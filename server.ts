@@ -31,14 +31,28 @@ const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL ||
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
 if (!supabaseUrl || !supabaseServiceKey) {
-  console.error("--- ERRO DE CONFIGURAÇÃO ---");
-  console.error("SUPABASE_URL encontrada:", supabaseUrl ? "SIM (valor oculto)" : "NÃO");
-  console.error("SUPABASE_SERVICE_ROLE_KEY encontrada:", supabaseServiceKey ? "SIM (valor oculto)" : "NÃO");
-  console.error("Variáveis disponíveis no ambiente:", Object.keys(process.env).filter(k => !k.includes('SECRET') && !k.includes('KEY') && !k.includes('PASS')).join(', '));
-  console.error("----------------------------");
+  console.error("--- ERRO DE CONFIGURAÇÃO CRÍTICO ---");
+  console.error("Data/Hora:", new Date().toISOString());
+  console.error("NODE_ENV:", process.env.NODE_ENV);
+  
+  // Lista TODAS as chaves que começam com SUPABASE, VITE_ ou STRIPE (sem mostrar os valores)
+  const relevantKeys = Object.keys(process.env).filter(k => 
+    k.startsWith('SUPABASE') || 
+    k.startsWith('VITE_') || 
+    k.startsWith('STRIPE') ||
+    k.startsWith('SESSION')
+  );
+  
+  console.error("Variáveis de configuração detectadas no sistema:", relevantKeys.length > 0 ? relevantKeys.join(', ') : "NENHUMA");
+  
+  console.error("Detalhes específicos:");
+  console.error("- SUPABASE_URL:", process.env.SUPABASE_URL ? "✅" : "❌");
+  console.error("- VITE_SUPABASE_URL:", process.env.VITE_SUPABASE_URL ? "✅" : "❌");
+  console.error("- SUPABASE_SERVICE_ROLE_KEY:", process.env.SUPABASE_SERVICE_ROLE_KEY ? "✅" : "❌");
+  console.error("-------------------------------------");
   
   if (process.env.NODE_ENV === 'production') {
-    console.error("Encerrando processo devido a falta de configuração crítica em produção.");
+    console.error("O servidor não pode iniciar sem as credenciais do Supabase.");
     process.exit(1);
   }
 }
