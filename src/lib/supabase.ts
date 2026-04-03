@@ -17,15 +17,18 @@ export const getSupabase = async () => {
   if (supabaseClient) return supabaseClient;
   
   const config = await fetchConfig();
-  if (config && config.supabaseUrl && config.supabaseAnonKey) {
-    supabaseClient = createClient(config.supabaseUrl, config.supabaseAnonKey);
+  const url = config?.supabaseUrl || import.meta.env.VITE_SUPABASE_URL;
+  const key = config?.supabaseAnonKey || import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+  if (url && key) {
+    supabaseClient = createClient(url, key);
   } else {
-    // Fallback to env vars if API fails (useful for local dev if not using proxy)
-    const url = import.meta.env.VITE_SUPABASE_URL;
-    const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
-    if (url && key) {
-      supabaseClient = createClient(url, key);
-    }
+    console.error('ERRO CRÍTICO: Configurações do Supabase não encontradas!', {
+      hasUrl: !!url,
+      hasKey: !!key,
+      origin: window.location.origin
+    });
+    throw new Error('O sistema não pôde inicializar a conexão com o banco de dados. Verifique as variáveis de ambiente no Railway.');
   }
   
   return supabaseClient;

@@ -228,17 +228,6 @@ export const LandingPage = ({ onLogin }: any) => {
             <a href="#precos" className="text-sm font-semibold text-gray-500 hover:text-[#4318FF] transition-colors">Preços</a>
           </div>
           <div className="flex items-center gap-4">
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(window.location.href);
-                alert('Link copiado! Abra em uma nova aba do navegador.');
-              }}
-              className="hidden lg:flex items-center gap-2 text-gray-400 hover:text-gray-600 transition-colors text-sm font-medium"
-              title="Copiar link para abrir em nova aba"
-            >
-              <Copy size={16} />
-              Copiar Link
-            </button>
             <button 
               onClick={() => {
                 setLoginType('patient');
