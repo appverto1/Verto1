@@ -8,7 +8,9 @@ import session from 'express-session';
 import dotenv from 'dotenv';
 import Stripe from 'stripe';
 
-dotenv.config();
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config();
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,7 +30,7 @@ function getStripe() {
 
 // Initialize Supabase Admin Client (using service role for backend access)
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_SERVICE_ROLE_KEY || "";
 
 if (!supabaseUrl || !supabaseServiceKey) {
   console.error("--- ERRO DE CONFIGURAÇÃO CRÍTICO ---");
