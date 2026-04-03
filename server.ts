@@ -357,7 +357,7 @@ async function startServer() {
       const hasFreeAccess = freeAccessEmails.includes(user.email || "");
 
       // If profile doesn't exist (first time Google login), create it
-      if (!profile && !profileError) {
+      if (!profile) {
         const roleToUse = intendedRole || 'therapist';
         const newProfile = {
           id: user.id,
@@ -377,6 +377,8 @@ async function startServer() {
           
         if (!createError) {
           profile = createdProfile;
+        } else {
+          console.error("Error creating profile during login:", createError);
         }
       } else if (profile && hasFreeAccess && intendedRole && profile.role !== intendedRole) {
         // For first client, allow switching roles for testing
