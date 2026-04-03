@@ -5,6 +5,7 @@ import { PatientDashboard } from './components/PatientDashboard';
 import { TherapistDashboard } from './components/TherapistDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
 import { TeamManagement } from './components/TeamManagement';
+import { InvitationModal } from './components/InvitationModal';
 import { testSupabaseConnection, getSupabase } from './lib/supabase';
 import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard, Users } from 'lucide-react';
 import { syncOfflineData } from './services/localDb';
@@ -106,6 +107,9 @@ export default function App() {
       const data = await response.json();
       if (data.success) {
         setUser(data.user);
+        if (data.isFirstLogin && (data.user.role === 'coordinator' || data.user.role === 'admin')) {
+          setShowInvitationModal(true);
+        }
       }
     } catch (error) {
       console.error('Login error:', error);
@@ -142,6 +146,7 @@ export default function App() {
   const [clinicalRecords, setClinicalRecords] = useState<any[]>([]);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
   const [view, setView] = useState<'dashboard' | 'team'>('dashboard');
+  const [showInvitationModal, setShowInvitationModal] = useState(false);
 
   const onAddActivityLog = async (action: string, details: string, category: 'clinical' | 'management' | 'system' = 'clinical') => {
     const newLog = {
@@ -272,7 +277,8 @@ export default function App() {
     { id: 101, name: 'Alexandre', date: todayStr, time: '09:00', status: 'confirmed', type: 'ABA / AFLS', color: 'bg-blue-100 text-blue-600' }, 
     { id: 102, name: 'Júlia S.', date: todayStr, time: '10:30', status: 'pending', type: 'Avaliação', color: 'bg-pink-100 text-pink-600' },
     { id: 103, name: 'Marcos P.', date: tomorrowStr, time: '14:00', status: 'confirmed', type: 'TCC', color: 'bg-green-100 text-green-600' },
-    { id: 104, name: 'Ana Clara', date: nextWeekStr, time: '11:00', status: 'pending', type: 'TO', color: 'bg-orange-100 text-orange-600' }
+    { id: 104, name: 'Ana Clara', date: nextWeekStr, time: '11:00', status: 'pending', type: 'TO', color: 'bg-orange-100 text-orange-600' },
+    { id: 105, name: 'Pedro H.', date: todayStr, time: '16:00', status: 'canceled', type: 'Psicomotricidade', color: 'bg-red-100 text-red-600' }
   ]);
   const [allPatients, setAllPatients] = useState<any[]>([ 
     { id: 101, name: 'Alexandre', phone: '11999999999', age: 8, type: 'neurodevelopment', approach: 'ABA' }, 
@@ -455,6 +461,10 @@ export default function App() {
       onAddActivityLog("Edição de Histórico", `Registro de atividade "${item.title}" (ID ${id}) editado.`);
     }
   };
+  const handleUpdateAgendaStatus = (id: any, status: string) => {
+    setTherapistAgenda(prev => prev.map(item => item.id === id ? { ...item, status } : item));
+  };
+
   const handleAddPatient = async (data: any) => { 
     const newId = data.id || Date.now(); 
     
@@ -944,8 +954,16 @@ export default function App() {
           onUpdatePatient={handleUpdatePatient} 
           onRecordTrial={handleRecordTrial} 
           onDeleteHistoryItem={handleDeleteHistoryItem} 
+          onUpdateAgendaStatus={handleUpdateAgendaStatus}
           activityLogs={activityLogs} 
           onAddActivityLog={onAddActivityLog} 
+        />
+      )}
+
+      {showInvitationModal && (
+        <InvitationModal 
+          user={user} 
+          onClose={() => setShowInvitationModal(false)} 
         />
       )}
     </React.Fragment>

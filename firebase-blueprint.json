@@ -101,6 +101,21 @@
         "status": { "type": "string", "enum": ["paid", "pending", "overdue"], "description": "Payment status" }
       },
       "required": ["patient_id", "clinic_id", "amount", "date", "status"]
+    },
+    "Invitation": {
+      "title": "Clinic Invitation",
+      "description": "An invitation for a professional to join a clinic",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email", "description": "Email of the invited professional" },
+        "clinic_id": { "type": "string", "description": "ID of the clinic inviting the professional" },
+        "clinic_name": { "type": "string", "description": "Name of the clinic for the invitation email/UI" },
+        "role": { "type": "string", "enum": ["therapist", "receptionist"], "description": "Role assigned to the invited professional" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "declined"], "description": "Status of the invitation" },
+        "invited_by": { "type": "string", "description": "UID of the user who sent the invitation" },
+        "created_at": { "type": "string", "format": "date-time", "description": "When the invitation was sent" }
+      },
+      "required": ["email", "clinic_id", "role", "status", "invited_by", "created_at"]
     }
   },
   "firestore": {
@@ -127,6 +142,10 @@
     "/payments/{paymentId}": {
       "schema": "Payment",
       "description": "Payment records"
+    },
+    "/invitations/{invitationId}": {
+      "schema": "Invitation",
+      "description": "Clinic invitations"
     }
   }
 }

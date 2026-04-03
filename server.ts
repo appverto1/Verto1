@@ -326,7 +326,8 @@ async function startServer() {
       };
 
       req.session.user = userData;
-      res.json({ success: true, user: userData });
+      res.json({ success: true, user: userData, isFirstLogin: req.session.isFirstLogin });
+      delete req.session.isFirstLogin; // Clear after sending
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -359,13 +360,38 @@ async function startServer() {
       // If profile doesn't exist (first time Google login), create it
       if (!profile) {
         const roleToUse = intendedRole || 'therapist';
+        
+        // Check for pending invitations for this email
+        const { data: invitations, error: inviteError } = await supabase
+          .from('invitations')
+          .select('*')
+          .eq('email', user.email)
+          .eq('status', 'pending');
+
+        let clinicId = roleToUse === 'coordinator' ? user.id : null;
+        let finalRole = roleToUse;
+
+        if (!inviteError && invitations && invitations.length > 0) {
+          const invitation = invitations[0];
+          clinicId = invitation.clinic_id;
+          finalRole = invitation.role;
+          
+          // Mark as accepted
+          await supabase
+            .from('invitations')
+            .update({ status: 'accepted' })
+            .eq('id', invitation.id);
+        }
+
         const newProfile = {
           id: user.id,
           email: user.email,
           name: user.user_metadata?.full_name || user.email?.split('@')[0],
-          role: roleToUse,
-          clinic_id: roleToUse === 'coordinator' ? user.id : null,
+          role: finalRole,
+          clinic_id: clinicId,
           subscription_status: hasFreeAccess ? 'active' : 'pending',
+          plan_price: finalRole === 'patient' ? 4.90 : 149.90,
+          plan_name: finalRole === 'patient' ? 'Paciente' : 'Essencial',
           created_at: new Date().toISOString()
         };
         
@@ -377,6 +403,7 @@ async function startServer() {
           
         if (!createError) {
           profile = createdProfile;
+          req.session.isFirstLogin = true; // Flag for frontend
         } else {
           console.error("Error creating profile during login:", createError);
         }
@@ -405,11 +432,12 @@ async function startServer() {
         age: profile?.age,
         clinicId: profile?.clinic_id,
         subscriptionStatus: hasFreeAccess ? 'active' : (profile?.subscription_status || 'pending'),
-        planPrice: profile?.role === 'patient' ? 4.90 : (profile?.plan_price || 149.90)
+        planPrice: (profile?.role === 'patient' || intendedRole === 'patient') ? 4.90 : (profile?.plan_price || 149.90)
       };
 
       req.session.user = userData;
-      res.json({ success: true, user: userData });
+      res.json({ success: true, user: userData, isFirstLogin: req.session.isFirstLogin });
+      delete req.session.isFirstLogin;
     } catch (error) {
       console.error("Login verification error:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -432,10 +460,10 @@ async function startServer() {
     }
   });
 
-  // Clinic Management
+  // Clinic Management & Invitations
   app.get('/api/clinic/members', checkAuth, async (req: any, res) => {
     const user = req.session.user;
-    if (user.role !== 'coordinator') {
+    if (user.role !== 'coordinator' && user.role !== 'admin') {
       return res.status(403).json({ error: 'Apenas coordenadores podem gerenciar a equipe' });
     }
 
@@ -447,6 +475,108 @@ async function startServer() {
       
       if (error) throw error;
       res.json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.post('/api/clinic/invite', checkAuth, async (req: any, res) => {
+    try {
+      const { email, role } = req.body;
+      const user = req.session.user;
+
+      if (user.role !== 'coordinator' && user.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas coordenadores podem convidar membros' });
+      }
+
+      // Check for existing invitation
+      const { data: existing } = await supabase
+        .from('invitations')
+        .select('*')
+        .eq('email', email)
+        .eq('clinic_id', user.clinicId || user.id)
+        .eq('status', 'pending')
+        .maybeSingle();
+
+      if (existing) {
+        return res.status(400).json({ error: 'Já existe um convite pendente para este e-mail' });
+      }
+
+      const { data, error } = await supabase
+        .from('invitations')
+        .insert([{
+          email,
+          clinic_id: user.clinicId || user.id,
+          clinic_name: user.name,
+          role,
+          status: 'pending',
+          invited_by: user.id,
+          created_at: new Date().toISOString()
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+      res.json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.get('/api/clinic/invitations', checkAuth, async (req: any, res) => {
+    try {
+      const user = req.session.user;
+      const { data, error } = await supabase
+        .from('invitations')
+        .select('*')
+        .eq('clinic_id', user.clinicId || user.id)
+        .eq('status', 'pending');
+
+      if (error) throw error;
+      res.json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.post('/api/clinic/accept-invite', checkAuth, async (req: any, res) => {
+    try {
+      const { invitationId } = req.body;
+      const user = req.session.user;
+
+      const { data: invitation, error: fetchError } = await supabase
+        .from('invitations')
+        .select('*')
+        .eq('id', invitationId)
+        .single();
+
+      if (fetchError || !invitation) {
+        return res.status(404).json({ error: 'Convite não encontrado' });
+      }
+
+      if (invitation.email !== user.email) {
+        return res.status(403).json({ error: 'Este convite não é para você' });
+      }
+
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({
+          clinic_id: invitation.clinic_id,
+          role: invitation.role
+        })
+        .eq('id', user.id);
+
+      if (updateError) throw updateError;
+
+      await supabase
+        .from('invitations')
+        .update({ status: 'accepted' })
+        .eq('id', invitationId);
+
+      req.session.user.clinicId = invitation.clinic_id;
+      req.session.user.role = invitation.role;
+
+      res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }

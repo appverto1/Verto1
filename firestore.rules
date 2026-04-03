@@ -64,7 +64,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
-        (request.auth.token.email == "mateus.com96@gmail.com" && request.auth.token.email_verified == true);
+        (request.auth.token.email == "appverto1@gmail.com" && request.auth.token.email_verified == true);
     }
 
     function isEmailOwner(email) {
@@ -119,10 +119,20 @@ service cloud.firestore {
     }
 
     function isValidUser(data) {
-      return hasOnlyAllowedFields(['name', 'role', 'email', 'crp', 'plan', 'age']) &&
+      return hasOnlyAllowedFields(['name', 'role', 'email', 'crp', 'plan', 'age', 'clinic_id']) &&
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-             data.role in ['therapist', 'patient', 'admin'] &&
+             data.role in ['coordinator', 'therapist', 'receptionist', 'patient', 'admin'] &&
              isValidEmail(data.email);
+    }
+
+    function isValidInvitation(data) {
+      return hasOnlyAllowedFields(['email', 'clinic_id', 'clinic_name', 'role', 'status', 'invited_by', 'created_at']) &&
+             isValidEmail(data.email) &&
+             data.clinic_id is string &&
+             data.role in ['therapist', 'receptionist'] &&
+             data.status in ['pending', 'accepted', 'declined'] &&
+             data.invited_by is string &&
+             isValidDateString(data.created_at);
     }
 
     // ===============================================================
@@ -174,6 +184,22 @@ service cloud.firestore {
         (resource.data.patient_email == request.auth.token.email && request.resource.data.patient_email == resource.data.patient_email)
       );
       allow delete: if isAdmin();
+    }
+
+    match /invitations/{invitationId} {
+      allow read: if isAuthenticated() && (
+        request.auth.token.email == resource.data.email || 
+        request.auth.uid == resource.data.invited_by ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() && isValidInvitation(request.resource.data) && (
+        request.resource.data.invited_by == request.auth.uid || isAdmin()
+      );
+      allow update: if isAuthenticated() && isValidInvitation(request.resource.data) && (
+        (request.auth.token.email == resource.data.email && request.resource.data.status in ['accepted', 'declined']) ||
+        (request.auth.uid == resource.data.invited_by && request.resource.data.status == 'cancelled') ||
+        isAdmin()
+      );
     }
 
     // Default deny

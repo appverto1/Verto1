@@ -9,8 +9,10 @@ import { ProtocolManagementSystem } from './Protocols';
 import { PatientRegistry } from './PatientRegistry';
 import { PatientDetailView } from './PatientDetailView';
 import { TeamManagement } from './TeamManagement';
+import { SettingsMenu } from './SettingsMenu';
+import { InvitationModal } from './InvitationModal';
 
-export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, therapistAgenda, patientsHistory, therapistNotes, onAddNote, allTasks, onAddTask, onUpdateHistoryItem, onAddPatient, onUpdateTask, allPatients, clinicalRecords, onScheduleSession, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, activityLogs, onAddActivityLog, onViewTeam }: any) => { 
+export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, therapistAgenda, patientsHistory, therapistNotes, onAddNote, allTasks, onAddTask, onUpdateHistoryItem, onAddPatient, onUpdateHistoryItem: onUpdateHistoryItemProp, onUpdateTask, allPatients, clinicalRecords, onScheduleSession, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, activityLogs, onAddActivityLog, onViewTeam, onUpdateAgendaStatus }: any) => { 
   const [view, setView] = useState('home'); 
   const [selectedPatientId, setSelectedPatientId] = useState<any>(null); 
   const [runTutorial, setRunTutorial] = useState(false); 
@@ -19,6 +21,7 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
   const [isAddSessionModalOpen, setIsAddSessionModalOpen] = useState(false);
   const [isMarketplaceOpen, setIsMarketplaceOpen] = useState(false);
   const [isFinancialOpen, setIsFinancialOpen] = useState(false);
+  const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [payments, setPayments] = useState<any[]>([
     { id: 1, patientId: 101, patientName: 'Alexandre', amount: 150, date: new Date().toISOString(), method: 'pix', status: 'paid' },
     { id: 2, patientId: 102, patientName: 'Júlia S.', amount: 200, date: new Date().toISOString(), method: 'card', status: 'pending' }
@@ -127,8 +130,10 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
   }; 
   
   const handleStatusUpdate = (appointmentId: any, newStatus: string) => {
-    // In a real app, this would call an API
-    alert(`Status do agendamento ${appointmentId} alterado para: ${newStatus}`);
+    if (onUpdateAgendaStatus) {
+      onUpdateAgendaStatus(appointmentId, newStatus);
+    }
+    onAddActivityLog("Atualização de Agenda", `Status do agendamento ${appointmentId} alterado para: ${newStatus}`, 'management');
   };
 
   const handleAddPayment = () => {
@@ -549,7 +554,13 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
               </p> 
             </div>
           </div> 
-          <div className="relative"> 
+          <div className="flex items-center gap-3 relative"> 
+            <SettingsMenu 
+              user={user} 
+              onLogout={onLogout} 
+              onViewTeam={onViewTeam} 
+              onOpenInvitations={() => setShowInvitationModal(true)} 
+            />
             <button 
               id="menu-btn"
               onClick={() => setIsMenuOpen(!isMenuOpen)} 
@@ -680,13 +691,24 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
               const isKid = (patientData?.age !== undefined && patientData.age <= 12) || patientData?.anamnesisData?.formType === 'child';
               const category = isKid ? 'Kids' : 'Adulto';
               
+              const statusColors: any = {
+                confirmed: 'bg-green-50 border-green-100',
+                pending: 'bg-yellow-50 border-yellow-100',
+                canceled: 'bg-red-50 border-red-100',
+                reschedule: 'bg-red-50 border-red-100',
+                absent: 'bg-gray-50 border-gray-100'
+              };
+              const cardBg = statusColors[patientItem.status] || 'bg-white border-indigo-50';
+
               return ( 
-                <div id={idx === 0 ? 'patient-card-0' : ''} key={patientItem.id} onClick={() => onPatientClick(patientItem.id)} className={`min-w-[200px] bg-white rounded-3xl p-4 shadow-sm border snap-center flex flex-col justify-between h-40 hover:shadow-md transition-all relative overflow-hidden group cursor-pointer active:scale-95 ${isKid ? 'border-pink-50' : 'border-indigo-50'}`}> 
+                <div id={idx === 0 ? 'patient-card-0' : ''} key={patientItem.id} onClick={() => { if (user.role !== 'receptionist') onPatientClick(patientItem.id); }} className={`min-w-[200px] rounded-3xl p-4 shadow-sm border snap-center flex flex-col justify-between h-44 hover:shadow-md transition-all relative overflow-hidden group cursor-pointer active:scale-95 ${cardBg}`}> 
                   <div className={`absolute top-0 right-0 w-20 h-20 rounded-bl-full opacity-10 transition-transform group-hover:scale-110 ${isKid ? 'bg-pink-500' : 'bg-indigo-500'}`}></div> 
                   <div className="flex justify-between items-start z-10">
                     <span className="font-semibold text-gray-800 text-xl tracking-tight">{patientItem.time}</span>
                     <div className="flex flex-col items-end gap-1">
-                      <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase ${patientItem.status === 'confirmed' ? 'bg-green-100 text-green-600' : patientItem.status === 'pending' ? 'bg-yellow-100 text-yellow-600' : 'bg-red-100 text-red-500'}`}>{patientItem.status === 'confirmed' ? 'Conf' : 'Pend'}</span>
+                      <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase ${patientItem.status === 'confirmed' ? 'bg-green-100 text-green-600' : patientItem.status === 'pending' ? 'bg-yellow-100 text-yellow-600' : 'bg-red-100 text-red-500'}`}>
+                        {patientItem.status === 'confirmed' ? 'Conf' : patientItem.status === 'pending' ? 'Pend' : 'Canc'}
+                      </span>
                       <span className={`text-[8px] font-semibold px-1.5 py-0.5 rounded-full uppercase tracking-tighter ${isKid ? 'bg-pink-100 text-pink-500' : 'bg-indigo-50 text-indigo-500'}`}>{category}</span>
                     </div>
                   </div> 
@@ -694,31 +716,31 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
                     <div className="flex items-center gap-2 mb-3">
                       <button 
                         onClick={(e) => { e.stopPropagation(); handleStatusUpdate(patientItem.id, 'confirmed'); }}
-                        className="flex-1 py-1 bg-green-50 text-green-600 rounded-lg text-[10px] font-bold hover:bg-green-600 hover:text-white transition-all"
+                        className="flex-1 py-1.5 bg-white/80 text-green-600 rounded-lg text-[9px] font-bold hover:bg-green-600 hover:text-white transition-all border border-green-200 uppercase"
                       >
-                        Check-in
+                        Confirmar
                       </button>
                       <button 
-                        onClick={(e) => { e.stopPropagation(); handleStatusUpdate(patientItem.id, 'absent'); }}
-                        className="flex-1 py-1 bg-red-50 text-red-600 rounded-lg text-[10px] font-bold hover:bg-red-600 hover:text-white transition-all"
+                        onClick={(e) => { e.stopPropagation(); handleStatusUpdate(patientItem.id, 'canceled'); }}
+                        className="flex-1 py-1.5 bg-white/80 text-red-600 rounded-lg text-[9px] font-bold hover:bg-red-600 hover:text-white transition-all border border-red-200 uppercase"
                       >
-                        Falta
+                        Cancelar
                       </button>
                     </div>
                     <div className="flex items-end justify-between">
                       <div>
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold text-sm mb-2 ${isKid ? 'bg-pink-400 text-white' : 'bg-indigo-400 text-white'}`}>{patientItem.name.charAt(0)}</div>
-                        <h3 className="font-semibold text-gray-700 text-base truncate tracking-tight">{patientItem.name}</h3>
-                        <p className="text-xs text-gray-400 font-medium">{patientItem.type}</p>
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-semibold text-xs mb-1 ${isKid ? 'bg-pink-400 text-white' : 'bg-indigo-400 text-white'}`}>{patientItem.name.charAt(0)}</div>
+                        <h3 className="font-semibold text-gray-700 text-sm truncate tracking-tight max-w-[100px]">{patientItem.name}</h3>
+                        <p className="text-[10px] text-gray-400 font-medium">{patientItem.type}</p>
                       </div>
                       <a 
                         href={`https://wa.me/${(patientData?.phone || '').replace(/\D/g, '')}`} 
                         target="_blank" 
                         rel="noopener noreferrer" 
-                        className="mb-1 p-2 bg-green-50 text-green-500 rounded-xl hover:bg-green-500 hover:text-white transition-all shadow-sm"
+                        className="mb-1 p-1.5 bg-green-50 text-green-500 rounded-xl hover:bg-green-500 hover:text-white transition-all shadow-sm"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <MessageCircle size={18} />
+                        <MessageCircle size={14} />
                       </a>
                     </div>
                   </div> 
@@ -868,6 +890,13 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
           </button>
         )}
       </div> 
+
+      {showInvitationModal && (
+        <InvitationModal 
+          user={user} 
+          onClose={() => setShowInvitationModal(false)} 
+        />
+      )}
     </div> 
   ); 
 };

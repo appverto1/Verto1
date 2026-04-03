@@ -326,5 +326,54 @@ export const dataService = {
       console.error('Error assigning clinic role:', error);
       return { success: false, error: String(error) };
     }
+  },
+  
+  async inviteToClinic(email: string, role: string) {
+    try {
+      const response = await fetch('/api/clinic/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, role })
+      });
+      if (response.ok) {
+        return await response.json();
+      }
+      const err = await response.json();
+      return { success: false, error: err.error || 'Failed to send invitation' };
+    } catch (error) {
+      console.error('Error inviting to clinic:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async getInvitations() {
+    try {
+      const response = await fetch('/api/clinic/invitations');
+      if (response.ok) {
+        return await response.json();
+      }
+      return { success: false, error: 'Failed to fetch invitations' };
+    } catch (error) {
+      console.error('Error fetching invitations:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async acceptInvitation(invitationId: string) {
+    try {
+      const response = await fetch('/api/clinic/accept-invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invitationId })
+      });
+      if (response.ok) {
+        return await response.json();
+      }
+      const err = await response.json();
+      return { success: false, error: err.error || 'Failed to accept invitation' };
+    } catch (error) {
+      console.error('Error accepting invitation:', error);
+      return { success: false, error: String(error) };
+    }
   }
 };

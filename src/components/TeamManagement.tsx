@@ -30,6 +30,7 @@ interface Member {
 
 export function TeamManagement({ user }: { user: any }) {
   const [members, setMembers] = useState<Member[]>([]);
+  const [invitations, setInvitations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -40,6 +41,7 @@ export function TeamManagement({ user }: { user: any }) {
 
   useEffect(() => {
     fetchMembers();
+    fetchInvitations();
   }, []);
 
   const fetchMembers = async () => {
@@ -58,23 +60,34 @@ export function TeamManagement({ user }: { user: any }) {
     }
   };
 
-  const handleAssignRole = async (e: React.FormEvent) => {
+  const fetchInvitations = async () => {
+    try {
+      const result = await dataService.getInvitations();
+      if (result.success) {
+        setInvitations(result.data);
+      }
+    } catch (err) {
+      console.error('Error fetching invitations:', err);
+    }
+  };
+
+  const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsAssigning(true);
     setError(null);
     setSuccess(null);
 
     try {
-      const result = await dataService.assignClinicRole(newMemberEmail, newMemberRole);
+      const result = await dataService.inviteToClinic(newMemberEmail, newMemberRole);
       if (result.success) {
-        setSuccess(`Papel atribuído com sucesso a ${newMemberEmail}`);
+        setSuccess(`Convite enviado com sucesso para ${newMemberEmail}`);
         setNewMemberEmail('');
-        fetchMembers();
+        fetchInvitations();
       } else {
         setError(result.error);
       }
     } catch (err) {
-      setError('Erro ao atribuir papel');
+      setError('Erro ao enviar convite');
     } finally {
       setIsAssigning(false);
     }
@@ -139,7 +152,7 @@ export function TeamManagement({ user }: { user: any }) {
             <h2 className="text-lg font-bold text-slate-900 mb-2">Atribuir Novo Papel</h2>
             <p className="text-slate-500 text-xs mb-6">O colaborador já deve ter uma conta cadastrada na Verto.</p>
 
-            <form onSubmit={handleAssignRole} className="space-y-4">
+            <form onSubmit={handleInvite} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">E-mail do Colaborador</label>
                 <div className="relative">
@@ -207,9 +220,34 @@ export function TeamManagement({ user }: { user: any }) {
                 disabled={isAssigning}
                 className="w-full bg-[#4318FF] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98] disabled:opacity-50 disabled:scale-100"
               >
-                {isAssigning ? 'Atribuindo...' : 'Atribuir Papel'}
+                {isAssigning ? 'Enviando...' : 'Enviar Convite'}
               </button>
             </form>
+
+            {/* Pending Invitations */}
+            {invitations.length > 0 && (
+              <div className="mt-12">
+                <h3 className="text-lg font-bold text-slate-900 mb-6">Convites Pendentes</h3>
+                <div className="space-y-3">
+                  {invitations.map((inv) => (
+                    <div key={inv.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-slate-400">
+                          <Mail size={20} />
+                        </div>
+                        <div>
+                          <p className="font-bold text-slate-900 text-sm">{inv.email}</p>
+                          <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-widest">{inv.role}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="px-3 py-1 bg-amber-100 text-amber-600 rounded-full text-[10px] font-bold uppercase tracking-widest">Pendente</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
