@@ -58,6 +58,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [selectedPEIDomainId, setSelectedPEIDomainId] = useState("");
   const [selectedPEISkillId, setSelectedPEISkillId] = useState("");
   const [isSessionModeOpen, setIsSessionModeOpen] = useState(false);
+  const [isUnlinkingModalOpen, setIsUnlinkingModalOpen] = useState(false);
   
   const [patientFiles, setPatientFiles] = useState([
     { id: 1, name: 'Avaliação_Neuropsicológica.pdf', size: '2.4 MB', date: '15/01/2026', type: 'application/pdf' },
@@ -459,6 +460,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const handleSaveTaskEdit = () => { if (editingTask && editingTask.title) { onUpdateTask(editingTask.id, { title: editingTask.title, description: editingTask.description }); setEditingTask(null); } }; 
   const handleUpdateAnamnesis = (updatedData: any) => { if (onUpdatePatient) { onUpdatePatient({ id: patient.id, name: updatedData.nome, phone: updatedData.telefone, address: updatedData.endereco, diagnosis: updatedData.motivoConsulta, anamnesisData: updatedData }); } }; 
   
+  const handleUnlinkPatient = () => {
+    if (onUpdatePatient) {
+      // When unlinking, we keep the history but remove the clinic association
+      onUpdatePatient({ 
+        id: patient.id, 
+        clinic_id: null, 
+        status: 'unlinked',
+        unlinkedAt: new Date().toISOString()
+      });
+      setIsUnlinkingModalOpen(false);
+      onBack(); // Go back to dashboard
+    }
+  };
+  
   const handleFileUpload = (e: any) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -680,6 +695,35 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         </div> 
       )} 
       <AnamnesisModal isOpen={showAnamnesis} onClose={() => setShowAnamnesis(false)} initialData={patient.anamnesisData || { nome: patient.name }} onSave={handleUpdateAnamnesis} mode="edit" /> 
+      
+      {isUnlinkingModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-[32px] p-8 shadow-2xl text-center max-w-sm animate-pop border border-red-50">
+            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4 text-red-600">
+              <EyeOff size={32} />
+            </div>
+            <h3 className="text-xl font-semibold text-gray-800 mb-2">Desvincular Paciente?</h3>
+            <p className="text-gray-500 text-sm mb-6 leading-relaxed">
+              O paciente será removido da sua lista, mas todo o <strong>histórico clínico e anotações</strong> serão preservados e poderão ser acessados por um novo profissional caso ele seja vinculado novamente.
+            </p>
+            <div className="flex flex-col gap-3">
+              <button 
+                onClick={handleUnlinkPatient} 
+                className="w-full py-3 bg-red-500 text-white rounded-xl font-semibold shadow-lg shadow-red-200 hover:bg-red-600 transition-all"
+              >
+                Sim, Desvincular
+              </button>
+              <button 
+                onClick={() => setIsUnlinkingModalOpen(false)} 
+                className="w-full py-3 bg-gray-100 rounded-xl font-semibold text-gray-700 hover:bg-gray-200 transition-all"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white px-6 pt-10 pb-6 shadow-sm z-20"> 
         <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-4"> 
           <div className="flex items-center gap-4"> 
@@ -707,6 +751,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             <button id="anamnesis-btn" onClick={() => setShowAnamnesis(true)} className="flex-1 sm:flex-none bg-[#F4F7FE] text-[#4318FF] px-4 py-2.5 rounded-xl text-xs font-semibold hover:bg-[#4318FF]/10 transition-colors flex items-center justify-center gap-2 border border-blue-100"> 
               <FileText size={16} /> Ficha Anamnese 
             </button> 
+            <button 
+              onClick={() => setIsUnlinkingModalOpen(true)}
+              className="p-2.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+              title="Desvincular Paciente"
+            >
+              <EyeOff size={20} />
+            </button>
           </div>
         </div> 
         <div id="tab-nav" className="flex gap-2 bg-gray-100 p-1 rounded-xl overflow-x-auto no-scrollbar"> 

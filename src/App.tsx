@@ -496,7 +496,30 @@ export default function App() {
         if (userResult.tempPassword) {
           alert(`Conta criada para o paciente!\nEmail: ${data.email}\nSenha temporária: ${userResult.tempPassword}\n\nPor favor, informe ao paciente.`);
         } else if (userResult.message === 'User already exists') {
-          alert(`O paciente com o email ${data.email} já possui uma conta no sistema.`);
+          // If user already exists, we should inform that history will be linked
+          alert(`O paciente com o email ${data.email} já possui uma conta no sistema. Todo o histórico clínico anterior será vinculado a este novo prontuário.`);
+          
+          // Fetch existing history and notes by email
+          const historyRes = await dataService.getHistoryByEmail(data.email);
+          if (historyRes.success && historyRes.data) {
+            const existingHistory = historyRes.data.map((h: any) => ({
+              ...h,
+              patientId: newId, // Link to the temporary ID, will be updated to realId later
+              time: new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              dateGroup: new Date(h.created_at).toDateString() === new Date().toDateString() ? "Hoje" : new Date(h.created_at).toLocaleDateString()
+            }));
+            setHistory(prev => [...prev, ...existingHistory]);
+          }
+
+          const notesRes = await dataService.getNotesByEmail(data.email);
+          if (notesRes.success && notesRes.data) {
+            const existingNotes = notesRes.data.map((n: any) => ({
+              ...n,
+              patientId: newId,
+              date: new Date(n.created_at).toLocaleString()
+            }));
+            setTherapistNotes(prev => [...prev, ...existingNotes]);
+          }
         }
       }
     }
@@ -520,33 +543,43 @@ export default function App() {
     // Split updates
     const { diagnosis, anamnesisData, pei, evaluationLinks, interventionTaskLinks, ...identityData } = updatedData;
 
-    if (Object.keys(identityData).length > 1) { // More than just 'id'
-      setAllPatients(prev => prev.map(p => p.id === updatedData.id ? { ...p, ...identityData } : p)); 
-    }
+    // If unlinking (clinic_id is null), remove from local state
+    if (updatedData.clinic_id === null) {
+      setAllPatients(prev => prev.filter(p => p.id !== updatedData.id));
+      setClinicalRecords(prev => prev.filter(r => r.patientId !== updatedData.id));
+      setTherapistAgenda(prev => prev.filter(a => a.id !== updatedData.id));
+      onAddActivityLog("Desvinculação de Paciente", `Paciente ID ${updatedData.id} foi desvinculado.`, 'management');
+    } else {
+      if (Object.keys(identityData).length > 1) { // More than just 'id'
+        setAllPatients(prev => prev.map(p => p.id === updatedData.id ? { ...p, ...identityData } : p)); 
+      }
 
-    if (diagnosis !== undefined || anamnesisData !== undefined || pei !== undefined || evaluationLinks !== undefined || interventionTaskLinks !== undefined) {
-      setClinicalRecords(prev => prev.map(r => r.patientId === updatedData.id ? { 
-        ...r, 
-        ...(diagnosis !== undefined && { diagnosis }),
-        ...(anamnesisData !== undefined && { anamnesisData }),
-        ...(pei !== undefined && { pei }),
-        ...(evaluationLinks !== undefined && { evaluationLinks }),
-        ...(interventionTaskLinks !== undefined && { interventionTaskLinks })
-      } : r));
-    }
+      if (diagnosis !== undefined || anamnesisData !== undefined || pei !== undefined || evaluationLinks !== undefined || interventionTaskLinks !== undefined) {
+        setClinicalRecords(prev => prev.map(r => r.patientId === updatedData.id ? { 
+          ...r, 
+          ...(diagnosis !== undefined && { diagnosis }),
+          ...(anamnesisData !== undefined && { anamnesisData }),
+          ...(pei !== undefined && { pei }),
+          ...(evaluationLinks !== undefined && { evaluationLinks }),
+          ...(interventionTaskLinks !== undefined && { interventionTaskLinks })
+        } : r));
+      }
 
-    setTherapistAgenda(prev => prev.map(a => a.id === updatedData.id ? { ...a, name: updatedData.name || a.name } : a)); 
-    onAddActivityLog("Atualização de Cadastro", `Dados do paciente ID ${updatedData.id} atualizados.`, 'management');
+      setTherapistAgenda(prev => prev.map(a => a.id === updatedData.id ? { ...a, name: updatedData.name || a.name } : a)); 
+      onAddActivityLog("Atualização de Cadastro", `Dados do paciente ID ${updatedData.id} atualizados.`, 'management');
+    }
 
     // Sync to Backend
-    if (typeof updatedData.id === 'string') {
+    if (typeof updatedData.id === 'string' || typeof updatedData.id === 'number') {
       const { dataService } = await import('./services/dataService');
-      await dataService.updatePatient(updatedData.id, {
+      await dataService.updatePatient(String(updatedData.id), {
         name: updatedData.name,
         email: updatedData.email,
         phone: updatedData.phone,
         age: updatedData.age,
-        diagnosis: updatedData.diagnosis
+        diagnosis: updatedData.diagnosis,
+        clinic_id: updatedData.clinic_id,
+        status: updatedData.status
       });
     }
   };

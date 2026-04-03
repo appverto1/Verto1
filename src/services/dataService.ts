@@ -158,6 +158,20 @@ export const dataService = {
     return { success: true, data: local.filter(r => r.data.patient_id === patientId).map(r => r.data) };
   },
 
+  async getNotesByEmail(email: string) {
+    try {
+      const response = await fetch(`/api/notes/email/${email}`);
+      if (response.ok) {
+        const result = await response.json();
+        return result;
+      }
+    } catch (error) {
+      console.log('Fetching notes by email from local storage...');
+    }
+    const local = await db.records.where('type').equals('note').toArray();
+    return { success: true, data: local.filter(r => r.data.patient_email === email).map(r => r.data) };
+  },
+
   async addNote(note: any) {
     const id = note.id || generateId();
     const data = { ...note, id, created_at: note.created_at || new Date().toISOString() };

@@ -4,9 +4,11 @@ import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
 import cookieParser from 'cookie-parser';
-import session from 'express-session';
+import cookieSession from 'cookie-session';
 import dotenv from 'dotenv';
 import Stripe from 'stripe';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
@@ -65,6 +67,26 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // Trust proxy is required for rate limiting and secure cookies behind Railway's load balancer
+  app.set('trust proxy', 1);
+
+  // Security Headers (Helmet)
+  app.use(helmet({
+    contentSecurityPolicy: false, // Disable CSP for Vite dev mode compatibility
+    crossOriginEmbedderPolicy: false
+  }));
+
+  // Rate Limiting (Prevent Brute Force)
+  const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each IP to 100 requests per windowMs
+    message: { error: 'Muitas requisições. Tente novamente mais tarde.' },
+    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+    validate: false, // Disable all validation checks for proxy headers
+  });
+  app.use('/api/', limiter);
+
   // Stripe Webhook (to handle successful payments) - MUST BE BEFORE express.json()
   app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     const sig = req.headers['stripe-signature'];
@@ -104,15 +126,13 @@ async function startServer() {
 
   app.use(express.json());
   app.use(cookieParser());
-  app.use(session({
-    secret: process.env.SESSION_SECRET || 'verto-secret-key',
-    resave: false,
-    saveUninitialized: false,
-    cookie: { 
-      secure: process.env.NODE_ENV === 'production',
-      httpOnly: true,
-      maxAge: 24 * 60 * 60 * 1000 // 24 hours
-    }
+  app.use(cookieSession({
+    name: 'verto-session',
+    keys: [process.env.SESSION_SECRET || 'verto-secret-key'],
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    sameSite: 'lax'
   }));
 
   // Auth Middleware
@@ -121,6 +141,46 @@ async function startServer() {
       next();
     } else {
       res.status(401).json({ error: 'Unauthorized' });
+    }
+  };
+
+  // Ownership Middleware (IDOR Protection)
+  const checkPatientAccess = async (req: any, res: any, next: any) => {
+    const user = req.session.user;
+    const patientId = req.params.patientId || req.body.patient_id;
+
+    if (!patientId) return next();
+
+    try {
+      // Admin bypass
+      if (user.role === 'admin' || user.role === 'coordinator') return next();
+
+      // Check if user is the patient themselves
+      if (user.id === patientId) return next();
+
+      // Check if user is the therapist for this patient
+      const { data: patient, error } = await supabase
+        .from('patients')
+        .select('therapist_id, clinic_id')
+        .eq('id', patientId)
+        .single();
+
+      if (error || !patient) {
+        return res.status(404).json({ error: 'Paciente não encontrado' });
+      }
+
+      if (patient.therapist_id === user.id) {
+        return next();
+      }
+
+      // If in the same clinic, allow access (for coordination)
+      if (patient.clinic_id && patient.clinic_id === user.clinic_id) {
+        return next();
+      }
+
+      return res.status(403).json({ error: 'Acesso negado a este prontuário' });
+    } catch (err) {
+      return res.status(500).json({ error: 'Erro ao verificar permissões' });
     }
   };
 
@@ -324,10 +384,8 @@ async function startServer() {
   });
 
   app.post('/api/auth/logout', (req, res) => {
-    req.session.destroy((err) => {
-      if (err) return res.status(500).json({ error: 'Logout failed' });
-      res.json({ success: true });
-    });
+    req.session = null;
+    res.json({ success: true });
   });
 
   app.get('/api/auth/me', (req, res) => {
@@ -525,12 +583,32 @@ async function startServer() {
   });
 
   // Notes
-  app.get('/api/notes/:patientId', checkAuth, async (req, res) => {
+  app.get('/api/notes/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
     try {
       const { data, error } = await supabase
         .from('notes')
         .select('*')
         .eq('patient_id', req.params.patientId)
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
+      res.json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.get('/api/notes/email/:email', checkAuth, async (req: any, res) => {
+    try {
+      // Only allow if searching for own email OR if therapist
+      if (req.session.user.role !== 'therapist' && req.session.user.role !== 'admin' && req.session.user.email !== req.params.email) {
+        return res.status(403).json({ error: 'Acesso negado' });
+      }
+
+      const { data, error } = await supabase
+        .from('notes')
+        .select('*')
+        .eq('patient_email', req.params.email)
         .order('created_at', { ascending: false });
       
       if (error) throw error;
@@ -560,7 +638,7 @@ async function startServer() {
   });
 
   // History
-  app.get('/api/history/:patientId', checkAuth, async (req, res) => {
+  app.get('/api/history/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
     try {
       const { data, error } = await supabase
         .from('history')
@@ -575,8 +653,13 @@ async function startServer() {
     }
   });
 
-  app.get('/api/history/email/:email', checkAuth, async (req, res) => {
+  app.get('/api/history/email/:email', checkAuth, async (req: any, res) => {
     try {
+      // Only allow if searching for own email OR if therapist/admin
+      if (req.session.user.role !== 'therapist' && req.session.user.role !== 'admin' && req.session.user.email !== req.params.email) {
+        return res.status(403).json({ error: 'Acesso negado' });
+      }
+
       const { data, error } = await supabase
         .from('history')
         .select('*')
@@ -645,8 +728,13 @@ async function startServer() {
   });
 
   // User Profile
-  app.get('/api/profile/:userId', checkAuth, async (req, res) => {
+  app.get('/api/profile/:userId', checkAuth, async (req: any, res) => {
     try {
+      // Only allow own profile or admin
+      if (req.session.user.id !== req.params.userId && req.session.user.role !== 'admin' && req.session.user.role !== 'coordinator') {
+        return res.status(403).json({ error: 'Acesso negado' });
+      }
+
       const { data, error } = await supabase
         .from('users')
         .select('*')
@@ -660,8 +748,13 @@ async function startServer() {
     }
   });
 
-  app.post('/api/profile/:userId', checkAuth, async (req, res) => {
+  app.post('/api/profile/:userId', checkAuth, async (req: any, res) => {
     try {
+      // Only allow own profile or admin
+      if (req.session.user.id !== req.params.userId && req.session.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Acesso negado' });
+      }
+
       const { error } = await supabase
         .from('users')
         .upsert({
@@ -678,7 +771,7 @@ async function startServer() {
   });
 
   // Tasks
-  app.get('/api/tasks/:patientId', checkAuth, async (req, res) => {
+  app.get('/api/tasks/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
     try {
       const { data, error } = await supabase
         .from('tasks')
@@ -693,8 +786,13 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tasks/email/:email', checkAuth, async (req, res) => {
+  app.get('/api/tasks/email/:email', checkAuth, async (req: any, res) => {
     try {
+      // Only allow if searching for own email OR if therapist/admin
+      if (req.session.user.role !== 'therapist' && req.session.user.role !== 'admin' && req.session.user.email !== req.params.email) {
+        return res.status(403).json({ error: 'Acesso negado' });
+      }
+
       const { data, error } = await supabase
         .from('tasks')
         .select('*')
