@@ -4,7 +4,8 @@ import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
 import cookieParser from 'cookie-parser';
-import cookieSession from 'cookie-session';
+import session from 'express-session';
+import pgSession from 'connect-pg-simple';
 import dotenv from 'dotenv';
 import Stripe from 'stripe';
 import helmet from 'helmet';
@@ -126,13 +127,25 @@ async function startServer() {
 
   app.use(express.json());
   app.use(cookieParser());
-  app.use(cookieSession({
+
+  // Database Session Store
+  const PostgresStore = pgSession(session);
+  const sessionStore = process.env.DATABASE_URL 
+    ? new PostgresStore({ conString: process.env.DATABASE_URL, createTableIfMissing: true })
+    : undefined;
+
+  app.use(session({
+    store: sessionStore,
+    secret: process.env.SESSION_SECRET || 'verto-secret-key',
+    resave: false,
+    saveUninitialized: false,
     name: 'verto-session',
-    keys: [process.env.SESSION_SECRET || 'verto-secret-key'],
-    maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    secure: process.env.NODE_ENV === 'production',
-    httpOnly: true,
-    sameSite: 'lax'
+    cookie: { 
+      secure: process.env.NODE_ENV === 'production',
+      httpOnly: true,
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      sameSite: 'lax'
+    }
   }));
 
   // Auth Middleware
@@ -384,8 +397,11 @@ async function startServer() {
   });
 
   app.post('/api/auth/logout', (req, res) => {
-    req.session = null;
-    res.json({ success: true });
+    req.session.destroy((err) => {
+      if (err) return res.status(500).json({ error: 'Logout failed' });
+      res.clearCookie('verto-session');
+      res.json({ success: true });
+    });
   });
 
   app.get('/api/auth/me', (req, res) => {
