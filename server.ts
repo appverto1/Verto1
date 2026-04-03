@@ -198,8 +198,13 @@ async function startServer() {
   };
 
   app.get('/api/config', (req, res) => {
+    let url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
+    if (url && !url.startsWith('http')) {
+      url = `https://${url}`;
+    }
+    
     res.json({
-      supabaseUrl: process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL,
+      supabaseUrl: url,
       supabaseAnonKey: process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
     });
   });
