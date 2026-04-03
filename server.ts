@@ -130,10 +130,23 @@ async function startServer() {
 
   // Database Session Store
   const PostgresStore = pgSession(session);
-  const sessionStore = process.env.DATABASE_URL 
-    ? new PostgresStore({ conString: process.env.DATABASE_URL, createTableIfMissing: true })
-    : undefined;
+  let sessionStore;
+  console.log('DATABASE_URL presente:', !!process.env.DATABASE_URL);
+  try {
+    if (process.env.DATABASE_URL) {
+      sessionStore = new PostgresStore({ 
+        conString: process.env.DATABASE_URL, 
+        createTableIfMissing: true,
+        schemaName: 'public',
+        tableName: 'sessions'
+      });
+      console.log('Armazenamento de sessão no banco de dados configurado.');
+    }
+  } catch (err) {
+    console.error('ERRO AO INICIALIZAR PG-SESSION:', err);
+  }
 
+  console.log('Session store initialized:', !!sessionStore);
   app.use(session({
     store: sessionStore,
     secret: process.env.SESSION_SECRET || 'verto-secret-key',
@@ -938,9 +951,20 @@ async function startServer() {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      const indexPath = path.join(distPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(404).send('Frontend não encontrado. Certifique-se de que o build foi executado corretamente.');
+      }
     });
   }
+
+  // Global Error Handler
+  app.use((err: any, req: any, res: any, next: any) => {
+    console.error('SERVER ERROR:', err);
+    res.status(500).send('Internal Server Error: ' + (process.env.NODE_ENV === 'production' ? 'Ocorreu um erro no servidor.' : err.message));
+  });
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);

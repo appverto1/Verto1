@@ -1043,7 +1043,7 @@ export const LandingPage = ({ onLogin }: any) => {
                     onClick={handleGoogleLogin}
                     className="w-full bg-white border border-gray-200 text-gray-700 py-3.5 rounded-2xl font-bold text-sm shadow-sm hover:bg-gray-50 transition-all active:scale-[0.98] flex items-center justify-center gap-3"
                   >
-                    <img src="https://www.gstatic.com/lamda/images/google_signin_buttons_v2/google-icon.svg" alt="Google" className="w-5 h-5" />
+                    <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" alt="Google" className="w-5 h-5" />
                     Entrar com Google
                   </button>
 
@@ -1260,7 +1260,7 @@ export const LandingPage = ({ onLogin }: any) => {
                         onClick={handleGoogleLogin}
                         className="w-full bg-white border border-gray-100 text-gray-600 py-2.5 md:py-3 rounded-2xl font-semibold text-[11px] md:text-xs shadow-sm hover:bg-gray-50 transition-all active:scale-[0.98] flex items-center justify-center gap-3"
                       >
-                        <img src="https://www.gstatic.com/lamda/images/google_signin_buttons_v2/google-icon.svg" alt="Google" className="w-4 h-4" />
+                        <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" alt="Google" className="w-4 h-4" />
                         Cadastrar com Google
                       </button>
                     </form>
