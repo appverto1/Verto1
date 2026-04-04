@@ -13,8 +13,32 @@ import { SettingsMenu } from './SettingsMenu';
 import { InvitationModal } from './InvitationModal';
 import { RoomReservation } from './RoomReservation';
 
-export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, therapistAgenda, patientsHistory, therapistNotes, onAddNote, allTasks, onAddTask, onUpdateHistoryItem, onAddPatient, onUpdateHistoryItem: onUpdateHistoryItemProp, onUpdateTask, allPatients, clinicalRecords, onScheduleSession, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, activityLogs, onAddActivityLog, onViewTeam, onUpdateAgendaStatus }: any) => { 
+export const TherapistDashboard = ({ 
+  user, onLogout, protocols, setProtocols, therapistAgenda, patientsHistory, 
+  therapistNotes, onAddNote, allTasks, onAddTask, onUpdateHistoryItem, 
+  onAddPatient, onUpdateTask, allPatients, clinicalRecords, onScheduleSession, 
+  onUpdatePatient, onRecordTrial, onDeleteHistoryItem, activityLogs, 
+  onAddActivityLog, onViewTeam, onUpdateAgendaStatus,
+  rooms, setRooms, roomReservations, setRoomReservations,
+  specialtySettings, setSpecialtySettings, onUpdateProfile
+}: any) => { 
   const [view, setView] = useState('home'); 
+
+  // Sync view with URL hash to address navigation issues
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.replace('#', '') || 'home';
+      setView(hash);
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    handleHashChange(); // Initial check
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  const handleSetView = (newView: string) => {
+    window.location.hash = newView;
+    setView(newView);
+  };
   const [selectedPatientId, setSelectedPatientId] = useState<any>(null); 
   const [runTutorial, setRunTutorial] = useState(false); 
   const [tutorialStep, setTutorialStep] = useState(0); 
@@ -221,21 +245,30 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
 
   if (view === 'protocols') return <ProtocolManagementSystem protocols={protocols} onSaveProtocol={handleSaveProtocol} onDeleteProtocol={handleDeleteProtocol} onBack={() => setView('home')} />; 
   if (view === 'patients_registry') return <PatientRegistry patients={allPatients} clinicalRecords={clinicalRecords} onBack={() => setView('home')} onSelectPatient={onPatientClick} userRole={user.role} />; 
-  if (view === 'room_reservation') return <RoomReservation user={user} />;
+  if (view === 'room_reservation') return <RoomReservation user={user} rooms={rooms} setRooms={setRooms} reservations={roomReservations} setReservations={setRoomReservations} onBack={() => handleSetView('home')} />;
   
   if (view === 'profile') {
     return (
       <div className="p-8 bg-slate-50 min-h-screen">
         <div className="max-w-4xl mx-auto">
           <div className="flex items-center gap-4 mb-8">
-            <button onClick={() => setView('home')} className="p-2 hover:bg-white rounded-xl transition-all shadow-sm border border-slate-100"><ChevronRight className="rotate-180" /></button>
+            <button onClick={() => handleSetView('home')} className="p-2 hover:bg-white rounded-xl transition-all shadow-sm border border-slate-100"><ChevronRight className="rotate-180" /></button>
             <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Meu Perfil</h2>
           </div>
           
           <div className="bg-white rounded-[32px] p-8 shadow-sm border border-slate-100">
             <div className="flex items-center gap-6 mb-8 pb-8 border-b border-slate-50">
-              <div className="w-24 h-24 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center text-3xl font-bold">
-                {user.name?.charAt(0)}
+              <div className="relative group">
+                <div className="w-24 h-24 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center text-3xl font-bold overflow-hidden border-2 border-transparent group-hover:border-blue-500/20 transition-all">
+                  {user.profilePicture ? (
+                    <img src={user.profilePicture} alt="Profile" className="w-full h-full object-cover" />
+                  ) : (
+                    user.name?.charAt(0)
+                  )}
+                </div>
+                <button className="absolute -bottom-2 -right-2 p-2 bg-[#4318FF] text-white rounded-xl shadow-lg hover:scale-110 transition-all">
+                  <Camera size={14} />
+                </button>
               </div>
               <div>
                 <h3 className="text-xl font-bold text-slate-900">{user.name}</h3>
@@ -257,11 +290,40 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Especialidade Principal</label>
-                <input type="text" placeholder="Ex: Psicologia Infantil" className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" />
+                <select className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all">
+                  <option value="Psicólogo">Psicólogo</option>
+                  <option value="Terapeuta Ocupacional">Terapeuta Ocupacional</option>
+                  <option value="Fonoaudiólogo">Fonoaudiólogo</option>
+                  <option value="Fisioterapeuta">Fisioterapeuta</option>
+                </select>
               </div>
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Registro Profissional (CRP/CRM)</label>
-                <input type="text" placeholder="00/00000" className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" />
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Registro Profissional (CRP/CRM) {user.specialty === 'Psicólogo' && <span className="text-red-500">*</span>}</label>
+                <input 
+                  type="text" 
+                  value={user.crp || ''} 
+                  onChange={(e) => onUpdateProfile({ crp: e.target.value })}
+                  placeholder="00/00000" 
+                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" 
+                  required={user.specialty === 'Psicólogo'}
+                />
+              </div>
+            </div>
+
+            <div className="mt-10 pt-10 border-t border-slate-50">
+              <h3 className="text-sm font-bold text-slate-900 mb-6">Tempo de Sessão por Especialidade (minutos)</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                {Object.entries(specialtySettings).map(([spec, time]: any) => (
+                  <div key={spec} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">{spec}</label>
+                    <input 
+                      type="number" 
+                      value={time} 
+                      onChange={(e) => setSpecialtySettings({...specialtySettings, [spec]: parseInt(e.target.value)})}
+                      className="w-full bg-transparent border-none p-0 text-sm font-bold text-slate-900 focus:ring-0" 
+                    />
+                  </div>
+                ))}
               </div>
             </div>
             
@@ -423,28 +485,28 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
         
         <nav className="flex-1 space-y-2">
           <button 
-            onClick={() => setView('home')}
+            onClick={() => handleSetView('home')}
             className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'home' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
           >
             <LayoutDashboard size={20} /> Dashboard
           </button>
           
           <button 
-            onClick={() => setView('patients_registry')}
+            onClick={() => handleSetView('patients_registry')}
             className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'patients_registry' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
           >
             <Users size={20} /> Pacientes
           </button>
           
           <button 
-            onClick={() => setView('protocols')}
+            onClick={() => handleSetView('protocols')}
             className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'protocols' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
           >
             <ClipboardList size={20} /> Protocolos
           </button>
 
           <button 
-            onClick={() => setView('room_reservation')}
+            onClick={() => handleSetView('room_reservation')}
             className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'room_reservation' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
           >
             <DoorOpen size={20} /> Reserva de Salas
@@ -452,7 +514,7 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
           
           {(user?.role === 'coordinator' || user?.role === 'receptionist') && (
             <button 
-              onClick={() => setView('financial')}
+              onClick={() => handleSetView('financial')}
               className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'financial' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
             >
               <ShoppingBag size={20} /> Financeiro
@@ -470,7 +532,7 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
           
           {(user?.role === 'coordinator' || user?.role === 'therapist') && (
             <button 
-              onClick={() => setView('clinic')}
+              onClick={() => handleSetView('clinic')}
               className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'clinic' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
             >
               <Rocket size={20} /> Gestão da Clínica
@@ -741,7 +803,7 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
             <div className="space-y-4"> 
               <div className="relative"><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Paciente</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none focus:border-[#4318FF] font-semibold text-gray-700" placeholder="Buscar..." value={sessionPatientName} onChange={e => setSessionPatientName(e.target.value)} />{filteredPatients.length > 0 && (<div className="absolute top-full left-0 right-0 bg-white border border-gray-100 rounded-xl shadow-xl mt-1 z-20 max-h-40 overflow-y-auto no-scrollbar">{filteredPatients.map(p => (<div key={p.id} onClick={() => selectPatientForSession(p.name)} className="p-3 hover:bg-[#F4F7FE] cursor-pointer text-sm font-semibold text-gray-700 border-b border-gray-50 last:border-0 flex items-center gap-2"><div className="w-6 h-6 rounded-full bg-[#4318FF]/10 text-[#4318FF] flex items-center justify-center text-xs">{p.name.charAt(0)}</div>{p.name}</div>))}</div>)}</div> 
               <div className="grid grid-cols-2 gap-3"><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Data</label><input type="date" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionDate} onChange={e => setSessionDate(e.target.value)} /></div><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Hora</label><input type="time" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionTime} onChange={e => setSessionTime(e.target.value)} /></div></div> 
-              <div className="grid grid-cols-2 gap-3"><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Abordagem</label><select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionApproach} onChange={e => setSessionApproach(e.target.value)}><option value="">Selecione...</option><option value="Consulta Padrão">Consulta Padrão</option><option value="TCC">TCC</option><option value="ABA">ABA</option><option value="Integração Sensorial">Integração Sensorial</option></select></div><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Sala</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" placeholder="Ex: Sala 01" value={sessionRoom} onChange={e => setSessionRoom(e.target.value)} /></div></div>
+              <div className="grid grid-cols-2 gap-3"><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Abordagem</label><select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionApproach} onChange={e => setSessionApproach(e.target.value)}><option value="">Selecione...</option><option value="Consulta Padrão">Consulta Padrão</option><option value="TCC">TCC</option><option value="ABA">ABA</option><option value="Integração Sensorial">Integração Sensorial</option></select></div><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Sala</label><select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionRoom} onChange={e => setSessionRoom(e.target.value)}><option value="">Selecione...</option>{rooms.map((room: any) => (<option key={room.id} value={room.name}>{room.name}</option>))}</select></div></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Profissional Responsável</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" placeholder="Nome do Profissional" value={sessionProfessional} onChange={e => setSessionProfessional(e.target.value)} /></div>
                 <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Nº de Sessões</label><input type="number" min="1" max="12" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionNumSessions} onChange={e => setSessionNumSessions(parseInt(e.target.value))} /></div>
@@ -1100,21 +1162,22 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
         <div className="flex flex-col sm:flex-row gap-4"> 
           {user?.role !== 'receptionist' && (
             <>
-              <button id="protocols-btn" onClick={() => setView('protocols')} className="flex-1 bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex items-center justify-between hover:shadow-md transition-all group"> <div className="flex items-center gap-4"><div className="w-12 h-12 rounded-full bg-blue-50 text-[#4318FF] flex items-center justify-center group-hover:scale-110 transition-transform"><Settings size={24} /></div><div className="text-left"><h3 className="font-semibold text-gray-800 text-lg tracking-tight">Gestão de Protocolos</h3><p className="text-gray-500 text-xs font-medium">Crie e edite estruturas</p></div></div><ChevronRight className="text-gray-300" /> </button> 
-              <button id="patients-btn" onClick={() => setView('patients_registry')} className="flex-1 bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex items-center justify-between hover:shadow-md transition-all group"> <div className="flex items-center gap-4"><div className="w-12 h-12 rounded-full bg-purple-50 text-purple-600 flex items-center justify-center group-hover:scale-110 transition-transform"><Users size={24} /></div><div className="text-left"><h3 className="font-semibold text-gray-800 text-lg tracking-tight">Meus Pacientes</h3><p className="text-gray-500 text-xs font-medium">Acesse os prontuários</p></div></div><ChevronRight className="text-gray-300" /> </button> 
+              <button id="protocols-btn" onClick={() => handleSetView('protocols')} className="flex-1 bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex items-center justify-between hover:shadow-md transition-all group"> <div className="flex items-center gap-4"><div className="w-12 h-12 rounded-full bg-blue-50 text-[#4318FF] flex items-center justify-center group-hover:scale-110 transition-transform"><Settings size={24} /></div><div className="text-left"><h3 className="font-semibold text-gray-800 text-lg tracking-tight">Gestão de Protocolos</h3><p className="text-gray-500 text-xs font-medium">Crie e edite estruturas</p></div></div><ChevronRight className="text-gray-300" /> </button> 
+              <button id="patients-btn" onClick={() => handleSetView('patients_registry')} className="flex-1 bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex items-center justify-between hover:shadow-md transition-all group"> <div className="flex items-center gap-4"><div className="w-12 h-12 rounded-full bg-purple-50 text-purple-600 flex items-center justify-center group-hover:scale-110 transition-transform"><Users size={24} /></div><div className="text-left"><h3 className="font-semibold text-gray-800 text-lg tracking-tight">Meus Pacientes</h3><p className="text-gray-500 text-xs font-medium">Acesse os prontuários</p></div></div><ChevronRight className="text-gray-300" /> </button> 
             </>
           )}
-          {user?.role === 'receptionist' && (
-            <div className="flex-1 bg-blue-50 p-6 rounded-3xl border border-blue-100 flex items-center gap-4">
-              <div className="w-12 h-12 rounded-full bg-white text-blue-500 flex items-center justify-center">
-                <Calendar size={24} />
+          <button id="rooms-btn" onClick={() => handleSetView('room_reservation')} className="flex-1 bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex items-center justify-between hover:shadow-md transition-all group"> 
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-full bg-orange-50 text-orange-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+                <DoorOpen size={24} />
               </div>
-              <div>
-                <h3 className="font-bold text-blue-900">Acesso Recepcionista</h3>
-                <p className="text-blue-700/70 text-xs">Seu acesso é focado na gestão de agendas e horários.</p>
+              <div className="text-left">
+                <h3 className="font-semibold text-gray-800 text-lg tracking-tight">Reserva de Salas</h3>
+                <p className="text-gray-500 text-xs font-medium">Calendário e disponibilidade</p>
               </div>
             </div>
-          )}
+            <ChevronRight className="text-gray-300" /> 
+          </button>
         </div> 
 
         {user?.role === 'coordinator' && (

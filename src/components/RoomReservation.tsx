@@ -32,27 +32,14 @@ interface Room {
   specialties: string[];
 }
 
-export function RoomReservation({ user }: { user: any }) {
-  const [reservations, setReservations] = useState<Reservation[]>([
-    {
-      id: '1',
-      roomId: 'room1',
-      roomName: 'Sala 01 - Kids',
-      professionalId: 'prof1',
-      professionalName: 'Dra. Raísa',
-      date: new Date().toISOString().split('T')[0],
-      startTime: '09:00',
-      endTime: '10:00'
-    }
-  ]);
-
-  const [rooms, setRooms] = useState<Room[]>([
-    { id: 'room1', name: 'Sala 01 - Kids', specialties: ['ABA', 'TCC'] },
-    { id: 'room2', name: 'Sala 02 - Adulto', specialties: ['TCC', 'Psicanálise'] },
-    { id: 'room3', name: 'Sala 03 - Avaliação', specialties: ['Neuropsicologia'] },
-    { id: 'room4', name: 'Sala 04 - TO', specialties: ['Integração Sensorial', 'TO'] },
-  ]);
-
+export function RoomReservation({ user, rooms, setRooms, reservations, setReservations, onBack }: { 
+  user: any, 
+  rooms: Room[], 
+  setRooms: React.Dispatch<React.SetStateAction<Room[]>>, 
+  reservations: Reservation[], 
+  setReservations: React.Dispatch<React.SetStateAction<Reservation[]>>,
+  onBack: () => void
+}) {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isManageRoomsOpen, setIsManageRoomsOpen] = useState(false);
@@ -157,9 +144,14 @@ export function RoomReservation({ user }: { user: any }) {
   return (
     <div className="p-6 max-w-6xl mx-auto font-sans">
       <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Reserva de Salas</h1>
-          <p className="text-slate-500 text-sm">Gerencie o uso das salas da clínica.</p>
+        <div className="flex items-center gap-4">
+          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full transition-all">
+            <ChevronLeft size={24} className="text-slate-600" />
+          </button>
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Reserva de Salas</h1>
+            <p className="text-slate-500 text-sm">Gerencie o uso das salas da clínica.</p>
+          </div>
         </div>
         
         <div className="flex items-center gap-3">

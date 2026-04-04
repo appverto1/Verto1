@@ -359,6 +359,24 @@ export const dataService = {
     }
   },
 
+  async updateMemberRole(memberId: string, role: string) {
+    try {
+      const response = await fetch(`/api/clinic/members/${memberId}/role`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role })
+      });
+      if (response.ok) {
+        return await response.json();
+      }
+      const err = await response.json();
+      return { success: false, error: err.error || 'Failed to update role' };
+    } catch (error) {
+      console.error('Error updating member role:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
   async acceptInvitation(invitationId: string) {
     try {
       const response = await fetch('/api/clinic/accept-invite', {

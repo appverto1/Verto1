@@ -618,6 +618,31 @@ async function startServer() {
     }
   });
 
+  app.patch('/api/clinic/members/:memberId/role', checkAuth, async (req: any, res) => {
+    const adminUser = req.session.user;
+    if (adminUser.role !== 'coordinator' && adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Apenas coordenadores podem atualizar papéis' });
+    }
+
+    const { memberId } = req.params;
+    const { role } = req.body;
+
+    if (!role) return res.status(400).json({ error: 'Papel é obrigatório' });
+
+    try {
+      const { error } = await supabase
+        .from('users')
+        .update({ role })
+        .eq('id', memberId)
+        .eq('clinic_id', adminUser.clinicId || adminUser.id);
+
+      if (error) throw error;
+      res.json({ success: true, message: 'Papel atualizado com sucesso' });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
   // Create Patient User Account (called by therapist when adding a patient)
   app.post('/api/patients/create-user', checkAuth, async (req: any, res) => {
     const { email, name } = req.body;

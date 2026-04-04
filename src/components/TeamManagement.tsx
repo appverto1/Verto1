@@ -93,6 +93,20 @@ export function TeamManagement({ user }: { user: any }) {
     }
   };
 
+  const handleUpdateRole = async (memberId: string, newRole: any) => {
+    try {
+      const result = await dataService.updateMemberRole(memberId, newRole);
+      if (result.success) {
+        setSuccess('Papel atualizado com sucesso');
+        fetchMembers();
+      } else {
+        setError(result.error);
+      }
+    } catch (err) {
+      setError('Erro ao atualizar papel');
+    }
+  };
+
   const roleIcons = {
     coordinator: <Shield className="text-purple-500" size={18} />,
     therapist: <Stethoscope className="text-blue-500" size={18} />,
@@ -297,7 +311,16 @@ export function TeamManagement({ user }: { user: any }) {
                       <div className="hidden md:block text-right">
                         <div className="flex items-center justify-end gap-1.5 mb-0.5">
                           {roleIcons[member.role as keyof typeof roleIcons]}
-                          <span className="text-xs font-bold text-slate-700">{roleLabels[member.role as keyof typeof roleLabels]}</span>
+                          <select 
+                            value={member.role}
+                            disabled={member.id === user.id}
+                            onChange={(e) => handleUpdateRole(member.id, e.target.value)}
+                            className="text-xs font-bold text-slate-700 bg-transparent border-none p-0 focus:ring-0 cursor-pointer disabled:cursor-default"
+                          >
+                            <option value="coordinator">Coordenador</option>
+                            <option value="therapist">Terapeuta</option>
+                            <option value="receptionist">Recepcionista</option>
+                          </select>
                         </div>
                         <p className="text-[10px] text-slate-400">Desde {new Date(member.created_at).toLocaleDateString()}</p>
                       </div>

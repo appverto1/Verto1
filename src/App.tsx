@@ -146,6 +146,32 @@ export default function App() {
   const [clinicalRecords, setClinicalRecords] = useState<any[]>([]);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
   const [view, setView] = useState<'dashboard' | 'team'>('dashboard');
+  const [rooms, setRooms] = useState<any[]>([
+    { id: 'room1', name: 'Sala 01 - Kids', specialties: ['ABA', 'TCC'] },
+    { id: 'room2', name: 'Sala 02 - Terapia Ocupacional', specialties: ['Integração Sensorial', 'TO'] },
+    { id: 'room3', name: 'Sala 03 - Avaliação', specialties: ['Neuropsicologia'] },
+    { id: 'room4', name: 'Sala 04 - TO', specialties: ['Integração Sensorial', 'TO'] },
+  ]);
+  const [roomReservations, setRoomReservations] = useState<any[]>([
+    {
+      id: '1',
+      roomId: 'room1',
+      roomName: 'Sala 01 - Kids',
+      professionalId: 'prof1',
+      professionalName: 'Dra. Raísa',
+      date: new Date().toISOString().split('T')[0],
+      startTime: '09:00',
+      endTime: '10:00'
+    }
+  ]);
+  const [specialtySettings, setSpecialtySettings] = useState<any>({
+    'ABA': 60,
+    'TCC': 50,
+    'TO': 45,
+    'Neuropsicologia': 90
+  });
+  const [profilePicture, setProfilePicture] = useState<string | null>(null);
+  const [crp, setCrp] = useState<string>('');
   const [showInvitationModal, setShowInvitationModal] = useState(false);
 
   const onAddActivityLog = async (action: string, details: string, category: 'clinical' | 'management' | 'system' = 'clinical') => {
@@ -959,7 +985,7 @@ export default function App() {
         </div>
       ) : (
         <TherapistDashboard 
-          user={user}
+          user={{...user, profilePicture, crp}} 
           onLogout={handleLogout} 
           onViewTeam={() => setView('team')}
           therapistAgenda={therapistAgenda} 
@@ -982,6 +1008,16 @@ export default function App() {
           onUpdateAgendaStatus={handleUpdateAgendaStatus}
           activityLogs={activityLogs} 
           onAddActivityLog={onAddActivityLog} 
+          rooms={rooms}
+          setRooms={setRooms}
+          roomReservations={roomReservations}
+          setRoomReservations={setRoomReservations}
+          specialtySettings={specialtySettings}
+          setSpecialtySettings={setSpecialtySettings}
+          onUpdateProfile={(data: any) => {
+            if (data.profilePicture !== undefined) setProfilePicture(data.profilePicture);
+            if (data.crp !== undefined) setCrp(data.crp);
+          }}
         />
       )}
 
