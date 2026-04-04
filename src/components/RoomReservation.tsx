@@ -25,6 +25,7 @@ export interface Reservation {
   date: string;
   startTime: string;
   endTime: string;
+  status?: string;
 }
 
 export interface Room {
@@ -78,15 +79,26 @@ export const RoomReservationTable = ({
                     time >= r.startTime && time < r.endTime
                   );
 
+                  const isPending = reservation?.status === 'pending';
+                  const isConfirmed = reservation?.status === 'confirmed';
+
                   return (
                     <td key={room.id} className="p-2 border-b border-slate-50 relative h-20">
                       {reservation ? (
-                        <div className={`h-full w-full rounded-2xl p-3 flex flex-col justify-between transition-all ${reservation.professionalId === user.id ? 'bg-blue-50 border border-blue-100' : 'bg-slate-50 border border-slate-100'}`}>
+                        <div className={`h-full w-full rounded-2xl p-3 flex flex-col justify-between transition-all ${
+                          reservation.professionalId === user.id 
+                            ? isPending 
+                              ? 'bg-blue-50/40 border border-dashed border-blue-200 opacity-60' 
+                              : 'bg-blue-50 border border-blue-100' 
+                            : isPending
+                              ? 'bg-slate-50/40 border border-dashed border-slate-200 opacity-60'
+                              : 'bg-slate-50 border border-slate-100'
+                        }`}>
                           <div>
                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
                               {reservation.startTime} - {reservation.endTime}
                             </p>
-                            <p className="text-xs font-bold text-slate-900 truncate">
+                            <p className={`text-xs font-bold text-slate-900 truncate ${isPending ? 'italic' : ''}`}>
                               {reservation.professionalName}
                             </p>
                           </div>

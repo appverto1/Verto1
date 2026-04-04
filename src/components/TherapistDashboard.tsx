@@ -255,6 +255,24 @@ export const TherapistDashboard = ({
   if (view === 'room_reservation') return <RoomReservation user={user} rooms={rooms} setRooms={setRooms} reservations={roomReservations} setReservations={setRoomReservations} onBack={() => handleSetView('home')} />;
   
   if (view === 'profile') {
+    const [profileName, setProfileName] = useState(user.name || '');
+    const [profileEmail, setProfileEmail] = useState(user.email || '');
+    const [profileSpecialty, setProfileSpecialty] = useState(user.specialty || 'Psicólogo');
+    const [profileCrp, setProfileCrp] = useState(user.crp || '');
+
+    const handleSaveProfile = () => {
+      if (profileSpecialty === 'Psicólogo' && !profileCrp.trim()) {
+        return alert("O preenchimento do CRP é obrigatório para Psicólogos.");
+      }
+      onUpdateProfile({
+        name: profileName,
+        email: profileEmail,
+        specialty: profileSpecialty,
+        crp: profileCrp
+      });
+      alert("Alterações salvas com sucesso!");
+    };
+
     return (
       <div className="p-8 bg-slate-50 min-h-screen">
         <div className="max-w-4xl mx-auto">
@@ -308,15 +326,29 @@ export const TherapistDashboard = ({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nome Completo</label>
-                <input type="text" defaultValue={user.name} className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" />
+                <input 
+                  type="text" 
+                  value={profileName} 
+                  onChange={(e) => setProfileName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" 
+                />
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">E-mail Profissional</label>
-                <input type="email" defaultValue={user.email} className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" />
+                <input 
+                  type="email" 
+                  value={profileEmail} 
+                  onChange={(e) => setProfileEmail(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" 
+                />
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Especialidade Principal</label>
-                <select className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all">
+                <select 
+                  value={profileSpecialty}
+                  onChange={(e) => setProfileSpecialty(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all"
+                >
                   <option value="Psicólogo">Psicólogo</option>
                   <option value="Terapeuta Ocupacional">Terapeuta Ocupacional</option>
                   <option value="Fonoaudiólogo">Fonoaudiólogo</option>
@@ -324,14 +356,14 @@ export const TherapistDashboard = ({
                 </select>
               </div>
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Registro Profissional (CRP/CRM) {user.specialty === 'Psicólogo' && <span className="text-red-500">*</span>}</label>
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Registro Profissional (CRP/CRM) {profileSpecialty === 'Psicólogo' && <span className="text-red-500">*</span>}</label>
                 <input 
                   type="text" 
-                  value={user.crp || ''} 
-                  onChange={(e) => onUpdateProfile({ crp: e.target.value })}
+                  value={profileCrp} 
+                  onChange={(e) => setProfileCrp(e.target.value)}
                   placeholder="00/00000" 
                   className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" 
-                  required={user.specialty === 'Psicólogo'}
+                  required={profileSpecialty === 'Psicólogo'}
                 />
               </div>
             </div>
@@ -354,7 +386,10 @@ export const TherapistDashboard = ({
             </div>
             
             <div className="mt-10 flex justify-end">
-              <button className="bg-[#4318FF] text-white px-8 py-4 rounded-2xl font-bold shadow-lg shadow-blue-500/20 hover:scale-105 transition-all">
+              <button 
+                onClick={handleSaveProfile}
+                className="bg-[#4318FF] text-white px-8 py-4 rounded-2xl font-bold shadow-lg shadow-blue-500/20 hover:scale-105 transition-all"
+              >
                 Salvar Alterações
               </button>
             </div>

@@ -489,6 +489,12 @@ export default function App() {
   };
   const handleUpdateAgendaStatus = (id: any, status: string) => {
     setTherapistAgenda(prev => prev.map(item => item.id === id ? { ...item, status } : item));
+    
+    if (status === 'canceled') {
+      setRoomReservations(prev => prev.filter(r => r.id !== 'res-' + id));
+    } else {
+      setRoomReservations(prev => prev.map(r => r.id === 'res-' + id ? { ...r, status } : r));
+    }
   };
 
   const handleAddPatient = async (data: any) => { 
@@ -658,7 +664,8 @@ export default function App() {
         professionalName: user.name,
         date: item.date,
         startTime: item.time,
-        endTime: calculateEndTime(item.time, sess.approach)
+        endTime: calculateEndTime(item.time, sess.approach),
+        status: item.status
       }));
       setRoomReservations(prev => [...prev, ...newRoomReservations]);
     }
