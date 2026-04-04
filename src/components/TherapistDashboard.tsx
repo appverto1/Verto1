@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { HelpCircle, ShoppingBag, UserPlus, LogOut, Search, Menu, X, Calendar, CalendarRange, CalendarDays, Plus, CalendarPlus, MessageCircle, ChevronRight, Settings, Users, Rocket, ShieldCheck, Lightbulb, ClipboardList, Clock, Filter as FilterIcon, Camera, Share2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { HelpCircle, ShoppingBag, UserPlus, LogOut, Search, Menu, X, Calendar, CalendarRange, CalendarDays, Plus, CalendarPlus, MessageCircle, ChevronRight, Settings, Users, Rocket, ShieldCheck, Lightbulb, ClipboardList, Clock, Filter as FilterIcon, Camera, Share2, AlertCircle, CheckCircle2, LayoutDashboard, DoorOpen } from 'lucide-react';
 import { LogoVerto } from './Common';
 import { googleCalendarService } from '../services/googleCalendarService';
 import { TutorialOverlay } from './Tutorial';
@@ -11,6 +11,7 @@ import { PatientDetailView } from './PatientDetailView';
 import { TeamManagement } from './TeamManagement';
 import { SettingsMenu } from './SettingsMenu';
 import { InvitationModal } from './InvitationModal';
+import { RoomReservation } from './RoomReservation';
 
 export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, therapistAgenda, patientsHistory, therapistNotes, onAddNote, allTasks, onAddTask, onUpdateHistoryItem, onAddPatient, onUpdateHistoryItem: onUpdateHistoryItemProp, onUpdateTask, allPatients, clinicalRecords, onScheduleSession, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, activityLogs, onAddActivityLog, onViewTeam, onUpdateAgendaStatus }: any) => { 
   const [view, setView] = useState('home'); 
@@ -210,6 +211,7 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
 
   if (view === 'protocols') return <ProtocolManagementSystem protocols={protocols} onSaveProtocol={handleSaveProtocol} onDeleteProtocol={handleDeleteProtocol} onBack={() => setView('home')} />; 
   if (view === 'patients_registry') return <PatientRegistry patients={allPatients} clinicalRecords={clinicalRecords} onBack={() => setView('home')} onSelectPatient={onPatientClick} userRole={user.role} />; 
+  if (view === 'room_reservation') return <RoomReservation user={user} />;
   if (view === 'clinic') return <div className="p-8 text-center bg-white min-h-screen flex flex-col items-center justify-center"><Rocket size={64} className="text-emerald-500 mb-4 animate-bounce" /><h2 className="text-2xl font-bold text-gray-800">Gestão da Clínica</h2><p className="text-gray-500 max-w-md mx-auto mt-2">Esta funcionalidade está sendo atualizada para incluir novos relatórios financeiros e DRE automático.</p><button onClick={() => setView('home')} className="mt-8 px-8 py-3 bg-emerald-500 text-white rounded-2xl font-bold shadow-lg shadow-emerald-500/20 hover:opacity-90 transition-all">Voltar ao Início</button></div>;
   
   if (view === 'financial') {
@@ -299,8 +301,98 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
   } 
   
   return ( 
-    <div className="min-h-screen bg-gray-50 flex flex-col overflow-y-auto"> 
-      {runTutorial && ( <TutorialOverlay steps={dashboardSteps} onClose={() => setRunTutorial(false)} currentStepIndex={tutorialStep} onStepChange={setTutorialStep} /> )} 
+    <div className="flex min-h-screen bg-[#F4F7FE] font-sans overflow-hidden">
+      {/* Desktop Sidebar */}
+      <aside className="hidden lg:flex flex-col w-72 bg-white border-r border-slate-100 p-6 sticky top-0 h-screen overflow-y-auto shrink-0">
+        <div className="mb-10 px-4">
+          <LogoVerto size={40} showText={true} />
+        </div>
+        
+        <nav className="flex-1 space-y-2">
+          <button 
+            onClick={() => setView('home')}
+            className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'home' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
+          >
+            <LayoutDashboard size={20} /> Dashboard
+          </button>
+          
+          <button 
+            onClick={() => setView('patients_registry')}
+            className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'patients_registry' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
+          >
+            <Users size={20} /> Pacientes
+          </button>
+          
+          <button 
+            onClick={() => setView('protocols')}
+            className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'protocols' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
+          >
+            <ClipboardList size={20} /> Protocolos
+          </button>
+
+          <button 
+            onClick={() => setView('room_reservation')}
+            className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'room_reservation' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
+          >
+            <DoorOpen size={20} /> Reserva de Salas
+          </button>
+          
+          {(user?.role === 'coordinator' || user?.role === 'receptionist') && (
+            <button 
+              onClick={() => setView('financial')}
+              className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'financial' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
+            >
+              <ShoppingBag size={20} /> Financeiro
+            </button>
+          )}
+          
+          {user?.role === 'coordinator' && (
+            <button 
+              onClick={onViewTeam}
+              className="w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+            >
+              <Users size={20} /> Gestão da Equipe
+            </button>
+          )}
+          
+          {(user?.role === 'coordinator' || user?.role === 'therapist') && (
+            <button 
+              onClick={() => setView('clinic')}
+              className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'clinic' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
+            >
+              <Rocket size={20} /> Gestão da Clínica
+            </button>
+          )}
+          
+          <div className="pt-6 mt-6 border-t border-slate-50 space-y-2">
+            <button onClick={() => setIsMarketplaceOpen(true)} className="w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm text-slate-400 hover:bg-slate-50 hover:text-slate-600">
+              <ShoppingBag size={20} /> Marketplace
+            </button>
+            <button onClick={() => setIsActivityLogOpen(true)} className="w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm text-slate-400 hover:bg-slate-50 hover:text-slate-600">
+              <ClipboardList size={20} /> Log de Atividades
+            </button>
+            <button 
+              onClick={async () => {
+                const result = await googleCalendarService.connect();
+                if (result.success) alert('Google Agenda conectado com sucesso!');
+              }} 
+              className="w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+            >
+              <Share2 size={20} /> Google Agenda
+            </button>
+          </div>
+        </nav>
+        
+        <div className="mt-auto pt-6 border-t border-slate-50">
+          <button onClick={onLogout} className="flex items-center gap-3 p-3.5 w-full text-red-500 hover:bg-red-50 rounded-2xl transition-all font-bold text-sm">
+            <LogOut size={20} /> Sair
+          </button>
+        </div>
+      </aside>
+
+      {/* Main Content Area */}
+      <main className="flex-1 overflow-y-auto h-screen relative">
+        {runTutorial && ( <TutorialOverlay steps={dashboardSteps} onClose={() => setRunTutorial(false)} currentStepIndex={tutorialStep} onStepChange={setTutorialStep} /> )} 
       <AnamnesisModal isOpen={isRegisterModalOpen} onClose={() => setIsRegisterModalOpen(false)} initialData={null} onSave={handleRegisterSubmit} mode="create" /> 
       
       {isPaymentModalOpen && (
@@ -542,18 +634,11 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
           </div> 
         </div> 
       )} 
-      <div className="bg-white px-6 pt-10 pb-6 shadow-sm z-20"> 
-        <div className="flex justify-between items-center mb-6"> 
-          <div id="welcome-header" className="flex items-center gap-4"> 
-            <LogoVerto size={48} showText={true} />
-            <div className="w-px h-8 bg-gray-100 mx-2"></div>
-            <div>
-              <h1 className="text-2xl font-semibold text-gray-800 leading-none tracking-tight">{user?.name || 'Profissional'}</h1> 
-              <p className="text-xs text-gray-500 uppercase font-semibold tracking-widest mt-1">
-                {user?.role === 'coordinator' ? 'Coordenador' : user?.role === 'receptionist' ? 'Recepcionista' : 'Terapeuta Clínica'}
-              </p> 
-            </div>
-          </div> 
+      {/* Responsive Header */}
+      <div className="bg-white lg:bg-transparent px-6 lg:px-10 pt-6 lg:pt-10 pb-6 z-20"> 
+        {/* Mobile Header */}
+        <div className="lg:hidden flex justify-between items-center mb-6"> 
+          <LogoVerto size={32} showText={true} />
           <div className="flex items-center gap-3 relative"> 
             <SettingsMenu 
               user={user} 
@@ -581,37 +666,55 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
                    />
                 </div>
 
-                <button onClick={() => {setRunTutorial(true); setTutorialStep(0); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider">
+                <button onClick={() => {setView('home'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
+                  <LayoutDashboard size={18}/> Dashboard
+                </button>
+
+                <button onClick={() => {setView('patients_registry'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
+                  <Users size={18}/> Pacientes
+                </button>
+
+                <button onClick={() => {setView('protocols'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
+                  <ClipboardList size={18}/> Protocolos
+                </button>
+
+                <button onClick={() => {setView('room_reservation'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
+                  <DoorOpen size={18}/> Reserva de Salas
+                </button>
+
+                <div className="h-px bg-gray-100 my-1"></div>
+
+                <button onClick={() => {setRunTutorial(true); setTutorialStep(0); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
                   <HelpCircle size={18}/> Tutorial / Ajuda
                 </button>
                 
-                <button id="menu-marketplace" onClick={() => {setIsMarketplaceOpen(true); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#05CD99] transition-colors text-xs font-semibold uppercase tracking-wider">
+                <button id="menu-marketplace" onClick={() => {setIsMarketplaceOpen(true); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#05CD99] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
                   <ShoppingBag size={18}/> Marketplace
                 </button>
 
                 {(user?.role === 'coordinator' || user?.role === 'receptionist') && (
-                  <button id="menu-financial" onClick={() => {setView('financial'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-emerald-500 transition-colors text-xs font-semibold uppercase tracking-wider">
+                  <button id="menu-financial" onClick={() => {setView('financial'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-emerald-500 transition-colors text-xs font-semibold uppercase tracking-wider text-left">
                     <ShoppingBag size={18}/> Financeiro & Pagamentos
                   </button>
                 )}
 
-                <button id="menu-new-patient" onClick={() => {setIsRegisterModalOpen(true); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider">
+                <button id="menu-new-patient" onClick={() => {setIsRegisterModalOpen(true); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
                   <UserPlus size={18}/> Novo Paciente
                 </button>
 
                 {user?.role === 'coordinator' && (
-                  <button id="menu-team" onClick={() => {onViewTeam(); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-purple-600 transition-colors text-xs font-semibold uppercase tracking-wider">
+                  <button id="menu-team" onClick={() => {onViewTeam(); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-purple-600 transition-colors text-xs font-semibold uppercase tracking-wider text-left">
                     <Users size={18}/> Gestão da Equipe
                   </button>
                 )}
 
                 {(user?.role === 'coordinator' || user?.role === 'therapist') && (
-                  <button id="menu-clinic" onClick={() => {setView('clinic'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-emerald-500 transition-colors text-xs font-semibold uppercase tracking-wider">
+                  <button id="menu-clinic" onClick={() => {setView('clinic'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-emerald-500 transition-colors text-xs font-semibold uppercase tracking-wider text-left">
                     <Rocket size={18}/> Gestão da Clínica
                   </button>
                 )}
 
-                <button id="menu-activity-log" onClick={() => {setIsActivityLogOpen(true); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-blue-500 transition-colors text-xs font-semibold uppercase tracking-wider">
+                <button id="menu-activity-log" onClick={() => {setIsActivityLogOpen(true); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-blue-500 transition-colors text-xs font-semibold uppercase tracking-wider text-left">
                   <ClipboardList size={18}/> Log de Atividades
                 </button>
 
@@ -623,19 +726,43 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
                     }
                     setIsMenuOpen(false);
                   }} 
-                  className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-blue-600 transition-colors text-xs font-semibold uppercase tracking-wider"
+                  className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-blue-600 transition-colors text-xs font-semibold uppercase tracking-wider text-left"
                 >
                   <Share2 size={18}/> Integrar Google Agenda
                 </button>
 
                 <div className="h-px bg-gray-100 my-1"></div>
 
-                <button id="menu-logout" onClick={onLogout} className="flex items-center gap-3 p-3 hover:bg-red-50 rounded-xl text-red-500 transition-colors text-xs font-semibold uppercase tracking-wider">
+                <button id="menu-logout" onClick={onLogout} className="flex items-center gap-3 p-3 hover:bg-red-50 rounded-xl text-red-500 transition-colors text-xs font-semibold uppercase tracking-wider text-left">
                   <LogOut size={18}/> Sair
                 </button>
               </div>
             )}
           </div> 
+        </div>
+
+        {/* Desktop Header */}
+        <div className="hidden lg:flex justify-between items-center mb-6">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Olá, {user?.name?.split(' ')[0] || 'Profissional'}</h1>
+            <p className="text-slate-500 font-medium">Bem-vindo de volta ao seu painel.</p>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="relative">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+              <input 
+                type="text" 
+                placeholder="Buscar..." 
+                className="pl-12 pr-4 py-3 bg-white border border-slate-100 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all w-64 shadow-sm"
+              />
+            </div>
+            <SettingsMenu 
+              user={user} 
+              onLogout={onLogout} 
+              onViewTeam={onViewTeam} 
+              onOpenInvitations={() => setShowInvitationModal(true)} 
+            />
+          </div>
         </div>
 
         <div id="agenda-toggles" className="bg-gray-100 p-1 rounded-xl mb-6 flex gap-1 w-full max-w-sm">
@@ -889,7 +1016,8 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
             </div>
           </button>
         )}
-      </div> 
+      </div>
+    </main>
 
       {showInvitationModal && (
         <InvitationModal 
