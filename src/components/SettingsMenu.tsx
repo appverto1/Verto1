@@ -15,9 +15,11 @@ interface SettingsMenuProps {
   onLogout: () => void;
   onViewTeam?: () => void;
   onOpenInvitations?: () => void;
+  onViewProfile?: () => void;
+  onViewBilling?: () => void;
 }
 
-export function SettingsMenu({ user, onLogout, onViewTeam, onOpenInvitations }: SettingsMenuProps) {
+export function SettingsMenu({ user, onLogout, onViewTeam, onOpenInvitations, onViewProfile, onViewBilling }: SettingsMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -69,7 +71,7 @@ export function SettingsMenu({ user, onLogout, onViewTeam, onOpenInvitations }: 
               <button
                 onClick={() => {
                   setIsOpen(false);
-                  // Profile logic
+                  onViewProfile?.();
                 }}
                 className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
               >
@@ -116,7 +118,7 @@ export function SettingsMenu({ user, onLogout, onViewTeam, onOpenInvitations }: 
                 <button
                   onClick={() => {
                     setIsOpen(false);
-                    // Billing logic
+                    onViewBilling?.();
                   }}
                   className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
                 >

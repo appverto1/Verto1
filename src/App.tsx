@@ -595,8 +595,33 @@ export default function App() {
   };
   const handleScheduleSession = (sess: any) => { 
     const pid = allPatients.find(p => p.name === sess.patientName)?.id || Date.now(); 
-    setTherapistAgenda(prev => [...prev, {id: pid, name: sess.patientName, date: sess.date, time: sess.time, status: 'pending', type: sess.approach, color: 'bg-blue-100 text-blue-600'}].sort((a,b) => a.time.localeCompare(b.time))); 
-    onAddActivityLog("Agendamento de Sessão", `Sessão agendada para "${sess.patientName}" em ${sess.date} às ${sess.time}.`, 'management');
+    const numSessions = sess.numSessions || 1;
+    const newItems = [];
+    
+    for (let i = 0; i < numSessions; i++) {
+      const date = new Date(sess.date + 'T00:00:00');
+      date.setDate(date.getDate() + (i * 7)); // Weekly recurrence
+      const dateStr = date.toISOString().split('T')[0];
+      
+      newItems.push({
+        id: Date.now() + i, // Unique ID for each session
+        patientId: pid,
+        name: sess.patientName, 
+        date: dateStr, 
+        time: sess.time, 
+        status: 'pending', 
+        type: sess.approach, 
+        color: 'bg-blue-100 text-blue-600',
+        professional: sess.professional,
+        room: sess.room
+      });
+    }
+
+    setTherapistAgenda(prev => [...prev, ...newItems].sort((a,b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      return a.time.localeCompare(b.time);
+    })); 
+    onAddActivityLog("Agendamento de Sessão", `${numSessions} sessões agendadas para "${sess.patientName}" começando em ${sess.date}.`, 'management');
   };
   const handleMoodCheckin = (l: number, n: string, i: string, t: any) => setHistory(prev => [{ id: Date.now(), patientId: user.id, type: 'checkin', title: "Check-in", time: new Date().toLocaleTimeString(), energy: l, note: n, icon: i, dateGroup: "Hoje", tag: t }, ...prev]);
   const handleCompleteTask = async (t: any, e: number, n: string) => { 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { HelpCircle, ShoppingBag, UserPlus, LogOut, Search, Menu, X, Calendar, CalendarRange, CalendarDays, Plus, CalendarPlus, MessageCircle, ChevronRight, Settings, Users, Rocket, ShieldCheck, Lightbulb, ClipboardList, Clock, Filter as FilterIcon, Camera, Share2, AlertCircle, CheckCircle2, LayoutDashboard, DoorOpen } from 'lucide-react';
+import { HelpCircle, ShoppingBag, UserPlus, LogOut, Search, Menu, X, Calendar, CalendarRange, CalendarDays, Plus, CalendarPlus, MessageCircle, ChevronRight, Settings, Users, Rocket, ShieldCheck, Lightbulb, ClipboardList, Clock, Filter as FilterIcon, Camera, Share2, AlertCircle, CheckCircle2, LayoutDashboard, DoorOpen, CreditCard } from 'lucide-react';
 import { LogoVerto } from './Common';
 import { googleCalendarService } from '../services/googleCalendarService';
 import { TutorialOverlay } from './Tutorial';
@@ -40,6 +40,7 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
   const [sessionApproach, setSessionApproach] = useState("");
   const [sessionRoom, setSessionRoom] = useState("");
   const [sessionProfessional, setSessionProfessional] = useState("Dra. Raísa");
+  const [sessionNumSessions, setSessionNumSessions] = useState(1);
   const [agendaView, setAgendaView] = useState('day'); 
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [isDayDetailsModalOpen, setIsDayDetailsModalOpen] = useState(false);
@@ -104,7 +105,15 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
   const selectPatientForSession = (name: string) => { setSessionPatientName(name); setFilteredPatients([]); }; 
   const handleSessionSubmit = async () => { 
     if(!sessionPatientName || !sessionTime) return alert("Preencha nome e horário"); 
-    const newSession = { patientName: sessionPatientName, date: sessionDate, time: sessionTime, approach: sessionApproach || "Consulta Padrão", room: sessionRoom || "Sala 01", professional: sessionProfessional }; 
+    const newSession = { 
+      patientName: sessionPatientName, 
+      date: sessionDate, 
+      time: sessionTime, 
+      approach: sessionApproach || "Consulta Padrão", 
+      room: sessionRoom || "Sala 01", 
+      professional: sessionProfessional,
+      numSessions: sessionNumSessions
+    }; 
     onScheduleSession(newSession); 
     
     // Sync to Google Calendar if connected
@@ -128,6 +137,7 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
     setSessionApproach(""); 
     setSessionRoom(""); 
     setSessionProfessional("Dra. Raísa"); 
+    setSessionNumSessions(1);
   }; 
   
   const handleStatusUpdate = (appointmentId: any, newStatus: string) => {
@@ -212,6 +222,109 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
   if (view === 'protocols') return <ProtocolManagementSystem protocols={protocols} onSaveProtocol={handleSaveProtocol} onDeleteProtocol={handleDeleteProtocol} onBack={() => setView('home')} />; 
   if (view === 'patients_registry') return <PatientRegistry patients={allPatients} clinicalRecords={clinicalRecords} onBack={() => setView('home')} onSelectPatient={onPatientClick} userRole={user.role} />; 
   if (view === 'room_reservation') return <RoomReservation user={user} />;
+  
+  if (view === 'profile') {
+    return (
+      <div className="p-8 bg-slate-50 min-h-screen">
+        <div className="max-w-4xl mx-auto">
+          <div className="flex items-center gap-4 mb-8">
+            <button onClick={() => setView('home')} className="p-2 hover:bg-white rounded-xl transition-all shadow-sm border border-slate-100"><ChevronRight className="rotate-180" /></button>
+            <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Meu Perfil</h2>
+          </div>
+          
+          <div className="bg-white rounded-[32px] p-8 shadow-sm border border-slate-100">
+            <div className="flex items-center gap-6 mb-8 pb-8 border-b border-slate-50">
+              <div className="w-24 h-24 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center text-3xl font-bold">
+                {user.name?.charAt(0)}
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-slate-900">{user.name}</h3>
+                <p className="text-slate-500 font-medium">{user.email}</p>
+                <span className="inline-block mt-2 px-3 py-1 bg-blue-100 text-blue-600 rounded-full text-[10px] font-bold uppercase tracking-widest">
+                  {user.role}
+                </span>
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nome Completo</label>
+                <input type="text" defaultValue={user.name} className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">E-mail Profissional</label>
+                <input type="email" defaultValue={user.email} className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Especialidade Principal</label>
+                <input type="text" placeholder="Ex: Psicologia Infantil" className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Registro Profissional (CRP/CRM)</label>
+                <input type="text" placeholder="00/00000" className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" />
+              </div>
+            </div>
+            
+            <div className="mt-10 flex justify-end">
+              <button className="bg-[#4318FF] text-white px-8 py-4 rounded-2xl font-bold shadow-lg shadow-blue-500/20 hover:scale-105 transition-all">
+                Salvar Alterações
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'billing') {
+    return (
+      <div className="p-8 bg-slate-50 min-h-screen">
+        <div className="max-w-4xl mx-auto">
+          <div className="flex items-center gap-4 mb-8">
+            <button onClick={() => setView('home')} className="p-2 hover:bg-white rounded-xl transition-all shadow-sm border border-slate-100"><ChevronRight className="rotate-180" /></button>
+            <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Assinatura e Faturamento</h2>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Plano Atual</p>
+              <h3 className="text-xl font-bold text-slate-900">Verto Pro</h3>
+              <p className="text-emerald-500 text-xs font-bold mt-2 flex items-center gap-1"><CheckCircle2 size={12} /> Ativo</p>
+            </div>
+            <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Próxima Fatura</p>
+              <h3 className="text-xl font-bold text-slate-900">R$ 149,90</h3>
+              <p className="text-slate-400 text-xs font-medium mt-2">Vence em 15/04/2026</p>
+            </div>
+            <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Método de Pagamento</p>
+              <h3 className="text-xl font-bold text-slate-900">Cartão •••• 4242</h3>
+              <p className="text-blue-500 text-xs font-bold mt-2 cursor-pointer hover:underline">Alterar</p>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-[32px] p-8 shadow-sm border border-slate-100">
+            <h3 className="text-lg font-bold text-slate-900 mb-6">Histórico de Faturas</h3>
+            <div className="space-y-4">
+              {[1, 2, 3].map(i => (
+                <div key={i} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="flex items-center gap-4">
+                    <div className="p-2 bg-white rounded-xl text-slate-400"><CreditCard size={20} /></div>
+                    <div>
+                      <p className="font-bold text-slate-900 text-sm">Fatura #00{i} - Março 2026</p>
+                      <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-widest">Pago em 15/03/2026</p>
+                    </div>
+                  </div>
+                  <button className="text-blue-600 font-bold text-xs hover:underline">Download PDF</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (view === 'clinic') return <div className="p-8 text-center bg-white min-h-screen flex flex-col items-center justify-center"><Rocket size={64} className="text-emerald-500 mb-4 animate-bounce" /><h2 className="text-2xl font-bold text-gray-800">Gestão da Clínica</h2><p className="text-gray-500 max-w-md mx-auto mt-2">Esta funcionalidade está sendo atualizada para incluir novos relatórios financeiros e DRE automático.</p><button onClick={() => setView('home')} className="mt-8 px-8 py-3 bg-emerald-500 text-white rounded-2xl font-bold shadow-lg shadow-emerald-500/20 hover:opacity-90 transition-all">Voltar ao Início</button></div>;
   
   if (view === 'financial') {
@@ -628,7 +741,11 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
             <div className="space-y-4"> 
               <div className="relative"><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Paciente</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none focus:border-[#4318FF] font-semibold text-gray-700" placeholder="Buscar..." value={sessionPatientName} onChange={e => setSessionPatientName(e.target.value)} />{filteredPatients.length > 0 && (<div className="absolute top-full left-0 right-0 bg-white border border-gray-100 rounded-xl shadow-xl mt-1 z-20 max-h-40 overflow-y-auto no-scrollbar">{filteredPatients.map(p => (<div key={p.id} onClick={() => selectPatientForSession(p.name)} className="p-3 hover:bg-[#F4F7FE] cursor-pointer text-sm font-semibold text-gray-700 border-b border-gray-50 last:border-0 flex items-center gap-2"><div className="w-6 h-6 rounded-full bg-[#4318FF]/10 text-[#4318FF] flex items-center justify-center text-xs">{p.name.charAt(0)}</div>{p.name}</div>))}</div>)}</div> 
               <div className="grid grid-cols-2 gap-3"><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Data</label><input type="date" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionDate} onChange={e => setSessionDate(e.target.value)} /></div><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Hora</label><input type="time" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionTime} onChange={e => setSessionTime(e.target.value)} /></div></div> 
-              <div className="grid grid-cols-2 gap-3"><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Abordagem</label><select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionApproach} onChange={e => setSessionApproach(e.target.value)}><option value="">Selecione...</option><option value="Consulta Padrão">Consulta Padrão</option><option value="TCC">TCC</option><option value="ABA">ABA</option><option value="Integração Sensorial">Integração Sensorial</option></select></div><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Sala</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" placeholder="Ex: Sala 01" value={sessionRoom} onChange={e => setSessionRoom(e.target.value)} /></div></div><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Profissional Responsável</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" placeholder="Nome do Profissional" value={sessionProfessional} onChange={e => setSessionProfessional(e.target.value)} /></div> 
+              <div className="grid grid-cols-2 gap-3"><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Abordagem</label><select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionApproach} onChange={e => setSessionApproach(e.target.value)}><option value="">Selecione...</option><option value="Consulta Padrão">Consulta Padrão</option><option value="TCC">TCC</option><option value="ABA">ABA</option><option value="Integração Sensorial">Integração Sensorial</option></select></div><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Sala</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" placeholder="Ex: Sala 01" value={sessionRoom} onChange={e => setSessionRoom(e.target.value)} /></div></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Profissional Responsável</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" placeholder="Nome do Profissional" value={sessionProfessional} onChange={e => setSessionProfessional(e.target.value)} /></div>
+                <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Nº de Sessões</label><input type="number" min="1" max="12" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionNumSessions} onChange={e => setSessionNumSessions(parseInt(e.target.value))} /></div>
+              </div>
               <button onClick={handleSessionSubmit} className="w-full bg-[#4318FF] text-white font-semibold py-4 rounded-xl shadow-lg shadow-[#4318FF]/30 hover:opacity-90 transition-all mt-2 active:scale-95 uppercase tracking-widest">Confirmar Agendamento</button> 
             </div> 
           </div> 
@@ -645,6 +762,8 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
               onLogout={onLogout} 
               onViewTeam={onViewTeam} 
               onOpenInvitations={() => setShowInvitationModal(true)} 
+              onViewProfile={() => setView('profile')}
+              onViewBilling={() => setView('billing')}
             />
             <button 
               id="menu-btn"
@@ -761,6 +880,8 @@ export const TherapistDashboard = ({ user, onLogout, protocols, setProtocols, th
               onLogout={onLogout} 
               onViewTeam={onViewTeam} 
               onOpenInvitations={() => setShowInvitationModal(true)} 
+              onViewProfile={() => setView('profile')}
+              onViewBilling={() => setView('billing')}
             />
           </div>
         </div>
