@@ -647,8 +647,33 @@ export default function App() {
       if (a.date !== b.date) return a.date.localeCompare(b.date);
       return a.time.localeCompare(b.time);
     })); 
+
+    // Update room reservations
+    if (sess.room) {
+      const newRoomReservations = newItems.map(item => ({
+        id: 'res-' + item.id,
+        roomId: sess.room,
+        roomName: rooms.find(r => r.id === sess.room)?.name || sess.room,
+        professionalId: user.id,
+        professionalName: user.name,
+        date: item.date,
+        startTime: item.time,
+        endTime: calculateEndTime(item.time, sess.approach)
+      }));
+      setRoomReservations(prev => [...prev, ...newRoomReservations]);
+    }
+
     onAddActivityLog("Agendamento de Sessão", `${numSessions} sessões agendadas para "${sess.patientName}" começando em ${sess.date}.`, 'management');
   };
+
+  const calculateEndTime = (startTime: string, approach: string) => {
+    const duration = specialtySettings[approach] || 60;
+    const [hours, minutes] = startTime.split(':').map(Number);
+    const date = new Date();
+    date.setHours(hours, minutes + duration);
+    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  };
+
   const handleMoodCheckin = (l: number, n: string, i: string, t: any) => setHistory(prev => [{ id: Date.now(), patientId: user.id, type: 'checkin', title: "Check-in", time: new Date().toLocaleTimeString(), energy: l, note: n, icon: i, dateGroup: "Hoje", tag: t }, ...prev]);
   const handleCompleteTask = async (t: any, e: number, n: string) => { 
     const time = new Date().toLocaleTimeString();

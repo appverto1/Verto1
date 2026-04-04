@@ -11,7 +11,12 @@ import { PatientDetailView } from './PatientDetailView';
 import { TeamManagement } from './TeamManagement';
 import { SettingsMenu } from './SettingsMenu';
 import { InvitationModal } from './InvitationModal';
-import { RoomReservation } from './RoomReservation';
+import { 
+  RoomReservation, 
+  RoomReservationTable, 
+  Room, 
+  Reservation as RoomReservationType 
+} from './RoomReservation';
 
 export const TherapistDashboard = ({ 
   user, onLogout, protocols, setProtocols, therapistAgenda, patientsHistory, 
@@ -34,6 +39,8 @@ export const TherapistDashboard = ({
     handleHashChange(); // Initial check
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
+
+  const [roomReservationDate, setRoomReservationDate] = useState(new Date().toISOString().split('T')[0]);
 
   const handleSetView = (newView: string) => {
     window.location.hash = newView;
@@ -266,7 +273,26 @@ export const TherapistDashboard = ({
                     user.name?.charAt(0)
                   )}
                 </div>
-                <button className="absolute -bottom-2 -right-2 p-2 bg-[#4318FF] text-white rounded-xl shadow-lg hover:scale-110 transition-all">
+                <input 
+                  type="file" 
+                  id="profile-pic-upload" 
+                  className="hidden" 
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onloadend = () => {
+                        onUpdateProfile({ profilePicture: reader.result as string });
+                      };
+                      reader.readAsDataURL(file);
+                    }
+                  }}
+                />
+                <button 
+                  onClick={() => document.getElementById('profile-pic-upload')?.click()}
+                  className="absolute -bottom-2 -right-2 p-2 bg-[#4318FF] text-white rounded-xl shadow-lg hover:scale-110 transition-all"
+                >
                   <Camera size={14} />
                 </button>
               </div>
@@ -997,7 +1023,7 @@ export const TherapistDashboard = ({
           <div id="schedule-list" className="flex overflow-x-auto pb-4 -mx-6 px-6 space-x-4 snap-x no-scrollbar"> 
             <div id="schedule-btn" onClick={() => setIsAddSessionModalOpen(true)} className="min-w-[120px] bg-white rounded-3xl border-2 border-dashed border-[#4318FF]/40 flex flex-col items-center justify-center cursor-pointer hover:bg-[#F4F7FE] transition-all snap-center h-40 group shrink-0"> <div className="w-10 h-10 rounded-full bg-[#4318FF]/10 text-[#4318FF] flex items-center justify-center mb-2 group-hover:scale-110 transition-transform"><CalendarPlus size={24} /></div><span className="text-xs font-semibold text-[#4318FF] uppercase tracking-tighter">Agendar</span> </div> 
             {filteredAgendaList.map((patientItem: any, idx: number) => {
-              const patientData = allPatients.find((p: any) => p.id === patientItem.id);
+              const patientData = allPatients.find((p: any) => p.id === patientItem.patientId);
               const isKid = (patientData?.age !== undefined && patientData.age <= 12) || patientData?.anamnesisData?.formType === 'child';
               const category = isKid ? 'Kids' : 'Adulto';
               
@@ -1011,7 +1037,7 @@ export const TherapistDashboard = ({
               const cardBg = statusColors[patientItem.status] || 'bg-white border-indigo-50';
 
               return ( 
-                <div id={idx === 0 ? 'patient-card-0' : ''} key={patientItem.id} onClick={() => { if (user.role !== 'receptionist') onPatientClick(patientItem.id); }} className={`min-w-[200px] rounded-3xl p-4 shadow-sm border snap-center flex flex-col justify-between h-44 hover:shadow-md transition-all relative overflow-hidden group cursor-pointer active:scale-95 ${cardBg}`}> 
+                <div id={idx === 0 ? 'patient-card-0' : ''} key={patientItem.id} onClick={() => { if (user.role !== 'receptionist') onPatientClick(patientItem.patientId); }} className={`min-w-[200px] rounded-3xl p-4 shadow-sm border snap-center flex flex-col justify-between h-44 hover:shadow-md transition-all relative overflow-hidden group cursor-pointer active:scale-95 ${cardBg}`}> 
                   <div className={`absolute top-0 right-0 w-20 h-20 rounded-bl-full opacity-10 transition-transform group-hover:scale-110 ${isKid ? 'bg-pink-500' : 'bg-indigo-500'}`}></div> 
                   <div className="flex justify-between items-start z-10">
                     <span className="font-semibold text-gray-800 text-xl tracking-tight">{patientItem.time}</span>
@@ -1092,7 +1118,7 @@ export const TherapistDashboard = ({
                   <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3 ml-1 bg-gray-100 px-3 py-1 rounded-lg w-fit">{dateKey}</h4>
                   <div className="space-y-3">
                     {groupedAgenda[dateKey].map((item: any) => (
-                      <div key={item.id} onClick={() => onPatientClick(item.id)} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between hover:shadow-md transition-all cursor-pointer group">
+                      <div key={item.id} onClick={() => onPatientClick(item.patientId)} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between hover:shadow-md transition-all cursor-pointer group">
                         <div className="flex items-center gap-4">
                             <div className={`w-12 h-12 rounded-2xl flex flex-col items-center justify-center font-semibold text-white ${item.color.replace('text', 'bg').replace('-100', '-500')}`}>
                               <span className="text-xs opacity-70">AS</span>
@@ -1104,7 +1130,7 @@ export const TherapistDashboard = ({
                             </div>
                         </div>
                         <div className="flex items-center gap-2">
-                            <a href={`https://wa.me/${(allPatients.find((p: any) => p.id === item.id)?.phone || '').replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="p-2 text-green-500 hover:bg-green-50 rounded-xl transition-all" onClick={e => e.stopPropagation()}>
+                            <a href={`https://wa.me/${(allPatients.find((p: any) => p.id === item.patientId)?.phone || '').replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="p-2 text-green-500 hover:bg-green-50 rounded-xl transition-all" onClick={e => e.stopPropagation()}>
                                <MessageCircle size={18} />
                             </a>
                             <div className="p-2 text-gray-300 hover:text-[#4318FF] hover:bg-blue-50 rounded-xl transition-all">
@@ -1156,8 +1182,34 @@ export const TherapistDashboard = ({
               </div>
             </div>
           </div>
+        <div className="mt-8 animate-fade-in">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest ml-1">Reserva de Salas</h3>
+            <div className="flex items-center gap-2">
+              <input 
+                type="date" 
+                value={roomReservationDate}
+                onChange={(e) => setRoomReservationDate(e.target.value)}
+                className="px-3 py-1.5 bg-white border border-gray-100 rounded-xl text-[10px] font-bold text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+              />
+              <button 
+                onClick={() => handleSetView('room_reservation')}
+                className="p-1.5 bg-blue-50 text-[#4318FF] rounded-lg hover:bg-blue-100 transition-all"
+              >
+                <Plus size={14} />
+              </button>
+            </div>
+          </div>
+          <RoomReservationTable 
+            rooms={rooms}
+            reservations={roomReservations}
+            selectedDate={roomReservationDate}
+            user={user}
+            onDeleteReservation={(id) => setRoomReservations(prev => prev.filter(r => r.id !== id))}
+          />
         </div>
       </div> 
+    </div>
       <div className="p-6 flex flex-col gap-6"> 
         <div className="flex flex-col sm:flex-row gap-4"> 
           {user?.role !== 'receptionist' && (
