@@ -18,6 +18,151 @@ import {
   Reservation as RoomReservationType 
 } from './RoomReservation';
 
+const ProfileView = ({ user, onUpdateProfile, specialtySettings, setSpecialtySettings, onBack }: any) => {
+  const [profileName, setProfileName] = useState(user.name || '');
+  const [profileEmail, setProfileEmail] = useState(user.email || '');
+  const [profileSpecialty, setProfileSpecialty] = useState(user.specialty || 'Psicólogo');
+  const [profileCrp, setProfileCrp] = useState(user.crp || '');
+
+  const handleSaveProfile = () => {
+    if (profileSpecialty === 'Psicólogo' && !profileCrp.trim()) {
+      return alert("O preenchimento do CRP é obrigatório para Psicólogos.");
+    }
+    onUpdateProfile({
+      name: profileName,
+      email: profileEmail,
+      specialty: profileSpecialty,
+      crp: profileCrp
+    });
+    alert("Alterações salvas com sucesso!");
+  };
+
+  return (
+    <div className="p-8 bg-slate-50 min-h-screen">
+      <div className="max-w-4xl mx-auto">
+        <div className="flex items-center gap-4 mb-8">
+          <button onClick={onBack} className="p-2 hover:bg-white rounded-xl transition-all shadow-sm border border-slate-100"><ChevronRight className="rotate-180" /></button>
+          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Meu Perfil</h2>
+        </div>
+        
+        <div className="bg-white rounded-[32px] p-8 shadow-sm border border-slate-100">
+          <div className="flex items-center gap-6 mb-8 pb-8 border-b border-slate-50">
+            <div className="relative group">
+              <div className="w-24 h-24 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center text-3xl font-bold overflow-hidden border-2 border-transparent group-hover:border-blue-500/20 transition-all">
+                {user.profilePicture ? (
+                  <img src={user.profilePicture} alt="Profile" className="w-full h-full object-cover" />
+                ) : (
+                  user.name?.charAt(0)
+                )}
+              </div>
+              <input 
+                type="file" 
+                id="profile-pic-upload" 
+                className="hidden" 
+                accept="image/*"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                      onUpdateProfile({ profilePicture: reader.result as string });
+                    };
+                    reader.readAsDataURL(file);
+                  }
+                }}
+              />
+              <button 
+                onClick={() => document.getElementById('profile-pic-upload')?.click()}
+                className="absolute -bottom-2 -right-2 p-2 bg-[#4318FF] text-white rounded-xl shadow-lg hover:scale-110 transition-all"
+              >
+                <Camera size={14} />
+              </button>
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-slate-900">{user.name}</h3>
+              <p className="text-slate-500 font-medium">{user.email}</p>
+              <span className="inline-block mt-2 px-3 py-1 bg-blue-100 text-blue-600 rounded-full text-[10px] font-bold uppercase tracking-widest">
+                {user.role}
+              </span>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nome Completo</label>
+              <input 
+                type="text" 
+                value={profileName} 
+                onChange={(e) => setProfileName(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" 
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">E-mail Profissional</label>
+              <input 
+                type="email" 
+                value={profileEmail} 
+                onChange={(e) => setProfileEmail(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" 
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Especialidade Principal</label>
+              <select 
+                value={profileSpecialty}
+                onChange={(e) => setProfileSpecialty(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all"
+              >
+                <option value="Psicólogo">Psicólogo</option>
+                <option value="Terapeuta Ocupacional">Terapeuta Ocupacional</option>
+                <option value="Fonoaudiólogo">Fonoaudiólogo</option>
+                <option value="Fisioterapeuta">Fisioterapeuta</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Registro Profissional (CRP/CRM) {profileSpecialty === 'Psicólogo' && <span className="text-red-500">*</span>}</label>
+              <input 
+                type="text" 
+                value={profileCrp} 
+                onChange={(e) => setProfileCrp(e.target.value)}
+                placeholder="00/00000" 
+                className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" 
+                required={profileSpecialty === 'Psicólogo'}
+              />
+            </div>
+          </div>
+
+          <div className="mt-10 pt-10 border-t border-slate-50">
+            <h3 className="text-sm font-bold text-slate-900 mb-6">Tempo de Sessão por Especialidade (minutos)</h3>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              {Object.entries(specialtySettings).map(([spec, time]: any) => (
+                <div key={spec} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">{spec}</label>
+                  <input 
+                    type="number" 
+                    value={time} 
+                    onChange={(e) => setSpecialtySettings({...specialtySettings, [spec]: parseInt(e.target.value)})}
+                    className="w-full bg-transparent border-none p-0 text-sm font-bold text-slate-900 focus:ring-0" 
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+          
+          <div className="mt-10 flex justify-end">
+            <button 
+              onClick={handleSaveProfile}
+              className="bg-[#4318FF] text-white px-8 py-4 rounded-2xl font-bold shadow-lg shadow-blue-500/20 hover:scale-105 transition-all"
+            >
+              Salvar Alterações
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const TherapistDashboard = ({ 
   user, onLogout, protocols, setProtocols, therapistAgenda, patientsHistory, 
   therapistNotes, onAddNote, allTasks, onAddTask, onUpdateHistoryItem, 
@@ -314,147 +459,14 @@ export const TherapistDashboard = ({
   );
   
   if (view === 'profile') {
-    const [profileName, setProfileName] = useState(user.name || '');
-    const [profileEmail, setProfileEmail] = useState(user.email || '');
-    const [profileSpecialty, setProfileSpecialty] = useState(user.specialty || 'Psicólogo');
-    const [profileCrp, setProfileCrp] = useState(user.crp || '');
-
-    const handleSaveProfile = () => {
-      if (profileSpecialty === 'Psicólogo' && !profileCrp.trim()) {
-        return alert("O preenchimento do CRP é obrigatório para Psicólogos.");
-      }
-      onUpdateProfile({
-        name: profileName,
-        email: profileEmail,
-        specialty: profileSpecialty,
-        crp: profileCrp
-      });
-      alert("Alterações salvas com sucesso!");
-    };
-
     return (
-      <div className="p-8 bg-slate-50 min-h-screen">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex items-center gap-4 mb-8">
-            <button onClick={() => handleSetView('home')} className="p-2 hover:bg-white rounded-xl transition-all shadow-sm border border-slate-100"><ChevronRight className="rotate-180" /></button>
-            <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Meu Perfil</h2>
-          </div>
-          
-          <div className="bg-white rounded-[32px] p-8 shadow-sm border border-slate-100">
-            <div className="flex items-center gap-6 mb-8 pb-8 border-b border-slate-50">
-              <div className="relative group">
-                <div className="w-24 h-24 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center text-3xl font-bold overflow-hidden border-2 border-transparent group-hover:border-blue-500/20 transition-all">
-                  {user.profilePicture ? (
-                    <img src={user.profilePicture} alt="Profile" className="w-full h-full object-cover" />
-                  ) : (
-                    user.name?.charAt(0)
-                  )}
-                </div>
-                <input 
-                  type="file" 
-                  id="profile-pic-upload" 
-                  className="hidden" 
-                  accept="image/*"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) {
-                      const reader = new FileReader();
-                      reader.onloadend = () => {
-                        onUpdateProfile({ profilePicture: reader.result as string });
-                      };
-                      reader.readAsDataURL(file);
-                    }
-                  }}
-                />
-                <button 
-                  onClick={() => document.getElementById('profile-pic-upload')?.click()}
-                  className="absolute -bottom-2 -right-2 p-2 bg-[#4318FF] text-white rounded-xl shadow-lg hover:scale-110 transition-all"
-                >
-                  <Camera size={14} />
-                </button>
-              </div>
-              <div>
-                <h3 className="text-xl font-bold text-slate-900">{user.name}</h3>
-                <p className="text-slate-500 font-medium">{user.email}</p>
-                <span className="inline-block mt-2 px-3 py-1 bg-blue-100 text-blue-600 rounded-full text-[10px] font-bold uppercase tracking-widest">
-                  {user.role}
-                </span>
-              </div>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nome Completo</label>
-                <input 
-                  type="text" 
-                  value={profileName} 
-                  onChange={(e) => setProfileName(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" 
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">E-mail Profissional</label>
-                <input 
-                  type="email" 
-                  value={profileEmail} 
-                  onChange={(e) => setProfileEmail(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" 
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Especialidade Principal</label>
-                <select 
-                  value={profileSpecialty}
-                  onChange={(e) => setProfileSpecialty(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all"
-                >
-                  <option value="Psicólogo">Psicólogo</option>
-                  <option value="Terapeuta Ocupacional">Terapeuta Ocupacional</option>
-                  <option value="Fonoaudiólogo">Fonoaudiólogo</option>
-                  <option value="Fisioterapeuta">Fisioterapeuta</option>
-                </select>
-              </div>
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Registro Profissional (CRP/CRM) {profileSpecialty === 'Psicólogo' && <span className="text-red-500">*</span>}</label>
-                <input 
-                  type="text" 
-                  value={profileCrp} 
-                  onChange={(e) => setProfileCrp(e.target.value)}
-                  placeholder="00/00000" 
-                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all" 
-                  required={profileSpecialty === 'Psicólogo'}
-                />
-              </div>
-            </div>
-
-            <div className="mt-10 pt-10 border-t border-slate-50">
-              <h3 className="text-sm font-bold text-slate-900 mb-6">Tempo de Sessão por Especialidade (minutos)</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                {Object.entries(specialtySettings).map(([spec, time]: any) => (
-                  <div key={spec} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">{spec}</label>
-                    <input 
-                      type="number" 
-                      value={time} 
-                      onChange={(e) => setSpecialtySettings({...specialtySettings, [spec]: parseInt(e.target.value)})}
-                      className="w-full bg-transparent border-none p-0 text-sm font-bold text-slate-900 focus:ring-0" 
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-            
-            <div className="mt-10 flex justify-end">
-              <button 
-                onClick={handleSaveProfile}
-                className="bg-[#4318FF] text-white px-8 py-4 rounded-2xl font-bold shadow-lg shadow-blue-500/20 hover:scale-105 transition-all"
-              >
-                Salvar Alterações
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
+      <ProfileView 
+        user={user} 
+        onUpdateProfile={onUpdateProfile} 
+        specialtySettings={specialtySettings} 
+        setSpecialtySettings={setSpecialtySettings} 
+        onBack={() => handleSetView('home')} 
+      />
     );
   }
 
