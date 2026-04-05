@@ -299,7 +299,19 @@ export const TherapistDashboard = ({
 
   if (view === 'protocols') return <ProtocolManagementSystem protocols={protocols} onSaveProtocol={handleSaveProtocol} onDeleteProtocol={handleDeleteProtocol} onBack={() => setView('home')} />; 
   if (view === 'patients_registry') return <PatientRegistry patients={allPatients} clinicalRecords={clinicalRecords} onBack={() => setView('home')} onSelectPatient={onPatientClick} userRole={user.role} />; 
-  if (view === 'room_reservation') return <RoomReservation user={user} rooms={rooms} setRooms={setRooms} reservations={roomReservations} setReservations={setRoomReservations} onBack={() => handleSetView('home')} />;
+  if (view === 'room_reservation') return (
+    <RoomReservation 
+      user={user} 
+      rooms={rooms} 
+      setRooms={setRooms} 
+      reservations={roomReservations} 
+      onDeleteReservation={(id) => {
+        const appointmentId = id.replace('res-', '');
+        onUpdateAgendaStatus(Number(appointmentId), 'canceled');
+      }} 
+      onBack={() => handleSetView('home')} 
+    />
+  );
   
   if (view === 'profile') {
     const [profileName, setProfileName] = useState(user.name || '');
@@ -1324,7 +1336,8 @@ export const TherapistDashboard = ({
                 selectedDate={new Date().toISOString().split('T')[0]}
                 user={user}
                 onDeleteReservation={(id) => {
-                  setRoomReservations((prev: any) => prev.filter((r: any) => r.id !== id));
+                  const appointmentId = id.replace('res-', '');
+                  onUpdateAgendaStatus(Number(appointmentId), 'canceled');
                 }}
               />
             </div>

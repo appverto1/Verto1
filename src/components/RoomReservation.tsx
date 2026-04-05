@@ -127,12 +127,12 @@ export const RoomReservationTable = ({
   );
 };
 
-export function RoomReservation({ user, rooms, setRooms, reservations, setReservations, onBack }: { 
+export function RoomReservation({ user, rooms, setRooms, reservations, onDeleteReservation, onBack }: { 
   user: any, 
   rooms: Room[], 
   setRooms: React.Dispatch<React.SetStateAction<Room[]>>, 
   reservations: Reservation[], 
-  setReservations: React.Dispatch<React.SetStateAction<Reservation[]>>,
+  onDeleteReservation: (id: string) => void,
   onBack: () => void
 }) {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
@@ -171,7 +171,7 @@ export function RoomReservation({ user, rooms, setRooms, reservations, setReserv
   };
 
   const handleDeleteReservation = (id: string) => {
-    setReservations(prev => prev.filter(r => r.id !== id));
+    onDeleteReservation(id);
   };
 
   return (

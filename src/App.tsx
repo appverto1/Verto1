@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { GlobalStyles, ENERGY_TAGS } from './components/Common';
 import { LandingPage } from './components/LandingPage';
 import { PatientDashboard } from './components/PatientDashboard';
@@ -146,30 +146,58 @@ export default function App() {
   const [clinicalRecords, setClinicalRecords] = useState<any[]>([]);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
   const [view, setView] = useState<'dashboard' | 'team'>('dashboard');
+  const todayStr = new Date().toISOString().split('T')[0];
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = tomorrow.toISOString().split('T')[0];
+  const nextWeek = new Date(); nextWeek.setDate(nextWeek.getDate() + 7);
+  const nextWeekStr = nextWeek.toISOString().split('T')[0];
+
   const [rooms, setRooms] = useState<any[]>([
     { id: 'room1', name: 'Sala 01 - Kids', specialties: ['ABA', 'TCC'] },
     { id: 'room2', name: 'Sala 02 - Terapia Ocupacional', specialties: ['Integração Sensorial', 'TO'] },
     { id: 'room3', name: 'Sala 03 - Avaliação', specialties: ['Neuropsicologia'] },
     { id: 'room4', name: 'Sala 04 - TO', specialties: ['Integração Sensorial', 'TO'] },
   ]);
-  const [roomReservations, setRoomReservations] = useState<any[]>([
-    {
-      id: '1',
-      roomId: 'room1',
-      roomName: 'Sala 01 - Kids',
-      professionalId: 'prof1',
-      professionalName: 'Dra. Raísa',
-      date: new Date().toISOString().split('T')[0],
-      startTime: '09:00',
-      endTime: '10:00'
-    }
+  const [therapistAgenda, setTherapistAgenda] = useState<any[]>([ 
+    { id: 101, name: 'Alexandre', date: todayStr, time: '09:00', status: 'confirmed', type: 'ABA', color: 'bg-blue-100 text-blue-600', room: 'room1', professional: 'Dra. Raísa', professionalId: 'prof1' }, 
+    { id: 102, name: 'Júlia S.', date: todayStr, time: '10:30', status: 'pending', type: 'Neuropsicologia', color: 'bg-pink-100 text-pink-600', room: 'room3', professional: 'Dra. Raísa', professionalId: 'prof1' },
+    { id: 103, name: 'Marcos P.', date: tomorrowStr, time: '14:00', status: 'confirmed', type: 'TCC', color: 'bg-green-100 text-green-600', room: 'room1', professional: 'Dra. Raísa', professionalId: 'prof1' },
+    { id: 104, name: 'Ana Clara', date: nextWeekStr, time: '11:00', status: 'pending', type: 'Integração Sensorial', color: 'bg-orange-100 text-orange-600', room: 'room2', professional: 'Dra. Raísa', professionalId: 'prof1' },
+    { id: 105, name: 'Pedro H.', date: todayStr, time: '16:00', status: 'canceled', type: 'TO', color: 'bg-red-100 text-red-600', room: 'room4', professional: 'Dra. Raísa', professionalId: 'prof1' }
   ]);
+
   const [specialtySettings, setSpecialtySettings] = useState<any>({
     'ABA': 60,
     'TCC': 50,
     'TO': 45,
     'Neuropsicologia': 90
   });
+
+  const calculateEndTime = (startTime: string, approach: string) => {
+    const duration = specialtySettings[approach] || 60;
+    const [hours, minutes] = startTime.split(':').map(Number);
+    const date = new Date();
+    date.setHours(hours, minutes + duration);
+    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  };
+
+  const roomReservations = useMemo(() => {
+    return therapistAgenda
+      .filter(item => item.room && item.status !== 'canceled')
+      .map(item => ({
+        id: 'res-' + item.id,
+        roomId: item.room,
+        roomName: rooms.find(r => r.id === item.room)?.name || item.room,
+        professionalId: item.professionalId || 'prof1',
+        professionalName: item.professional || 'Dra. Raísa',
+        patientName: item.name,
+        date: item.date,
+        startTime: item.time,
+        endTime: calculateEndTime(item.time, item.type),
+        status: item.status
+      }));
+  }, [therapistAgenda, rooms, specialtySettings]);
+
   const [profilePicture, setProfilePicture] = useState<string | null>(null);
   const [crp, setCrp] = useState<string>('');
   const [showInvitationModal, setShowInvitationModal] = useState(false);
@@ -199,14 +227,6 @@ export default function App() {
     { id: 'dom-sa', name: 'Consciência Social e Modos', skills: [{ id: 'sa1', name: 'Responde às saudações de forma apropriada', objective: 'O aprendiz irá responder a todas as saudações com contato visual', criteria: '3=Independente com contato visual; 2=Responde sem contato visual; 1=Com ajuda; 0=Não faz', example: "Hey, Oi, Olá", maxScore: 3 }] }
   ];
   
-  const todayStr = new Date().toISOString().split('T')[0];
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toISOString().split('T')[0];
-  const nextWeek = new Date();
-  nextWeek.setDate(nextWeek.getDate() + 7);
-  const nextWeekStr = nextWeek.toISOString().split('T')[0];
-
   const handleCheckout = async () => {
     try {
       const response = await fetch('/api/stripe/create-checkout', {
@@ -298,13 +318,6 @@ export default function App() {
         { id: 's1', name: 'Inicia conversa com pares', objective: 'O aprendiz inicia uma interação verbal com um colega', criteria: 'Independente; Com ajuda; Não realiza', example: 'Diz "Oi, quer brincar?"', maxScore: 1 }
       ]}
     ], ageGroup: 'child', type: 'neurodevelopment', domain: 'Socialização', category: 'intervention' }
-  ]);
-  const [therapistAgenda, setTherapistAgenda] = useState<any[]>([ 
-    { id: 101, name: 'Alexandre', date: todayStr, time: '09:00', status: 'confirmed', type: 'ABA / AFLS', color: 'bg-blue-100 text-blue-600' }, 
-    { id: 102, name: 'Júlia S.', date: todayStr, time: '10:30', status: 'pending', type: 'Avaliação', color: 'bg-pink-100 text-pink-600' },
-    { id: 103, name: 'Marcos P.', date: tomorrowStr, time: '14:00', status: 'confirmed', type: 'TCC', color: 'bg-green-100 text-green-600' },
-    { id: 104, name: 'Ana Clara', date: nextWeekStr, time: '11:00', status: 'pending', type: 'TO', color: 'bg-orange-100 text-orange-600' },
-    { id: 105, name: 'Pedro H.', date: todayStr, time: '16:00', status: 'canceled', type: 'Psicomotricidade', color: 'bg-red-100 text-red-600' }
   ]);
   const [allPatients, setAllPatients] = useState<any[]>([ 
     { id: 101, name: 'Alexandre', phone: '11999999999', age: 8, type: 'neurodevelopment', approach: 'ABA' }, 
@@ -489,12 +502,6 @@ export default function App() {
   };
   const handleUpdateAgendaStatus = (id: any, status: string) => {
     setTherapistAgenda(prev => prev.map(item => item.id === id ? { ...item, status } : item));
-    
-    if (status === 'canceled') {
-      setRoomReservations(prev => prev.filter(r => r.id !== 'res-' + id));
-    } else {
-      setRoomReservations(prev => prev.map(r => r.id === 'res-' + id ? { ...r, status } : r));
-    }
   };
 
   const handleAddPatient = async (data: any) => { 
@@ -700,33 +707,8 @@ export default function App() {
       return a.time.localeCompare(b.time);
     })); 
 
-    // Update room reservations
-    if (sess.room) {
-      const newRoomReservations = newItems.map(item => ({
-        id: 'res-' + item.id,
-        roomId: sess.room,
-        roomName: rooms.find(r => r.id === sess.room)?.name || sess.room,
-        professionalId: user.id,
-        professionalName: user.name,
-        patientName: item.name,
-        date: item.date,
-        startTime: item.time,
-        endTime: calculateEndTime(item.time, sess.approach),
-        status: item.status
-      }));
-      setRoomReservations(prev => [...prev, ...newRoomReservations]);
-    }
-
     onAddActivityLog("Agendamento de Sessão", `${numSessions} sessões agendadas para "${sess.patientName}" começando em ${sess.date}.`, 'management');
     return { success: true };
-  };
-
-  const calculateEndTime = (startTime: string, approach: string) => {
-    const duration = specialtySettings[approach] || 60;
-    const [hours, minutes] = startTime.split(':').map(Number);
-    const date = new Date();
-    date.setHours(hours, minutes + duration);
-    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
   };
 
   const handleMoodCheckin = (l: number, n: string, i: string, t: any) => setHistory(prev => [{ id: Date.now(), patientId: user.id, type: 'checkin', title: "Check-in", time: new Date().toLocaleTimeString(), energy: l, note: n, icon: i, dateGroup: "Hoje", tag: t }, ...prev]);
@@ -1091,7 +1073,6 @@ export default function App() {
           rooms={rooms}
           setRooms={setRooms}
           roomReservations={roomReservations}
-          setRoomReservations={setRoomReservations}
           specialtySettings={specialtySettings}
           setSpecialtySettings={setSpecialtySettings}
           onUpdateProfile={(data: any) => {
