@@ -22,6 +22,7 @@ export interface Reservation {
   roomName: string;
   professionalId: string;
   professionalName: string;
+  patientName?: string;
   date: string;
   startTime: string;
   endTime: string;
@@ -99,7 +100,7 @@ export const RoomReservationTable = ({
                               {reservation.startTime} - {reservation.endTime}
                             </p>
                             <p className={`text-xs font-bold text-slate-900 truncate ${isPending ? 'italic' : ''}`}>
-                              {reservation.professionalName}
+                              {reservation.professionalName} {reservation.patientName ? `- ${reservation.patientName}` : ''}
                             </p>
                           </div>
                           {(reservation.professionalId === user.id || user.role === 'coordinator') && (

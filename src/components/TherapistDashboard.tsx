@@ -136,13 +136,13 @@ export const TherapistDashboard = ({
   useEffect(() => { if (sessionPatientName) { const matches = allPatients.filter((p: any) => p.name.toLowerCase().includes(sessionPatientName.toLowerCase())); setFilteredPatients(matches); } else { setFilteredPatients([]); } }, [sessionPatientName, allPatients]); 
   const selectPatientForSession = (name: string) => { setSessionPatientName(name); setFilteredPatients([]); }; 
   const handleSessionSubmit = async () => { 
-    if(!sessionPatientName || !sessionTime) return alert("Preencha nome e horário"); 
+    if(!sessionPatientName || !sessionTime || !sessionRoom) return alert("Preencha nome, horário e sala"); 
     const newSession = { 
       patientName: sessionPatientName, 
       date: sessionDate, 
       time: sessionTime, 
       approach: sessionApproach || "Consulta Padrão", 
-      room: sessionRoom || "Sala 01", 
+      room: sessionRoom, 
       professional: sessionProfessional,
       numSessions: sessionNumSessions
     }; 
@@ -911,7 +911,27 @@ export const TherapistDashboard = ({
             <div className="space-y-4"> 
               <div className="relative"><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Paciente</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none focus:border-[#4318FF] font-semibold text-gray-700" placeholder="Buscar..." value={sessionPatientName} onChange={e => setSessionPatientName(e.target.value)} />{filteredPatients.length > 0 && (<div className="absolute top-full left-0 right-0 bg-white border border-gray-100 rounded-xl shadow-xl mt-1 z-20 max-h-40 overflow-y-auto no-scrollbar">{filteredPatients.map(p => (<div key={p.id} onClick={() => selectPatientForSession(p.name)} className="p-3 hover:bg-[#F4F7FE] cursor-pointer text-sm font-semibold text-gray-700 border-b border-gray-50 last:border-0 flex items-center gap-2"><div className="w-6 h-6 rounded-full bg-[#4318FF]/10 text-[#4318FF] flex items-center justify-center text-xs">{p.name.charAt(0)}</div>{p.name}</div>))}</div>)}</div> 
               <div className="grid grid-cols-2 gap-3"><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Data</label><input type="date" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionDate} onChange={e => setSessionDate(e.target.value)} /></div><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Hora</label><input type="time" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionTime} onChange={e => setSessionTime(e.target.value)} /></div></div> 
-              <div className="grid grid-cols-2 gap-3"><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Abordagem</label><select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionApproach} onChange={e => setSessionApproach(e.target.value)}><option value="">Selecione...</option><option value="Consulta Padrão">Consulta Padrão</option><option value="TCC">TCC</option><option value="ABA">ABA</option><option value="Integração Sensorial">Integração Sensorial</option></select></div><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Sala</label><select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionRoom} onChange={e => setSessionRoom(e.target.value)}><option value="">Selecione...</option>{rooms.map((room: any) => (<option key={room.id} value={room.name}>{room.name}</option>))}</select></div></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Abordagem</label>
+                  <select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionApproach} onChange={e => setSessionApproach(e.target.value)}>
+                    <option value="">Selecione...</option>
+                    <option value="Consulta Padrão">Consulta Padrão</option>
+                    <option value="TCC">TCC</option>
+                    <option value="ABA">ABA</option>
+                    <option value="Integração Sensorial">Integração Sensorial</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Sala <span className="text-red-500">*</span></label>
+                  <select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700 border-indigo-100 focus:border-indigo-500" value={sessionRoom} onChange={e => setSessionRoom(e.target.value)}>
+                    <option value="">Selecione a Sala...</option>
+                    {rooms.map((room: any) => (
+                      <option key={room.id} value={room.id}>{room.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Profissional Responsável</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" placeholder="Nome do Profissional" value={sessionProfessional} onChange={e => setSessionProfessional(e.target.value)} /></div>
                 <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Nº de Sessões</label><input type="number" min="1" max="12" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionNumSessions} onChange={e => setSessionNumSessions(parseInt(e.target.value))} /></div>
@@ -1278,9 +1298,38 @@ export const TherapistDashboard = ({
           </div>
         </div>
       </div>
-      <div className="p-6 flex flex-col gap-6"> 
-        {/* Removed bottom cards as requested */}
-      </div>
+        <div className="p-6 flex flex-col gap-6"> 
+          <div className="bg-white rounded-[32px] p-6 border border-slate-100 shadow-sm animate-fade-in">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center">
+                  <DoorOpen size={20} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Reserva de Salas (Hoje)</h3>
+                  <p className="text-slate-500 text-xs font-medium">Visualização rápida da disponibilidade</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => handleSetView('room_reservation')}
+                className="text-xs font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-widest"
+              >
+                Ver Tudo
+              </button>
+            </div>
+            <div className="max-h-[400px] overflow-y-auto no-scrollbar">
+              <RoomReservationTable 
+                rooms={rooms}
+                reservations={roomReservations}
+                selectedDate={new Date().toISOString().split('T')[0]}
+                user={user}
+                onDeleteReservation={(id) => {
+                  setRoomReservations((prev: any) => prev.filter((r: any) => r.id !== id));
+                }}
+              />
+            </div>
+          </div>
+        </div>
     </main>
 
       {showInvitationModal && (

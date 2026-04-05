@@ -708,6 +708,7 @@ export default function App() {
         roomName: rooms.find(r => r.id === sess.room)?.name || sess.room,
         professionalId: user.id,
         professionalName: user.name,
+        patientName: item.name,
         date: item.date,
         startTime: item.time,
         endTime: calculateEndTime(item.time, sess.approach),
