@@ -135,22 +135,32 @@ async function startServer() {
   // Database Session Store
   const PostgresStore = pgSession(session);
   let sessionStore;
-  console.log('DATABASE_URL presente:', !!process.env.DATABASE_URL);
-  try {
-    if (process.env.DATABASE_URL) {
+  
+  if (process.env.DATABASE_URL) {
+    console.log('Tentando configurar armazenamento de sessão no Postgres...');
+    try {
       sessionStore = new PostgresStore({ 
         conString: process.env.DATABASE_URL, 
         createTableIfMissing: true,
         schemaName: 'public',
-        tableName: 'sessions'
+        tableName: 'sessions',
+        // Previne que erros de conexão derrubem o processo
+        errorLog: (err) => {
+          console.error('ERRO NO ARMAZENAMENTO DE SESSÃO (PG):', err.message);
+          if (err.message.includes('ENETUNREACH')) {
+            console.error('Dica: O banco de dados parece inacessível via rede (possível problema de IPv6).');
+          }
+        }
       });
-      console.log('Armazenamento de sessão no banco de dados configurado.');
+      console.log('Armazenamento de sessão no banco de dados inicializado.');
+    } catch (err) {
+      console.error('FALHA CRÍTICA AO INICIALIZAR PG-SESSION, USANDO MEMÓRIA:', err);
+      sessionStore = undefined; // Fallback automático para MemoryStore do express-session
     }
-  } catch (err) {
-    console.error('ERRO AO INICIALIZAR PG-SESSION:', err);
+  } else {
+    console.warn('DATABASE_URL não encontrada, usando armazenamento em memória (sessões serão perdidas ao reiniciar).');
   }
 
-  console.log('Session store initialized:', !!sessionStore);
   app.use(session({
     store: sessionStore,
     secret: process.env.SESSION_SECRET || 'verto-secret-key',
@@ -158,9 +168,9 @@ async function startServer() {
     saveUninitialized: false,
     name: 'verto-session',
     cookie: { 
-      secure: true, // Always true for sameSite: 'none'
+      secure: true, 
       httpOnly: true,
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      maxAge: 24 * 60 * 60 * 1000, 
       sameSite: 'none'
     }
   }));
