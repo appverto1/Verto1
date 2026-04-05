@@ -8,7 +8,7 @@ import {
   Shield,
   ChevronRight
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 
 interface SettingsMenuProps {
   user: any;
@@ -41,7 +41,10 @@ export function SettingsMenu({ user, onLogout, onViewTeam, onOpenInvitations, on
   return (
     <div className="relative" ref={menuRef} style={{ zIndex: 100 }}>
       <button
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => {
+          console.log('Settings gear clicked, current state:', isOpen);
+          setIsOpen(!isOpen);
+        }}
         className="p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
       >
         <Settings size={20} />
@@ -58,11 +61,11 @@ export function SettingsMenu({ user, onLogout, onViewTeam, onOpenInvitations, on
             <div className="p-4 border-b border-slate-50">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center font-bold">
-                  {user.name?.charAt(0)}
+                  {user?.name?.charAt(0) || '?'}
                 </div>
                 <div className="overflow-hidden">
-                  <p className="text-sm font-bold text-slate-900 truncate">{user.name}</p>
-                  <p className="text-[10px] text-slate-400 truncate uppercase tracking-widest font-semibold">{user.role}</p>
+                  <p className="text-sm font-bold text-slate-900 truncate">{user?.name || 'Usuário'}</p>
+                  <p className="text-[10px] text-slate-400 truncate uppercase tracking-widest font-semibold">{user?.role || 'Profissional'}</p>
                 </div>
               </div>
             </div>
