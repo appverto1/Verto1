@@ -1060,6 +1060,7 @@ async function startServer() {
   app.post('/api/stripe/create-checkout', checkAuth, async (req, res) => {
     try {
       const user = req.session.user;
+      console.log('Creating checkout for user:', user.id, user.email, user.role);
       
       // Determine price
       let amount = 0;
@@ -1077,18 +1078,34 @@ async function startServer() {
         };
         
         // Try to get plan from profile if not in session
-        const { data: profile } = await supabase
+        const { data: profile, error: profileError } = await supabase
           .from('users')
           .select('plan_name')
           .eq('id', user.id)
           .single();
           
+        if (profileError) {
+          console.warn('Could not fetch user profile for plan, using default:', profileError.message);
+        }
+        
         const planName = profile?.plan_name || 'Essencial';
         amount = planPrices[planName] || 14990;
         description = `Plano ${planName} - Verto`;
       }
 
-      const stripe = getStripe();
+      console.log('Checkout details:', { amount, description });
+
+      let stripe;
+      try {
+        stripe = getStripe();
+      } catch (stripeInitError: any) {
+        console.error('Stripe initialization failed:', stripeInitError.message);
+        return res.status(500).json({ 
+          error: 'O Stripe não está configurado corretamente no servidor.',
+          details: stripeInitError.message 
+        });
+      }
+
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         line_items: [
@@ -1115,10 +1132,14 @@ async function startServer() {
         }
       });
 
+      console.log('Stripe session created:', session.id);
       res.json({ url: session.url });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Stripe checkout error:', error);
-      res.status(500).json({ error: 'Erro ao criar sessão de pagamento' });
+      res.status(500).json({ 
+        error: error.message || 'Erro ao criar sessão de pagamento',
+        details: process.env.NODE_ENV === 'production' ? undefined : error.stack
+      });
     }
   });
 

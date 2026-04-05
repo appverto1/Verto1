@@ -35,6 +35,7 @@ const ProfileView = ({ user, onUpdateProfile, specialtySettings, setSpecialtySet
       crp: profileCrp
     });
     alert("Alterações salvas com sucesso!");
+    onBack();
   };
 
   return (

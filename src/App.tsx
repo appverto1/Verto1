@@ -249,11 +249,11 @@ export default function App() {
       if (data.url) {
         window.location.href = data.url;
       } else {
-        alert('Erro ao iniciar pagamento. Tente novamente.');
+        alert('Erro ao iniciar pagamento: ' + (data.error || 'Tente novamente.'));
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Checkout error:', error);
-      alert('Erro de conexão. Tente novamente.');
+      alert('Erro de conexão: ' + error.message);
     }
   };
 

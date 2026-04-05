@@ -182,7 +182,8 @@ export const LandingPage = ({ onLogin }: any) => {
           window.location.href = checkoutData.url;
         } else {
           // Fallback if Stripe fails
-          alert('Conta criada com sucesso! Por favor, faça login para continuar.');
+          console.error('Stripe creation failed:', checkoutData);
+          alert(`Conta criada com sucesso! No entanto, houve um erro ao iniciar o pagamento: ${checkoutData.error || 'Erro desconhecido'}. Por favor, faça login para tentar novamente.`);
           setShowRegister(false);
           setShowLogin(true);
         }
