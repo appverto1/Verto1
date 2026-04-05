@@ -431,8 +431,7 @@ async function startServer() {
           .eq('email', user.email)
           .eq('status', 'pending');
 
-        let clinicId = roleToUse === 'coordinator' ? user.id : null;
-        let finalRole = roleToUse;
+        let clinicId = finalRole === 'coordinator' ? user.id : null;
 
         if (!inviteError && invitations && invitations.length > 0) {
           const invitation = invitations[0];
