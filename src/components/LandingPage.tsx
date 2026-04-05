@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Rocket, 
   ShieldCheck, 
@@ -138,6 +138,16 @@ export const LandingPage = ({ onLogin }: any) => {
     }
   };
 
+  const [acquisitionChannel, setAcquisitionChannel] = useState('organic');
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const utmSource = urlParams.get('utm_source');
+    if (utmSource) {
+      setAcquisitionChannel(utmSource);
+    }
+  }, []);
+
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegisterError('');
@@ -159,7 +169,8 @@ export const LandingPage = ({ onLogin }: any) => {
           name,
           role: registerType === 'professional' ? 'coordinator' : 'patient', // Professionals sign up as coordinators
           crp: registerType === 'professional' ? crp : undefined,
-          planName: registerType === 'patient' ? 'Paciente' : selectedPlan
+          planName: registerType === 'patient' ? 'Paciente' : selectedPlan,
+          acquisitionChannel
         })
       });
 

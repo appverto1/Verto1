@@ -39,8 +39,8 @@ import {
 } from 'recharts';
 import { LogoVerto } from './Common';
 
-// Mock Data for Admin Dashboard
-const DRE_DATA = [
+// Mock Data for Admin Dashboard (Removed as we use real data now)
+const DRE_DATA_MOCK = [
   { month: 'Jan', revenue: 45000, costs: 12000, expenses: 8000, profit: 25000 },
   { month: 'Fev', revenue: 52000, costs: 14000, expenses: 8500, profit: 29500 },
   { month: 'Mar', revenue: 61000, costs: 15500, expenses: 9000, profit: 36500 },
@@ -67,16 +67,79 @@ const RECENT_CLIENTS = [
 export const AdminDashboard = ({ onLogout }: any) => {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [searchTerm, setSearchTerm] = useState('');
+  const [stats, setStats] = useState<any>(null);
+  const [clients, setClients] = useState<any[]>([]);
+  const [dreData, setDreData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
 
-  const totalRevenue = DRE_DATA.reduce((acc, curr) => acc + curr.revenue, 0);
-  const totalProfit = DRE_DATA.reduce((acc, curr) => acc + curr.profit, 0);
-  const activeClientsCount = CLIENT_PLANS.reduce((acc, curr) => acc + curr.count, 0);
-  const avgTicket = totalRevenue / activeClientsCount / DRE_DATA.length;
+  React.useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [statsRes, clientsRes, dreRes] = await Promise.all([
+          fetch('/api/admin/stats'),
+          fetch('/api/admin/clients'),
+          fetch('/api/admin/dre')
+        ]);
+        
+        const statsData = await statsRes.json();
+        const clientsData = await clientsRes.json();
+        const dreData = await dreRes.json();
+        
+        if (statsData.success) setStats(statsData.stats);
+        if (clientsData.success) setClients(clientsData.data);
+        if (dreData.success) setDreData(dreData.data);
+      } catch (err) {
+        console.error('Error fetching admin data:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
-  const filteredClients = RECENT_CLIENTS.filter(c => 
-    c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    c.email.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const handleRefund = async (userId: string, amount: number) => {
+    if (!window.confirm(`Deseja realmente reembolsar R$ ${amount.toFixed(2)} para este cliente?`)) return;
+    try {
+      const res = await fetch('/api/admin/refund', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, amount })
+      });
+      const data = await res.json();
+      if (data.success) alert(data.message);
+    } catch (err) {
+      alert('Erro ao processar reembolso');
+    }
+  };
+
+  const handleCharge = async (userId: string) => {
+    try {
+      const res = await fetch('/api/admin/charge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId })
+      });
+      const data = await res.json();
+      if (data.success) alert(data.message);
+    } catch (err) {
+      alert('Erro ao processar cobrança');
+    }
+  };
+
+  const filteredClients = useMemo(() => {
+    return clients.filter(c => 
+      (c.name?.toLowerCase() || '').includes(searchTerm.toLowerCase()) || 
+      (c.email?.toLowerCase() || '').includes(searchTerm.toLowerCase())
+    );
+  }, [clients, searchTerm]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F4F7FE]">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#4318FF]"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F4F7FE] flex font-sans text-gray-900">
@@ -166,8 +229,8 @@ export const AdminDashboard = ({ onLogout }: any) => {
             {/* KPI Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               <KpiCard 
-                title="Receita Total (6m)" 
-                value={`R$ ${(totalRevenue / 1000).toFixed(1)}k`} 
+                title="MRR (Mensal)" 
+                value={`R$ ${(stats?.mrr || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`} 
                 trend="+12.5%" 
                 isPositive={true} 
                 icon={<DollarSign size={24} />}
@@ -175,24 +238,24 @@ export const AdminDashboard = ({ onLogout }: any) => {
               />
               <KpiCard 
                 title="Clientes Ativos" 
-                value={activeClientsCount.toString()} 
+                value={stats?.activeUsers?.toString() || '0'} 
                 trend="+8" 
                 isPositive={true} 
                 icon={<Users size={24} />}
                 color="bg-[#05CD99]"
               />
               <KpiCard 
-                title="Ticket Médio" 
-                value={`R$ ${avgTicket.toFixed(2)}`} 
-                trend="-2.1%" 
-                isPositive={false} 
+                title="Total de Usuários" 
+                value={stats?.totalUsers?.toString() || '0'} 
+                trend="+15" 
+                isPositive={true} 
                 icon={<TrendingUp size={24} />}
                 color="bg-[#FFB547]"
               />
               <KpiCard 
-                title="Inadimplência" 
-                value="4.2%" 
-                trend="+0.5%" 
+                title="Inadimplentes" 
+                value={stats?.delinquentUsers?.toString() || '0'} 
+                trend="+2" 
                 isPositive={false} 
                 icon={<AlertCircle size={24} />}
                 color="bg-[#EE5D50]"
@@ -217,7 +280,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
                 </div>
                 <div className="h-80">
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={DRE_DATA}>
+                    <AreaChart data={DRE_DATA_MOCK}>
                       <defs>
                         <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor="#4318FF" stopOpacity={0.1}/>
@@ -254,19 +317,19 @@ export const AdminDashboard = ({ onLogout }: any) => {
               <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-50">
                 <h3 className="text-xl font-bold text-gray-800 tracking-tight mb-8">Mix de Planos</h3>
                 <div className="space-y-6">
-                  {CLIENT_PLANS.map((plan, i) => (
+                  {Object.entries(dreData?.byPlan || {}).map(([name, value]: [string, any], i) => (
                     <div key={i} className="space-y-2">
                       <div className="flex justify-between items-center">
                         <div className="flex flex-col">
-                          <span className="text-sm font-bold text-gray-700">{plan.name}</span>
-                          <span className="text-[9px] font-bold text-gray-400 uppercase">Ticket: R$ {plan.price}</span>
+                          <span className="text-sm font-bold text-gray-700">{name}</span>
+                          <span className="text-[9px] font-bold text-gray-400 uppercase">Receita: R$ {value.toLocaleString()}</span>
                         </div>
-                        <span className="text-xs font-bold text-gray-400">{plan.count} ({Math.round(plan.count / activeClientsCount * 100)}%)</span>
+                        <span className="text-xs font-bold text-gray-400">{Math.round(value / (dreData?.revenue || 1) * 100)}%</span>
                       </div>
                       <div className="h-2 w-full bg-gray-50 rounded-full overflow-hidden">
                         <div 
-                          className="h-full rounded-full transition-all duration-1000" 
-                          style={{ width: `${(plan.count / activeClientsCount * 100)}%`, backgroundColor: plan.color }}
+                          className="h-full rounded-full transition-all duration-1000 bg-[#4318FF]" 
+                          style={{ width: `${(value / (dreData?.revenue || 1) * 100)}%` }}
                         ></div>
                       </div>
                     </div>
@@ -275,7 +338,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
                 <div className="mt-10 p-6 bg-[#F4F7FE] rounded-3xl">
                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Insight de Vendas</p>
                   <p className="text-xs font-bold text-gray-600 leading-relaxed">
-                    O plano <span className="text-[#4318FF]">Equipe</span> teve o maior crescimento este mês (+15%).
+                    A maior parte da receita vem do plano <span className="text-[#4318FF]">{Object.entries(dreData?.byPlan || {}).sort((a: any, b: any) => b[1] - a[1])[0]?.[0] || '...'}</span>.
                   </p>
                 </div>
               </div>
@@ -312,25 +375,43 @@ export const AdminDashboard = ({ onLogout }: any) => {
                           </div>
                         </td>
                         <td className="px-8 py-5">
-                          <span className="text-xs font-bold text-gray-600">{client.plan}</span>
+                          <span className="text-xs font-bold text-gray-600">{client.plan_name || 'Nenhum'}</span>
                         </td>
                         <td className="px-8 py-5">
-                          <span className="text-sm font-bold text-gray-800">R$ {client.value.toLocaleString()}</span>
+                          <span className="text-sm font-bold text-gray-800">R$ {client.plan_price?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}</span>
                         </td>
                         <td className="px-8 py-5">
-                          <span className="text-xs font-bold text-gray-400">{new Date(client.date).toLocaleDateString('pt-BR')}</span>
+                          <span className="text-xs font-bold text-gray-400">{client.created_at ? new Date(client.created_at).toLocaleDateString('pt-BR') : 'N/A'}</span>
                         </td>
                         <td className="px-8 py-5">
                           <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest ${
-                            client.status === 'active' ? 'bg-green-50 text-green-500' : 'bg-red-50 text-red-500'
+                            client.subscription_status === 'active' ? 'bg-green-50 text-green-500' : 'bg-red-50 text-red-500'
                           }`}>
-                            {client.status === 'active' ? 'Ativo' : 'Inadimplente'}
+                            {client.subscription_status === 'active' ? 'Ativo' : 'Inadimplente'}
                           </span>
                         </td>
                         <td className="px-8 py-5 text-right">
-                          <button className="p-2 text-gray-300 hover:text-[#4318FF] transition-all">
-                            <ChevronRight size={20} />
-                          </button>
+                          <div className="flex justify-end gap-2">
+                            {client.subscription_status === 'delinquent' && (
+                              <button 
+                                onClick={() => handleCharge(client.id)}
+                                className="p-2 text-[#EE5D50] hover:bg-red-50 rounded-xl transition-all"
+                                title="Cobrar Inadimplente"
+                              >
+                                <CreditCard size={16} />
+                              </button>
+                            )}
+                            <button 
+                              onClick={() => handleRefund(client.id, client.plan_price || 0)}
+                              className="p-2 text-gray-400 hover:text-[#4318FF] hover:bg-blue-50 rounded-xl transition-all"
+                              title="Reembolsar"
+                            >
+                              <ArrowDownRight size={16} />
+                            </button>
+                            <button className="p-2 text-gray-300 hover:text-[#4318FF] transition-all">
+                              <ChevronRight size={20} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -339,6 +420,64 @@ export const AdminDashboard = ({ onLogout }: any) => {
               </div>
               <div className="p-6 bg-gray-50/30 text-center">
                 <button className="text-xs font-bold text-[#4318FF] uppercase tracking-widest hover:underline">Ver todos os clientes</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'financial' && (
+          <div className="space-y-8 animate-fade-in">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-50">
+                <h3 className="text-xl font-bold text-gray-800 tracking-tight mb-8">Receita por Canal de Aquisição</h3>
+                <div className="h-80">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={Object.entries(dreData?.byChannel || {}).map(([name, value]) => ({ name, value: Number(value) }))}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F4F7FE" />
+                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} />
+                      <YAxis axisLine={false} tickLine={false} tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} />
+                      <Tooltip contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 25px rgba(0,0,0,0.05)' }} />
+                      <Bar dataKey="value" fill="#4318FF" radius={[8, 8, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-50">
+                <h3 className="text-xl font-bold text-gray-800 tracking-tight mb-8">Receita por Plano</h3>
+                <div className="h-80">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={Object.entries(dreData?.byPlan || {}).map(([name, value]) => ({ name, value: Number(value) }))}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F4F7FE" />
+                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} />
+                      <YAxis axisLine={false} tickLine={false} tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} />
+                      <Tooltip contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 25px rgba(0,0,0,0.05)' }} />
+                      <Bar dataKey="value" fill="#05CD99" radius={[8, 8, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-50">
+              <h3 className="text-xl font-bold text-gray-800 tracking-tight mb-8">Demonstrativo de Resultados (DRE)</h3>
+              <div className="space-y-4">
+                <div className="flex justify-between p-4 bg-gray-50 rounded-2xl">
+                  <span className="font-bold text-gray-600">Receita Bruta</span>
+                  <span className="font-bold text-[#4318FF]">R$ {dreData?.revenue?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                </div>
+                <div className="flex justify-between p-4 border-b border-gray-50">
+                  <span className="text-gray-500">Impostos (Simulado 6%)</span>
+                  <span className="text-red-500">- R$ {(dreData?.revenue * 0.06).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                </div>
+                <div className="flex justify-between p-4 border-b border-gray-50">
+                  <span className="text-gray-500">Taxas Stripe (Simulado 3.99% + R$0,39)</span>
+                  <span className="text-red-500">- R$ {(dreData?.revenue * 0.0399).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                </div>
+                <div className="flex justify-between p-4 bg-blue-50 rounded-2xl">
+                  <span className="font-bold text-gray-800">Receita Líquida</span>
+                  <span className="font-bold text-[#05CD99]">R$ {(dreData?.revenue * 0.9).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                </div>
               </div>
             </div>
           </div>

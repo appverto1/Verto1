@@ -248,7 +248,7 @@ async function startServer() {
   
   // Direct Signup (Bypasses email confirmation using Admin API)
   app.post('/api/auth/signup-direct', async (req, res) => {
-    const { email, password, name, role, intendedRole, planName } = req.body;
+    const { email, password, name, role, intendedRole, planName, acquisitionChannel } = req.body;
     if (!email || !password) return res.status(400).json({ error: "E-mail e senha são obrigatórios" });
 
     try {
@@ -285,7 +285,10 @@ async function startServer() {
 
       if (userId) {
         // Create profile
-        const roleToUse = intendedRole || role || 'therapist';
+        const adminEmails = ['appverto1@gmail.com'];
+        const isAdmin = adminEmails.includes(email);
+        const roleToUse = isAdmin ? 'admin' : (intendedRole || role || 'therapist');
+        
         const freeAccessEmails = ['mateus.com96@gmail.com', 'profissionalmateus1@gmail.com', 'appverto1@gmail.com']; 
         const hasFreeAccess = freeAccessEmails.includes(email);
 
@@ -308,6 +311,7 @@ async function startServer() {
           subscription_status: hasFreeAccess ? 'active' : 'pending',
           plan_name: finalPlanName,
           plan_price: finalPlanPrice,
+          acquisition_channel: acquisitionChannel || 'organic',
           created_at: new Date().toISOString()
         };
 
@@ -411,11 +415,14 @@ async function startServer() {
 
       // Logic for free access (First Client & AIS Agent Testing)
       const freeAccessEmails = ['mateus.com96@gmail.com', 'profissionalmateus1@gmail.com', 'appverto1@gmail.com']; 
+      const adminEmails = ['appverto1@gmail.com'];
       const hasFreeAccess = freeAccessEmails.includes(user.email || "");
+      const isAdmin = adminEmails.includes(user.email || "");
 
       // If profile doesn't exist (first time Google login), create it
       if (!profile) {
-        const roleToUse = intendedRole || 'therapist';
+        let finalRole = intendedRole || 'therapist';
+        if (isAdmin) finalRole = 'admin';
         
         // Check for pending invitations for this email
         const { data: invitations, error: inviteError } = await supabase
@@ -448,6 +455,7 @@ async function startServer() {
           subscription_status: hasFreeAccess ? 'active' : 'pending',
           plan_price: finalRole === 'patient' ? 4.90 : 149.90,
           plan_name: finalRole === 'patient' ? 'Paciente' : 'Essencial',
+          acquisition_channel: req.body.acquisitionChannel || 'organic',
           created_at: new Date().toISOString()
         };
         
@@ -1090,6 +1098,120 @@ async function startServer() {
       
       if (error) throw error;
       res.json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  // --- ADMIN ROUTES ---
+  const checkAdmin = (req: any, res: any, next: any) => {
+    if (req.session.user && req.session.user.role === 'admin') {
+      next();
+    } else {
+      res.status(403).json({ error: 'Acesso negado. Apenas administradores podem acessar esta rota.' });
+    }
+  };
+
+  app.get('/api/admin/stats', checkAuth, checkAdmin, async (req, res) => {
+    try {
+      // Get total users
+      const { count: totalUsers } = await supabase.from('users').select('*', { count: 'exact', head: true });
+      
+      // Get active subscriptions
+      const { count: activeUsers } = await supabase
+        .from('users')
+        .select('*', { count: 'exact', head: true })
+        .eq('subscription_status', 'active');
+
+      // Get delinquent users
+      const { count: delinquentUsers } = await supabase
+        .from('users')
+        .select('*', { count: 'exact', head: true })
+        .eq('subscription_status', 'delinquent');
+
+      // Calculate MRR (Monthly Recurring Revenue)
+      const { data: activeProfiles } = await supabase
+        .from('users')
+        .select('plan_price')
+        .eq('subscription_status', 'active');
+      
+      const mrr = activeProfiles?.reduce((sum, p) => sum + (p.plan_price || 0), 0) || 0;
+
+      res.json({
+        success: true,
+        stats: {
+          totalUsers,
+          activeUsers,
+          delinquentUsers,
+          mrr
+        }
+      });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.get('/api/admin/clients', checkAuth, checkAdmin, async (req, res) => {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
+      res.json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.get('/api/admin/dre', checkAuth, checkAdmin, async (req, res) => {
+    try {
+      // This would ideally aggregate data from a 'transactions' or 'revenue' table
+      // For now, we'll aggregate from the 'users' table based on their active plans
+      const { data: profiles } = await supabase
+        .from('users')
+        .select('plan_name, plan_price, acquisition_channel, subscription_status')
+        .eq('subscription_status', 'active');
+
+      const dre = {
+        revenue: profiles?.reduce((sum, p) => sum + (p.plan_price || 0), 0) || 0,
+        byChannel: profiles?.reduce((acc: any, p) => {
+          const channel = p.acquisition_channel || 'organic';
+          acc[channel] = (acc[channel] || 0) + (p.plan_price || 0);
+          return acc;
+        }, {}),
+        byPlan: profiles?.reduce((acc: any, p) => {
+          const plan = p.plan_name || 'Desconhecido';
+          acc[plan] = (acc[plan] || 0) + (p.plan_price || 0);
+          return acc;
+        }, {})
+      };
+
+      res.json({ success: true, data: dre });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.post('/api/admin/refund', checkAuth, checkAdmin, async (req, res) => {
+    const { stripeSessionId, amount } = req.body;
+    try {
+      const stripe = getStripe();
+      // In a real app, we'd find the charge ID from the session
+      // For now, this is a placeholder for the Stripe API call
+      // const refund = await stripe.refunds.create({ charge: chargeId, amount: amount * 100 });
+      res.json({ success: true, message: 'Reembolso processado com sucesso (Simulado)' });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.post('/api/admin/charge', checkAuth, checkAdmin, async (req, res) => {
+    const { userId } = req.body;
+    try {
+      // Logic to trigger a manual charge or retry via Stripe
+      res.json({ success: true, message: 'Cobrança iniciada com sucesso (Simulado)' });
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }
