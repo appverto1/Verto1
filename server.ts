@@ -64,6 +64,10 @@ if (!supabaseUrl || !supabaseServiceKey) {
 
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.warn("AVISO: STRIPE_SECRET_KEY não configurada. Pagamentos não funcionarão.");
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -222,6 +226,37 @@ async function startServer() {
     });
   });
 
+  // --- HEALTH CHECK ---
+  app.get('/api/health', async (req, res) => {
+    const status: any = {
+      supabase: 'unknown',
+      stripe: 'unknown',
+      env: {
+        NODE_ENV: process.env.NODE_ENV,
+        HAS_SUPABASE_URL: !!process.env.SUPABASE_URL,
+        HAS_SUPABASE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+        HAS_STRIPE_KEY: !!process.env.STRIPE_SECRET_KEY,
+        HAS_DATABASE_URL: !!process.env.DATABASE_URL
+      }
+    };
+
+    try {
+      const { error } = await supabase.from('users').select('count', { count: 'exact', head: true });
+      status.supabase = error ? `error: ${error.message}` : 'ok';
+    } catch (err: any) {
+      status.supabase = `exception: ${err.message}`;
+    }
+
+    try {
+      const stripe = getStripe();
+      status.stripe = 'ok';
+    } catch (err: any) {
+      status.stripe = `error: ${err.message}`;
+    }
+
+    res.json(status);
+  });
+
   // --- API ROUTES ---
   
   // Direct Signup (Bypasses email confirmation using Admin API)
@@ -361,6 +396,7 @@ async function startServer() {
   // Login (receives Supabase access token from client, verifies it, and sets session)
   app.post('/api/auth/login', async (req, res) => {
     const { accessToken, intendedRole } = req.body;
+    console.log('Login attempt with token:', !!accessToken, 'intendedRole:', intendedRole);
     if (!accessToken) return res.status(400).json({ error: "Access token required" });
 
     try {
@@ -368,8 +404,11 @@ async function startServer() {
       const { data: { user }, error } = await supabase.auth.getUser(accessToken);
       
       if (error || !user) {
+        console.error('Supabase auth error:', error);
         return res.status(401).json({ error: "Invalid token" });
       }
+
+      console.log('User verified:', user.id, user.email);
 
       // Fetch user profile from 'users' table
       let { data: profile, error: profileError } = await supabase
@@ -377,6 +416,11 @@ async function startServer() {
         .select('*')
         .eq('id', user.id)
         .single();
+
+      if (profileError && profileError.code !== 'PGRST116') {
+        console.error('Profile fetch error:', profileError);
+        throw profileError;
+      }
 
       // Logic for free access (First Client & AIS Agent Testing)
       const freeAccessEmails = ['mateus.com96@gmail.com', 'profissionalmateus1@gmail.com', 'appverto1@gmail.com']; 
@@ -758,10 +802,14 @@ async function startServer() {
         .select('*')
         .eq('therapist_id', req.session.user.id);
       
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase patients fetch error:', error);
+        throw error;
+      }
       res.json({ success: true, data });
-    } catch (error) {
-      res.status(500).json({ error: String(error) });
+    } catch (error: any) {
+      console.error('Patients route error:', error);
+      res.status(500).json({ error: error.message || String(error) });
     }
   });
 
@@ -918,10 +966,14 @@ async function startServer() {
         .eq('user_id', req.session.user.id)
         .order('timestamp', { ascending: false });
       
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase logs fetch error:', error);
+        throw error;
+      }
       res.json({ success: true, data });
-    } catch (error) {
-      res.status(500).json({ error: String(error) });
+    } catch (error: any) {
+      console.error('Logs route error:', error);
+      res.status(500).json({ error: error.message || String(error) });
     }
   });
 
@@ -1167,7 +1219,8 @@ async function startServer() {
   app.use((err: any, req: any, res: any, next: any) => {
     console.error('SERVER ERROR:', err);
     res.status(500).json({ 
-      error: process.env.NODE_ENV === 'production' ? 'Ocorreu um erro no servidor.' : err.message 
+      error: err.message || 'Ocorreu um erro no servidor.',
+      details: err.stack
     });
   });
 
