@@ -79,20 +79,32 @@ export default function App() {
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('payment') === 'success') {
       // Refresh session to get active status
+      // We might need to wait a bit for the webhook to complete
+      let attempts = 0;
+      const maxAttempts = 5;
+      
       const checkSession = async () => {
         try {
           const response = await fetch('/api/auth/me');
           const data = await response.json();
           if (data.user) {
-            setUser(data.user);
-            // Clear URL params
-            window.history.replaceState({}, document.title, "/");
+            if (data.user.subscriptionStatus === 'active' || attempts >= maxAttempts) {
+              setUser(data.user);
+              // Clear URL params
+              window.history.replaceState({}, document.title, "/");
+            } else {
+              attempts++;
+              setTimeout(checkSession, 2000); // Wait 2 seconds and try again
+            }
           }
         } catch (error) {
           console.error('Session refresh error:', error);
         }
       };
       checkSession();
+    } else if (urlParams.get('payment') === 'cancel') {
+      alert('O pagamento foi cancelado. Você pode tentar novamente quando quiser.');
+      window.history.replaceState({}, document.title, "/");
     }
   }, []);
 

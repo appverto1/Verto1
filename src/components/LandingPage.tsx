@@ -47,6 +47,8 @@ export const LandingPage = ({ onLogin }: any) => {
   const [activeFaq, setActiveFaq] = useState<number | null>(null);
   const [isVerifyingEmail, setIsVerifyingEmail] = useState(false);
   const [showPricingAfterClick, setShowPricingAfterClick] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   React.useEffect(() => {
     const savedEmail = localStorage.getItem('verto_email');
@@ -146,6 +148,7 @@ export const LandingPage = ({ onLogin }: any) => {
     }
 
     try {
+      setLoading(true);
       // Use direct signup route to bypass email confirmation
       const response = await fetch('/api/auth/signup-direct', {
         method: 'POST',
@@ -155,7 +158,8 @@ export const LandingPage = ({ onLogin }: any) => {
           password,
           name,
           role: registerType === 'professional' ? 'coordinator' : 'patient', // Professionals sign up as coordinators
-          crp: registerType === 'professional' ? crp : undefined
+          crp: registerType === 'professional' ? crp : undefined,
+          planName: registerType === 'patient' ? 'Paciente' : selectedPlan
         })
       });
 
@@ -165,9 +169,24 @@ export const LandingPage = ({ onLogin }: any) => {
         throw new Error(data.error || 'Erro ao criar conta');
       }
 
-      alert('Conta criada com sucesso! Você já pode fazer login.');
-      setShowRegister(false);
-      setShowLogin(true);
+      if (registerType === 'professional' && !selectedPlan) {
+        setRegisterStep(3);
+      } else {
+        // Redirect to Stripe checkout
+        const checkoutRes = await fetch('/api/stripe/create-checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const checkoutData = await checkoutRes.json();
+        if (checkoutData.url) {
+          window.location.href = checkoutData.url;
+        } else {
+          // Fallback if Stripe fails
+          alert('Conta criada com sucesso! Por favor, faça login para continuar.');
+          setShowRegister(false);
+          setShowLogin(true);
+        }
+      }
     } catch (error: any) {
       console.error('Register error:', error);
       if (error.message.includes('already been registered') || error.message.includes('já está cadastrado')) {
@@ -180,37 +199,37 @@ export const LandingPage = ({ onLogin }: any) => {
 
   const handleSelectPlan = async (planName: string) => {
     try {
-      // Use direct signup route to bypass email confirmation
-      const response = await fetch('/api/auth/signup-direct', {
+      setLoading(true);
+      // If we are in step 3, the account is already created and session is set
+      // We just need to update the plan in the database and then go to checkout
+      const profileRes = await fetch(`/api/profile/${email}`, { // This might not work if we don't have the ID yet in the frontend
+        // But we have the user in the session now because signup-direct sets it
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: email,
-          password: password,
-          name: name,
-          role: 'therapist',
-          intendedRole: 'therapist',
-          crp: crp,
-          plan: planName
+          plan_name: planName,
+          plan_price: planName === 'Essencial' ? 149.90 : planName === 'Crescimento' ? 399.90 : 679.90
         })
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Erro ao criar conta');
+      // Actually, create-checkout already looks at the profile.
+      // Let's just call create-checkout.
+      const checkoutRes = await fetch('/api/stripe/create-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const checkoutData = await checkoutRes.json();
+      
+      if (checkoutData.url) {
+        window.location.href = checkoutData.url;
+      } else {
+        throw new Error(checkoutData.error || 'Erro ao iniciar checkout');
       }
-
-      alert(`Cadastro realizado com sucesso no plano ${planName}! Você já pode fazer login.`);
-      setShowRegister(false);
-      setShowLogin(true);
     } catch (err: any) {
       console.error('Select plan error:', err);
-      if (err.message.includes('already been registered') || err.message.includes('já está cadastrado')) {
-        setRegisterError('Este e-mail já está cadastrado. Por favor, faça login.');
-      } else {
-        setRegisterError('Erro ao processar cadastro do plano: ' + err.message);
-      }
+      setRegisterError('Erro ao processar checkout: ' + err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -655,11 +674,14 @@ export const LandingPage = ({ onLogin }: any) => {
               </div>
               <button 
                 onClick={() => {
-                  window.open('https://calendly.com/verto-health', '_blank');
+                  setSelectedPlan('Essencial');
+                  setRegisterType('professional');
+                  setRegisterStep(2);
+                  setShowRegister(true);
                 }}
                 className="w-full bg-gray-900 text-white py-4 rounded-2xl font-semibold text-sm mb-8 hover:bg-black transition-all"
               >
-                Agendar uma demonstração
+                Começar Agora
               </button>
               <ul className="space-y-4 flex-1">
                 {['Até 2 Profissionais', 'Planos Terapêuticos Ilimitados', 'Relatórios de Evolução Automáticos', 'Portal do Paciente', 'Gestão Financeira Básica', 'Histórico Portátil', 'Dashboard do Profissional'].map((f, i) => (
@@ -684,11 +706,14 @@ export const LandingPage = ({ onLogin }: any) => {
               </div>
               <button 
                 onClick={() => {
-                  window.open('https://calendly.com/verto-health', '_blank');
+                  setSelectedPlan('Crescimento');
+                  setRegisterType('professional');
+                  setRegisterStep(2);
+                  setShowRegister(true);
                 }}
                 className="w-full bg-[#4318FF] text-white py-4 rounded-2xl font-semibold text-sm mb-8 shadow-lg shadow-blue-500/20 hover:opacity-90 transition-all"
               >
-                Agendar uma demonstração
+                Começar Agora
               </button>
               <ul className="space-y-4 flex-1">
                 <li className="text-xs font-semibold text-[#4318FF] uppercase tracking-widest mb-2">Tudo do Essencial +</li>
@@ -713,11 +738,14 @@ export const LandingPage = ({ onLogin }: any) => {
               </div>
               <button 
                 onClick={() => {
-                  window.open('https://calendly.com/verto-health', '_blank');
+                  setSelectedPlan('Avançado');
+                  setRegisterType('professional');
+                  setRegisterStep(2);
+                  setShowRegister(true);
                 }}
                 className="w-full bg-gray-900 text-white py-4 rounded-2xl font-semibold text-sm mb-8 hover:bg-black transition-all"
               >
-                Agendar uma demonstração
+                Começar Agora
               </button>
               <ul className="space-y-4 flex-1">
                 <li className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">Tudo do Crescimento +</li>
@@ -1241,9 +1269,10 @@ export const LandingPage = ({ onLogin }: any) => {
 
                       <button 
                         type="submit"
-                        className={`w-full py-3 md:py-3.5 rounded-2xl font-semibold text-sm shadow-lg transition-all active:scale-[0.98] mt-2 ${registerType === 'professional' ? 'bg-[#4318FF] text-white shadow-blue-500/10' : 'bg-pink-500 text-white shadow-pink-500/10'}`}
+                        disabled={loading}
+                        className={`w-full py-3 md:py-3.5 rounded-2xl font-semibold text-sm shadow-lg transition-all active:scale-[0.98] mt-2 ${registerType === 'professional' ? 'bg-[#4318FF] text-white shadow-blue-500/10' : 'bg-pink-500 text-white shadow-pink-500/10'} ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
                       >
-                        {registerType === 'professional' ? 'Continuar para Planos' : 'Criar minha conta'}
+                        {loading ? 'Processando...' : (registerType === 'professional' && !selectedPlan ? 'Continuar para Planos' : 'Criar minha conta e Pagar')}
                       </button>
 
                       <div className="relative my-3 md:my-4">

@@ -226,7 +226,7 @@ async function startServer() {
   
   // Direct Signup (Bypasses email confirmation using Admin API)
   app.post('/api/auth/signup-direct', async (req, res) => {
-    const { email, password, name, role, intendedRole } = req.body;
+    const { email, password, name, role, intendedRole, planName } = req.body;
     if (!email || !password) return res.status(400).json({ error: "E-mail e senha são obrigatórios" });
 
     try {
@@ -267,6 +267,16 @@ async function startServer() {
         const freeAccessEmails = ['mateus.com96@gmail.com', 'profissionalmateus1@gmail.com', 'appverto1@gmail.com']; 
         const hasFreeAccess = freeAccessEmails.includes(email);
 
+        const planPrices: Record<string, number> = {
+          'Essencial': 149.90,
+          'Crescimento': 399.90,
+          'Avançado': 679.90,
+          'Paciente': 4.90
+        };
+
+        const finalPlanName = planName || (roleToUse === 'patient' ? 'Paciente' : 'Essencial');
+        const finalPlanPrice = planPrices[finalPlanName] || 149.90;
+
         const newProfile = {
           id: userId,
           email: email,
@@ -274,6 +284,8 @@ async function startServer() {
           role: roleToUse,
           clinic_id: roleToUse === 'coordinator' ? userId : null, // Coordinator is their own clinic owner
           subscription_status: hasFreeAccess ? 'active' : 'pending',
+          plan_name: finalPlanName,
+          plan_price: finalPlanPrice,
           created_at: new Date().toISOString()
         };
 
@@ -287,8 +299,21 @@ async function startServer() {
             }
             throw insertError;
         }
+
+        // Set session
+        const userData = {
+          id: userId,
+          email: email,
+          role: roleToUse,
+          name: name || email.split('@')[0],
+          subscriptionStatus: hasFreeAccess ? 'active' : 'pending',
+          planPrice: finalPlanPrice,
+          clinicId: newProfile.clinic_id
+        };
+
+        req.session.user = userData;
         
-        res.json({ success: true, message: "Conta criada e confirmada com sucesso!" });
+        res.json({ success: true, message: "Conta criada com sucesso!", user: userData });
       }
     } catch (error: any) {
       console.error("Signup bypass error:", error);
