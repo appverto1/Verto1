@@ -21,7 +21,8 @@ import {
   Calendar,
   Database,
   ExternalLink,
-  CheckCircle2
+  CheckCircle2,
+  Shield
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -71,31 +72,77 @@ export const AdminDashboard = ({ onLogout }: any) => {
   const [clients, setClients] = useState<any[]>([]);
   const [dreData, setDreData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [show2FASetup, setShow2FASetup] = useState(false);
+  const [qrCodeUrl, setQrCodeUrl] = useState('');
+  const [twoFactorToken, setTwoFactorToken] = useState('');
+  const [is2FAEnabled, setIs2FAEnabled] = useState(false);
 
   React.useEffect(() => {
     const fetchData = async () => {
       try {
-        const [statsRes, clientsRes, dreRes] = await Promise.all([
+        const [statsRes, clientsRes, dreRes, profileRes] = await Promise.all([
           fetch('/api/admin/stats'),
           fetch('/api/admin/clients'),
-          fetch('/api/admin/dre')
+          fetch('/api/admin/dre'),
+          fetch('/api/auth/profile')
         ]);
         
+        // Check if all responses are OK
+        if (!statsRes.ok || !clientsRes.ok || !dreRes.ok) {
+          throw new Error('Erro ao carregar dados administrativos. Verifique suas permissões.');
+        }
+
         const statsData = await statsRes.json();
         const clientsData = await clientsRes.json();
         const dreData = await dreRes.json();
+        const profileData = await profileRes.json();
         
         if (statsData.success) setStats(statsData.stats);
         if (clientsData.success) setClients(clientsData.data);
         if (dreData.success) setDreData(dreData.data);
-      } catch (err) {
+        if (profileData.success) setIs2FAEnabled(profileData.user.two_factor_enabled);
+      } catch (err: any) {
         console.error('Error fetching admin data:', err);
+        alert(err.message || 'Ocorreu um erro ao carregar o painel.');
       } finally {
         setLoading(false);
       }
     };
     fetchData();
   }, []);
+
+  const start2FASetup = async () => {
+    try {
+      const response = await fetch('/api/auth/2fa/setup', { method: 'POST' });
+      const data = await response.json();
+      if (data.qrCodeUrl) {
+        setQrCodeUrl(data.qrCodeUrl);
+        setShow2FASetup(true);
+      }
+    } catch (err) {
+      console.error('2FA setup error:', err);
+    }
+  };
+
+  const verifyAndEnable2FA = async () => {
+    try {
+      const response = await fetch('/api/auth/2fa/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: twoFactorToken })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setShow2FASetup(false);
+        setIs2FAEnabled(true);
+        alert('2FA habilitado com sucesso!');
+      } else {
+        alert('Código inválido.');
+      }
+    } catch (err) {
+      console.error('2FA verify error:', err);
+    }
+  };
 
   const handleRefund = async (userId: string, amount: number) => {
     if (!window.confirm(`Deseja realmente reembolsar R$ ${amount.toFixed(2)} para este cliente?`)) return;
@@ -498,6 +545,54 @@ export const AdminDashboard = ({ onLogout }: any) => {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <div className="space-y-6">
+                  <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Segurança Robusta (2FA)</p>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-3 h-3 rounded-full ${is2FAEnabled ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                        <span className="text-sm font-bold text-gray-800">
+                          {is2FAEnabled ? '2FA Ativado' : '2FA Desativado'}
+                        </span>
+                      </div>
+                      {!is2FAEnabled && (
+                        <button 
+                          onClick={start2FASetup}
+                          className="text-xs font-bold text-[#4318FF] uppercase tracking-widest hover:underline"
+                        >
+                          Configurar Agora
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500 mt-4 leading-relaxed">
+                      A autenticação de dois fatores adiciona uma camada extra de segurança à sua conta de administrador.
+                    </p>
+                  </div>
+
+                  {show2FASetup && (
+                    <div className="p-6 bg-blue-50 rounded-3xl border border-blue-100 animate-fade-in">
+                      <p className="text-[10px] font-bold text-[#4318FF] uppercase tracking-widest mb-4">Configurar Google Authenticator</p>
+                      <div className="flex flex-col items-center gap-4">
+                        <img src={qrCodeUrl} alt="QR Code" className="w-32 h-32 bg-white p-2 rounded-xl" />
+                        <div className="w-full space-y-2">
+                          <input 
+                            type="text" 
+                            placeholder="Código de 6 dígitos"
+                            value={twoFactorToken}
+                            onChange={(e) => setTwoFactorToken(e.target.value)}
+                            className="w-full bg-white border border-blue-100 rounded-xl py-3 px-4 text-center font-bold tracking-widest focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                            maxLength={6}
+                          />
+                          <button 
+                            onClick={verifyAndEnable2FA}
+                            className="w-full bg-[#4318FF] text-white py-3 rounded-xl font-bold text-xs uppercase tracking-widest shadow-lg shadow-blue-500/20"
+                          >
+                            Ativar Proteção
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100">
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Status da Conexão</p>
                     <div className="flex items-center gap-3">

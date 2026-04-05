@@ -118,11 +118,15 @@ export default function App() {
       });
       const data = await response.json();
       if (data.success) {
+        if (data.twoFactorRequired) {
+          return { twoFactorRequired: true, email: data.email };
+        }
         setUser(data.user);
         if (data.isFirstLogin && (data.user.role === 'coordinator' || data.user.role === 'admin')) {
           setShowInvitationModal(true);
         }
       }
+      return data;
     } catch (error) {
       console.error('Login error:', error);
     }

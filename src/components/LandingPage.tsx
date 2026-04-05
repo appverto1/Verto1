@@ -49,6 +49,12 @@ export const LandingPage = ({ onLogin }: any) => {
   const [showPricingAfterClick, setShowPricingAfterClick] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [twoFactorRequired, setTwoFactorRequired] = useState(false);
+  const [twoFactorToken, setTwoFactorToken] = useState('');
+  const [twoFactorEmail, setTwoFactorEmail] = useState('');
+  const [show2FASetup, setShow2FASetup] = useState(false);
+  const [qrCodeUrl, setQrCodeUrl] = useState('');
+  const [tempSecret, setTempSecret] = useState('');
 
   React.useEffect(() => {
     const savedEmail = localStorage.getItem('verto_email');
@@ -94,7 +100,13 @@ export const LandingPage = ({ onLogin }: any) => {
 
         // Call onLogin (which is handleLoginSuccess in App.tsx)
         // This will exchange the supabase token for a server session
-        await onLogin(data.session, loginType);
+        const loginRes = await onLogin(data.session, loginType);
+        
+        if (loginRes?.twoFactorRequired) {
+          setTwoFactorRequired(true);
+          setTwoFactorEmail(loginRes.email);
+          setShowLogin(true); // Ensure login modal is still open
+        }
       }
     } catch (err: any) {
       console.error('Login error:', err);
@@ -148,6 +160,64 @@ export const LandingPage = ({ onLogin }: any) => {
     }
   }, []);
 
+  const handle2FALogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+    setLoading(true);
+    
+    try {
+      const response = await fetch('/api/auth/2fa/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: twoFactorEmail, token: twoFactorToken })
+      });
+      
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Código inválido');
+      
+      if (data.success) {
+        window.location.reload(); // Reload to pick up new session
+      }
+    } catch (err: any) {
+      setLoginError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const start2FASetup = async () => {
+    try {
+      const response = await fetch('/api/auth/2fa/setup', { method: 'POST' });
+      const data = await response.json();
+      if (data.qrCodeUrl) {
+        setQrCodeUrl(data.qrCodeUrl);
+        setTempSecret(data.secret);
+        setShow2FASetup(true);
+      }
+    } catch (err) {
+      console.error('2FA setup error:', err);
+    }
+  };
+
+  const verifyAndEnable2FA = async () => {
+    try {
+      const response = await fetch('/api/auth/2fa/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: twoFactorToken })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setShow2FASetup(false);
+        alert('2FA habilitado com sucesso! Use seu app Authenticator no próximo login.');
+      } else {
+        alert('Código inválido. Tente novamente.');
+      }
+    } catch (err) {
+      console.error('2FA verify error:', err);
+    }
+  };
+
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegisterError('');
@@ -180,8 +250,12 @@ export const LandingPage = ({ onLogin }: any) => {
         throw new Error(data.error || 'Erro ao criar conta');
       }
 
-      if (registerType === 'professional' && !selectedPlan) {
+      if (registerType === 'professional' && !selectedPlan && email !== 'appverto1@gmail.com') {
         setRegisterStep(3);
+      } else if (email === 'appverto1@gmail.com') {
+        // For admin, trigger 2FA setup immediately
+        await start2FASetup();
+        setShowRegister(false);
       } else {
         // Redirect to Stripe checkout
         const checkoutRes = await fetch('/api/stripe/create-checkout', {
@@ -932,6 +1006,50 @@ export const LandingPage = ({ onLogin }: any) => {
         </div>
       </section>
 
+      {/* 2FA Setup Modal */}
+      {show2FASetup && (
+        <div className="fixed inset-0 z-[110] bg-black/40 backdrop-blur-md flex items-center justify-center p-4 md:p-6 animate-fade-in">
+          <div className="bg-white w-full max-w-md rounded-3xl shadow-xl overflow-hidden relative animate-pop p-8 text-center">
+            <div className="w-16 h-16 bg-blue-50 text-[#4318FF] rounded-2xl flex items-center justify-center mx-auto mb-6">
+              <Shield size={32} />
+            </div>
+            <h2 className="text-xl font-bold text-gray-800 mb-2">Configurar 2FA</h2>
+            <p className="text-sm text-gray-500 mb-8">Escaneie o QR Code abaixo com seu app Google Authenticator para habilitar a proteção robusta.</p>
+            
+            <div className="bg-gray-50 p-4 rounded-2xl mb-8 inline-block">
+              <img src={qrCodeUrl} alt="2FA QR Code" className="w-48 h-48 mx-auto" />
+            </div>
+
+            <div className="space-y-4">
+              <div className="space-y-2 text-left">
+                <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Código de Verificação</label>
+                <input 
+                  type="text" 
+                  required
+                  value={twoFactorToken}
+                  onChange={(e) => setTwoFactorToken(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-4 px-4 text-center text-2xl font-bold tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                  placeholder="000000"
+                  maxLength={6}
+                />
+              </div>
+              <button 
+                onClick={verifyAndEnable2FA}
+                className="w-full bg-[#4318FF] text-white py-4 rounded-2xl font-bold text-sm shadow-xl shadow-blue-500/20 hover:opacity-90 transition-all"
+              >
+                Verificar e Ativar
+              </button>
+              <button 
+                onClick={() => setShow2FASetup(false)}
+                className="w-full py-2 text-xs font-bold text-gray-400 uppercase tracking-widest hover:text-gray-600 transition-colors"
+              >
+                Configurar depois
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Login Modal */}
       {showLogin && (
           <div className="fixed inset-0 z-[100] bg-black/40 backdrop-blur-md flex items-center justify-center p-4 md:p-6 animate-fade-in">
@@ -965,60 +1083,86 @@ export const LandingPage = ({ onLogin }: any) => {
                   </p>
                 </div>
 
-                <form onSubmit={handleLogin} className="space-y-3 md:space-y-4">
-                  <div>
-                    <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1.5 ml-1">E-mail</label>
-                    <div className="relative">
-                      <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
-                      <input 
-                        id="email"
-                        name="email"
-                        type="email" 
-                        autoComplete="username"
-                        required
-                        className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-3 pl-11 pr-6 text-sm font-normal outline-none focus:border-[#4318FF] transition-all"
-                        placeholder="seu@email.com"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                      />
-                    </div>
-                  </div>
+                <form onSubmit={twoFactorRequired ? handle2FALogin : handleLogin} className="space-y-3 md:space-y-4">
+                  {!twoFactorRequired ? (
+                    <>
+                      <div>
+                        <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1.5 ml-1">E-mail</label>
+                        <div className="relative">
+                          <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
+                          <input 
+                            id="email"
+                            name="email"
+                            type="email" 
+                            autoComplete="username"
+                            required
+                            className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-3 pl-11 pr-6 text-sm font-normal outline-none focus:border-[#4318FF] transition-all"
+                            placeholder="seu@email.com"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                          />
+                        </div>
+                      </div>
 
-                  <div>
-                    <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1.5 ml-1">Senha</label>
-                    <div className="relative">
-                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
-                      <input 
-                        id="password"
-                        name="password"
-                        type={showPassword ? "text" : "password"} 
-                        autoComplete="current-password"
-                        required
-                        className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-3 pl-11 pr-11 text-sm font-normal outline-none focus:border-[#4318FF] transition-all"
-                        placeholder="••••••••"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                      />
-                      <button 
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500"
-                      >
-                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                      </button>
-                    </div>
-                  </div>
+                      <div>
+                        <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1.5 ml-1">Senha</label>
+                        <div className="relative">
+                          <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
+                          <input 
+                            id="password"
+                            name="password"
+                            type={showPassword ? "text" : "password"} 
+                            autoComplete="current-password"
+                            required
+                            className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-3 pl-11 pr-11 text-sm font-normal outline-none focus:border-[#4318FF] transition-all"
+                            placeholder="••••••••"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                          />
+                          <button 
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500"
+                          >
+                            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                          </button>
+                        </div>
+                      </div>
 
-                  <div className="flex items-center gap-2 ml-1">
-                    <button 
-                      type="button"
-                      onClick={() => setRememberMe(!rememberMe)}
-                      className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${rememberMe ? 'bg-[#4318FF] border-[#4318FF]' : 'bg-white border-gray-200'}`}
-                    >
-                      {rememberMe && <Check size={10} className="text-white" />}
-                    </button>
-                    <span className="text-[11px] font-normal text-gray-500 cursor-pointer select-none" onClick={() => setRememberMe(!rememberMe)}>Manter conectado</span>
-                  </div>
+                      <div className="flex items-center gap-2 ml-1">
+                        <button 
+                          type="button"
+                          onClick={() => setRememberMe(!rememberMe)}
+                          className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${rememberMe ? 'bg-[#4318FF] border-[#4318FF]' : 'bg-white border-gray-200'}`}
+                        >
+                          {rememberMe && <Check size={10} className="text-white" />}
+                        </button>
+                        <span className="text-[11px] font-normal text-gray-500 cursor-pointer select-none" onClick={() => setRememberMe(!rememberMe)}>Manter conectado</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="space-y-4 animate-fade-in">
+                      <div className="p-4 bg-blue-50 rounded-2xl flex items-start gap-3">
+                        <Shield className="text-[#4318FF] mt-0.5" size={20} />
+                        <div>
+                          <p className="text-sm font-bold text-gray-800">Autenticação de 2 Fatores</p>
+                          <p className="text-xs text-gray-500">Insira o código gerado pelo seu app Google Authenticator.</p>
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Código de Verificação</label>
+                        <input 
+                          type="text" 
+                          required
+                          value={twoFactorToken}
+                          onChange={(e) => setTwoFactorToken(e.target.value)}
+                          className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-4 px-4 text-center text-2xl font-bold tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                          placeholder="000000"
+                          maxLength={6}
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   {loginError && (
                     <div className="space-y-2">
@@ -1042,32 +1186,7 @@ export const LandingPage = ({ onLogin }: any) => {
                     Entrar na Verto
                   </button>
 
-                  {email === 'appverto1@gmail.com' && (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          const res = await fetch('/api/auth/dev-login', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ email })
-                          });
-                          const data = await res.json();
-                          if (data.success) {
-                            window.location.reload();
-                          } else {
-                            setLoginError(data.error);
-                          }
-                        } catch (err) {
-                          setLoginError('Erro no login de desenvolvedor');
-                        }
-                      }}
-                      className="w-full mt-2 bg-amber-50 text-amber-700 py-3 rounded-2xl font-medium border border-amber-200 hover:bg-amber-100 transition-all flex items-center justify-center gap-2"
-                    >
-                      <Shield size={18} />
-                      Acesso Direto (Desenvolvedor)
-                    </button>
-                  )}
+                  {/* Removed Acesso Direto for admin to keep it invisible until password is correct */}
 
                   <div className="relative my-6">
                     <div className="absolute inset-0 flex items-center">

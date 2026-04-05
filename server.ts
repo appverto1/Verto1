@@ -10,6 +10,8 @@ import dotenv from 'dotenv';
 import Stripe from 'stripe';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import { authenticator } from 'otplib';
+import QRCode from 'qrcode';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
@@ -246,6 +248,94 @@ async function startServer() {
 
   // --- API ROUTES ---
   
+  // 2FA Setup - Generate Secret and QR Code
+  app.post('/api/auth/2fa/setup', async (req, res) => {
+    if (!req.session.user) return res.status(401).json({ error: "Não autenticado" });
+    
+    const userEmail = req.session.user.email;
+    const secret = authenticator.generateSecret();
+    const otpauth = authenticator.keyuri(userEmail, 'Verto', secret);
+    
+    try {
+      const qrCodeUrl = await QRCode.toDataURL(otpauth);
+      
+      // Store secret temporarily in session (not enabled yet)
+      req.session.temp2faSecret = secret;
+      
+      res.json({ secret, qrCodeUrl });
+    } catch (err) {
+      res.status(500).json({ error: "Erro ao gerar QR Code" });
+    }
+  });
+
+  // 2FA Verify - Enable 2FA after first verification
+  app.post('/api/auth/2fa/verify', async (req, res) => {
+    if (!req.session.user || !req.session.temp2faSecret) {
+      return res.status(401).json({ error: "Sessão inválida para setup de 2FA" });
+    }
+    
+    const { token } = req.body;
+    const isValid = authenticator.verify({ token, secret: req.session.temp2faSecret });
+    
+    if (!isValid) {
+      return res.status(400).json({ error: "Código inválido" });
+    }
+    
+    try {
+      // Save secret to database and enable 2FA
+      const { error } = await supabase
+        .from('users')
+        .update({ 
+          two_factor_secret: req.session.temp2faSecret,
+          two_factor_enabled: true 
+        })
+        .eq('id', req.session.user.id);
+        
+      if (error) throw error;
+      
+      delete req.session.temp2faSecret;
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 2FA Login Verification
+  app.post('/api/auth/2fa/login', async (req, res) => {
+    const { email, token } = req.body;
+    if (!email || !token) return res.status(400).json({ error: "E-mail e código são obrigatórios" });
+    
+    try {
+      const { data: { users } } = await supabase.auth.admin.listUsers();
+      const user = users.find(u => u.email === email);
+      if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
+      
+      const { data: profile } = await supabase.from('users').select('*').eq('id', user.id).single();
+      if (!profile || !profile.two_factor_enabled || !profile.two_factor_secret) {
+        return res.status(400).json({ error: "2FA não habilitado para este usuário" });
+      }
+      
+      const isValid = authenticator.verify({ token, secret: profile.two_factor_secret });
+      if (!isValid) return res.status(400).json({ error: "Código inválido" });
+      
+      // Complete login
+      const userData = {
+        id: user.id,
+        email: user.email,
+        role: profile.role,
+        name: profile.name,
+        subscriptionStatus: profile.subscription_status,
+        planPrice: profile.plan_price,
+        clinicId: profile.clinic_id
+      };
+      
+      req.session.user = userData;
+      res.json({ success: true, user: userData });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Direct Signup (Bypasses email confirmation using Admin API)
   app.post('/api/auth/signup-direct', async (req, res) => {
     const { email, password, name, role, intendedRole, planName, acquisitionChannel } = req.body;
@@ -367,6 +457,11 @@ async function startServer() {
       // Fetch profile
       const { data: profile } = await supabase.from('users').select('*').eq('id', user.id).single();
 
+      // Check for 2FA
+      if (profile?.two_factor_enabled) {
+        return res.json({ success: true, twoFactorRequired: true, email: user.email });
+      }
+
       const userData = {
         id: user.id,
         email: user.email,
@@ -411,6 +506,11 @@ async function startServer() {
       if (profileError && profileError.code !== 'PGRST116') {
         console.error('Profile fetch error:', profileError);
         throw profileError;
+      }
+
+      // Check for 2FA
+      if (profile?.two_factor_enabled) {
+        return res.json({ success: true, twoFactorRequired: true, email: user.email });
       }
 
       // Logic for free access (First Client & AIS Agent Testing)

@@ -84,7 +84,9 @@
         "crp": { "type": "string", "description": "Professional registration number" },
         "plan": { "type": "string", "description": "Subscription plan" },
         "age": { "type": "integer", "description": "Age (for patients)" },
-        "clinic_id": { "type": "string", "description": "ID of the clinic this user belongs to" }
+        "clinic_id": { "type": "string", "description": "ID of the clinic this user belongs to" },
+        "two_factor_secret": { "type": "string", "description": "TOTP secret for 2FA" },
+        "two_factor_enabled": { "type": "boolean", "description": "Whether 2FA is enabled for this user" }
       },
       "required": ["name", "role", "email"]
     },
