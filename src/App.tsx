@@ -629,24 +629,70 @@ export default function App() {
     const pid = allPatients.find(p => p.name === sess.patientName)?.id || Date.now(); 
     const numSessions = sess.numSessions || 1;
     const newItems = [];
+    const conflicts: string[] = [];
     
     for (let i = 0; i < numSessions; i++) {
       const date = new Date(sess.date + 'T00:00:00');
       date.setDate(date.getDate() + (i * 7)); // Weekly recurrence
       const dateStr = date.toISOString().split('T')[0];
-      
-      newItems.push({
-        id: Date.now() + i, // Unique ID for each session
-        patientId: pid,
-        name: sess.patientName, 
-        date: dateStr, 
-        time: sess.time, 
-        status: 'pending', 
-        type: sess.approach, 
-        color: 'bg-blue-100 text-blue-600',
-        professional: sess.professional,
-        room: sess.room
-      });
+      const startTime = sess.time;
+      const endTime = calculateEndTime(sess.time, sess.approach);
+
+      // 1. Room Conflict Check
+      if (sess.room) {
+        const roomConflict = roomReservations.find(r => 
+          r.date === dateStr && 
+          r.roomId === sess.room && 
+          r.status !== 'canceled' &&
+          ((startTime >= r.startTime && startTime < r.endTime) || 
+           (endTime > r.startTime && endTime <= r.endTime) ||
+           (startTime <= r.startTime && endTime >= r.endTime))
+        );
+        if (roomConflict) {
+          conflicts.push(`Conflito de Sala: ${sess.room} já está reservada em ${dateStr} às ${startTime}`);
+        }
+      }
+
+      // 2. Professional Conflict Check
+      const profConflict = therapistAgenda.find(a => 
+        a.date === dateStr && 
+        a.professional === sess.professional && 
+        a.time === sess.time &&
+        a.status !== 'canceled'
+      );
+      if (profConflict) {
+        conflicts.push(`Conflito de Profissional: ${sess.professional} já tem agenda em ${dateStr} às ${startTime}`);
+      }
+
+      // 3. Patient Conflict Check
+      const patientConflict = therapistAgenda.find(a => 
+        a.date === dateStr && 
+        a.patientId === pid && 
+        a.time === sess.time &&
+        a.status !== 'canceled'
+      );
+      if (patientConflict) {
+        conflicts.push(`Conflito de Paciente: ${sess.patientName} já tem sessão em ${dateStr} às ${startTime}`);
+      }
+
+      if (conflicts.length === 0) {
+        newItems.push({
+          id: Date.now() + i, // Unique ID for each session
+          patientId: pid,
+          name: sess.patientName, 
+          date: dateStr, 
+          time: sess.time, 
+          status: 'pending', 
+          type: sess.approach, 
+          color: 'bg-blue-100 text-blue-600',
+          professional: sess.professional,
+          room: sess.room
+        });
+      }
+    }
+
+    if (conflicts.length > 0) {
+      return { success: false, errors: conflicts };
     }
 
     setTherapistAgenda(prev => [...prev, ...newItems].sort((a,b) => {
@@ -671,6 +717,7 @@ export default function App() {
     }
 
     onAddActivityLog("Agendamento de Sessão", `${numSessions} sessões agendadas para "${sess.patientName}" começando em ${sess.date}.`, 'management');
+    return { success: true };
   };
 
   const calculateEndTime = (startTime: string, approach: string) => {

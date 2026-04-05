@@ -76,6 +76,7 @@ export const TherapistDashboard = ({
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [isDayDetailsModalOpen, setIsDayDetailsModalOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false); 
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
 
   useEffect(() => {
     if (runTutorial) {
@@ -145,7 +146,10 @@ export const TherapistDashboard = ({
       professional: sessionProfessional,
       numSessions: sessionNumSessions
     }; 
-    onScheduleSession(newSession); 
+    const result = onScheduleSession(newSession); 
+    if (result && !result.success) {
+      return alert(result.errors.join('\n'));
+    }
     
     // Sync to Google Calendar if connected
     const isConnected = await googleCalendarService.isConnected();
@@ -195,15 +199,16 @@ export const TherapistDashboard = ({
     setSelectedPaymentPatient(null);
   };
 
-  const confirmedCount = therapistAgenda.filter((a: any) => a.status === 'confirmed').length;
-  const pendingCount = therapistAgenda.filter((a: any) => a.status === 'pending').length;
-  const canceledCount = therapistAgenda.filter((a: any) => a.status === 'canceled').length;
-
   const getFilteredAgenda = () => {
     const today = new Date();
     today.setHours(0,0,0,0);
     
     let list = therapistAgenda;
+    
+    // Filter by status if selected
+    if (statusFilter) {
+      list = list.filter((item: any) => item.status === statusFilter);
+    }
     
     // Filter by professional if not 'all'
     if (professionalFilter !== 'all') {
@@ -229,9 +234,53 @@ export const TherapistDashboard = ({
     });
   };
 
+  const currentViewAgenda = useMemo(() => getFilteredAgenda(), [agendaView, therapistAgenda, professionalFilter, statusFilter]);
+  
+  const confirmedCount = therapistAgenda.filter((a: any) => {
+    const itemDate = new Date(a.date + 'T00:00:00');
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    if (agendaView === 'day') return itemDate.getTime() === today.getTime() && a.status === 'confirmed';
+    if (agendaView === 'week') {
+      const nextWeek = new Date(today);
+      nextWeek.setDate(today.getDate() + 7);
+      return itemDate >= today && itemDate <= nextWeek && a.status === 'confirmed';
+    }
+    if (agendaView === 'month') return itemDate.getMonth() === today.getMonth() && itemDate.getFullYear() === today.getFullYear() && a.status === 'confirmed';
+    return a.status === 'confirmed';
+  }).length;
+
+  const pendingCount = therapistAgenda.filter((a: any) => {
+    const itemDate = new Date(a.date + 'T00:00:00');
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    if (agendaView === 'day') return itemDate.getTime() === today.getTime() && a.status === 'pending';
+    if (agendaView === 'week') {
+      const nextWeek = new Date(today);
+      nextWeek.setDate(today.getDate() + 7);
+      return itemDate >= today && itemDate <= nextWeek && a.status === 'pending';
+    }
+    if (agendaView === 'month') return itemDate.getMonth() === today.getMonth() && itemDate.getFullYear() === today.getFullYear() && a.status === 'pending';
+    return a.status === 'pending';
+  }).length;
+
+  const canceledCount = therapistAgenda.filter((a: any) => {
+    const itemDate = new Date(a.date + 'T00:00:00');
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    if (agendaView === 'day') return itemDate.getTime() === today.getTime() && a.status === 'canceled';
+    if (agendaView === 'week') {
+      const nextWeek = new Date(today);
+      nextWeek.setDate(today.getDate() + 7);
+      return itemDate >= today && itemDate <= nextWeek && a.status === 'canceled';
+    }
+    if (agendaView === 'month') return itemDate.getMonth() === today.getMonth() && itemDate.getFullYear() === today.getFullYear() && a.status === 'canceled';
+    return a.status === 'canceled';
+  }).length;
+
   const groupedAgenda = useMemo(() => {
     if (agendaView === 'day' || agendaView === 'month') return null; 
-    const items = getFilteredAgenda();
+    const items = currentViewAgenda;
     const grouped: any = {};
     items.forEach((item: any) => {
       const dateKey = new Date(item.date + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric', month: 'short' });
@@ -239,9 +288,7 @@ export const TherapistDashboard = ({
       grouped[dateKey].push(item);
     });
     return grouped;
-  }, [agendaView, therapistAgenda]);
-
-  const filteredAgendaList = agendaView === 'day' ? getFilteredAgenda() : [];
+  }, [agendaView, therapistAgenda, currentViewAgenda]);
 
   const marketProtocols = [
     { id: 'm1', title: 'VB-MAPP Completo', price: 'R$ 1,90', badge: 'Popular', badgeColor: 'bg-orange-500', description: 'Avaliação de marcos de desenvolvimento e comportamento verbal para crianças com autismo.', includes: ['Checklist Completo', 'Planilhas de Registro', 'Sugestões de Metas'], color: 'bg-purple-100 text-purple-600' },
@@ -875,7 +922,7 @@ export const TherapistDashboard = ({
         </div> 
       )} 
       {/* Responsive Header */}
-      <div className="bg-white lg:bg-transparent px-6 lg:px-10 pt-6 lg:pt-10 pb-6 z-20"> 
+      <div className="bg-white lg:bg-transparent px-6 lg:px-10 pt-6 lg:pt-10 pb-6 z-30 relative"> 
         {/* Mobile Header */}
         <div className="lg:hidden flex justify-between items-center mb-6"> 
           <LogoVerto size={32} showText={true} />
@@ -885,8 +932,8 @@ export const TherapistDashboard = ({
               onLogout={onLogout} 
               onViewTeam={onViewTeam} 
               onOpenInvitations={() => setShowInvitationModal(true)} 
-              onViewProfile={() => setView('profile')}
-              onViewBilling={() => setView('billing')}
+              onViewProfile={() => handleSetView('profile')}
+              onViewBilling={() => handleSetView('billing')}
             />
             <button 
               id="menu-btn"
@@ -908,19 +955,19 @@ export const TherapistDashboard = ({
                    />
                 </div>
 
-                <button onClick={() => {setView('home'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
+                <button onClick={() => {handleSetView('home'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
                   <LayoutDashboard size={18}/> Dashboard
                 </button>
 
-                <button onClick={() => {setView('patients_registry'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
+                <button onClick={() => {handleSetView('patients_registry'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
                   <Users size={18}/> Pacientes
                 </button>
 
-                <button onClick={() => {setView('protocols'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
+                <button onClick={() => {handleSetView('protocols'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
                   <ClipboardList size={18}/> Protocolos
                 </button>
 
-                <button onClick={() => {setView('room_reservation'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
+                <button onClick={() => {handleSetView('room_reservation'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#4318FF] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
                   <DoorOpen size={18}/> Reserva de Salas
                 </button>
 
@@ -935,7 +982,7 @@ export const TherapistDashboard = ({
                 </button>
 
                 {(user?.role === 'coordinator' || user?.role === 'receptionist') && (
-                  <button id="menu-financial" onClick={() => {setView('financial'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-emerald-500 transition-colors text-xs font-semibold uppercase tracking-wider text-left">
+                  <button id="menu-financial" onClick={() => {handleSetView('financial'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-emerald-500 transition-colors text-xs font-semibold uppercase tracking-wider text-left">
                     <ShoppingBag size={18}/> Financeiro & Pagamentos
                   </button>
                 )}
@@ -951,7 +998,7 @@ export const TherapistDashboard = ({
                 )}
 
                 {(user?.role === 'coordinator' || user?.role === 'therapist') && (
-                  <button id="menu-clinic" onClick={() => {setView('clinic'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-emerald-500 transition-colors text-xs font-semibold uppercase tracking-wider text-left">
+                  <button id="menu-clinic" onClick={() => {handleSetView('clinic'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-emerald-500 transition-colors text-xs font-semibold uppercase tracking-wider text-left">
                     <Rocket size={18}/> Gestão da Clínica
                   </button>
                 )}
@@ -1003,8 +1050,8 @@ export const TherapistDashboard = ({
               onLogout={onLogout} 
               onViewTeam={onViewTeam} 
               onOpenInvitations={() => setShowInvitationModal(true)} 
-              onViewProfile={() => setView('profile')}
-              onViewBilling={() => setView('billing')}
+              onViewProfile={() => handleSetView('profile')}
+              onViewBilling={() => handleSetView('billing')}
             />
           </div>
         </div>
@@ -1057,7 +1104,7 @@ export const TherapistDashboard = ({
         {agendaView === 'day' ? (
           <div id="schedule-list" className="flex overflow-x-auto pb-4 -mx-6 px-6 space-x-4 snap-x no-scrollbar"> 
             <div id="schedule-btn" onClick={() => setIsAddSessionModalOpen(true)} className="min-w-[120px] bg-white rounded-3xl border-2 border-dashed border-[#4318FF]/40 flex flex-col items-center justify-center cursor-pointer hover:bg-[#F4F7FE] transition-all snap-center h-40 group shrink-0"> <div className="w-10 h-10 rounded-full bg-[#4318FF]/10 text-[#4318FF] flex items-center justify-center mb-2 group-hover:scale-110 transition-transform"><CalendarPlus size={24} /></div><span className="text-xs font-semibold text-[#4318FF] uppercase tracking-tighter">Agendar</span> </div> 
-            {filteredAgendaList.map((patientItem: any, idx: number) => {
+            {currentViewAgenda.map((patientItem: any, idx: number) => {
               const patientData = allPatients.find((p: any) => p.id === patientItem.patientId);
               const isKid = (patientData?.age !== undefined && patientData.age <= 12) || patientData?.anamnesisData?.formType === 'child';
               const category = isKid ? 'Kids' : 'Adulto';
@@ -1189,104 +1236,50 @@ export const TherapistDashboard = ({
         <div className="mt-4 animate-fade-in">
           <h3 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-3 ml-1">Resumo {agendaView === 'day' ? 'do Dia' : agendaView === 'week' ? 'da Semana' : 'do Mês'}</h3>
           <div id="summary-stats" className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div id="summary-confirmed" className="flex-1 bg-white p-4 rounded-[24px] border border-gray-100 shadow-sm flex flex-col group hover:border-green-100 transition-all">
+            <div 
+              id="summary-confirmed" 
+              onClick={() => setStatusFilter(statusFilter === 'confirmed' ? null : 'confirmed')}
+              className={`flex-1 bg-white p-4 rounded-[24px] border shadow-sm flex flex-col group transition-all cursor-pointer ${statusFilter === 'confirmed' ? 'border-green-500 ring-2 ring-green-500/20' : 'border-gray-100 hover:border-green-100'}`}
+            >
               <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Confirmadas</span>
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-[#05CD99] animate-pulse"></div>
                 <span className="text-xl font-semibold text-gray-800">
-                  {agendaView === 'day' ? confirmedCount : (filteredAgendaList.length > 0 ? 0 : getFilteredAgenda().filter((a: any) => a.status === 'confirmed').length)}
+                  {confirmedCount}
                 </span>
               </div>
             </div>
-            <div id="summary-pending" className="flex-1 bg-white p-4 rounded-[24px] border border-gray-100 shadow-sm flex flex-col group hover:border-yellow-100 transition-all">
+            <div 
+              id="summary-pending" 
+              onClick={() => setStatusFilter(statusFilter === 'pending' ? null : 'pending')}
+              className={`flex-1 bg-white p-4 rounded-[24px] border shadow-sm flex flex-col group transition-all cursor-pointer ${statusFilter === 'pending' ? 'border-yellow-500 ring-2 ring-yellow-500/20' : 'border-gray-100 hover:border-yellow-100'}`}
+            >
               <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Pendentes</span>
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-[#FFB547]"></div>
                 <span className="text-xl font-semibold text-gray-800">
-                   {agendaView === 'day' ? pendingCount : (filteredAgendaList.length > 0 ? 0 : getFilteredAgenda().filter((a: any) => a.status === 'pending').length)}
+                   {pendingCount}
                 </span>
               </div>
             </div>
-            <div id="summary-canceled" className="flex-1 bg-white p-4 rounded-[24px] border border-gray-100 shadow-sm flex flex-col group hover:border-red-100 transition-all">
+            <div 
+              id="summary-canceled" 
+              onClick={() => setStatusFilter(statusFilter === 'canceled' ? null : 'canceled')}
+              className={`flex-1 bg-white p-4 rounded-[24px] border shadow-sm flex flex-col group transition-all cursor-pointer ${statusFilter === 'canceled' ? 'border-red-500 ring-2 ring-red-500/20' : 'border-gray-100 hover:border-red-100'}`}
+            >
               <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Ausentes</span>
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-[#EE5D50]"></div>
                 <span className="text-xl font-semibold text-gray-800">
-                   {agendaView === 'day' ? canceledCount : (filteredAgendaList.length > 0 ? 0 : getFilteredAgenda().filter((a: any) => a.status === 'canceled').length)}
+                   {canceledCount}
                 </span>
               </div>
             </div>
           </div>
-        <div className="mt-8 animate-fade-in">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest ml-1">Reserva de Salas</h3>
-            <div className="flex items-center gap-2">
-              <input 
-                type="date" 
-                value={roomReservationDate}
-                onChange={(e) => setRoomReservationDate(e.target.value)}
-                className="px-3 py-1.5 bg-white border border-gray-100 rounded-xl text-[10px] font-bold text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
-              />
-              <button 
-                onClick={() => handleSetView('room_reservation')}
-                className="p-1.5 bg-blue-50 text-[#4318FF] rounded-lg hover:bg-blue-100 transition-all"
-              >
-                <Plus size={14} />
-              </button>
-            </div>
-          </div>
-          <RoomReservationTable 
-            rooms={rooms}
-            reservations={roomReservations}
-            selectedDate={roomReservationDate}
-            user={user}
-            onDeleteReservation={(id) => setRoomReservations(prev => prev.filter(r => r.id !== id))}
-          />
         </div>
-      </div> 
-    </div>
+      </div>
       <div className="p-6 flex flex-col gap-6"> 
-        <div className="flex flex-col sm:flex-row gap-4"> 
-          {user?.role !== 'receptionist' && (
-            <>
-              <button id="protocols-btn" onClick={() => handleSetView('protocols')} className="flex-1 bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex items-center justify-between hover:shadow-md transition-all group"> <div className="flex items-center gap-4"><div className="w-12 h-12 rounded-full bg-blue-50 text-[#4318FF] flex items-center justify-center group-hover:scale-110 transition-transform"><Settings size={24} /></div><div className="text-left"><h3 className="font-semibold text-gray-800 text-lg tracking-tight">Gestão de Protocolos</h3><p className="text-gray-500 text-xs font-medium">Crie e edite estruturas</p></div></div><ChevronRight className="text-gray-300" /> </button> 
-              <button id="patients-btn" onClick={() => handleSetView('patients_registry')} className="flex-1 bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex items-center justify-between hover:shadow-md transition-all group"> <div className="flex items-center gap-4"><div className="w-12 h-12 rounded-full bg-purple-50 text-purple-600 flex items-center justify-center group-hover:scale-110 transition-transform"><Users size={24} /></div><div className="text-left"><h3 className="font-semibold text-gray-800 text-lg tracking-tight">Meus Pacientes</h3><p className="text-gray-500 text-xs font-medium">Acesse os prontuários</p></div></div><ChevronRight className="text-gray-300" /> </button> 
-            </>
-          )}
-          <button id="rooms-btn" onClick={() => handleSetView('room_reservation')} className="flex-1 bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex items-center justify-between hover:shadow-md transition-all group"> 
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-full bg-orange-50 text-orange-600 flex items-center justify-center group-hover:scale-110 transition-transform">
-                <DoorOpen size={24} />
-              </div>
-              <div className="text-left">
-                <h3 className="font-semibold text-gray-800 text-lg tracking-tight">Reserva de Salas</h3>
-                <p className="text-gray-500 text-xs font-medium">Calendário e disponibilidade</p>
-              </div>
-            </div>
-            <ChevronRight className="text-gray-300" /> 
-          </button>
-        </div> 
-
-        {user?.role === 'coordinator' && (
-          <button id="clinic-btn" onClick={() => setView('clinic')} className="w-full bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex items-center justify-between hover:shadow-md transition-all group">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center group-hover:scale-110 transition-transform">
-                <Rocket size={24} />
-              </div>
-              <div className="text-left">
-                <h3 className="font-semibold text-gray-800 text-lg tracking-tight">Gestão da Clínica</h3>
-                <p className="text-gray-500 text-xs font-medium">DRE Mensal, Financeiro e Metas</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="text-right hidden sm:block">
-                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Lucro do Mês</p>
-                <p className="text-sm font-semibold text-emerald-600">R$ 12.450,00</p>
-              </div>
-              <ChevronRight className="text-gray-300" />
-            </div>
-          </button>
-        )}
+        {/* Removed bottom cards as requested */}
       </div>
     </main>
 

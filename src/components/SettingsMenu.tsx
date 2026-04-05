@@ -33,13 +33,13 @@ export function SettingsMenu({ user, onLogout, onViewTeam, onOpenInvitations, on
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const isCoordinator = user.role === 'coordinator' || user.role === 'admin';
-  const isReceptionist = user.role === 'receptionist';
+  const isCoordinator = user?.role === 'coordinator' || user?.role === 'admin';
+  const isReceptionist = user?.role === 'receptionist';
   const canManageTeam = isCoordinator;
   const canSeeBilling = isCoordinator || isReceptionist;
 
   return (
-    <div className="relative" ref={menuRef}>
+    <div className="relative" ref={menuRef} style={{ zIndex: 100 }}>
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
@@ -53,7 +53,7 @@ export function SettingsMenu({ user, onLogout, onViewTeam, onOpenInvitations, on
             initial={{ opacity: 0, scale: 0.95, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
-            className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden z-50"
+            className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden z-[100]"
           >
             <div className="p-4 border-b border-slate-50">
               <div className="flex items-center gap-3">

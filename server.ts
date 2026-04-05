@@ -154,10 +154,10 @@ async function startServer() {
     saveUninitialized: false,
     name: 'verto-session',
     cookie: { 
-      secure: process.env.NODE_ENV === 'production',
+      secure: true, // Always true for sameSite: 'none'
       httpOnly: true,
       maxAge: 24 * 60 * 60 * 1000, // 24 hours
-      sameSite: 'lax'
+      sameSite: 'none'
     }
   }));
 
