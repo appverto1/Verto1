@@ -133,33 +133,10 @@ async function startServer() {
   app.use(cookieParser());
 
   // Database Session Store
-  const PostgresStore = pgSession(session);
-  let sessionStore;
-  
-  if (process.env.DATABASE_URL) {
-    console.log('Tentando configurar armazenamento de sessão no Postgres...');
-    try {
-      sessionStore = new PostgresStore({ 
-        conString: process.env.DATABASE_URL, 
-        createTableIfMissing: true,
-        schemaName: 'public',
-        tableName: 'sessions',
-        // Previne que erros de conexão derrubem o processo
-        errorLog: (err) => {
-          console.error('ERRO NO ARMAZENAMENTO DE SESSÃO (PG):', err.message);
-          if (err.message.includes('ENETUNREACH')) {
-            console.error('Dica: O banco de dados parece inacessível via rede (possível problema de IPv6).');
-          }
-        }
-      });
-      console.log('Armazenamento de sessão no banco de dados inicializado.');
-    } catch (err) {
-      console.error('FALHA CRÍTICA AO INICIALIZAR PG-SESSION, USANDO MEMÓRIA:', err);
-      sessionStore = undefined; // Fallback automático para MemoryStore do express-session
-    }
-  } else {
-    console.warn('DATABASE_URL não encontrada, usando armazenamento em memória (sessões serão perdidas ao reiniciar).');
-  }
+  // Forçamos o uso de memória (MemoryStore) para evitar erros de rede ENETUNREACH (IPv6)
+  // que estão derrubando o servidor.
+  const sessionStore = undefined; 
+  console.log('Usando armazenamento de sessão em memória para garantir estabilidade.');
 
   app.use(session({
     store: sessionStore,

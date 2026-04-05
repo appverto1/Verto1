@@ -34,8 +34,10 @@ const ProfileView = ({ user, onUpdateProfile, specialtySettings, setSpecialtySet
       specialty: profileSpecialty,
       crp: profileCrp
     });
-    alert("Alterações salvas com sucesso!");
-    onBack();
+    setTimeout(() => {
+      alert("Alterações salvas com sucesso!");
+      onBack();
+    }, 100);
   };
 
   return (
