@@ -111,6 +111,18 @@ export default function App() {
 
   const handleLoginSuccess = async (supabaseSession: any, intendedRole?: string) => {
     try {
+      if (!supabaseSession) {
+        // If no session provided, we might already have the user from signup-direct
+        // or we just need to refresh the session from the server
+        const response = await fetch('/api/auth/me');
+        const data = await response.json();
+        if (data.user) {
+          setUser(data.user);
+          return data;
+        }
+        return { success: false, error: 'No session' };
+      }
+
       const accessToken = supabaseSession.access_token;
       const response = await fetch('/api/auth/login', {
         method: 'POST',
@@ -126,6 +138,10 @@ export default function App() {
         if (data.isFirstLogin && (data.user.role === 'coordinator' || data.user.role === 'admin')) {
           setShowInvitationModal(true);
         }
+      } else {
+        // If server-side login fails, sign out of Supabase to clear local state
+        const supabase = await getSupabase();
+        await supabase.auth.signOut();
       }
       return data;
     } catch (error) {
@@ -1020,12 +1036,12 @@ export default function App() {
       <GlobalStyles />
       
       {!user ? (
-        <LandingPage onLogin={handleLoginSuccess} />
+        <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />
       ) : user.subscriptionStatus === 'pending' ? (
         <SubscriptionRequired user={user} onLogout={handleLogout} />
       ) : user.role === 'patient' ? (
         <PatientDashboard user={user} onLogout={handleLogout} onMoodCheckin={handleMoodCheckin} tasks={tasks.filter(t => t.patientId === user.id)} onCompleteTask={handleCompleteTask} history={history.filter(h => h.patientId === user.id)} energyTags={ENERGY_TAGS} sharedNotes={therapistNotes.filter(n => n.patientId === user.id && n.type === 'shared')} protocols={protocols} onAddFamilyNote={handleAddFamilyNote} />
-      ) : user.role === 'admin' ? (
+      ) : (user.role === 'admin' || user.role === 'owner') ? (
         <AdminDashboard onLogout={handleLogout} />
       ) : view === 'team' && user.role === 'coordinator' ? (
         <div className="min-h-screen bg-slate-50 flex">

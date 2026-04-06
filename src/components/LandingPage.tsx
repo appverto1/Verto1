@@ -30,7 +30,7 @@ import { LogoVerto } from './Common';
 import { getSupabase } from '../lib/supabase';
 import { dataService } from '../services/dataService';
 
-export const LandingPage = ({ onLogin }: any) => {
+export const LandingPage = ({ onLogin, setUser }: any) => {
   const [showLogin, setShowLogin] = useState(false);
   const [showRegister, setShowRegister] = useState(false);
   const [loginType, setLoginType] = useState<'professional' | 'patient' | 'coordinator' | null>(null);
@@ -53,6 +53,7 @@ export const LandingPage = ({ onLogin }: any) => {
   const [twoFactorToken, setTwoFactorToken] = useState('');
   const [twoFactorEmail, setTwoFactorEmail] = useState('');
   const [show2FASetup, setShow2FASetup] = useState(false);
+  const [loginStep, setLoginStep] = useState<'email' | 'password'>('email');
   const [qrCodeUrl, setQrCodeUrl] = useState('');
   const [tempSecret, setTempSecret] = useState('');
 
@@ -70,7 +71,12 @@ export const LandingPage = ({ onLogin }: any) => {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loginStep === 'email') {
+      setLoginStep('password');
+      return;
+    }
     setLoginError('');
+    setLoading(true);
     
     try {
       const supabase = await getSupabase();
@@ -105,12 +111,15 @@ export const LandingPage = ({ onLogin }: any) => {
         if (loginRes?.twoFactorRequired) {
           setTwoFactorRequired(true);
           setTwoFactorEmail(loginRes.email);
+          setLoginStep('password');
           setShowLogin(true); // Ensure login modal is still open
         }
       }
     } catch (err: any) {
       console.error('Login error:', err);
       setLoginError('Credenciais inválidas ou erro de conexão. Verifique seus dados.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -159,37 +168,6 @@ export const LandingPage = ({ onLogin }: any) => {
       setAcquisitionChannel(utmSource);
     }
   }, []);
-
-  const handleDevLogin = async (role: string) => {
-    setLoginError('');
-    setLoading(true);
-    try {
-      const response = await fetch('/api/auth/dev-login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          email: role === 'admin' ? 'appverto1@gmail.com' : (role === 'coordinator' ? 'profissionalmateus1@gmail.com' : 'mateus.com96@gmail.com'),
-          intendedRole: role
-        })
-      });
-      const data = await response.json();
-      if (data.success) {
-        if (data.twoFactorRequired) {
-          setTwoFactorRequired(true);
-          setTwoFactorEmail(data.email);
-          setShowLogin(true);
-        } else {
-          window.location.reload();
-        }
-      } else {
-        throw new Error(data.error);
-      }
-    } catch (err: any) {
-      setLoginError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handle2FALogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -281,12 +259,15 @@ export const LandingPage = ({ onLogin }: any) => {
         throw new Error(data.error || 'Erro ao criar conta');
       }
 
-      if (registerType === 'professional' && !selectedPlan && email !== 'appverto1@gmail.com') {
-        setRegisterStep(3);
-      } else if (email === 'appverto1@gmail.com') {
-        // For admin, trigger 2FA setup immediately
-        await start2FASetup();
+      if (data.user.subscriptionStatus === 'active') {
+        // Free access or admin, no need for checkout
+        if (email === 'appverto1@gmail.com') {
+          await start2FASetup();
+        }
         setShowRegister(false);
+        setUser(data.user); // Log in directly
+      } else if (registerType === 'professional' && !selectedPlan) {
+        setRegisterStep(3);
       } else {
         // Redirect to Stripe checkout
         const checkoutRes = await fetch('/api/stripe/create-checkout', {
@@ -301,6 +282,7 @@ export const LandingPage = ({ onLogin }: any) => {
           console.error('Stripe creation failed:', checkoutData);
           alert(`Conta criada com sucesso! No entanto, houve um erro ao iniciar o pagamento: ${checkoutData.error || 'Erro desconhecido'}. Por favor, faça login para tentar novamente.`);
           setShowRegister(false);
+          setLoginStep('email');
           setShowLogin(true);
         }
       }
@@ -317,23 +299,12 @@ export const LandingPage = ({ onLogin }: any) => {
   const handleSelectPlan = async (planName: string) => {
     try {
       setLoading(true);
-      // If we are in step 3, the account is already created and session is set
-      // We just need to update the plan in the database and then go to checkout
-      const profileRes = await fetch(`/api/profile/${email}`, { // This might not work if we don't have the ID yet in the frontend
-        // But we have the user in the session now because signup-direct sets it
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          plan_name: planName,
-          plan_price: planName === 'Essencial' ? 149.90 : planName === 'Crescimento' ? 399.90 : 679.90
-        })
-      });
-
-      // Actually, create-checkout already looks at the profile.
-      // Let's just call create-checkout.
+      
+      // Call create-checkout with the selected plan
       const checkoutRes = await fetch('/api/stripe/create-checkout', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planName })
       });
       const checkoutData = await checkoutRes.json();
       
@@ -367,6 +338,7 @@ export const LandingPage = ({ onLogin }: any) => {
             <button 
               onClick={() => {
                 setLoginType('patient');
+                setLoginStep('email');
                 setShowLogin(true);
               }}
               className="text-gray-500 font-semibold text-sm hover:text-pink-500 transition-colors"
@@ -376,6 +348,7 @@ export const LandingPage = ({ onLogin }: any) => {
             <button 
               onClick={() => {
                 setLoginType('professional');
+                setLoginStep('email');
                 setShowLogin(true);
               }}
               className="bg-[#4318FF] text-white px-6 py-2.5 rounded-full font-semibold text-sm shadow-lg shadow-blue-500/20 hover:opacity-90 transition-all active:scale-95"
@@ -1117,59 +1090,72 @@ export const LandingPage = ({ onLogin }: any) => {
                 <form onSubmit={twoFactorRequired ? handle2FALogin : handleLogin} className="space-y-3 md:space-y-4">
                   {!twoFactorRequired ? (
                     <>
-                      <div>
-                        <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1.5 ml-1">E-mail</label>
-                        <div className="relative">
-                          <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
-                          <input 
-                            id="email"
-                            name="email"
-                            type="email" 
-                            autoComplete="username"
-                            required
-                            className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-3 pl-11 pr-6 text-sm font-normal outline-none focus:border-[#4318FF] transition-all"
-                            placeholder="seu@email.com"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                          />
+                      {loginStep === 'email' ? (
+                        <div>
+                          <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1.5 ml-1">E-mail</label>
+                          <div className="relative">
+                            <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
+                            <input 
+                              id="email"
+                              name="email"
+                              type="email" 
+                              autoComplete="username"
+                              required
+                              className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-3 pl-11 pr-6 text-sm font-normal outline-none focus:border-[#4318FF] transition-all"
+                              placeholder="seu@email.com"
+                              value={email}
+                              onChange={(e) => setEmail(e.target.value)}
+                            />
+                          </div>
                         </div>
-                      </div>
+                      ) : (
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5 ml-1">
+                            <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wider">Senha</label>
+                            <button 
+                              type="button"
+                              onClick={() => setLoginStep('email')}
+                              className="text-[10px] font-bold text-[#4318FF] hover:underline"
+                            >
+                              Alterar e-mail
+                            </button>
+                          </div>
+                          <div className="relative">
+                            <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
+                            <input 
+                              id="password"
+                              name="password"
+                              type={showPassword ? "text" : "password"} 
+                              autoComplete="current-password"
+                              required
+                              className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-3 pl-11 pr-11 text-sm font-normal outline-none focus:border-[#4318FF] transition-all"
+                              placeholder={email === 'appverto1@gmail.com' ? "Cadastre uma senha forte" : "••••••••"}
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                            />
+                            <button 
+                              type="button"
+                              onClick={() => setShowPassword(!showPassword)}
+                              className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500"
+                            >
+                              {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
-                      <div>
-                        <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1.5 ml-1">Senha</label>
-                        <div className="relative">
-                          <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
-                          <input 
-                            id="password"
-                            name="password"
-                            type={showPassword ? "text" : "password"} 
-                            autoComplete="current-password"
-                            required
-                            className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-3 pl-11 pr-11 text-sm font-normal outline-none focus:border-[#4318FF] transition-all"
-                            placeholder="••••••••"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                          />
+                      {loginStep === 'password' && (
+                        <div className="flex items-center gap-2 ml-1">
                           <button 
                             type="button"
-                            onClick={() => setShowPassword(!showPassword)}
-                            className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500"
+                            onClick={() => setRememberMe(!rememberMe)}
+                            className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${rememberMe ? 'bg-[#4318FF] border-[#4318FF]' : 'bg-white border-gray-200'}`}
                           >
-                            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                            {rememberMe && <Check size={10} className="text-white" />}
                           </button>
+                          <span className="text-[11px] font-normal text-gray-500 cursor-pointer select-none" onClick={() => setRememberMe(!rememberMe)}>Manter conectado</span>
                         </div>
-                      </div>
-
-                      <div className="flex items-center gap-2 ml-1">
-                        <button 
-                          type="button"
-                          onClick={() => setRememberMe(!rememberMe)}
-                          className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${rememberMe ? 'bg-[#4318FF] border-[#4318FF]' : 'bg-white border-gray-200'}`}
-                        >
-                          {rememberMe && <Check size={10} className="text-white" />}
-                        </button>
-                        <span className="text-[11px] font-normal text-gray-500 cursor-pointer select-none" onClick={() => setRememberMe(!rememberMe)}>Manter conectado</span>
-                      </div>
+                      )}
                     </>
                   ) : (
                     <div className="space-y-4 animate-fade-in">
@@ -1210,53 +1196,14 @@ export const LandingPage = ({ onLogin }: any) => {
                     </div>
                   )}
 
-                  {/* Dev Login Section */}
-                  {!twoFactorRequired && (
-                    <div className="p-4 bg-slate-50 border border-slate-100 rounded-2xl">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-                        <Shield size={10} /> Acesso de Teste (AIS Agent)
-                      </p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button 
-                          type="button"
-                          onClick={() => handleDevLogin('admin')}
-                          className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 hover:border-[#4318FF] hover:text-[#4318FF] transition-all"
-                        >
-                          Super Admin
-                        </button>
-                        <button 
-                          type="button"
-                          onClick={() => handleDevLogin('coordinator')}
-                          className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 hover:border-[#4318FF] hover:text-[#4318FF] transition-all"
-                        >
-                          Coordenador
-                        </button>
-                        <button 
-                          type="button"
-                          onClick={() => handleDevLogin('therapist')}
-                          className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 hover:border-[#4318FF] hover:text-[#4318FF] transition-all"
-                        >
-                          Profissional
-                        </button>
-                        <button 
-                          type="button"
-                          onClick={() => handleDevLogin('patient')}
-                          className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 hover:border-[#4318FF] hover:text-[#4318FF] transition-all"
-                        >
-                          Paciente
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
                   <button 
                     type="submit"
-                    className="w-full bg-[#4318FF] text-white py-3.5 rounded-2xl font-semibold text-sm shadow-lg shadow-blue-500/20 hover:opacity-90 transition-all active:scale-[0.98]"
+                    disabled={loading}
+                    className="w-full bg-[#4318FF] text-white py-3.5 rounded-2xl font-semibold text-sm shadow-lg shadow-blue-500/20 hover:opacity-90 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
                   >
-                    Entrar na Verto
+                    {loading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : null}
+                    {loginStep === 'email' ? 'Continuar' : 'Entrar na Verto'}
                   </button>
-
-                  {/* Removed Acesso Direto for admin to keep it invisible until password is correct */}
 
                   <div className="relative my-6">
                     <div className="absolute inset-0 flex items-center">
@@ -1366,6 +1313,7 @@ export const LandingPage = ({ onLogin }: any) => {
                         <button 
                           onClick={() => {
                             setShowRegister(false);
+                            setLoginStep('email');
                             setShowLogin(true);
                           }}
                           className="text-[#4318FF] font-medium hover:underline"

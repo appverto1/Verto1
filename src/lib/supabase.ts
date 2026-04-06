@@ -21,7 +21,21 @@ export const getSupabase = async () => {
   const key = config?.supabaseAnonKey || import.meta.env.VITE_SUPABASE_ANON_KEY;
 
   if (url && key) {
-    supabaseClient = createClient(url, key);
+    supabaseClient = createClient(url, key, {
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: true
+      }
+    });
+    
+    // Check if session is valid, if not clear it to avoid "Invalid Refresh Token" errors
+    supabaseClient.auth.getSession().then(({ data: { session }, error }: any) => {
+      if (error && error.message.includes('Refresh Token Not Found')) {
+        console.warn('Stale session detected, clearing Supabase storage...');
+        supabaseClient.auth.signOut();
+      }
+    });
   } else {
     console.error('ERRO CRÍTICO: Configurações do Supabase não encontradas!', {
       hasUrl: !!url,
