@@ -10,7 +10,7 @@ import dotenv from 'dotenv';
 import Stripe from 'stripe';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { authenticator } from 'otplib';
+import { generateSecret, verifySync, generateURI } from 'otplib';
 import QRCode from 'qrcode';
 
 if (process.env.NODE_ENV !== 'production') {
@@ -253,8 +253,8 @@ async function startServer() {
     if (!req.session.user) return res.status(401).json({ error: "Não autenticado" });
     
     const userEmail = req.session.user.email;
-    const secret = authenticator.generateSecret();
-    const otpauth = authenticator.keyuri(userEmail, 'Verto', secret);
+    const secret = generateSecret();
+    const otpauth = generateURI({ issuer: 'Verto', label: userEmail, secret });
     
     try {
       const qrCodeUrl = await QRCode.toDataURL(otpauth);
@@ -275,9 +275,9 @@ async function startServer() {
     }
     
     const { token } = req.body;
-    const isValid = authenticator.verify({ token, secret: req.session.temp2faSecret });
+    const result = verifySync({ token, secret: req.session.temp2faSecret });
     
-    if (!isValid) {
+    if (!result.valid) {
       return res.status(400).json({ error: "Código inválido" });
     }
     
@@ -315,8 +315,8 @@ async function startServer() {
         return res.status(400).json({ error: "2FA não habilitado para este usuário" });
       }
       
-      const isValid = authenticator.verify({ token, secret: profile.two_factor_secret });
-      if (!isValid) return res.status(400).json({ error: "Código inválido" });
+      const result = verifySync({ token, secret: profile.two_factor_secret });
+      if (!result.valid) return res.status(400).json({ error: "Código inválido" });
       
       // Complete login
       const userData = {
