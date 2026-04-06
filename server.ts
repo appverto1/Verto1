@@ -402,7 +402,8 @@ async function startServer() {
           plan_name: finalPlanName,
           plan_price: finalPlanPrice,
           acquisition_channel: acquisitionChannel || 'organic',
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
+          first_login_completed: false // Track onboarding status
         };
 
         const { error: insertError } = await supabase.from('users').insert([newProfile]);
@@ -424,12 +425,14 @@ async function startServer() {
           name: name || email.split('@')[0],
           subscriptionStatus: hasFreeAccess ? 'active' : 'pending',
           planPrice: finalPlanPrice,
-          clinicId: newProfile.clinic_id
+          clinicId: newProfile.clinic_id,
+          firstLoginCompleted: false
         };
 
         req.session.user = userData;
+        req.session.isFirstLogin = true;
         
-        res.json({ success: true, message: "Conta criada com sucesso!", user: userData });
+        res.json({ success: true, message: "Conta criada com sucesso!", user: userData, isFirstLogin: true });
       }
     } catch (error: any) {
       console.error("Signup bypass error:", error);
@@ -555,7 +558,8 @@ async function startServer() {
           plan_price: finalRole === 'patient' ? 4.90 : 149.90,
           plan_name: finalRole === 'patient' ? 'Paciente' : 'Essencial',
           acquisition_channel: req.body.acquisitionChannel || 'organic',
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
+          first_login_completed: false
         };
         
         const { data: createdProfile, error: createError } = await supabase
@@ -595,7 +599,8 @@ async function startServer() {
         age: profile?.age,
         clinicId: profile?.clinic_id,
         subscriptionStatus: hasFreeAccess ? 'active' : (profile?.subscription_status || 'pending'),
-        planPrice: (profile?.role === 'patient' || intendedRole === 'patient') ? 4.90 : (profile?.plan_price || 149.90)
+        planPrice: (profile?.role === 'patient' || intendedRole === 'patient') ? 4.90 : (profile?.plan_price || 149.90),
+        firstLoginCompleted: profile?.first_login_completed ?? true
       };
 
       req.session.user = userData;
@@ -1090,6 +1095,36 @@ async function startServer() {
   });
 
   // User Profile
+  app.post('/api/profile/:userId/complete-onboarding', checkAuth, async (req: any, res) => {
+    const { userId } = req.params;
+    const { name, specialty, crp } = req.body;
+    
+    if (req.session.user.id !== userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const { error } = await supabase
+        .from('users')
+        .update({ 
+          name, 
+          specialty, 
+          crp, 
+          first_login_completed: true 
+        })
+        .eq('id', userId);
+
+      if (error) throw error;
+
+      req.session.user.name = name;
+      req.session.user.firstLoginCompleted = true;
+      
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.get('/api/profile/:userId', checkAuth, async (req: any, res) => {
     try {
       // Only allow own profile or admin

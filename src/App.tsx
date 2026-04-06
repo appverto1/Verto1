@@ -6,6 +6,7 @@ import { TherapistDashboard } from './components/TherapistDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
 import { TeamManagement } from './components/TeamManagement';
 import { InvitationModal } from './components/InvitationModal';
+import { ProfessionalOnboarding } from './components/ProfessionalOnboarding';
 import { testSupabaseConnection, getSupabase } from './lib/supabase';
 import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard, Users } from 'lucide-react';
 import { syncOfflineData } from './services/localDb';
@@ -1102,6 +1103,15 @@ export default function App() {
         <InvitationModal 
           user={user} 
           onClose={() => setShowInvitationModal(false)} 
+        />
+      )}
+
+      {user && !user.firstLoginCompleted && (user.role === 'therapist' || user.role === 'coordinator') && (
+        <ProfessionalOnboarding 
+          user={user} 
+          onComplete={(data) => {
+            setUser({ ...user, ...data, firstLoginCompleted: true });
+          }} 
         />
       )}
     </React.Fragment>
