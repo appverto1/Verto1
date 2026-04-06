@@ -524,8 +524,7 @@ async function startServer() {
 
       // If profile doesn't exist (first time Google login), create it
       if (!profile) {
-        let finalRole = intendedRole || 'therapist';
-        if (isAdmin) finalRole = 'admin';
+        let finalRole = isAdmin ? 'admin' : (intendedRole || 'therapist');
         
         // Check for pending invitations for this email
         const { data: invitations, error: inviteError } = await supabase
@@ -534,7 +533,7 @@ async function startServer() {
           .eq('email', user.email)
           .eq('status', 'pending');
 
-        let clinicId = finalRole === 'coordinator' ? user.id : null;
+        let clinicId = (finalRole === 'coordinator' || finalRole === 'admin') ? user.id : null;
 
         if (!inviteError && invitations && invitations.length > 0) {
           const invitation = invitations[0];
@@ -555,52 +554,58 @@ async function startServer() {
           role: finalRole,
           clinic_id: clinicId,
           subscription_status: hasFreeAccess ? 'active' : 'pending',
-          plan_price: finalRole === 'patient' ? 4.90 : 149.90,
           plan_name: finalRole === 'patient' ? 'Paciente' : 'Essencial',
-          acquisition_channel: req.body.acquisitionChannel || 'organic',
+          plan_price: finalRole === 'patient' ? 4.90 : 149.90,
           created_at: new Date().toISOString(),
           first_login_completed: false
         };
-        
-        const { data: createdProfile, error: createError } = await supabase
+
+        const { data: createdProfile, error: insertError } = await supabase
           .from('users')
           .insert([newProfile])
           .select()
           .single();
-          
-        if (!createError) {
-          profile = createdProfile;
-          req.session.isFirstLogin = true; // Flag for frontend
-        } else {
-          console.error("Error creating profile during login:", createError);
+
+        if (insertError) {
+          console.error("Error creating profile during login:", insertError);
+          throw insertError;
         }
-      } else if (profile && hasFreeAccess && intendedRole && profile.role !== intendedRole) {
-        // For first client, allow switching roles for testing
-        const { data: updatedProfile, error: updateError } = await supabase
-          .from('users')
-          .update({ 
-            role: intendedRole,
-            clinic_id: intendedRole === 'coordinator' ? user.id : profile.clinic_id
-          })
-          .eq('id', user.id)
-          .select()
-          .single();
-          
-        if (!updateError) {
-          profile = updatedProfile;
+        profile = createdProfile;
+        req.session.isFirstLogin = true;
+      } else {
+        // Ensure appverto1 is ALWAYS admin even if profile was created differently
+        if (isAdmin && profile.role !== 'admin') {
+          const { data: updatedProfile } = await supabase
+            .from('users')
+            .update({ role: 'admin' })
+            .eq('id', user.id)
+            .select()
+            .single();
+          if (updatedProfile) profile = updatedProfile;
+        } else if (hasFreeAccess && intendedRole && profile.role !== intendedRole) {
+          // For testing accounts, allow switching roles
+          const { data: updatedProfile } = await supabase
+            .from('users')
+            .update({ 
+              role: intendedRole,
+              clinic_id: intendedRole === 'coordinator' ? user.id : profile.clinic_id
+            })
+            .eq('id', user.id)
+            .select()
+            .single();
+          if (updatedProfile) profile = updatedProfile;
         }
       }
-      
+
       const userData = {
         id: user.id,
         email: user.email,
-        role: profile?.role || 'therapist',
-        name: profile?.name || user.email?.split('@')[0],
-        age: profile?.age,
-        clinicId: profile?.clinic_id,
-        subscriptionStatus: hasFreeAccess ? 'active' : (profile?.subscription_status || 'pending'),
-        planPrice: (profile?.role === 'patient' || intendedRole === 'patient') ? 4.90 : (profile?.plan_price || 149.90),
-        firstLoginCompleted: profile?.first_login_completed ?? true
+        role: profile.role,
+        name: profile.name,
+        subscriptionStatus: profile.subscription_status,
+        planPrice: profile.plan_price,
+        clinicId: profile.clinic_id,
+        firstLoginCompleted: profile.first_login_completed
       };
 
       req.session.user = userData;

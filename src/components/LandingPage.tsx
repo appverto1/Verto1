@@ -160,6 +160,37 @@ export const LandingPage = ({ onLogin }: any) => {
     }
   }, []);
 
+  const handleDevLogin = async (role: string) => {
+    setLoginError('');
+    setLoading(true);
+    try {
+      const response = await fetch('/api/auth/dev-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          email: role === 'admin' ? 'appverto1@gmail.com' : (role === 'coordinator' ? 'profissionalmateus1@gmail.com' : 'mateus.com96@gmail.com'),
+          intendedRole: role
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        if (data.twoFactorRequired) {
+          setTwoFactorRequired(true);
+          setTwoFactorEmail(data.email);
+          setShowLogin(true);
+        } else {
+          window.location.reload();
+        }
+      } else {
+        throw new Error(data.error);
+      }
+    } catch (err: any) {
+      setLoginError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handle2FALogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
@@ -1176,6 +1207,45 @@ export const LandingPage = ({ onLogin }: any) => {
                           Reenviar e-mail de confirmação
                         </button>
                       )}
+                    </div>
+                  )}
+
+                  {/* Dev Login Section */}
+                  {!twoFactorRequired && (
+                    <div className="p-4 bg-slate-50 border border-slate-100 rounded-2xl">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                        <Shield size={10} /> Acesso de Teste (AIS Agent)
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button 
+                          type="button"
+                          onClick={() => handleDevLogin('admin')}
+                          className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 hover:border-[#4318FF] hover:text-[#4318FF] transition-all"
+                        >
+                          Super Admin
+                        </button>
+                        <button 
+                          type="button"
+                          onClick={() => handleDevLogin('coordinator')}
+                          className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 hover:border-[#4318FF] hover:text-[#4318FF] transition-all"
+                        >
+                          Coordenador
+                        </button>
+                        <button 
+                          type="button"
+                          onClick={() => handleDevLogin('therapist')}
+                          className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 hover:border-[#4318FF] hover:text-[#4318FF] transition-all"
+                        >
+                          Profissional
+                        </button>
+                        <button 
+                          type="button"
+                          onClick={() => handleDevLogin('patient')}
+                          className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 hover:border-[#4318FF] hover:text-[#4318FF] transition-all"
+                        >
+                          Paciente
+                        </button>
+                      </div>
                     </div>
                   )}
 
