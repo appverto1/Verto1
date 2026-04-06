@@ -171,7 +171,7 @@ export const TherapistDashboard = ({
   therapistNotes, onAddNote, allTasks, onAddTask, onUpdateHistoryItem, 
   onAddPatient, onUpdateTask, allPatients, clinicalRecords, onScheduleSession, 
   onUpdatePatient, onRecordTrial, onDeleteHistoryItem, activityLogs, 
-  onAddActivityLog, onViewTeam, onUpdateAgendaStatus,
+  onAddActivityLog, onViewTeam, onUpdateAgendaStatus, onUpdateAppointment,
   rooms, setRooms, roomReservations, setRoomReservations,
   specialtySettings, setSpecialtySettings, onUpdateProfile
 }: any) => { 
@@ -199,6 +199,7 @@ export const TherapistDashboard = ({
   const [tutorialStep, setTutorialStep] = useState(0); 
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
   const [isAddSessionModalOpen, setIsAddSessionModalOpen] = useState(false);
+  const [editingAppointmentId, setEditingAppointmentId] = useState<any>(null);
   const [isMarketplaceOpen, setIsMarketplaceOpen] = useState(false);
   const [isFinancialOpen, setIsFinancialOpen] = useState(false);
   const [showInvitationModal, setShowInvitationModal] = useState(false);
@@ -285,6 +286,22 @@ export const TherapistDashboard = ({
   const selectPatientForSession = (name: string) => { setSessionPatientName(name); setFilteredPatients([]); }; 
   const handleSessionSubmit = async () => { 
     if(!sessionPatientName || !sessionTime || !sessionRoom) return alert("Preencha nome, horário e sala"); 
+    
+    if (editingAppointmentId) {
+      const updates = {
+        name: sessionPatientName,
+        date: sessionDate,
+        time: sessionTime,
+        type: sessionApproach || "Consulta Padrão",
+        room: sessionRoom,
+        professional: sessionProfessional
+      };
+      onUpdateAppointment(editingAppointmentId, updates);
+      setIsAddSessionModalOpen(false);
+      resetSessionForm();
+      return;
+    }
+
     const newSession = { 
       patientName: sessionPatientName, 
       date: sessionDate, 
@@ -314,6 +331,11 @@ export const TherapistDashboard = ({
     }
 
     setIsAddSessionModalOpen(false); 
+    resetSessionForm();
+  }; 
+
+  const resetSessionForm = () => {
+    setEditingAppointmentId(null);
     setSessionPatientName(""); 
     setSessionTime(""); 
     setSessionDate(new Date().toISOString().split('T')[0]); 
@@ -321,7 +343,18 @@ export const TherapistDashboard = ({
     setSessionRoom(""); 
     setSessionProfessional("Dra. Raísa"); 
     setSessionNumSessions(1);
-  }; 
+  };
+
+  const handleEditAppointment = (appointment: any) => {
+    setEditingAppointmentId(appointment.id);
+    setSessionPatientName(appointment.name);
+    setSessionDate(appointment.date);
+    setSessionTime(appointment.time);
+    setSessionApproach(appointment.type);
+    setSessionRoom(appointment.room);
+    setSessionProfessional(appointment.professional);
+    setIsAddSessionModalOpen(true);
+  };
   
   const handleStatusUpdate = (appointmentId: any, newStatus: string) => {
     if (onUpdateAgendaStatus) {
@@ -933,8 +966,8 @@ export const TherapistDashboard = ({
       {isAddSessionModalOpen && ( 
         <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in" onClick={() => setIsAddSessionModalOpen(false)}> 
           <div className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-pop relative" onClick={e => e.stopPropagation()}> 
-            <button onClick={() => setIsAddSessionModalOpen(false)} className="absolute top-6 right-6 text-gray-400 hover:text-gray-600"><X size={24}/></button> 
-            <h2 className="text-2xl font-semibold text-gray-800 mb-6 flex items-center gap-2 tracking-tight"><CalendarPlus size={24} className="text-[#4318FF]"/> Agendar Sessão</h2> 
+            <button onClick={() => resetSessionForm()} className="absolute top-6 right-6 text-gray-400 hover:text-gray-600"><X size={24}/></button> 
+            <h2 className="text-2xl font-semibold text-gray-800 mb-6 flex items-center gap-2 tracking-tight"><CalendarPlus size={24} className="text-[#4318FF]"/> {editingAppointmentId ? 'Editar Agendamento' : 'Agendar Sessão'}</h2> 
             <div className="space-y-4"> 
               <div className="relative"><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Paciente</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none focus:border-[#4318FF] font-semibold text-gray-700" placeholder="Buscar..." value={sessionPatientName} onChange={e => setSessionPatientName(e.target.value)} />{filteredPatients.length > 0 && (<div className="absolute top-full left-0 right-0 bg-white border border-gray-100 rounded-xl shadow-xl mt-1 z-20 max-h-40 overflow-y-auto no-scrollbar">{filteredPatients.map(p => (<div key={p.id} onClick={() => selectPatientForSession(p.name)} className="p-3 hover:bg-[#F4F7FE] cursor-pointer text-sm font-semibold text-gray-700 border-b border-gray-50 last:border-0 flex items-center gap-2"><div className="w-6 h-6 rounded-full bg-[#4318FF]/10 text-[#4318FF] flex items-center justify-center text-xs">{p.name.charAt(0)}</div>{p.name}</div>))}</div>)}</div> 
               <div className="grid grid-cols-2 gap-3"><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Data</label><input type="date" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionDate} onChange={e => setSessionDate(e.target.value)} /></div><div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Hora</label><input type="time" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionTime} onChange={e => setSessionTime(e.target.value)} /></div></div> 
@@ -963,7 +996,7 @@ export const TherapistDashboard = ({
                 <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Profissional Responsável</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" placeholder="Nome do Profissional" value={sessionProfessional} onChange={e => setSessionProfessional(e.target.value)} /></div>
                 <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Nº de Sessões</label><input type="number" min="1" max="12" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={sessionNumSessions} onChange={e => setSessionNumSessions(parseInt(e.target.value))} /></div>
               </div>
-              <button onClick={handleSessionSubmit} className="w-full bg-[#4318FF] text-white font-semibold py-4 rounded-xl shadow-lg shadow-[#4318FF]/30 hover:opacity-90 transition-all mt-2 active:scale-95 uppercase tracking-widest">Confirmar Agendamento</button> 
+              <button onClick={handleSessionSubmit} className="w-full bg-[#4318FF] text-white font-semibold py-4 rounded-xl shadow-lg shadow-[#4318FF]/30 hover:opacity-90 transition-all mt-2 active:scale-95 uppercase tracking-widest">{editingAppointmentId ? 'Salvar Alterações' : 'Confirmar Agendamento'}</button> 
             </div> 
           </div> 
         </div> 
@@ -1169,7 +1202,15 @@ export const TherapistDashboard = ({
                 <div id={idx === 0 ? 'patient-card-0' : ''} key={patientItem.id} onClick={() => { if (user.role !== 'receptionist') onPatientClick(patientItem.patientId); }} className={`min-w-[200px] rounded-3xl p-4 shadow-sm border snap-center flex flex-col justify-between h-44 hover:shadow-md transition-all relative overflow-hidden group cursor-pointer active:scale-95 ${cardBg}`}> 
                   <div className={`absolute top-0 right-0 w-20 h-20 rounded-bl-full opacity-10 transition-transform group-hover:scale-110 ${isKid ? 'bg-pink-500' : 'bg-indigo-500'}`}></div> 
                   <div className="flex justify-between items-start z-10">
-                    <span className="font-semibold text-gray-800 text-xl tracking-tight">{patientItem.time}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-gray-800 text-xl tracking-tight">{patientItem.time}</span>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleEditAppointment(patientItem); }}
+                        className="p-1 text-slate-400 hover:text-[#4318FF] hover:bg-blue-50 rounded-lg transition-all"
+                      >
+                        <Settings size={14} />
+                      </button>
+                    </div>
                     <div className="flex flex-col items-end gap-1">
                       <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase ${patientItem.status === 'confirmed' ? 'bg-green-100 text-green-600' : patientItem.status === 'pending' ? 'bg-yellow-100 text-yellow-600' : 'bg-red-100 text-red-500'}`}>
                         {patientItem.status === 'confirmed' ? 'Conf' : patientItem.status === 'pending' ? 'Pend' : 'Canc'}
@@ -1178,16 +1219,22 @@ export const TherapistDashboard = ({
                     </div>
                   </div> 
                   <div className="z-10 mt-auto">
-                    <div className="flex items-center gap-2 mb-3">
+                    <div className="flex items-center gap-1.5 mb-3">
                       <button 
                         onClick={(e) => { e.stopPropagation(); handleStatusUpdate(patientItem.id, 'confirmed'); }}
-                        className="flex-1 py-1.5 bg-white/80 text-green-600 rounded-lg text-[9px] font-bold hover:bg-green-600 hover:text-white transition-all border border-green-200 uppercase"
+                        className={`flex-1 py-1.5 rounded-lg text-[9px] font-bold transition-all border uppercase ${patientItem.status === 'confirmed' ? 'bg-green-600 text-white border-green-600' : 'bg-white/80 text-green-600 border-green-200 hover:bg-green-600 hover:text-white'}`}
                       >
                         Confirmar
                       </button>
                       <button 
+                        onClick={(e) => { e.stopPropagation(); handleStatusUpdate(patientItem.id, 'pending'); }}
+                        className={`flex-1 py-1.5 rounded-lg text-[9px] font-bold transition-all border uppercase ${patientItem.status === 'pending' ? 'bg-yellow-500 text-white border-yellow-500' : 'bg-white/80 text-yellow-600 border-yellow-200 hover:bg-yellow-500 hover:text-white'}`}
+                      >
+                        Pendente
+                      </button>
+                      <button 
                         onClick={(e) => { e.stopPropagation(); handleStatusUpdate(patientItem.id, 'canceled'); }}
-                        className="flex-1 py-1.5 bg-white/80 text-red-600 rounded-lg text-[9px] font-bold hover:bg-red-600 hover:text-white transition-all border border-red-200 uppercase"
+                        className={`flex-1 py-1.5 rounded-lg text-[9px] font-bold transition-all border uppercase ${patientItem.status === 'canceled' ? 'bg-red-600 text-white border-red-600' : 'bg-white/80 text-red-600 border-red-200 hover:bg-red-600 hover:text-white'}`}
                       >
                         Cancelar
                       </button>

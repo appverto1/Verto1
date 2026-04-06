@@ -521,6 +521,11 @@ export default function App() {
     setTherapistAgenda(prev => prev.map(item => item.id === id ? { ...item, status } : item));
   };
 
+  const handleUpdateAppointment = (id: any, updates: any) => {
+    setTherapistAgenda(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
+    onAddActivityLog("Edição de Agendamento", `Agendamento ID ${id} atualizado: ${JSON.stringify(updates)}`, 'management');
+  };
+
   const handleAddPatient = async (data: any) => { 
     const newId = data.id || Date.now(); 
     
@@ -1085,6 +1090,7 @@ export default function App() {
           onRecordTrial={handleRecordTrial} 
           onDeleteHistoryItem={handleDeleteHistoryItem} 
           onUpdateAgendaStatus={handleUpdateAgendaStatus}
+          onUpdateAppointment={handleUpdateAppointment}
           activityLogs={activityLogs} 
           onAddActivityLog={onAddActivityLog} 
           rooms={rooms}
