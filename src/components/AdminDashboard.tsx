@@ -39,6 +39,7 @@ import {
   Area
 } from 'recharts';
 import { LogoVerto } from './Common';
+import { getSupabase } from '../lib/supabase';
 
 // Mock Data for Admin Dashboard (Removed as we use real data now)
 const DRE_DATA_MOCK = [
@@ -80,11 +81,18 @@ export const AdminDashboard = ({ onLogout }: any) => {
   React.useEffect(() => {
     const fetchData = async () => {
       try {
+        const supabase = await getSupabase();
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = session?.access_token;
+        const headers = {
+          'Authorization': token ? `Bearer ${token}` : ''
+        };
+
         const [statsRes, clientsRes, dreRes, profileRes] = await Promise.all([
-          fetch('/api/admin/stats', { credentials: 'include' }),
-          fetch('/api/admin/clients', { credentials: 'include' }),
-          fetch('/api/admin/dre', { credentials: 'include' }),
-          fetch('/api/auth/profile', { credentials: 'include' })
+          fetch('/api/admin/stats', { credentials: 'include', headers }),
+          fetch('/api/admin/clients', { credentials: 'include', headers }),
+          fetch('/api/admin/dre', { credentials: 'include', headers }),
+          fetch('/api/auth/profile', { credentials: 'include', headers })
         ]);
         
         // Check if all responses are OK
@@ -113,7 +121,17 @@ export const AdminDashboard = ({ onLogout }: any) => {
 
   const start2FASetup = async () => {
     try {
-      const response = await fetch('/api/auth/2fa/setup', { method: 'POST', credentials: 'include' });
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      const response = await fetch('/api/auth/2fa/setup', { 
+        method: 'POST', 
+        credentials: 'include',
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : ''
+        }
+      });
       const data = await response.json();
       if (data.qrCodeUrl) {
         setQrCodeUrl(data.qrCodeUrl);
@@ -126,9 +144,16 @@ export const AdminDashboard = ({ onLogout }: any) => {
 
   const verifyAndEnable2FA = async () => {
     try {
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
       const response = await fetch('/api/auth/2fa/verify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
         credentials: 'include',
         body: JSON.stringify({ token: twoFactorToken })
       });

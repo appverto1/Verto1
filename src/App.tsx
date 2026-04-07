@@ -60,7 +60,16 @@ export default function App() {
   useEffect(() => {
     const checkSession = async () => {
       try {
-        const response = await fetch('/api/auth/me', { credentials: 'include' });
+        const supabase = await getSupabase();
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = session?.access_token;
+
+        const response = await fetch('/api/auth/me', { 
+          credentials: 'include',
+          headers: {
+            'Authorization': token ? `Bearer ${token}` : ''
+          }
+        });
         const data = await response.json();
         if (data.user) {
           setUser(data.user);
@@ -87,7 +96,16 @@ export default function App() {
       
       const checkSession = async () => {
         try {
-          const response = await fetch('/api/auth/me', { credentials: 'include' });
+          const supabase = await getSupabase();
+          const { data: { session } } = await supabase.auth.getSession();
+          const token = session?.access_token;
+
+          const response = await fetch('/api/auth/me', { 
+            credentials: 'include',
+            headers: {
+              'Authorization': token ? `Bearer ${token}` : ''
+            }
+          });
           const data = await response.json();
           if (data.user) {
             if (data.user.subscriptionStatus === 'active' || attempts >= maxAttempts) {
@@ -115,7 +133,16 @@ export default function App() {
       if (!supabaseSession) {
         // If no session provided, we might already have the user from signup-direct
         // or we just need to refresh the session from the server
-        const response = await fetch('/api/auth/me', { credentials: 'include' });
+        const supabase = await getSupabase();
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = session?.access_token;
+
+        const response = await fetch('/api/auth/me', { 
+          credentials: 'include',
+          headers: {
+            'Authorization': token ? `Bearer ${token}` : ''
+          }
+        });
         const data = await response.json();
         if (data.user) {
           setUser(data.user);
@@ -1016,8 +1043,17 @@ export default function App() {
   const handleLogout = async () => {
     onAddActivityLog("Logout do Sistema", "O profissional encerrou a sessão com segurança.", "system");
     try {
-      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
       const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      await fetch('/api/auth/logout', { 
+        method: 'POST', 
+        credentials: 'include',
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : ''
+        }
+      });
       if (supabase) await supabase.auth.signOut();
     } catch (error) {
       console.error('Logout error:', error);

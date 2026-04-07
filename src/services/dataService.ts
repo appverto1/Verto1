@@ -37,6 +37,16 @@ async function handleDataError(error: unknown, operationType: OperationType, pat
   throw new Error(JSON.stringify(errInfo));
 }
 
+async function getAuthHeaders() {
+  const supabase = await getSupabase();
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': token ? `Bearer ${token}` : ''
+  };
+}
+
 // Helper to handle offline-first saving
 async function saveOfflineFirst(id: string, data: any, type: any, endpoint: string, method: 'POST' | 'PATCH' = 'POST') {
   // 1. Save locally first
@@ -54,7 +64,7 @@ async function saveOfflineFirst(id: string, data: any, type: any, endpoint: stri
   try {
     const response = await fetch(endpoint, {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: await getAuthHeaders(),
       credentials: 'include',
       body: JSON.stringify(data)
     });
@@ -82,7 +92,10 @@ export const dataService = {
 
   async getPatients() {
     try {
-      const response = await fetch('/api/patients');
+      const response = await fetch('/api/patients', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
       if (response.ok) {
         const result = await response.json();
         // Update local cache
@@ -108,7 +121,8 @@ export const dataService = {
     try {
       const response = await fetch('/api/patients/create-user', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getAuthHeaders(),
+        credentials: 'include',
         body: JSON.stringify({ email, name })
       });
       if (response.ok) {
@@ -127,7 +141,10 @@ export const dataService = {
 
   async getActivityLogs() {
     try {
-      const response = await fetch('/api/logs');
+      const response = await fetch('/api/logs', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
       if (response.ok) {
         const result = await response.json();
         for (const l of result.data) {
@@ -144,7 +161,10 @@ export const dataService = {
 
   async getNotes(patientId: string) {
     try {
-      const response = await fetch(`/api/notes/${patientId}`);
+      const response = await fetch(`/api/notes/${patientId}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
       if (response.ok) {
         const result = await response.json();
         for (const n of result.data) {
@@ -161,7 +181,10 @@ export const dataService = {
 
   async getNotesByEmail(email: string) {
     try {
-      const response = await fetch(`/api/notes/email/${email}`);
+      const response = await fetch(`/api/notes/email/${email}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
       if (response.ok) {
         const result = await response.json();
         return result;
@@ -181,7 +204,10 @@ export const dataService = {
 
   async getHistory(patientId: string) {
     try {
-      const response = await fetch(`/api/history/${patientId}`);
+      const response = await fetch(`/api/history/${patientId}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
       if (response.ok) {
         const result = await response.json();
         for (const h of result.data) {
@@ -198,7 +224,10 @@ export const dataService = {
 
   async getHistoryByEmail(email: string) {
     try {
-      const response = await fetch(`/api/history/email/${email}`);
+      const response = await fetch(`/api/history/email/${email}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
       if (response.ok) {
         const result = await response.json();
         return result;
@@ -218,7 +247,10 @@ export const dataService = {
 
   async getTasks(patientId: string) {
     try {
-      const response = await fetch(`/api/tasks/${patientId}`);
+      const response = await fetch(`/api/tasks/${patientId}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
       if (response.ok) {
         const result = await response.json();
         for (const t of result.data) {
@@ -235,7 +267,10 @@ export const dataService = {
 
   async getTasksByEmail(email: string) {
     try {
-      const response = await fetch(`/api/tasks/email/${email}`);
+      const response = await fetch(`/api/tasks/email/${email}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
       if (response.ok) {
         const result = await response.json();
         return result;
@@ -260,7 +295,10 @@ export const dataService = {
 
   async getUserProfile(userId: string) {
     try {
-      const response = await fetch(`/api/profile/${userId}`);
+      const response = await fetch(`/api/profile/${userId}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
       if (response.ok) {
         const result = await response.json();
         await db.records.put({ id: userId, data: result, type: 'profile', sync_status: 'synced', last_updated: Date.now(), method: 'POST', endpoint: `/api/profile/${userId}` });
@@ -300,7 +338,10 @@ export const dataService = {
 
   async getClinicMembers() {
     try {
-      const response = await fetch('/api/clinic/members');
+      const response = await fetch('/api/clinic/members', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
       if (response.ok) {
         return await response.json();
       }
@@ -315,7 +356,8 @@ export const dataService = {
     try {
       const response = await fetch('/api/clinic/assign-role', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getAuthHeaders(),
+        credentials: 'include',
         body: JSON.stringify({ email, role })
       });
       if (response.ok) {
@@ -331,9 +373,16 @@ export const dataService = {
   
   async inviteToClinic(email: string, role: string) {
     try {
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
       const response = await fetch('/api/clinic/invite', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
         credentials: 'include',
         body: JSON.stringify({ email, role })
       });
@@ -350,7 +399,10 @@ export const dataService = {
 
   async getInvitations() {
     try {
-      const response = await fetch('/api/clinic/invitations');
+      const response = await fetch('/api/clinic/invitations', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
       if (response.ok) {
         return await response.json();
       }
@@ -365,7 +417,8 @@ export const dataService = {
     try {
       const response = await fetch(`/api/clinic/members/${memberId}/role`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getAuthHeaders(),
+        credentials: 'include',
         body: JSON.stringify({ role })
       });
       if (response.ok) {
@@ -383,7 +436,8 @@ export const dataService = {
     try {
       const response = await fetch('/api/clinic/accept-invite', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getAuthHeaders(),
+        credentials: 'include',
         body: JSON.stringify({ invitationId })
       });
       if (response.ok) {

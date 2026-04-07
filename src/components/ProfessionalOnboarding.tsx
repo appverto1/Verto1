@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { dataService } from '../services/dataService';
+import { getSupabase } from '../lib/supabase';
 
 interface ProfessionalOnboardingProps {
   user: any;
@@ -49,6 +50,10 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
   const finishOnboarding = async () => {
     setLoading(true);
     try {
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
       // Send invitations first if any
       if (invites.length > 0) {
         for (const invite of invites) {
@@ -58,7 +63,10 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
 
       const response = await fetch(`/api/profile/${user.id}/complete-onboarding`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
         credentials: 'include',
         body: JSON.stringify({ name, specialty, crp, profilePicture })
       });

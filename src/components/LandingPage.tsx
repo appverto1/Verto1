@@ -175,9 +175,17 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     setLoading(true);
     
     try {
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
       const response = await fetch('/api/auth/2fa/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        credentials: 'include',
         body: JSON.stringify({ email: twoFactorEmail, token: twoFactorToken })
       });
       
@@ -196,7 +204,17 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
   const start2FASetup = async () => {
     try {
-      const response = await fetch('/api/auth/2fa/setup', { method: 'POST' });
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      const response = await fetch('/api/auth/2fa/setup', { 
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : ''
+        }
+      });
       const data = await response.json();
       if (data.qrCodeUrl) {
         setQrCodeUrl(data.qrCodeUrl);
@@ -210,9 +228,17 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
   const verifyAndEnable2FA = async () => {
     try {
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
       const response = await fetch('/api/auth/2fa/verify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        credentials: 'include',
         body: JSON.stringify({ token: twoFactorToken })
       });
       const data = await response.json();
@@ -271,9 +297,16 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         setRegisterStep(3);
       } else {
         // Redirect to Stripe checkout
+        const supabase = await getSupabase();
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = session?.access_token;
+
         const checkoutRes = await fetch('/api/stripe/create-checkout', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : ''
+          },
           credentials: 'include'
         });
         const checkoutData = await checkoutRes.json();

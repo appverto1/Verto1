@@ -150,9 +150,11 @@ async function startServer() {
   app.use(session({
     store: sessionStore,
     secret: process.env.SESSION_SECRET || 'verto-secret-key',
-    resave: false,
-    saveUninitialized: false,
+    resave: true, // Force session to be saved back to the session store
+    saveUninitialized: true, // Force a session that is "new" but not modified to be saved to the store
+    rolling: true, // Force the session identifier cookie to be set on every response
     name: 'verto-session',
+    proxy: true,
     cookie: { 
       secure: true, 
       httpOnly: true,
@@ -162,12 +164,44 @@ async function startServer() {
   }));
 
   // Auth Middleware
-  const checkAuth = (req: any, res: any, next: any) => {
+  const checkAuth = async (req: any, res: any, next: any) => {
+    // 1. Check Session (Cookie-based)
     if (req.session.user) {
-      next();
-    } else {
-      res.status(401).json({ error: 'Unauthorized' });
+      console.log(`[Auth] Session found for ${req.session.user.email}`);
+      return next();
     }
+
+    // 2. Fallback: Check Authorization Header (Token-based)
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      try {
+        const { data: { user }, error } = await supabase.auth.getUser(token);
+        if (!error && user) {
+          console.log(`[Auth] Token verified for ${user.email}`);
+          // Re-populate session if missing but token is valid
+          const { data: profile } = await supabase.from('users').select('*').eq('id', user.id).single();
+          if (profile) {
+            req.session.user = {
+              id: user.id,
+              email: user.email,
+              role: profile.role,
+              name: profile.name,
+              subscriptionStatus: profile.subscription_status,
+              planPrice: profile.plan_price,
+              clinicId: profile.clinic_id,
+              firstLoginCompleted: profile.first_login_completed
+            };
+            return next();
+          }
+        }
+      } catch (err) {
+        console.error('[Auth] Token verification error:', err);
+      }
+    }
+
+    console.warn(`[Auth] Unauthorized access attempt to ${req.path}`);
+    res.status(401).json({ error: 'Unauthorized - No valid session or token' });
   };
 
   // Ownership Middleware (IDOR Protection)
@@ -1050,8 +1084,11 @@ async function startServer() {
     const { userId } = req.params;
     const { name, specialty, crp, profilePicture } = req.body;
     
+    console.log(`[Onboarding] Attempt for userId: ${userId}, SessionUser: ${req.session.user?.id}`);
+
     if (req.session.user.id !== userId) {
-      return res.status(401).json({ error: "Unauthorized" });
+      console.error(`[Onboarding] ID Mismatch. URL: ${userId}, Session: ${req.session.user.id}`);
+      return res.status(401).json({ error: "Unauthorized - ID Mismatch" });
     }
 
     try {

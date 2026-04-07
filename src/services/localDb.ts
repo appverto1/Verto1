@@ -1,4 +1,5 @@
 import Dexie, { Table } from 'dexie';
+import { getSupabase } from '../lib/supabase';
 
 // Define the structure of our records
 export interface OfflineRecord {
@@ -45,9 +46,16 @@ export const syncOfflineData = async () => {
 
     for (const record of pending) {
       try {
+        const supabase = await getSupabase();
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = session?.access_token;
+
         const response = await fetch(record.endpoint, {
           method: record.method,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : ''
+          },
           credentials: 'include',
           body: JSON.stringify(record.data)
         });
