@@ -24,7 +24,7 @@ export const getSupabase = async () => {
     supabaseClient = createClient(url, key, {
       auth: {
         autoRefreshToken: true,
-        persistSession: true,
+        persistSession: false,
         detectSessionInUrl: true
       }
     });

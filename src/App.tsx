@@ -28,14 +28,21 @@ export default function App() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
     
-    // Initial sync
-    if (navigator.onLine) syncOfflineData();
+    // Initial sync - moved to run only when user is ready
+    // if (navigator.onLine) syncOfflineData();
 
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
+  // Sync when user is ready
+  useEffect(() => {
+    if (user && navigator.onLine) {
+      syncOfflineData();
+    }
+  }, [user]);
 
   useEffect(() => {
     const initSupabase = async () => {
@@ -266,7 +273,7 @@ export default function App() {
 
   const onAddActivityLog = async (action: string, details: string, category: 'clinical' | 'management' | 'system' = 'clinical') => {
     const newLog = {
-      id: Date.now(),
+      id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
       professional: user?.name || "Profissional",
       action,
@@ -417,7 +424,7 @@ export default function App() {
       if (user) {
         const { dataService } = await import('./services/dataService');
         
-        if (user.role === 'therapist') {
+        if (user.role === 'therapist' || user.role === 'coordinator') {
           // Load Patients
           const patientsRes = await dataService.getPatients();
           if (patientsRes.success && patientsRes.data) {
@@ -432,39 +439,45 @@ export default function App() {
             const allHistory: any[] = [];
             const allTasks: any[] = [];
 
-            for (const patient of [...allPatients, ...patientsRes.data]) {
-              if (!patient.id) continue;
-              const notesRes = await dataService.getNotes(String(patient.id));
-              if (notesRes.success && notesRes.data) {
-                allNotes.push(...notesRes.data.map((n: any) => ({
-                  ...n,
-                  patientId: n.patient_id,
-                  date: new Date(n.created_at).toLocaleString()
-                })));
+            // Only fetch for real patients (UUIDs from DB)
+            const realPatients = [...allPatients, ...patientsRes.data].filter(p => 
+              p.id && typeof p.id === 'string' && p.id.length > 10
+            );
+
+            if (realPatients.length > 0) {
+              for (const patient of realPatients) {
+                const notesRes = await dataService.getNotes(String(patient.id));
+                if (notesRes.success && notesRes.data) {
+                  allNotes.push(...notesRes.data.map((n: any) => ({
+                    ...n,
+                    patientId: n.patient_id,
+                    date: new Date(n.created_at).toLocaleString()
+                  })));
+                }
+
+                const historyRes = await dataService.getHistory(String(patient.id));
+                if (historyRes.success && historyRes.data) {
+                  allHistory.push(...historyRes.data.map((h: any) => ({
+                    ...h,
+                    patientId: h.patient_id,
+                    time: new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    dateGroup: new Date(h.created_at).toDateString() === new Date().toDateString() ? "Hoje" : new Date(h.created_at).toLocaleDateString()
+                  })));
+                }
+
+                const tasksRes = await dataService.getTasks(String(patient.id));
+                if (tasksRes.success && tasksRes.data) {
+                  allTasks.push(...tasksRes.data.map((t: any) => ({
+                    ...t,
+                    patientId: t.patient_id
+                  })));
+                }
               }
 
-              const historyRes = await dataService.getHistory(String(patient.id));
-              if (historyRes.success && historyRes.data) {
-                allHistory.push(...historyRes.data.map((h: any) => ({
-                  ...h,
-                  patientId: h.patient_id,
-                  time: new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                  dateGroup: new Date(h.created_at).toDateString() === new Date().toDateString() ? "Hoje" : new Date(h.created_at).toLocaleDateString()
-                })));
-              }
-
-              const tasksRes = await dataService.getTasks(String(patient.id));
-              if (tasksRes.success && tasksRes.data) {
-                allTasks.push(...tasksRes.data.map((t: any) => ({
-                  ...t,
-                  patientId: t.patient_id
-                })));
-              }
+              if (allNotes.length > 0) setTherapistNotes(allNotes);
+              if (allHistory.length > 0) setHistory(allHistory);
+              if (allTasks.length > 0) setTasks(allTasks);
             }
-
-            if (allNotes.length > 0) setTherapistNotes(allNotes);
-            if (allHistory.length > 0) setHistory(allHistory);
-            if (allTasks.length > 0) setTasks(allTasks);
           }
         } else if (user.role === 'patient') {
           // Load Patient's own history and tasks by email
@@ -494,7 +507,7 @@ export default function App() {
   // Fetch activity logs from Backend on load
   useEffect(() => {
     const fetchLogs = async () => {
-      if (user && user.role === 'therapist') {
+      if (user && (user.role === 'therapist' || user.role === 'coordinator')) {
         const { dataService } = await import('./services/dataService');
         const { success, data } = await dataService.getActivityLogs();
         if (success && data) {

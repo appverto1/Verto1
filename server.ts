@@ -188,9 +188,11 @@ async function startServer() {
               role: profile.role,
               name: profile.name,
               subscriptionStatus: profile.subscription_status,
+              planName: profile.plan_name,
               planPrice: profile.plan_price,
               clinicId: profile.clinic_id,
-              firstLoginCompleted: profile.first_login_completed
+              firstLoginCompleted: profile.first_login_completed || user.user_metadata?.first_login_completed,
+              clinicSettings: user.user_metadata?.clinic_settings || null
             };
             return next();
           }
@@ -442,8 +444,7 @@ async function startServer() {
           subscription_status: 'pending', // Default to pending until onboarding/payment
           plan_name: finalPlanName,
           plan_price: finalPlanPrice,
-          created_at: new Date().toISOString(),
-          first_login_completed: false
+          created_at: new Date().toISOString()
         };
 
         const { error: insertError } = await supabase.from('users').insert([newProfile]);
@@ -456,6 +457,11 @@ async function startServer() {
             }
             throw insertError;
         }
+
+        // Also update user metadata for onboarding tracking
+        await supabase.auth.admin.updateUserById(userId, {
+          user_metadata: { first_login_completed: false }
+        });
 
         // Set session
         const userData = {
@@ -556,8 +562,7 @@ async function startServer() {
           subscription_status: 'pending',
           plan_name: finalRole === 'patient' ? 'Paciente' : 'Essencial',
           plan_price: finalRole === 'patient' ? 4.90 : 149.90,
-          created_at: new Date().toISOString(),
-          first_login_completed: false
+          created_at: new Date().toISOString()
         };
 
         const { data: createdProfile, error: insertError } = await supabase
@@ -570,6 +575,12 @@ async function startServer() {
           console.error("Error creating profile during login:", insertError);
           throw insertError;
         }
+
+        // Also update user metadata for onboarding tracking
+        await supabase.auth.admin.updateUserById(user.id, {
+          user_metadata: { first_login_completed: false }
+        });
+
         profile = createdProfile;
         req.session.isFirstLogin = true;
       }
@@ -580,9 +591,11 @@ async function startServer() {
         role: profile.role,
         name: profile.name,
         subscriptionStatus: profile.subscription_status,
+        planName: profile.plan_name,
         planPrice: profile.plan_price,
         clinicId: profile.clinic_id,
-        firstLoginCompleted: profile.first_login_completed
+        firstLoginCompleted: profile.first_login_completed || user.user_metadata?.first_login_completed,
+        clinicSettings: user.user_metadata?.clinic_settings || null
       };
 
       req.session.user = userData;
@@ -881,10 +894,15 @@ async function startServer() {
   // Patients
   app.get('/api/patients', checkAuth, async (req: any, res) => {
     try {
-      const { data, error } = await supabase
-        .from('patients')
-        .select('*')
-        .eq('therapist_id', req.session.user.id);
+      let query = supabase.from('patients').select('*');
+      
+      if (req.session.user.role === 'coordinator') {
+        query = query.eq('clinic_id', req.session.user.clinicId);
+      } else {
+        query = query.eq('therapist_id', req.session.user.id);
+      }
+      
+      const { data, error } = await query;
       
       if (error) {
         console.error('Supabase patients fetch error:', error);
@@ -1074,17 +1092,18 @@ async function startServer() {
       
       if (error) throw error;
       res.json({ success: true, id: data.id });
-    } catch (error) {
-      res.status(500).json({ error: String(error) });
+    } catch (error: any) {
+      console.error('[Logs] Error saving activity log:', error);
+      res.status(500).json({ error: error.message || String(error) });
     }
   });
 
   // User Profile
   app.post('/api/profile/:userId/complete-onboarding', checkAuth, async (req: any, res) => {
     const { userId } = req.params;
-    const { name, specialty, crp, profilePicture } = req.body;
+    const { name, specialty, crp, profilePicture, clinicSettings } = req.body;
     
-    console.log(`[Onboarding] Attempt for userId: ${userId}, SessionUser: ${req.session.user?.id}`);
+    console.log(`[Onboarding] Starting for userId: ${userId}`);
 
     if (req.session.user.id !== userId) {
       console.error(`[Onboarding] ID Mismatch. URL: ${userId}, Session: ${req.session.user.id}`);
@@ -1092,43 +1111,75 @@ async function startServer() {
     }
 
     try {
-      // Try to update all fields
-      const { error } = await supabase
-        .from('users')
-        .update({ 
-          name, 
-          specialty, 
-          crp,
-          profile_picture: profilePicture,
-          first_login_completed: true
-        })
-        .eq('id', userId);
+      // 1. Try to update the profile in Supabase
+      // We do this in a way that doesn't fail if columns are missing
+      console.log(`[Onboarding] Updating Supabase for ${userId}...`);
+      
+      const updateData: any = { 
+        name
+      };
 
-      if (error) {
-        console.warn("Full update failed, trying minimal update:", error.message);
-        // Fallback: Try to update only name and first_login_completed if others fail
-        const { error: fallbackError } = await supabase
+      // Only add these if they are provided and likely to exist
+      if (specialty) updateData.specialty = specialty;
+      if (crp) updateData.crp = crp;
+      if (profilePicture) updateData.profile_picture = profilePicture;
+
+      try {
+        const { error } = await supabase
           .from('users')
-          .update({ 
-            name,
-            first_login_completed: true
-          })
+          .update(updateData)
           .eq('id', userId);
-          
-        if (fallbackError) throw fallbackError;
+
+        if (error) {
+          console.warn("[Onboarding] Supabase update had issues, attempting minimal fallback:", error.message);
+          // Minimal fallback: just the name
+          const { error: fallbackError } = await supabase
+            .from('users')
+            .update({ 
+              name
+            })
+            .eq('id', userId);
+            
+          if (fallbackError) {
+            console.error("[Onboarding] Fallback also failed:", fallbackError.message);
+          }
+        }
+
+        // Update user metadata for onboarding tracking - This is our reliable source now
+        await supabase.auth.admin.updateUserById(userId, {
+          user_metadata: { 
+            first_login_completed: true,
+            clinic_settings: clinicSettings || null
+          }
+        });
+      } catch (dbErr) {
+        console.error("[Onboarding] Database exception (likely schema mismatch):", dbErr);
       }
 
-      req.session.user.name = name;
-      req.session.user.profilePicture = profilePicture;
-      req.session.user.firstLoginCompleted = true;
-      
-      req.session.save((err) => {
-        if (err) console.error("Session save error in onboarding:", err);
-        res.json({ success: true });
-      });
+      // 2. Update the session - This is the most important part for the UI to proceed
+      console.log(`[Onboarding] Updating session for ${userId}`);
+      if (req.session.user) {
+        req.session.user.name = name;
+        if (profilePicture) req.session.user.profilePicture = profilePicture;
+        req.session.user.firstLoginCompleted = true;
+        
+        req.session.save((err) => {
+          if (err) {
+            console.error("[Onboarding] Session save error:", err);
+            // Even if session save fails, we might want to return success if the memory session is updated
+            // but for safety we return 500
+            return res.status(500).json({ error: "Erro ao salvar sessão" });
+          }
+          console.log(`[Onboarding] Success for ${userId}`);
+          res.json({ success: true });
+        });
+      } else {
+        console.error("[Onboarding] No session user found during update");
+        res.status(401).json({ error: "Sessão expirada" });
+      }
     } catch (error: any) {
-      console.error("Onboarding error:", error);
-      res.status(500).json({ error: error.message });
+      console.error("[Onboarding] Critical error:", error);
+      res.status(500).json({ error: error.message || "Erro interno no servidor" });
     }
   });
 

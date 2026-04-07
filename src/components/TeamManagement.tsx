@@ -28,6 +28,13 @@ interface Member {
   created_at: string;
 }
 
+const PLAN_LIMITS: Record<string, number> = {
+  'Essencial': 2,
+  'Profissional': 5,
+  'Clínica': 999,
+  'Paciente': 0
+};
+
 export function TeamManagement({ user }: { user: any }) {
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<any[]>([]);
@@ -38,6 +45,11 @@ export function TeamManagement({ user }: { user: any }) {
   const [isAssigning, setIsAssigning] = useState(false);
   const [newMemberEmail, setNewMemberEmail] = useState('');
   const [newMemberRole, setNewMemberRole] = useState<'therapist' | 'receptionist'>('therapist');
+
+  const planName = user.planName || 'Essencial';
+  const inviteLimit = PLAN_LIMITS[planName] || 2;
+  const totalUsed = members.length + invitations.filter(i => i.status === 'pending').length;
+  const canInvite = totalUsed < inviteLimit;
 
   useEffect(() => {
     fetchMembers();
@@ -76,6 +88,12 @@ export function TeamManagement({ user }: { user: any }) {
     setIsAssigning(true);
     setError(null);
     setSuccess(null);
+
+    if (!canInvite) {
+      setError(`Seu plano ${planName} permite no máximo ${inviteLimit} membros. Faça upgrade para convidar mais.`);
+      setIsAssigning(false);
+      return;
+    }
 
     try {
       const result = await dataService.inviteToClinic(newMemberEmail, newMemberRole);
@@ -139,10 +157,17 @@ export function TeamManagement({ user }: { user: any }) {
       <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Gestão da Equipe</h1>
-          <p className="text-slate-500 text-sm">Gerencie os papéis e acessos dos seus colaboradores.</p>
+          <p className="text-slate-500 text-sm">
+            Plano {planName}: {totalUsed} de {inviteLimit === 999 ? 'Ilimitado' : inviteLimit} vagas utilizadas
+          </p>
         </div>
         
         <div className="flex items-center gap-3">
+          {!canInvite && (
+            <span className="px-3 py-1 bg-amber-50 text-amber-600 rounded-lg text-[10px] font-bold uppercase border border-amber-100">
+              Limite atingido
+            </span>
+          )}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
             <input 
@@ -231,10 +256,14 @@ export function TeamManagement({ user }: { user: any }) {
 
               <button
                 type="submit"
-                disabled={isAssigning}
-                className="w-full bg-[#4318FF] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98] disabled:opacity-50 disabled:scale-100"
+                disabled={isAssigning || !canInvite}
+                className={`w-full py-4 rounded-2xl font-bold text-sm shadow-lg transition-all ${
+                  !canInvite 
+                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed shadow-none' 
+                    : 'bg-[#4318FF] text-white shadow-blue-500/20 hover:scale-[1.02] active:scale-[0.98]'
+                } disabled:opacity-50 disabled:scale-100`}
               >
-                {isAssigning ? 'Enviando...' : 'Enviar Convite'}
+                {isAssigning ? 'Enviando...' : !canInvite ? 'Limite de Plano Atingido' : 'Enviar Convite'}
               </button>
             </form>
 

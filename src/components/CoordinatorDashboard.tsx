@@ -470,6 +470,57 @@ export function CoordinatorDashboard({ user, onLogout, allPatients, therapistAge
                 </div>
               </motion.div>
             )}
+            {activeTab === 'settings' && (
+              <motion.div key="settings" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100">
+                <div className="flex items-center justify-between mb-8">
+                  <h3 className="text-xl font-bold text-slate-900">Configurações da Clínica</h3>
+                  <button className="px-6 py-3 bg-[#4318FF] text-white rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-all">
+                    Salvar Alterações
+                  </button>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-6">
+                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">Horários e Sessões</h4>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-2">Duração Padrão da Sessão</label>
+                        <select className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all">
+                          <option value="30">30 minutos</option>
+                          <option value="45">45 minutos</option>
+                          <option value="50" selected={user.clinicSettings?.defaultSessionDuration === '50'}>50 minutos</option>
+                          <option value="60">60 minutos</option>
+                        </select>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-2">Início do Expediente</label>
+                          <input type="time" defaultValue={user.clinicSettings?.workStart || "08:00"} className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-2">Fim do Expediente</label>
+                          <input type="time" defaultValue={user.clinicSettings?.workEnd || "18:00"} className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-6">
+                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">Plano e Assinatura</h4>
+                    <div className="p-6 bg-blue-50 rounded-3xl border border-blue-100">
+                      <div className="flex items-center justify-between mb-4">
+                        <p className="text-sm font-bold text-blue-900">Plano {user.planName || 'Essencial'}</p>
+                        <span className="px-3 py-1 bg-blue-100 text-[#4318FF] rounded-lg text-[10px] font-bold uppercase">Ativo</span>
+                      </div>
+                      <p className="text-xs text-blue-600 mb-6">Sua clínica possui acesso a todas as ferramentas de gestão e prontuário eletrônico.</p>
+                      <button className="w-full py-3 bg-white text-[#4318FF] rounded-2xl font-bold text-xs shadow-sm hover:shadow-md transition-all">
+                        Gerenciar Assinatura
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
           </AnimatePresence>
         </main>
       </div>

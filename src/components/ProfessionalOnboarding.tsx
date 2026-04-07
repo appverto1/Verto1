@@ -10,7 +10,9 @@ import {
   MessageCircle,
   Plus,
   X,
-  UserPlus
+  UserPlus,
+  Clock,
+  Calendar as CalendarIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { dataService } from '../services/dataService';
@@ -21,8 +23,15 @@ interface ProfessionalOnboardingProps {
   onComplete: (data: any) => void;
 }
 
+const PLAN_LIMITS: Record<string, number> = {
+  'Essencial': 2,
+  'Profissional': 5,
+  'Clínica': 999,
+  'Paciente': 0
+};
+
 export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboardingProps) {
-  const [step, setStep] = useState(1); // 1: Profile, 2: Invitations (only for coordinator)
+  const [step, setStep] = useState(1); // 1: Profile, 2: Invitations, 3: Clinic Settings
   const [name, setName] = useState(user.name || '');
   const [specialty, setSpecialty] = useState('Psicólogo');
   const [crp, setCrp] = useState('');
@@ -33,6 +42,14 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
   const [invites, setInvites] = useState<{ email: string, role: 'therapist' | 'receptionist' }[]>([]);
   const [newInviteEmail, setNewInviteEmail] = useState('');
   const [newInviteRole, setNewInviteRole] = useState<'therapist' | 'receptionist'>('therapist');
+
+  // Clinic Settings state
+  const [defaultSessionDuration, setDefaultSessionDuration] = useState('50');
+  const [workStart, setWorkStart] = useState('08:00');
+  const [workEnd, setWorkEnd] = useState('18:00');
+
+  const planName = user.planName || 'Essencial';
+  const inviteLimit = PLAN_LIMITS[planName] || 2;
 
   const handleProfileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,6 +62,11 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
     } else {
       await finishOnboarding();
     }
+  };
+
+  const handleInvitationsSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setStep(3);
   };
 
   const finishOnboarding = async () => {
@@ -61,6 +83,12 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
         }
       }
 
+      // Save clinic settings if coordinator
+      if (user.role === 'coordinator') {
+        // Here we could call an API to save clinic settings
+        console.log('Saving clinic settings:', { defaultSessionDuration, workStart, workEnd });
+      }
+
       const response = await fetch(`/api/profile/${user.id}/complete-onboarding`, {
         method: 'POST',
         headers: { 
@@ -68,13 +96,34 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
           'Authorization': token ? `Bearer ${token}` : ''
         },
         credentials: 'include',
-        body: JSON.stringify({ name, specialty, crp, profilePicture })
+        body: JSON.stringify({ 
+          name, 
+          specialty, 
+          crp, 
+          profilePicture,
+          clinicSettings: user.role === 'coordinator' ? {
+            defaultSessionDuration,
+            workStart,
+            workEnd
+          } : null
+        })
       });
       
       if (response.ok) {
-        onComplete({ name, specialty, crp, profilePicture });
+        onComplete({ 
+          name, 
+          specialty, 
+          crp, 
+          profilePicture,
+          clinicSettings: user.role === 'coordinator' ? {
+            defaultSessionDuration,
+            workStart,
+            workEnd
+          } : null
+        });
       } else {
-        alert('Erro ao salvar configurações. Tente novamente.');
+        const errData = await response.json();
+        alert(`Erro ao salvar configurações: ${errData.error || 'Tente novamente.'}`);
       }
     } catch (err) {
       console.error('Onboarding error:', err);
@@ -87,6 +136,9 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
   const addInvite = () => {
     if (!newInviteEmail || !newInviteEmail.includes('@')) return alert('E-mail inválido');
     if (invites.find(i => i.email === newInviteEmail)) return alert('Este e-mail já está na lista');
+    if (invites.length >= inviteLimit) {
+      return alert(`Seu plano ${planName} permite no máximo ${inviteLimit} convites. Faça upgrade para convidar mais profissionais.`);
+    }
     
     setInvites([...invites, { email: newInviteEmail, role: newInviteRole }]);
     setNewInviteEmail('');
@@ -116,12 +168,14 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
                 <ShieldCheck size={32} />
               </div>
               <h2 className="text-3xl font-bold mb-4 tracking-tight">
-                {step === 1 ? 'Bem-vindo à Verto!' : 'Sua Equipe'}
+                {step === 1 ? 'Bem-vindo à Verto!' : step === 2 ? 'Sua Equipe' : 'Configurações'}
               </h2>
               <p className="text-blue-100 text-sm leading-relaxed">
                 {step === 1 
                   ? 'Vamos configurar seu perfil profissional para começar os atendimentos e gerir sua clínica.'
-                  : 'Convide seus colaboradores para começarem a trabalhar com você.'}
+                  : step === 2
+                  ? 'Convide seus colaboradores para começarem a trabalhar com você.'
+                  : 'Defina os horários padrão da sua clínica para facilitar o agendamento.'}
               </p>
             </div>
 
@@ -131,10 +185,16 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
                 Perfil Profissional
               </div>
               {user.role === 'coordinator' && (
-                <div className="flex items-center gap-3 text-xs font-medium text-blue-100">
-                  <CheckCircle2 size={16} className={step >= 2 ? "text-green-400" : "text-white/30"} />
-                  Convite de Equipe
-                </div>
+                <>
+                  <div className="flex items-center gap-3 text-xs font-medium text-blue-100">
+                    <CheckCircle2 size={16} className={step >= 2 ? "text-green-400" : "text-white/30"} />
+                    Convite de Equipe
+                  </div>
+                  <div className="flex items-center gap-3 text-xs font-medium text-blue-100">
+                    <CheckCircle2 size={16} className={step >= 3 ? "text-green-400" : "text-white/30"} />
+                    Configurações da Clínica
+                  </div>
+                </>
               )}
             </div>
           </div>
@@ -152,7 +212,7 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
                 >
                   <div className="flex items-center justify-between">
                     <h3 className="text-xl font-bold text-slate-900">Configurações de Perfil</h3>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Passo 1 de {user.role === 'coordinator' ? '2' : '1'}</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Passo 1 de {user.role === 'coordinator' ? '3' : '1'}</span>
                   </div>
 
                   {/* Profile Picture */}
@@ -254,7 +314,7 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
                     </div>
                   </form>
                 </motion.div>
-              ) : (
+              ) : step === 2 ? (
                 <motion.div 
                   key="step2"
                   initial={{ opacity: 0, x: 20 }}
@@ -264,10 +324,21 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
                 >
                   <div className="flex items-center justify-between">
                     <h3 className="text-xl font-bold text-slate-900">Convidar Colaboradores</h3>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Passo 2 de 2</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Passo 2 de 3</span>
                   </div>
 
-                  <div className="space-y-6">
+                  <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100 flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-bold text-blue-900">Plano {planName}</p>
+                      <p className="text-[10px] text-blue-600">Limite: {inviteLimit === 999 ? 'Ilimitado' : `${inviteLimit} profissionais`}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs font-bold text-blue-900">{invites.length} / {inviteLimit === 999 ? '∞' : inviteLimit}</p>
+                      <p className="text-[10px] text-blue-600">utilizados</p>
+                    </div>
+                  </div>
+
+                  <form onSubmit={handleInvitationsSubmit} className="space-y-6">
                     <div className="p-6 bg-blue-50 rounded-3xl border border-blue-100">
                       <h4 className="text-sm font-bold text-[#4318FF] mb-2 flex items-center gap-2">
                         <MessageCircle size={18} /> Link Direto (WhatsApp)
@@ -305,6 +376,7 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
                           <option value="receptionist">Recepcionista</option>
                         </select>
                         <button 
+                          type="button"
                           onClick={addInvite}
                           className="p-3.5 bg-[#4318FF] text-white rounded-2xl hover:scale-105 transition-all shadow-lg shadow-blue-500/20"
                         >
@@ -328,7 +400,7 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
                                   <p className="text-[10px] font-bold text-slate-400 uppercase">{invite.role === 'therapist' ? 'Terapeuta' : 'Recepcionista'}</p>
                                 </div>
                               </div>
-                              <button onClick={() => removeInvite(invite.email)} className="p-2 text-slate-300 hover:text-red-500 transition-all">
+                              <button type="button" onClick={() => removeInvite(invite.email)} className="p-2 text-slate-300 hover:text-red-500 transition-all">
                                 <X size={18} />
                               </button>
                             </div>
@@ -339,13 +411,109 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
 
                     <div className="flex gap-4 pt-4">
                       <button
+                        type="button"
                         onClick={() => setStep(1)}
                         className="flex-1 bg-slate-100 text-slate-600 py-4 rounded-2xl font-bold text-sm hover:bg-slate-200 transition-all"
                       >
                         Voltar
                       </button>
                       <button
-                        onClick={finishOnboarding}
+                        type="submit"
+                        className="flex-[2] bg-[#4318FF] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                      >
+                        Próximo Passo
+                        <ArrowRight size={18} />
+                      </button>
+                    </div>
+                  </form>
+                </motion.div>
+              ) : (
+                <motion.div 
+                  key="step3"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  className="space-y-8"
+                >
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xl font-bold text-slate-900">Configurações da Clínica</h3>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Passo 3 de 3</span>
+                  </div>
+
+                  <form onSubmit={(e) => { e.preventDefault(); finishOnboarding(); }} className="space-y-6">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Duração Padrão da Sessão (minutos)</label>
+                      <div className="relative">
+                        <Clock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                        <select 
+                          value={defaultSessionDuration}
+                          onChange={(e) => setDefaultSessionDuration(e.target.value)}
+                          className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border-none rounded-2xl text-sm font-semibold focus:ring-2 focus:ring-blue-500/20 transition-all appearance-none"
+                        >
+                          <option value="30">30 minutos</option>
+                          <option value="45">45 minutos</option>
+                          <option value="50">50 minutos</option>
+                          <option value="60">60 minutos</option>
+                          <option value="90">90 minutos</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Início do Expediente</label>
+                        <div className="relative">
+                          <CalendarIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                          <input 
+                            type="time"
+                            value={workStart}
+                            onChange={(e) => setWorkStart(e.target.value)}
+                            className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border-none rounded-2xl text-sm font-semibold focus:ring-2 focus:ring-blue-500/20 transition-all"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Fim do Expediente</label>
+                        <div className="relative">
+                          <CalendarIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                          <input 
+                            type="time"
+                            value={workEnd}
+                            onChange={(e) => setWorkEnd(e.target.value)}
+                            className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border-none rounded-2xl text-sm font-semibold focus:ring-2 focus:ring-blue-500/20 transition-all"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100">
+                      <h4 className="text-xs font-bold text-slate-900 mb-2">Resumo das Configurações</h4>
+                      <ul className="space-y-2">
+                        <li className="text-[10px] text-slate-500 flex items-center gap-2">
+                          <CheckCircle2 size={12} className="text-green-500" />
+                          Sessões de {defaultSessionDuration} minutos por padrão.
+                        </li>
+                        <li className="text-[10px] text-slate-500 flex items-center gap-2">
+                          <CheckCircle2 size={12} className="text-green-500" />
+                          Agenda disponível das {workStart} às {workEnd}.
+                        </li>
+                        <li className="text-[10px] text-slate-500 flex items-center gap-2">
+                          <CheckCircle2 size={12} className="text-green-500" />
+                          {invites.length} convites de equipe serão enviados.
+                        </li>
+                      </ul>
+                    </div>
+
+                    <div className="flex gap-4 pt-4">
+                      <button
+                        type="button"
+                        onClick={() => setStep(2)}
+                        className="flex-1 bg-slate-100 text-slate-600 py-4 rounded-2xl font-bold text-sm hover:bg-slate-200 transition-all"
+                      >
+                        Voltar
+                      </button>
+                      <button
+                        type="submit"
                         disabled={loading}
                         className="flex-[2] bg-[#4318FF] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98] flex items-center justify-center gap-2"
                       >
@@ -353,7 +521,7 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
                         {!loading && <CheckCircle2 size={18} />}
                       </button>
                     </div>
-                  </div>
+                  </form>
                 </motion.div>
               )}
             </AnimatePresence>

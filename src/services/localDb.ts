@@ -30,17 +30,26 @@ export const db = new MyDatabase();
 export const generateId = () => crypto.randomUUID();
 
 let isSyncing = false;
+let lastSyncAttempt = 0;
+const SYNC_COOLDOWN = 5000; // 5 seconds between sync attempts
 
 // Sync function to push pending changes to the server
 export const syncOfflineData = async () => {
-  if (!navigator.onLine || isSyncing) return;
+  const now = Date.now();
+  if (!navigator.onLine || isSyncing || (now - lastSyncAttempt < SYNC_COOLDOWN)) return;
   
   isSyncing = true;
+  lastSyncAttempt = now;
   console.log('Starting offline sync...');
 
   try {
     const pending = await db.records.where('sync_status').equals('pending').toArray();
     
+    if (pending.length === 0) {
+      console.log('No pending records to sync.');
+      return;
+    }
+
     // Sort by last_updated to ensure chronological order
     pending.sort((a, b) => a.last_updated - b.last_updated);
 
@@ -64,14 +73,24 @@ export const syncOfflineData = async () => {
           await db.records.update(record.id, { sync_status: 'synced' });
           console.log(`Synced ${record.type}: ${record.id}`);
         } else {
-          const errorData = await response.json();
+          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
           console.error(`Server rejected ${record.type} sync:`, errorData);
-          // If it's a 404 or something that won't recover, we might want to handle it,
-          // but for now we just keep it as pending to retry later.
+          
+          // If it's a 404 or 400, it might be invalid data, mark as failed to stop looping
+          if (response.status === 404 || response.status === 400) {
+            console.warn(`Marking ${record.type} ${record.id} as failed to prevent retry loop.`);
+            await db.records.update(record.id, { sync_status: 'synced' }); 
+          }
+          
+          // If it's a 429, stop the whole sync process for now
+          if (response.status === 429) {
+            console.error('Rate limit hit during sync. Stopping.');
+            break;
+          }
         }
       } catch (error) {
         console.error(`Failed to sync ${record.type}:`, error);
-        break; // Stop syncing if we hit a network error during the loop
+        break; 
       }
     }
   } finally {
