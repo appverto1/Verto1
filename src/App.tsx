@@ -3,6 +3,7 @@ import { GlobalStyles, ENERGY_TAGS } from './components/Common';
 import { LandingPage } from './components/LandingPage';
 import { PatientDashboard } from './components/PatientDashboard';
 import { TherapistDashboard } from './components/TherapistDashboard';
+import { CoordinatorDashboard } from './components/CoordinatorDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
 import { TeamManagement } from './components/TeamManagement';
 import { InvitationModal } from './components/InvitationModal';
@@ -59,7 +60,7 @@ export default function App() {
   useEffect(() => {
     const checkSession = async () => {
       try {
-        const response = await fetch('/api/auth/me');
+        const response = await fetch('/api/auth/me', { credentials: 'include' });
         const data = await response.json();
         if (data.user) {
           setUser(data.user);
@@ -86,7 +87,7 @@ export default function App() {
       
       const checkSession = async () => {
         try {
-          const response = await fetch('/api/auth/me');
+          const response = await fetch('/api/auth/me', { credentials: 'include' });
           const data = await response.json();
           if (data.user) {
             if (data.user.subscriptionStatus === 'active' || attempts >= maxAttempts) {
@@ -114,7 +115,7 @@ export default function App() {
       if (!supabaseSession) {
         // If no session provided, we might already have the user from signup-direct
         // or we just need to refresh the session from the server
-        const response = await fetch('/api/auth/me');
+        const response = await fetch('/api/auth/me', { credentials: 'include' });
         const data = await response.json();
         if (data.user) {
           setUser(data.user);
@@ -127,6 +128,7 @@ export default function App() {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ accessToken, intendedRole })
       });
       const data = await response.json();
@@ -1014,7 +1016,7 @@ export default function App() {
   const handleLogout = async () => {
     onAddActivityLog("Logout do Sistema", "O profissional encerrou a sessão com segurança.", "system");
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
       const supabase = await getSupabase();
       if (supabase) await supabase.auth.signOut();
     } catch (error) {
@@ -1037,52 +1039,26 @@ export default function App() {
       
       {!user ? (
         <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />
+      ) : (user.role === 'therapist' || user.role === 'coordinator') && !user.firstLoginCompleted ? (
+        <ProfessionalOnboarding 
+          user={user} 
+          onComplete={(data) => {
+            setUser({ ...user, ...data, firstLoginCompleted: true });
+          }} 
+        />
       ) : user.subscriptionStatus === 'pending' ? (
         <SubscriptionRequired user={user} onLogout={handleLogout} />
       ) : user.role === 'patient' ? (
         <PatientDashboard user={user} onLogout={handleLogout} onMoodCheckin={handleMoodCheckin} tasks={tasks.filter(t => t.patientId === user.id)} onCompleteTask={handleCompleteTask} history={history.filter(h => h.patientId === user.id)} energyTags={ENERGY_TAGS} sharedNotes={therapistNotes.filter(n => n.patientId === user.id && n.type === 'shared')} protocols={protocols} onAddFamilyNote={handleAddFamilyNote} />
+      ) : user.role === 'coordinator' ? (
+        <CoordinatorDashboard 
+          user={user} 
+          onLogout={handleLogout} 
+          allPatients={allPatients} 
+          therapistAgenda={therapistAgenda} 
+        />
       ) : (user.role === 'admin' || user.role === 'owner') ? (
         <AdminDashboard onLogout={handleLogout} />
-      ) : view === 'team' && user.role === 'coordinator' ? (
-        <div className="min-h-screen bg-slate-50 flex">
-          {/* Sidebar for Team View */}
-          <div className="w-64 bg-white border-r border-slate-100 hidden lg:flex flex-col p-6 sticky top-0 h-screen">
-            <div className="flex items-center gap-3 mb-10 px-2">
-              <div className="w-10 h-10 bg-[#4318FF] rounded-2xl flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
-                <Database size={20} />
-              </div>
-              <span className="font-bold text-xl text-slate-900 tracking-tight">Verto</span>
-            </div>
-
-            <nav className="space-y-2 flex-1">
-              <button 
-                onClick={() => setView('dashboard')}
-                className="w-full flex items-center gap-3 px-4 py-3 text-slate-400 hover:text-slate-900 hover:bg-slate-50 rounded-2xl transition-all font-medium text-sm"
-              >
-                <LayoutDashboard size={20} />
-                Painel Principal
-              </button>
-              <button 
-                className="w-full flex items-center gap-3 px-4 py-3 text-[#4318FF] bg-blue-50 rounded-2xl transition-all font-bold text-sm"
-              >
-                <Users size={20} />
-                Gestão da Equipe
-              </button>
-            </nav>
-
-            <button 
-              onClick={handleLogout}
-              className="flex items-center gap-3 px-4 py-3 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-2xl transition-all font-medium text-sm"
-            >
-              <Lock size={20} />
-              Sair
-            </button>
-          </div>
-
-          <div className="flex-1 overflow-y-auto">
-            <TeamManagement user={user} />
-          </div>
-        </div>
       ) : (
         <TherapistDashboard 
           user={{...user, profilePicture, crp}} 
@@ -1125,15 +1101,6 @@ export default function App() {
         <InvitationModal 
           user={user} 
           onClose={() => setShowInvitationModal(false)} 
-        />
-      )}
-
-      {user && !user.firstLoginCompleted && (user.role === 'therapist' || user.role === 'coordinator') && (
-        <ProfessionalOnboarding 
-          user={user} 
-          onComplete={(data) => {
-            setUser({ ...user, ...data, firstLoginCompleted: true });
-          }} 
         />
       )}
     </React.Fragment>

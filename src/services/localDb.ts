@@ -48,6 +48,7 @@ export const syncOfflineData = async () => {
         const response = await fetch(record.endpoint, {
           method: record.method,
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify(record.data)
         });
 

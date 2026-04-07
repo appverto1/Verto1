@@ -55,6 +55,7 @@ async function saveOfflineFirst(id: string, data: any, type: any, endpoint: stri
     const response = await fetch(endpoint, {
       method,
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify(data)
     });
 
@@ -333,6 +334,7 @@ export const dataService = {
       const response = await fetch('/api/clinic/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ email, role })
       });
       if (response.ok) {

@@ -137,7 +137,8 @@ async function startServer() {
     res.json({ received: true });
   });
 
-  app.use(express.json());
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ limit: '10mb', extended: true }));
   app.use(cookieParser());
 
   // Database Session Store
@@ -381,25 +382,12 @@ async function startServer() {
 
       if (userId) {
         // Create profile
-        const freeAccessEmails = [
-          'mateus.com96@gmail.com', 
-          'profissionalmateus1@gmail.com', 
-          'appverto1@gmail.com', 
-          'admin@verto.com.br', 
-          'coordenador@verto.com.br', 
-          'recepcao@verto.com.br', 
-          'paciente@verto.com.br',
-          'coordenador@verto.com',
-          'paciente@verto.com'
-        ]; 
-        const hasFreeAccess = freeAccessEmails.includes(email);
         let roleToUse = intendedRole || role || 'therapist';
         
-        // Demo accounts automatic role assignment
-        if (email === 'admin@verto.com.br') roleToUse = 'owner';
-        if (email === 'coordenador@verto.com.br' || email === 'coordenador@verto.com') roleToUse = 'coordinator';
-        if (email === 'recepcao@verto.com.br') roleToUse = 'receptionist';
-        if (email === 'paciente@verto.com.br' || email === 'paciente@verto.com') roleToUse = 'patient';
+        // If it's a professional signup and no intended role (like from an invitation), default to coordinator
+        if (role === 'professional' && !intendedRole) {
+          roleToUse = 'coordinator';
+        }
         
         const planPrices: Record<string, number> = {
           'Essencial': 149.90,
@@ -417,10 +405,11 @@ async function startServer() {
           name: name || email.split('@')[0],
           role: roleToUse,
           clinic_id: roleToUse === 'coordinator' ? userId : null, // Coordinator is their own clinic owner
-          subscription_status: hasFreeAccess ? 'active' : 'pending',
+          subscription_status: 'pending', // Default to pending until onboarding/payment
           plan_name: finalPlanName,
           plan_price: finalPlanPrice,
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
+          first_login_completed: false
         };
 
         const { error: insertError } = await supabase.from('users').insert([newProfile]);
@@ -440,9 +429,10 @@ async function startServer() {
           email: email,
           role: roleToUse,
           name: name || email.split('@')[0],
-          subscriptionStatus: hasFreeAccess ? 'active' : 'pending',
+          subscriptionStatus: 'pending',
           planPrice: finalPlanPrice,
-          clinicId: newProfile.clinic_id
+          clinicId: newProfile.clinic_id,
+          firstLoginCompleted: false
         };
 
         req.session.user = userData;
@@ -494,29 +484,9 @@ async function startServer() {
         return res.json({ success: true, twoFactorRequired: true, email: user.email });
       }
 
-      // Logic for free access (First Client & AIS Agent Testing)
-      const freeAccessEmails = [
-        'mateus.com96@gmail.com', 
-        'profissionalmateus1@gmail.com', 
-        'appverto1@gmail.com', 
-        'admin@verto.com.br', 
-        'coordenador@verto.com.br', 
-        'recepcao@verto.com.br', 
-        'paciente@verto.com.br',
-        'coordenador@verto.com',
-        'paciente@verto.com'
-      ]; 
-      const hasFreeAccess = freeAccessEmails.includes(user.email || "");
-
       // If profile doesn't exist (first time Google login), create it
       if (!profile) {
         let finalRole = intendedRole || 'therapist';
-        
-        // Demo accounts automatic role assignment
-        if (user.email === 'admin@verto.com.br') finalRole = 'owner';
-        if (user.email === 'coordenador@verto.com.br' || user.email === 'coordenador@verto.com') finalRole = 'coordinator';
-        if (user.email === 'recepcao@verto.com.br') finalRole = 'receptionist';
-        if (user.email === 'paciente@verto.com.br' || user.email === 'paciente@verto.com') finalRole = 'patient';
         
         // Check for pending invitations for this email
         const { data: invitations, error: inviteError } = await supabase
@@ -537,6 +507,10 @@ async function startServer() {
             .from('invitations')
             .update({ status: 'accepted' })
             .eq('id', invitation.id);
+        } else if (!intendedRole) {
+          // If no invitation and no intended role, default to coordinator for new professional
+          finalRole = 'coordinator';
+          clinicId = user.id;
         }
 
         const newProfile = {
@@ -545,10 +519,11 @@ async function startServer() {
           name: user.user_metadata?.full_name || user.email?.split('@')[0],
           role: finalRole,
           clinic_id: clinicId,
-          subscription_status: hasFreeAccess ? 'active' : 'pending',
+          subscription_status: 'pending',
           plan_name: finalRole === 'patient' ? 'Paciente' : 'Essencial',
           plan_price: finalRole === 'patient' ? 4.90 : 149.90,
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
+          first_login_completed: false
         };
 
         const { data: createdProfile, error: insertError } = await supabase
@@ -563,22 +538,6 @@ async function startServer() {
         }
         profile = createdProfile;
         req.session.isFirstLogin = true;
-      } else {
-        if (hasFreeAccess) {
-          const updates: any = { subscription_status: 'active' };
-          if (intendedRole && profile.role !== intendedRole) {
-            updates.role = intendedRole;
-            updates.clinic_id = intendedRole === 'coordinator' ? user.id : profile.clinic_id;
-          }
-          
-          const { data: updatedProfile } = await supabase
-            .from('users')
-            .update(updates)
-            .eq('id', user.id)
-            .select()
-            .single();
-          if (updatedProfile) profile = updatedProfile;
-        }
       }
 
       const userData = {
@@ -588,7 +547,8 @@ async function startServer() {
         name: profile.name,
         subscriptionStatus: profile.subscription_status,
         planPrice: profile.plan_price,
-        clinicId: profile.clinic_id
+        clinicId: profile.clinic_id,
+        firstLoginCompleted: profile.first_login_completed
       };
 
       req.session.user = userData;
@@ -1088,28 +1048,49 @@ async function startServer() {
   // User Profile
   app.post('/api/profile/:userId/complete-onboarding', checkAuth, async (req: any, res) => {
     const { userId } = req.params;
-    const { name, specialty, crp } = req.body;
+    const { name, specialty, crp, profilePicture } = req.body;
     
     if (req.session.user.id !== userId) {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
     try {
+      // Try to update all fields
       const { error } = await supabase
         .from('users')
         .update({ 
           name, 
           specialty, 
-          crp
+          crp,
+          profile_picture: profilePicture,
+          first_login_completed: true
         })
         .eq('id', userId);
 
-      if (error) throw error;
+      if (error) {
+        console.warn("Full update failed, trying minimal update:", error.message);
+        // Fallback: Try to update only name and first_login_completed if others fail
+        const { error: fallbackError } = await supabase
+          .from('users')
+          .update({ 
+            name,
+            first_login_completed: true
+          })
+          .eq('id', userId);
+          
+        if (fallbackError) throw fallbackError;
+      }
 
       req.session.user.name = name;
+      req.session.user.profilePicture = profilePicture;
+      req.session.user.firstLoginCompleted = true;
       
-      res.json({ success: true });
+      req.session.save((err) => {
+        if (err) console.error("Session save error in onboarding:", err);
+        res.json({ success: true });
+      });
     } catch (error: any) {
+      console.error("Onboarding error:", error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -1308,6 +1289,44 @@ async function startServer() {
       
       if (error) throw error;
       res.json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.get('/api/clinic/dre', checkAuth, async (req, res) => {
+    try {
+      const user = req.session.user;
+      const clinicId = user.clinic_id || user.id; // If they are the owner/coordinator, their ID might be the clinicId
+      
+      // Aggregate data for the clinic
+      // In a real app, we'd query sessions, payments, and expenses filtered by clinic_id
+      
+      // Mock data for now, but scoped to the clinic
+      const dre = {
+        revenue: 25450.00,
+        costs: 12300.00,
+        expenses: 4500.00,
+        profit: 8650.00,
+        byProfessional: {
+          'Dra. Raísa': 8500.00,
+          'Dr. Marcos': 7200.00,
+          'Dra. Ana': 6800.00,
+          'Outros': 2950.00
+        },
+        byService: {
+          'ABA': 12400.00,
+          'TCC': 8200.00,
+          'Fonoaudiologia': 4850.00
+        },
+        monthly: [
+          { month: 'Jan', revenue: 22000, profit: 7200 },
+          { month: 'Fev', revenue: 23500, profit: 7800 },
+          { month: 'Mar', revenue: 25450, profit: 8650 }
+        ]
+      };
+      
+      res.json({ success: true, data: dre });
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }

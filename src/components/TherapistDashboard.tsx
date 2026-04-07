@@ -691,6 +691,15 @@ export const TherapistDashboard = ({
           
           {user?.role === 'coordinator' && (
             <button 
+              onClick={() => onViewTeam()}
+              className="w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+            >
+              <LayoutDashboard size={20} /> Dashboard Gestão
+            </button>
+          )}
+          
+          {user?.role === 'coordinator' && (
+            <button 
               onClick={onViewTeam}
               className="w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm text-slate-400 hover:bg-slate-50 hover:text-slate-600"
             >
@@ -700,7 +709,7 @@ export const TherapistDashboard = ({
           
           {(user?.role === 'coordinator' || user?.role === 'therapist') && (
             <button 
-              onClick={() => handleSetView('clinic')}
+              onClick={() => user?.role === 'coordinator' ? onViewTeam() : handleSetView('clinic')}
               className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'clinic' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
             >
               <Rocket size={20} /> Gestão da Clínica

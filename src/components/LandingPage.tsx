@@ -242,6 +242,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       const response = await fetch('/api/auth/signup-direct', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           email,
           password,
@@ -259,8 +260,8 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         throw new Error(data.error || 'Erro ao criar conta');
       }
 
-      if (data.user.subscriptionStatus === 'active') {
-        // Free access or admin, no need for checkout
+      if (data.user.subscriptionStatus === 'active' || registerType === 'professional') {
+        // Free access or professional (needs onboarding first)
         if (email === 'appverto1@gmail.com') {
           await start2FASetup();
         }
@@ -272,7 +273,8 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         // Redirect to Stripe checkout
         const checkoutRes = await fetch('/api/stripe/create-checkout', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include'
         });
         const checkoutData = await checkoutRes.json();
         if (checkoutData.url) {

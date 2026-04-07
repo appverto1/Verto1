@@ -81,10 +81,10 @@ export const AdminDashboard = ({ onLogout }: any) => {
     const fetchData = async () => {
       try {
         const [statsRes, clientsRes, dreRes, profileRes] = await Promise.all([
-          fetch('/api/admin/stats'),
-          fetch('/api/admin/clients'),
-          fetch('/api/admin/dre'),
-          fetch('/api/auth/profile')
+          fetch('/api/admin/stats', { credentials: 'include' }),
+          fetch('/api/admin/clients', { credentials: 'include' }),
+          fetch('/api/admin/dre', { credentials: 'include' }),
+          fetch('/api/auth/profile', { credentials: 'include' })
         ]);
         
         // Check if all responses are OK
@@ -113,7 +113,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
 
   const start2FASetup = async () => {
     try {
-      const response = await fetch('/api/auth/2fa/setup', { method: 'POST' });
+      const response = await fetch('/api/auth/2fa/setup', { method: 'POST', credentials: 'include' });
       const data = await response.json();
       if (data.qrCodeUrl) {
         setQrCodeUrl(data.qrCodeUrl);
@@ -129,6 +129,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
       const response = await fetch('/api/auth/2fa/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ token: twoFactorToken })
       });
       const data = await response.json();
