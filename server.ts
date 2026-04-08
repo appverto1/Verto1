@@ -168,24 +168,30 @@ async function startServer() {
         const { Pool } = pg;
         const pool = new Pool({ 
           connectionString: dbUrl,
-          // Add some defaults for stability
-          max: 20,
+          max: 10,
           idleTimeoutMillis: 30000,
-          connectionTimeoutMillis: 2000,
+          connectionTimeoutMillis: 5000, // 5 seconds timeout
         });
 
-        // Test the pool connection immediately
-        pool.on('error', (err) => {
-          console.error('Unexpected error on idle client', err);
-        });
+        // Test the connection before using it for sessions
+        try {
+          console.log('Testing PostgreSQL connection for session store...');
+          const client = await pool.connect();
+          console.log('PostgreSQL connection successful.');
+          client.release();
 
-        const PostgresStore = pgSession(session);
-        sessionStore = new PostgresStore({
-          pool: pool,
-          tableName: 'session',
-          createTableIfMissing: true
-        });
-        console.log('Using PostgreSQL session store with pg.Pool.');
+          const PostgresStore = pgSession(session);
+          sessionStore = new PostgresStore({
+            pool: pool,
+            tableName: 'session',
+            createTableIfMissing: true
+          });
+          console.log('Using PostgreSQL session store.');
+        } catch (connErr: any) {
+          console.error('Failed to connect to PostgreSQL for session store. Falling back to MemoryStore.', connErr.message);
+          sessionStore = undefined;
+          await pool.end().catch(() => {});
+        }
       } else {
         console.warn('DATABASE_URL provided but is not a valid PostgreSQL connection string. Falling back to MemoryStore.');
       }

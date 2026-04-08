@@ -12,40 +12,48 @@ const fetchConfig = async () => {
 };
 
 let supabaseClient: any = null;
+let initPromise: Promise<any> | null = null;
 
 export const getSupabase = async () => {
   if (supabaseClient) return supabaseClient;
   
-  const config = await fetchConfig();
-  const url = config?.supabaseUrl || import.meta.env.VITE_SUPABASE_URL;
-  const key = config?.supabaseAnonKey || import.meta.env.VITE_SUPABASE_ANON_KEY;
+  if (initPromise) return initPromise;
 
-  if (url && key) {
-    supabaseClient = createClient(url, key, {
-      auth: {
-        autoRefreshToken: true,
-        persistSession: false,
-        detectSessionInUrl: true
-      }
-    });
-    
-    // Check if session is valid, if not clear it to avoid "Invalid Refresh Token" errors
-    supabaseClient.auth.getSession().then(({ data: { session }, error }: any) => {
-      if (error && error.message.includes('Refresh Token Not Found')) {
-        console.warn('Stale session detected, clearing Supabase storage...');
-        supabaseClient.auth.signOut();
-      }
-    });
-  } else {
-    console.error('ERRO CRÍTICO: Configurações do Supabase não encontradas!', {
-      hasUrl: !!url,
-      hasKey: !!key,
-      origin: window.location.origin
-    });
-    throw new Error('O sistema não pôde inicializar a conexão com o banco de dados. Verifique as variáveis de ambiente no Railway.');
-  }
-  
-  return supabaseClient;
+  initPromise = (async () => {
+    const config = await fetchConfig();
+    const url = config?.supabaseUrl || import.meta.env.VITE_SUPABASE_URL;
+    const key = config?.supabaseAnonKey || import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+    if (url && key) {
+      supabaseClient = createClient(url, key, {
+        auth: {
+          autoRefreshToken: true,
+          persistSession: false,
+          detectSessionInUrl: true
+        }
+      });
+      
+      // Check if session is valid
+      supabaseClient.auth.getSession().then(({ data: { session }, error }: any) => {
+        if (error && error.message.includes('Refresh Token Not Found')) {
+          console.warn('Stale session detected, clearing Supabase storage...');
+          supabaseClient.auth.signOut();
+        }
+      });
+      
+      return supabaseClient;
+    } else {
+      console.error('ERRO CRÍTICO: Configurações do Supabase não encontradas!', {
+        hasUrl: !!url,
+        hasKey: !!key,
+        origin: window.location.origin
+      });
+      initPromise = null; // Allow retry
+      throw new Error('O sistema não pôde inicializar a conexão com o banco de dados.');
+    }
+  })();
+
+  return initPromise;
 };
 
 // Legacy export for compatibility (will be null until initialized)
