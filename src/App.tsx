@@ -186,29 +186,29 @@ export default function App() {
   };
 
   const initialHistory = [ 
-    { id: 106, patientId: 102, type: 'task', title: "Olha por onde anda", time: "08:30", energy: 85, note: "Ótima atenção hoje.", icon: "🚶", dateGroup: "Hoje", score: 2 },
-    { id: 105, patientId: 102, type: 'task', title: "Usa os utensílios da forma apropriada", time: "12:15", energy: 70, note: "Usou garfo e faca independentemente.", icon: "🍴", dateGroup: "Hoje", score: 4 },
-    { id: 104, patientId: 102, type: 'task', title: "Responde às saudações de forma apropriada", time: "14:00", energy: 90, note: "Contato visual mantido.", icon: "👋", dateGroup: "Hoje", score: 3 },
-    { id: 103, patientId: 102, type: 'task', title: "Muda de atividade quando o alarme tocar", time: "16:00", energy: 60, note: "Trocou sem frustração.", icon: "⏰", dateGroup: "Hoje", score: 2 },
-    { id: 102, patientId: 102, type: 'task', title: "Classifica o dinheiro", time: "10:00", energy: 50, note: "Acertou moedas e notas de 10.", icon: "💵", dateGroup: "Ontem", score: 2 },
-    { id: 101, patientId: 102, type: 'task', title: "Olha por onde anda", time: "09:00", energy: 40, note: "Esbarrou em dois móveis.", icon: "🚶", dateGroup: "Ontem", score: 1 },
-    { id: 100, patientId: 102, type: 'task', title: "Responde às saudações de forma apropriada", time: "15:00", energy: 30, note: "Respondeu mas olhou para o chão.", icon: "👋", dateGroup: "Ontem", score: 1 },
-    { id: 99, patientId: 102, type: 'task', title: "Classifica o dinheiro", time: "11:00", energy: 20, note: "Confundiu moedas.", icon: "💵", dateGroup: "25/01/2026", score: 1 },
-    { id: 98, patientId: 102, type: 'task', title: "Usa os utensílios da forma apropriada", time: "12:30", energy: 45, note: "Dificuldade em segurar o garfo.", icon: "🍴", dateGroup: "25/01/2026", score: 2 },
-    // Data for Alexandre (101) - VB-MAPP
-    { id: 210, patientId: 101, type: 'task', title: "Emite 2 mandos sem ajuda", time: "09:00", energy: 90, note: "Pediu água e bola.", icon: "🗣️", dateGroup: "Hoje", score: 1 },
-    { id: 209, patientId: 101, type: 'task', title: "Atende ao chamado do nome", time: "09:15", energy: 85, note: "Atendeu prontamente.", icon: "👂", dateGroup: "Hoje", score: 1 },
-    { id: 208, patientId: 101, type: 'task', title: "Encaixa 2 peças de quebra-cabeça", time: "09:30", energy: 80, note: "Encaixou círculo e quadrado.", icon: "🧩", dateGroup: "Hoje", score: 0.5 },
-    { id: 207, patientId: 101, type: 'task', title: "Imita 2 movimentos motoros grossos", time: "09:45", energy: 75, note: "Imitou bater palmas.", icon: "🙌", dateGroup: "Hoje", score: 1 },
-    { id: 206, patientId: 101, type: 'task', title: "Olha por onde anda", time: "08:30", energy: 95, note: "Super herói atento!", icon: "🚶", dateGroup: "Hoje", score: 1 },
-    { id: 205, patientId: 101, type: 'task', title: "Responde às saudações de forma apropriada", time: "10:00", energy: 80, note: "Cumprimentou todo mundo!", icon: "👋", dateGroup: "Hoje", score: 0.5 },
-    { id: 204, patientId: 101, type: 'task', title: "Olha por onde anda", time: "09:00", energy: 60, note: "Um pouco distraído.", icon: "🚶", dateGroup: "Ontem", score: 0.5 },
-    { id: 203, patientId: 101, type: 'task', title: "Responde às saudações de forma apropriada", time: "11:00", energy: 50, note: "Precisou de ajuda.", icon: "👋", dateGroup: "Ontem", score: 0 },
+    { id: 106, patientId: 'mock-pedro-123', type: 'task', title: "Olha por onde anda", time: "08:30", energy: 85, note: "Ótima atenção hoje.", icon: "🚶", dateGroup: "Hoje", score: 2 },
+    { id: 105, patientId: 'mock-pedro-123', type: 'task', title: "Usa os utensílios da forma apropriada", time: "12:15", energy: 70, note: "Usou garfo e faca independentemente.", icon: "🍴", dateGroup: "Hoje", score: 4 },
+    { id: 104, patientId: 'mock-pedro-123', type: 'task', title: "Responde às saudações de forma apropriada", time: "14:00", energy: 90, note: "Contato visual mantido.", icon: "👋", dateGroup: "Hoje", score: 3 },
+    { id: 103, patientId: 'mock-pedro-123', type: 'task', title: "Muda de atividade quando o alarme tocar", time: "16:00", energy: 60, note: "Trocou sem frustração.", icon: "⏰", dateGroup: "Hoje", score: 2 },
+    { id: 102, patientId: 'mock-pedro-123', type: 'task', title: "Classifica o dinheiro", time: "10:00", energy: 50, note: "Acertou moedas e notas de 10.", icon: "💵", dateGroup: "Ontem", score: 2 },
+    { id: 101, patientId: 'mock-pedro-123', type: 'task', title: "Olha por onde anda", time: "09:00", energy: 40, note: "Esbarrou em dois móveis.", icon: "🚶", dateGroup: "Ontem", score: 1 },
+    { id: 100, patientId: 'mock-pedro-123', type: 'task', title: "Responde às saudações de forma apropriada", time: "15:00", energy: 30, note: "Respondeu mas olhou para o chão.", icon: "👋", dateGroup: "Ontem", score: 1 },
+    { id: 99, patientId: 'mock-pedro-123', type: 'task', title: "Classifica o dinheiro", time: "11:00", energy: 20, note: "Confundiu moedas.", icon: "💵", dateGroup: "25/01/2026", score: 1 },
+    { id: 98, patientId: 'mock-pedro-123', type: 'task', title: "Usa os utensílios da forma apropriada", time: "12:30", energy: 45, note: "Dificuldade em segurar o garfo.", icon: "🍴", dateGroup: "25/01/2026", score: 2 },
+    // Data for Alexandre (mock-alexandre-123) - VB-MAPP
+    { id: 210, patientId: 'mock-alexandre-123', type: 'task', title: "Emite 2 mandos sem ajuda", time: "09:00", energy: 90, note: "Pediu água e bola.", icon: "🗣️", dateGroup: "Hoje", score: 1 },
+    { id: 209, patientId: 'mock-alexandre-123', type: 'task', title: "Atende ao chamado do nome", time: "09:15", energy: 85, note: "Atendeu prontamente.", icon: "👂", dateGroup: "Hoje", score: 1 },
+    { id: 208, patientId: 'mock-alexandre-123', type: 'task', title: "Encaixa 2 peças de quebra-cabeça", time: "09:30", energy: 80, note: "Encaixou círculo e quadrado.", icon: "🧩", dateGroup: "Hoje", score: 0.5 },
+    { id: 207, patientId: 'mock-alexandre-123', type: 'task', title: "Imita 2 movimentos motoros grossos", time: "09:45", energy: 75, note: "Imitou bater palmas.", icon: "🙌", dateGroup: "Hoje", score: 1 },
+    { id: 206, patientId: 'mock-alexandre-123', type: 'task', title: "Olha por onde anda", time: "08:30", energy: 95, note: "Super herói atento!", icon: "🚶", dateGroup: "Hoje", score: 1 },
+    { id: 205, patientId: 'mock-alexandre-123', type: 'task', title: "Responde às saudações de forma apropriada", time: "10:00", energy: 80, note: "Cumprimentou todo mundo!", icon: "👋", dateGroup: "Hoje", score: 0.5 },
+    { id: 204, patientId: 'mock-alexandre-123', type: 'task', title: "Olha por onde anda", time: "09:00", energy: 60, note: "Um pouco distraído.", icon: "🚶", dateGroup: "Ontem", score: 0.5 },
+    { id: 203, patientId: 'mock-alexandre-123', type: 'task', title: "Responde às saudações de forma apropriada", time: "11:00", energy: 50, note: "Precisou de ajuda.", icon: "👋", dateGroup: "Ontem", score: 0 },
     // Mock Photos for Mural
-    { id: 301, patientId: 101, type: 'photo', title: "Desenho do Alexandre", time: "10:00", note: "Olha o que eu fiz hoje!", image: "https://picsum.photos/seed/drawing/400/400", dateGroup: "Hoje", date: new Date().toISOString(), icon: "🖼️" },
-    { id: 302, patientId: 101, type: 'photo', title: "Atividade de hoje", time: "11:30", note: "Brincando com blocos", image: "https://picsum.photos/seed/activity/400/400", dateGroup: "Hoje", date: new Date().toISOString(), icon: "📸" }
+    { id: 301, patientId: 'mock-alexandre-123', type: 'photo', title: "Desenho do Alexandre", time: "10:00", note: "Olha o que eu fiz hoje!", image: "https://picsum.photos/seed/drawing/400/400", dateGroup: "Hoje", date: new Date().toISOString(), icon: "🖼️" },
+    { id: 302, patientId: 'mock-alexandre-123', type: 'photo', title: "Atividade de hoje", time: "11:30", note: "Brincando com blocos", image: "https://picsum.photos/seed/activity/400/400", dateGroup: "Hoje", date: new Date().toISOString(), icon: "📸" }
   ];
-  const initialTasks = [ { id: 1, patientId: 102, title: "Tomar Medicação", icon: "💊", color: "bg-blue-100 text-blue-600", completed: false, type: 'task', description: "Lembre-se de tomar com água." } ];
+  const initialTasks = [ { id: 1, patientId: 'mock-pedro-123', title: "Tomar Medicação", icon: "💊", color: "bg-blue-100 text-blue-600", completed: false, type: 'task', description: "Lembre-se de tomar com água." } ];
   const [therapistNotes, setTherapistNotes] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>(initialTasks);
@@ -390,15 +390,16 @@ export default function App() {
     ], ageGroup: 'child', type: 'neurodevelopment', domain: 'Socialização', category: 'intervention' }
   ]);
   const [allPatients, setAllPatients] = useState<any[]>([ 
-    { id: 101, name: 'Alexandre', phone: '11999999999', age: 8, type: 'neurodevelopment', approach: 'ABA' }, 
-    { id: 102, name: 'Júlia S.', phone: '11988888888', age: 24, type: 'conventional', approach: 'TCC' } 
+    { id: 'mock-alexandre-123', name: 'Alexandre', email: 'alexandre@verto.com', phone: '11999999999', age: 8, type: 'neurodevelopment', approach: 'ABA' }, 
+    { id: 'mock-pedro-123', name: 'Pedro H.', email: 'pedro@verto.com', phone: '11988888888', age: 35, type: 'conventional', approach: 'TCC' },
+    { id: 'mock-joao-123', name: 'João', email: 'joao@verto.com', phone: '11977777777', age: 28, type: 'neurodevelopment', approach: 'ABA' }
   ]);
 
   useEffect(() => {
     // Initialize clinical records for mock patients
     setClinicalRecords([
       { 
-        patientId: 101, 
+        patientId: 'mock-alexandre-123', 
         diagnosis: "TEA", 
         anamnesisData: { formType: 'child', motivoConsulta: "Dificuldade na socialização e fala." },
         pei: [
@@ -409,9 +410,17 @@ export default function App() {
         interventionTaskLinks: {}
       },
       { 
-        patientId: 102, 
+        patientId: 'mock-pedro-123', 
         diagnosis: "Ansiedade", 
         anamnesisData: { formType: 'adult', motivoConsulta: "Ansiedade e dificuldade de sono." },
+        pei: [],
+        evaluationLinks: {},
+        interventionTaskLinks: {}
+      },
+      { 
+        patientId: 'mock-joao-123', 
+        diagnosis: "TEA", 
+        anamnesisData: { formType: 'adult', motivoConsulta: "Dificuldade na interação social." },
         pei: [],
         evaluationLinks: {},
         interventionTaskLinks: {}

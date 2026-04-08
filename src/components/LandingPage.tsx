@@ -79,6 +79,29 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     setLoading(true);
     
     try {
+      // Mock Login Bypass for testing
+      const mockEmails = ['alexandre@verto.com', 'joao@verto.com', 'pedro@verto.com', 'coordenador@verto.com'];
+      if (mockEmails.includes(email.toLowerCase()) && password === '123456') {
+        const response = await fetch('/api/auth/mock-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ email, password })
+        });
+        const data = await response.json();
+        if (data.success) {
+          setShowLogin(false);
+          setUser(data.user);
+          // Force a small delay to ensure state is updated before any other logic
+          setTimeout(() => {
+            window.location.reload();
+          }, 500);
+          return;
+        } else {
+          throw new Error(data.error || 'Erro no login de teste');
+        }
+      }
+
       const supabase = await getSupabase();
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
@@ -344,6 +367,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       const checkoutRes = await fetch('/api/stripe/create-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ planName })
       });
       const checkoutData = await checkoutRes.json();

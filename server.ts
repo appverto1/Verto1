@@ -203,20 +203,22 @@ async function startServer() {
     name: 'verto-session',
     proxy: true,
     cookie: { 
-      secure: process.env.NODE_ENV === 'production', 
+      secure: true, 
       httpOnly: true,
-      maxAge: 24 * 60 * 60 * 1000, 
-      sameSite: 'lax'
+      maxAge: 30 * 24 * 60 * 60 * 1000, 
+      sameSite: 'none'
     }
   }));
 
   // Auth Middleware
   const checkAuth = async (req: any, res: any, next: any) => {
     // 1. Check Session (Cookie-based)
-    if (req.session.user) {
-      console.log(`[Auth] Session found for ${req.session.user.email}`);
+    if (req.session && req.session.user) {
+      console.log(`[Auth] Session found for ${req.session.user.email} (Path: ${req.path})`);
       return next();
     }
+
+    console.log(`[Auth] No session found for ${req.path}. Cookies:`, req.cookies ? Object.keys(req.cookies) : 'none');
 
     // 2. Fallback: Check Authorization Header (Token-based)
     const authHeader = req.headers.authorization;
@@ -542,6 +544,77 @@ async function startServer() {
     }
   });
 
+  // --- AUTH ROUTES ---
+  app.post('/api/auth/mock-login', async (req: any, res: any) => {
+    const { email, password } = req.body;
+    
+    // Mock passwords are all 123456 for these test accounts
+    if (password !== '123456') {
+      return res.status(401).json({ error: "Senha incorreta para conta de teste." });
+    }
+
+    let mockUser: any = null;
+
+    if (email === 'alexandre@verto.com') {
+      mockUser = {
+        id: 'mock-alexandre-123',
+        email: 'alexandre@verto.com',
+        name: 'Alexandre (Infantil)',
+        role: 'patient',
+        age: 8,
+        subscriptionStatus: 'active',
+        planName: 'Paciente',
+        firstLoginCompleted: true
+      };
+    } else if (email === 'joao@verto.com') {
+      mockUser = {
+        id: 'mock-joao-123',
+        email: 'joao@verto.com',
+        name: 'João (Adulto TEA)',
+        role: 'patient',
+        age: 28,
+        subscriptionStatus: 'active',
+        planName: 'Paciente',
+        firstLoginCompleted: true
+      };
+    } else if (email === 'pedro@verto.com') {
+      mockUser = {
+        id: 'mock-pedro-123',
+        email: 'pedro@verto.com',
+        name: 'Pedro (Adulto Convencional)',
+        role: 'patient',
+        age: 35,
+        subscriptionStatus: 'active',
+        planName: 'Paciente',
+        firstLoginCompleted: true
+      };
+    } else if (email === 'coordenador@verto.com') {
+      mockUser = {
+        id: 'mock-coordenador-123',
+        email: 'coordenador@verto.com',
+        name: 'Coordenador Verto',
+        role: 'coordinator',
+        clinicId: 'mock-coordenador-123',
+        subscriptionStatus: 'active',
+        planName: 'Premium',
+        firstLoginCompleted: true
+      };
+    }
+
+    if (mockUser) {
+      req.session.user = mockUser;
+      req.session.save((err) => {
+        if (err) {
+          console.error("Session save error in mock-login:", err);
+          return res.status(500).json({ error: "Erro ao salvar sessão de teste" });
+        }
+        res.json({ success: true, user: mockUser });
+      });
+    } else {
+      res.status(404).json({ error: "Conta de teste não encontrada." });
+    }
+  });
+
   // Login (receives Supabase access token from client, verifies it, and sets session)
   app.post('/api/auth/login', async (req, res) => {
     const { accessToken, intendedRole } = req.body;
@@ -550,7 +623,11 @@ async function startServer() {
 
     try {
       // Verify token with Supabase
-      // Use service role to verify the user's token
+      if (!supabaseServiceKey) {
+        console.error('[Auth] SUPABASE_SERVICE_ROLE_KEY is missing. Cannot verify token.');
+        return res.status(500).json({ error: "Erro de configuração no servidor (Supabase Key)" });
+      }
+
       const { data: { user }, error } = await supabase.auth.getUser(accessToken);
       
       if (error || !user) {
@@ -569,7 +646,7 @@ async function startServer() {
 
       if (profileError && profileError.code !== 'PGRST116') {
         console.error('Profile fetch error:', profileError);
-        throw profileError;
+        return res.status(500).json({ error: "Erro ao buscar perfil do usuário", details: profileError.message });
       }
 
       // Check for 2FA
