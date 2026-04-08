@@ -139,11 +139,13 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         } else if (loginRes?.success) {
           setShowLogin(false);
           // App.tsx handles setUser
+        } else if (loginRes?.error) {
+          throw new Error(loginRes.error);
         }
       }
     } catch (err: any) {
       console.error('Login error:', err);
-      setLoginError('Credenciais inválidas ou erro de conexão. Verifique seus dados.');
+      setLoginError(`Erro no login: ${err.message || 'Credenciais inválidas ou erro de conexão'}`);
     } finally {
       setLoading(false);
     }

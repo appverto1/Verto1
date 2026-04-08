@@ -84,6 +84,9 @@ async function startServer() {
 
   // Trust proxy is required for rate limiting and secure cookies behind Railway's load balancer
   app.set('trust proxy', 1);
+  
+  console.log('[Config] SESSION_SECRET defined:', !!process.env.SESSION_SECRET);
+  console.log('[Config] SUPABASE_SERVICE_ROLE_KEY defined:', !!process.env.SUPABASE_SERVICE_ROLE_KEY);
 
   // Security Headers (Helmet)
   app.use(helmet({
@@ -547,6 +550,7 @@ async function startServer() {
   // --- AUTH ROUTES ---
   app.post('/api/auth/mock-login', async (req: any, res: any) => {
     const { email, password } = req.body;
+    console.log(`[Auth] Mock login attempt for ${email}`);
     
     // Mock passwords are all 123456 for these test accounts
     if (password !== '123456') {
@@ -729,6 +733,7 @@ async function startServer() {
       };
 
       req.session.user = userData;
+      console.log(`[Auth] Saving session for ${user.email}. Session ID: ${req.sessionID}`);
       req.session.save((err) => {
         if (err) {
           console.error("Session save error in login:", err);

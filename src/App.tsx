@@ -168,20 +168,23 @@ export default function App() {
       const data = await response.json();
       if (data.success) {
         if (data.twoFactorRequired) {
-          return { twoFactorRequired: true, email: data.email };
+          return { success: true, twoFactorRequired: true, email: data.email };
         }
         setUser(data.user);
         if (data.isFirstLogin && (data.user.role === 'coordinator' || data.user.role === 'admin')) {
           setShowInvitationModal(true);
         }
+        return { success: true, user: data.user };
       } else {
+        console.error('Login failed on server:', data.error);
         // If server-side login fails, sign out of Supabase to clear local state
         const supabase = await getSupabase();
         await supabase.auth.signOut();
+        return { success: false, error: data.error || 'Erro ao sincronizar sessão com o servidor' };
       }
-      return data;
-    } catch (error) {
+    } catch (error: any) {
       console.error('Login error:', error);
+      return { success: false, error: error.message || 'Erro de conexão' };
     }
   };
 
