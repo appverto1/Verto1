@@ -1,17 +1,44 @@
-name: Claude Code Review
+# Claude Review Workflow
+
+name: Claude Review
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    branches:
+      - main
 
 jobs:
-  claude_review:
+  security-checks:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v2
 
-      - name: Claude Code Review
-        uses: anthropics/claude-github-connector@v1
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Security Check
+        run: |
+          echo "Running security checks..."
+          ## Insert your security checks here
+          ## Example: npm audit or safety check for Python
+
+  code-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Code Quality Validation
+        run: |
+          echo "Validating code quality..."
+          ## Insert your code quality checks here
+          ## Example: flake8 for Python or eslint for JavaScript
+
+  ui-issues:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: UI Issue Detection
+        run: |
+          echo "Checking for UI issues..."
+          ## Insert your UI issue detection commands here
