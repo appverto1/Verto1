@@ -113,6 +113,9 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           setTwoFactorEmail(loginRes.email);
           setLoginStep('password');
           setShowLogin(true); // Ensure login modal is still open
+        } else if (loginRes?.success) {
+          setShowLogin(false);
+          // App.tsx handles setUser
         }
       }
     } catch (err: any) {
@@ -293,6 +296,8 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         }
         setShowRegister(false);
         setUser(data.user); // Log in directly
+        // Ensure we refresh the page or state to show the dashboard
+        window.location.reload();
       } else if (registerType === 'professional' && !selectedPlan) {
         setRegisterStep(3);
       } else {

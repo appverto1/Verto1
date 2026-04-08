@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { HelpCircle, ShoppingBag, UserPlus, LogOut, Search, Menu, X, Calendar, CalendarRange, CalendarDays, Plus, CalendarPlus, MessageCircle, ChevronRight, Settings, Users, Rocket, ShieldCheck, Lightbulb, ClipboardList, Clock, Filter as FilterIcon, Camera, Share2, AlertCircle, CheckCircle2, LayoutDashboard, DoorOpen, CreditCard } from 'lucide-react';
 import { LogoVerto } from './Common';
-import { googleCalendarService } from '../services/googleCalendarService';
 import { TutorialOverlay } from './Tutorial';
 import { AnamnesisModal } from './Anamnesis';
 import { DayDetailsModal, CalendarWidget } from './Calendar';
@@ -135,23 +134,6 @@ const ProfileView = ({ user, onUpdateProfile, specialtySettings, setSpecialtySet
             </div>
           </div>
 
-          <div className="mt-10 pt-10 border-t border-slate-50">
-            <h3 className="text-sm font-bold text-slate-900 mb-6">Tempo de Sessão por Especialidade (minutos)</h3>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              {Object.entries(specialtySettings).map(([spec, time]: any) => (
-                <div key={spec} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">{spec}</label>
-                  <input 
-                    type="number" 
-                    value={time} 
-                    onChange={(e) => setSpecialtySettings({...specialtySettings, [spec]: parseInt(e.target.value)})}
-                    className="w-full bg-transparent border-none p-0 text-sm font-bold text-slate-900 focus:ring-0" 
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-          
           <div className="mt-10 flex justify-end">
             <button 
               onClick={handleSaveProfile}
@@ -173,7 +155,7 @@ export const TherapistDashboard = ({
   onUpdatePatient, onRecordTrial, onDeleteHistoryItem, activityLogs, 
   onAddActivityLog, onViewTeam, onUpdateAgendaStatus, onUpdateAppointment,
   rooms, setRooms, roomReservations, setRoomReservations,
-  specialtySettings, setSpecialtySettings, onUpdateProfile
+  specialtySettings, setSpecialtySettings, onUpdateProfile, onOpenOnboarding
 }: any) => { 
   const [view, setView] = useState('home'); 
 
@@ -212,7 +194,6 @@ export const TherapistDashboard = ({
   const [selectedPaymentPatient, setSelectedPaymentPatient] = useState<any>(null);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('pix');
-  const [isActivityLogOpen, setIsActivityLogOpen] = useState(false);
   const [sessionPatientName, setSessionPatientName] = useState("");
   const [filteredPatients, setFilteredPatients] = useState<any[]>([]);
   const [sessionTime, setSessionTime] = useState("");
@@ -245,8 +226,7 @@ export const TherapistDashboard = ({
     { targetId: 'summary-stats', title: 'Resumo de Atendimentos', content: 'Acompanhe o status das suas sessões: confirmadas, pendentes ou ausentes.', placement: 'top' },
     { targetId: 'patient-card-0', title: 'Acessar Prontuário', content: 'Clique no paciente para ver detalhes, enviar tarefas e avaliar progresso.', placement: 'bottom' },
     { targetId: 'protocols-btn', title: 'Gestão de Protocolos', content: 'Crie e edite as estruturas de avaliação (VB-MAPP, AFLS, etc) que você utiliza.', placement: 'top' },
-    { targetId: 'patients-btn', title: 'Meus Pacientes', content: 'Acesse a lista completa de todos os seus pacientes cadastrados e seus prontuários.', placement: 'top' },
-    { targetId: 'clinic-btn', title: 'Gestão da Clínica', content: 'Acompanhe o financeiro, DRE e metas de faturamento da sua clínica ou consultório.', placement: 'top' }
+    { targetId: 'patients-btn', title: 'Meus Pacientes', content: 'Acesse a lista completa de todos os seus pacientes cadastrados e seus prontuários.', placement: 'top' }
   ]; 
   
   const handleSaveProtocol = (updatedProtocol: any) => { const exists = protocols.find((p: any) => p.id === updatedProtocol.id); if (exists) { setProtocols((prev: any) => prev.map((p: any) => p.id === updatedProtocol.id ? updatedProtocol : p)); } else { setProtocols((prev: any) => [...prev, updatedProtocol]); } }; 
@@ -316,20 +296,6 @@ export const TherapistDashboard = ({
       return alert(result.errors.join('\n'));
     }
     
-    // Sync to Google Calendar if connected
-    const isConnected = await googleCalendarService.isConnected();
-    if (isConnected) {
-      const startTime = `${sessionDate}T${sessionTime}:00`;
-      const endDateTime = new Date(new Date(startTime).getTime() + 60 * 60 * 1000).toISOString(); // Default 1h
-      await googleCalendarService.syncEvent({
-        title: `Verto: ${sessionPatientName} - ${sessionApproach || 'Consulta'}`,
-        description: `Sessão agendada via Verto Health. Sala: ${sessionRoom || 'Sala 01'}`,
-        startTime,
-        endTime: endDateTime,
-        location: sessionRoom || 'Clínica Verto'
-      });
-    }
-
     setIsAddSessionModalOpen(false); 
     resetSessionForm();
   }; 
@@ -484,7 +450,6 @@ export const TherapistDashboard = ({
     <RoomReservation 
       user={user} 
       rooms={rooms} 
-      setRooms={setRooms} 
       reservations={roomReservations} 
       onDeleteReservation={(id) => {
         const appointmentId = id.replace('res-', '');
@@ -555,7 +520,6 @@ export const TherapistDashboard = ({
     );
   }
 
-  if (view === 'clinic') return <div className="p-8 text-center bg-white min-h-screen flex flex-col items-center justify-center"><Rocket size={64} className="text-emerald-500 mb-4 animate-bounce" /><h2 className="text-2xl font-bold text-gray-800">Gestão da Clínica</h2><p className="text-gray-500 max-w-md mx-auto mt-2">Esta funcionalidade está sendo atualizada para incluir novos relatórios financeiros e DRE automático.</p><button onClick={() => setView('home')} className="mt-8 px-8 py-3 bg-emerald-500 text-white rounded-2xl font-bold shadow-lg shadow-emerald-500/20 hover:opacity-90 transition-all">Voltar ao Início</button></div>;
   
   if (view === 'financial') {
     return (
@@ -707,30 +671,9 @@ export const TherapistDashboard = ({
             </button>
           )}
           
-          {(user?.role === 'coordinator' || user?.role === 'therapist') && (
-            <button 
-              onClick={() => user?.role === 'coordinator' ? onViewTeam() : handleSetView('clinic')}
-              className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'clinic' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
-            >
-              <Rocket size={20} /> Gestão da Clínica
-            </button>
-          )}
-          
           <div className="pt-6 mt-6 border-t border-slate-50 space-y-2">
             <button onClick={() => setIsMarketplaceOpen(true)} className="w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm text-slate-400 hover:bg-slate-50 hover:text-slate-600">
-              <ShoppingBag size={20} /> Marketplace
-            </button>
-            <button onClick={() => setIsActivityLogOpen(true)} className="w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm text-slate-400 hover:bg-slate-50 hover:text-slate-600">
-              <ClipboardList size={20} /> Log de Atividades
-            </button>
-            <button 
-              onClick={async () => {
-                const result = await googleCalendarService.connect();
-                if (result.success) alert('Google Agenda conectado com sucesso!');
-              }} 
-              className="w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm text-slate-400 hover:bg-slate-50 hover:text-slate-600"
-            >
-              <Share2 size={20} /> Google Agenda
+              <ShoppingBag size={20} /> Marketplace <span className="ml-auto text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">EM BREVE</span>
             </button>
           </div>
         </nav>
@@ -802,91 +745,6 @@ export const TherapistDashboard = ({
           </div>
         </div>
       )}
-      
-      {isActivityLogOpen && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in" onClick={() => setIsActivityLogOpen(false)}>
-          <div className="bg-white w-full max-w-4xl rounded-[40px] shadow-2xl animate-pop relative overflow-hidden flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
-            <div className="absolute top-0 left-0 right-0 h-2 bg-blue-600"></div>
-            <div className="p-8 pb-4">
-              <div className="flex justify-between items-start mb-2">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-blue-50 rounded-2xl text-blue-600">
-                    <ClipboardList size={28}/>
-                  </div>
-                  <div>
-                    <h2 className="text-3xl font-semibold text-gray-800 tracking-tight">Log de <span className="text-blue-600">Atividades</span></h2>
-                    <div className="flex items-center gap-2 mt-1">
-                      <ShieldCheck size={14} className="text-blue-500" />
-                      <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Auditoria e Rastreabilidade Completa</span>
-                    </div>
-                  </div>
-                </div>
-                <button onClick={() => setIsActivityLogOpen(false)} className="p-2 bg-gray-100 rounded-full text-gray-400 hover:bg-red-50 hover:text-red-500 transition-all"><X size={20}/></button>
-              </div>
-            </div>
-
-            <div className="p-8 pt-0 overflow-y-auto custom-scrollbar flex-1">
-              <div className="bg-gray-50 rounded-3xl p-6 mb-6">
-                <div className="flex flex-wrap gap-4 items-center justify-between">
-                  <div className="flex gap-2">
-                    <span className="px-3 py-1 bg-white border border-gray-200 rounded-full text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Total: {activityLogs.length} registros</span>
-                  </div>
-                  <div className="flex gap-2">
-                    <button className="p-2 bg-white border border-gray-200 rounded-xl text-gray-400 hover:text-blue-600 transition-all"><FilterIcon size={16}/></button>
-                    <button className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-600 hover:bg-gray-50 transition-all">Exportar PDF</button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {activityLogs.length > 0 ? (
-                  activityLogs.map((log: any) => (
-                    <div key={log.id} className="bg-white border border-gray-100 p-4 rounded-2xl hover:shadow-md transition-all flex items-start gap-4 group">
-                      <div className={`p-2.5 rounded-xl shrink-0 ${
-                        log.category === 'clinical' ? 'bg-blue-50 text-blue-600' : 
-                        log.category === 'management' ? 'bg-emerald-50 text-emerald-600' : 
-                        'bg-amber-50 text-amber-600'
-                      }`}>
-                        {log.category === 'clinical' ? <Users size={18}/> : 
-                         log.category === 'management' ? <Calendar size={18}/> : 
-                         <Settings size={18}/>}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between mb-1">
-                          <h4 className="font-semibold text-gray-800 text-sm truncate">{log.action}</h4>
-                          <span className="text-[10px] font-semibold text-gray-400 flex items-center gap-1">
-                            <Clock size={10}/> {new Date(log.timestamp).toLocaleString('pt-BR')}
-                          </span>
-                        </div>
-                        <p className="text-xs text-gray-500 leading-relaxed">{log.details}</p>
-                        <div className="mt-2 flex items-center gap-3">
-                          <span className="text-[9px] font-semibold text-gray-300 uppercase tracking-widest">Profissional: {log.professional}</span>
-                          <span className={`text-[9px] font-semibold uppercase tracking-widest px-2 py-0.5 rounded-full ${
-                            log.category === 'clinical' ? 'bg-blue-50 text-blue-500' : 
-                            log.category === 'management' ? 'bg-emerald-50 text-emerald-500' : 
-                            'bg-amber-50 text-amber-500'
-                          }`}>
-                            {log.category}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-center py-20 opacity-50">
-                    <ClipboardList size={48} className="mx-auto mb-4 text-gray-300"/>
-                    <p className="text-sm font-semibold text-gray-400 uppercase tracking-widest">Nenhuma atividade registrada ainda.</p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="p-6 bg-gray-50 text-center border-t border-gray-100">
-              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Este log é imutável e segue os padrões de segurança LGPD e HIPAA para auditoria clínica.</p>
-            </div>
-          </div>
-        </div>
-      )}
 
       <DayDetailsModal 
         isOpen={isDayDetailsModalOpen}
@@ -898,75 +756,25 @@ export const TherapistDashboard = ({
       />
       {isMarketplaceOpen && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in" onClick={() => setIsMarketplaceOpen(false)}>
-          <div className="bg-white w-full max-w-2xl rounded-[40px] shadow-2xl animate-pop relative overflow-hidden flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+          <div className="bg-white w-full max-w-md rounded-[40px] shadow-2xl animate-pop relative overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-purple-500 via-blue-500 to-green-500"></div>
-            <div className="p-8 pb-4">
-              <div className="flex justify-between items-start mb-2">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-[#05CD99]/10 rounded-2xl text-[#05CD99]">
-                    <ShoppingBag size={28}/>
-                  </div>
-                  <div>
-                    <h2 className="text-3xl font-semibold text-gray-800 tracking-tight">Marketplace <span className="text-[#05CD99] font-logo font-bold lowercase">verto</span></h2>
-                    <div className="flex items-center gap-2 mt-1">
-                      <ShieldCheck size={14} className="text-blue-500" />
-                      <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Protocolos Validados e Editáveis</span>
-                    </div>
-                  </div>
-                </div>
-                <button onClick={() => setIsMarketplaceOpen(false)} className="p-2 bg-gray-100 rounded-full text-gray-400 hover:bg-red-50 hover:text-red-500 transition-all"><X size={20}/></button>
+            <div className="p-12 text-center">
+              <div className="w-20 h-20 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center mx-auto mb-6">
+                <ShoppingBag size={40} />
               </div>
-            </div>
-            <div className="p-8 pt-0 overflow-y-auto custom-scrollbar flex-1">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {marketProtocols.map(proto => (
-                  <div key={proto.id} className="bg-white p-5 rounded-[32px] border border-gray-100 shadow-sm flex flex-col gap-4 group hover:shadow-xl hover:border-[#05CD99]/20 transition-all duration-300 relative overflow-hidden">
-                    <div className="flex justify-between items-start relative z-10">
-                      <div className={`p-3 rounded-2xl ${proto.color} shadow-sm group-hover:scale-110 transition-transform`}>
-                        <Rocket size={20} />
-                      </div>
-                      <div className="flex flex-col items-end">
-                        <span className={`${proto.badgeColor} text-white text-[9px] font-semibold px-2.5 py-1 rounded-full uppercase mb-2 shadow-sm`}>{proto.badge}</span>
-                        <div className="flex flex-col items-end">
-                          <span className="text-lg font-semibold text-[#05CD99] leading-none">{proto.price}</span>
-                          <span className="text-[9px] font-semibold text-gray-300 uppercase">por mês</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="relative z-10">
-                      <h3 className="font-semibold text-gray-800 text-base tracking-tight">{proto.title}</h3>
-                      <p className="text-[11px] text-gray-500 mt-1.5 leading-relaxed h-12 overflow-hidden">{proto.description}</p>
-                    </div>
-                    <div className="bg-gray-50/80 rounded-2xl p-3 relative z-10">
-                      <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-widest mb-2 ml-1">O que inclui:</p>
-                      <ul className="space-y-1.5">
-                        {proto.includes.map((inc, i) => (
-                          <li key={i} className="flex items-center gap-2 text-[10px] font-semibold text-gray-600">
-                            <div className="w-1 h-1 rounded-full bg-[#05CD99]"></div>
-                            {inc}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                    <button onClick={() => alert('Assinatura iniciada! O protocolo já está na sua biblioteca.')} className="w-full bg-[#05CD99] text-white font-semibold py-3 rounded-2xl text-xs shadow-lg shadow-[#05CD99]/20 hover:opacity-90 active:scale-95 transition-all flex items-center justify-center gap-2 relative z-10 uppercase tracking-widest">
-                      Assinar Protocolo
-                    </button>
-                    <div className="absolute -bottom-4 -right-4 w-24 h-24 bg-gray-50 rounded-full opacity-50 -z-0 group-hover:scale-150 transition-transform"></div>
-                  </div>
-                ))}
+              <h2 className="text-3xl font-bold text-slate-900 mb-4 tracking-tight">Marketplace</h2>
+              <div className="inline-block px-4 py-1.5 bg-blue-100 text-blue-600 rounded-full text-xs font-bold uppercase tracking-widest mb-6">
+                Em Breve
               </div>
-              <div className="mt-8 p-6 bg-blue-50 rounded-[32px] border border-blue-100 flex items-center gap-4 animate-pulse">
-                <div className="p-3 bg-white rounded-full text-blue-500 shadow-sm">
-                  <Lightbulb size={24} />
-                </div>
-                <div>
-                  <h4 className="text-sm font-semibold text-blue-700 tracking-tight">Dica Verto</h4>
-                  <p className="text-[11px] font-semibold text-blue-600/70">Assine protocolos para automatizar o envio de tarefas e os gráficos de evolução!</p>
-                </div>
-              </div>
-            </div>
-            <div className="p-6 bg-gray-50 text-center border-t border-gray-100">
-              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Pagamento mensal via cartão ou PIX • Cancele quando quiser</p>
+              <p className="text-slate-500 font-medium leading-relaxed">
+                Estamos preparando uma curadoria exclusiva de protocolos validados, materiais de apoio e ferramentas para potencializar seus atendimentos.
+              </p>
+              <button 
+                onClick={() => setIsMarketplaceOpen(false)}
+                className="mt-10 w-full py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-all"
+              >
+                Entendi
+              </button>
             </div>
           </div>
         </div>
@@ -1023,6 +831,7 @@ export const TherapistDashboard = ({
               onOpenInvitations={() => setShowInvitationModal(true)} 
               onViewProfile={() => handleSetView('profile')}
               onViewBilling={() => handleSetView('billing')}
+              onOpenOnboarding={onOpenOnboarding}
             />
             <button 
               id="menu-btn"
@@ -1067,7 +876,7 @@ export const TherapistDashboard = ({
                 </button>
                 
                 <button id="menu-marketplace" onClick={() => {setIsMarketplaceOpen(true); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#05CD99] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
-                  <ShoppingBag size={18}/> Marketplace
+                  <ShoppingBag size={18}/> Marketplace <span className="ml-auto text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">EM BREVE</span>
                 </button>
 
                 {(user?.role === 'coordinator' || user?.role === 'receptionist') && (
@@ -1085,29 +894,6 @@ export const TherapistDashboard = ({
                     <Users size={18}/> Gestão da Equipe
                   </button>
                 )}
-
-                {(user?.role === 'coordinator' || user?.role === 'therapist') && (
-                  <button id="menu-clinic" onClick={() => {handleSetView('clinic'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-emerald-500 transition-colors text-xs font-semibold uppercase tracking-wider text-left">
-                    <Rocket size={18}/> Gestão da Clínica
-                  </button>
-                )}
-
-                <button id="menu-activity-log" onClick={() => {setIsActivityLogOpen(true); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-blue-500 transition-colors text-xs font-semibold uppercase tracking-wider text-left">
-                  <ClipboardList size={18}/> Log de Atividades
-                </button>
-
-                <button 
-                  onClick={async () => {
-                    const result = await googleCalendarService.connect();
-                    if (result.success) {
-                      alert('Google Agenda conectado com sucesso!');
-                    }
-                    setIsMenuOpen(false);
-                  }} 
-                  className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-blue-600 transition-colors text-xs font-semibold uppercase tracking-wider text-left"
-                >
-                  <Share2 size={18}/> Integrar Google Agenda
-                </button>
 
                 <div className="h-px bg-gray-100 my-1"></div>
 
@@ -1141,6 +927,7 @@ export const TherapistDashboard = ({
               onOpenInvitations={() => setShowInvitationModal(true)} 
               onViewProfile={() => handleSetView('profile')}
               onViewBilling={() => handleSetView('billing')}
+              onOpenOnboarding={onOpenOnboarding}
             />
           </div>
         </div>

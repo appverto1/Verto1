@@ -17,9 +17,18 @@ interface SettingsMenuProps {
   onOpenInvitations?: () => void;
   onViewProfile?: () => void;
   onViewBilling?: () => void;
+  onOpenOnboarding?: () => void;
 }
 
-export function SettingsMenu({ user, onLogout, onViewTeam, onOpenInvitations, onViewProfile, onViewBilling }: SettingsMenuProps) {
+export function SettingsMenu({ 
+  user, 
+  onLogout, 
+  onViewTeam, 
+  onOpenInvitations, 
+  onViewProfile, 
+  onViewBilling,
+  onOpenOnboarding
+}: SettingsMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -87,6 +96,20 @@ export function SettingsMenu({ user, onLogout, onViewTeam, onOpenInvitations, on
 
               {canManageTeam && (
                 <>
+                  <button
+                    onClick={() => {
+                      setIsOpen(false);
+                      onOpenOnboarding?.();
+                    }}
+                    className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Settings size={18} className="text-slate-400 group-hover:text-blue-500" />
+                      <span className="text-sm font-medium">Configurações Iniciais</span>
+                    </div>
+                    <ChevronRight size={14} className="text-slate-300" />
+                  </button>
+
                   <button
                     onClick={() => {
                       setIsOpen(false);

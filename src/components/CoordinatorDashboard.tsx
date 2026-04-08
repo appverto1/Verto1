@@ -19,11 +19,16 @@ import {
   Mail,
   Filter,
   Download,
-  FileText
+  FileText,
+  DoorOpen,
+  Edit2,
+  Trash2
 } from 'lucide-react';
 import { TeamManagement } from './TeamManagement';
 import { InvitationModal } from './InvitationModal';
+import { SettingsMenu } from './SettingsMenu';
 import { LogoVerto } from './Common';
+import { RoomReservation } from './RoomReservation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   BarChart, 
@@ -45,12 +50,60 @@ interface CoordinatorDashboardProps {
   onLogout: () => void;
   allPatients: any[];
   therapistAgenda: any[];
+  onOpenOnboarding?: () => void;
+  rooms: any[];
+  setRooms: React.Dispatch<React.SetStateAction<any[]>>;
+  roomReservations: any[];
+  onDeleteRoomReservation: (id: string) => void;
 }
 
-export function CoordinatorDashboard({ user, onLogout, allPatients, therapistAgenda }: CoordinatorDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'team' | 'financial' | 'patients' | 'agenda' | 'protocols' | 'settings'>('dashboard');
+export function CoordinatorDashboard({ 
+  user, 
+  onLogout, 
+  allPatients, 
+  therapistAgenda, 
+  onOpenOnboarding,
+  rooms,
+  setRooms,
+  roomReservations,
+  onDeleteRoomReservation
+}: CoordinatorDashboardProps) {
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'team' | 'financial' | 'patients' | 'agenda' | 'rooms' | 'protocols' | 'settings'>('dashboard');
   const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [isEditingRooms, setIsEditingRooms] = useState(false);
+  const [newRoom, setNewRoom] = useState({ name: '', specialties: '' });
+  const [editingRoom, setEditingRoom] = useState<any>(null);
+
+  const handleAddRoom = (e: React.FormEvent) => {
+    e.preventDefault();
+    const specialtiesArray = newRoom.specialties.split(',').map(s => s.trim()).filter(s => s !== '');
+    const room = {
+      id: Date.now().toString(),
+      name: newRoom.name,
+      specialties: specialtiesArray
+    };
+    setRooms(prev => [...prev, room]);
+    setNewRoom({ name: '', specialties: '' });
+  };
+
+  const handleEditRoom = (room: any) => {
+    setEditingRoom(room);
+    setNewRoom({ name: room.name, specialties: room.specialties.join(', ') });
+  };
+
+  const handleUpdateRoom = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingRoom) return;
+    const specialtiesArray = newRoom.specialties.split(',').map(s => s.trim()).filter(s => s !== '');
+    setRooms(prev => prev.map(r => r.id === editingRoom.id ? { ...r, name: newRoom.name, specialties: specialtiesArray } : r));
+    setEditingRoom(null);
+    setNewRoom({ name: '', specialties: '' });
+  };
+
+  const handleDeleteRoom = (id: string) => {
+    setRooms(prev => prev.filter(r => r.id !== id));
+  };
 
   // Mock data for DRE
   const dreData = [
@@ -331,6 +384,7 @@ export function CoordinatorDashboard({ user, onLogout, allPatients, therapistAge
             { id: 'financial', label: 'Financeiro (DRE)', icon: DollarSign },
             { id: 'patients', label: 'Pacientes', icon: ClipboardList },
             { id: 'agenda', label: 'Agenda Global', icon: Calendar },
+            { id: 'rooms', label: 'Gestão de Salas', icon: DoorOpen },
             { id: 'settings', label: 'Configurações', icon: Settings },
           ].map((item) => (
             <button 
@@ -398,6 +452,15 @@ export function CoordinatorDashboard({ user, onLogout, allPatients, therapistAge
             >
               <UserPlus size={20} />
             </button>
+            <SettingsMenu 
+              user={user} 
+              onLogout={onLogout} 
+              onViewTeam={() => setActiveTab('team')}
+              onOpenInvitations={() => setShowInvitationModal(true)}
+              onViewProfile={() => setActiveTab('settings')}
+              onViewBilling={() => setActiveTab('settings')}
+              onOpenOnboarding={onOpenOnboarding}
+            />
           </div>
         </header>
 
@@ -468,6 +531,121 @@ export function CoordinatorDashboard({ user, onLogout, allPatients, therapistAge
                     </div>
                   ))}
                 </div>
+              </motion.div>
+            )}
+            {activeTab === 'rooms' && (
+              <motion.div key="rooms" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="space-y-6">
+                <div className="flex items-center justify-between bg-white p-6 rounded-[32px] shadow-sm border border-slate-100">
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-900">Gestão de Salas</h3>
+                    <p className="text-slate-500 text-sm">Configure as salas disponíveis para reserva.</p>
+                  </div>
+                  <button 
+                    onClick={() => setIsEditingRooms(!isEditingRooms)}
+                    className={`px-6 py-3 rounded-2xl font-bold text-sm transition-all flex items-center gap-2 ${isEditingRooms ? 'bg-slate-100 text-slate-600' : 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20'}`}
+                  >
+                    {isEditingRooms ? 'Ver Reservas' : 'Editar Salas'}
+                  </button>
+                </div>
+
+                {isEditingRooms ? (
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="lg:col-span-1">
+                      <div className="bg-white p-6 rounded-[32px] shadow-sm border border-slate-100 sticky top-6">
+                        <h4 className="text-sm font-bold text-slate-900 mb-6 flex items-center gap-2">
+                          <Plus size={18} className="text-[#4318FF]" />
+                          {editingRoom ? 'Editar Sala' : 'Nova Sala'}
+                        </h4>
+                        <form onSubmit={editingRoom ? handleUpdateRoom : handleAddRoom} className="space-y-4">
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Nome da Sala</label>
+                            <input 
+                              type="text" 
+                              value={newRoom.name}
+                              onChange={(e) => setNewRoom({...newRoom, name: e.target.value})}
+                              className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl text-sm font-semibold focus:ring-2 focus:ring-blue-500/20 transition-all"
+                              placeholder="Ex: Sala 01"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Especialidades</label>
+                            <input 
+                              type="text" 
+                              value={newRoom.specialties}
+                              onChange={(e) => setNewRoom({...newRoom, specialties: e.target.value})}
+                              className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl text-sm font-semibold focus:ring-2 focus:ring-blue-500/20 transition-all"
+                              placeholder="Ex: ABA, TCC, Fono"
+                            />
+                            <p className="text-[9px] text-slate-400 mt-1 ml-1">Separe por vírgula</p>
+                          </div>
+                          <button 
+                            type="submit"
+                            className="w-full py-4 bg-[#4318FF] text-white rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
+                          >
+                            {editingRoom ? 'Atualizar Sala' : 'Adicionar Sala'}
+                          </button>
+                          {editingRoom && (
+                            <button 
+                              type="button"
+                              onClick={() => { setEditingRoom(null); setNewRoom({ name: '', specialties: '' }); }}
+                              className="w-full py-2 text-slate-400 text-[10px] font-bold uppercase tracking-widest"
+                            >
+                              Cancelar Edição
+                            </button>
+                          )}
+                        </form>
+                      </div>
+                    </div>
+
+                    <div className="lg:col-span-2">
+                      <div className="bg-white p-6 rounded-[32px] shadow-sm border border-slate-100">
+                        <h4 className="text-sm font-bold text-slate-900 mb-6">Salas Cadastradas</h4>
+                        <div className="grid gap-4">
+                          {rooms.map(room => (
+                            <div key={room.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100 group hover:bg-white hover:shadow-md transition-all">
+                              <div className="flex items-center gap-4">
+                                <div className="w-12 h-12 bg-white text-slate-400 rounded-xl flex items-center justify-center group-hover:text-[#4318FF] transition-all">
+                                  <DoorOpen size={24} />
+                                </div>
+                                <div>
+                                  <h5 className="font-bold text-slate-900">{room.name}</h5>
+                                  <div className="flex flex-wrap gap-1 mt-1">
+                                    {room.specialties.map((s: string) => (
+                                      <span key={s} className="px-2 py-0.5 bg-white text-slate-500 rounded-full text-[9px] font-bold uppercase tracking-wider border border-slate-100">{s}</span>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button 
+                                  onClick={() => handleEditRoom(room)}
+                                  className="p-2 text-slate-400 hover:text-[#4318FF] hover:bg-blue-50 rounded-xl transition-all"
+                                >
+                                  <Edit2 size={18} />
+                                </button>
+                                <button 
+                                  onClick={() => handleDeleteRoom(room.id)}
+                                  className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                                >
+                                  <Trash2 size={18} />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <RoomReservation 
+                    user={user}
+                    rooms={rooms}
+                    reservations={roomReservations}
+                    onDeleteReservation={onDeleteRoomReservation}
+                    onBack={() => setActiveTab('dashboard')}
+                  />
+                )}
               </motion.div>
             )}
             {activeTab === 'settings' && (

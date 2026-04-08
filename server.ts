@@ -1,11 +1,13 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
 import cookieParser from 'cookie-parser';
 import session from 'express-session';
 import pgSession from 'connect-pg-simple';
+import pg from 'pg';
 import dotenv from 'dotenv';
 import Stripe from 'stripe';
 import helmet from 'helmet';
@@ -34,8 +36,8 @@ function getStripe() {
 }
 
 // Initialize Supabase Admin Client (using service role for backend access)
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_SERVICE_ROLE_KEY || "";
+const supabaseUrl = process.env.SUPABASE_URL || "";
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
 if (!supabaseUrl || !supabaseServiceKey) {
   console.error("--- ERRO DE CONFIGURAÇÃO CRÍTICO ---");
@@ -107,10 +109,13 @@ async function startServer() {
 
     try {
       const stripe = getStripe();
+      if (!process.env.STRIPE_WEBHOOK_SECRET) {
+        throw new Error('STRIPE_WEBHOOK_SECRET is required');
+      }
       event = stripe.webhooks.constructEvent(
         req.body,
         sig as string,
-        process.env.STRIPE_WEBHOOK_SECRET || ''
+        process.env.STRIPE_WEBHOOK_SECRET
       );
     } catch (err: any) {
       console.error('Webhook signature verification failed:', err.message);
@@ -142,24 +147,66 @@ async function startServer() {
   app.use(cookieParser());
 
   // Database Session Store
-  // Forçamos o uso de memória (MemoryStore) para evitar erros de rede ENETUNREACH (IPv6)
-  // que estão derrubando o servidor.
-  const sessionStore = undefined; 
-  console.log('Usando armazenamento de sessão em memória para garantir estabilidade.');
+  // Use PostgreSQL store in production if DATABASE_URL is available
+  let sessionStore: any = undefined;
+  if (process.env.DATABASE_URL && process.env.DATABASE_URL !== 'undefined' && process.env.DATABASE_URL !== '') {
+    try {
+      const dbUrl = process.env.DATABASE_URL.trim();
+      
+      // Basic validation to prevent TypeError: Invalid URL
+      if (dbUrl.startsWith('postgres://') || dbUrl.startsWith('postgresql://')) {
+        // Try parsing it to ensure it's a valid URL format for Node's URL constructor
+        try {
+          new URL(dbUrl);
+        } catch (urlErr) {
+          throw new Error(`Invalid DATABASE_URL format: ${dbUrl.substring(0, 20)}...`);
+        }
+        
+        const { Pool } = pg;
+        const pool = new Pool({ 
+          connectionString: dbUrl,
+          // Add some defaults for stability
+          max: 20,
+          idleTimeoutMillis: 30000,
+          connectionTimeoutMillis: 2000,
+        });
+
+        // Test the pool connection immediately
+        pool.on('error', (err) => {
+          console.error('Unexpected error on idle client', err);
+        });
+
+        const PostgresStore = pgSession(session);
+        sessionStore = new PostgresStore({
+          pool: pool,
+          tableName: 'session',
+          createTableIfMissing: true
+        });
+        console.log('Using PostgreSQL session store with pg.Pool.');
+      } else {
+        console.warn('DATABASE_URL provided but is not a valid PostgreSQL connection string. Falling back to MemoryStore.');
+      }
+    } catch (err: any) {
+      console.error('Error initializing PostgreSQL session store:', err.message);
+      sessionStore = undefined; // Ensure fallback to MemoryStore
+    }
+  } else {
+    console.log('Usando armazenamento de sessão em memória (MemoryStore).');
+  }
 
   app.use(session({
     store: sessionStore,
-    secret: process.env.SESSION_SECRET || 'verto-secret-key',
-    resave: true, // Force session to be saved back to the session store
-    saveUninitialized: true, // Force a session that is "new" but not modified to be saved to the store
-    rolling: true, // Force the session identifier cookie to be set on every response
+    secret: process.env.SESSION_SECRET || (() => { throw new Error('SESSION_SECRET must be set'); })(),
+    resave: false, 
+    saveUninitialized: false, 
+    rolling: true, 
     name: 'verto-session',
     proxy: true,
     cookie: { 
-      secure: true, 
+      secure: process.env.NODE_ENV === 'production', 
       httpOnly: true,
       maxAge: 24 * 60 * 60 * 1000, 
-      sameSite: 'none'
+      sameSite: 'lax'
     }
   }));
 
@@ -479,7 +526,13 @@ async function startServer() {
         req.session.isFirstLogin = true;
         
         req.session.save((err) => {
-          if (err) console.error("Session save error in signup-direct:", err);
+          if (err) {
+            console.error("Session save error in signup-direct:", err);
+            if (!res.headersSent) {
+              return res.status(500).json({ error: "Erro ao salvar sessão" });
+            }
+            return;
+          }
           res.json({ success: true, message: "Conta criada com sucesso!", user: userData, isFirstLogin: true });
         });
       }
@@ -600,7 +653,13 @@ async function startServer() {
 
       req.session.user = userData;
       req.session.save((err) => {
-        if (err) console.error("Session save error in login:", err);
+        if (err) {
+          console.error("Session save error in login:", err);
+          if (!res.headersSent) {
+            return res.status(500).json({ error: "Erro ao salvar sessão" });
+          }
+          return;
+        }
         res.json({ success: true, user: userData, isFirstLogin: req.session.isFirstLogin });
         delete req.session.isFirstLogin;
       });
@@ -1166,9 +1225,10 @@ async function startServer() {
         req.session.save((err) => {
           if (err) {
             console.error("[Onboarding] Session save error:", err);
-            // Even if session save fails, we might want to return success if the memory session is updated
-            // but for safety we return 500
-            return res.status(500).json({ error: "Erro ao salvar sessão" });
+            if (!res.headersSent) {
+              return res.status(500).json({ error: "Erro ao salvar sessão" });
+            }
+            return;
           }
           console.log(`[Onboarding] Success for ${userId}`);
           res.json({ success: true });
@@ -1250,21 +1310,6 @@ async function startServer() {
 
       const { data, error } = await supabase
         .from('tasks')
-        .select('*')
-        .eq('patient_email', req.params.email)
-        .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      res.json({ success: true, data });
-    } catch (error) {
-      res.status(500).json({ error: String(error) });
-    }
-  });
-
-  app.get('/api/history/email/:email', checkAuth, async (req, res) => {
-    try {
-      const { data, error } = await supabase
-        .from('history')
         .select('*')
         .eq('patient_email', req.params.email)
         .order('created_at', { ascending: false });
@@ -1540,6 +1585,8 @@ async function startServer() {
         });
       }
 
+      const origin = req.headers.origin || `${req.protocol}://${req.get('host')}`;
+      
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         line_items: [
@@ -1558,8 +1605,8 @@ async function startServer() {
           },
         ],
         mode: 'subscription',
-        success_url: `${req.headers.origin}/?payment=success`,
-        cancel_url: `${req.headers.origin}/?payment=cancel`,
+        success_url: `${origin}/?payment=success`,
+        cancel_url: `${origin}/?payment=cancel`,
         customer_email: user.email,
         metadata: {
           userId: user.id
@@ -1600,6 +1647,11 @@ async function startServer() {
   // Global Error Handler
   app.use((err: any, req: any, res: any, next: any) => {
     console.error('SERVER ERROR:', err);
+    
+    if (res.headersSent) {
+      return next(err);
+    }
+    
     res.status(500).json({ 
       error: err.message || 'Ocorreu um erro no servidor.',
       details: err.stack

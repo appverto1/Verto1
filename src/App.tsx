@@ -270,6 +270,7 @@ export default function App() {
   const [profilePicture, setProfilePicture] = useState<string | null>(null);
   const [crp, setCrp] = useState<string>('');
   const [showInvitationModal, setShowInvitationModal] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   const onAddActivityLog = async (action: string, details: string, category: 'clinical' | 'management' | 'system' = 'clinical') => {
     const newLog = {
@@ -1088,12 +1089,14 @@ export default function App() {
       
       {!user ? (
         <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />
-      ) : (user.role === 'therapist' || user.role === 'coordinator') && !user.firstLoginCompleted ? (
+      ) : ((user.role === 'therapist' || user.role === 'coordinator') && !user.firstLoginCompleted) || showOnboarding ? (
         <ProfessionalOnboarding 
           user={user} 
           onComplete={(data) => {
             setUser({ ...user, ...data, firstLoginCompleted: true });
+            setShowOnboarding(false);
           }} 
+          onClose={() => setShowOnboarding(false)}
         />
       ) : user.subscriptionStatus === 'pending' ? (
         <SubscriptionRequired user={user} onLogout={handleLogout} />
@@ -1105,6 +1108,14 @@ export default function App() {
           onLogout={handleLogout} 
           allPatients={allPatients} 
           therapistAgenda={therapistAgenda} 
+          onOpenOnboarding={() => setShowOnboarding(true)}
+          rooms={rooms}
+          setRooms={setRooms}
+          roomReservations={roomReservations}
+          onDeleteRoomReservation={(id) => {
+            const agendaId = id.replace('res-', '');
+            handleUpdateAgendaStatus(Number(agendaId), 'canceled');
+          }}
         />
       ) : (user.role === 'admin' || user.role === 'owner') ? (
         <AdminDashboard onLogout={handleLogout} />
@@ -1127,6 +1138,7 @@ export default function App() {
           allPatients={allPatients} 
           clinicalRecords={clinicalRecords}
           onScheduleSession={handleScheduleSession} 
+          onOpenOnboarding={() => setShowOnboarding(true)}
           onUpdatePatient={handleUpdatePatient} 
           onRecordTrial={handleRecordTrial} 
           onDeleteHistoryItem={handleDeleteHistoryItem} 

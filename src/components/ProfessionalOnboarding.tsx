@@ -21,6 +21,7 @@ import { getSupabase } from '../lib/supabase';
 interface ProfessionalOnboardingProps {
   user: any;
   onComplete: (data: any) => void;
+  onClose?: () => void;
 }
 
 const PLAN_LIMITS: Record<string, number> = {
@@ -30,7 +31,7 @@ const PLAN_LIMITS: Record<string, number> = {
   'Paciente': 0
 };
 
-export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboardingProps) {
+export function ProfessionalOnboarding({ user, onComplete, onClose }: ProfessionalOnboardingProps) {
   const [step, setStep] = useState(1); // 1: Profile, 2: Invitations, 3: Clinic Settings
   const [name, setName] = useState(user.name || '');
   const [specialty, setSpecialty] = useState('Psicólogo');
@@ -200,7 +201,15 @@ export function ProfessionalOnboarding({ user, onComplete }: ProfessionalOnboard
           </div>
 
           {/* Right Side - Form */}
-          <div className="p-10 md:w-2/3 overflow-y-auto max-h-[80vh]">
+          <div className="p-10 md:w-2/3 overflow-y-auto max-h-[80vh] relative">
+            {onClose && (
+              <button 
+                onClick={onClose}
+                className="absolute top-6 right-6 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all z-10"
+              >
+                <X size={20} />
+              </button>
+            )}
             <AnimatePresence mode="wait">
               {step === 1 ? (
                 <motion.div 

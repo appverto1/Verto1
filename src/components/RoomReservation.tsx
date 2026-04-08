@@ -127,48 +127,14 @@ export const RoomReservationTable = ({
   );
 };
 
-export function RoomReservation({ user, rooms, setRooms, reservations, onDeleteReservation, onBack }: { 
+export function RoomReservation({ user, rooms, reservations, onDeleteReservation, onBack }: { 
   user: any, 
   rooms: Room[], 
-  setRooms: React.Dispatch<React.SetStateAction<Room[]>>, 
   reservations: Reservation[], 
   onDeleteReservation: (id: string) => void,
   onBack: () => void
 }) {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-  const [isManageRoomsOpen, setIsManageRoomsOpen] = useState(false);
-  const [newRoom, setNewRoom] = useState({
-    name: '',
-    specialties: ''
-  });
-  const [editingRoom, setEditingRoom] = useState<Room | null>(null);
-
-  const handleAddRoom = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newRoom.name) return;
-    const specialtiesArray = newRoom.specialties.split(',').map(s => s.trim()).filter(s => s !== '');
-    const room: Room = {
-      id: Date.now().toString(),
-      name: newRoom.name,
-      specialties: specialtiesArray
-    };
-    setRooms(prev => [...prev, room]);
-    setNewRoom({ name: '', specialties: '' });
-  };
-
-  const handleEditRoom = (room: Room) => {
-    setEditingRoom(room);
-    setNewRoom({ name: room.name, specialties: room.specialties.join(', ') });
-  };
-
-  const handleUpdateRoom = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingRoom) return;
-    const specialtiesArray = newRoom.specialties.split(',').map(s => s.trim()).filter(s => s !== '');
-    setRooms(prev => prev.map(r => r.id === editingRoom.id ? { ...r, name: newRoom.name, specialties: specialtiesArray } : r));
-    setEditingRoom(null);
-    setNewRoom({ name: '', specialties: '' });
-  };
 
   const handleDeleteReservation = (id: string) => {
     onDeleteReservation(id);
@@ -194,15 +160,6 @@ export function RoomReservation({ user, rooms, setRooms, reservations, onDeleteR
             onChange={(e) => setSelectedDate(e.target.value)}
             className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all font-semibold text-slate-700"
           />
-          {user.role === 'coordinator' && (
-            <button 
-              onClick={() => setIsManageRoomsOpen(true)}
-              className="flex items-center gap-2 bg-slate-100 text-slate-600 px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-slate-200 transition-all"
-            >
-              <DoorOpen size={18} />
-              Salas
-            </button>
-          )}
         </div>
       </div>
 
@@ -213,112 +170,6 @@ export function RoomReservation({ user, rooms, setRooms, reservations, onDeleteR
         user={user}
         onDeleteReservation={handleDeleteReservation}
       />
-
-      <AnimatePresence>
-        {isManageRoomsOpen && (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white w-full max-w-2xl rounded-[32px] shadow-2xl p-8 max-h-[80vh] overflow-y-auto no-scrollbar"
-            >
-              <div className="flex items-center justify-between mb-8">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-slate-50 text-slate-600 rounded-2xl flex items-center justify-center">
-                    <DoorOpen size={24} />
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-bold text-slate-900">Gerenciar Salas</h2>
-                    <p className="text-slate-500 text-xs font-medium">Adicione ou remova salas da clínica</p>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setIsManageRoomsOpen(false)}
-                  className="p-2 text-slate-400 hover:bg-slate-50 rounded-xl transition-all"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              <form onSubmit={editingRoom ? handleUpdateRoom : handleAddRoom} className="space-y-6 mb-8 p-6 bg-slate-50 rounded-3xl">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Nome da Sala</label>
-                    <input 
-                      type="text" 
-                      value={newRoom.name}
-                      onChange={(e) => setNewRoom({...newRoom, name: e.target.value})}
-                      className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm focus:ring-2 focus:ring-blue-500/20 transition-all font-medium"
-                      placeholder="Ex: Sala 01"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Especialidades (separadas por vírgula)</label>
-                    <input 
-                      type="text" 
-                      value={newRoom.specialties}
-                      onChange={(e) => setNewRoom({...newRoom, specialties: e.target.value})}
-                      className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm focus:ring-2 focus:ring-blue-500/20 transition-all font-medium"
-                      placeholder="Ex: ABA, TCC, Fono"
-                    />
-                  </div>
-                </div>
-                <button 
-                  type="submit"
-                  className="w-full py-4 bg-[#4318FF] text-white rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
-                >
-                  {editingRoom ? 'Atualizar Sala' : 'Adicionar Sala'}
-                </button>
-                {editingRoom && (
-                  <button 
-                    type="button"
-                    onClick={() => { setEditingRoom(null); setNewRoom({ name: '', specialties: '' }); }}
-                    className="w-full py-2 text-slate-400 text-xs font-bold uppercase tracking-widest"
-                  >
-                    Cancelar Edição
-                  </button>
-                )}
-              </form>
-
-              <div className="space-y-3">
-                {rooms.map(room => (
-                  <div key={room.id} className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl hover:shadow-md transition-all group">
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 bg-slate-50 text-slate-400 rounded-xl flex items-center justify-center group-hover:bg-blue-50 group-hover:text-blue-600 transition-all">
-                        <DoorOpen size={20} />
-                      </div>
-                      <div>
-                        <h4 className="font-bold text-slate-900">{room.name}</h4>
-                        <div className="flex gap-1 mt-1">
-                          {room.specialties.map(s => (
-                            <span key={s} className="px-2 py-0.5 bg-slate-50 text-slate-500 rounded-full text-[9px] font-bold uppercase tracking-wider">{s}</span>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button 
-                        onClick={() => handleEditRoom(room)}
-                        className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"
-                      >
-                        <Edit2 size={18} />
-                      </button>
-                      <button 
-                        onClick={() => setRooms(prev => prev.filter(r => r.id !== room.id))}
-                        className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
-                      >
-                        <Trash2 size={18} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
