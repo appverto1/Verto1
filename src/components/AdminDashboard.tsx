@@ -62,7 +62,7 @@ const RECENT_CLIENTS = [
   { id: 1, name: 'Clínica NeuroViver', email: 'contato@neuroviver.com.br', plan: 'Equipe', value: 828, status: 'active', date: '2026-03-20' },
   { id: 2, name: 'Dr. Marcos Silva', email: 'marcos.silva@gmail.com', plan: 'Profissional', value: 79, status: 'active', date: '2026-03-18' },
   { id: 3, name: 'Espaço Evoluir', email: 'financeiro@evoluir.com', plan: 'Clínico', value: 1475, status: 'delinquent', date: '2026-03-15' },
-  { id: 4, name: 'Centro ABA Kids', email: 'adm@abakids.com', plan: 'Enterprise', value: 2500, status: 'active', date: '2026-03-10' },
+  { id: 4, name: 'Centro ABA Criança', email: 'adm@abacrianca.com', plan: 'Enterprise', value: 2500, status: 'active', date: '2026-03-10' },
   { id: 5, name: 'Dra. Ana Paula', email: 'ana.paula@to.com.br', plan: 'Profissional', value: 79, status: 'active', date: '2026-03-05' },
 ];
 
@@ -239,6 +239,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
           <SidebarItem 
             icon={<BarChart3 size={20} />} 
             label="Financeiro (DRE)" 
+            badge="EM BREVE"
             active={activeTab === 'financial'} 
             onClick={() => setActiveTab('financial')} 
           />
@@ -499,60 +500,13 @@ export const AdminDashboard = ({ onLogout }: any) => {
         )}
 
         {activeTab === 'financial' && (
-          <div className="space-y-8 animate-fade-in">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-50">
-                <h3 className="text-xl font-bold text-gray-800 tracking-tight mb-8">Receita por Canal de Aquisição</h3>
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={Object.entries(dreData?.byChannel || {}).map(([name, value]) => ({ name, value: Number(value) }))}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F4F7FE" />
-                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} />
-                      <YAxis axisLine={false} tickLine={false} tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} />
-                      <Tooltip contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 25px rgba(0,0,0,0.05)' }} />
-                      <Bar dataKey="value" fill="#4318FF" radius={[8, 8, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-50">
-                <h3 className="text-xl font-bold text-gray-800 tracking-tight mb-8">Receita por Plano</h3>
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={Object.entries(dreData?.byPlan || {}).map(([name, value]) => ({ name, value: Number(value) }))}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F4F7FE" />
-                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} />
-                      <YAxis axisLine={false} tickLine={false} tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} />
-                      <Tooltip contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 25px rgba(0,0,0,0.05)' }} />
-                      <Bar dataKey="value" fill="#05CD99" radius={[8, 8, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
+          <div className="flex flex-col items-center justify-center py-20 bg-white rounded-[32px] shadow-sm border border-gray-50 animate-fade-in">
+            <div className="w-20 h-20 bg-blue-50 text-[#4318FF] rounded-3xl flex items-center justify-center mb-6">
+              <DollarSign size={40} />
             </div>
-
-            <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-50">
-              <h3 className="text-xl font-bold text-gray-800 tracking-tight mb-8">Demonstrativo de Resultados (DRE)</h3>
-              <div className="space-y-4">
-                <div className="flex justify-between p-4 bg-gray-50 rounded-2xl">
-                  <span className="font-bold text-gray-600">Receita Bruta</span>
-                  <span className="font-bold text-[#4318FF]">R$ {dreData?.revenue?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                </div>
-                <div className="flex justify-between p-4 border-b border-gray-50">
-                  <span className="text-gray-500">Impostos (Simulado 6%)</span>
-                  <span className="text-red-500">- R$ {(dreData?.revenue * 0.06).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                </div>
-                <div className="flex justify-between p-4 border-b border-gray-50">
-                  <span className="text-gray-500">Taxas Stripe (Simulado 3.99% + R$0,39)</span>
-                  <span className="text-red-500">- R$ {(dreData?.revenue * 0.0399).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                </div>
-                <div className="flex justify-between p-4 bg-blue-50 rounded-2xl">
-                  <span className="font-bold text-gray-800">Receita Líquida</span>
-                  <span className="font-bold text-[#05CD99]">R$ {(dreData?.revenue * 0.9).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                </div>
-              </div>
-            </div>
+            <h3 className="text-2xl font-bold text-gray-800 tracking-tight mb-2">DRE e Gestão Financeira</h3>
+            <p className="text-gray-500 font-medium mb-8">Esta funcionalidade está sendo preparada para você.</p>
+            <span className="px-6 py-2 bg-[#4318FF] text-white rounded-full text-xs font-bold uppercase tracking-widest shadow-lg shadow-blue-200">Em Breve</span>
           </div>
         )}
 
@@ -685,7 +639,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
   );
 };
 
-const SidebarItem = ({ icon, label, active, onClick }: any) => (
+const SidebarItem = ({ icon, label, active, onClick, badge }: any) => (
   <button 
     onClick={onClick}
     className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-bold transition-all ${
@@ -696,7 +650,8 @@ const SidebarItem = ({ icon, label, active, onClick }: any) => (
   >
     {icon}
     <span className="text-sm">{label}</span>
-    {active && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-white"></div>}
+    {badge && <span className="ml-auto text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">{badge}</span>}
+    {active && !badge && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-white"></div>}
   </button>
 );
 

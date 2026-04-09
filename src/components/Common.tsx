@@ -1,11 +1,20 @@
 import React from 'react';
-import { BatteryCharging, BatteryFull, Ear, Users, Brain, Check, CheckCircle, Activity } from 'lucide-react';
+import { BatteryCharging, BatteryFull, Ear, Users, Brain, Check, CheckCircle, Activity, DollarSign, Briefcase, Heart, Plus } from 'lucide-react';
 
 export const ENERGY_TAGS = [
   { id: 'sensory', label: 'Sensorial', icon: <Ear size={18} />, color: 'bg-purple-100 text-purple-600 border-purple-200' },
   { id: 'social', label: 'Social', icon: <Users size={18} />, color: 'bg-blue-100 text-blue-600 border-blue-200' },
   { id: 'focus', label: 'Foco', icon: <Brain size={18} />, color: 'bg-orange-100 text-orange-600 border-orange-200' },
   { id: 'rest', label: 'Descanso', icon: <BatteryCharging size={18} />, color: 'bg-green-100 text-green-600 border-green-200' }
+];
+
+export const ADULT_CONVENTIONAL_TAGS = [
+  { id: 'family', label: 'Família', icon: <Users size={18} />, color: 'bg-blue-100 text-blue-600 border-blue-200' },
+  { id: 'money', label: 'Dinheiro', icon: <DollarSign size={18} />, color: 'bg-green-100 text-green-600 border-green-200' },
+  { id: 'work', label: 'Trabalho', icon: <Briefcase size={18} />, color: 'bg-orange-100 text-orange-600 border-orange-200' },
+  { id: 'relationship', label: 'Relacionamento', icon: <Heart size={18} />, color: 'bg-pink-100 text-pink-600 border-pink-200' },
+  { id: 'thought', label: 'Pensamento', icon: <Brain size={18} />, color: 'bg-purple-100 text-purple-600 border-purple-200' },
+  { id: 'others', label: 'Outros', icon: <Plus size={18} />, color: 'bg-gray-100 text-gray-600 border-gray-200' }
 ];
 
 export const LogoVerto = ({ size = 64, className = "", showText = false }: { size?: number, className?: string, showText?: boolean }) => (

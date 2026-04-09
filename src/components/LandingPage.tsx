@@ -92,10 +92,6 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         if (data.success) {
           setShowLogin(false);
           setUser(data.user);
-          // Force a small delay to ensure state is updated before any other logic
-          setTimeout(() => {
-            window.location.reload();
-          }, 500);
           return;
         } else {
           throw new Error(data.error || 'Erro no login de teste');
@@ -669,7 +665,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 mb-32">
-            {/* Kids & Family */}
+            {/* Criança & Família */}
             <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-[56px] p-12 hover:bg-white/10 transition-all group">
               <div className="w-16 h-16 bg-pink-500/20 text-pink-400 rounded-2xl flex items-center justify-center mb-8 group-hover:scale-110 transition-transform">
                 <Heart size={32} />
@@ -754,7 +750,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               <div className="space-y-12 relative">
                 <div className="absolute left-[27px] top-0 bottom-0 w-0.5 bg-gradient-to-b from-pink-500/50 to-transparent"></div>
                 {[
-                  { step: "01", title: "Portal Personalizado", desc: "Acesso a uma interface desenhada para o perfil do paciente (lúdica para kids, funcional para adultos)." },
+                  { step: "01", title: "Portal Personalizado", desc: "Acesso a uma interface desenhada para o perfil do paciente (lúdica para crianças, funcional para adultos)." },
                   { step: "02", title: "Visualização de Metas", desc: "O paciente e a família acompanham o progresso do tratamento de forma clara, celebrando cada conquista." },
                   { step: "03", title: "Tarefas Terapêuticas", desc: "Engajamento contínuo fora da clínica com tarefas que reforçam as habilidades trabalhadas no plano." },
                   { step: "04", title: "Celebração de Vitórias", desc: "Reforço positivo imediato a cada meta batida, transformando o tratamento em uma jornada positiva." }
@@ -789,7 +785,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               { icon: <Activity />, title: "Relatórios de Progresso", desc: "Transforme dados de sessão em relatórios visuais automáticos que provam a evolução do paciente.", color: "text-[#05CD99]", bg: "bg-emerald-100" },
               { icon: <Heart />, title: "Portal da Família", desc: "Compartilhe o progresso do tratamento de forma lúdica, celebrando cada pequena vitória com os pais.", color: "text-pink-600", bg: "bg-pink-100" },
               { icon: <Zap />, title: "Autonomia do Paciente", desc: "Pacientes adultos assumem o protagonismo do próprio tratamento através de tarefas e registros de bem-estar.", color: "text-orange-600", bg: "bg-orange-100" },
-              { icon: <Rocket />, title: "Gestão da Clínica", desc: "Controle financeiro completo, DRE e gestão administrativa simplificada para sua operação.", color: "text-emerald-600", bg: "bg-emerald-50" },
+              { icon: <Rocket />, title: "Gestão da Clínica", desc: "Controle financeiro completo, DRE (Em Breve) e gestão administrativa simplificada para sua operação.", color: "text-emerald-600", bg: "bg-emerald-50" },
               { icon: <Users />, title: "Equipe Multidisciplinar", desc: "Equipe alinhada em torno do mesmo planejamento, garantindo consistência e troca de informações.", color: "text-red-600", bg: "bg-red-100" }
             ].map((feature, i) => (
               <div 

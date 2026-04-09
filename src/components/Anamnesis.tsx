@@ -4,7 +4,7 @@ import { X, Baby, UserPlus, FileText, User, ChevronDown, Phone, Eye, Briefcase, 
 export const AnamnesisModal = ({ isOpen, onClose, initialData, onSave, mode = 'create' }: any) => { 
   const defaultData = { 
     nome: "", email: "", dataNascimento: "", idade: "", genero: "", estadoCivil: "", profissao: "", religiao: "", endereco: "", telefone: "", pessoaReferencia: "", telefoneReferencia: "", familiaHabita: "", familiaConstituicao: "", familiaClima: "", paiDados: "", paiRelacaoPassada: "", paiRelacaoAtual: "", maeDados: "", maeRelacaoPassada: "", maeRelacaoAtual: "", irmaosDados: "", irmaosRelacaoPassada: "", irmaosRelacaoAtual: "", parDados: "", parRelacaoPassada: "", parRelacaoAtual: "", filhosDados: "", filhosRelacaoPassada: "", filhosRelacaoAtual: "", outrosDados: "", outrosRelacaoPassada: "", outrosRelacaoAtual: "", relacoesProfissionais: "", relacoesAfetivas: "", relacoesSignificativas: "", vidaSocialGeral: "", dificuldadesSociais: "", grauInstrucao: "", descProfissional: "", dificuldadesLaborais: "", situacaoEconomica: "", dependenciaEconomica: "", alimentacao: "", sonoSonho: "", limpezaHigiene: "", exercicio: "", controleMedico: "", habitosNocivos: "", outrosTratamentos: "", contatoProfSaude: "", interesses: "", disponibilidadeTempo: "", empregoTempoLivre: "", interessesPotenciais: "", atividadesIndividuais: "", atividadesGrupais: "", motivoConsulta: "", iniciativaTratamento: "", referenciaTerapeuta: "", expectativa: "", previoTipo: "", previoDuracao: "", previoMotivo: "", previoInterrupcao: "",
-    // Kids Script Fields
+    // Criança Script Fields
     dataHoje: new Date().toISOString().split('T')[0],
     profissional: "Dra. Raísa",
     crp: "06/123456",
@@ -84,14 +84,14 @@ export const AnamnesisModal = ({ isOpen, onClose, initialData, onSave, mode = 'c
         <div className="absolute top-6 right-6 flex items-center gap-3">
           <div className="bg-gray-100 p-1 rounded-xl flex gap-1">
             <button onClick={() => setFormType('adult')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${formType === 'adult' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-400'}`}>Adulto</button>
-            <button onClick={() => setFormType('child')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${formType === 'child' ? 'bg-white text-[#4318FF] shadow-sm' : 'text-gray-400'}`}>Infantil</button>
+            <button onClick={() => setFormType('child')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${formType === 'child' ? 'bg-white text-[#4318FF] shadow-sm' : 'text-gray-400'}`}>Criança</button>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-red-500 transition-colors p-2"><X size={24}/></button> 
         </div>
 
         <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2"> 
           <div className="p-2 bg-[#4318FF]/10 rounded-xl text-[#4318FF]">{formType === 'child' ? <Baby size={24}/> : (mode === 'create' ? <UserPlus size={24} /> : <FileText size={24}/>)}</div> 
-          {mode === 'create' ? `Prontuário de Admissão (${formType === 'child' ? 'Infantil' : 'Adulto'})` : `Editar Ficha (${formType === 'child' ? 'Infantil' : 'Adulto'})`} 
+          {mode === 'create' ? `Prontuário de Admissão (${formType === 'child' ? 'Criança' : 'Adulto'})` : `Editar Ficha (${formType === 'child' ? 'Criança' : 'Adulto'})`} 
         </h2> 
 
         <div className="space-y-4"> 

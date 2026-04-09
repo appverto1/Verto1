@@ -22,13 +22,16 @@ import {
   FileText,
   DoorOpen,
   Edit2,
-  Trash2
+  Trash2,
+  History,
+  ClipboardCheck
 } from 'lucide-react';
 import { TeamManagement } from './TeamManagement';
 import { InvitationModal } from './InvitationModal';
 import { SettingsMenu } from './SettingsMenu';
 import { LogoVerto } from './Common';
 import { RoomReservation } from './RoomReservation';
+import { ProtocolManagementSystem } from './Protocols';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   BarChart, 
@@ -55,6 +58,10 @@ interface CoordinatorDashboardProps {
   setRooms: React.Dispatch<React.SetStateAction<any[]>>;
   roomReservations: any[];
   onDeleteRoomReservation: (id: string) => void;
+  protocols: any[];
+  setProtocols: (protocols: any) => void;
+  activityLogs: any[];
+  onAddActivityLog: (title: string, content: string, type?: string) => void;
 }
 
 export function CoordinatorDashboard({ 
@@ -66,9 +73,13 @@ export function CoordinatorDashboard({
   rooms,
   setRooms,
   roomReservations,
-  onDeleteRoomReservation
+  onDeleteRoomReservation,
+  protocols,
+  setProtocols,
+  activityLogs,
+  onAddActivityLog
 }: CoordinatorDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'team' | 'financial' | 'patients' | 'agenda' | 'rooms' | 'protocols' | 'settings'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'team' | 'financial' | 'patients' | 'agenda' | 'rooms' | 'protocols' | 'settings' | 'logs'>('dashboard');
   const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isEditingRooms, setIsEditingRooms] = useState(false);
@@ -381,10 +392,12 @@ export function CoordinatorDashboard({
           {[
             { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
             { id: 'team', label: 'Equipe', icon: Users },
-            { id: 'financial', label: 'Financeiro (DRE)', icon: DollarSign },
+            { id: 'financial', label: 'Financeiro (DRE)', icon: DollarSign, badge: 'EM BREVE' },
             { id: 'patients', label: 'Pacientes', icon: ClipboardList },
             { id: 'agenda', label: 'Agenda Global', icon: Calendar },
+            { id: 'protocols', label: 'Protocolos', icon: ClipboardCheck },
             { id: 'rooms', label: 'Gestão de Salas', icon: DoorOpen },
+            { id: 'logs', label: 'Log de Atividades', icon: History },
             { id: 'settings', label: 'Configurações', icon: Settings },
           ].map((item) => (
             <button 
@@ -398,6 +411,7 @@ export function CoordinatorDashboard({
             >
               <item.icon size={20} />
               {item.label}
+              {item.badge && <span className="ml-auto text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">{item.badge}</span>}
             </button>
           ))}
         </nav>
@@ -477,8 +491,13 @@ export function CoordinatorDashboard({
               </motion.div>
             )}
             {activeTab === 'financial' && (
-              <motion.div key="financial" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}}>
-                {renderFinancial()}
+              <motion.div key="financial" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="flex flex-col items-center justify-center py-20 bg-white rounded-[40px] shadow-sm border border-slate-100">
+                <div className="w-20 h-20 bg-blue-50 text-[#4318FF] rounded-[32px] flex items-center justify-center mb-6">
+                  <DollarSign size={40} />
+                </div>
+                <h3 className="text-2xl font-bold text-slate-900 tracking-tight mb-2">Financeiro e DRE</h3>
+                <p className="text-slate-500 font-medium mb-8">Esta funcionalidade está sendo preparada para você.</p>
+                <span className="px-6 py-2 bg-[#4318FF] text-white rounded-full text-xs font-bold uppercase tracking-widest shadow-lg shadow-blue-500/20">Em Breve</span>
               </motion.div>
             )}
             {activeTab === 'patients' && (
@@ -648,6 +667,60 @@ export function CoordinatorDashboard({
                 )}
               </motion.div>
             )}
+            {activeTab === 'protocols' && (
+              <div className="animate-fade-in">
+                <ProtocolManagementSystem 
+                  protocols={protocols} 
+                  onSaveProtocol={(p: any) => {
+                    const exists = protocols.find((old: any) => old.id === p.id);
+                    if (exists) {
+                      setProtocols(protocols.map((old: any) => old.id === p.id ? p : old));
+                    } else {
+                      setProtocols([...protocols, p]);
+                    }
+                  }} 
+                  onDeleteProtocol={(id: any) => setProtocols(protocols.filter((p: any) => p.id !== id))} 
+                  onBack={() => setActiveTab('overview')} 
+                />
+              </div>
+            )}
+            {activeTab === 'logs' && (
+              <div className="space-y-6 animate-fade-in">
+                <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100">
+                  <h3 className="text-xl font-bold text-slate-900 mb-6">Log de Atividades do Sistema</h3>
+                  <div className="space-y-4">
+                    {activityLogs && activityLogs.length > 0 ? (
+                      activityLogs.map((log, i) => (
+                        <div key={i} className="flex items-start gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                          <div className={`p-2 rounded-xl ${
+                            log.type === 'management' ? 'bg-purple-100 text-purple-600' : 
+                            log.type === 'clinical' ? 'bg-blue-100 text-blue-600' : 
+                            'bg-slate-200 text-slate-600'
+                          }`}>
+                            <History size={18} />
+                          </div>
+                          <div className="flex-1">
+                            <div className="flex items-center justify-between mb-1">
+                              <p className="text-sm font-bold text-slate-900">{log.title}</p>
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{log.time || new Date(log.created_at).toLocaleString()}</span>
+                            </div>
+                            <p className="text-xs text-slate-500 leading-relaxed">{log.content}</p>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-20">
+                        <div className="w-20 h-20 bg-slate-50 rounded-[32px] flex items-center justify-center mx-auto mb-6 text-slate-200">
+                          <History size={40} />
+                        </div>
+                        <h4 className="text-lg font-bold text-slate-900 mb-2">Nenhuma atividade registrada</h4>
+                        <p className="text-sm text-slate-400 max-w-xs mx-auto">As ações realizadas no sistema aparecerão aqui para acompanhamento da coordenação.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
             {activeTab === 'settings' && (
               <motion.div key="settings" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100">
                 <div className="flex items-center justify-between mb-8">
@@ -663,10 +736,13 @@ export function CoordinatorDashboard({
                     <div className="space-y-4">
                       <div>
                         <label className="block text-xs font-bold text-slate-700 mb-2">Duração Padrão da Sessão</label>
-                        <select className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all">
+                        <select 
+                          defaultValue={user.clinicSettings?.defaultSessionDuration || "50"}
+                          className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                        >
                           <option value="30">30 minutos</option>
                           <option value="45">45 minutos</option>
-                          <option value="50" selected={user.clinicSettings?.defaultSessionDuration === '50'}>50 minutos</option>
+                          <option value="50">50 minutos</option>
                           <option value="60">60 minutos</option>
                         </select>
                       </div>
@@ -691,7 +767,13 @@ export function CoordinatorDashboard({
                         <span className="px-3 py-1 bg-blue-100 text-[#4318FF] rounded-lg text-[10px] font-bold uppercase">Ativo</span>
                       </div>
                       <p className="text-xs text-blue-600 mb-6">Sua clínica possui acesso a todas as ferramentas de gestão e prontuário eletrônico.</p>
-                      <button className="w-full py-3 bg-white text-[#4318FF] rounded-2xl font-bold text-xs shadow-sm hover:shadow-md transition-all">
+                      <button 
+                        onClick={() => {
+                          // In a real app, this would open a Stripe portal or a plan selection modal
+                          window.alert('Funcionalidade de upgrade de plano será implementada em breve. Por favor, entre em contato com o suporte para alterar seu plano.');
+                        }}
+                        className="w-full py-3 bg-white text-[#4318FF] rounded-2xl font-bold text-xs shadow-sm hover:shadow-md transition-all"
+                      >
                         Gerenciar Assinatura
                       </button>
                     </div>

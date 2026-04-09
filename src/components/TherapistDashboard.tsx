@@ -527,7 +527,7 @@ export const TherapistDashboard = ({
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-4">
             <button onClick={() => setView('home')} className="p-2 hover:bg-white rounded-xl transition-all"><ChevronRight className="rotate-180" /></button>
-            <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Financeiro & Pagamentos</h2>
+            <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Financeiro & Pagamentos <span className="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full ml-2">EM BREVE</span></h2>
           </div>
           <button 
             onClick={() => setIsPaymentModalOpen(true)}
@@ -649,7 +649,7 @@ export const TherapistDashboard = ({
               onClick={() => handleSetView('financial')}
               className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'financial' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
             >
-              <ShoppingBag size={20} /> Financeiro
+              <ShoppingBag size={20} /> Financeiro <span className="ml-auto text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">EM BREVE</span>
             </button>
           )}
           
@@ -881,7 +881,7 @@ export const TherapistDashboard = ({
 
                 {(user?.role === 'coordinator' || user?.role === 'receptionist') && (
                   <button id="menu-financial" onClick={() => {handleSetView('financial'); setIsMenuOpen(false);}} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-emerald-500 transition-colors text-xs font-semibold uppercase tracking-wider text-left">
-                    <ShoppingBag size={18}/> Financeiro & Pagamentos
+                    <ShoppingBag size={18}/> Financeiro & Pagamentos <span className="ml-auto text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">EM BREVE</span>
                   </button>
                 )}
 
@@ -983,7 +983,7 @@ export const TherapistDashboard = ({
             {currentViewAgenda.map((patientItem: any, idx: number) => {
               const patientData = allPatients.find((p: any) => p.id === patientItem.patientId);
               const isKid = (patientData?.age !== undefined && patientData.age <= 12) || patientData?.anamnesisData?.formType === 'child';
-              const category = isKid ? 'Kids' : 'Adulto';
+              const category = isKid ? 'Criança' : 'Adulto';
               
               const statusColors: any = {
                 confirmed: 'bg-green-50 border-green-100',

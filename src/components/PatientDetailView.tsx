@@ -94,10 +94,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   }, [history, patient.id]);
 
   const patientCategory = useMemo(() => {
-     if (patient.anamnesisData?.formType) {
-        return patient.anamnesisData.formType === 'child' ? 'Kids' : 'Adulto';
-     }
-     return (patient.age !== undefined && patient.age <= 12) ? 'Kids' : 'Adulto';
+    if (patient.anamnesisData?.formType) {
+      return patient.anamnesisData.formType === 'child' ? 'Criança' : 'Adulto';
+    }
+    return (patient.age !== undefined && patient.age <= 12) ? 'Criança' : 'Adulto';
   }, [patient]);
 
   const evaluationSkills = useMemo(() => {
@@ -575,7 +575,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   };
 
   const getMasteryProgress = (skillName: string) => {
-    if (patientCategory !== 'Kids') return null;
+    if (patientCategory !== 'Criança') return null;
     const goal = patient.pei?.find((g: any) => g.name === skillName);
     const skillHistory = history
       .filter((h: any) => h.patientId === patient.id && h.title === skillName && h.type === 'task' && (!goal || h.id > goal.id))
@@ -643,7 +643,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         <TutorialOverlay 
           steps={[
             { targetId: 'back-btn', title: 'Voltar ao Dashboard', content: 'Clique aqui para retornar à tela principal a qualquer momento.', placement: 'bottom' },
-            { targetId: 'patient-header-info', title: 'Informações do Paciente', content: 'Aqui você vê o nome, categoria (Kids/Adulto) e acessa o WhatsApp ou Ficha de Anamnese.', placement: 'bottom' },
+            { targetId: 'patient-header-info', title: 'Informações do Paciente', content: 'Aqui você vê o nome, categoria (Criança/Adulto) e acessa o WhatsApp ou Ficha de Anamnese.', placement: 'bottom' },
             { targetId: 'tab-nav', title: 'Navegação por Abas', content: 'O prontuário é organizado em abas para facilitar o acesso a diferentes tipos de informação.', placement: 'bottom' },
             { targetId: 'tab-history', title: 'Aba Histórico', content: 'Veja a evolução clínica e o histórico de todas as atividades realizadas pelo paciente.', placement: 'bottom' },
             { targetId: 'history-filters', title: 'Filtros e Comparação', content: 'Filtre por protocolo ou data para comparar o desempenho em diferentes momentos.', placement: 'bottom' },
@@ -731,8 +731,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             <div id="patient-header-info">
                 <div className="flex items-center gap-2">
                     <h1 className="text-2xl font-semibold text-gray-800 tracking-tight">{patient.name}</h1>
-                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full uppercase tracking-wider ${patientCategory === 'Kids' ? 'bg-pink-100 text-pink-500' : 'bg-indigo-50 text-indigo-500'}`}>
-                       {patientCategory === 'Kids' ? 'Kids' : 'Adulto'}
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full uppercase tracking-wider ${patientCategory === 'Criança' ? 'bg-pink-100 text-pink-500' : 'bg-indigo-50 text-indigo-500'}`}>
+                       {patientCategory === 'Criança' ? 'Criança' : 'Adulto'}
                     </span>
                 </div>
                 <p className="text-gray-500 text-xs">Detalhes do Paciente</p>
@@ -832,7 +832,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       isTherapist={true} 
                       onEvaluate={onEvaluateHistoryItem} 
                       protocols={protocols} 
-                      isKid={patientCategory === 'Kids'}
+                      isKid={patientCategory === 'Criança'}
                       fullHistory={history.filter((h: any) => h.patientId === patient.id)}
                       peiGoals={patient.pei || []}
                     />
@@ -1236,7 +1236,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                         <Zap size={14} fill={goal.isPriority ? "currentColor" : "none"} />
                                       </button>
                                     </h4>
-                                    {patientCategory === 'Kids' && (
+                                    {patientCategory === 'Criança' && (
                                       <div className="mt-1 mb-2">
                                         <MasteryDots count={getMasteryProgress(goal.name) || 0} status={goal.status} />
                                       </div>
@@ -1260,7 +1260,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                         <option value="in_progress">Em Treino</option>
                                         <option value="completed">Adquirido</option>
                                       </select>
-                                      {patientCategory === 'Kids' && goal.status !== 'completed' && (
+                                      {patientCategory === 'Criança' && goal.status !== 'completed' && (
                                         <button 
                                           onClick={() => {
                                             if (confirm("Deseja zerar o progresso de maestria desta meta? Isso reiniciará a contagem de acertos consecutivos.")) {
@@ -1329,7 +1329,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                       }}
                                     />
                                   </div>
-                                  {patientCategory === 'Kids' && (
+                                  {patientCategory === 'Criança' && (
                                     <div className="flex justify-between px-1">
                                       <span className="text-[8px] font-semibold text-gray-300 uppercase">Início</span>
                                       <span className="text-[8px] font-semibold text-gray-300 uppercase">Maestria</span>
@@ -1663,7 +1663,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               {goal.domainName}
                             </span>
                             <h4 className="text-xl font-semibold text-gray-800 tracking-tight">{goal.name}</h4>
-                            {patientCategory === 'Kids' && (
+                            {patientCategory === 'Criança' && (
                               <div className="mt-2">
                                 <MasteryDots count={getMasteryProgress(goal.name) || 0} status={goal.status} />
                               </div>

@@ -26,8 +26,9 @@ interface ProfessionalOnboardingProps {
 
 const PLAN_LIMITS: Record<string, number> = {
   'Essencial': 2,
-  'Profissional': 5,
-  'Clínica': 999,
+  'Crescimento': 7,
+  'Avançado': 12,
+  'Enterprise': 999,
   'Paciente': 0
 };
 
@@ -116,6 +117,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
           specialty, 
           crp, 
           profilePicture,
+          subscriptionStatus: 'active',
           clinicSettings: user.role === 'coordinator' ? {
             defaultSessionDuration,
             workStart,

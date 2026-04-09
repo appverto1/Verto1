@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { GlobalStyles, ENERGY_TAGS } from './components/Common';
+import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS } from './components/Common';
 import { LandingPage } from './components/LandingPage';
 import { PatientDashboard } from './components/PatientDashboard';
 import { TherapistDashboard } from './components/TherapistDashboard';
@@ -55,7 +55,9 @@ export default function App() {
           localStorage.removeItem('verto_intended_role');
           await handleLoginSuccess(session, intendedRole);
         } else if (event === 'SIGNED_OUT') {
-          setUser(null);
+          // Don't blindly clear user on SIGNED_OUT, let handleLogout or checkSession handle it
+          // to avoid race conditions with mock/session-based login
+          console.log('Supabase SIGNED_OUT event received');
         }
       });
 
@@ -225,7 +227,7 @@ export default function App() {
   const nextWeekStr = nextWeek.toISOString().split('T')[0];
 
   const [rooms, setRooms] = useState<any[]>([
-    { id: 'room1', name: 'Sala 01 - Kids', specialties: ['ABA', 'TCC'] },
+    { id: 'room1', name: 'Sala 01 - Criança', specialties: ['ABA', 'TCC'] },
     { id: 'room2', name: 'Sala 02 - Terapia Ocupacional', specialties: ['Integração Sensorial', 'TO'] },
     { id: 'room3', name: 'Sala 03 - Avaliação', specialties: ['Neuropsicologia'] },
     { id: 'room4', name: 'Sala 04 - TO', specialties: ['Integração Sensorial', 'TO'] },
@@ -856,7 +858,7 @@ export default function App() {
       });
     });
 
-    // Normalize score for kids if it's not already 0, 0.5 or 1
+    // Normalize score for crianças if it's not already 0, 0.5 or 1
     let finalScore = score;
     if (isKid && skillMaxScore === 1 && ![0, 0.5, 1].includes(score)) {
       if (score >= 3) finalScore = 1;
@@ -898,7 +900,7 @@ export default function App() {
     setHistory(prev => {
       const updatedHistory = [newHistoryItem, ...prev];
       
-      // Regra de Maestria para Kids: 5 vezes consecutivas nota 1.0
+      // Regra de Maestria para Criança: 5 vezes consecutivas nota 1.0
       const targetPatient = allPatients.find(p => p.id === pid);
       const clinicalRecord = clinicalRecords.find(r => r.patientId === pid);
       const isKid = (targetPatient?.age !== undefined && targetPatient.age <= 12) || clinicalRecord?.anamnesisData?.formType === 'child';
@@ -1113,7 +1115,18 @@ export default function App() {
       ) : user.subscriptionStatus === 'pending' ? (
         <SubscriptionRequired user={user} onLogout={handleLogout} />
       ) : user.role === 'patient' ? (
-        <PatientDashboard user={user} onLogout={handleLogout} onMoodCheckin={handleMoodCheckin} tasks={tasks.filter(t => t.patientId === user.id)} onCompleteTask={handleCompleteTask} history={history.filter(h => h.patientId === user.id)} energyTags={ENERGY_TAGS} sharedNotes={therapistNotes.filter(n => n.patientId === user.id && n.type === 'shared')} protocols={protocols} onAddFamilyNote={handleAddFamilyNote} />
+        <PatientDashboard 
+          user={user} 
+          onLogout={handleLogout} 
+          onMoodCheckin={handleMoodCheckin} 
+          tasks={tasks.filter(t => t.patientId === user.id)} 
+          onCompleteTask={handleCompleteTask} 
+          history={history.filter(h => h.patientId === user.id)} 
+          energyTags={user.type === 'conventional' ? ADULT_CONVENTIONAL_TAGS : ENERGY_TAGS} 
+          sharedNotes={therapistNotes.filter(n => n.patientId === user.id && n.type === 'shared')} 
+          protocols={protocols} 
+          onAddFamilyNote={handleAddFamilyNote} 
+        />
       ) : user.role === 'coordinator' ? (
         <CoordinatorDashboard 
           user={user} 
@@ -1128,6 +1141,10 @@ export default function App() {
             const agendaId = id.replace('res-', '');
             handleUpdateAgendaStatus(Number(agendaId), 'canceled');
           }}
+          protocols={protocols}
+          setProtocols={setProtocols}
+          activityLogs={activityLogs}
+          onAddActivityLog={onAddActivityLog}
         />
       ) : (user.role === 'admin' || user.role === 'owner') ? (
         <AdminDashboard onLogout={handleLogout} />

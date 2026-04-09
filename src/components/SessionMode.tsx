@@ -132,7 +132,7 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, onDeleteHistoryIt
                 {goal.name}
               </h2>
 
-              {/* Mastery Progress for Kids */}
+              {/* Mastery Progress for Criança */}
               {patient.age <= 12 && (
                 <div className="flex gap-2 mb-8 items-center">
                   {[1, 2, 3, 4, 5].map((i) => {

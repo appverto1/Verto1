@@ -41,10 +41,13 @@ async function getAuthHeaders() {
   const supabase = await getSupabase();
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token;
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': token ? `Bearer ${token}` : ''
+  const headers: any = {
+    'Content-Type': 'application/json'
   };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
 }
 
 // Helper to handle offline-first saving
@@ -373,16 +376,9 @@ export const dataService = {
   
   async inviteToClinic(email: string, role: string) {
     try {
-      const supabase = await getSupabase();
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-
       const response = await fetch('/api/clinic/invite', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : ''
-        },
+        headers: await getAuthHeaders(),
         credentials: 'include',
         body: JSON.stringify({ email, role })
       });

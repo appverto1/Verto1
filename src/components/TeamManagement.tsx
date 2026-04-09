@@ -30,8 +30,10 @@ interface Member {
 
 const PLAN_LIMITS: Record<string, number> = {
   'Essencial': 2,
-  'Profissional': 5,
-  'Clínica': 999,
+  'Crescimento': 7,
+  'Avançado': 12,
+  'Enterprise': 999,
+  'Premium': 999,
   'Paciente': 0
 };
 
@@ -164,9 +166,14 @@ export function TeamManagement({ user }: { user: any }) {
         
         <div className="flex items-center gap-3">
           {!canInvite && (
-            <span className="px-3 py-1 bg-amber-50 text-amber-600 rounded-lg text-[10px] font-bold uppercase border border-amber-100">
-              Limite atingido
-            </span>
+            <button 
+              onClick={() => {
+                window.alert('Para aumentar o limite de profissionais, por favor faça o upgrade do seu plano na aba de Configurações.');
+              }}
+              className="px-4 py-2 bg-amber-500 text-white rounded-xl text-xs font-bold uppercase shadow-lg shadow-amber-500/20 hover:scale-105 transition-all"
+            >
+              Fazer Upgrade
+            </button>
           )}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />

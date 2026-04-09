@@ -117,7 +117,7 @@ export const ProtocolEditor = ({ protocol, onSave, onCancel }: any) => {
         <div className="bg-gray-50 p-4 rounded-2xl border border-gray-200 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-2"> 
           <div className="md:col-span-2"> 
             <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nome do Protocolo</label> 
-            <input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7551FF]" value={localProtocol.title} onChange={(e) => setLocalProtocol({ ...localProtocol, title: e.target.value })} placeholder="Ex: Protocolo de Ansiedade Infantil" /> 
+            <input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7551FF]" value={localProtocol.title} onChange={(e) => setLocalProtocol({ ...localProtocol, title: e.target.value })} placeholder="Ex: Protocolo de Ansiedade" /> 
           </div> 
           <div> 
             <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Categoria</label> 

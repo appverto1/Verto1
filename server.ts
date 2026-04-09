@@ -83,7 +83,7 @@ async function startServer() {
   const PORT = 3000;
 
   // Trust proxy is required for rate limiting and secure cookies behind Railway's load balancer
-  app.set('trust proxy', 1);
+  app.set('trust proxy', true);
   
   console.log('[Config] SESSION_SECRET defined:', !!process.env.SESSION_SECRET);
   console.log('[Config] SUPABASE_SERVICE_ROLE_KEY defined:', !!process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -227,7 +227,11 @@ async function startServer() {
       return next();
     }
 
-    console.log(`[Auth] No session found for ${req.path}. Cookies:`, req.cookies ? Object.keys(req.cookies) : 'none');
+    const cookieHeader = req.headers.cookie;
+    console.log(`[Auth] No session found for ${req.path}. Cookies present:`, !!cookieHeader);
+    if (cookieHeader) {
+      console.log(`[Auth] Cookie names:`, cookieHeader.split(';').map((c: string) => c.split('=')[0].trim()));
+    }
 
     // 2. Fallback: Check Authorization Header (Token-based)
     const authHeader = req.headers.authorization;
@@ -528,6 +532,7 @@ async function startServer() {
           role: roleToUse,
           name: name || email.split('@')[0],
           subscriptionStatus: 'pending',
+          planName: finalPlanName,
           planPrice: finalPlanPrice,
           clinicId: newProfile.clinic_id,
           firstLoginCompleted: false
@@ -569,7 +574,7 @@ async function startServer() {
       mockUser = {
         id: 'mock-alexandre-123',
         email: 'alexandre@verto.com',
-        name: 'Alexandre (Infantil)',
+        name: 'Alexandre',
         role: 'patient',
         age: 8,
         subscriptionStatus: 'active',
@@ -580,7 +585,7 @@ async function startServer() {
       mockUser = {
         id: 'mock-joao-123',
         email: 'joao@verto.com',
-        name: 'João (Adulto TEA)',
+        name: 'João',
         role: 'patient',
         age: 28,
         subscriptionStatus: 'active',
@@ -591,7 +596,7 @@ async function startServer() {
       mockUser = {
         id: 'mock-pedro-123',
         email: 'pedro@verto.com',
-        name: 'Pedro (Adulto Convencional)',
+        name: 'Pedro',
         role: 'patient',
         age: 35,
         subscriptionStatus: 'active',
@@ -1038,6 +1043,35 @@ async function startServer() {
     }
   });
 
+  app.post('/api/storage/create-bucket', checkAuth, async (req, res) => {
+    const { bucketName } = req.body;
+    if (!bucketName) return res.status(400).json({ error: 'Bucket name is required' });
+
+    try {
+      // Check if bucket exists
+      const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+      if (listError) throw listError;
+
+      const exists = buckets.find(b => b.name === bucketName);
+      if (exists) {
+        return res.json({ success: true, message: 'Bucket already exists' });
+      }
+
+      // Create bucket
+      const { data, error } = await supabase.storage.createBucket(bucketName, {
+        public: true,
+        fileSizeLimit: 5242880, // 5MB
+        allowedMimeTypes: ['image/png', 'image/jpeg', 'image/gif']
+      });
+
+      if (error) throw error;
+      res.json({ success: true, message: 'Bucket created successfully', data });
+    } catch (error: any) {
+      console.error(`Error creating bucket ${bucketName}:`, error);
+      res.status(500).json({ error: error.message || String(error) });
+    }
+  });
+
   // Patients
   app.get('/api/patients', checkAuth, async (req: any, res) => {
     try {
@@ -1263,7 +1297,8 @@ async function startServer() {
       console.log(`[Onboarding] Updating Supabase for ${userId}...`);
       
       const updateData: any = { 
-        name
+        name,
+        subscription_status: 'active'
       };
 
       // Only add these if they are provided and likely to exist
@@ -1309,6 +1344,7 @@ async function startServer() {
         req.session.user.name = name;
         if (profilePicture) req.session.user.profilePicture = profilePicture;
         req.session.user.firstLoginCompleted = true;
+        req.session.user.subscriptionStatus = 'active';
         
         req.session.save((err) => {
           if (err) {

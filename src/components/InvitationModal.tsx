@@ -31,7 +31,8 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
     'Essencial': 2,
     'Crescimento': 7,
     'Avançado': 12,
-    'Enterprise': 999
+    'Enterprise': 999,
+    'Premium': 999
   };
 
   const currentPlan = user.planName || 'Essencial';
