@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   LayoutDashboard, 
   Users, 
@@ -24,14 +24,25 @@ import {
   Edit2,
   Trash2,
   History,
-  ClipboardCheck
+  ClipboardCheck,
+  CalendarRange,
+  CalendarDays,
+  CalendarPlus,
+  MessageCircle,
+  CreditCard,
+  CheckCircle2,
+  AlertCircle,
+  Zap,
+  Heart,
+  X
 } from 'lucide-react';
 import { TeamManagement } from './TeamManagement';
 import { InvitationModal } from './InvitationModal';
 import { SettingsMenu } from './SettingsMenu';
-import { LogoVerto } from './Common';
+import { PatientDetailView } from './PatientDetailView';
 import { RoomReservation } from './RoomReservation';
 import { ProtocolManagementSystem } from './Protocols';
+import { CalendarWidget, DayDetailsModal } from './Calendar';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   BarChart, 
@@ -62,6 +73,14 @@ interface CoordinatorDashboardProps {
   setProtocols: (protocols: any) => void;
   activityLogs: any[];
   onAddActivityLog: (title: string, content: string, type?: string) => void;
+  onScheduleSession: (session: any) => any;
+  onUpdateAppointment: (id: number, updates: any) => void;
+  onUpdateAgendaStatus: (id: number, status: string) => void;
+  onAddPatient: (patient: any) => void;
+  patientsHistory: any[];
+  therapistNotes: any[];
+  onAddNote: (pid: any, txt: string, visibility: string, subject?: string) => void;
+  onUpdateProfile: (updates: any) => void;
 }
 
 export function CoordinatorDashboard({ 
@@ -77,14 +96,204 @@ export function CoordinatorDashboard({
   protocols,
   setProtocols,
   activityLogs,
-  onAddActivityLog
+  onAddActivityLog,
+  onScheduleSession,
+  onUpdateAppointment,
+  onUpdateAgendaStatus,
+  onAddPatient,
+  patientsHistory,
+  therapistNotes,
+  onAddNote,
+  onUpdateProfile
 }: CoordinatorDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'team' | 'financial' | 'patients' | 'agenda' | 'rooms' | 'protocols' | 'settings' | 'logs'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'team' | 'financial' | 'patients' | 'agenda' | 'rooms' | 'protocols' | 'settings' | 'logs' | 'billing'>('dashboard');
   const [showInvitationModal, setShowInvitationModal] = useState(false);
+  const [showBillingDetails, setShowBillingDetails] = useState(false);
+
+  const billingHistory = [
+    { date: '15/03/2026', amount: 149.90, status: 'paid', method: 'Cartão •••• 4242' },
+    { date: '15/02/2026', amount: 149.90, status: 'paid', method: 'Cartão •••• 4242' },
+    { date: '15/01/2026', amount: 149.90, status: 'paid', method: 'Cartão •••• 4242' },
+  ];
+
+  const upcomingBills = [
+    { date: '15/04/2026', amount: 149.90, status: 'pending' },
+    { date: '15/05/2026', amount: 149.90, status: 'pending' },
+    { date: '15/06/2026', amount: 149.90, status: 'pending' },
+  ];
+
+  const mockMedicalRecord = {
+    firstInterview: {
+      date: '10/01/2024',
+      therapist: 'Dra. Ana Silva',
+      mainComplaint: 'Dificuldades na interação social e atraso na fala.',
+      history: 'Gestação sem intercorrências. Marcos do desenvolvimento motores dentro do esperado, porém sem balbucio aos 12 meses.',
+      observations: 'Paciente evita contato visual, apresenta estereotipias motoras (flapping).',
+      diagnosis: 'TEA (Transtorno do Espectro Autista) - Nível 1 de suporte.',
+      recommendations: 'Terapia ABA 20h semanais, Fonoaudiologia 2h semanais.'
+    }
+  };
   const [loading, setLoading] = useState(false);
   const [isEditingRooms, setIsEditingRooms] = useState(false);
   const [newRoom, setNewRoom] = useState({ name: '', specialties: '' });
   const [editingRoom, setEditingRoom] = useState<any>(null);
+
+  // Agenda State
+  const [agendaView, setAgendaView] = useState<'day' | 'week' | 'month'>('day');
+  const [professionalFilter, setProfessionalFilter] = useState('all');
+  const [isAddSessionModalOpen, setIsAddSessionModalOpen] = useState(false);
+  const [isDayDetailsModalOpen, setIsDayDetailsModalOpen] = useState(false);
+  const [calendarDate, setCalendarDate] = useState(new Date());
+  const [sessionDate, setSessionDate] = useState(new Date().toISOString().split('T')[0]);
+  const [sessionTime, setSessionTime] = useState('08:00');
+  const [sessionPatientName, setSessionPatientName] = useState('');
+  const [sessionApproach, setSessionApproach] = useState('');
+  const [sessionRoom, setSessionRoom] = useState('');
+  const [sessionProfessional, setSessionProfessional] = useState('');
+  const [sessionNumSessions, setSessionNumSessions] = useState(1);
+  const [editingAppointmentId, setEditingAppointmentId] = useState<number | null>(null);
+  const [selectedPatientId, setSelectedPatientId] = useState<any>(null);
+  const [view, setView] = useState<'home' | 'patient'>('home');
+  const [filteredPatients, setFilteredPatients] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (sessionPatientName) {
+      const matches = allPatients.filter((p: any) => p.name.toLowerCase().includes(sessionPatientName.toLowerCase()));
+      setFilteredPatients(matches);
+    } else {
+      setFilteredPatients([]);
+    }
+  }, [sessionPatientName, allPatients]);
+
+  const selectPatientForSession = (name: string) => {
+    setSessionPatientName(name);
+    setFilteredPatients([]);
+  };
+
+  const resetSessionForm = () => {
+    setSessionPatientName('');
+    setSessionTime('08:00');
+    setSessionRoom('');
+    setSessionApproach('');
+    setSessionProfessional('');
+    setSessionNumSessions(1);
+    setEditingAppointmentId(null);
+  };
+
+  const handleSessionSubmit = async () => {
+    if (!sessionPatientName || !sessionTime || !sessionRoom) return alert("Preencha nome, horário e sala");
+
+    if (editingAppointmentId) {
+      const updates = {
+        name: sessionPatientName,
+        date: sessionDate,
+        time: sessionTime,
+        type: sessionApproach || "Consulta Padrão",
+        room: sessionRoom,
+        professional: sessionProfessional
+      };
+      onUpdateAppointment(editingAppointmentId, updates);
+      setIsAddSessionModalOpen(false);
+      resetSessionForm();
+      return;
+    }
+
+    const newSession = {
+      patientName: sessionPatientName,
+      date: sessionDate,
+      time: sessionTime,
+      approach: sessionApproach || "Consulta Padrão",
+      room: sessionRoom,
+      professional: sessionProfessional,
+      numSessions: sessionNumSessions
+    };
+    const result = onScheduleSession(newSession);
+    if (result && !result.success) {
+      return alert(result.errors.join('\n'));
+    }
+
+    setIsAddSessionModalOpen(false);
+    resetSessionForm();
+  };
+
+  const handleStatusUpdate = (id: number, status: string) => {
+    onUpdateAgendaStatus(id, status);
+  };
+
+  const handleEditAppointment = (appointment: any) => {
+    setEditingAppointmentId(appointment.id);
+    setSessionPatientName(appointment.name);
+    setSessionDate(appointment.date);
+    setSessionTime(appointment.time);
+    setSessionApproach(appointment.type);
+    setSessionRoom(appointment.room);
+    setSessionProfessional(appointment.therapistName);
+    setIsAddSessionModalOpen(true);
+  };
+
+  const onPatientClick = (patientId: any) => {
+    setSelectedPatientId(patientId);
+    setView('patient');
+  };
+
+  const filteredAgenda = useMemo(() => {
+    let filtered = therapistAgenda;
+    if (professionalFilter !== 'all') {
+      filtered = filtered.filter(a => a.therapistName === professionalFilter);
+    }
+    return filtered;
+  }, [therapistAgenda, professionalFilter]);
+
+  const currentViewAgenda = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    return filteredAgenda.filter((a: any) => {
+      const itemDate = new Date(a.date + 'T00:00:00');
+      if (agendaView === 'day') return itemDate.getTime() === today.getTime();
+      if (agendaView === 'week') {
+        const nextWeek = new Date(today);
+        nextWeek.setDate(today.getDate() + 7);
+        return itemDate >= today && itemDate <= nextWeek;
+      }
+      if (agendaView === 'month') return itemDate.getMonth() === today.getMonth() && itemDate.getFullYear() === today.getFullYear();
+      return true;
+    }).sort((a, b) => a.time.localeCompare(b.time));
+  }, [agendaView, filteredAgenda]);
+
+  const groupedAgenda = useMemo(() => {
+    if (agendaView === 'day' || agendaView === 'month') return null;
+    const items = currentViewAgenda;
+    const grouped: any = {};
+    items.forEach((item: any) => {
+      const dateKey = new Date(item.date + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric', month: 'short' });
+      if (!grouped[dateKey]) grouped[dateKey] = [];
+      grouped[dateKey].push(item);
+    });
+    return grouped;
+  }, [agendaView, currentViewAgenda]);
+
+  const handleCheckout = async (planId: string) => {
+    setLoading(true);
+    try {
+      const response = await fetch('/api/stripe/create-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planId, userId: user.id })
+      });
+      const data = await response.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        alert('Erro ao iniciar checkout: ' + data.error);
+      }
+    } catch (error) {
+      console.error('Checkout error:', error);
+      alert('Erro de conexão ao processar pagamento.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleAddRoom = (e: React.FormEvent) => {
     e.preventDefault();
@@ -143,95 +352,355 @@ export function CoordinatorDashboard({
 
   const COLORS = ['#4318FF', '#6AD2FF', '#EFF4FB', '#A3AED0'];
 
-  const renderDashboard = () => (
-    <div className="space-y-8 animate-in fade-in duration-500">
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {[
-          { label: 'Faturamento Mensal', value: 'R$ 45.250', icon: DollarSign, trend: '+12%', color: 'bg-blue-50 text-[#4318FF]' },
-          { label: 'Lucro Líquido', value: 'R$ 15.935', icon: TrendingUp, trend: '+8.4%', color: 'bg-green-50 text-green-600' },
-          { label: 'Pacientes Ativos', value: allPatients.length.toString(), icon: Users, trend: '+3', color: 'bg-purple-50 text-purple-600' },
-          { label: 'Sessões Realizadas', value: '142', icon: Calendar, trend: '+15', color: 'bg-orange-50 text-orange-600' },
-        ].map((stat, i) => (
-          <div key={i} className="bg-white p-6 rounded-[32px] shadow-sm border border-slate-100 hover:shadow-md transition-all group">
-            <div className="flex items-center justify-between mb-4">
-              <div className={`w-12 h-12 ${stat.color} rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform`}>
-                <stat.icon size={24} />
+  const renderAgendaContent = () => (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between bg-white p-6 rounded-[32px] shadow-sm border border-slate-100">
+        <div>
+          <h3 className="text-xl font-bold text-slate-900">Agenda Global da Clínica</h3>
+          <p className="text-slate-500 text-sm">Visualize e gerencie todos os atendimentos.</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="bg-slate-100 p-1 rounded-xl flex gap-1">
+            <button 
+              onClick={() => setAgendaView('day')} 
+              className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${agendaView === 'day' ? 'bg-white text-[#4318FF] shadow-sm' : 'text-slate-400'}`}
+            >
+              <Calendar size={14} /> Dia
+            </button>
+            <button 
+              onClick={() => setAgendaView('week')} 
+              className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${agendaView === 'week' ? 'bg-white text-[#4318FF] shadow-sm' : 'text-slate-400'}`}
+            >
+              <CalendarRange size={14} /> Semana
+            </button>
+            <button 
+              onClick={() => setAgendaView('month')} 
+              className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${agendaView === 'month' ? 'bg-white text-[#4318FF] shadow-sm' : 'text-slate-400'}`}
+            >
+              <CalendarDays size={14} /> Mês
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white p-6 rounded-[32px] shadow-sm border border-slate-100">
+        <div className="mb-6 flex items-center gap-3 overflow-x-auto no-scrollbar pb-2">
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap">Filtrar Profissional:</span>
+          <button 
+            onClick={() => setProfessionalFilter('all')}
+            className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${professionalFilter === 'all' ? 'bg-[#4318FF] text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
+          >
+            Todos
+          </button>
+          {Array.from(new Set(therapistAgenda.map(a => a.therapistName))).filter(Boolean).map(prof => (
+            <button 
+              key={prof}
+              onClick={() => setProfessionalFilter(prof)}
+              className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${professionalFilter === prof ? 'bg-[#4318FF] text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
+            >
+              {prof}
+            </button>
+          ))}
+        </div>
+
+        {agendaView === 'day' ? (
+          <div className="space-y-4">
+            <button 
+              onClick={() => setIsAddSessionModalOpen(true)}
+              className="w-full bg-white rounded-2xl border-2 border-dashed border-[#4318FF]/40 p-4 flex items-center justify-center cursor-pointer hover:bg-[#F4F7FE] transition-all gap-3 group mb-4"
+            >
+              <div className="w-8 h-8 rounded-full bg-[#4318FF]/10 text-[#4318FF] flex items-center justify-center group-hover:scale-110 transition-transform"><Plus size={18} /></div>
+              <span className="text-xs font-semibold text-[#4318FF] uppercase tracking-wider">Novo Agendamento</span>
+            </button>
+            {currentViewAgenda.length > 0 ? (
+              currentViewAgenda.map((item, i) => (
+                <div key={i} onClick={() => onPatientClick(item.patientId)} className="flex items-center gap-6 p-4 bg-white hover:bg-slate-50 rounded-2xl transition-all border border-slate-100 hover:border-blue-500/30 group cursor-pointer">
+                  <div className="w-20 text-center">
+                    <p className="text-sm font-black text-[#4318FF]">{item.time}</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase">Hoje</p>
+                  </div>
+                  <div className="w-1 h-10 bg-blue-100 rounded-full" />
+                  <div className="flex-1">
+                    <p className="text-sm font-bold text-slate-900">{item.patientName}</p>
+                    <p className="text-xs text-slate-400 font-medium">Terapeuta: {item.therapistName || 'Dr. Ricardo'}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1">
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleStatusUpdate(item.id, 'confirmed'); }}
+                        className={`px-2 py-1 rounded-lg text-[8px] font-bold uppercase transition-all ${item.status === 'confirmed' ? 'bg-green-600 text-white' : 'bg-green-50 text-green-600 hover:bg-green-600 hover:text-white'}`}
+                      >
+                        Conf
+                      </button>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleStatusUpdate(item.id, 'pending'); }}
+                        className={`px-2 py-1 rounded-lg text-[8px] font-bold uppercase transition-all ${item.status === 'pending' ? 'bg-yellow-500 text-white' : 'bg-yellow-50 text-yellow-600 hover:bg-yellow-500 hover:text-white'}`}
+                      >
+                        Pend
+                      </button>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleStatusUpdate(item.id, 'canceled'); }}
+                        className={`px-2 py-1 rounded-lg text-[8px] font-bold uppercase transition-all ${item.status === 'canceled' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600 hover:bg-red-600 hover:text-white'}`}
+                      >
+                        Canc
+                      </button>
+                    </div>
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); handleEditAppointment(item); }}
+                      className="p-2 text-slate-400 hover:text-[#4318FF] hover:bg-blue-50 rounded-xl transition-all"
+                    >
+                      <Settings size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="text-center py-20 opacity-50">
+                <Calendar size={48} className="mx-auto mb-4 text-slate-300" />
+                <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Nenhum atendimento para hoje</p>
               </div>
-              <span className="text-xs font-bold text-green-500 bg-green-50 px-2 py-1 rounded-lg">{stat.trend}</span>
+            )}
+          </div>
+        ) : agendaView === 'month' ? (
+          <CalendarWidget 
+            agenda={filteredAgenda} 
+            currentDate={calendarDate} 
+            onDateChange={setCalendarDate}
+            onDateSelect={(dateStr: string) => {
+              setSessionDate(dateStr);
+              setIsDayDetailsModalOpen(true);
+            }}
+          />
+        ) : (
+          <div className="space-y-8">
+            {groupedAgenda && Object.keys(groupedAgenda).length > 0 ? (
+              Object.keys(groupedAgenda).map(dateKey => (
+                <div key={dateKey}>
+                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 ml-1 flex items-center gap-2">
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#4318FF]" />
+                    {dateKey}
+                  </h4>
+                  <div className="space-y-3">
+                    {groupedAgenda[dateKey].map((item: any, i: number) => (
+                      <div key={i} className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex items-center justify-between hover:bg-white hover:shadow-md transition-all group">
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-white rounded-xl flex flex-col items-center justify-center font-bold text-[#4318FF] shadow-sm">
+                            <span className="text-[8px] opacity-50 uppercase">ÀS</span>
+                            <span className="text-sm">{item.time}</span>
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-slate-900 text-sm">{item.patientName}</h3>
+                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tight">Terapeuta: {item.therapistName}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className={`px-2 py-1 rounded-lg text-[8px] font-bold uppercase ${item.status === 'confirmed' ? 'bg-green-100 text-green-600' : item.status === 'pending' ? 'bg-yellow-100 text-yellow-600' : 'bg-red-100 text-red-500'}`}>
+                            {item.status}
+                          </span>
+                          <div className="px-2 py-1 bg-white text-slate-400 rounded-lg text-[8px] font-bold uppercase border border-slate-100">
+                            {item.type}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="text-center py-20 opacity-50">
+                <CalendarRange size={48} className="mx-auto mb-4 text-slate-300" />
+                <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Nenhum atendimento para esta semana</p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <DayDetailsModal 
+        isOpen={isDayDetailsModalOpen}
+        onClose={() => setIsDayDetailsModalOpen(false)}
+        date={sessionDate}
+        agenda={filteredAgenda}
+        onAddSession={() => setIsAddSessionModalOpen(true)}
+        onPatientClick={onPatientClick}
+      />
+    </div>
+  );
+
+  const renderRoomsContent = () => (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between bg-white p-6 rounded-[32px] shadow-sm border border-slate-100">
+        <div>
+          <h3 className="text-xl font-bold text-slate-900">Gestão de Salas</h3>
+          <p className="text-slate-500 text-sm">Configure as salas disponíveis para reserva.</p>
+        </div>
+        <button 
+          onClick={() => setIsEditingRooms(!isEditingRooms)}
+          className={`px-6 py-3 rounded-2xl font-bold text-sm transition-all flex items-center gap-2 ${isEditingRooms ? 'bg-slate-100 text-slate-600' : 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20'}`}
+        >
+          {isEditingRooms ? 'Ver Reservas' : 'Editar Salas'}
+        </button>
+      </div>
+
+      {isEditingRooms ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-1">
+            <div className="bg-white p-6 rounded-[32px] shadow-sm border border-slate-100 sticky top-6">
+              <h4 className="text-sm font-bold text-slate-900 mb-6 flex items-center gap-2">
+                <Plus size={18} className="text-[#4318FF]" />
+                {editingRoom ? 'Editar Sala' : 'Nova Sala'}
+              </h4>
+              <form onSubmit={editingRoom ? handleUpdateRoom : handleAddRoom} className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Nome da Sala</label>
+                  <input 
+                    type="text" 
+                    value={newRoom.name}
+                    onChange={(e) => setNewRoom({...newRoom, name: e.target.value})}
+                    className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl text-sm font-semibold focus:ring-2 focus:ring-blue-500/20 transition-all"
+                    placeholder="Ex: Sala 01"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Especialidades</label>
+                  <input 
+                    type="text" 
+                    value={newRoom.specialties}
+                    onChange={(e) => setNewRoom({...newRoom, specialties: e.target.value})}
+                    className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl text-sm font-semibold focus:ring-2 focus:ring-blue-500/20 transition-all"
+                    placeholder="Ex: ABA, TCC, Fono"
+                  />
+                  <p className="text-[9px] text-slate-400 mt-1 ml-1">Separe por vírgula</p>
+                </div>
+                <button 
+                  type="submit"
+                  className="w-full py-4 bg-[#4318FF] text-white rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
+                >
+                  {editingRoom ? 'Atualizar Sala' : 'Adicionar Sala'}
+                </button>
+                {editingRoom && (
+                  <button 
+                    type="button"
+                    onClick={() => { setEditingRoom(null); setNewRoom({ name: '', specialties: '' }); }}
+                    className="w-full py-2 text-slate-400 text-[10px] font-bold uppercase tracking-widest"
+                  >
+                    Cancelar Edição
+                  </button>
+                )}
+              </form>
+            </div>
+          </div>
+
+          <div className="lg:col-span-2">
+            <div className="bg-white p-6 rounded-[32px] shadow-sm border border-slate-100">
+              <h4 className="text-sm font-bold text-slate-900 mb-6">Salas Cadastradas</h4>
+              <div className="grid gap-4">
+                {rooms.map(room => (
+                  <div key={room.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100 group hover:bg-white hover:shadow-md transition-all">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-white text-slate-400 rounded-xl flex items-center justify-center group-hover:text-[#4318FF] transition-all">
+                        <DoorOpen size={24} />
+                      </div>
+                      <div>
+                        <h5 className="font-bold text-slate-900">{room.name}</h5>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {room.specialties.map((s: string) => (
+                            <span key={s} className="px-2 py-0.5 bg-white text-slate-500 rounded-full text-[9px] font-bold uppercase tracking-wider border border-slate-100">{s}</span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => handleEditRoom(room)}
+                        className="p-2 text-slate-400 hover:text-[#4318FF] hover:bg-blue-50 rounded-xl transition-all"
+                      >
+                        <Edit2 size={18} />
+                      </button>
+                      <button 
+                        onClick={() => handleDeleteRoom(room.id)}
+                        className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <RoomReservation 
+          user={user}
+          rooms={rooms}
+          reservations={roomReservations}
+          onDeleteReservation={onDeleteRoomReservation}
+          onBack={() => setIsEditingRooms(true)}
+        />
+      )}
+    </div>
+  );
+
+  const renderDashboard = () => (
+    <div className="space-y-12 animate-in fade-in duration-500">
+      {/* Agenda Global Section */}
+      <section className="space-y-6">
+        <div className="flex items-center gap-3 px-2">
+          <div className="p-2 bg-blue-50 text-[#4318FF] rounded-xl"><Calendar size={24} /></div>
+          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Agenda Global</h2>
+        </div>
+        {renderAgendaContent()}
+      </section>
+
+      {/* Gestão de Salas Section */}
+      <section className="space-y-6">
+        <div className="flex items-center gap-3 px-2">
+          <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl"><DoorOpen size={24} /></div>
+          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Gestão de Salas</h2>
+        </div>
+        {renderRoomsContent()}
+      </section>
+
+      {/* Gestão de Equipe Section */}
+      <section className="space-y-6">
+        <div className="flex items-center gap-3 px-2">
+          <div className="p-2 bg-purple-50 text-purple-600 rounded-xl"><Users size={24} /></div>
+          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Gestão de Equipe</h2>
+        </div>
+        <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100">
+          <TeamManagement user={user} />
+        </div>
+      </section>
+
+      {/* Stats Grid - Moved below */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-8 border-t border-slate-100">
+        {[
+          { id: 'patients', label: 'Pacientes Ativos', value: allPatients.length.toString(), icon: Users, trend: '+3', color: 'bg-purple-50 text-purple-600' },
+          { id: 'agenda', label: 'Sessões Realizadas', value: '142', icon: Calendar, trend: '+15', color: 'bg-orange-50 text-orange-600' },
+        ].map((stat, i) => (
+          <div 
+            key={i} 
+            onClick={() => setActiveTab(stat.id as any)}
+            className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 hover:shadow-xl hover:border-blue-500/30 transition-all group cursor-pointer"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className={`w-14 h-14 ${stat.color} rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform`}>
+                <stat.icon size={28} />
+              </div>
+              <div className="flex flex-col items-end">
+                <span className="text-xs font-bold text-green-500 bg-green-50 px-2 py-1 rounded-lg">{stat.trend}</span>
+                <span className="text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-widest">Ver Detalhes</span>
+              </div>
             </div>
             <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-1">{stat.label}</p>
-            <h3 className="text-2xl font-bold text-slate-900">{stat.value}</h3>
+            <h3 className="text-3xl font-bold text-slate-900">{stat.value}</h3>
           </div>
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Revenue Chart */}
-        <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100">
-          <div className="flex items-center justify-between mb-8">
-            <div>
-              <h3 className="text-lg font-bold text-slate-900 tracking-tight">Crescimento da Clínica</h3>
-              <p className="text-slate-400 text-xs font-medium">Faturamento vs Lucro (Últimos 4 meses)</p>
-            </div>
-            <select className="bg-slate-50 border-none rounded-xl px-4 py-2 text-xs font-bold text-slate-600 outline-none">
-              <option>2024</option>
-            </select>
-          </div>
-          <div className="h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={revenueHistory}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-                <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} dy={10} />
-                <YAxis axisLine={false} tickLine={false} tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} />
-                <Tooltip 
-                  contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                  itemStyle={{ fontWeight: 'bold', fontSize: '12px' }}
-                />
-                <Line type="monotone" dataKey="revenue" stroke="#4318FF" strokeWidth={4} dot={{ r: 6, fill: '#4318FF', strokeWidth: 3, stroke: '#fff' }} activeDot={{ r: 8 }} />
-                <Line type="monotone" dataKey="profit" stroke="#05CD99" strokeWidth={4} dot={{ r: 6, fill: '#05CD99', strokeWidth: 3, stroke: '#fff' }} activeDot={{ r: 8 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Team Performance */}
-        <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100">
-          <div className="flex items-center justify-between mb-8">
-            <div>
-              <h3 className="text-lg font-bold text-slate-900 tracking-tight">Desempenho da Equipe</h3>
-              <p className="text-slate-400 text-xs font-medium">Pacientes por profissional</p>
-            </div>
-            <button className="p-2 hover:bg-slate-50 rounded-xl transition-all">
-              <Plus size={20} className="text-[#4318FF]" />
-            </button>
-          </div>
-          <div className="space-y-6">
-            {teamPerformance.map((member, i) => (
-              <div key={i} className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center font-bold text-slate-600">
-                    {member.name.split(' ')[1][0]}
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-900">{member.name}</p>
-                    <p className="text-xs text-slate-400 font-medium">{member.patients} pacientes ativos</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-bold text-[#4318FF]">R$ {member.revenue.toLocaleString()}</p>
-                  <div className="w-24 h-1.5 bg-slate-100 rounded-full mt-1 overflow-hidden">
-                    <div 
-                      className="h-full bg-[#4318FF] rounded-full" 
-                      style={{ width: `${(member.patients / 20) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+      {/* Removed financial and performance charts as they belong to DRE */}
     </div>
   );
 
@@ -374,6 +843,21 @@ export function CoordinatorDashboard({
     </div>
   );
 
+  if (view === 'patient' && selectedPatientId) {
+    const patient = allPatients.find(p => p.id === selectedPatientId);
+    return (
+      <PatientDetailView 
+        patient={patient} 
+        onBack={() => setView('home')} 
+        history={patientsHistory.filter(h => h.patientId === selectedPatientId)}
+        notes={therapistNotes.filter(n => n.patientId === selectedPatientId)}
+        onAddNote={onAddNote}
+        protocols={protocols}
+        userRole={user.role}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#F4F7FE] flex">
       {/* Sidebar */}
@@ -391,14 +875,13 @@ export function CoordinatorDashboard({
         <nav className="space-y-2 flex-1">
           {[
             { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-            { id: 'team', label: 'Equipe', icon: Users },
-            { id: 'financial', label: 'Financeiro (DRE)', icon: DollarSign, badge: 'EM BREVE' },
             { id: 'patients', label: 'Pacientes', icon: ClipboardList },
-            { id: 'agenda', label: 'Agenda Global', icon: Calendar },
             { id: 'protocols', label: 'Protocolos', icon: ClipboardCheck },
-            { id: 'rooms', label: 'Gestão de Salas', icon: DoorOpen },
             { id: 'logs', label: 'Log de Atividades', icon: History },
             { id: 'settings', label: 'Configurações', icon: Settings },
+            { id: 'financial', label: 'Financeiro (DRE)', icon: DollarSign, badge: 'EM BREVE' },
+            { id: 'flow', label: 'Verto Flow', icon: Zap, badge: 'EM BREVE' },
+            { id: 'birthdays', label: 'Aniversariantes', icon: Heart, badge: 'EM BREVE' },
           ].map((item) => (
             <button 
               key={item.id}
@@ -472,7 +955,7 @@ export function CoordinatorDashboard({
               onViewTeam={() => setActiveTab('team')}
               onOpenInvitations={() => setShowInvitationModal(true)}
               onViewProfile={() => setActiveTab('settings')}
-              onViewBilling={() => setActiveTab('settings')}
+              onViewBilling={() => setActiveTab('billing')}
               onOpenOnboarding={onOpenOnboarding}
             />
           </div>
@@ -487,16 +970,45 @@ export function CoordinatorDashboard({
             )}
             {activeTab === 'team' && (
               <motion.div key="team" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}}>
+                <div className="mb-6">
+                  <button onClick={() => setActiveTab('dashboard')} className="flex items-center gap-2 text-slate-400 hover:text-slate-900 font-bold text-xs uppercase tracking-widest transition-all">
+                    <ChevronRight size={16} className="rotate-180" /> Voltar ao Dashboard
+                  </button>
+                </div>
                 <TeamManagement user={user} />
               </motion.div>
             )}
             {activeTab === 'financial' && (
-              <motion.div key="financial" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="flex flex-col items-center justify-center py-20 bg-white rounded-[40px] shadow-sm border border-slate-100">
+              <motion.div key="financial" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="flex flex-col items-center justify-center py-20 bg-white rounded-[40px] shadow-sm border border-slate-100 p-8 text-center">
                 <div className="w-20 h-20 bg-blue-50 text-[#4318FF] rounded-[32px] flex items-center justify-center mb-6">
                   <DollarSign size={40} />
                 </div>
                 <h3 className="text-2xl font-bold text-slate-900 tracking-tight mb-2">Financeiro e DRE</h3>
-                <p className="text-slate-500 font-medium mb-8">Esta funcionalidade está sendo preparada para você.</p>
+                <p className="text-slate-500 font-medium mb-8 max-w-md">Esta funcionalidade está sendo preparada para você. Em Breve.</p>
+                <span className="px-6 py-2 bg-[#4318FF] text-white rounded-full text-xs font-bold uppercase tracking-widest shadow-lg shadow-blue-500/20">Em Breve</span>
+              </motion.div>
+            )}
+            {activeTab === 'flow' && (
+              <motion.div key="flow" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="flex flex-col items-center justify-center py-20 bg-white rounded-[40px] shadow-sm border border-slate-100 p-8 text-center">
+                <div className="w-20 h-20 bg-blue-50 text-[#4318FF] rounded-[32px] flex items-center justify-center mb-6">
+                  <Zap size={40} />
+                </div>
+                <h3 className="text-2xl font-bold text-slate-900 tracking-tight mb-2">Verto Flow</h3>
+                <p className="text-slate-500 font-medium mb-8 max-w-md">
+                  O coordenador vai poder gerenciar uma lista de espera inteligente para que a agenda seja preenchida por outro paciente caso haja algum cancelamento e horário disponível.
+                </p>
+                <span className="px-6 py-2 bg-[#4318FF] text-white rounded-full text-xs font-bold uppercase tracking-widest shadow-lg shadow-blue-500/20">Em Breve</span>
+              </motion.div>
+            )}
+            {activeTab === 'birthdays' && (
+              <motion.div key="birthdays" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="flex flex-col items-center justify-center py-20 bg-white rounded-[40px] shadow-sm border border-slate-100 p-8 text-center">
+                <div className="w-20 h-20 bg-pink-50 text-pink-600 rounded-[32px] flex items-center justify-center mb-6">
+                  <Heart size={40} />
+                </div>
+                <h3 className="text-2xl font-bold text-slate-900 tracking-tight mb-2">Aniversariantes</h3>
+                <p className="text-slate-500 font-medium mb-8 max-w-md">
+                  Configuração que possibilite o envio de mensagens automáticas de feliz aniversário aos pacientes e profissionais da clínica.
+                </p>
                 <span className="px-6 py-2 bg-[#4318FF] text-white rounded-full text-xs font-bold uppercase tracking-widest shadow-lg shadow-blue-500/20">Em Breve</span>
               </motion.div>
             )}
@@ -521,7 +1033,12 @@ export function CoordinatorDashboard({
                         </div>
                       </div>
                       <div className="flex items-center justify-between pt-4 border-t border-slate-200/50">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Status</span>
+                        <button 
+                          onClick={() => onPatientClick(patient.id)}
+                          className="text-[10px] font-bold text-[#4318FF] uppercase tracking-widest hover:underline flex items-center gap-1"
+                        >
+                          <FileText size={12} /> Prontuário Completo
+                        </button>
                         <span className="px-2 py-1 bg-green-100 text-green-600 rounded-lg text-[10px] font-bold uppercase">Ativo</span>
                       </div>
                     </div>
@@ -530,141 +1047,158 @@ export function CoordinatorDashboard({
               </motion.div>
             )}
             {activeTab === 'agenda' && (
-              <motion.div key="agenda" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100">
-                <h3 className="text-xl font-bold text-slate-900 mb-8">Agenda Global da Clínica</h3>
-                <div className="space-y-4">
-                  {therapistAgenda.map((item, i) => (
-                    <div key={i} className="flex items-center gap-6 p-4 hover:bg-slate-50 rounded-2xl transition-all border border-transparent hover:border-slate-100">
-                      <div className="w-20 text-center">
-                        <p className="text-sm font-black text-[#4318FF]">{item.time}</p>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase">Hoje</p>
-                      </div>
-                      <div className="w-1 h-10 bg-blue-100 rounded-full" />
-                      <div className="flex-1">
-                        <p className="text-sm font-bold text-slate-900">{item.patientName}</p>
-                        <p className="text-xs text-slate-400 font-medium">Terapeuta: {item.therapistName || 'Dr. Ricardo'}</p>
-                      </div>
-                      <div className="px-3 py-1 bg-blue-50 text-[#4318FF] rounded-lg text-[10px] font-bold uppercase">
-                        {item.type}
-                      </div>
+              <motion.div key="agenda" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="space-y-6">
+                <div className="mb-2">
+                  <button onClick={() => setActiveTab('dashboard')} className="flex items-center gap-2 text-slate-400 hover:text-slate-900 font-bold text-xs uppercase tracking-widest transition-all">
+                    <ChevronRight size={16} className="rotate-180" /> Voltar ao Dashboard
+                  </button>
+                </div>
+                {renderAgendaContent()}
+              </motion.div>
+            )}
+            {activeTab === 'billing' && (
+              <motion.div key="billing" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="max-w-4xl mx-auto space-y-8">
+                <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100">
+                  <div className="flex items-center gap-4 mb-8">
+                    <div className="p-3 bg-blue-50 text-[#4318FF] rounded-2xl">
+                      <CreditCard size={24} />
                     </div>
-                  ))}
+                    <div>
+                      <h3 className="text-2xl font-bold text-slate-900 tracking-tight">Assinatura e Planos</h3>
+                      <p className="text-slate-500 font-medium">Gerencie seu plano e faturamento.</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
+                    <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Plano Atual</p>
+                      <h4 className="text-xl font-bold text-slate-900">{user.planName || 'Verto Pro'}</h4>
+                      <p className="text-emerald-500 text-xs font-bold mt-2 flex items-center gap-1">
+                        <CheckCircle2 size={12} /> Ativo
+                      </p>
+                    </div>
+                    <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Próximo Vencimento</p>
+                      <h4 className="text-xl font-bold text-slate-900">15/05/2026</h4>
+                      <p className="text-slate-400 text-xs font-medium mt-2">Renovação automática</p>
+                    </div>
+                    <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Valor Mensal</p>
+                      <h4 className="text-xl font-bold text-slate-900">R$ {user.planPrice?.toFixed(2).replace('.', ',') || '149,90'}</h4>
+                      <p className="text-blue-500 text-xs font-bold mt-2 cursor-pointer hover:underline" onClick={() => setShowBillingDetails(!showBillingDetails)}>
+                        {showBillingDetails ? 'Ocultar detalhes' : 'Ver detalhes'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {showBillingDetails && (
+                    <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="mb-12 space-y-6 overflow-hidden">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="bg-slate-50 p-6 rounded-[32px] border border-slate-100">
+                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Histórico de Pagamentos</h4>
+                          <div className="space-y-3">
+                            {billingHistory.map((bill, i) => (
+                              <div key={i} className="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-100">
+                                <div>
+                                  <p className="text-sm font-bold text-slate-900">{bill.date}</p>
+                                  <p className="text-[10px] text-slate-400 font-medium">{bill.method}</p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-sm font-bold text-slate-900">R$ {bill.amount.toFixed(2).replace('.', ',')}</p>
+                                  <span className="text-[8px] font-bold text-green-500 uppercase">Pago</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="bg-slate-50 p-6 rounded-[32px] border border-slate-100">
+                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Próximos Vencimentos</h4>
+                          <div className="space-y-3">
+                            {upcomingBills.map((bill, i) => (
+                              <div key={i} className="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-100">
+                                <div>
+                                  <p className="text-sm font-bold text-slate-900">{bill.date}</p>
+                                  <p className="text-[10px] text-slate-400 font-medium">Renovação Automática</p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-sm font-bold text-slate-900">R$ {bill.amount.toFixed(2).replace('.', ',')}</p>
+                                  <span className="text-[8px] font-bold text-blue-500 uppercase">Agendado</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+
+                  <h4 className="text-lg font-bold text-slate-900 mb-6">Upgrade de Plano</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className={`p-8 rounded-[40px] border-2 transition-all ${user.planName === 'Crescimento' ? 'border-[#4318FF] bg-blue-50/30' : 'border-slate-100 hover:border-blue-200'}`}>
+                      <div className="flex justify-between items-start mb-6">
+                        <div>
+                          <h5 className="text-xl font-bold text-slate-900">Crescimento</h5>
+                          <p className="text-slate-500 text-sm">Para clínicas em crescimento</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-2xl font-black text-[#4318FF]">R$ 399,90</p>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase">por mês</p>
+                        </div>
+                      </div>
+                      <ul className="space-y-3 mb-8">
+                        {['3 a 7 Profissionais', 'Dashboard de Evolução Clínica', 'Relatórios Consolidados', 'Gestão Financeira Avançada', 'Suporte Prioritário'].map(feat => (
+                          <li key={feat} className="flex items-center gap-2 text-sm text-slate-600 font-medium">
+                            <CheckCircle2 size={16} className="text-emerald-500" /> {feat}
+                          </li>
+                        ))}
+                      </ul>
+                      <button 
+                        onClick={() => handleCheckout('growth_plan_id')}
+                        disabled={loading || user.planName === 'Crescimento'}
+                        className={`w-full py-4 rounded-2xl font-bold text-sm transition-all ${user.planName === 'Crescimento' ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20 hover:scale-[1.02]'}`}
+                      >
+                        {user.planName === 'Crescimento' ? 'Plano Atual' : 'Fazer Upgrade'}
+                      </button>
+                    </div>
+
+                    <div className="p-8 rounded-[40px] border-2 transition-all border-slate-100 hover:border-blue-200">
+                      <div className="flex justify-between items-start mb-6">
+                        <div>
+                          <h5 className="text-xl font-bold text-slate-900">Avançado</h5>
+                          <p className="text-slate-500 text-sm">Para clínicas estabelecidas</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-2xl font-black text-[#4318FF]">R$ 679,90</p>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase">por mês</p>
+                        </div>
+                      </div>
+                      <ul className="space-y-3 mb-8">
+                        {['7 a 12 Profissionais', 'Múltiplos Workspaces de PEI', 'API de Integração de Dados', 'Gerente de Conta Dedicado'].map(feat => (
+                          <li key={feat} className="flex items-center gap-2 text-sm text-slate-600 font-medium">
+                            <CheckCircle2 size={16} className="text-emerald-500" /> {feat}
+                          </li>
+                        ))}
+                      </ul>
+                      <button 
+                        onClick={() => handleCheckout('advanced_plan_id')}
+                        disabled={loading}
+                        className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold text-sm shadow-lg shadow-slate-900/20 hover:scale-[1.02] transition-all"
+                      >
+                        Fazer Upgrade
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </motion.div>
             )}
             {activeTab === 'rooms' && (
               <motion.div key="rooms" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="space-y-6">
-                <div className="flex items-center justify-between bg-white p-6 rounded-[32px] shadow-sm border border-slate-100">
-                  <div>
-                    <h3 className="text-xl font-bold text-slate-900">Gestão de Salas</h3>
-                    <p className="text-slate-500 text-sm">Configure as salas disponíveis para reserva.</p>
-                  </div>
-                  <button 
-                    onClick={() => setIsEditingRooms(!isEditingRooms)}
-                    className={`px-6 py-3 rounded-2xl font-bold text-sm transition-all flex items-center gap-2 ${isEditingRooms ? 'bg-slate-100 text-slate-600' : 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20'}`}
-                  >
-                    {isEditingRooms ? 'Ver Reservas' : 'Editar Salas'}
+                <div className="mb-2">
+                  <button onClick={() => setActiveTab('dashboard')} className="flex items-center gap-2 text-slate-400 hover:text-slate-900 font-bold text-xs uppercase tracking-widest transition-all">
+                    <ChevronRight size={16} className="rotate-180" /> Voltar ao Dashboard
                   </button>
                 </div>
-
-                {isEditingRooms ? (
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    <div className="lg:col-span-1">
-                      <div className="bg-white p-6 rounded-[32px] shadow-sm border border-slate-100 sticky top-6">
-                        <h4 className="text-sm font-bold text-slate-900 mb-6 flex items-center gap-2">
-                          <Plus size={18} className="text-[#4318FF]" />
-                          {editingRoom ? 'Editar Sala' : 'Nova Sala'}
-                        </h4>
-                        <form onSubmit={editingRoom ? handleUpdateRoom : handleAddRoom} className="space-y-4">
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Nome da Sala</label>
-                            <input 
-                              type="text" 
-                              value={newRoom.name}
-                              onChange={(e) => setNewRoom({...newRoom, name: e.target.value})}
-                              className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl text-sm font-semibold focus:ring-2 focus:ring-blue-500/20 transition-all"
-                              placeholder="Ex: Sala 01"
-                              required
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Especialidades</label>
-                            <input 
-                              type="text" 
-                              value={newRoom.specialties}
-                              onChange={(e) => setNewRoom({...newRoom, specialties: e.target.value})}
-                              className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl text-sm font-semibold focus:ring-2 focus:ring-blue-500/20 transition-all"
-                              placeholder="Ex: ABA, TCC, Fono"
-                            />
-                            <p className="text-[9px] text-slate-400 mt-1 ml-1">Separe por vírgula</p>
-                          </div>
-                          <button 
-                            type="submit"
-                            className="w-full py-4 bg-[#4318FF] text-white rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
-                          >
-                            {editingRoom ? 'Atualizar Sala' : 'Adicionar Sala'}
-                          </button>
-                          {editingRoom && (
-                            <button 
-                              type="button"
-                              onClick={() => { setEditingRoom(null); setNewRoom({ name: '', specialties: '' }); }}
-                              className="w-full py-2 text-slate-400 text-[10px] font-bold uppercase tracking-widest"
-                            >
-                              Cancelar Edição
-                            </button>
-                          )}
-                        </form>
-                      </div>
-                    </div>
-
-                    <div className="lg:col-span-2">
-                      <div className="bg-white p-6 rounded-[32px] shadow-sm border border-slate-100">
-                        <h4 className="text-sm font-bold text-slate-900 mb-6">Salas Cadastradas</h4>
-                        <div className="grid gap-4">
-                          {rooms.map(room => (
-                            <div key={room.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100 group hover:bg-white hover:shadow-md transition-all">
-                              <div className="flex items-center gap-4">
-                                <div className="w-12 h-12 bg-white text-slate-400 rounded-xl flex items-center justify-center group-hover:text-[#4318FF] transition-all">
-                                  <DoorOpen size={24} />
-                                </div>
-                                <div>
-                                  <h5 className="font-bold text-slate-900">{room.name}</h5>
-                                  <div className="flex flex-wrap gap-1 mt-1">
-                                    {room.specialties.map((s: string) => (
-                                      <span key={s} className="px-2 py-0.5 bg-white text-slate-500 rounded-full text-[9px] font-bold uppercase tracking-wider border border-slate-100">{s}</span>
-                                    ))}
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <button 
-                                  onClick={() => handleEditRoom(room)}
-                                  className="p-2 text-slate-400 hover:text-[#4318FF] hover:bg-blue-50 rounded-xl transition-all"
-                                >
-                                  <Edit2 size={18} />
-                                </button>
-                                <button 
-                                  onClick={() => handleDeleteRoom(room.id)}
-                                  className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
-                                >
-                                  <Trash2 size={18} />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <RoomReservation 
-                    user={user}
-                    rooms={rooms}
-                    reservations={roomReservations}
-                    onDeleteReservation={onDeleteRoomReservation}
-                    onBack={() => setActiveTab('dashboard')}
-                  />
-                )}
+                {renderRoomsContent()}
               </motion.div>
             )}
             {activeTab === 'protocols' && (
@@ -768,10 +1302,7 @@ export function CoordinatorDashboard({
                       </div>
                       <p className="text-xs text-blue-600 mb-6">Sua clínica possui acesso a todas as ferramentas de gestão e prontuário eletrônico.</p>
                       <button 
-                        onClick={() => {
-                          // In a real app, this would open a Stripe portal or a plan selection modal
-                          window.alert('Funcionalidade de upgrade de plano será implementada em breve. Por favor, entre em contato com o suporte para alterar seu plano.');
-                        }}
+                        onClick={() => setActiveTab('billing')}
                         className="w-full py-3 bg-white text-[#4318FF] rounded-2xl font-bold text-xs shadow-sm hover:shadow-md transition-all"
                       >
                         Gerenciar Assinatura
@@ -790,6 +1321,75 @@ export function CoordinatorDashboard({
           user={user} 
           onClose={() => setShowInvitationModal(false)} 
         />
+      )}
+
+      {isAddSessionModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in" onClick={() => setIsAddSessionModalOpen(false)}>
+          <div className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-pop relative" onClick={e => e.stopPropagation()}>
+            <button onClick={() => setIsAddSessionModalOpen(false)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-600"><X size={24}/></button>
+            <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-2 tracking-tight"><CalendarPlus size={24} className="text-[#4318FF]"/> {editingAppointmentId ? 'Editar Agendamento' : 'Agendar Sessão'}</h2>
+            <div className="space-y-4">
+              <div className="relative">
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Paciente</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none focus:ring-2 focus:ring-blue-500/20 font-semibold text-slate-700" 
+                  placeholder="Buscar..." 
+                  value={sessionPatientName} 
+                  onChange={e => setSessionPatientName(e.target.value)} 
+                />
+                {filteredPatients.length > 0 && (
+                  <div className="absolute top-full left-0 right-0 bg-white border border-slate-100 rounded-xl shadow-xl mt-1 z-20 max-h-40 overflow-y-auto no-scrollbar">
+                    {filteredPatients.map(p => (
+                      <div key={p.id} onClick={() => selectPatientForSession(p.name)} className="p-3 hover:bg-slate-50 cursor-pointer text-sm font-semibold text-slate-700 border-b border-slate-50 last:border-0 flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-full bg-blue-50 text-[#4318FF] flex items-center justify-center text-xs">{p.name.charAt(0)}</div>
+                        {p.name}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Data</label>
+                  <input type="date" className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700" value={sessionDate} onChange={e => setSessionDate(e.target.value)} />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Hora</label>
+                  <input type="time" className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700" value={sessionTime} onChange={e => setSessionTime(e.target.value)} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Abordagem</label>
+                  <select className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700" value={sessionApproach} onChange={e => setSessionApproach(e.target.value)}>
+                    <option value="">Selecione...</option>
+                    <option value="Consulta Padrão">Consulta Padrão</option>
+                    <option value="TCC">TCC</option>
+                    <option value="ABA">ABA</option>
+                    <option value="Integração Sensorial">Integração Sensorial</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Sala</label>
+                  <select className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700" value={sessionRoom} onChange={e => setSessionRoom(e.target.value)}>
+                    <option value="">Selecione...</option>
+                    {rooms.map((room: any) => (
+                      <option key={room.id} value={room.id}>{room.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Terapeuta Responsável</label>
+                <input type="text" className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700" placeholder="Nome do Profissional" value={sessionProfessional} onChange={e => setSessionProfessional(e.target.value)} />
+              </div>
+              <button onClick={handleSessionSubmit} className="w-full bg-[#4318FF] text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-500/20 hover:opacity-90 transition-all mt-2 active:scale-95 uppercase tracking-widest">
+                {editingAppointmentId ? 'Salvar Alterações' : 'Confirmar Agendamento'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

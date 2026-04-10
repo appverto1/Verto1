@@ -207,6 +207,29 @@ export const TherapistDashboard = ({
   const [isDayDetailsModalOpen, setIsDayDetailsModalOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false); 
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleCheckout = async (planId: string) => {
+    setLoading(true);
+    try {
+      const response = await fetch('/api/stripe/create-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planId, userId: user.id })
+      });
+      const data = await response.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        alert('Erro ao iniciar checkout: ' + data.error);
+      }
+    } catch (error) {
+      console.error('Checkout error:', error);
+      alert('Erro de conexão ao processar pagamento.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (runTutorial) {
@@ -495,6 +518,65 @@ export const TherapistDashboard = ({
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Método de Pagamento</p>
               <h3 className="text-xl font-bold text-slate-900">Cartão •••• 4242</h3>
               <p className="text-blue-500 text-xs font-bold mt-2 cursor-pointer hover:underline">Alterar</p>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-[32px] p-8 shadow-sm border border-slate-100 mb-8">
+            <h3 className="text-lg font-bold text-slate-900 mb-6">Upgrade de Plano</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className={`p-8 rounded-[40px] border-2 transition-all ${user.planName === 'Verto Business' ? 'border-[#4318FF] bg-blue-50/30' : 'border-slate-100 hover:border-blue-200'}`}>
+                <div className="flex justify-between items-start mb-6">
+                  <div>
+                    <h5 className="text-xl font-bold text-slate-900">Verto Business</h5>
+                    <p className="text-slate-500 text-sm">Para clínicas em crescimento</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-2xl font-black text-[#4318FF]">R$ 299,90</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase">por mês</p>
+                  </div>
+                </div>
+                <ul className="space-y-3 mb-8">
+                  {['Até 10 Terapeutas', 'Pacientes Ilimitados', 'DRE Avançado', 'Suporte Prioritário', 'Personalização de Marca'].map(feat => (
+                    <li key={feat} className="flex items-center gap-2 text-sm text-slate-600 font-medium">
+                      <CheckCircle2 size={16} className="text-emerald-500" /> {feat}
+                    </li>
+                  ))}
+                </ul>
+                <button 
+                  onClick={() => handleCheckout('business_plan_id')}
+                  disabled={loading || user.planName === 'Verto Business'}
+                  className={`w-full py-4 rounded-2xl font-bold text-sm transition-all ${user.planName === 'Verto Business' ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20 hover:scale-[1.02]'}`}
+                >
+                  {user.planName === 'Verto Business' ? 'Plano Atual' : 'Fazer Upgrade'}
+                </button>
+              </div>
+
+              <div className={`p-8 rounded-[40px] border-2 transition-all ${user.planName === 'Verto Enterprise' ? 'border-[#4318FF] bg-blue-50/30' : 'border-slate-100 hover:border-blue-200'}`}>
+                <div className="flex justify-between items-start mb-6">
+                  <div>
+                    <h5 className="text-xl font-bold text-slate-900">Verto Enterprise</h5>
+                    <p className="text-slate-500 text-sm">Solução completa e ilimitada</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-2xl font-black text-[#4318FF]">R$ 599,90</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase">por mês</p>
+                  </div>
+                </div>
+                <ul className="space-y-3 mb-8">
+                  {['Terapeutas Ilimitados', 'Pacientes Ilimitados', 'DRE Completo', 'Gerente de Conta', 'API de Integração'].map(feat => (
+                    <li key={feat} className="flex items-center gap-2 text-sm text-slate-600 font-medium">
+                      <CheckCircle2 size={16} className="text-emerald-500" /> {feat}
+                    </li>
+                  ))}
+                </ul>
+                <button 
+                  onClick={() => handleCheckout('enterprise_plan_id')}
+                  disabled={loading || user.planName === 'Verto Enterprise'}
+                  className={`w-full py-4 rounded-2xl font-bold text-sm transition-all ${user.planName === 'Verto Enterprise' ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20 hover:scale-[1.02]'}`}
+                >
+                  {user.planName === 'Verto Enterprise' ? 'Plano Atual' : 'Fazer Upgrade'}
+                </button>
+              </div>
             </div>
           </div>
 

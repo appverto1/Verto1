@@ -72,6 +72,10 @@ async function saveOfflineFirst(id: string, data: any, type: any, endpoint: stri
       body: JSON.stringify(data)
     });
 
+    if (response.status === 401) {
+      window.dispatchEvent(new CustomEvent('verto-unauthorized'));
+    }
+
     if (response.ok) {
       const result = await response.json();
       // 3. Mark as synced if successful
@@ -99,6 +103,9 @@ export const dataService = {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
+      if (response.status === 401) {
+        window.dispatchEvent(new CustomEvent('verto-unauthorized'));
+      }
       if (response.ok) {
         const result = await response.json();
         // Update local cache
@@ -148,6 +155,9 @@ export const dataService = {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
+      if (response.status === 401) {
+        window.dispatchEvent(new CustomEvent('verto-unauthorized'));
+      }
       if (response.ok) {
         const result = await response.json();
         for (const l of result.data) {
@@ -168,6 +178,9 @@ export const dataService = {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
+      if (response.status === 401) {
+        window.dispatchEvent(new CustomEvent('verto-unauthorized'));
+      }
       if (response.ok) {
         const result = await response.json();
         for (const n of result.data) {

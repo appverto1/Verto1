@@ -72,6 +72,9 @@ export const syncOfflineData = async () => {
         if (response.ok) {
           await db.records.update(record.id, { sync_status: 'synced' });
           console.log(`Synced ${record.type}: ${record.id}`);
+          
+          // Small delay between sync requests to avoid rate limits
+          await new Promise(resolve => setTimeout(resolve, 100));
         } else {
           const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
           console.error(`Server rejected ${record.type} sync:`, errorData);

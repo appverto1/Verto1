@@ -2,8 +2,9 @@ import React from 'react';
 import { ChevronLeft, ChevronRight, Calendar, X, Plus } from 'lucide-react';
 
 export const CalendarWidget = ({ agenda, currentDate, onDateChange, onDateSelect }: any) => {
-  const year = currentDate.getFullYear();
-  const month = currentDate.getMonth();
+  const date = currentDate instanceof Date ? currentDate : new Date(currentDate);
+  const year = date.getFullYear();
+  const month = date.getMonth();
   
   const getDaysInMonth = (y: number, m: number) => new Date(y, m + 1, 0).getDate();
   const getFirstDayOfMonth = (y: number, m: number) => new Date(y, m, 1).getDay();
