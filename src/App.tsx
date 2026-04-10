@@ -45,15 +45,6 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
-    const handleUnauthorized = () => {
-      console.warn('Unauthorized access detected. Logging out...');
-      setUser(null);
-    };
-    window.addEventListener('verto-unauthorized', handleUnauthorized);
-    return () => window.removeEventListener('verto-unauthorized', handleUnauthorized);
-  }, []);
-
-  useEffect(() => {
     const initSupabase = async () => {
       const supabase = await getSupabase();
       if (!supabase) return;
@@ -463,49 +454,38 @@ export default function App() {
             const allHistory: any[] = [];
             const allTasks: any[] = [];
 
-            // Only fetch for real patients (UUIDs from DB, not mock IDs)
+            // Only fetch for real patients (UUIDs from DB)
             const realPatients = [...allPatients, ...patientsRes.data].filter(p => 
-              p.id && typeof p.id === 'string' && p.id.length > 10 && !p.id.startsWith('mock-')
+              p.id && typeof p.id === 'string' && p.id.length > 10
             );
 
             if (realPatients.length > 0) {
-              // Fetch in batches or with small delays to avoid rate limits
               for (const patient of realPatients) {
-                try {
-                  const [notesRes, historyRes, tasksRes] = await Promise.all([
-                    dataService.getNotes(String(patient.id)),
-                    dataService.getHistory(String(patient.id)),
-                    dataService.getTasks(String(patient.id))
-                  ]);
+                const notesRes = await dataService.getNotes(String(patient.id));
+                if (notesRes.success && notesRes.data) {
+                  allNotes.push(...notesRes.data.map((n: any) => ({
+                    ...n,
+                    patientId: n.patient_id,
+                    date: new Date(n.created_at).toLocaleString()
+                  })));
+                }
 
-                  if (notesRes.success && notesRes.data) {
-                    allNotes.push(...notesRes.data.map((n: any) => ({
-                      ...n,
-                      patientId: n.patient_id,
-                      date: new Date(n.created_at).toLocaleString()
-                    })));
-                  }
+                const historyRes = await dataService.getHistory(String(patient.id));
+                if (historyRes.success && historyRes.data) {
+                  allHistory.push(...historyRes.data.map((h: any) => ({
+                    ...h,
+                    patientId: h.patient_id,
+                    time: new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    dateGroup: new Date(h.created_at).toDateString() === new Date().toDateString() ? "Hoje" : new Date(h.created_at).toLocaleDateString()
+                  })));
+                }
 
-                  if (historyRes.success && historyRes.data) {
-                    allHistory.push(...historyRes.data.map((h: any) => ({
-                      ...h,
-                      patientId: h.patient_id,
-                      time: new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                      dateGroup: new Date(h.created_at).toDateString() === new Date().toDateString() ? "Hoje" : new Date(h.created_at).toLocaleDateString()
-                    })));
-                  }
-
-                  if (tasksRes.success && tasksRes.data) {
-                    allTasks.push(...tasksRes.data.map((t: any) => ({
-                      ...t,
-                      patientId: t.patient_id
-                    })));
-                  }
-                  
-                  // Small delay to prevent bursting
-                  await new Promise(resolve => setTimeout(resolve, 50));
-                } catch (err) {
-                  console.error(`Error fetching data for patient ${patient.id}:`, err);
+                const tasksRes = await dataService.getTasks(String(patient.id));
+                if (tasksRes.success && tasksRes.data) {
+                  allTasks.push(...tasksRes.data.map((t: any) => ({
+                    ...t,
+                    patientId: t.patient_id
+                  })));
                 }
               }
 
