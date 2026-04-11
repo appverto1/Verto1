@@ -1146,6 +1146,15 @@ export default function App() {
           setProtocols={setProtocols}
           activityLogs={activityLogs}
           onAddActivityLog={onAddActivityLog}
+          onScheduleSession={handleScheduleSession}
+          onUpdateAppointment={handleUpdateAppointment}
+          onUpdateAgendaStatus={handleUpdateAgendaStatus}
+          onAddPatient={handleAddPatient}
+          patientsHistory={history}
+          therapistNotes={therapistNotes}
+          onAddNote={handleAddNote}
+          allTasks={tasks}
+          onUpdateProfile={(updates: any) => setUser({ ...user, ...updates })}
         />
       ) : user.role === 'owner' ? (
         <SuperAdminDashboard onLogout={handleLogout} />

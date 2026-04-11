@@ -1465,10 +1465,15 @@ async function startServer() {
   });
 
   // Owner-only stats (CEO dashboard)
-  app.get('/api/owner/stats', checkAuth, async (req: any, res) => {
-    if (req.session.user?.role !== 'owner') {
-      return res.status(403).json({ error: 'Acesso negado' });
+  const checkOwner = (req: any, res: any, next: any) => {
+    if (req.session.user && req.session.user.role === 'owner') {
+      next();
+    } else {
+      res.status(403).json({ error: 'Acesso negado. Apenas o proprietário pode acessar esta rota.' });
     }
+  };
+
+  app.get('/api/owner/stats', checkAuth, checkOwner, async (req: any, res) => {
     try {
       const { count: totalUsers } = await supabase
         .from('users').select('*', { count: 'exact', head: true });
@@ -1485,6 +1490,148 @@ async function startServer() {
 
       res.json({ success: true, stats: { totalUsers, activeUsers, mrr } });
     } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.get('/api/owner/clients', checkAuth, checkOwner, async (req, res) => {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
+      res.json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.get('/api/owner/financial-overview', checkAuth, checkOwner, async (req, res) => {
+    try {
+      // Try to fetch from views (public schema)
+      const [summaryRes, monthlyRes, byPlanRes, topCustomersRes, delinquentRes] = await Promise.all([
+        supabase.from('vw_owner_dre_summary').select('*').single(),
+        supabase.from('vw_owner_dre_monthly').select('*').order('period_month', { ascending: true }),
+        supabase.from('vw_owner_revenue_by_plan').select('*'),
+        supabase.from('vw_owner_customer_profitability').select('*').limit(20),
+        supabase.from('vw_owner_delinquent_customers').select('*')
+      ]);
+
+      const isMissingViews = summaryRes.error?.code === 'PGRST116' || summaryRes.error?.code === '42P01';
+
+      if (isMissingViews) {
+        return res.json({
+          success: true,
+          data: {
+            summary: { revenueNet: 0, contributionMarginPct: 0, ebitda: 0, delinquencyAmount: 0 },
+            monthly: [],
+            byPlan: [],
+            topCustomers: [],
+            delinquentCustomers: [],
+            source: 'fallback'
+          }
+        });
+      }
+
+      if (summaryRes.error && summaryRes.error.code !== 'PGRST116') throw summaryRes.error;
+      if (monthlyRes.error) throw monthlyRes.error;
+
+      res.json({
+        success: true,
+        data: {
+          summary: summaryRes.data || {},
+          monthly: monthlyRes.data || [],
+          byPlan: byPlanRes.data || [],
+          topCustomers: topCustomersRes.data || [],
+          delinquentCustomers: delinquentRes.data || [],
+          source: 'supabase_financial_views'
+        }
+      });
+    } catch (error) {
+      console.error('Financial overview error:', error);
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.post('/api/owner/bootstrap-finance', checkAuth, checkOwner, async (req, res) => {
+    try {
+      // Check if tables exist by trying a simple query on the schema
+      const { error: schemaCheck } = await supabase.schema('finance').from('revenue_entries').select('id').limit(1);
+      
+      if (schemaCheck && schemaCheck.code === '42P01') {
+        return res.status(400).json({ 
+          success: false, 
+          error: 'As tabelas financeiras ainda não foram criadas no banco de dados. Por favor, execute o script SQL primeiro.' 
+        });
+      }
+
+      const { count } = await supabase.schema('finance').from('revenue_entries').select('*', { count: 'exact', head: true });
+      
+      if (count && count > 0) {
+        return res.json({ success: true, message: 'Base financeira já contém dados.' });
+      }
+
+      const { data: customers } = await supabase.from('users').select('id, plan_name, plan_price').limit(10);
+      
+      if (!customers || customers.length === 0) {
+        return res.status(400).json({ error: 'Nenhum cliente encontrado para associar dados financeiros.' });
+      }
+
+      const revenueEntries = [];
+      const costEntries = [];
+      const now = new Date();
+
+      for (let i = 0; i < 12; i++) {
+        const monthDate = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const monthStr = monthDate.toISOString().split('T')[0];
+
+        for (const customer of customers) {
+          const price = customer.plan_price || 149.90;
+          revenueEntries.push({
+            customer_id: customer.id,
+            plan_name: customer.plan_name || 'Essencial',
+            billed_on: monthStr,
+            gross_amount: price,
+            status: Math.random() > 0.15 ? 'paid' : 'delinquent',
+            taxes: price * 0.06,
+            discounts: 0
+          });
+
+          costEntries.push({
+            cost_type: 'variable',
+            customer_id: customer.id,
+            description: 'Infraestrutura e APIs',
+            occurred_on: monthStr,
+            amount: 12.50
+          });
+        }
+
+        costEntries.push({
+          cost_type: 'fixed',
+          description: 'Salários Equipe',
+          occurred_on: monthStr,
+          amount: 8500.00
+        });
+        costEntries.push({
+          cost_type: 'fixed',
+          description: 'Marketing e Ads',
+          occurred_on: monthStr,
+          amount: 1200.00
+        });
+      }
+
+      const { error: revErr } = await supabase.schema('finance').from('revenue_entries').insert(revenueEntries);
+      const { error: costErr } = await supabase.schema('finance').from('cost_entries').insert(costEntries);
+
+      if (revErr || costErr) {
+        throw new Error(`Erro ao inserir dados: ${revErr?.message || ''} ${costErr?.message || ''}`);
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Bootstrap finance error:', error);
       res.status(500).json({ error: String(error) });
     }
   });
