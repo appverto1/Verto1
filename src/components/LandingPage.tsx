@@ -80,7 +80,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     
     try {
       // Mock Login Bypass for testing
-      const mockEmails = ['alexandre@verto.com', 'joao@verto.com', 'pedro@verto.com', 'coordenador@verto.com'];
+      const mockEmails = ['alexandre@verto.com', 'joao@verto.com', 'pedro@verto.com', 'coordenador@verto.com', 'appverto1@gmail.com'];
       if (mockEmails.includes(email.toLowerCase()) && password === '123456') {
         const response = await fetch('/api/auth/mock-login', {
           method: 'POST',

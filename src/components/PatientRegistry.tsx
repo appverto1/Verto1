@@ -119,7 +119,9 @@ export const PatientRegistry = ({ patients, clinicalRecords, onBack, onSelectPat
                     >
                       <MessageCircle size={16} /> WhatsApp
                     </a>
-                    <span className="text-xs font-bold text-[#4318FF] flex items-center gap-1 group-hover:gap-2 transition-all">Ver Prontuário <ChevronRight size={14}/></span> 
+                    {userRole !== 'receptionist' && (
+                      <span className="text-xs font-bold text-[#4318FF] flex items-center gap-1 group-hover:gap-2 transition-all">Ver Prontuário <ChevronRight size={14}/></span>
+                    )}
                   </div> 
                 </div> 
               );

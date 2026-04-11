@@ -697,7 +697,7 @@ export const TherapistDashboard = ({
           <LogoVerto size={40} showText={true} />
         </div>
         
-        <nav className="flex-1 space-y-2">
+        <nav className="flex-1 space-y-2 overflow-y-auto no-scrollbar pr-2">
           <button 
             onClick={() => handleSetView('home')}
             className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-bold text-sm ${view === 'home' ? 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
@@ -906,6 +906,14 @@ export const TherapistDashboard = ({
         <div className="lg:hidden flex justify-between items-center mb-6"> 
           <LogoVerto size={32} showText={true} />
           <div className="flex items-center gap-3 relative"> 
+            <button 
+              id="menu-btn"
+              onClick={() => setIsMenuOpen(!isMenuOpen)} 
+              className={`p-3 rounded-2xl transition-all shadow-sm ${isMenuOpen ? 'bg-[#4318FF] text-white shadow-lg' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            >
+              {isMenuOpen ? <X size={20} /> : <Menu size={20} />}
+            </button>
+
             <SettingsMenu 
               user={user} 
               onLogout={onLogout} 
@@ -915,13 +923,6 @@ export const TherapistDashboard = ({
               onViewBilling={() => handleSetView('billing')}
               onOpenOnboarding={onOpenOnboarding}
             />
-            <button 
-              id="menu-btn"
-              onClick={() => setIsMenuOpen(!isMenuOpen)} 
-              className={`p-3 rounded-2xl transition-all shadow-sm ${isMenuOpen ? 'bg-[#4318FF] text-white shadow-lg' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-            >
-              {isMenuOpen ? <X size={20} /> : <Menu size={20} />}
-            </button>
 
             {isMenuOpen && (
               <div className="absolute right-0 top-14 w-64 bg-white rounded-[24px] shadow-2xl border border-gray-100 p-4 z-50 animate-pop flex flex-col gap-2">

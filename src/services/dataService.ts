@@ -291,6 +291,27 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'task', '/api/tasks');
   },
 
+  async getPayments() {
+    try {
+      const response = await fetch('/api/payments', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      if (response.ok) {
+        const result = await response.json();
+        return result;
+      }
+    } catch (error) {
+      console.error('Error fetching payments:', error);
+    }
+    return { success: true, data: [] };
+  },
+
+  async savePayment(payment: any) {
+    const id = generateId();
+    return await saveOfflineFirst(id, payment, 'payment', '/api/payments');
+  },
+
   async saveUserProfile(userId: string, profile: any) {
     const data = { ...profile, updated_at: profile.updated_at || new Date().toISOString() };
     return await saveOfflineFirst(userId, data, 'profile', `/api/profile/${userId}`);

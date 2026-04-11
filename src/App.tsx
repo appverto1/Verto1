@@ -303,11 +303,12 @@ export default function App() {
     { id: 'dom-sa', name: 'Consciência Social e Modos', skills: [{ id: 'sa1', name: 'Responde às saudações de forma apropriada', objective: 'O aprendiz irá responder a todas as saudações com contato visual', criteria: '3=Independente com contato visual; 2=Responde sem contato visual; 1=Com ajuda; 0=Não faz', example: "Hey, Oi, Olá", maxScore: 3 }] }
   ];
   
-  const handleCheckout = async () => {
+  const handleCheckout = async (planName?: string) => {
     try {
       const response = await fetch('/api/stripe/create-checkout', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(planName ? { planName } : {})
       });
       const data = await response.json();
       if (data.url) {
@@ -319,6 +320,11 @@ export default function App() {
       console.error('Checkout error:', error);
       alert('Erro de conexão: ' + error.message);
     }
+  };
+
+  const handleEnterpriseContact = (currentUser: any) => {
+    const message = `Olá! Tenho interesse no plano Enterprise da Verto.\n\nNome: ${currentUser?.name || ''}\nEmail: ${currentUser?.email || ''}`;
+    window.open(`https://wa.me/5511959348563?text=${encodeURIComponent(message)}`, '_blank');
   };
 
   const SubscriptionRequired = ({ user, onLogout }: { user: any, onLogout: () => void }) => (
@@ -333,17 +339,46 @@ export default function App() {
           {user.role === 'patient' ? (
             <span> O valor para pacientes é de apenas <strong>R$ 4,90/mês</strong>.</span>
           ) : (
-            <span> Selecione o plano ideal para sua clínica e comece a evoluir.</span>
+            <span> Escolha um plano para concluir sua assinatura.</span>
           )}
         </p>
         
         <div className="space-y-4">
-          <button 
-            onClick={handleCheckout}
-            className="w-full bg-[#4318FF] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
-          >
-            Pagar Agora (R$ {user.planPrice?.toFixed(2).replace('.', ',') || '0,00'})
-          </button>
+          {user.role === 'patient' ? (
+            <button 
+              onClick={() => handleCheckout()}
+              className="w-full bg-[#4318FF] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
+            >
+              Pagar Agora (R$ 4,90)
+            </button>
+          ) : (
+            <React.Fragment>
+              <button 
+                onClick={() => handleCheckout('Essencial')}
+                className="w-full bg-[#4318FF] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
+              >
+                Assinar Essencial (R$ 149,90)
+              </button>
+              <button 
+                onClick={() => handleCheckout('Crescimento')}
+                className="w-full bg-[#05CD99] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-emerald-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
+              >
+                Assinar Crescimento (R$ 399,90)
+              </button>
+              <button 
+                onClick={() => handleCheckout('Avançado')}
+                className="w-full bg-[#FFB547] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-amber-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
+              >
+                Assinar Avançado (R$ 679,90)
+              </button>
+              <button
+                onClick={() => handleEnterpriseContact(user)}
+                className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-slate-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
+              >
+                Falar sobre Enterprise (WhatsApp)
+              </button>
+            </React.Fragment>
+          )}
           
           <button 
             onClick={onLogout}
@@ -1146,15 +1181,6 @@ export default function App() {
           setProtocols={setProtocols}
           activityLogs={activityLogs}
           onAddActivityLog={onAddActivityLog}
-          onScheduleSession={handleScheduleSession}
-          onUpdateAppointment={handleUpdateAppointment}
-          onUpdateAgendaStatus={handleUpdateAgendaStatus}
-          onAddPatient={handleAddPatient}
-          patientsHistory={history}
-          therapistNotes={therapistNotes}
-          onAddNote={handleAddNote}
-          allTasks={tasks}
-          onUpdateProfile={(updates: any) => setUser({ ...user, ...updates })}
         />
       ) : user.role === 'owner' ? (
         <SuperAdminDashboard onLogout={handleLogout} />

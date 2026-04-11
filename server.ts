@@ -35,6 +35,20 @@ function getStripe() {
   return stripeClient;
 }
 
+function normalizeProfessionalPlan(input?: string | null): 'Essencial' | 'Crescimento' | 'AvanÃ§ado' | null {
+  if (!input) return null;
+  const normalized = input
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+  if (normalized === 'essencial') return 'Essencial';
+  if (normalized === 'crescimento') return 'Crescimento';
+  if (normalized === 'avancado') return 'AvanÃ§ado';
+  return null;
+}
+
 // Initialize Supabase Admin Client (using service role for backend access)
 const supabaseUrl = process.env.SUPABASE_URL || "";
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
@@ -494,8 +508,8 @@ async function startServer() {
           'Paciente': 4.90
         };
 
-        const finalPlanName = planName || (roleToUse === 'patient' ? 'Paciente' : 'Essencial');
-        const finalPlanPrice = planPrices[finalPlanName] || 149.90;
+        const finalPlanName = roleToUse === 'patient' ? 'Paciente' : normalizeProfessionalPlan(planName);
+        const finalPlanPrice = finalPlanName ? (planPrices[finalPlanName] || null) : null;
 
         const newProfile = {
           id: userId,
@@ -705,8 +719,8 @@ async function startServer() {
           role: finalRole,
           clinic_id: clinicId,
           subscription_status: 'pending',
-          plan_name: finalRole === 'patient' ? 'Paciente' : 'Essencial',
-          plan_price: finalRole === 'patient' ? 4.90 : 149.90,
+          plan_name: finalRole === 'patient' ? 'Paciente' : null,
+          plan_price: finalRole === 'patient' ? 4.90 : null,
           created_at: new Date().toISOString()
         };
 
@@ -1464,15 +1478,19 @@ async function startServer() {
     }
   });
 
-  // Owner-only stats (CEO dashboard)
   const checkOwner = (req: any, res: any, next: any) => {
-    if (req.session.user && req.session.user.role === 'owner') {
-      next();
-    } else {
-      res.status(403).json({ error: 'Acesso negado. Apenas o proprietário pode acessar esta rota.' });
+    if (req.session.user?.role === 'owner') {
+      return next();
     }
+    return res.status(403).json({ error: 'Acesso negado. Apenas super admins podem acessar esta rota.' });
   };
 
+  const hasMissingFinancialSchema = (error: any) => {
+    const message = (error?.message || '').toLowerCase();
+    return message.includes('schema cache') || message.includes('does not exist') || message.includes('relation');
+  };
+
+  // Owner-only stats (CEO dashboard)
   app.get('/api/owner/stats', checkAuth, checkOwner, async (req: any, res) => {
     try {
       const { count: totalUsers } = await supabase
@@ -1494,145 +1512,301 @@ async function startServer() {
     }
   });
 
-  app.get('/api/owner/clients', checkAuth, checkOwner, async (req, res) => {
+  app.get('/api/owner/clients', checkAuth, checkOwner, async (req: any, res) => {
     try {
       const { data, error } = await supabase
         .from('users')
-        .select('*')
-        .order('created_at', { ascending: false });
-      
+        .select('id, name, email, plan_name, plan_price, subscription_status, created_at')
+        .order('created_at', { ascending: false })
+        .limit(500);
+
       if (error) throw error;
-      res.json({ success: true, data });
+      return res.json({ success: true, data: data || [] });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      return res.status(500).json({ error: String(error) });
     }
   });
 
-  app.get('/api/owner/financial-overview', checkAuth, checkOwner, async (req, res) => {
+  app.get('/api/owner/financial-overview', checkAuth, checkOwner, async (req: any, res) => {
     try {
-      // Try to fetch from views (public schema)
-      const [summaryRes, monthlyRes, byPlanRes, topCustomersRes, delinquentRes] = await Promise.all([
+      const [summaryRes, monthlyRes, byPlanRes, profitabilityRes, delinquentRes] = await Promise.all([
         supabase.from('vw_owner_dre_summary').select('*').single(),
         supabase.from('vw_owner_dre_monthly').select('*').order('period_month', { ascending: true }),
-        supabase.from('vw_owner_revenue_by_plan').select('*'),
-        supabase.from('vw_owner_customer_profitability').select('*').limit(20),
-        supabase.from('vw_owner_delinquent_customers').select('*')
+        supabase.from('vw_owner_revenue_by_plan').select('*').order('revenue_net', { ascending: false }),
+        supabase.from('vw_owner_customer_profitability').select('*').order('profit', { ascending: true }).limit(20),
+        supabase.from('vw_owner_delinquent_customers').select('*').order('delinquency_amount', { ascending: false }).limit(20)
       ]);
 
-      const isMissingViews = summaryRes.error?.code === 'PGRST116' || summaryRes.error?.code === '42P01';
+      const missingSchema =
+        hasMissingFinancialSchema(summaryRes.error) ||
+        hasMissingFinancialSchema(monthlyRes.error) ||
+        hasMissingFinancialSchema(byPlanRes.error) ||
+        hasMissingFinancialSchema(profitabilityRes.error) ||
+        hasMissingFinancialSchema(delinquentRes.error);
 
-      if (isMissingViews) {
+      if (!missingSchema && !summaryRes.error && !monthlyRes.error && !byPlanRes.error && !profitabilityRes.error && !delinquentRes.error) {
+        const monthly = (monthlyRes.data || []).map((row: any) => ({
+          monthLabel: new Date(row.period_month).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', ''),
+          revenueNet: Number(row.revenue_net || 0),
+          variableCosts: Number(row.variable_costs || 0),
+          fixedCosts: Number(row.fixed_costs || 0),
+          ebitda: Number(row.ebitda || 0),
+          contributionMarginPct: Number(row.contribution_margin_pct || 0),
+          delinquencyAmount: Number(row.delinquency_amount || 0)
+        }));
+
         return res.json({
           success: true,
           data: {
-            summary: { revenueNet: 0, contributionMarginPct: 0, ebitda: 0, delinquencyAmount: 0 },
-            monthly: [],
-            byPlan: [],
-            topCustomers: [],
-            delinquentCustomers: [],
-            source: 'fallback'
+            source: 'supabase_financial_views',
+            summary: {
+              revenueGross: Number(summaryRes.data?.revenue_gross || 0),
+              deductions: Number(summaryRes.data?.deductions || 0),
+              revenueNet: Number(summaryRes.data?.revenue_net || 0),
+              variableCosts: Number(summaryRes.data?.variable_costs || 0),
+              fixedCosts: Number(summaryRes.data?.fixed_costs || 0),
+              contributionMarginValue: Number(summaryRes.data?.contribution_margin_value || 0),
+              contributionMarginPct: Number(summaryRes.data?.contribution_margin_pct || 0),
+              ebitda: Number(summaryRes.data?.ebitda || 0),
+              ebitdaPct: Number(summaryRes.data?.ebitda_pct || 0),
+              delinquencyAmount: Number(summaryRes.data?.delinquency_amount || 0)
+            },
+            monthly,
+            byPlan: (byPlanRes.data || []).map((row: any) => ({
+              planName: row.plan_name || 'Nao definido',
+              customers: Number(row.customers || 0),
+              revenueNet: Number(row.revenue_net || 0)
+            })),
+            topCustomers: (profitabilityRes.data || []).map((row: any) => ({
+              customerId: row.customer_id,
+              name: row.name,
+              email: row.email,
+              revenueNet: Number(row.revenue_net || 0),
+              totalCost: Number(row.variable_cost || 0) + Number(row.fixed_cost_allocated || 0),
+              profit: Number(row.profit || 0),
+              marginPct: Number(row.margin_pct || 0),
+              status: row.subscription_status || 'active'
+            })),
+            delinquentCustomers: (delinquentRes.data || []).map((row: any) => ({
+              customerId: row.customer_id,
+              name: row.name,
+              email: row.email,
+              delinquencyAmount: Number(row.delinquency_amount || 0),
+              openTitles: Number(row.open_titles || 0)
+            }))
           }
         });
       }
 
-      if (summaryRes.error && summaryRes.error.code !== 'PGRST116') throw summaryRes.error;
-      if (monthlyRes.error) throw monthlyRes.error;
+      const { data: users, error: usersError } = await supabase
+        .from('users')
+        .select('id, name, email, plan_name, plan_price, subscription_status, created_at');
 
-      res.json({
+      if (usersError) throw usersError;
+
+      const dataset = users || [];
+      const revenueNet = dataset
+        .filter((u: any) => u.subscription_status === 'active')
+        .reduce((acc: number, u: any) => acc + Number(u.plan_price || 0), 0);
+      const delinquentUsers = dataset.filter((u: any) => u.subscription_status === 'delinquent');
+      const delinquencyAmount = delinquentUsers.reduce((acc: number, u: any) => acc + Number(u.plan_price || 0), 0);
+      const variableCosts = revenueNet * 0.22;
+      const fixedCosts = revenueNet * 0.18;
+      const contributionMarginValue = revenueNet - variableCosts;
+      const ebitda = contributionMarginValue - fixedCosts;
+
+      const byPlanMap = dataset
+        .filter((u: any) => u.subscription_status === 'active')
+        .reduce((acc: any, u: any) => {
+          const key = u.plan_name || 'Nao definido';
+          if (!acc[key]) acc[key] = { planName: key, customers: 0, revenueNet: 0 };
+          acc[key].customers += 1;
+          acc[key].revenueNet += Number(u.plan_price || 0);
+          return acc;
+        }, {});
+
+      const now = new Date();
+      const monthly = Array.from({ length: 6 }).map((_, index) => {
+        const date = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1);
+        const monthFactor = 0.85 + index * 0.04;
+        return {
+          monthLabel: date.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', ''),
+          revenueNet: Number((revenueNet * monthFactor).toFixed(2)),
+          variableCosts: Number((variableCosts * monthFactor).toFixed(2)),
+          fixedCosts: Number((fixedCosts * monthFactor).toFixed(2)),
+          ebitda: Number((ebitda * monthFactor).toFixed(2)),
+          contributionMarginPct: Number((((contributionMarginValue * monthFactor) / ((revenueNet * monthFactor) || 1)) * 100).toFixed(2)),
+          delinquencyAmount: Number((delinquencyAmount * monthFactor).toFixed(2))
+        };
+      });
+
+      const topCustomers = dataset
+        .map((u: any) => {
+          const customerRevenue = Number(u.subscription_status === 'active' ? u.plan_price || 0 : 0);
+          const estimatedCost = customerRevenue * 0.95 + (u.subscription_status === 'delinquent' ? Number(u.plan_price || 0) : 0);
+          const profit = customerRevenue - estimatedCost;
+          return {
+            customerId: u.id,
+            name: u.name,
+            email: u.email,
+            revenueNet: customerRevenue,
+            totalCost: Number(estimatedCost.toFixed(2)),
+            profit: Number(profit.toFixed(2)),
+            marginPct: customerRevenue > 0 ? Number(((profit / customerRevenue) * 100).toFixed(2)) : 0,
+            status: u.subscription_status
+          };
+        })
+        .sort((a: any, b: any) => a.profit - b.profit)
+        .slice(0, 20);
+
+      return res.json({
         success: true,
         data: {
-          summary: summaryRes.data || {},
-          monthly: monthlyRes.data || [],
-          byPlan: byPlanRes.data || [],
-          topCustomers: topCustomersRes.data || [],
-          delinquentCustomers: delinquentRes.data || [],
-          source: 'supabase_financial_views'
+          source: 'fallback_users',
+          summary: {
+            revenueGross: revenueNet,
+            deductions: 0,
+            revenueNet,
+            variableCosts: Number(variableCosts.toFixed(2)),
+            fixedCosts: Number(fixedCosts.toFixed(2)),
+            contributionMarginValue: Number(contributionMarginValue.toFixed(2)),
+            contributionMarginPct: revenueNet > 0 ? Number(((contributionMarginValue / revenueNet) * 100).toFixed(2)) : 0,
+            ebitda: Number(ebitda.toFixed(2)),
+            ebitdaPct: revenueNet > 0 ? Number(((ebitda / revenueNet) * 100).toFixed(2)) : 0,
+            delinquencyAmount: Number(delinquencyAmount.toFixed(2))
+          },
+          monthly,
+          byPlan: Object.values(byPlanMap),
+          topCustomers,
+          delinquentCustomers: delinquentUsers.map((u: any) => ({
+            customerId: u.id,
+            name: u.name,
+            email: u.email,
+            delinquencyAmount: Number(u.plan_price || 0),
+            openTitles: 1
+          }))
         }
       });
     } catch (error) {
-      console.error('Financial overview error:', error);
-      res.status(500).json({ error: String(error) });
+      return res.status(500).json({ error: String(error) });
     }
   });
 
-  app.post('/api/owner/bootstrap-finance', checkAuth, checkOwner, async (req, res) => {
+  app.post('/api/owner/bootstrap-finance', checkAuth, checkOwner, async (req: any, res) => {
     try {
-      // Check if tables exist by trying a simple query on the schema
-      const { error: schemaCheck } = await supabase.schema('finance').from('revenue_entries').select('id').limit(1);
-      
-      if (schemaCheck && schemaCheck.code === '42P01') {
-        return res.status(400).json({ 
-          success: false, 
-          error: 'As tabelas financeiras ainda não foram criadas no banco de dados. Por favor, execute o script SQL primeiro.' 
-        });
+      const ownerId = req.session.user?.id;
+      const today = new Date();
+      const periodStart = new Date(today.getFullYear(), today.getMonth(), 1);
+      const periodEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+      const periodStartStr = periodStart.toISOString().split('T')[0];
+      const periodEndStr = periodEnd.toISOString().split('T')[0];
+
+      const { data: users, error: usersError } = await supabase
+        .from('users')
+        .select('id, plan_name, plan_price, subscription_status')
+        .not('plan_price', 'is', null);
+
+      if (usersError) throw usersError;
+
+      const { data: existingRevenue, error: existingRevenueError } = await supabase
+        .schema('finance')
+        .from('revenue_entries')
+        .select('id')
+        .eq('notes', '[AUTO_BOOTSTRAP]')
+        .gte('billed_on', periodStartStr)
+        .lte('billed_on', periodEndStr)
+        .limit(1);
+
+      if (existingRevenueError && !hasMissingFinancialSchema(existingRevenueError)) {
+        throw existingRevenueError;
       }
 
-      const { count } = await supabase.schema('finance').from('revenue_entries').select('*', { count: 'exact', head: true });
-      
-      if (count && count > 0) {
-        return res.json({ success: true, message: 'Base financeira já contém dados.' });
-      }
+      if ((existingRevenue || []).length === 0) {
+        const revenueRows = (users || [])
+          .filter((u: any) => Number(u.plan_price || 0) > 0)
+          .map((u: any) => ({
+            customer_id: u.id,
+            plan_name: u.plan_name || 'Nao definido',
+            billed_on: periodStartStr,
+            due_date: periodEndStr,
+            gross_amount: Number(u.plan_price || 0),
+            discounts: 0,
+            taxes: 0,
+            status: u.subscription_status === 'active' ? 'paid' : u.subscription_status === 'delinquent' ? 'delinquent' : 'pending',
+            notes: '[AUTO_BOOTSTRAP]',
+            created_by: ownerId
+          }));
 
-      const { data: customers } = await supabase.from('users').select('id, plan_name, plan_price').limit(10);
-      
-      if (!customers || customers.length === 0) {
-        return res.status(400).json({ error: 'Nenhum cliente encontrado para associar dados financeiros.' });
-      }
-
-      const revenueEntries = [];
-      const costEntries = [];
-      const now = new Date();
-
-      for (let i = 0; i < 12; i++) {
-        const monthDate = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        const monthStr = monthDate.toISOString().split('T')[0];
-
-        for (const customer of customers) {
-          const price = customer.plan_price || 149.90;
-          revenueEntries.push({
-            customer_id: customer.id,
-            plan_name: customer.plan_name || 'Essencial',
-            billed_on: monthStr,
-            gross_amount: price,
-            status: Math.random() > 0.15 ? 'paid' : 'delinquent',
-            taxes: price * 0.06,
-            discounts: 0
-          });
-
-          costEntries.push({
-            cost_type: 'variable',
-            customer_id: customer.id,
-            description: 'Infraestrutura e APIs',
-            occurred_on: monthStr,
-            amount: 12.50
-          });
+        if (revenueRows.length > 0) {
+          const { error: revenueInsertError } = await supabase
+            .schema('finance')
+            .from('revenue_entries')
+            .insert(revenueRows);
+          if (revenueInsertError) throw revenueInsertError;
         }
-
-        costEntries.push({
-          cost_type: 'fixed',
-          description: 'Salários Equipe',
-          occurred_on: monthStr,
-          amount: 8500.00
-        });
-        costEntries.push({
-          cost_type: 'fixed',
-          description: 'Marketing e Ads',
-          occurred_on: monthStr,
-          amount: 1200.00
-        });
       }
 
-      const { error: revErr } = await supabase.schema('finance').from('revenue_entries').insert(revenueEntries);
-      const { error: costErr } = await supabase.schema('finance').from('cost_entries').insert(costEntries);
+      const { data: existingCosts, error: existingCostsError } = await supabase
+        .schema('finance')
+        .from('cost_entries')
+        .select('id')
+        .eq('notes', '[AUTO_BOOTSTRAP]')
+        .gte('occurred_on', periodStartStr)
+        .lte('occurred_on', periodEndStr)
+        .limit(1);
 
-      if (revErr || costErr) {
-        throw new Error(`Erro ao inserir dados: ${revErr?.message || ''} ${costErr?.message || ''}`);
+      if (existingCostsError && !hasMissingFinancialSchema(existingCostsError)) {
+        throw existingCostsError;
       }
 
-      res.json({ success: true });
+      if ((existingCosts || []).length === 0) {
+        const fixedCostRows = [
+          {
+            cost_type: 'fixed',
+            description: 'Infraestrutura cloud e ferramentas',
+            occurred_on: periodStartStr,
+            amount: 1200,
+            is_operational: true,
+            notes: '[AUTO_BOOTSTRAP]',
+            created_by: ownerId
+          },
+          {
+            cost_type: 'fixed',
+            description: 'Operacoes administrativas',
+            occurred_on: periodStartStr,
+            amount: 900,
+            is_operational: true,
+            notes: '[AUTO_BOOTSTRAP]',
+            created_by: ownerId
+          }
+        ];
+
+        const variableCostRows = (users || [])
+          .filter((u: any) => Number(u.plan_price || 0) > 0)
+          .map((u: any) => ({
+            cost_type: 'variable',
+            customer_id: u.id,
+            description: 'Custo variavel estimado por cliente',
+            occurred_on: periodStartStr,
+            amount: Number((Number(u.plan_price || 0) * 0.25).toFixed(2)),
+            is_operational: true,
+            notes: '[AUTO_BOOTSTRAP]',
+            created_by: ownerId
+          }));
+
+        const { error: costsInsertError } = await supabase
+          .schema('finance')
+          .from('cost_entries')
+          .insert([...fixedCostRows, ...variableCostRows]);
+        if (costsInsertError) throw costsInsertError;
+      }
+
+      return res.json({
+        success: true,
+        message: 'Base financeira inicial criada com sucesso.'
+      });
     } catch (error) {
-      console.error('Bootstrap finance error:', error);
-      res.status(500).json({ error: String(error) });
+      return res.status(500).json({ error: String(error) });
     }
   });
 
@@ -1806,7 +1980,7 @@ async function startServer() {
           'Avançado': 67990
         };
         
-        let planName = requestedPlan;
+        let planName = normalizeProfessionalPlan(requestedPlan) || requestedPlan;
         
         if (!planName) {
           // Try to get plan from profile if not in session
@@ -1817,10 +1991,20 @@ async function startServer() {
             .single();
             
           if (profileError) {
-            console.warn('Could not fetch user profile for plan, using default:', profileError.message);
+            console.warn('Could not fetch user profile for plan:', profileError.message);
           }
-          planName = profile?.plan_name || 'Essencial';
-        } else {
+          planName = normalizeProfessionalPlan(profile?.plan_name) || profile?.plan_name || null;
+        }
+
+        if (!planName) {
+          return res.status(400).json({ error: 'Selecione um plano para continuar.' });
+        }
+
+        if (!planPrices[planName]) {
+          return res.status(400).json({ error: 'Plano invalido para checkout.' });
+        }
+
+        if (requestedPlan) {
           // Update user profile with selected plan if it was passed in body
           const planPrice = planName === 'Essencial' ? 149.90 : planName === 'Crescimento' ? 399.90 : 679.90;
           const { error: updateError } = await supabase
@@ -1839,7 +2023,7 @@ async function startServer() {
           }
         }
         
-        amount = planPrices[planName] || 14990;
+        amount = planPrices[planName];
         description = `Plano ${planName} - Verto`;
       }
 

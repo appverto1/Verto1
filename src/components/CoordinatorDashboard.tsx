@@ -38,7 +38,8 @@ import {
   Menu,
   MoreVertical,
   Clock,
-  XCircle
+  XCircle,
+  Paperclip
 } from 'lucide-react';
 import { TeamManagement } from './TeamManagement';
 import { InvitationModal } from './InvitationModal';
@@ -62,6 +63,7 @@ import {
   PieChart as RePieChart,
   Pie
 } from 'recharts';
+import { dataService } from '../services/dataService';
 
 interface CoordinatorDashboardProps {
   user: any;
@@ -163,6 +165,51 @@ export function CoordinatorDashboard({
   const [selectedPatientId, setSelectedPatientId] = useState<any>(null);
   const [view, setView] = useState<'home' | 'patient'>('home');
   const [filteredPatients, setFilteredPatients] = useState<any[]>([]);
+  const [payments, setPayments] = useState<any[]>([]);
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [selectedPaymentPatient, setSelectedPaymentPatient] = useState<any>(null);
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('pix');
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [paymentReceipt, setPaymentReceipt] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchPayments = async () => {
+      const result = await dataService.getPayments();
+      if (result.success) {
+        setPayments(result.data);
+      }
+    };
+    if (activeTab === 'financial') {
+      fetchPayments();
+    }
+  }, [activeTab]);
+
+  const handleAddPayment = async () => {
+    if (!selectedPaymentPatient || !paymentAmount) return alert("Preencha todos os campos");
+    
+    const newPayment = {
+      patient_id: selectedPaymentPatient.id,
+      patient_name: selectedPaymentPatient.name,
+      amount: parseFloat(paymentAmount),
+      payment_date: paymentDate,
+      method: paymentMethod,
+      status: 'paid',
+      receipt_url: paymentReceipt
+    };
+
+    const result = await dataService.savePayment(newPayment);
+    if (result.success) {
+      setPayments(prev => [result.data || newPayment, ...prev]);
+      setIsPaymentModalOpen(false);
+      setPaymentAmount('');
+      setSelectedPaymentPatient(null);
+      setPaymentReceipt(null);
+      alert("Pagamento registrado com sucesso!");
+    } else {
+      alert("Erro ao salvar pagamento.");
+    }
+  };
 
   useEffect(() => {
     const handleClickOutside = () => setOpenMenuId(null);
@@ -925,7 +972,7 @@ export function CoordinatorDashboard({
             </div>
           </div>
 
-          <nav className="space-y-2 flex-1">
+          <nav className="space-y-2 flex-1 overflow-y-auto no-scrollbar pr-2">
             {[
               { id: 'dashboard', label: 'Painel', icon: LayoutDashboard },
               { id: 'patients', label: 'Pacientes', icon: ClipboardList },
@@ -1120,7 +1167,7 @@ export function CoordinatorDashboard({
           </div>
         </div>
 
-        <nav className="space-y-2 flex-1">
+        <nav className="space-y-2 flex-1 overflow-y-auto no-scrollbar pr-2">
           {[
             { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
             { id: 'patients', label: 'Pacientes', icon: ClipboardList },
@@ -1208,14 +1255,12 @@ export function CoordinatorDashboard({
               />
             </div>
             
-            {/* 
             <button 
-              onClick={() => setShowInvitationModal(true)}
-              className="p-2.5 lg:p-3 bg-[#4318FF] text-white rounded-full hover:scale-105 transition-all shadow-lg shadow-blue-500/20"
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="lg:hidden p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
             >
-              <UserPlus size={18} />
+              <Menu size={20} />
             </button>
-            */}
 
             <SettingsMenu 
               user={user} 
@@ -1226,13 +1271,6 @@ export function CoordinatorDashboard({
               onViewBilling={() => setActiveTab('billing')}
               onOpenOnboarding={onOpenOnboarding}
             />
-
-            <button 
-              onClick={() => setIsMobileMenuOpen(true)}
-              className="lg:hidden p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
-            >
-              <Menu size={20} />
-            </button>
           </div>
         </header>
 
@@ -1311,6 +1349,103 @@ export function CoordinatorDashboard({
         </AnimatePresence>
 
         <main className="p-4 lg:p-8 pb-20">
+          {isPaymentModalOpen && (
+            <div className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in" onClick={() => setIsPaymentModalOpen(false)}>
+              <div className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-pop relative" onClick={e => e.stopPropagation()}>
+                <button onClick={() => setIsPaymentModalOpen(false)} className="absolute top-6 right-6 text-gray-400 hover:text-gray-600"><X size={24}/></button>
+                <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-2"><DollarSign size={24} className="text-[#4318FF]"/> Registrar Pagamento</h2>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Paciente</label>
+                    <select 
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                      onChange={(e) => {
+                        const p = allPatients.find((p: any) => p.id === e.target.value || p.id === parseInt(e.target.value));
+                        setSelectedPaymentPatient(p);
+                      }}
+                    >
+                      <option value="">Selecione o paciente...</option>
+                      {allPatients.map((p: any) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Valor (R$)</label>
+                      <input 
+                        type="number" 
+                        value={paymentAmount}
+                        onChange={(e) => setPaymentAmount(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700" 
+                        placeholder="0,00"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Data</label>
+                      <input 
+                        type="date" 
+                        value={paymentDate}
+                        onChange={(e) => setPaymentDate(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700" 
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Método</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {['pix', 'card', 'cash'].map(m => (
+                        <button 
+                          key={m}
+                          onClick={() => setPaymentMethod(m)}
+                          className={`py-2 rounded-xl text-[10px] font-bold uppercase border-2 transition-all ${paymentMethod === m ? 'border-[#4318FF] bg-blue-50 text-[#4318FF]' : 'border-slate-100 text-slate-400'}`}
+                        >
+                          {m === 'pix' ? 'PIX' : m === 'card' ? 'Cartão' : 'Dinheiro'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Anexar Comprovante</label>
+                    <div 
+                      className="border-2 border-dashed border-slate-200 rounded-2xl p-4 text-center cursor-pointer hover:border-blue-500 transition-all bg-slate-50"
+                      onClick={() => document.getElementById('receipt-upload')?.click()}
+                    >
+                      {paymentReceipt ? (
+                        <div className="flex items-center justify-center gap-2 text-emerald-500 font-bold text-xs">
+                          <CheckCircle2 size={16} /> Arquivo Selecionado
+                        </div>
+                      ) : (
+                        <div className="text-slate-400 text-xs font-medium flex flex-col items-center gap-2">
+                          <Paperclip size={20} />
+                          Clique para anexar comprovante
+                        </div>
+                      )}
+                      <input 
+                        type="file" 
+                        id="receipt-upload" 
+                        className="hidden" 
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            const reader = new FileReader();
+                            reader.onloadend = () => setPaymentReceipt(reader.result as string);
+                            reader.readAsDataURL(file);
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <button 
+                    onClick={handleAddPayment}
+                    className="w-full bg-[#4318FF] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 mt-4"
+                  >
+                    Confirmar Pagamento
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           <AnimatePresence mode="wait">
             {activeTab === 'dashboard' && (
               <motion.div key="dashboard" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}}>
@@ -1328,13 +1463,130 @@ export function CoordinatorDashboard({
               </motion.div>
             )}
             {activeTab === 'financial' && (
-              <motion.div key="financial" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="flex flex-col items-center justify-center py-20 bg-white rounded-[40px] shadow-sm border border-slate-100 p-8 text-center">
-                <div className="w-20 h-20 bg-blue-50 text-[#4318FF] rounded-[32px] flex items-center justify-center mb-6">
-                  <DollarSign size={40} />
+              <motion.div key="financial" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="space-y-8">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-2xl font-bold text-slate-900 tracking-tight">Gestão Financeira & DRE</h3>
+                    <p className="text-slate-500 font-medium">Acompanhe o faturamento e saúde financeira da clínica.</p>
+                  </div>
+                  <button 
+                    onClick={() => setIsPaymentModalOpen(true)}
+                    className="bg-[#4318FF] text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 flex items-center gap-2 hover:scale-105 transition-all"
+                  >
+                    <Plus size={18} /> Registrar Pagamento
+                  </button>
                 </div>
-                <h3 className="text-2xl font-bold text-slate-900 tracking-tight mb-2">Financeiro e DRE</h3>
-                <p className="text-slate-500 font-medium mb-8 max-w-md">Esta funcionalidade está sendo preparada para você. Em Breve.</p>
-                <span className="px-6 py-2 bg-[#4318FF] text-white rounded-full text-xs font-bold uppercase tracking-widest shadow-lg shadow-blue-500/20">Em Breve</span>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                  <div className="lg:col-span-2 space-y-8">
+                    {/* DRE Table */}
+                    <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden">
+                      <div className="p-8 border-b border-slate-50">
+                        <h4 className="font-bold text-slate-900">Demonstrativo de Resultados (DRE)</h4>
+                      </div>
+                      <div className="p-8">
+                        <div className="space-y-4">
+                          {dreData.map((item, idx) => (
+                            <div key={idx} className={`flex items-center justify-between p-4 rounded-2xl ${
+                              item.type === 'total' ? 'bg-slate-50 font-bold' : 
+                              item.type === 'profit' ? 'bg-emerald-50 text-emerald-700 font-black' : 
+                              'bg-white'
+                            }`}>
+                              <div className="flex items-center gap-3">
+                                <div className={`w-2 h-2 rounded-full ${
+                                  item.type === 'income' ? 'bg-emerald-500' : 
+                                  item.type === 'expense' ? 'bg-red-500' : 
+                                  'bg-blue-500'
+                                }`} />
+                                <div>
+                                  <p className="text-sm">{item.label}</p>
+                                  <p className="text-[10px] text-slate-400 font-medium">{item.info}</p>
+                                </div>
+                              </div>
+                              <p className="text-lg">
+                                {item.value < 0 ? `- R$ ${Math.abs(item.value).toLocaleString()}` : `R$ ${item.value.toLocaleString()}`}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Recent Payments */}
+                    <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden">
+                      <div className="p-8 border-b border-slate-50">
+                        <h4 className="font-bold text-slate-900">Últimos Recebimentos</h4>
+                      </div>
+                      <div className="p-8 overflow-x-auto">
+                        <table className="w-full">
+                          <thead>
+                            <tr className="text-left border-b border-slate-50">
+                              <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Paciente</th>
+                              <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Valor</th>
+                              <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Data</th>
+                              <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Método</th>
+                              <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50">
+                            {payments.length > 0 ? payments.map((p, idx) => (
+                              <tr key={p.id || idx} className="group hover:bg-slate-50 transition-all">
+                                <td className="py-4 font-semibold text-slate-700">{p.patient_name}</td>
+                                <td className="py-4 font-bold text-[#4318FF]">R$ {p.amount.toFixed(2)}</td>
+                                <td className="py-4 text-slate-500 text-sm">{new Date(p.payment_date).toLocaleDateString()}</td>
+                                <td className="py-4"><span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-[10px] font-bold uppercase">{p.method}</span></td>
+                                <td className="py-4"><span className="px-3 py-1 bg-green-100 text-green-600 rounded-full text-[10px] font-bold uppercase">Pago</span></td>
+                              </tr>
+                            )) : (
+                              <tr>
+                                <td colSpan={5} className="py-8 text-center text-slate-400 text-sm font-medium">Nenhum pagamento registrado.</td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-8">
+                    <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 p-8">
+                      <h4 className="font-bold text-slate-900 mb-6">Desempenho por Mês</h4>
+                      <div className="h-64">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={revenueHistory}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                            <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{fill: '#94A3B8', fontSize: 12}} />
+                            <YAxis axisLine={false} tickLine={false} tick={{fill: '#94A3B8', fontSize: 12}} />
+                            <Tooltip 
+                              contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)'}}
+                              cursor={{fill: '#F8FAFC'}}
+                            />
+                            <Bar dataKey="revenue" fill="#4318FF" radius={[4, 4, 0, 0]} />
+                            <Bar dataKey="profit" fill="#6AD2FF" radius={[4, 4, 0, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 p-8">
+                      <h4 className="font-bold text-slate-900 mb-6">Repasses Pendentes</h4>
+                      <div className="space-y-4">
+                        {teamPerformance.map((member, i) => (
+                          <div key={i} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl">
+                            <div>
+                              <p className="font-bold text-slate-900 text-sm">{member.name}</p>
+                              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{member.patients} pacientes</p>
+                            </div>
+                            <div className="text-right">
+                              <p className="font-bold text-slate-900 text-sm">R$ {(member.revenue * 0.4).toLocaleString()}</p>
+                              <p className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest">A pagar</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </motion.div>
             )}
             {activeTab === 'flow' && (
