@@ -5,6 +5,7 @@ import { PatientDashboard } from './components/PatientDashboard';
 import { TherapistDashboard } from './components/TherapistDashboard';
 import { CoordinatorDashboard } from './components/CoordinatorDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
+import { SuperAdminDashboard } from './components/SuperAdminDashboard';
 import { TeamManagement } from './components/TeamManagement';
 import { InvitationModal } from './components/InvitationModal';
 import { ProfessionalOnboarding } from './components/ProfessionalOnboarding';
@@ -1145,17 +1146,10 @@ export default function App() {
           setProtocols={setProtocols}
           activityLogs={activityLogs}
           onAddActivityLog={onAddActivityLog}
-          onScheduleSession={handleScheduleSession}
-          onUpdateAppointment={handleUpdateAppointment}
-          onUpdateAgendaStatus={handleUpdateAgendaStatus}
-          onAddPatient={handleAddPatient}
-          patientsHistory={history}
-          therapistNotes={therapistNotes}
-          onAddNote={handleAddNote}
-          allTasks={tasks}
-          onUpdateProfile={(updates: any) => setUser({ ...user, ...updates })}
         />
-      ) : (user.role === 'admin' || user.role === 'owner') ? (
+      ) : user.role === 'owner' ? (
+        <SuperAdminDashboard onLogout={handleLogout} />
+      ) : user.role === 'admin' ? (
         <AdminDashboard onLogout={handleLogout} />
       ) : (
         <TherapistDashboard 
