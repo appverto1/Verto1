@@ -48,9 +48,11 @@ export function TeamManagement({ user }: { user: any }) {
   const [newMemberEmail, setNewMemberEmail] = useState('');
   const [newMemberRole, setNewMemberRole] = useState<'therapist' | 'receptionist'>('therapist');
 
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+
   const planName = user.planName || 'Essencial';
   const inviteLimit = PLAN_LIMITS[planName] || 2;
-  const totalUsed = members.length + invitations.filter(i => i.status === 'pending').length;
+  const totalUsed = (members?.length || 0) + (invitations?.filter(i => i.status === 'pending').length || 0);
   const canInvite = totalUsed < inviteLimit;
 
   useEffect(() => {
@@ -63,7 +65,7 @@ export function TeamManagement({ user }: { user: any }) {
     try {
       const result = await dataService.getClinicMembers();
       if (result.success) {
-        setMembers(result.data);
+        setMembers(result.data || []);
       } else {
         setError(result.error);
       }
@@ -78,7 +80,7 @@ export function TeamManagement({ user }: { user: any }) {
     try {
       const result = await dataService.getInvitations();
       if (result.success) {
-        setInvitations(result.data);
+        setInvitations(result.data || []);
       }
     } catch (err) {
       console.error('Error fetching invitations:', err);
@@ -275,7 +277,7 @@ export function TeamManagement({ user }: { user: any }) {
             </form>
 
             {/* Pending Invitations */}
-            {invitations.length > 0 && (
+            {(invitations?.length || 0) > 0 && (
               <div className="mt-12">
                 <h3 className="text-lg font-bold text-slate-900 mb-6">Convites Pendentes</h3>
                 <div className="space-y-3">
@@ -307,7 +309,7 @@ export function TeamManagement({ user }: { user: any }) {
             <div className="p-6 border-b border-slate-50 flex items-center justify-between">
               <h2 className="font-bold text-slate-900">Membros Ativos</h2>
               <span className="px-3 py-1 bg-slate-100 text-slate-500 rounded-full text-[10px] font-bold uppercase tracking-wider">
-                {filteredMembers.length} Colaboradores
+                {filteredMembers?.length || 0} Colaboradores
               </span>
             </div>
 
@@ -317,7 +319,7 @@ export function TeamManagement({ user }: { user: any }) {
                   <div className="w-8 h-8 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div>
                   <p className="text-slate-400 text-sm">Carregando equipe...</p>
                 </div>
-              ) : filteredMembers.length === 0 ? (
+              ) : (filteredMembers?.length || 0) === 0 ? (
                 <div className="p-12 text-center">
                   <div className="w-16 h-16 bg-slate-50 text-slate-300 rounded-3xl flex items-center justify-center mx-auto mb-4">
                     <Users size={32} />
@@ -347,23 +349,55 @@ export function TeamManagement({ user }: { user: any }) {
                       <div className="hidden md:block text-right">
                         <div className="flex items-center justify-end gap-1.5 mb-0.5">
                           {roleIcons[member.role as keyof typeof roleIcons]}
-                          <select 
-                            value={member.role}
-                            disabled={member.id === user.id}
-                            onChange={(e) => handleUpdateRole(member.id, e.target.value)}
-                            className="text-xs font-bold text-slate-700 bg-transparent border-none p-0 focus:ring-0 cursor-pointer disabled:cursor-default"
-                          >
-                            <option value="coordinator">Coordenador</option>
-                            <option value="therapist">Terapeuta</option>
-                            <option value="receptionist">Recepcionista</option>
-                          </select>
+                          <span className="text-xs font-semibold text-slate-700">{roleLabels[member.role as keyof typeof roleLabels]}</span>
                         </div>
-                        <p className="text-[10px] text-slate-400">Desde {new Date(member.created_at).toLocaleDateString()}</p>
+                        <p className="text-[10px] text-slate-400 font-medium">Desde {new Date(member.created_at).toLocaleDateString()}</p>
                       </div>
                       
-                      <button className="p-2 text-slate-300 hover:text-slate-600 hover:bg-white rounded-xl transition-all">
-                        <MoreVertical size={18} />
-                      </button>
+                      <div className="relative">
+                        <button 
+                          onClick={() => setOpenMenuId(openMenuId === member.id ? null : member.id)}
+                          className="p-2 text-slate-400 hover:text-slate-600 hover:bg-white rounded-xl transition-all"
+                        >
+                          <MoreVertical size={18} />
+                        </button>
+                        
+                        {openMenuId === member.id && (
+                          <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 py-2 animate-in fade-in zoom-in duration-200">
+                            <div className="px-4 py-2 border-b border-slate-50 mb-1">
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Alterar Papel</p>
+                            </div>
+                            <button 
+                              onClick={() => { handleUpdateRole(member.id, 'coordinator'); setOpenMenuId(null); }}
+                              className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'coordinator' ? 'text-purple-600 bg-purple-50' : 'text-slate-600 hover:bg-slate-50'}`}
+                              disabled={member.id === user.id}
+                            >
+                              <Shield size={14} /> Coordenador
+                            </button>
+                            <button 
+                              onClick={() => { handleUpdateRole(member.id, 'therapist'); setOpenMenuId(null); }}
+                              className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'therapist' ? 'text-blue-600 bg-blue-50' : 'text-slate-600 hover:bg-slate-50'}`}
+                              disabled={member.id === user.id}
+                            >
+                              <Stethoscope size={14} /> Terapeuta
+                            </button>
+                            <button 
+                              onClick={() => { handleUpdateRole(member.id, 'receptionist'); setOpenMenuId(null); }}
+                              className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'receptionist' ? 'text-green-600 bg-green-50' : 'text-slate-600 hover:bg-slate-50'}`}
+                              disabled={member.id === user.id}
+                            >
+                              <Calendar size={14} /> Recepcionista
+                            </button>
+                            <div className="h-px bg-slate-50 my-1" />
+                            <button 
+                              className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-red-500 hover:bg-red-50 transition-all"
+                              disabled={member.id === user.id}
+                            >
+                              <Trash2 size={14} /> Remover da Equipe
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))

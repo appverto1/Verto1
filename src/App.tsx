@@ -1152,6 +1152,7 @@ export default function App() {
           patientsHistory={history}
           therapistNotes={therapistNotes}
           onAddNote={handleAddNote}
+          allTasks={tasks}
           onUpdateProfile={(updates: any) => setUser({ ...user, ...updates })}
         />
       ) : (user.role === 'admin' || user.role === 'owner') ? (

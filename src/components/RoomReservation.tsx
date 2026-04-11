@@ -52,16 +52,16 @@ export const RoomReservationTable = ({
 
   return (
     <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse">
-          <thead>
+      <div className="overflow-x-auto no-scrollbar max-h-[70vh]">
+        <table className="w-full border-collapse table-fixed">
+          <thead className="sticky top-0 z-30">
             <tr className="bg-slate-50">
-              <th className="p-4 text-left text-xs font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 w-32">Horário</th>
+              <th className="sticky left-0 z-40 bg-slate-50 p-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 w-20 sm:w-32 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">Horário</th>
               {rooms.map(room => (
-                <th key={room.id} className="p-4 text-left border-b border-slate-100 min-w-[200px]">
+                <th key={room.id} className="p-4 text-left border-b border-slate-100 min-w-[160px] sm:min-w-[200px]">
                   <div className="flex flex-col">
-                    <span className="text-xs font-bold text-slate-900 uppercase tracking-widest">{room.name}</span>
-                    <span className="text-[10px] font-medium text-slate-400 normal-case">{room.specialties.join(', ')}</span>
+                    <span className="text-[10px] sm:text-xs font-bold text-slate-900 uppercase tracking-widest truncate">{room.name}</span>
+                    <span className="text-[9px] sm:text-[10px] font-medium text-slate-400 normal-case truncate">{room.specialties.join(', ')}</span>
                   </div>
                 </th>
               ))}
@@ -70,7 +70,7 @@ export const RoomReservationTable = ({
           <tbody>
             {timeSlots.map(time => (
               <tr key={time} className="group">
-                <td className="p-4 text-sm font-bold text-slate-500 border-b border-slate-50 bg-slate-50/30">
+                <td className="sticky left-0 z-10 p-4 text-xs sm:text-sm font-bold text-slate-500 border-b border-slate-50 bg-slate-50/50 backdrop-blur-sm shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
                   {time}
                 </td>
                 {rooms.map(room => {
@@ -81,12 +81,11 @@ export const RoomReservationTable = ({
                   );
 
                   const isPending = reservation?.status === 'pending';
-                  const isConfirmed = reservation?.status === 'confirmed';
 
                   return (
-                    <td key={room.id} className="p-2 border-b border-slate-50 relative h-20">
+                    <td key={room.id} className="p-2 border-b border-slate-50 relative h-20 sm:h-24">
                       {reservation ? (
-                        <div className={`h-full w-full rounded-2xl p-3 flex flex-col justify-between transition-all ${
+                        <div className={`h-full w-full rounded-2xl p-2 sm:p-3 flex flex-col justify-between transition-all ${
                           reservation.professionalId === user.id 
                             ? isPending 
                               ? 'bg-blue-50/40 border border-dashed border-blue-200 opacity-60' 
@@ -95,20 +94,23 @@ export const RoomReservationTable = ({
                               ? 'bg-slate-50/40 border border-dashed border-slate-200 opacity-60'
                               : 'bg-slate-50 border border-slate-100'
                         }`}>
-                          <div>
-                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                          <div className="overflow-hidden">
+                            <p className="text-[8px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5 sm:mb-1">
                               {reservation.startTime} - {reservation.endTime}
                             </p>
-                            <p className={`text-xs font-bold text-slate-900 truncate ${isPending ? 'italic' : ''}`}>
-                              {reservation.professionalName} {reservation.patientName ? `- ${reservation.patientName}` : ''}
+                            <p className={`text-[10px] sm:text-xs font-bold text-slate-900 truncate ${isPending ? 'italic' : ''}`}>
+                              {reservation.patientName || 'Paciente'}
+                            </p>
+                            <p className="text-[9px] sm:text-[10px] text-slate-400 font-medium truncate">
+                              {reservation.professionalName}
                             </p>
                           </div>
                           {(reservation.professionalId === user.id || user.role === 'coordinator') && (
                             <button 
                               onClick={() => onDeleteReservation(reservation.id)}
-                              className="absolute top-2 right-2 p-1.5 text-slate-300 hover:text-red-500 hover:bg-white rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                              className="absolute top-2 right-2 p-1 text-slate-300 hover:text-red-500 hover:bg-white rounded-lg transition-all opacity-0 group-hover:opacity-100"
                             >
-                              <Trash2 size={14} />
+                              <Trash2 size={12} />
                             </button>
                           )}
                         </div>

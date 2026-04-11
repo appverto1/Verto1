@@ -34,7 +34,11 @@ import {
   AlertCircle,
   Zap,
   Heart,
-  X
+  X,
+  Menu,
+  MoreVertical,
+  Clock,
+  XCircle
 } from 'lucide-react';
 import { TeamManagement } from './TeamManagement';
 import { InvitationModal } from './InvitationModal';
@@ -81,6 +85,7 @@ interface CoordinatorDashboardProps {
   therapistNotes: any[];
   onAddNote: (pid: any, txt: string, visibility: string, subject?: string) => void;
   onUpdateProfile: (updates: any) => void;
+  allTasks?: any[];
 }
 
 export function CoordinatorDashboard({ 
@@ -104,11 +109,13 @@ export function CoordinatorDashboard({
   patientsHistory,
   therapistNotes,
   onAddNote,
-  onUpdateProfile
+  onUpdateProfile,
+  allTasks = []
 }: CoordinatorDashboardProps) {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'team' | 'financial' | 'patients' | 'agenda' | 'rooms' | 'protocols' | 'settings' | 'logs' | 'billing'>('dashboard');
   const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [showBillingDetails, setShowBillingDetails] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const billingHistory = [
     { date: '15/03/2026', amount: 149.90, status: 'paid', method: 'Cartão •••• 4242' },
@@ -144,6 +151,7 @@ export function CoordinatorDashboard({
   const [isAddSessionModalOpen, setIsAddSessionModalOpen] = useState(false);
   const [isDayDetailsModalOpen, setIsDayDetailsModalOpen] = useState(false);
   const [calendarDate, setCalendarDate] = useState(new Date());
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [sessionDate, setSessionDate] = useState(new Date().toISOString().split('T')[0]);
   const [sessionTime, setSessionTime] = useState('08:00');
   const [sessionPatientName, setSessionPatientName] = useState('');
@@ -157,7 +165,13 @@ export function CoordinatorDashboard({
   const [filteredPatients, setFilteredPatients] = useState<any[]>([]);
 
   useEffect(() => {
-    if (sessionPatientName) {
+    const handleClickOutside = () => setOpenMenuId(null);
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    if (sessionPatientName && allPatients) {
       const matches = allPatients.filter((p: any) => p.name.toLowerCase().includes(sessionPatientName.toLowerCase()));
       setFilteredPatients(matches);
     } else {
@@ -237,7 +251,7 @@ export function CoordinatorDashboard({
   };
 
   const filteredAgenda = useMemo(() => {
-    let filtered = therapistAgenda;
+    let filtered = therapistAgenda || [];
     if (professionalFilter !== 'all') {
       filtered = filtered.filter(a => a.therapistName === professionalFilter);
     }
@@ -248,7 +262,7 @@ export function CoordinatorDashboard({
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    return filteredAgenda.filter((a: any) => {
+    return (filteredAgenda || []).filter((a: any) => {
       const itemDate = new Date(a.date + 'T00:00:00');
       if (agendaView === 'day') return itemDate.getTime() === today.getTime();
       if (agendaView === 'week') {
@@ -354,28 +368,28 @@ export function CoordinatorDashboard({
 
   const renderAgendaContent = () => (
     <div className="space-y-6">
-      <div className="flex items-center justify-between bg-white p-6 rounded-[32px] shadow-sm border border-slate-100">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-slate-100 gap-4">
         <div>
-          <h3 className="text-xl font-bold text-slate-900">Agenda Global da Clínica</h3>
-          <p className="text-slate-500 text-sm">Visualize e gerencie todos os atendimentos.</p>
+          <h3 className="text-lg sm:text-xl font-bold text-slate-900">Agenda Global</h3>
+          <p className="text-slate-500 text-sm hidden sm:block">Gerencie todos os atendimentos.</p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="bg-slate-100 p-1 rounded-xl flex gap-1">
+        <div className="flex items-center gap-3 w-full sm:w-auto overflow-x-auto no-scrollbar pb-1 sm:pb-0">
+          <div className="bg-slate-100 p-1 rounded-xl flex gap-1 w-full sm:w-auto">
             <button 
               onClick={() => setAgendaView('day')} 
-              className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${agendaView === 'day' ? 'bg-white text-[#4318FF] shadow-sm' : 'text-slate-400'}`}
+              className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === 'day' ? 'bg-white text-[#4318FF] shadow-sm' : 'text-slate-400'}`}
             >
               <Calendar size={14} /> Dia
             </button>
             <button 
               onClick={() => setAgendaView('week')} 
-              className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${agendaView === 'week' ? 'bg-white text-[#4318FF] shadow-sm' : 'text-slate-400'}`}
+              className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === 'week' ? 'bg-white text-[#4318FF] shadow-sm' : 'text-slate-400'}`}
             >
               <CalendarRange size={14} /> Semana
             </button>
             <button 
               onClick={() => setAgendaView('month')} 
-              className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${agendaView === 'month' ? 'bg-white text-[#4318FF] shadow-sm' : 'text-slate-400'}`}
+              className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === 'month' ? 'bg-white text-[#4318FF] shadow-sm' : 'text-slate-400'}`}
             >
               <CalendarDays size={14} /> Mês
             </button>
@@ -383,12 +397,12 @@ export function CoordinatorDashboard({
         </div>
       </div>
 
-      <div className="bg-white p-6 rounded-[32px] shadow-sm border border-slate-100">
+      <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-slate-100">
         <div className="mb-6 flex items-center gap-3 overflow-x-auto no-scrollbar pb-2">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap">Filtrar Profissional:</span>
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap hidden sm:inline">Filtrar Profissional:</span>
           <button 
             onClick={() => setProfessionalFilter('all')}
-            className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${professionalFilter === 'all' ? 'bg-[#4318FF] text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
+            className={`px-4 py-1.5 rounded-xl text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${professionalFilter === 'all' ? 'bg-[#4318FF] text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
           >
             Todos
           </button>
@@ -396,7 +410,7 @@ export function CoordinatorDashboard({
             <button 
               key={prof}
               onClick={() => setProfessionalFilter(prof)}
-              className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${professionalFilter === prof ? 'bg-[#4318FF] text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
+              className={`px-4 py-1.5 rounded-xl text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${professionalFilter === prof ? 'bg-[#4318FF] text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
             >
               {prof}
             </button>
@@ -407,25 +421,32 @@ export function CoordinatorDashboard({
           <div className="space-y-4">
             <button 
               onClick={() => setIsAddSessionModalOpen(true)}
-              className="w-full bg-white rounded-2xl border-2 border-dashed border-[#4318FF]/40 p-4 flex items-center justify-center cursor-pointer hover:bg-[#F4F7FE] transition-all gap-3 group mb-4"
+              className="w-full bg-white rounded-2xl border-2 border-dashed border-[#4318FF]/40 p-3 sm:p-4 flex items-center justify-center cursor-pointer hover:bg-[#F4F7FE] transition-all gap-3 group mb-4"
             >
               <div className="w-8 h-8 rounded-full bg-[#4318FF]/10 text-[#4318FF] flex items-center justify-center group-hover:scale-110 transition-transform"><Plus size={18} /></div>
-              <span className="text-xs font-semibold text-[#4318FF] uppercase tracking-wider">Novo Agendamento</span>
+              <span className="text-[10px] sm:text-xs font-semibold text-[#4318FF] uppercase tracking-wider">
+                <span className="sm:hidden">Agendar</span>
+                <span className="hidden sm:inline">Novo Agendamento</span>
+              </span>
             </button>
             {currentViewAgenda.length > 0 ? (
               currentViewAgenda.map((item, i) => (
-                <div key={i} onClick={() => onPatientClick(item.patientId)} className="flex items-center gap-6 p-4 bg-white hover:bg-slate-50 rounded-2xl transition-all border border-slate-100 hover:border-blue-500/30 group cursor-pointer">
-                  <div className="w-20 text-center">
-                    <p className="text-sm font-black text-[#4318FF]">{item.time}</p>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase">Hoje</p>
+                <div key={i} onClick={() => onPatientClick(item.patientId)} className="flex items-center gap-3 sm:gap-6 p-3 sm:p-4 bg-white hover:bg-slate-50 rounded-2xl transition-all border border-slate-100 hover:border-blue-500/30 group cursor-pointer relative">
+                  <div className="w-16 sm:w-20 text-center">
+                    <p className="text-sm font-bold text-[#4318FF]">{item.time}</p>
+                    <p className="text-[10px] font-semibold text-slate-400 uppercase">Hoje</p>
                   </div>
-                  <div className="w-1 h-10 bg-blue-100 rounded-full" />
-                  <div className="flex-1">
-                    <p className="text-sm font-bold text-slate-900">{item.patientName}</p>
-                    <p className="text-xs text-slate-400 font-medium">Terapeuta: {item.therapistName || 'Dr. Ricardo'}</p>
+                  <div className="w-1 h-10 bg-blue-100 rounded-full shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-slate-900 truncate">{item.patientName}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <p className="text-[10px] text-slate-400 font-medium truncate">Prof: {item.therapistName || 'Dr. Ricardo'}</p>
+                      <span className="w-1 h-1 bg-slate-200 rounded-full" />
+                      <p className="text-[10px] text-slate-400 font-medium truncate">Sala: {item.room || '01'}</p>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-2 sm:gap-3">
+                    <div className="hidden sm:flex items-center gap-1">
                       <button 
                         onClick={(e) => { e.stopPropagation(); handleStatusUpdate(item.id, 'confirmed'); }}
                         className={`px-2 py-1 rounded-lg text-[8px] font-bold uppercase transition-all ${item.status === 'confirmed' ? 'bg-green-600 text-white' : 'bg-green-50 text-green-600 hover:bg-green-600 hover:text-white'}`}
@@ -445,12 +466,50 @@ export function CoordinatorDashboard({
                         Canc
                       </button>
                     </div>
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); handleEditAppointment(item); }}
-                      className="p-2 text-slate-400 hover:text-[#4318FF] hover:bg-blue-50 rounded-xl transition-all"
-                    >
-                      <Settings size={14} />
-                    </button>
+                    
+                    <div className="relative">
+                      <button 
+                        onClick={(e) => { 
+                          e.stopPropagation(); 
+                          setOpenMenuId(openMenuId === item.id ? null : item.id); 
+                        }}
+                        className="p-2 text-slate-400 hover:text-[#4318FF] hover:bg-blue-50 rounded-xl transition-all"
+                      >
+                        <MoreVertical size={16} />
+                      </button>
+                      
+                      {openMenuId === item.id && (
+                        <div className="absolute right-0 top-full mt-2 w-40 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 py-2 animate-in fade-in zoom-in duration-200">
+                          <div className="sm:hidden">
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); handleStatusUpdate(item.id, 'confirmed'); setOpenMenuId(null); }}
+                              className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-all"
+                            >
+                              <CheckCircle2 size={14} className="text-green-500" /> Confirmar
+                            </button>
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); handleStatusUpdate(item.id, 'pending'); setOpenMenuId(null); }}
+                              className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-all"
+                            >
+                              <Clock size={14} className="text-yellow-500" /> Pendente
+                            </button>
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); handleStatusUpdate(item.id, 'canceled'); setOpenMenuId(null); }}
+                              className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-all"
+                            >
+                              <XCircle size={14} className="text-red-500" /> Cancelar
+                            </button>
+                            <div className="h-px bg-slate-50 my-1" />
+                          </div>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); handleEditAppointment(item); setOpenMenuId(null); }}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-all"
+                          >
+                            <Settings size={14} className="text-slate-400" /> Editar
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))
@@ -529,14 +588,14 @@ export function CoordinatorDashboard({
 
   const renderRoomsContent = () => (
     <div className="space-y-6">
-      <div className="flex items-center justify-between bg-white p-6 rounded-[32px] shadow-sm border border-slate-100">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-slate-100 gap-4">
         <div>
-          <h3 className="text-xl font-bold text-slate-900">Gestão de Salas</h3>
-          <p className="text-slate-500 text-sm">Configure as salas disponíveis para reserva.</p>
+          <h3 className="text-lg sm:text-xl font-bold text-slate-900">Salas</h3>
+          <p className="text-slate-500 text-sm hidden sm:block">Configure as salas disponíveis.</p>
         </div>
         <button 
           onClick={() => setIsEditingRooms(!isEditingRooms)}
-          className={`px-6 py-3 rounded-2xl font-bold text-sm transition-all flex items-center gap-2 ${isEditingRooms ? 'bg-slate-100 text-slate-600' : 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20'}`}
+          className={`px-4 sm:px-6 py-2 sm:py-3 rounded-2xl font-bold text-[10px] sm:text-sm transition-all flex items-center justify-center gap-2 ${isEditingRooms ? 'bg-slate-100 text-slate-600' : 'bg-[#4318FF] text-white shadow-lg shadow-blue-500/20'}`}
         >
           {isEditingRooms ? 'Ver Reservas' : 'Editar Salas'}
         </button>
@@ -644,58 +703,50 @@ export function CoordinatorDashboard({
   );
 
   const renderDashboard = () => (
-    <div className="space-y-12 animate-in fade-in duration-500">
+    <div className="space-y-8 sm:space-y-12 animate-in fade-in duration-500">
       {/* Agenda Global Section */}
-      <section className="space-y-6">
-        <div className="flex items-center gap-3 px-2">
-          <div className="p-2 bg-blue-50 text-[#4318FF] rounded-xl"><Calendar size={24} /></div>
-          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Agenda Global</h2>
-        </div>
+      <section className="space-y-4 sm:space-y-6">
         {renderAgendaContent()}
       </section>
 
       {/* Gestão de Salas Section */}
-      <section className="space-y-6">
-        <div className="flex items-center gap-3 px-2">
-          <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl"><DoorOpen size={24} /></div>
-          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Gestão de Salas</h2>
-        </div>
+      <section className="space-y-4 sm:space-y-6">
         {renderRoomsContent()}
       </section>
 
       {/* Gestão de Equipe Section */}
-      <section className="space-y-6">
-        <div className="flex items-center gap-3 px-2">
-          <div className="p-2 bg-purple-50 text-purple-600 rounded-xl"><Users size={24} /></div>
-          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Gestão de Equipe</h2>
-        </div>
-        <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100">
+      <section className="space-y-4 sm:space-y-6">
+        <div className="bg-white p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="p-2 bg-purple-50 text-purple-600 rounded-xl"><Users size={20} className="sm:w-6 sm:h-6" /></div>
+            <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">Equipe</h2>
+          </div>
           <TeamManagement user={user} />
         </div>
       </section>
 
       {/* Stats Grid - Moved below */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-8 border-t border-slate-100">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 pt-8 border-t border-slate-100">
         {[
-          { id: 'patients', label: 'Pacientes Ativos', value: allPatients.length.toString(), icon: Users, trend: '+3', color: 'bg-purple-50 text-purple-600' },
+          { id: 'patients', label: 'Pacientes Ativos', value: (allPatients?.length || 0).toString(), icon: Users, trend: '+3', color: 'bg-purple-50 text-purple-600' },
           { id: 'agenda', label: 'Sessões Realizadas', value: '142', icon: Calendar, trend: '+15', color: 'bg-orange-50 text-orange-600' },
         ].map((stat, i) => (
           <div 
             key={i} 
             onClick={() => setActiveTab(stat.id as any)}
-            className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 hover:shadow-xl hover:border-blue-500/30 transition-all group cursor-pointer"
+            className="bg-white p-6 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100 hover:shadow-xl hover:border-blue-500/30 transition-all group cursor-pointer"
           >
             <div className="flex items-center justify-between mb-4">
-              <div className={`w-14 h-14 ${stat.color} rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform`}>
-                <stat.icon size={28} />
+              <div className={`w-12 h-12 sm:w-14 sm:h-14 ${stat.color} rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform`}>
+                <stat.icon size={24} className="sm:w-7 sm:h-7" />
               </div>
               <div className="flex flex-col items-end">
-                <span className="text-xs font-bold text-green-500 bg-green-50 px-2 py-1 rounded-lg">{stat.trend}</span>
-                <span className="text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-widest">Ver Detalhes</span>
+                <span className="text-[10px] font-bold text-green-500 bg-green-50 px-2 py-1 rounded-lg">{stat.trend}</span>
+                <span className="text-[8px] sm:text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-widest">Ver Detalhes</span>
               </div>
             </div>
-            <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-1">{stat.label}</p>
-            <h3 className="text-3xl font-bold text-slate-900">{stat.value}</h3>
+            <p className="text-slate-400 text-[10px] font-semibold uppercase tracking-widest mb-1">{stat.label}</p>
+            <h3 className="text-2xl sm:text-3xl font-bold text-slate-900">{stat.value}</h3>
           </div>
         ))}
       </div>
@@ -705,68 +756,68 @@ export function CoordinatorDashboard({
   );
 
   const renderFinancial = () => (
-    <div className="space-y-8 animate-in fade-in duration-500">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-500">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Demonstrativo de Resultados (DRE)</h2>
-          <p className="text-slate-400 font-medium">Visão detalhada da saúde financeira da clínica</p>
+          <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">Financeiro (DRE)</h2>
+          <p className="text-slate-400 text-sm font-medium hidden sm:block">Visão detalhada da saúde financeira da clínica</p>
         </div>
-        <div className="flex gap-3">
-          <button className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-100 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all shadow-sm">
-            <Download size={16} /> Exportar PDF
+        <div className="flex gap-2 sm:gap-3">
+          <button className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 sm:px-4 py-2 bg-white border border-slate-100 rounded-xl text-[10px] sm:text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all shadow-sm">
+            <Download size={14} className="sm:w-4 sm:h-4" /> Exportar
           </button>
-          <button className="flex items-center gap-2 px-4 py-2 bg-[#4318FF] text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-500/20">
-            <Plus size={16} /> Novo Lançamento
+          <button className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 sm:px-4 py-2 bg-[#4318FF] text-white rounded-xl text-[10px] sm:text-xs font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-500/20">
+            <Plus size={14} className="sm:w-4 sm:h-4" /> Lançamento
           </button>
         </div>
       </div>
 
-      <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden">
-        <div className="p-8 border-b border-slate-50 flex items-center justify-between bg-slate-50/50">
+      <div className="bg-white rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100 overflow-hidden">
+        <div className="p-4 sm:p-8 border-b border-slate-50 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-50/50 gap-4">
           <div className="flex items-center gap-4">
             <div className="p-3 bg-white rounded-2xl shadow-sm border border-slate-100">
               <Calendar size={20} className="text-[#4318FF]" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Período Selecionado</p>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Período</p>
               <p className="text-sm font-bold text-slate-900">Março de 2024</p>
             </div>
           </div>
-          <div className="flex items-center gap-8">
-            <div className="text-right">
+          <div className="flex items-center justify-between sm:justify-end gap-8">
+            <div className="text-left sm:text-right">
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Margem Líquida</p>
-              <p className="text-lg font-bold text-green-500">35.2%</p>
+              <p className="text-base sm:text-lg font-bold text-green-500">35.2%</p>
             </div>
             <div className="text-right">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ponto de Equilíbrio</p>
-              <p className="text-lg font-bold text-slate-900">R$ 14.166</p>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ponto Equilíbrio</p>
+              <p className="text-base sm:text-lg font-bold text-slate-900">R$ 14.166</p>
             </div>
           </div>
         </div>
 
-        <div className="p-8">
-          <table className="w-full">
+        <div className="p-4 sm:p-8 overflow-x-auto no-scrollbar">
+          <table className="w-full min-w-[500px]">
             <thead>
               <tr className="text-left">
                 <th className="pb-6 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Descrição</th>
                 <th className="pb-6 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">Valor (R$)</th>
-                <th className="pb-6 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">% Receita</th>
+                <th className="pb-6 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">% Rec.</th>
                 <th className="pb-6 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center">Info</th>
               </tr>
             </thead>
             <tbody className="space-y-4">
               {dreData.map((item, i) => (
                 <tr key={i} className={`group ${item.type === 'total' || item.type === 'profit' ? 'bg-slate-50/50' : ''}`}>
-                  <td className={`py-4 px-4 rounded-l-2xl ${item.type === 'profit' ? 'text-lg font-bold text-green-600' : item.type === 'total' ? 'font-bold text-slate-900' : 'text-slate-600 font-medium'}`}>
+                  <td className={`py-3 sm:py-4 px-2 sm:px-4 rounded-l-2xl ${item.type === 'profit' ? 'text-base sm:text-lg font-bold text-green-600' : item.type === 'total' ? 'font-bold text-slate-900' : 'text-slate-600 font-medium text-sm'}`}>
                     {item.label}
                   </td>
-                  <td className={`py-4 px-4 text-right ${item.value < 0 ? 'text-red-500' : item.type === 'profit' ? 'text-lg font-bold text-green-600' : 'text-slate-900 font-bold'}`}>
+                  <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right ${item.value < 0 ? 'text-red-500' : item.type === 'profit' ? 'text-base sm:text-lg font-bold text-green-600' : 'text-slate-900 font-bold text-sm'}`}>
                     {item.value < 0 ? `- R$ ${Math.abs(item.value).toLocaleString()}` : `R$ ${item.value.toLocaleString()}`}
                   </td>
-                  <td className="py-4 px-4 text-right text-slate-400 font-bold text-xs">
+                  <td className="py-3 sm:py-4 px-2 sm:px-4 text-right text-slate-400 font-bold text-[10px] sm:text-xs">
                     {item.label === 'Receita Bruta' ? '100%' : `${Math.abs((item.value / 45250) * 100).toFixed(1)}%`}
                   </td>
-                  <td className="py-4 px-4 rounded-r-2xl text-center">
+                  <td className="py-3 sm:py-4 px-2 sm:px-4 rounded-r-2xl text-center">
                     <button className="p-1.5 hover:bg-white rounded-lg transition-all text-slate-300 hover:text-[#4318FF]">
                       <FileText size={14} />
                     </button>
@@ -779,62 +830,77 @@ export function CoordinatorDashboard({
       </div>
 
       {/* Financial Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 bg-white p-8 rounded-[40px] shadow-sm border border-slate-100">
-          <h3 className="text-lg font-bold text-slate-900 mb-6">Composição de Custos</h3>
-          <div className="h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={[
-                { name: 'Repasses', value: 18100 },
-                { name: 'Aluguel', value: 3500 },
-                { name: 'Marketing', value: 2000 },
-                { name: 'Sistemas', value: 1200 },
-                { name: 'Outros', value: 1800 },
-              ]}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} />
-                <YAxis axisLine={false} tickLine={false} tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} />
-                <Tooltip cursor={{fill: '#F8FAFC'}} contentStyle={{borderRadius: '16px', border: 'none'}} />
-                <Bar dataKey="value" fill="#4318FF" radius={[8, 8, 0, 0]} barSize={40} />
-              </BarChart>
-            </ResponsiveContainer>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8 overflow-hidden">
+        <div className="lg:col-span-2 bg-white p-6 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100">
+          <h3 className="text-base sm:text-lg font-bold text-slate-900 mb-6">Composição de Custos</h3>
+          <div className="overflow-x-auto no-scrollbar -mx-6 sm:mx-0 px-6 sm:px-0">
+            <div className="h-[250px] sm:h-[300px] min-w-[600px] sm:min-w-0">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart 
+                  data={[
+                    { name: 'Repasses', value: 18100 },
+                    { name: 'Aluguel', value: 3500 },
+                    { name: 'Marketing', value: 2000 },
+                    { name: 'Sistemas', value: 1200 },
+                    { name: 'Outros', value: 1800 },
+                  ]}
+                  margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
+                  barGap={12}
+                  barCategoryGap="30%"
+                >
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                  <XAxis 
+                    dataKey="name" 
+                    axisLine={false} 
+                    tickLine={false} 
+                    tick={{fill: '#A3AED0', fontSize: 10, fontWeight: 'bold'}} 
+                    padding={{ left: 30, right: 30 }}
+                  />
+                  <YAxis axisLine={false} tickLine={false} tick={{fill: '#A3AED0', fontSize: 10, fontWeight: 'bold'}} />
+                  <Tooltip cursor={{fill: '#F8FAFC'}} contentStyle={{borderRadius: '16px', border: 'none'}} />
+                  <Bar dataKey="value" fill="#4318FF" radius={[8, 8, 0, 0]} barSize={40} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         </div>
-        <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100">
-          <h3 className="text-lg font-bold text-slate-900 mb-6">Distribuição</h3>
-          <div className="h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <RePieChart>
-                <Pie
-                  data={[
-                    { name: 'Lucro', value: 15935 },
-                    { name: 'Repasses', value: 18100 },
-                    { name: 'Custos Fixos', value: 8500 },
-                    { name: 'Impostos', value: 2715 },
-                  ]}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={80}
-                  paddingAngle={5}
-                  dataKey="value"
-                >
-                  {COLORS.map((color, index) => (
-                    <Cell key={`cell-${index}`} fill={color} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </RePieChart>
-            </ResponsiveContainer>
+        <div className="bg-white p-6 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100">
+          <h3 className="text-base sm:text-lg font-bold text-slate-900 mb-6">Distribuição</h3>
+          <div className="overflow-x-auto no-scrollbar -mx-6 sm:mx-0 px-6 sm:px-0">
+            <div className="h-[250px] sm:h-[300px] min-w-[300px] sm:min-w-0">
+              <ResponsiveContainer width="100%" height="100%">
+                <RePieChart>
+                  <Pie
+                    data={[
+                      { name: 'Lucro', value: 15935 },
+                      { name: 'Repasses', value: 18100 },
+                      { name: 'Custos Fixos', value: 8500 },
+                      { name: 'Impostos', value: 2715 },
+                    ]}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={50}
+                    outerRadius={70}
+                    paddingAngle={5}
+                    dataKey="value"
+                  >
+                    {COLORS.map((color, index) => (
+                      <Cell key={`cell-${index}`} fill={color} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                </RePieChart>
+              </ResponsiveContainer>
+            </div>
           </div>
-          <div className="space-y-2 mt-4">
+          <div className="space-y-3 mt-6 border-t border-slate-50 pt-6">
             {['Lucro', 'Repasses', 'Custos Fixos', 'Impostos'].map((label, i) => (
-              <div key={i} className="flex items-center justify-between text-xs font-bold">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i] }} />
-                  <span className="text-slate-400">{label}</span>
+              <div key={i} className="flex items-center justify-between text-[11px] sm:text-xs font-semibold">
+                <div className="flex items-center gap-3">
+                  <div className="w-2.5 h-2.5 rounded-full shadow-sm" style={{ backgroundColor: COLORS[i] }} />
+                  <span className="text-slate-500">{label}</span>
                 </div>
-                <span className="text-slate-900">R$ {dreData.find(d => d.label.includes(label))?.value || 0}</span>
+                <span className="text-slate-900 font-bold">R$ {dreData.find(d => d.label.includes(label))?.value.toLocaleString() || 0}</span>
               </div>
             ))}
           </div>
@@ -846,15 +912,197 @@ export function CoordinatorDashboard({
   if (view === 'patient' && selectedPatientId) {
     const patient = allPatients.find(p => p.id === selectedPatientId);
     return (
-      <PatientDetailView 
-        patient={patient} 
-        onBack={() => setView('home')} 
-        history={patientsHistory.filter(h => h.patientId === selectedPatientId)}
-        notes={therapistNotes.filter(n => n.patientId === selectedPatientId)}
-        onAddNote={onAddNote}
-        protocols={protocols}
-        userRole={user.role}
-      />
+      <div className="min-h-screen bg-[#F4F7FE] flex">
+        {/* Sidebar */}
+        <div className="w-72 bg-white hidden lg:flex flex-col p-8 sticky top-0 h-screen border-r border-slate-100">
+          <div className="flex items-center gap-3 mb-12 px-2">
+            <div className="w-12 h-12 bg-[#4318FF] rounded-[20px] flex items-center justify-center text-white shadow-xl shadow-blue-500/30">
+              <TrendingUp size={24} />
+            </div>
+            <div>
+              <span className="font-black text-2xl text-slate-900 tracking-tighter block leading-none">VERTO</span>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">Gestão</span>
+            </div>
+          </div>
+
+          <nav className="space-y-2 flex-1">
+            {[
+              { id: 'dashboard', label: 'Painel', icon: LayoutDashboard },
+              { id: 'patients', label: 'Pacientes', icon: ClipboardList },
+              { id: 'protocols', label: 'Protocolos', icon: ClipboardCheck },
+              { id: 'logs', label: 'Registros', icon: History },
+              { id: 'settings', label: 'Configurações', icon: Settings },
+              { id: 'financial', label: 'Financeiro', icon: DollarSign, badge: 'EM BREVE' },
+              { id: 'flow', label: 'Fluxo Verto', icon: Zap, badge: 'EM BREVE' },
+              { id: 'birthdays', label: 'Aniversariantes', icon: Heart, badge: 'EM BREVE' },
+            ].map((item) => (
+              <button 
+                key={item.id}
+                onClick={() => {
+                  setActiveTab(item.id as any);
+                  setView('home');
+                }}
+                className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl transition-all font-bold text-sm ${
+                  activeTab === item.id 
+                    ? 'text-[#4318FF] bg-blue-50 shadow-sm' 
+                    : 'text-slate-400 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <item.icon size={20} />
+                {item.label}
+                {item.badge && <span className="ml-auto text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">{item.badge}</span>}
+              </button>
+            ))}
+          </nav>
+
+          <div className="mt-auto pt-8 border-t border-slate-50">
+            <div className="bg-slate-50 rounded-3xl p-4 mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center font-bold text-[#4318FF] shadow-sm">
+                  {user.name?.[0]}
+                </div>
+                <div className="overflow-hidden">
+                  <p className="text-xs font-bold text-slate-900 truncate">{user.name}</p>
+                  <p className="text-[10px] font-medium text-slate-400 truncate">{user.email}</p>
+                </div>
+              </div>
+            </div>
+            <button 
+              onClick={onLogout}
+              className="w-full flex items-center gap-4 px-6 py-4 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-2xl transition-all font-bold text-sm"
+            >
+              <LogOut size={20} />
+              Sair do Sistema
+            </button>
+          </div>
+        </div>
+
+        {/* Main Content */}
+        <div className="flex-1 overflow-y-auto">
+          {/* Header */}
+          <header className="px-4 lg:px-8 py-6 flex items-center justify-between sticky top-0 bg-[#F4F7FE]/80 backdrop-blur-md z-30">
+            <div className="flex items-center gap-4">
+              <button 
+                onClick={() => setView('home')}
+                className="p-2 bg-white rounded-xl text-slate-400 hover:text-[#4318FF] shadow-sm border border-slate-100 transition-all"
+              >
+                <ChevronRight size={20} className="rotate-180" />
+              </button>
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Prontuário</p>
+            <h1 className="text-xl lg:text-3xl font-semibold text-slate-900 tracking-tight capitalize">{patient?.name}</h1>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-2 lg:gap-4 bg-white p-1.5 lg:p-2 rounded-[24px] shadow-sm border border-slate-100">
+              <SettingsMenu 
+                user={user} 
+                onLogout={onLogout} 
+                onViewTeam={() => { setActiveTab('team'); setView('home'); }}
+                onOpenInvitations={() => setShowInvitationModal(true)}
+                onViewProfile={() => { setActiveTab('settings'); setView('home'); }}
+                onViewBilling={() => { setActiveTab('billing'); setView('home'); }}
+                onOpenOnboarding={onOpenOnboarding}
+              />
+
+              <button 
+                onClick={() => setIsMobileMenuOpen(true)}
+                className="lg:hidden p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
+              >
+                <Menu size={20} />
+              </button>
+            </div>
+          </header>
+
+          {/* Mobile Menu Drawer */}
+          <AnimatePresence>
+            {isMobileMenuOpen && (
+              <>
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[100] lg:hidden"
+                />
+                <motion.div 
+                  initial={{ x: '100%' }}
+                  animate={{ x: 0 }}
+                  exit={{ x: '100%' }}
+                  transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                  className="fixed top-0 right-0 bottom-0 w-[280px] bg-white z-[101] lg:hidden shadow-2xl flex flex-col p-6"
+                >
+                  <div className="flex items-center justify-between mb-8">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-[#4318FF] rounded-xl flex items-center justify-center text-white">
+                        <TrendingUp size={20} />
+                      </div>
+                      <span className="font-black text-xl text-slate-900 tracking-tighter">VERTO</span>
+                    </div>
+                    <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 text-slate-400 hover:text-slate-600">
+                      <X size={24} />
+                    </button>
+                  </div>
+
+                  <nav className="space-y-1 flex-1 overflow-y-auto no-scrollbar">
+                    {[
+                      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+                      { id: 'patients', label: 'Pacientes', icon: ClipboardList },
+                      { id: 'protocols', label: 'Protocolos', icon: ClipboardCheck },
+                      { id: 'logs', label: 'Log de Atividades', icon: History },
+                      { id: 'settings', label: 'Configurações', icon: Settings },
+                      { id: 'financial', label: 'Financeiro (DRE)', icon: DollarSign, badge: 'EM BREVE' },
+                      { id: 'flow', label: 'Verto Flow', icon: Zap, badge: 'EM BREVE' },
+                      { id: 'birthdays', label: 'Aniversariantes', icon: Heart, badge: 'EM BREVE' },
+                    ].map((item) => (
+                      <button 
+                        key={item.id}
+                        onClick={() => {
+                          setActiveTab(item.id as any);
+                          setView('home');
+                          setIsMobileMenuOpen(false);
+                        }}
+                        className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl transition-all font-medium text-sm ${
+                          activeTab === item.id 
+                            ? 'text-[#4318FF] bg-blue-50' 
+                            : 'text-slate-400 hover:text-slate-900 hover:bg-slate-50'
+                        }`}
+                      >
+                        <item.icon size={18} />
+                        {item.label}
+                        {item.badge && <span className="ml-auto text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">{item.badge}</span>}
+                      </button>
+                    ))}
+                  </nav>
+
+                  <div className="mt-auto pt-6 border-t border-slate-50">
+                    <button 
+                      onClick={onLogout}
+                      className="w-full flex items-center gap-4 px-4 py-3.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all font-bold text-sm"
+                    >
+                      <LogOut size={18} />
+                      Sair do Sistema
+                    </button>
+                  </div>
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
+
+          <main className="p-4 lg:p-8 pb-20">
+            <PatientDetailView 
+              patient={patient} 
+              onBack={() => setView('home')} 
+              history={patientsHistory.filter(h => h.patientId === selectedPatientId)}
+              notes={therapistNotes.filter(n => n.patientId === selectedPatientId)}
+              patientTasks={(allTasks || []).filter(t => t.patientId === selectedPatientId)}
+              onAddNote={onAddNote}
+              protocols={protocols}
+              userRole={user.role}
+            />
+          </main>
+        </div>
+      </div>
     );
   }
 
@@ -886,7 +1134,7 @@ export function CoordinatorDashboard({
             <button 
               key={item.id}
               onClick={() => setActiveTab(item.id as any)}
-              className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl transition-all font-bold text-sm ${
+              className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl transition-all font-medium text-sm ${
                 activeTab === item.id 
                   ? 'text-[#4318FF] bg-blue-50 shadow-sm' 
                   : 'text-slate-400 hover:text-slate-900 hover:bg-slate-50'
@@ -924,31 +1172,51 @@ export function CoordinatorDashboard({
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto">
         {/* Header */}
-        <header className="px-8 py-6 flex items-center justify-between sticky top-0 bg-[#F4F7FE]/80 backdrop-blur-md z-10">
-          <div>
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Páginas / {activeTab}</p>
-            <h1 className="text-3xl font-bold text-slate-900 tracking-tight capitalize">{activeTab === 'financial' ? 'Financeiro' : activeTab}</h1>
+        <header className="px-4 lg:px-8 py-6 flex items-center justify-between sticky top-0 bg-[#F4F7FE]/80 backdrop-blur-md z-30">
+          <div className="flex items-center gap-4">
+            {(activeTab !== 'dashboard' || (!isEditingRooms && activeTab === 'rooms')) && (
+              <button 
+                onClick={() => {
+                  if (!isEditingRooms && activeTab === 'rooms') {
+                    setIsEditingRooms(true);
+                  } else {
+                    setActiveTab('dashboard');
+                  }
+                }}
+                className="p-2 bg-white rounded-xl text-slate-400 hover:text-[#4318FF] shadow-sm border border-slate-100 transition-all"
+              >
+                <ChevronRight size={20} className="rotate-180" />
+              </button>
+            )}
+            <div>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">
+                {!isEditingRooms && activeTab === 'rooms' ? 'Salas' : `Páginas / ${activeTab}`}
+              </p>
+              <h1 className="text-xl lg:text-3xl font-semibold text-slate-900 tracking-tight capitalize">
+                {!isEditingRooms && activeTab === 'rooms' ? 'Reservas de Sala' : (activeTab === 'financial' ? 'Financeiro' : activeTab)}
+              </h1>
+            </div>
           </div>
           
-          <div className="flex items-center gap-4 bg-white p-2 rounded-[24px] shadow-sm border border-slate-100">
-            <div className="relative">
+          <div className="flex items-center gap-2 lg:gap-4 bg-white p-1.5 lg:p-2 rounded-[24px] shadow-sm border border-slate-100">
+            <div className="relative hidden md:block">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
               <input 
                 type="text" 
                 placeholder="Pesquisar..." 
-                className="bg-slate-50 border-none rounded-full py-3 pl-12 pr-6 text-sm font-medium outline-none focus:ring-2 ring-blue-500/20 w-64 transition-all"
+                className="bg-slate-50 border-none rounded-full py-3 pl-12 pr-6 text-sm font-medium outline-none focus:ring-2 ring-blue-500/20 w-48 lg:w-64 transition-all"
               />
             </div>
-            <button className="p-3 text-slate-400 hover:text-[#4318FF] transition-all relative">
-              <Bell size={20} />
-              <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white" />
-            </button>
+            
+            {/* 
             <button 
               onClick={() => setShowInvitationModal(true)}
-              className="p-3 bg-[#4318FF] text-white rounded-full hover:scale-105 transition-all shadow-lg shadow-blue-500/20"
+              className="p-2.5 lg:p-3 bg-[#4318FF] text-white rounded-full hover:scale-105 transition-all shadow-lg shadow-blue-500/20"
             >
-              <UserPlus size={20} />
+              <UserPlus size={18} />
             </button>
+            */}
+
             <SettingsMenu 
               user={user} 
               onLogout={onLogout} 
@@ -958,10 +1226,91 @@ export function CoordinatorDashboard({
               onViewBilling={() => setActiveTab('billing')}
               onOpenOnboarding={onOpenOnboarding}
             />
+
+            <button 
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="lg:hidden p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
+            >
+              <Menu size={20} />
+            </button>
           </div>
         </header>
 
-        <main className="p-8 pb-20">
+        {/* Mobile Menu Drawer */}
+        <AnimatePresence>
+          {isMobileMenuOpen && (
+            <>
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[100] lg:hidden"
+              />
+              <motion.div 
+                initial={{ x: '100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '100%' }}
+                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                className="fixed top-0 right-0 bottom-0 w-[280px] bg-white z-[101] lg:hidden shadow-2xl flex flex-col p-6"
+              >
+                <div className="flex items-center justify-between mb-8">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-[#4318FF] rounded-xl flex items-center justify-center text-white">
+                      <TrendingUp size={20} />
+                    </div>
+                    <span className="font-black text-xl text-slate-900 tracking-tighter">VERTO</span>
+                  </div>
+                  <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 text-slate-400 hover:text-slate-600">
+                    <X size={24} />
+                  </button>
+                </div>
+
+                <nav className="space-y-1 flex-1 overflow-y-auto no-scrollbar">
+                  {[
+                    { id: 'dashboard', label: 'Painel', icon: LayoutDashboard },
+                    { id: 'patients', label: 'Pacientes', icon: ClipboardList },
+                    { id: 'protocols', label: 'Protocolos', icon: ClipboardCheck },
+                    { id: 'logs', label: 'Registros', icon: History },
+                    { id: 'settings', label: 'Configurações', icon: Settings },
+                    { id: 'financial', label: 'Financeiro', icon: DollarSign, badge: 'EM BREVE' },
+                    { id: 'flow', label: 'Fluxo Verto', icon: Zap, badge: 'EM BREVE' },
+                    { id: 'birthdays', label: 'Aniversariantes', icon: Heart, badge: 'EM BREVE' },
+                  ].map((item) => (
+                    <button 
+                      key={item.id}
+                      onClick={() => {
+                        setActiveTab(item.id as any);
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl transition-all font-bold text-sm ${
+                        activeTab === item.id 
+                          ? 'text-[#4318FF] bg-blue-50' 
+                          : 'text-slate-400 hover:text-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      <item.icon size={18} />
+                      {item.label}
+                      {item.badge && <span className="ml-auto text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">{item.badge}</span>}
+                    </button>
+                  ))}
+                </nav>
+
+                <div className="mt-auto pt-6 border-t border-slate-50">
+                  <button 
+                    onClick={onLogout}
+                    className="w-full flex items-center gap-4 px-4 py-3.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all font-bold text-sm"
+                  >
+                    <LogOut size={18} />
+                    Sair do Sistema
+                  </button>
+                </div>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
+
+        <main className="p-4 lg:p-8 pb-20">
           <AnimatePresence mode="wait">
             {activeTab === 'dashboard' && (
               <motion.div key="dashboard" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}}>
@@ -1013,33 +1362,67 @@ export function CoordinatorDashboard({
               </motion.div>
             )}
             {activeTab === 'patients' && (
-              <motion.div key="patients" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100">
+              <motion.div key="patients" initial={{opacity: 0, y: 20}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: -20}} className="bg-white p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100">
                 <div className="flex items-center justify-between mb-8">
-                  <h3 className="text-xl font-bold text-slate-900">Gestão de Pacientes</h3>
-                  <button className="px-6 py-3 bg-[#4318FF] text-white rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-all">
+                  <h3 className="text-lg sm:text-xl font-bold text-slate-900">Gestão de Pacientes</h3>
+                  <button className="px-4 sm:px-6 py-2 sm:py-3 bg-[#4318FF] text-white rounded-2xl font-bold text-xs sm:text-sm shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-all">
                     Novo Paciente
                   </button>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                   {allPatients.map((patient, i) => (
-                    <div key={i} className="p-6 bg-slate-50 rounded-3xl border border-slate-100 hover:border-blue-500/30 transition-all group">
+                    <div key={i} className="p-4 sm:p-6 bg-slate-50 rounded-3xl border border-slate-100 hover:border-blue-500/30 transition-all group relative">
                       <div className="flex items-center gap-4 mb-4">
-                        <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center font-bold text-slate-900 shadow-sm group-hover:scale-110 transition-transform">
+                        <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white rounded-2xl flex items-center justify-center font-bold text-slate-900 shadow-sm group-hover:scale-110 transition-transform">
                           {patient.name[0]}
                         </div>
-                        <div>
-                          <h4 className="font-bold text-slate-900">{patient.name}</h4>
-                          <p className="text-xs text-slate-400 font-medium">ID: {patient.id}</p>
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-medium text-slate-900 truncate">{patient.name}</h4>
+                          <p className="text-[10px] text-slate-400 font-medium">ID: {patient.id}</p>
+                        </div>
+                        <div className="relative">
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === patient.id ? null : patient.id); }}
+                            className="p-2 text-slate-400 hover:text-[#4318FF] hover:bg-white rounded-xl transition-all"
+                          >
+                            <MoreVertical size={16} />
+                          </button>
+                          {openMenuId === patient.id && (
+                            <div className="absolute right-0 top-full mt-2 w-40 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 py-2 animate-in fade-in zoom-in duration-200">
+                              <button 
+                                onClick={() => { onPatientClick(patient.id); setOpenMenuId(null); }}
+                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                              >
+                                <FileText size={14} className="text-blue-500" /> Prontuário
+                              </button>
+                              <button 
+                                onClick={() => { onPatientClick(patient.id); setOpenMenuId(null); }}
+                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                              >
+                                <Search size={14} className="text-[#4318FF]" /> Ver Detalhes
+                              </button>
+                              <button 
+                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                              >
+                                <Edit2 size={14} className="text-slate-400" /> Editar
+                              </button>
+                              <button 
+                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-red-500 hover:bg-red-50 transition-all"
+                              >
+                                <Trash2 size={14} /> Excluir
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center justify-between pt-4 border-t border-slate-200/50">
-                        <button 
-                          onClick={() => onPatientClick(patient.id)}
-                          className="text-[10px] font-bold text-[#4318FF] uppercase tracking-widest hover:underline flex items-center gap-1"
-                        >
-                          <FileText size={12} /> Prontuário Completo
-                        </button>
-                        <span className="px-2 py-1 bg-green-100 text-green-600 rounded-lg text-[10px] font-bold uppercase">Ativo</span>
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                          <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Paciente Ativo</span>
+                        </div>
+                        <div className="px-2 py-1 bg-slate-100 text-slate-500 rounded-lg text-[8px] font-bold uppercase">
+                          {patient.id.startsWith('P') ? 'Infantil' : 'Adulto'}
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -1133,7 +1516,7 @@ export function CoordinatorDashboard({
                   )}
 
                   <h4 className="text-lg font-bold text-slate-900 mb-6">Upgrade de Plano</h4>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     <div className={`p-8 rounded-[40px] border-2 transition-all ${user.planName === 'Crescimento' ? 'border-[#4318FF] bg-blue-50/30' : 'border-slate-100 hover:border-blue-200'}`}>
                       <div className="flex justify-between items-start mb-6">
                         <div>
@@ -1161,7 +1544,7 @@ export function CoordinatorDashboard({
                       </button>
                     </div>
 
-                    <div className="p-8 rounded-[40px] border-2 transition-all border-slate-100 hover:border-blue-200">
+                    <div className={`p-8 rounded-[40px] border-2 transition-all ${user.planName === 'Avançado' ? 'border-[#4318FF] bg-blue-50/30' : 'border-slate-100 hover:border-blue-200'}`}>
                       <div className="flex justify-between items-start mb-6">
                         <div>
                           <h5 className="text-xl font-bold text-slate-900">Avançado</h5>
@@ -1181,10 +1564,37 @@ export function CoordinatorDashboard({
                       </ul>
                       <button 
                         onClick={() => handleCheckout('advanced_plan_id')}
-                        disabled={loading}
-                        className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold text-sm shadow-lg shadow-slate-900/20 hover:scale-[1.02] transition-all"
+                        disabled={loading || user.planName === 'Avançado'}
+                        className={`w-full py-4 rounded-2xl font-bold text-sm transition-all ${user.planName === 'Avançado' ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-slate-900 text-white shadow-lg shadow-slate-900/20 hover:scale-[1.02]'}`}
                       >
-                        Fazer Upgrade
+                        {user.planName === 'Avançado' ? 'Plano Atual' : 'Fazer Upgrade'}
+                      </button>
+                    </div>
+
+                    <div className="p-8 rounded-[40px] border-2 border-slate-100 hover:border-blue-200 transition-all bg-slate-50/30">
+                      <div className="flex justify-between items-start mb-6">
+                        <div>
+                          <h5 className="text-xl font-bold text-slate-900">Enterprise</h5>
+                          <p className="text-slate-500 text-sm">Para grandes redes</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-2xl font-black text-slate-900">Sob Consulta</p>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase">Personalizado</p>
+                        </div>
+                      </div>
+                      <ul className="space-y-3 mb-8">
+                        {['12+ Profissionais', 'Workspaces Ilimitados', 'Dashboard de Organização', 'Faturamento Centralizado', 'Opções de White-label'].map(feat => (
+                          <li key={feat} className="flex items-center gap-2 text-sm text-slate-600 font-medium">
+                            <CheckCircle2 size={16} className="text-emerald-500" /> {feat}
+                          </li>
+                        ))}
+                      </ul>
+                      <button 
+                        onClick={() => window.open('https://wa.me/5511999999999', '_blank')}
+                        className="w-full py-4 bg-white border-2 border-slate-900 text-slate-900 rounded-2xl font-bold text-sm hover:bg-slate-900 hover:text-white transition-all flex items-center justify-center gap-2"
+                      >
+                        <MessageCircle size={18} />
+                        Falar com Especialista
                       </button>
                     </div>
                   </div>
@@ -1221,7 +1631,7 @@ export function CoordinatorDashboard({
             {activeTab === 'logs' && (
               <div className="space-y-6 animate-fade-in">
                 <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100">
-                  <h3 className="text-xl font-bold text-slate-900 mb-6">Log de Atividades do Sistema</h3>
+                  <h3 className="text-xl font-bold text-slate-900 mb-6">Registros de Atividades do Sistema</h3>
                   <div className="space-y-4">
                     {activityLogs && activityLogs.length > 0 ? (
                       activityLogs.map((log, i) => (

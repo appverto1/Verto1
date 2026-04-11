@@ -59,9 +59,12 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
   }
 
   const yTicks = Array.from({ length: Math.floor(maxScore) + 1 }, (_, i) => i);
+  
+  // Calculate dynamic width based on number of labels to prevent crowding
+  const minWidth = Math.max(600, data.length * 120);
 
   return (
-    <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 animate-fade-in">
+    <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 animate-fade-in overflow-hidden">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-2">
         <h3 className="text-sm font-bold text-gray-700 uppercase tracking-tight flex items-center gap-2">
           <BarChart2 size={18} className="text-[#4318FF]" /> {title || "Comparativo de Desempenho"}
@@ -70,30 +73,32 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
           <Info size={12} /> Eixo Y: Pontuação (Máx: {maxScore}) • Eixo X: Domínios
         </div>
       </div>
-      <div className="h-[500px] sm:h-[600px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart
-            data={data}
-            margin={{ top: 10, right: 10, left: 0, bottom: 150 }}
-            barGap={4}
-            barCategoryGap="15%"
-          >
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-            <XAxis 
-              dataKey="name" 
-              axisLine={false} 
-              tickLine={false} 
-              interval={0}
-              tick={<CustomXAxisTick />}
-            />
-            <YAxis 
-              axisLine={false} 
-              tickLine={false} 
-              tick={{ fill: '#A3AED0', fontSize: 8, fontWeight: 'bold' }}
-              dx={-5}
-              domain={[0, maxScore]}
-              ticks={yTicks}
-            />
+      <div className="overflow-x-auto pb-4 no-scrollbar">
+        <div style={{ minWidth: `${minWidth}px`, height: '500px' }} className="relative z-10">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart
+              data={data}
+              margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
+              barGap={12}
+              barCategoryGap="30%"
+            >
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+              <XAxis 
+                dataKey="name" 
+                axisLine={false} 
+                tickLine={false} 
+                interval={0}
+                tick={<CustomXAxisTick />}
+                padding={{ left: 30, right: 30 }}
+              />
+              <YAxis 
+                axisLine={false} 
+                tickLine={false} 
+                tick={{ fill: '#A3AED0', fontSize: 10, fontWeight: 'bold' }}
+                dx={-5}
+                domain={[0, maxScore]}
+                ticks={yTicks}
+              />
             <Tooltip 
               cursor={{ fill: '#F8FAFC' }}
               contentStyle={{ 
@@ -140,6 +145,7 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
         </ResponsiveContainer>
       </div>
     </div>
+  </div>
   );
 };
 
@@ -165,20 +171,20 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
   const yTicks = Array.from({ length: Math.floor(maxScore) + 1 }, (_, i) => i);
   
   // Calculate dynamic width based on number of labels to prevent crowding
-  const minWidth = Math.max(100, data.length * 80);
+  const minWidth = Math.max(600, data.length * 120);
 
   return (
     <div className="bg-white/70 backdrop-blur-md p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-white/50 mb-8 animate-fade-in relative overflow-hidden chart-glow">
       <div className="absolute top-0 right-0 w-32 sm:w-48 h-32 sm:h-48 bg-indigo-50/50 rounded-bl-full -z-0"></div>
       
-      <div className="overflow-x-auto pb-4 scrollbar-hide cursor-grab active:cursor-grabbing">
+      <div className="overflow-x-auto pb-4 no-scrollbar cursor-grab active:cursor-grabbing">
         <div style={{ minWidth: `${minWidth}px`, height: '500px' }} className="relative z-10">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
               data={data}
-              margin={{ top: 10, right: 10, left: 0, bottom: 150 }}
-              barGap={4}
-              barCategoryGap="20%"
+              margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
+              barGap={12}
+              barCategoryGap="35%"
             >
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
               <XAxis 
@@ -187,11 +193,12 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
                 tickLine={false} 
                 interval={0}
                 tick={<CustomXAxisTick />}
+                padding={{ left: 30, right: 30 }}
               />
               <YAxis 
                 axisLine={false} 
                 tickLine={false} 
-                tick={{ fill: '#A3AED0', fontSize: 8, fontWeight: 'bold' }}
+                tick={{ fill: '#A3AED0', fontSize: 10, fontWeight: 'bold' }}
                 dx={-5}
                 domain={[0, maxScore]}
                 ticks={yTicks}
@@ -270,31 +277,36 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
 
   const yTicks = Array.from({ length: Math.floor(maxScore) + 1 }, (_, i) => i);
 
+  // Calculate dynamic width based on number of labels to prevent crowding
+  const minWidth = Math.max(600, data.length * 120);
+
   return (
     <div className="bg-white/70 backdrop-blur-md p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-white/50 mb-8 animate-fade-in relative overflow-hidden chart-glow">
       <div className="absolute top-0 right-0 w-32 sm:w-48 h-32 sm:h-48 bg-indigo-50/50 rounded-bl-full -z-0"></div>
-      <div className="h-[500px] sm:h-[600px] w-full relative z-10">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart
-            data={data}
-            margin={{ top: 10, right: 10, left: 0, bottom: 150 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-            <XAxis 
-              dataKey="name" 
-              axisLine={false} 
-              tickLine={false} 
-              interval={0}
-              tick={<CustomXAxisTick />}
-            />
-            <YAxis 
-              axisLine={false} 
-              tickLine={false} 
-              tick={{ fill: '#A3AED0', fontSize: 8, fontWeight: 'bold' }}
-              dx={-5}
-              domain={[0, maxScore]}
-              ticks={yTicks}
-            />
+      <div className="overflow-x-auto pb-4 no-scrollbar">
+        <div style={{ minWidth: `${minWidth}px`, height: '500px' }} className="relative z-10">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart
+              data={data}
+              margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+              <XAxis 
+                dataKey="name" 
+                axisLine={false} 
+                tickLine={false} 
+                interval={0}
+                tick={<CustomXAxisTick />}
+                padding={{ left: 30, right: 30 }}
+              />
+              <YAxis 
+                axisLine={false} 
+                tickLine={false} 
+                tick={{ fill: '#A3AED0', fontSize: 10, fontWeight: 'bold' }}
+                dx={-5}
+                domain={[0, maxScore]}
+                ticks={yTicks}
+              />
             <Tooltip 
               contentStyle={{ 
                 borderRadius: '16px', 
@@ -332,5 +344,6 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
         </ResponsiveContainer>
       </div>
     </div>
+  </div>
   );
 };

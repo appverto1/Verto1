@@ -87,7 +87,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [selectedSnapshotDate, setSelectedSnapshotDate] = useState("all");
 
   const availableSnapshots = useMemo(() => {
-    const dates = history
+    const dates = (history || [])
       .filter((h: any) => h.patientId === patient.id && h.type === 'task' && h.score !== undefined)
       .map((h: any) => h.dateGroup);
     return Array.from(new Set(dates));
@@ -283,11 +283,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     if (isCreatingNewTask) { setFinalTaskTitle(newTaskName); setFinalTaskSubtitle(newTaskObjective); } 
   }, [newTaskName, newTaskObjective, isCreatingNewTask]); 
 
-  const groupedHistory = history.reduce((groups: any, item: any) => { const group = groups[item.dateGroup] || []; group.push(item); groups[item.dateGroup] = group; return groups; }, {}); 
+  const groupedHistory = (history || []).reduce((groups: any, item: any) => { const group = groups[item.dateGroup] || []; group.push(item); groups[item.dateGroup] = group; return groups; }, {}); 
   const sortedDateKeys = Object.keys(groupedHistory).sort((a, b) => { if (a === "Hoje") return -1; if (b === "Hoje") return 1; if (a === "Ontem") return -1; if (b === "Ontem") return 1; return b.localeCompare(a); }); 
   
   const filteredNotes = useMemo(() => {
-    return notes.filter((n: any) => {
+    return (notes || []).filter((n: any) => {
       const matchPatient = n.patientId === patient.id;
       const matchVisibility = (n.visibility || n.type || 'private') === noteMode;
       
@@ -727,7 +727,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       <div className="bg-white px-6 pt-10 pb-6 shadow-sm z-20"> 
         <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-4"> 
           <div className="flex items-center gap-4"> 
-            <button id="back-btn" onClick={onBack} className="p-2 -ml-2 text-gray-500 hover:bg-gray-100 rounded-full"><ChevronLeft size={24}/></button> 
             <div id="patient-header-info">
                 <div className="flex items-center gap-2">
                     <h1 className="text-2xl font-semibold text-gray-800 tracking-tight">{patient.name}</h1>
@@ -818,12 +817,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             <div id="evolution-chart-container">
               <EvolutionLineChart chartData={radarChartData} maxScore={selectedProtocolMaxScore} />
             </div>
-            {sortedDateKeys.length > 0 ? sortedDateKeys.map((dateKey, gIdx) => ( 
+            {(sortedDateKeys?.length || 0) > 0 ? sortedDateKeys.map((dateKey, gIdx) => ( 
               <div key={dateKey} className="relative pl-6 border-l-2 border-gray-200 ml-2"> 
                 <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-[#7551FF] border-4 border-white ring-1 ring-gray-100"></div> 
                 <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">{dateKey}</h3> 
                 <div className="space-y-4"> 
-                  {groupedHistory[dateKey].map((item: any, idx: number) => (
+                  {(groupedHistory[dateKey] || []).map((item: any, idx: number) => (
                     <HistoryCard 
                       id={gIdx === 0 && idx === 0 ? 'history-item-0' : ''} 
                       key={item.id} 
@@ -833,7 +832,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       onEvaluate={onEvaluateHistoryItem} 
                       protocols={protocols} 
                       isKid={patientCategory === 'Criança'}
-                      fullHistory={history.filter((h: any) => h.patientId === patient.id)}
+                      fullHistory={(history || []).filter((h: any) => h.patientId === patient.id)}
                       peiGoals={patient.pei || []}
                     />
                   ))} 
@@ -1588,7 +1587,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 </div> 
                 <div className="space-y-3"> 
                   <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider ml-2 tracking-widest">Agendados</h3> 
-                  {patientTasks.length > 0 ? patientTasks.map((task: any) => ( 
+                  {(patientTasks?.length || 0) > 0 ? (patientTasks || []).map((task: any) => ( 
                     <div key={task.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between"> 
                       <div className="flex items-center gap-3"> 
                         <span className="text-xl">{task.type === 'reinforcement' ? '🌟' : task.type === 'intervention' ? '✍️' : '📋'}</span> 

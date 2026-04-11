@@ -352,39 +352,42 @@ export const AdminDashboard = ({ onLogout }: any) => {
                     </div>
                   </div>
                 </div>
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={DRE_DATA_MOCK}>
-                      <defs>
-                        <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#4318FF" stopOpacity={0.1}/>
-                          <stop offset="95%" stopColor="#4318FF" stopOpacity={0}/>
-                        </linearGradient>
-                        <linearGradient id="colorProfit" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#05CD99" stopOpacity={0.1}/>
-                          <stop offset="95%" stopColor="#05CD99" stopOpacity={0}/>
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F4F7FE" />
-                      <XAxis 
-                        dataKey="month" 
-                        axisLine={false} 
-                        tickLine={false} 
-                        tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} 
-                        dy={10}
-                      />
-                      <YAxis 
-                        axisLine={false} 
-                        tickLine={false} 
-                        tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} 
-                      />
-                      <Tooltip 
-                        contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 25px rgba(0,0,0,0.05)' }}
-                      />
-                      <Area type="monotone" dataKey="revenue" stroke="#4318FF" strokeWidth={3} fillOpacity={1} fill="url(#colorRev)" />
-                      <Area type="monotone" dataKey="profit" stroke="#05CD99" strokeWidth={3} fillOpacity={1} fill="url(#colorProfit)" />
-                    </AreaChart>
-                  </ResponsiveContainer>
+                <div className="overflow-x-auto no-scrollbar -mx-8 px-8">
+                  <div className="h-80 min-w-[600px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={DRE_DATA_MOCK} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#4318FF" stopOpacity={0.1}/>
+                            <stop offset="95%" stopColor="#4318FF" stopOpacity={0}/>
+                          </linearGradient>
+                          <linearGradient id="colorProfit" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#05CD99" stopOpacity={0.1}/>
+                            <stop offset="95%" stopColor="#05CD99" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F4F7FE" />
+                        <XAxis 
+                          dataKey="month" 
+                          axisLine={false} 
+                          tickLine={false} 
+                          tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} 
+                          dy={10}
+                          padding={{ left: 30, right: 30 }}
+                        />
+                        <YAxis 
+                          axisLine={false} 
+                          tickLine={false} 
+                          tick={{fill: '#A3AED0', fontSize: 12, fontWeight: 'bold'}} 
+                        />
+                        <Tooltip 
+                          contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 25px rgba(0,0,0,0.05)' }}
+                        />
+                        <Area type="monotone" dataKey="revenue" stroke="#4318FF" strokeWidth={3} fillOpacity={1} fill="url(#colorRev)" />
+                        <Area type="monotone" dataKey="profit" stroke="#05CD99" strokeWidth={3} fillOpacity={1} fill="url(#colorProfit)" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
                 </div>
               </div>
 
