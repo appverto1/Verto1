@@ -34,14 +34,18 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const [isUploading, setIsUploading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const userType = typeof user.type === 'string' ? user.type.toLowerCase() : '';
+  const hasExplicitPatientType = Boolean(userType);
   const userAge =
     typeof user.age === 'number'
       ? user.age
       : (user.age !== null && user.age !== undefined && Number.isFinite(Number(user.age)))
         ? Number(user.age)
         : null;
-  const isKidsProfile = user.type === 'kids_tea' || (userAge !== null && userAge <= 12) || user.anamnesisData?.formType === 'child';
-  const isConventionalAdult = user.type === 'conventional' && !isKidsProfile;
+  const isKidsProfile =
+    userType === 'kids_tea' ||
+    (!hasExplicitPatientType && ((userAge !== null && userAge <= 12) || user.anamnesisData?.formType === 'child'));
+  const isConventionalAdult = userType === 'conventional' && !isKidsProfile;
 
   const conventionalMoodTags = [
     { id: 'family', label: 'Família', icon: '👨‍👩‍👧‍👦', color: 'bg-blue-100 text-blue-600' },
@@ -290,6 +294,42 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const groupedHistory = filteredHistoryList.reduce((groups: any, item: any) => { const group = groups[item.dateGroup] || []; group.push(item); group.sort((a: any, b: any) => b.id - a.id); groups[item.dateGroup] = group; return groups; }, {}); 
   const sortedDateKeys = Object.keys(groupedHistory).sort((a, b) => { if (a === "Hoje") return -1; if (b === "Hoje") return 1; if (a === "Ontem") return -1; if (b === "Ontem") return 1; return b.localeCompare(a); }); 
+  const kidsTimelineHistory = useMemo(() => {
+    return filteredHistoryList.filter((item: any) => item.type !== 'family_note' && item.type !== 'photo');
+  }, [filteredHistoryList]);
+  const groupedKidsTimeline = useMemo(() => {
+    return kidsTimelineHistory.reduce((groups: any, item: any) => {
+      const group = groups[item.dateGroup] || [];
+      group.push(item);
+      group.sort((a: any, b: any) => b.id - a.id);
+      groups[item.dateGroup] = group;
+      return groups;
+    }, {});
+  }, [kidsTimelineHistory]);
+  const sortedKidsDateKeys = useMemo(() => {
+    return Object.keys(groupedKidsTimeline).sort((a, b) => {
+      if (a === "Hoje") return -1;
+      if (b === "Hoje") return 1;
+      if (a === "Ontem") return -1;
+      if (b === "Ontem") return 1;
+      return b.localeCompare(a);
+    });
+  }, [groupedKidsTimeline]);
+
+  const closeMoodModal = () => {
+    setIsMoodModalOpen(false);
+    setSelectedMood(null);
+    setSelectedTag(null);
+    setMoodNote("");
+  };
+
+  const closeTaskModal = () => {
+    setSelectedTask(null);
+    setTaskStep(1);
+    setTaskNote("");
+    setInterventionResponse("");
+    setInterventionImages([]);
+  };
 
   if (isKidsProfile) {
     return (
@@ -441,12 +481,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                      <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-widest flex items-center gap-2"> <Trophy size={16} /> Histórico </h2>
                   </div>
                   <div className="border-l-2 border-gray-100 ml-3 pb-4 pl-6 space-y-8"> 
-                    {sortedDateKeys.length > 0 ? sortedDateKeys.map(dateKey => ( 
+                    {sortedKidsDateKeys.length > 0 ? sortedKidsDateKeys.map(dateKey => ( 
                       <div key={dateKey} className="relative animate-slide-up"> 
                         <div className="absolute -left-[31px] top-0 w-4 h-4 rounded-full bg-[#7a32fc] border-2 border-white ring-4 ring-blue-50"></div> 
                         <h3 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 bg-gray-50 px-3 py-1 rounded-full w-fit">{dateKey}</h3> 
                         <div className="space-y-4"> 
-                          {groupedHistory[dateKey].map((item: any) => ( 
+                          {groupedKidsTimeline[dateKey].map((item: any) => ( 
                             <HistoryCard 
                               key={item.id} 
                               item={item} 
@@ -460,7 +500,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                           ))} 
                         </div> 
                       </div> 
-                    )) : ( <p className="text-center text-gray-400 text-xs py-4 italic">Nenhuma atividade registrada.</p> )} 
+                    )) : ( <p className="text-center text-gray-400 text-xs py-4 italic">Nenhuma atividade clínica registrada.</p> )} 
                   </div> 
                 </div> 
             </div>
@@ -789,7 +829,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                       item={item} 
                       energyTags={moodInfluenceTags} 
                       isTherapist={false} 
-                      isKid={user.age <= 12}
+                      isKid={isKidsProfile}
                       fullHistory={history}
                       peiGoals={user.pei || []}
                       protocols={protocols}
@@ -804,7 +844,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       {isMoodModalOpen && selectedMood && ( 
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"> 
           <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-pop relative"> 
-            <button onClick={() => setIsMoodModalOpen(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button> 
+            <button onClick={closeMoodModal} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button> 
             <div className="text-center mb-4"> 
               {user.type !== 'conventional' && (
                 <div className="inline-flex items-center gap-2 bg-gray-100 px-4 py-1.5 rounded-full mb-4"> <BatteryFull size={16} className="text-gray-500" /> <span className="text-sm font-semibold text-gray-600">Energia registrada: <span className="text-[#7a32fc]">{selectedMood.value}%</span></span> </div> 
@@ -827,7 +867,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       {selectedTask && ( 
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"> 
           <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-pop relative"> 
-            <button onClick={() => setSelectedTask(null)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button> 
+            <button onClick={closeTaskModal} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button> 
             <div className="text-center mb-6"> 
               <div className={`w-16 h-16 mx-auto rounded-2xl flex items-center justify-center text-3xl mb-3 ${selectedTask.color || 'bg-blue-100 text-blue-600'}`}> {selectedTask.icon || '📋'} </div> 
               <h3 className="text-xl font-semibold text-gray-800 tracking-tight">{selectedTask.title}</h3> 
@@ -966,7 +1006,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               </div>
             ) : taskStep === 1 ? ( 
               <div className="animate-slide-up"> 
-                {user.age <= 12 ? (
+                {isKidsProfile ? (
                   <div className="space-y-6">
                     <p className="text-center text-sm font-semibold text-gray-600 mb-4">Como você se saiu nessa missão?</p>
                     <div className={`grid gap-4 ${selectedTask.maxScore > 1 ? 'grid-cols-3' : 'grid-cols-3'}`}>
@@ -1063,11 +1103,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <div className="animate-slide-up"> 
                 <div className="mb-4"> 
                   <div className="flex items-center justify-between mb-2"> 
-                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">{user.age <= 12 ? 'Sua Pontuação' : isConventionalAdult ? 'Esforço' : 'Energia'}</span> 
-                    <span className="text-sm font-semibold text-[#7a32fc]">{user.age <= 12 ? taskEnergy : `${taskEnergy}%`}</span> 
+                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">{isKidsProfile ? 'Sua Pontuação' : isConventionalAdult ? 'Esforço' : 'Energia'}</span> 
+                    <span className="text-sm font-semibold text-[#7a32fc]">{isKidsProfile ? taskEnergy : `${taskEnergy}%`}</span> 
                   </div> 
                   <div className="w-full bg-gray-100 rounded-full h-2"> 
-                    <div className="bg-[#7a32fc] h-2 rounded-full" style={{ width: user.age <= 12 ? `${taskEnergy * 100}%` : `${taskEnergy}%` }}></div> 
+                    <div className="bg-[#7a32fc] h-2 rounded-full" style={{ width: isKidsProfile ? `${taskEnergy * 100}%` : `${taskEnergy}%` }}></div> 
                   </div> 
                   {isConventionalAdult && (
                     <div className="flex justify-between text-[10px] text-gray-400 font-semibold mt-1">
@@ -1076,7 +1116,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     </div>
                   )}
                 </div> 
-                <textarea className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none mb-4 font-medium" placeholder={user.age <= 12 ? "Quer contar como foi?" : isConventionalAdult ? "Observação opcional sobre o esforço..." : "Quer adicionar alguma observação?"} value={taskNote} onChange={(e) => setTaskNote(e.target.value)} autoFocus ></textarea> 
+                <textarea className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none mb-4 font-medium" placeholder={isKidsProfile ? "Quer contar como foi?" : isConventionalAdult ? "Observação opcional sobre o esforço..." : "Quer adicionar alguma observação?"} value={taskNote} onChange={(e) => setTaskNote(e.target.value)} autoFocus ></textarea> 
                 <button onClick={handleConfirmTask} disabled={showTaskSuccess} className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-500 text-white shadow-green-500/30 hover:opacity-90" > {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir</React.Fragment>} </button> 
               </div> 
             )} 

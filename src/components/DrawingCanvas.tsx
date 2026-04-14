@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Pencil, Eraser, Trash2, Check, X, RotateCcw } from 'lucide-react';
+import { Pencil, Eraser, Check, X, RotateCcw } from 'lucide-react';
 
 interface DrawingCanvasProps {
   image: string;
@@ -10,6 +10,9 @@ interface DrawingCanvasProps {
 export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ image, onSave, onCancel }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const baseImageRef = useRef<HTMLImageElement | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
+  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [color, setColor] = useState('#FF0000');
   const [lineWidth, setLineWidth] = useState(4);
@@ -22,37 +25,76 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ image, onSave, onC
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const img = new Image();
-    img.src = image;
-    img.onload = () => {
-      // Calculate dimensions to fit container while maintaining aspect ratio
-      const containerWidth = containerRef.current?.clientWidth || window.innerWidth;
-      const containerHeight = (window.innerHeight * 0.6);
-      
-      let width = img.width;
-      let height = img.height;
-      
-      const ratio = Math.min(containerWidth / width, containerHeight / height);
-      width *= ratio;
-      height *= ratio;
+    const loadImage = async () => {
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
 
-      canvas.width = width;
-      canvas.height = height;
-      ctx.drawImage(img, 0, 0, width, height);
-      
-      // Set default drawing styles
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
+      try {
+        const resp = await fetch(image);
+        const blob = await resp.blob();
+        const localUrl = URL.createObjectURL(blob);
+        objectUrlRef.current = localUrl;
+        img.src = localUrl;
+      } catch {
+        img.src = image;
+      }
+
+      img.onload = () => {
+        baseImageRef.current = img;
+        const containerWidth = containerRef.current?.clientWidth || window.innerWidth;
+        const containerHeight = (window.innerHeight * 0.6);
+        
+        let width = img.width;
+        let height = img.height;
+        
+        const ratio = Math.min(containerWidth / width, containerHeight / height);
+        width *= ratio;
+        height *= ratio;
+
+        canvas.width = width;
+        canvas.height = height;
+        ctx.clearRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+      };
+    };
+    loadImage();
+
+    return () => {
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
     };
   }, [image]);
 
   const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
     setIsDrawing(true);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    let x = 0;
+    let y = 0;
+    if ('touches' in e) {
+      x = e.touches[0].clientX - rect.left;
+      y = e.touches[0].clientY - rect.top;
+    } else {
+      x = e.clientX - rect.left;
+      y = e.clientY - rect.top;
+    }
+    lastPointRef.current = { x, y };
     draw(e);
   };
 
   const stopDrawing = () => {
     setIsDrawing(false);
+    lastPointRef.current = null;
     const canvas = canvasRef.current;
     if (canvas) {
       const ctx = canvas.getContext('2d');
@@ -78,25 +120,44 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ image, onSave, onC
       y = e.clientY - rect.top;
     }
 
-    ctx.lineWidth = lineWidth;
-    ctx.strokeStyle = tool === 'eraser' ? '#FFFFFF' : color;
-    
     if (tool === 'eraser') {
-      ctx.globalCompositeOperation = 'destination-out';
-    } else {
-      ctx.globalCompositeOperation = 'source-over';
+      const baseImage = baseImageRef.current;
+      if (!baseImage) return;
+      const radius = Math.max(8, lineWidth * 2);
+      const sx = Math.max(0, x - radius);
+      const sy = Math.max(0, y - radius);
+      const sw = Math.min(canvas.width - sx, radius * 2);
+      const sh = Math.min(canvas.height - sy, radius * 2);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.drawImage(baseImage, sx, sy, sw, sh, sx, sy, sw, sh);
+      ctx.restore();
+      lastPointRef.current = { x, y };
+      return;
     }
 
+    const from = lastPointRef.current || { x, y };
+    ctx.lineWidth = lineWidth;
+    ctx.strokeStyle = color;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
     ctx.lineTo(x, y);
     ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(x, y);
+    lastPointRef.current = { x, y };
   };
 
   const handleSave = () => {
     const canvas = canvasRef.current;
     if (canvas) {
-      onSave(canvas.toDataURL('image/png'));
+      try {
+        onSave(canvas.toDataURL('image/png'));
+      } catch (error) {
+        console.error('Drawing save error:', error);
+        onSave(image);
+      }
     }
   };
 
@@ -106,13 +167,11 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ image, onSave, onC
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const img = new Image();
-    img.src = image;
-    img.onload = () => {
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    };
+    const img = baseImageRef.current;
+    if (!img) return;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
   };
 
   return (
