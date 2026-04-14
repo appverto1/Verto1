@@ -75,6 +75,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     { id: 1, name: 'Avaliação_Neuropsicológica.pdf', size: '2.4 MB', date: '15/01/2026', type: 'application/pdf' },
     { id: 2, name: 'Exame_EEG_Resultado.jpg', size: '840 KB', date: '20/01/2026', type: 'image/jpeg' }
   ]);
+  const [showAnamnesisFileModal, setShowAnamnesisFileModal] = useState(false);
+  const [pendingAnamnesisPayload, setPendingAnamnesisPayload] = useState<string>("");
+  const [anamnesisFileName, setAnamnesisFileName] = useState("");
+  const [anamnesisFileDate, setAnamnesisFileDate] = useState(new Date().toISOString().slice(0, 10));
+  const [previewFile, setPreviewFile] = useState<any>(null);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [lastRecordedTrialId, setLastRecordedTrialId] = useState<any>(null);
@@ -309,7 +314,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         
       const matchSubject = !noteSubjectFilter || (n.subject && n.subject.toLowerCase().includes(noteSubjectFilter.toLowerCase()));
       
-      // Date format in notes is "DD/MM/YYYY â€¢ HH:mm"
+      // Date format in notes is "DD/MM/YYYY • HH:mm"
       // noteDateFilter is "YYYY-MM-DD"
       let matchDate = true;
       if (noteDateFilter) {
@@ -482,21 +487,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       });
     }
 
-    const ficheLabel = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.json`;
     const fichePayload = JSON.stringify(updatedData, null, 2);
-    const sizeKb = Math.max(1, Math.round(fichePayload.length / 1024));
-    setPatientFiles((prev: any[]) => [
-      {
-        id: Date.now(),
-        name: ficheLabel,
-        size: `${sizeKb} KB`,
-        date: new Date().toLocaleDateString("pt-BR"),
-        type: "application/json",
-        source: "anamnesis",
-      },
-      ...prev,
-    ]);
-    setActiveTab("files");
+    const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.json`;
+    setPendingAnamnesisPayload(fichePayload);
+    setAnamnesisFileName(defaultName);
+    setAnamnesisFileDate(new Date().toISOString().slice(0, 10));
+    setShowAnamnesisFileModal(true);
   }; 
   
   const handleUnlinkPatient = () => {
@@ -531,7 +527,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             name: file.name,
             size: (file.size / (1024 * 1024)).toFixed(1) + ' MB',
             date: new Date().toLocaleDateString('pt-BR'),
-            type: file.type
+            type: file.type,
+            objectUrl: URL.createObjectURL(file)
           };
           setPatientFiles((prev: any) => [newFile, ...prev]);
           setIsUploadingFile(false);
@@ -573,8 +570,69 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
   const removeFile = (id: any) => {
       if (confirm("Deseja remover este arquivo?")) {
-          setPatientFiles((prev: any) => prev.filter((f: any) => f.id !== id));
+          setPatientFiles((prev: any) =>
+            prev.filter((f: any) => {
+              if (f.id === id && f.objectUrl) {
+                URL.revokeObjectURL(f.objectUrl);
+              }
+              return f.id !== id;
+            }),
+          );
       }
+  };
+
+  const handleConfirmAnamnesisFile = () => {
+    if (!pendingAnamnesisPayload) return;
+    const fileName = (anamnesisFileName || `Ficha_Anamnese_${patient.name}`).trim();
+    const normalizedName = fileName.toLowerCase().endsWith(".json")
+      ? fileName
+      : `${fileName}.json`;
+    const sizeKb = Math.max(1, Math.round(pendingAnamnesisPayload.length / 1024));
+    const payloadDate = anamnesisFileDate
+      ? new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString("pt-BR")
+      : new Date().toLocaleDateString("pt-BR");
+
+    setPatientFiles((prev: any[]) => [
+      {
+        id: Date.now(),
+        name: normalizedName,
+        size: `${sizeKb} KB`,
+        date: payloadDate,
+        type: "application/json",
+        source: "anamnesis",
+        content: pendingAnamnesisPayload,
+      },
+      ...prev,
+    ]);
+    setShowAnamnesisFileModal(false);
+    setPendingAnamnesisPayload("");
+    setActiveTab("files");
+  };
+
+  const handleDownloadPatientFile = (file: any) => {
+    const href = file.objectUrl || file.url;
+    if (href) {
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = file.name || "arquivo";
+      a.target = "_blank";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    }
+
+    if (file.content) {
+      const blob = new Blob([file.content], { type: file.type || "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file.name || "arquivo.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
   };
 
   const handleDownloadReport = () => {
@@ -847,7 +905,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       value={selectedSnapshotDate}
                       onChange={(e) => setSelectedSnapshotDate(e.target.value)}
                     >
-                      <option value="all">Visão Geral (Ãšltimas Notas)</option>
+                      <option value="all">Visão Geral (Últimas Notas)</option>
                       {availableSnapshots.map((date: any) => (
                         <option key={date} value={date}>Avaliação de {date}</option>
                       ))}
@@ -1522,7 +1580,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                   <div className="mt-2 p-3 bg-indigo-50 border border-indigo-100 rounded-xl flex items-center gap-2 animate-pulse">
                                     <Zap size={14} className="text-indigo-600" />
                                     <p className="text-[10px] font-semibold text-indigo-700">
-                                      Vinculado Ã  Intervenção: <span className="underline">{patient.interventionTaskLinks[finalTaskTitle]}</span>
+                                      Vinculado à Intervenção: <span className="underline">{patient.interventionTaskLinks[finalTaskTitle]}</span>
                                     </p>
                                   </div>
                                 )}
@@ -1591,7 +1649,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               </select>
                               {linkedTask && patient.evaluationLinks && patient.evaluationLinks[linkedTask] && (
                                 <p className="text-[9px] text-[#05CD99] mt-1 font-semibold animate-pulse">
-                                  âœ¨ Protocolo de intervenção sugerido automaticamente!
+                                  Protocolo de intervenção sugerido automaticamente!
                                 </p>
                               )}
                             </div>
@@ -1821,11 +1879,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                     </div>
                     <div>
                       <p className="font-semibold text-gray-800 text-sm truncate max-w-[200px] tracking-tight">{file.name}</p>
-                      <p className="text-[10px] text-gray-400 font-semibold uppercase">{file.size} â€¢ {file.date}</p>
+                      <p className="text-[10px] text-gray-400 font-semibold uppercase">{file.size} • {file.date}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button title="Download" className="p-2.5 text-gray-400 hover:text-[#7a32fc] hover:bg-blue-50 rounded-xl transition-all">
+                    <button
+                      title="Visualizar"
+                      onClick={() => setPreviewFile(file)}
+                      className="p-2.5 text-gray-400 hover:text-[#7a32fc] hover:bg-blue-50 rounded-xl transition-all"
+                    >
+                      <Eye size={18} />
+                    </button>
+                    <button
+                      title="Download"
+                      onClick={() => handleDownloadPatientFile(file)}
+                      className="p-2.5 text-gray-400 hover:text-[#7a32fc] hover:bg-blue-50 rounded-xl transition-all"
+                    >
                       <Download size={18} />
                     </button>
                     <button onClick={() => removeFile(file.id)} title="Excluir" className="p-2.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all">
@@ -1843,7 +1912,88 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           </div>
         )} 
       </div> 
+
+      {showAnamnesisFileModal && (
+        <div className="fixed inset-0 z-[120] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-lg rounded-3xl p-6 shadow-2xl">
+            <h3 className="text-lg font-bold text-slate-900 mb-2">Salvar ficha de anamnese em Arquivos</h3>
+            <p className="text-sm text-slate-500 mb-5">
+              Defina o nome e a data de referência para visualizar e baixar este documento depois.
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-2">Nome do arquivo</label>
+                <input
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm"
+                  value={anamnesisFileName}
+                  onChange={(e) => setAnamnesisFileName(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-2">Data da ficha</label>
+                <input
+                  type="date"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm"
+                  value={anamnesisFileDate}
+                  onChange={(e) => setAnamnesisFileDate(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowAnamnesisFileModal(false);
+                  setPendingAnamnesisPayload("");
+                }}
+                className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-semibold text-sm"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleConfirmAnamnesisFile}
+                className="px-4 py-2.5 rounded-xl bg-[#7a32fc] text-white font-semibold text-sm"
+              >
+                Salvar em Arquivos
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {previewFile && (
+        <div className="fixed inset-0 z-[125] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-3xl max-h-[85vh] overflow-auto rounded-3xl p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">{previewFile.name}</h3>
+                <p className="text-xs text-slate-500">{previewFile.date}</p>
+              </div>
+              <button
+                onClick={() => setPreviewFile(null)}
+                className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {previewFile.type?.includes("image") && (previewFile.objectUrl || previewFile.url) ? (
+              <img src={previewFile.objectUrl || previewFile.url} alt={previewFile.name} className="w-full rounded-xl border border-slate-200" />
+            ) : previewFile.type?.includes("pdf") && (previewFile.objectUrl || previewFile.url) ? (
+              <iframe src={previewFile.objectUrl || previewFile.url} title={previewFile.name} className="w-full h-[65vh] rounded-xl border border-slate-200" />
+            ) : previewFile.content ? (
+              <pre className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs overflow-auto whitespace-pre-wrap">
+                {previewFile.content}
+              </pre>
+            ) : (
+              <p className="text-sm text-slate-500">
+                Pré-visualização indisponível para este arquivo. Use o botão de download.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </div> 
   ); 
 };
+
 

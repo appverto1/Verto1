@@ -11,6 +11,7 @@ import {
   Search,
   Bell,
   ChevronRight,
+  ChevronDown,
   DollarSign,
   PieChart,
   ArrowUpRight,
@@ -133,29 +134,60 @@ export function CoordinatorDashboard({
     | "logs"
     | "billing"
   >("dashboard");
+  const [tabHistory, setTabHistory] = useState<string[]>(["dashboard"]);
   const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [showBillingDetails, setShowBillingDetails] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
+
+  const navigateToTab = (
+    tab:
+      | "dashboard"
+      | "team"
+      | "financial"
+      | "patients"
+      | "agenda"
+      | "rooms"
+      | "protocols"
+      | "settings"
+      | "logs"
+      | "billing",
+  ) => {
+    setActiveTab(tab);
+    setTabHistory((prev) => {
+      if (prev[prev.length - 1] === tab) return prev;
+      return [...prev, tab];
+    });
+  };
+
+  const goBackTab = () => {
+    setTabHistory((prev) => {
+      if (prev.length <= 1) return prev;
+      const next = prev.slice(0, -1);
+      const previousTab = next[next.length - 1] as typeof activeTab;
+      setActiveTab(previousTab);
+      return next;
+    });
+  };
 
   const billingHistory = [
     {
       date: "15/03/2026",
       amount: 149.9,
       status: "paid",
-      method: "Cartão Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢ 4242",
+      method: "Cartão •••• 4242",
     },
     {
       date: "15/02/2026",
       amount: 149.9,
       status: "paid",
-      method: "Cartão Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢ 4242",
+      method: "Cartão •••• 4242",
     },
     {
       date: "15/01/2026",
       amount: 149.9,
       status: "paid",
-      method: "Cartão Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢ 4242",
+      method: "Cartão •••• 4242",
     },
   ];
 
@@ -164,6 +196,19 @@ export function CoordinatorDashboard({
     { date: "15/05/2026", amount: 149.9, status: "pending" },
     { date: "15/06/2026", amount: 149.9, status: "pending" },
   ];
+
+  const tabLabels: Record<string, string> = {
+    dashboard: "Painel",
+    team: "Gestão da Equipe",
+    financial: "Financeiro",
+    patients: "Pacientes",
+    agenda: "Agenda",
+    rooms: "Reservas de Sala",
+    protocols: "Protocolos",
+    settings: "Configurações da Clínica",
+    logs: "Log de Atividades",
+    billing: "Assinatura e Cobrança",
+  };
 
   const mockMedicalRecord = {
     firstInterview: {
@@ -1410,7 +1455,16 @@ export function CoordinatorDashboard({
           </div>
           <TeamManagement
             user={user}
-            onRequestUpgrade={() => setActiveTab("billing")}
+            onRequestUpgrade={() => navigateToTab("billing")}
+            memberSessionDurations={professionalSessionDurations}
+            onUpdateMemberSessionDuration={(member, duration) =>
+              setProfessionalSessionDurations((prev) => ({
+                ...prev,
+                [member.id]: duration,
+                [member.email]: duration,
+                [member.name]: duration,
+              }))
+            }
           />
         </div>
       </section>
@@ -1437,7 +1491,7 @@ export function CoordinatorDashboard({
         ].map((stat, i) => (
           <div
             key={i}
-            onClick={() => setActiveTab(stat.id as any)}
+            onClick={() => navigateToTab(stat.id as any)}
             className="bg-white p-6 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100 hover:shadow-xl hover:border-blue-500/30 transition-all group cursor-pointer"
           >
             <div className="flex items-center justify-between mb-4">
@@ -1696,12 +1750,10 @@ export function CoordinatorDashboard({
         {/* Sidebar */}
         <div className="w-72 bg-white hidden lg:flex flex-col p-8 sticky top-0 h-screen border-r border-slate-100">
           <div className="flex items-center gap-3 mb-12 px-2">
-            <div className="w-12 h-12 bg-[#7a32fc] rounded-[20px] flex items-center justify-center text-white shadow-xl shadow-purple-500/30">
-              <TrendingUp size={24} />
-            </div>
+            <LogoVerto size={48} />
             <div>
-              <span className="font-black text-2xl text-slate-900 tracking-tighter block leading-none">
-                VERTO
+              <span className="font-black text-2xl text-slate-900 tracking-tighter block leading-none lowercase">
+                verto
               </span>
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">
                 Gestão
@@ -1749,7 +1801,7 @@ export function CoordinatorDashboard({
               <button
                 key={item.id}
                 onClick={() => {
-                  setActiveTab(item.id as any);
+                  navigateToTab(item.id as any);
                   setView("home");
                 }}
                 className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl transition-all font-bold text-sm ${
@@ -1821,16 +1873,16 @@ export function CoordinatorDashboard({
                 user={user}
                 onLogout={onLogout}
                 onViewTeam={() => {
-                  setActiveTab("team");
+                  navigateToTab("team");
                   setView("home");
                 }}
                 onOpenInvitations={() => setShowInvitationModal(true)}
                 onViewProfile={() => {
-                  setActiveTab("settings");
+                  navigateToTab("settings");
                   setView("home");
                 }}
                 onViewBilling={() => {
-                  setActiveTab("billing");
+                  navigateToTab("billing");
                   setView("home");
                 }}
                 onOpenOnboarding={onOpenOnboarding}
@@ -1923,7 +1975,7 @@ export function CoordinatorDashboard({
                       <button
                         key={item.id}
                         onClick={() => {
-                          setActiveTab(item.id as any);
+                          navigateToTab(item.id as any);
                           setView("home");
                           setIsMobileMenuOpen(false);
                         }}
@@ -1990,7 +2042,7 @@ export function CoordinatorDashboard({
       <aside 
         onMouseEnter={() => setIsSidebarExpanded(true)}
         onMouseLeave={() => setIsSidebarExpanded(false)}
-        className={`${isSidebarExpanded ? 'w-72' : 'w-24'} bg-white hidden lg:flex flex-col p-8 sticky top-0 h-screen border-r border-slate-100 transition-all duration-300 ease-in-out z-50`}
+        className={`${isSidebarExpanded ? 'w-72' : 'w-24'} bg-white hidden lg:flex flex-col p-8 sticky top-0 h-screen border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
       >
         <div className={`flex items-center ${isSidebarExpanded ? 'gap-3' : 'justify-center'} mb-12 px-2 transition-all duration-300`}>
           <LogoVerto size={48} />
@@ -2029,7 +2081,7 @@ export function CoordinatorDashboard({
           ].map((item) => (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id as any)}
+              onClick={() => navigateToTab(item.id as any)}
               className={`w-full flex items-center ${isSidebarExpanded ? 'gap-4 px-6' : 'justify-center'} py-4 rounded-2xl transition-all font-medium text-sm ${
                 activeTab === item.id
                   ? "text-[#7a32fc] bg-purple-50 shadow-sm"
@@ -2051,6 +2103,15 @@ export function CoordinatorDashboard({
             </button>
           ))}
         </nav>
+        <div
+          className={`mt-3 mb-1 text-[10px] text-slate-400 font-semibold uppercase tracking-wider flex items-center ${
+            isSidebarExpanded ? "gap-1 px-2" : "justify-center"
+          }`}
+          title={!isSidebarExpanded ? "Role para ver mais módulos" : ""}
+        >
+          <ChevronDown size={12} />
+          {isSidebarExpanded && "Role para ver mais módulos"}
+        </div>
 
         <div className="mt-auto pt-8 border-t border-slate-50">
           {isSidebarExpanded && (
@@ -2082,18 +2143,18 @@ export function CoordinatorDashboard({
       </aside>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto relative z-10">
         {/* Header */}
         <header className="px-4 lg:px-8 py-6 flex items-center justify-between sticky top-0 bg-[#F4F7FE]/80 backdrop-blur-md z-30">
           <div className="flex items-center gap-4">
-            {(activeTab !== "dashboard" ||
+            {(tabHistory.length > 1 ||
               (!isEditingRooms && activeTab === "rooms")) && (
               <button
                 onClick={() => {
                   if (!isEditingRooms && activeTab === "rooms") {
                     setIsEditingRooms(true);
                   } else {
-                    setActiveTab("dashboard");
+                    goBackTab();
                   }
                 }}
                 className="p-2 bg-white rounded-xl text-slate-400 hover:text-[#7a32fc] shadow-sm border border-slate-100 transition-all"
@@ -2105,14 +2166,12 @@ export function CoordinatorDashboard({
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">
                 {!isEditingRooms && activeTab === "rooms"
                   ? "Salas"
-                  : `Páginas / ${activeTab}`}
+                  : `Páginas / ${tabLabels[activeTab] || "Painel"}`}
               </p>
               <h1 className="text-xl lg:text-3xl font-semibold text-slate-900 tracking-tight capitalize">
                 {!isEditingRooms && activeTab === "rooms"
                   ? "Reservas de Sala"
-                  : activeTab === "financial"
-                    ? "Financeiro"
-                    : activeTab}
+                  : tabLabels[activeTab] || "Painel"}
               </h1>
             </div>
           </div>
@@ -2140,10 +2199,10 @@ export function CoordinatorDashboard({
             <SettingsMenu
               user={user}
               onLogout={onLogout}
-              onViewTeam={() => setActiveTab("team")}
+              onViewTeam={() => navigateToTab("team")}
               onOpenInvitations={() => setShowInvitationModal(true)}
-              onViewProfile={() => setActiveTab("settings")}
-              onViewBilling={() => setActiveTab("billing")}
+              onViewProfile={() => navigateToTab("settings")}
+              onViewBilling={() => navigateToTab("billing")}
               onOpenOnboarding={onOpenOnboarding}
             />
           </div>
@@ -2169,11 +2228,9 @@ export function CoordinatorDashboard({
               >
                 <div className="flex items-center justify-between mb-8">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-[#7a32fc] rounded-xl flex items-center justify-center text-white">
-                      <TrendingUp size={20} />
-                    </div>
-                    <span className="font-black text-xl text-slate-900 tracking-tighter">
-                      VERTO
+                    <LogoVerto size={40} />
+                    <span className="font-black text-xl text-slate-900 tracking-tighter lowercase">
+                      verto
                     </span>
                   </div>
                   <button
@@ -2221,7 +2278,7 @@ export function CoordinatorDashboard({
                     <button
                       key={item.id}
                       onClick={() => {
-                        setActiveTab(item.id as any);
+                        navigateToTab(item.id as any);
                         setIsMobileMenuOpen(false);
                       }}
                       className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl transition-all font-bold text-sm ${
@@ -2439,16 +2496,24 @@ export function CoordinatorDashboard({
               >
                 <div className="mb-6">
                   <button
-                    onClick={() => setActiveTab("dashboard")}
+                    onClick={goBackTab}
                     className="flex items-center gap-2 text-slate-400 hover:text-slate-900 font-bold text-xs uppercase tracking-widest transition-all"
                   >
-                    <ChevronRight size={16} className="rotate-180" /> Voltar ao
-                    Painel
+                    <ChevronRight size={16} className="rotate-180" /> Voltar
                   </button>
                 </div>
                 <TeamManagement
                   user={user}
-                  onRequestUpgrade={() => setActiveTab("billing")}
+                  onRequestUpgrade={() => navigateToTab("billing")}
+                  memberSessionDurations={professionalSessionDurations}
+                  onUpdateMemberSessionDuration={(member, duration) =>
+                    setProfessionalSessionDurations((prev) => ({
+                      ...prev,
+                      [member.id]: duration,
+                      [member.email]: duration,
+                      [member.name]: duration,
+                    }))
+                  }
                 />
               </motion.div>
             )}
@@ -2595,7 +2660,7 @@ export function CoordinatorDashboard({
                     <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden">
                       <div className="p-8 border-b border-slate-50">
                         <h4 className="font-bold text-slate-900">
-                          ÃƒÅ¡ltimos Recebimentos
+                          Últimos Recebimentos
                         </h4>
                       </div>
                       <div className="p-8 overflow-x-auto">
@@ -2963,11 +3028,10 @@ export function CoordinatorDashboard({
               >
                 <div className="mb-2">
                   <button
-                    onClick={() => setActiveTab("dashboard")}
+                    onClick={goBackTab}
                     className="flex items-center gap-2 text-slate-400 hover:text-slate-900 font-bold text-xs uppercase tracking-widest transition-all"
                   >
-                    <ChevronRight size={16} className="rotate-180" /> Voltar ao
-                    Painel
+                    <ChevronRight size={16} className="rotate-180" /> Voltar
                   </button>
                 </div>
                 {renderAgendaContent()}
@@ -3284,11 +3348,10 @@ export function CoordinatorDashboard({
               >
                 <div className="mb-2">
                   <button
-                    onClick={() => setActiveTab("dashboard")}
+                    onClick={goBackTab}
                     className="flex items-center gap-2 text-slate-400 hover:text-slate-900 font-bold text-xs uppercase tracking-widest transition-all"
                   >
-                    <ChevronRight size={16} className="rotate-180" /> Voltar ao
-                    Painel
+                    <ChevronRight size={16} className="rotate-180" /> Voltar
                   </button>
                 </div>
                 {renderRoomsContent()}
@@ -3315,7 +3378,7 @@ export function CoordinatorDashboard({
                   onDeleteProtocol={(id: any) =>
                     setProtocols(protocols.filter((p: any) => p.id !== id))
                   }
-                  onBack={() => setActiveTab("overview")}
+                  onBack={goBackTab}
                 />
               </div>
             )}
@@ -3442,46 +3505,6 @@ export function CoordinatorDashboard({
                           />
                         </div>
                       </div>
-                      <div className="pt-4 border-t border-slate-100">
-                        <label className="block text-xs font-bold text-slate-700 mb-3">
-                          Duração por profissional
-                        </label>
-                        <div className="space-y-3">
-                          {Object.keys(professionalSessionDurations).length === 0 && (
-                            <p className="text-xs text-slate-400">
-                              Cadastre ou agende com profissionais para configurar a duração individual.
-                            </p>
-                          )}
-                          {Object.entries(professionalSessionDurations).map(
-                            ([professional, duration]) => (
-                              <div
-                                key={professional}
-                                className="grid grid-cols-[1fr_130px] gap-3 items-center"
-                              >
-                                <p className="text-sm font-semibold text-slate-700 truncate">
-                                  {professional}
-                                </p>
-                                <select
-                                  value={duration}
-                                  onChange={(e) =>
-                                    setProfessionalSessionDurations((prev) => ({
-                                      ...prev,
-                                      [professional]: e.target.value,
-                                    }))
-                                  }
-                                  className="w-full p-3 bg-slate-50 border-none rounded-xl text-xs font-semibold outline-none"
-                                >
-                                  <option value="30">30 min</option>
-                                  <option value="45">45 min</option>
-                                  <option value="50">50 min</option>
-                                  <option value="60">60 min</option>
-                                  <option value="90">90 min</option>
-                                </select>
-                              </div>
-                            ),
-                          )}
-                        </div>
-                      </div>
                     </div>
                   </div>
 
@@ -3500,10 +3523,10 @@ export function CoordinatorDashboard({
                       </div>
                       <p className="text-xs text-blue-600 mb-6">
                         Sua clínica possui acesso a todas as ferramentas de
-                        gestão e prontuário eletrÃƒÂ´nico.
+                        gestão e prontuário eletrônico.
                       </p>
                       <button
-                        onClick={() => setActiveTab("billing")}
+                        onClick={() => navigateToTab("billing")}
                         className="w-full py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-xs shadow-sm hover:opacity-90 transition-all"
                       >
                         Gerenciar Assinatura
@@ -3847,7 +3870,15 @@ export function CoordinatorDashboard({
               <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Bairro" value={newPatientForm.bairro} onChange={(e) => handlePatientFormChange("bairro", e.target.value)} />
               <input className="bg-slate-50 rounded-xl p-3 text-sm md:col-span-2" placeholder="Cidade" value={newPatientForm.cidade} onChange={(e) => handlePatientFormChange("cidade", e.target.value)} />
 
-              <select className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.patientProfileType} onChange={(e) => handlePatientFormChange("patientProfileType", e.target.value)}>
+              <div className="md:col-span-2">
+                <label className="block text-xs font-bold text-slate-600 mb-2">
+                  Selecione o tipo de portal desse paciente
+                </label>
+                <p className="text-[11px] text-slate-400 mb-2">
+                  Qual a área de acesso do paciente no aplicativo?
+                </p>
+              </div>
+              <select className="bg-slate-50 rounded-xl p-3 text-sm md:col-span-2" value={newPatientForm.patientProfileType} onChange={(e) => handlePatientFormChange("patientProfileType", e.target.value)}>
                 <option value="kids_tea">Paciente Kids TEA</option>
                 <option value="adult_tea">Paciente Adulto TEA</option>
                 <option value="adult_conventional">Paciente Adulto Convencional</option>
@@ -3895,5 +3926,6 @@ export function CoordinatorDashboard({
     </div>
   );
 }
+
 
 

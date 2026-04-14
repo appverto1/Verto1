@@ -13,8 +13,8 @@ import {
   MoreVertical,
   UserCheck,
   Calendar,
-  LayoutDashboard,
-  Stethoscope
+  Stethoscope,
+  Clock
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -41,9 +41,13 @@ const PLAN_LIMITS: Record<string, number> = {
 export function TeamManagement({
   user,
   onRequestUpgrade,
+  memberSessionDurations = {},
+  onUpdateMemberSessionDuration,
 }: {
   user: any;
   onRequestUpgrade?: () => void;
+  memberSessionDurations?: Record<string, string>;
+  onUpdateMemberSessionDuration?: (member: Member, duration: string) => void;
 }) {
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<any[]>([]);
@@ -240,6 +244,23 @@ export function TeamManagement({
                         </div>
                         <p className="text-[10px] text-slate-400 font-medium">Desde {new Date(member.created_at).toLocaleDateString()}</p>
                       </div>
+
+                      {(member.role === 'therapist' || member.role === 'coordinator') && (
+                        <div className="hidden md:flex items-center gap-2 bg-slate-50 rounded-xl px-2 py-1.5">
+                          <Clock size={14} className="text-slate-400" />
+                          <select
+                            value={memberSessionDurations[member.id] || memberSessionDurations[member.email] || memberSessionDurations[member.name] || '50'}
+                            onChange={(e) => onUpdateMemberSessionDuration?.(member, e.target.value)}
+                            className="bg-transparent text-xs font-semibold text-slate-700 outline-none"
+                          >
+                            <option value="30">30 min</option>
+                            <option value="45">45 min</option>
+                            <option value="50">50 min</option>
+                            <option value="60">60 min</option>
+                            <option value="90">90 min</option>
+                          </select>
+                        </div>
+                      )}
                       
                       <div className="relative">
                         <button 

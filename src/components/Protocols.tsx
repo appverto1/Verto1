@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { ChevronDown, Trash2, Plus, ChevronLeft, Save, SearchCode, Boxes, Filter, Search, FileUp, Loader2, ShieldCheck, Info } from 'lucide-react';
 import { SuccessOverlay } from './Common';
-import { AFLS_COMMUNITY_PROTOCOL } from '../constants/aflsProtocol';
 
 export const SkillEditor = ({ skill, onUpdate, onDelete, category }: any) => { 
   const [isOpen, setIsOpen] = useState(false); 
@@ -27,11 +26,11 @@ export const SkillEditor = ({ skill, onUpdate, onDelete, category }: any) => {
           <div><label className="text-[10px] uppercase font-bold text-gray-400">{isIntervention ? 'Objetivo / Instruções' : 'Objetivo'}</label><textarea className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs resize-none" rows={isIntervention ? 4 : 2} value={skill.objective || ''} onChange={(e) => onUpdate({ ...skill, objective: e.target.value })} placeholder={isIntervention ? "Descreva o que o paciente deve fazer ou escrever..." : "O que se espera do paciente?"}></textarea></div> 
           {!isIntervention && (
             <>
-              <div><label className="text-[10px] uppercase font-bold text-gray-400">Exemplos</label><textarea className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs resize-none" rows={2} value={skill.example || ''} onChange={(e) => onUpdate({ ...skill, example: e.target.value })} placeholder="Dê exemplos práticos..."></textarea></div> 
-              <div><label className="text-[10px] uppercase font-bold text-gray-400">Critérios</label><textarea className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs resize-none" rows={2} value={skill.criteria || ''} onChange={(e) => onUpdate({ ...skill, criteria: e.target.value })} placeholder="Critérios de pontuação..."></textarea></div> 
+              <div><label className="text-[10px] uppercase font-bold text-gray-400">Exemplos</label><textarea className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs resize-none" rows={2} value={skill.example || ''} onChange={(e) => onUpdate({ ...skill, example: e.target.value })} placeholder="DÃª exemplos prÃ¡ticos..."></textarea></div> 
+              <div><label className="text-[10px] uppercase font-bold text-gray-400">CritÃ©rios</label><textarea className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs resize-none" rows={2} value={skill.criteria || ''} onChange={(e) => onUpdate({ ...skill, criteria: e.target.value })} placeholder="CritÃ©rios de pontuaÃ§Ã£o..."></textarea></div> 
             </>
           )}
-          <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Comentário Interno</label><textarea className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs resize-none" rows={2} value={skill.comment || ''} onChange={(e) => onUpdate({ ...skill, comment: e.target.value })} placeholder="Observações do profissional..."></textarea></div> 
+          <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">ComentÃ¡rio Interno</label><textarea className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs resize-none" rows={2} value={skill.comment || ''} onChange={(e) => onUpdate({ ...skill, comment: e.target.value })} placeholder="ObservaÃ§Ãµes do profissional..."></textarea></div> 
         </div> 
       )} 
     </div> 
@@ -51,7 +50,7 @@ export const DomainEditor = ({ domain, onUpdate, onDelete, category }: any) => {
     } 
   }; 
   const addSkill = () => { 
-    const newSkill = { id: Date.now(), name: category === 'intervention' ? "Nova Tarefa de Intervenção" : "Nova Tarefa", code: "", maxScore: 2, objective: "", example: "", criteria: "", comment: "" }; 
+    const newSkill = { id: Date.now(), name: category === 'intervention' ? "Nova Tarefa de IntervenÃ§Ã£o" : "Nova Tarefa", code: "", maxScore: 2, objective: "", example: "", criteria: "", comment: "" }; 
     onUpdate({ ...domain, skills: [...domain.skills, newSkill] }); setIsOpen(true); 
   }; 
   return ( 
@@ -59,7 +58,7 @@ export const DomainEditor = ({ domain, onUpdate, onDelete, category }: any) => {
       <div className="flex items-center justify-between p-4 bg-gray-50"> 
         <div className="flex items-center gap-3 flex-1">
           <button onClick={() => setIsOpen(!isOpen)}><ChevronDown size={20} className={`text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}/></button>
-          <input type="text" className="bg-transparent font-bold text-gray-700 outline-none w-full" value={domain.name} onChange={(e) => onUpdate({ ...domain, name: e.target.value })} placeholder="Nome do Domínio/Categoria" />
+          <input type="text" className="bg-transparent font-bold text-gray-700 outline-none w-full" value={domain.name} onChange={(e) => onUpdate({ ...domain, name: e.target.value })} placeholder="Nome do DomÃ­nio/Categoria" />
         </div> 
         <button onClick={onDelete} className="text-gray-400 hover:text-red-500"><Trash2 size={18}/></button> 
       </div> 
@@ -87,13 +86,13 @@ export const ProtocolEditor = ({ protocol, onSave, onCancel }: any) => {
     setLocalProtocol({ ...localProtocol, data: updatedDomains }); 
   }; 
   const deleteDomain = (domainId: any) => { 
-    if (confirm("Remover este domínio inteiro?")) { 
+    if (confirm("Remover este domÃ­nio inteiro?")) { 
       const updatedDomains = localProtocol.data.filter((d: any) => d.id !== domainId); 
       setLocalProtocol({ ...localProtocol, data: updatedDomains }); 
     } 
   }; 
   const addDomain = () => { 
-    const newDomain = { id: `dom-${Date.now()}`, name: "Novo Domínio", skills: [] }; 
+    const newDomain = { id: `dom-${Date.now()}`, name: "Novo DomÃ­nio", skills: [] }; 
     setLocalProtocol({ ...localProtocol, data: [...localProtocol.data, newDomain] }); 
   }; 
   const handleSave = () => { 
@@ -145,7 +144,7 @@ export const ProtocolEditor = ({ protocol, onSave, onCancel }: any) => {
             </select> 
           </div> 
           <div className="md:col-span-5"> 
-            <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Domínios / Tags (Separar por vírgula)</label> 
+            <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Domínios / Tags (separar por vírgula)</label> 
             <input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7551FF]" value={localProtocol.domain} onChange={(e) => setLocalProtocol({ ...localProtocol, domain: e.target.value })} placeholder="Ex: Autoestima, Socialização, Autocuidado..." /> 
           </div> 
         </div> 
@@ -170,25 +169,8 @@ export const ProtocolManagementSystem = ({ protocols, onSaveProtocol, onDeletePr
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [hasLicense, setHasLicense] = useState(false);
-  const [importingGlobal, setImportingGlobal] = useState(false);
-
-  const handleImportAFLS = () => {
-    if (!hasLicense) return;
-    
-    setImportingGlobal(true);
-    setTimeout(() => {
-      const importedAFLS = {
-        ...AFLS_COMMUNITY_PROTOCOL,
-        id: `afls-${Date.now()}`,
-        isGlobal: false,
-        importedAt: new Date().toISOString()
-      };
-      onSaveProtocol(importedAFLS);
-      setImportingGlobal(false);
-      setShowImportModal(false);
-      setHasLicense(false);
-    }, 1500);
-  };
+  const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
+  const [pendingProtocolName, setPendingProtocolName] = useState("");
 
   const handleCreateNew = () => { 
     const newProto = { id: Date.now(), title: "Novo Protocolo Personalizado", data: [], ageGroup: 'all', type: 'conventional', domain: '', category: 'evaluation' }; 
@@ -200,9 +182,21 @@ export const ProtocolManagementSystem = ({ protocols, onSaveProtocol, onDeletePr
   }; 
 
   const handleFileUpload = (e: any) => {
-    const file = e.target.files[0];
+    const file = e.target.files?.[0];
     if (!file) return;
-    
+    setPendingImportFile(file);
+    setPendingProtocolName(file.name.replace(/\.[^.]+$/, ""));
+    setHasLicense(false);
+    setShowImportModal(true);
+    e.target.value = "";
+  };
+
+  const handleConfirmFileImport = () => {
+    if (!pendingImportFile || !hasLicense || !pendingProtocolName.trim()) return;
+
+    const file = pendingImportFile;
+    const protocolTitle = pendingProtocolName.trim();
+    setShowImportModal(false);
     setIsImporting(true);
     setImportProgress(10);
     
@@ -214,10 +208,9 @@ export const ProtocolManagementSystem = ({ protocols, onSaveProtocol, onDeletePr
             setIsImporting(false);
             setImportProgress(0);
             
-            // Create a mock imported protocol
             const newProtocol = {
               id: Date.now(),
-              title: `Protocolo Importado: ${file.name.split('.')[0]}`,
+              title: protocolTitle,
               category: 'evaluation',
               ageGroup: 'all',
               type: 'conventional',
@@ -235,7 +228,10 @@ export const ProtocolManagementSystem = ({ protocols, onSaveProtocol, onDeletePr
             };
             
             onSaveProtocol(newProtocol);
-            alert(`Ficheiro "${file.name}" importado com sucesso! O sistema mapeou as tarefas automaticamente e o protocolo já está disponível na sua biblioteca.`);
+            setPendingImportFile(null);
+            setPendingProtocolName("");
+            setHasLicense(false);
+            alert(`Arquivo "${file.name}" importado com sucesso! O protocolo "${protocolTitle}" já está disponível na biblioteca.`);
           }, 500);
           return 100;
         }
@@ -296,15 +292,28 @@ export const ProtocolManagementSystem = ({ protocols, onSaveProtocol, onDeletePr
             <div className="bg-[#7a32fc] p-8 text-white relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-bl-full -mr-8 -mt-8"></div>
               <ShieldCheck size={48} className="mb-4 relative z-10" />
-              <h2 className="text-2xl font-bold relative z-10">Importar Protocolo AFLS</h2>
-              <p className="text-white/80 text-sm mt-2 relative z-10">The Assessment of Functional Living Skills</p>
+              <h2 className="text-2xl font-bold relative z-10">Importar Protocolo</h2>
+              <p className="text-white/80 text-sm mt-2 relative z-10">Confirme os termos de uso e responsabilidade antes de continuar.</p>
             </div>
             
             <div className="p-8">
+              <div className="mb-6">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">
+                  Nome do protocolo
+                </label>
+                <input
+                  type="text"
+                  value={pendingProtocolName}
+                  onChange={(e) => setPendingProtocolName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm outline-none"
+                  placeholder="Ex: Protocolo de Comunicação Funcional"
+                />
+              </div>
+
               <div className="bg-blue-50 border border-blue-100 p-4 rounded-2xl mb-6 flex gap-3">
                 <Info size={20} className="text-blue-500 shrink-0 mt-0.5" />
                 <p className="text-xs text-blue-700 leading-relaxed font-medium">
-                  O AFLS é um protocolo protegido por direitos autorais e requer licenciamento para uso profissional. Ao importar, você confirma que possui a licença necessária.
+                  Protocolos clínicos podem ter direitos autorais e regras específicas de uso. Ao importar, você declara que possui autorização para utilização no ambiente da clínica.
                 </p>
               </div>
 
@@ -320,24 +329,29 @@ export const ProtocolManagementSystem = ({ protocols, onSaveProtocol, onDeletePr
                     <ShieldCheck className="absolute h-3.5 w-3.5 text-white opacity-0 peer-checked:opacity-100 left-0.5" strokeWidth={3} />
                   </div>
                   <span className="text-sm font-bold text-gray-700 group-hover:text-[#7a32fc] transition-colors">
-                    Declaro possuir os direitos e licença de uso deste protocolo para fins profissionais.
+                    Li e aceito os termos de responsabilidade e direitos de uso do protocolo importado.
                   </span>
                 </label>
               </div>
 
               <div className="grid grid-cols-2 gap-4 mt-8">
                 <button 
-                  onClick={() => setShowImportModal(false)}
+                  onClick={() => {
+                    setShowImportModal(false);
+                    setHasLicense(false);
+                    setPendingImportFile(null);
+                    setPendingProtocolName("");
+                  }}
                   className="py-4 rounded-2xl font-bold text-gray-500 hover:bg-gray-50 transition-all border border-gray-100"
                 >
                   Cancelar
                 </button>
                 <button 
-                  onClick={handleImportAFLS}
-                  disabled={!hasLicense || importingGlobal}
-                  className={`py-4 rounded-2xl font-bold text-white shadow-lg transition-all flex items-center justify-center gap-2 ${hasLicense ? 'bg-[#7a32fc] shadow-blue-200 hover:opacity-90 active:scale-95' : 'bg-gray-300 cursor-not-allowed shadow-none'}`}
+                  onClick={handleConfirmFileImport}
+                  disabled={!hasLicense || !pendingProtocolName.trim() || isImporting}
+                  className={`py-4 rounded-2xl font-bold text-white shadow-lg transition-all flex items-center justify-center gap-2 ${hasLicense && pendingProtocolName.trim() ? 'bg-[#7a32fc] shadow-blue-200 hover:opacity-90 active:scale-95' : 'bg-gray-300 cursor-not-allowed shadow-none'}`}
                 >
-                  {importingGlobal ? (
+                  {isImporting ? (
                     <>
                       <Loader2 size={18} className="animate-spin" />
                       Importando...
@@ -345,7 +359,7 @@ export const ProtocolManagementSystem = ({ protocols, onSaveProtocol, onDeletePr
                   ) : (
                     <>
                       <FileUp size={18} />
-                      Importar Agora
+                      Confirmar Importação
                     </>
                   )}
                 </button>
@@ -481,3 +495,4 @@ export const ProtocolManagementSystem = ({ protocols, onSaveProtocol, onDeletePr
     </div> 
   ); 
 };
+
