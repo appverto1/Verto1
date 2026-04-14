@@ -385,8 +385,37 @@ export const dataService = {
 
       return { success: true, url: signedData.signedUrl, path: data.path };
     } catch (error: any) {
-      console.error('Error uploading file:', error.message);
-      return { success: false, error: error.message };
+      console.warn('Direct Supabase upload failed, trying backend fallback:', error.message);
+      try {
+        const toBase64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(new Error('Falha ao ler arquivo para upload'));
+          reader.readAsDataURL(file);
+        });
+
+        const response = await fetch('/api/storage/upload', {
+          method: 'POST',
+          headers: await getAuthHeaders(),
+          credentials: 'include',
+          body: JSON.stringify({
+            bucket,
+            path,
+            contentType: file.type || 'application/octet-stream',
+            fileBase64: toBase64
+          })
+        });
+
+        const result = await response.json();
+        if (response.ok && result?.success) {
+          return { success: true, url: result.url, path: result.path };
+        }
+
+        return { success: false, error: result?.error || 'Falha no upload (fallback).' };
+      } catch (fallbackError: any) {
+        console.error('Fallback upload error:', fallbackError.message);
+        return { success: false, error: fallbackError.message || error.message };
+      }
     }
   },
 

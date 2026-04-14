@@ -34,7 +34,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const [isUploading, setIsUploading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const isKidsProfile = user.type === 'kids_tea' || user.age <= 12 || user.anamnesisData?.formType === 'child';
+  const userAge =
+    typeof user.age === 'number'
+      ? user.age
+      : (user.age !== null && user.age !== undefined && Number.isFinite(Number(user.age)))
+        ? Number(user.age)
+        : null;
+  const isKidsProfile = user.type === 'kids_tea' || (userAge !== null && userAge <= 12) || user.anamnesisData?.formType === 'child';
   const isConventionalAdult = user.type === 'conventional' && !isKidsProfile;
 
   const conventionalMoodTags = [
@@ -247,13 +253,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           setFamilyImage(result.url);
           setIsDrawingMode(true);
         } else {
-          alert('Erro ao enviar imagem. O sistema tentará criar o bucket "patient-photos" automaticamente. Por favor, tente novamente em alguns instantes.');
-          // Attempt to create bucket via API if it fails
-          fetch('/api/storage/create-bucket', { 
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ bucketName: 'patient-photos' })
-          }).catch(err => console.error('Failed to trigger bucket creation:', err));
+          alert('Erro ao enviar imagem. Tente novamente em alguns instantes.');
         }
       } catch (error) {
         console.error('Upload error:', error);

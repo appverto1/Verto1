@@ -1540,6 +1540,72 @@ async function startServer() {
     }
   });
 
+  app.post('/api/storage/upload', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner', 'patient'), async (req: any, res) => {
+    try {
+      const bucketName = sanitizeString(req.body?.bucket, 80);
+      const objectPath = sanitizeString(req.body?.path, 260);
+      const contentType = sanitizeString(req.body?.contentType, 120) || 'application/octet-stream';
+      const dataUrl = sanitizeString(req.body?.fileBase64, 8_000_000);
+
+      if (bucketName !== 'patient-photos') {
+        return res.status(400).json({ success: false, error: 'Bucket inválido para upload.' });
+      }
+      if (!objectPath || objectPath.includes('..')) {
+        return res.status(400).json({ success: false, error: 'Path inválido.' });
+      }
+      if (!dataUrl) {
+        return res.status(400).json({ success: false, error: 'Arquivo ausente.' });
+      }
+
+      const matches = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+      const base64Payload = matches?.[2] || dataUrl;
+      const mimeFromDataUrl = matches?.[1] || contentType;
+      const fileBuffer = Buffer.from(base64Payload, 'base64');
+
+      if (!fileBuffer.length || fileBuffer.length > 5 * 1024 * 1024) {
+        return res.status(400).json({ success: false, error: 'Arquivo inválido ou acima de 5MB.' });
+      }
+
+      const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+      if (listError) throw listError;
+
+      const exists = (buckets || []).find((b: any) => b.name === bucketName);
+      if (!exists) {
+        const { error: createError } = await supabase.storage.createBucket(bucketName, {
+          public: true,
+          fileSizeLimit: 5242880,
+          allowedMimeTypes: ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp']
+        });
+        if (createError) throw createError;
+      }
+
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from(bucketName)
+        .upload(objectPath, fileBuffer, {
+          cacheControl: '3600',
+          upsert: true,
+          contentType: mimeFromDataUrl
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { data: signedData, error: signedError } = await supabase.storage
+        .from(bucketName)
+        .createSignedUrl(uploadData.path, 60 * 60 * 24 * 30);
+
+      if (signedError) throw signedError;
+
+      return res.json({
+        success: true,
+        url: signedData.signedUrl,
+        path: uploadData.path
+      });
+    } catch (error: any) {
+      console.error('Storage upload fallback error:', error);
+      return res.status(500).json({ success: false, error: error.message || String(error) });
+    }
+  });
+
   // Patients
   app.get('/api/patients', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
