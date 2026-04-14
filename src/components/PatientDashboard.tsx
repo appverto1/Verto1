@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, CheckCircle, Camera, Image as ImageIcon, Trash2, Pencil, Menu, MessageCircle } from 'lucide-react';
+import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle } from 'lucide-react';
 import { EvolutionLineChart, EvolutionBarChart } from './Charts';
 import { LogoVerto, SuccessOverlay, BigEnergySlider, ENERGY_TAGS } from './Common';
 import { HistoryCard } from './History';
@@ -202,22 +202,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const stars = Math.min(5, Math.max(1, Math.ceil(weekLogs / 2)));
     return { weekLogs, totalTasksDone, stars };
   }, [familyDiaryHistory, history]);
-
-  const adultLatestUploads = useMemo(() => {
-    return history
-      .filter((item: any) => {
-        const hasText = Boolean(item?.note);
-        const hasMedia = Boolean(item?.image || item?.imageUrl || item?.photoUrl || item?.image_url || item?.url);
-        return hasText || hasMedia;
-      })
-      .sort((a: any, b: any) => {
-        const aTime = new Date(a.date || a.created_at || 0).getTime();
-        const bTime = new Date(b.date || b.created_at || 0).getTime();
-        if (aTime === bTime) return (b.id || 0) - (a.id || 0);
-        return bTime - aTime;
-      })
-      .slice(0, 8);
-  }, [history]);
 
   const handleConfirmFamilyNote = () => {
     if (familyNote.trim() || familyImage) {
@@ -762,42 +746,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 </div>
               ))}
             </div>
-          </div>
-        )}
-        {isConventionalAdult && (
-          <div className="mb-8 animate-fade-in">
-            <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-              <ImageIcon size={16} /> Últimos Registros Enviados
-            </h2>
-            {adultLatestUploads.length > 0 ? (
-              <div className="grid gap-3">
-                {adultLatestUploads.map((entry: any) => (
-                  <div key={`adult-entry-${entry.id}`} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                      <span className="text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">
-                        {entry.type === 'intervention' ? 'Tarefa de intervenção' : entry.type === 'task' ? 'Tarefa de avaliação' : 'Registro'}
-                      </span>
-                      <span className="text-[10px] text-gray-400 font-medium">
-                        {formatDiaryTimestamp(entry.date || entry.created_at)}
-                      </span>
-                    </div>
-                    {entry.note && <p className="text-sm text-gray-600 leading-relaxed mb-2 whitespace-pre-wrap">{entry.note}</p>}
-                    {(entry.image || entry.imageUrl || entry.photoUrl || entry.image_url || entry.url) && (
-                      <img
-                        src={entry.image || entry.imageUrl || entry.photoUrl || entry.image_url || entry.url}
-                        alt="Registro enviado"
-                        className="w-full max-h-44 object-cover rounded-xl border border-gray-100"
-                      />
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="bg-white p-6 rounded-2xl border border-dashed border-gray-200 text-center">
-                <p className="text-sm font-semibold text-gray-600 mb-1">Nenhum registro enviado ainda</p>
-                <p className="text-xs text-gray-400">Assim que você concluir tarefas com texto ou fotos, elas vão aparecer aqui com data e horário.</p>
-              </div>
-            )}
           </div>
         )}
         <div className="mt-8 mb-6"> 
