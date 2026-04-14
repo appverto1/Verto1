@@ -779,6 +779,13 @@ export const ReceptionistDashboard = ({
   }).length;
 
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
+  const receptionistSidebarItems = [
+    { id: "home", label: "Dashboard", icon: LayoutDashboard },
+    { id: "patients_registry", label: "Pacientes", icon: ClipboardList },
+    { id: "room_reservation", label: "Reservas de Sala", icon: DoorOpen },
+    { id: "financial_soon", label: "Financeiro", icon: CreditCard, badge: "EM BREVE", soon: true },
+    { id: "flow_soon", label: "Verto Flow", icon: Activity, badge: "EM BREVE", soon: true },
+  ];
 
   const groupedAgenda = useMemo(() => {
     if (agendaView === "day" || agendaView === "month") return null;
@@ -808,61 +815,37 @@ export const ReceptionistDashboard = ({
         </div>
 
         <nav className="flex-1 space-y-2 overflow-y-auto no-scrollbar pr-2">
-          <button
-            onClick={() => handleSetView("home")}
-            className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 p-3.5' : 'justify-center p-3.5'} rounded-2xl transition-all font-bold text-sm ${view === "home" ? "bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20" : "text-slate-400 hover:bg-slate-50 hover:text-slate-600"}`}
-            title={!isSidebarExpanded ? "Agenda Clínica" : ""}
-          >
-            <Calendar size={20} /> 
-            {isSidebarExpanded && <span>Agenda Clínica</span>}
-          </button>
-
-          <button
-            onClick={() => handleSetView("patients_registry")}
-            className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 p-3.5' : 'justify-center p-3.5'} rounded-2xl transition-all font-bold text-sm ${view === "patients_registry" ? "bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20" : "text-slate-400 hover:bg-slate-50 hover:text-slate-600"}`}
-            title={!isSidebarExpanded ? "Cadastro de Pacientes" : ""}
-          >
-            <ClipboardList size={20} /> 
-            {isSidebarExpanded && <span>Cadastro de Pacientes</span>}
-          </button>
-
-          <button
-            onClick={() => handleSetView("room_reservation")}
-            className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 p-3.5' : 'justify-center p-3.5'} rounded-2xl transition-all font-bold text-sm ${view === "room_reservation" ? "bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20" : "text-slate-400 hover:bg-slate-50 hover:text-slate-600"}`}
-            title={!isSidebarExpanded ? "Reserva de Salas" : ""}
-          >
-            <DoorOpen size={20} /> 
-            {isSidebarExpanded && <span>Reserva de Salas</span>}
-          </button>
-
-          {user?.role === "coordinator" && (
-            <button
-              onClick={() => onViewTeam()}
-              className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 p-3.5' : 'justify-center p-3.5'} rounded-2xl transition-all font-bold text-sm text-slate-400 hover:bg-slate-50 hover:text-slate-600`}
-              title={!isSidebarExpanded ? "Dashboard Gestão" : ""}
-            >
-              <LayoutDashboard size={20} /> 
-              {isSidebarExpanded && <span>Dashboard Gestão</span>}
-            </button>
-          )}
-
-          <div className={`pt-6 mt-6 border-t border-slate-50 space-y-2`}>
-            <button
-              onClick={() => {}}
-              className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 p-3.5' : 'justify-center p-3.5'} rounded-2xl transition-all font-bold text-sm text-slate-400 hover:bg-slate-50 hover:text-slate-600`}
-              title={!isSidebarExpanded ? "Verto Flow" : ""}
-            >
-              <Activity size={20} /> 
-              {isSidebarExpanded && (
-                <div className="flex items-center justify-between w-full">
-                  <span>Verto Flow</span>
-                  <span className="text-[8px] bg-purple-100 text-[#7a32fc] px-1.5 py-0.5 rounded-full">
-                    EM BREVE
-                  </span>
-                </div>
-              )}
-            </button>
-          </div>
+          {receptionistSidebarItems.map((item) => {
+            const isActive = view === item.id;
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                onClick={() => {
+                  if (item.soon) return;
+                  handleSetView(item.id);
+                }}
+                className={`w-full flex items-center ${isSidebarExpanded ? 'gap-4 px-6' : 'justify-center'} py-4 rounded-2xl transition-all font-medium text-sm ${
+                  isActive
+                    ? "text-[#7a32fc] bg-purple-50 shadow-sm"
+                    : "text-slate-400 hover:text-slate-900 hover:bg-slate-50"
+                } ${item.soon ? "opacity-70 cursor-not-allowed" : ""}`}
+                title={!isSidebarExpanded ? item.label : ""}
+              >
+                <Icon size={20} />
+                {isSidebarExpanded && (
+                  <>
+                    {item.label}
+                    {item.badge && (
+                      <span className="ml-auto text-[8px] bg-purple-100 text-[#7a32fc] px-1.5 py-0.5 rounded-full">
+                        {item.badge}
+                      </span>
+                    )}
+                  </>
+                )}
+              </button>
+            );
+          })}
         </nav>
 
         <div className="mt-auto pt-6 border-t border-slate-50">

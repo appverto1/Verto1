@@ -207,7 +207,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return history
       .filter((item: any) => {
         const hasText = Boolean(item?.note);
-        const hasMedia = Boolean(item?.imageUrl || item?.photoUrl || item?.url);
+        const hasMedia = Boolean(item?.image || item?.imageUrl || item?.photoUrl || item?.image_url || item?.url);
         return hasText || hasMedia;
       })
       .sort((a: any, b: any) => {
@@ -458,9 +458,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             </span>
                           </div>
                           {entry.note && <p className="text-xs sm:text-sm text-gray-700 leading-relaxed mb-2">{entry.note}</p>}
-                          {(entry.imageUrl || entry.photoUrl || entry.url) && (
+                          {(entry.image || entry.imageUrl || entry.photoUrl || entry.image_url || entry.url) && (
                             <img
-                              src={entry.imageUrl || entry.photoUrl || entry.url}
+                              src={entry.image || entry.imageUrl || entry.photoUrl || entry.image_url || entry.url}
                               alt="Registro do diário"
                               className="w-full max-h-40 object-cover rounded-xl border border-blue-100"
                             />
@@ -782,9 +782,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                       </span>
                     </div>
                     {entry.note && <p className="text-sm text-gray-600 leading-relaxed mb-2 whitespace-pre-wrap">{entry.note}</p>}
-                    {(entry.imageUrl || entry.photoUrl || entry.url) && (
+                    {(entry.image || entry.imageUrl || entry.photoUrl || entry.image_url || entry.url) && (
                       <img
-                        src={entry.imageUrl || entry.photoUrl || entry.url}
+                        src={entry.image || entry.imageUrl || entry.photoUrl || entry.image_url || entry.url}
                         alt="Registro enviado"
                         className="w-full max-h-44 object-cover rounded-xl border border-gray-100"
                       />
