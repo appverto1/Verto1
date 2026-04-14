@@ -1,0 +1,8 @@
+Antes de qualquer alteração: NÃO modificar estes arquivos:
+- src/App.tsx
+- src/components/SuperAdminDashboard.tsx
+- server.ts
+- sql/supabase_super_admin_financial.sql
+
+Objetivo desta tarefa: estruturar o painel de super admin para eu, dono da Verto, acompanhar a performance e rentabilidade da minha empresa.
+Só alterar arquivos estritamente necessários para esse objetivo.
