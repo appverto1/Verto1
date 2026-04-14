@@ -9,10 +9,13 @@ import { dataService } from '../services/dataService';
 
 export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote }: any) => { 
   const [selectedSnapshotDate, setSelectedSnapshotDate] = useState("all");
+  const [kidComparisonMode, setKidComparisonMode] = useState<'all' | 'improved' | 'declined'>('all');
   const [selectedTask, setSelectedTask] = useState<any>(null); 
   const [taskEnergy, setTaskEnergy] = useState(50); 
   const [taskNote, setTaskNote] = useState(""); 
   const [interventionResponse, setInterventionResponse] = useState("");
+  const [interventionImages, setInterventionImages] = useState<string[]>([]);
+  const [isInterventionUploading, setIsInterventionUploading] = useState(false);
   const [taskStep, setTaskStep] = useState(1); 
   const [showTaskSuccess, setShowTaskSuccess] = useState(false); 
   const [selectedMood, setSelectedMood] = useState<any>(null); 
@@ -31,6 +34,18 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const [isUploading, setIsUploading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const isKidsProfile = user.type === 'kids_tea' || user.age <= 12 || user.anamnesisData?.formType === 'child';
+  const isConventionalAdult = user.type === 'conventional' && !isKidsProfile;
+
+  const conventionalMoodTags = [
+    { id: 'family', label: 'Família', icon: '👨‍👩‍👧‍👦', color: 'bg-blue-100 text-blue-600' },
+    { id: 'work', label: 'Trabalho', icon: '💼', color: 'bg-orange-100 text-orange-600' },
+    { id: 'relationships', label: 'Relacionamentos', icon: '❤️', color: 'bg-pink-100 text-pink-600' },
+    { id: 'money', label: 'Dinheiro', icon: '💰', color: 'bg-green-100 text-green-600' },
+    { id: 'thoughts', label: 'Pensamentos', icon: '🧠', color: 'bg-purple-100 text-purple-600' },
+    { id: 'others', label: 'Outros', icon: '🧩', color: 'bg-gray-100 text-gray-600' }
+  ];
+  const moodInfluenceTags = isConventionalAdult ? conventionalMoodTags : (energyTags || []);
 
   const moodOptions = [ { value: 10, emoji: "😫", label: "Esgotado", color: "bg-red-100 border-red-200 hover:bg-red-200" }, { value: 30, emoji: "😕", label: "Baixo", color: "bg-orange-100 border-orange-200 hover:bg-orange-200" }, { value: 50, emoji: "😐", label: "Normal", color: "bg-yellow-100 border-yellow-200 hover:bg-yellow-200" }, { value: 70, emoji: "🙂", label: "Bem", color: "bg-blue-100 border-blue-200 hover:bg-blue-200" }, { value: 90, emoji: "🤩", label: "Ótimo!", color: "bg-green-100 border-green-200 hover:bg-green-200" } ];
 
@@ -121,6 +136,79 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return { labels, datasets };
   }, [history, protocols, selectedSnapshotDate, user]);
 
+  const kidChartViewData = useMemo(() => {
+    if (!kidChartData?.labels?.length || kidComparisonMode === 'all') return kidChartData;
+    const datasets = kidChartData.datasets || [];
+    if (datasets.length < 2) return kidChartData;
+
+    const currentDataset = datasets.find((d: any) => String(d.label || '').toLowerCase().includes('(agora)')) || datasets[datasets.length - 1];
+    const baselineDataset = datasets.find((d: any) => d !== currentDataset) || null;
+    if (!baselineDataset) return kidChartData;
+
+    const selectedIndexes = currentDataset.data
+      .map((value: number, idx: number) => {
+        const base = Number(baselineDataset.data[idx] ?? 0);
+        const curr = Number(value ?? 0);
+        const delta = curr - base;
+        if (kidComparisonMode === 'improved') return delta > 0 ? idx : -1;
+        return delta < 0 ? idx : -1;
+      })
+      .filter((idx: number) => idx >= 0);
+
+    if (selectedIndexes.length === 0) {
+      return { labels: [], datasets: [] };
+    }
+
+    return {
+      labels: selectedIndexes.map((i: number) => kidChartData.labels[i]),
+      datasets: datasets.map((dataset: any) => ({
+        ...dataset,
+        data: selectedIndexes.map((i: number) => dataset.data[i])
+      }))
+    };
+  }, [kidChartData, kidComparisonMode]);
+
+  const familyDiaryHistory = useMemo(() => {
+    return history
+      .filter((item: any) => item.type === 'family_note' || item.type === 'photo')
+      .sort((a: any, b: any) => {
+        const aTime = new Date(a.date || a.created_at || 0).getTime();
+        const bTime = new Date(b.date || b.created_at || 0).getTime();
+        if (aTime === bTime) return (b.id || 0) - (a.id || 0);
+        return bTime - aTime;
+      })
+      .slice(0, 8);
+  }, [history]);
+
+  const kidsGamification = useMemo(() => {
+    const today = new Date();
+    const weekAgo = new Date();
+    weekAgo.setDate(today.getDate() - 7);
+    const weekLogs = familyDiaryHistory.filter((item: any) => {
+      const when = new Date(item.date || item.created_at || 0);
+      return when >= weekAgo;
+    }).length;
+    const totalTasksDone = history.filter((item: any) => item.type === 'task').length;
+    const stars = Math.min(5, Math.max(1, Math.ceil(weekLogs / 2)));
+    return { weekLogs, totalTasksDone, stars };
+  }, [familyDiaryHistory, history]);
+
+  const adultLatestUploads = useMemo(() => {
+    return history
+      .filter((item: any) => {
+        const hasText = Boolean(item?.note);
+        const hasMedia = Boolean(item?.imageUrl || item?.photoUrl || item?.url);
+        return hasText || hasMedia;
+      })
+      .sort((a: any, b: any) => {
+        const aTime = new Date(a.date || a.created_at || 0).getTime();
+        const bTime = new Date(b.date || b.created_at || 0).getTime();
+        if (aTime === bTime) return (b.id || 0) - (a.id || 0);
+        return bTime - aTime;
+      })
+      .slice(0, 8);
+  }, [history]);
+
   const handleConfirmFamilyNote = () => {
     if (familyNote.trim() || familyImage) {
       setShowFamilySuccess(true);
@@ -132,6 +220,19 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         setIsFamilyLogOpen(false);
       }, 2000);
     }
+  };
+
+  const formatDiaryTimestamp = (value: any) => {
+    if (!value) return 'Agora';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Agora';
+    return date.toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -162,6 +263,26 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     }
   };
 
+  const handleInterventionImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsInterventionUploading(true);
+    try {
+      const fileName = `${user.id}/interventions/${Date.now()}-${file.name}`;
+      const result = await dataService.uploadFile('patient-photos', fileName, file);
+      if (result.success && result.url) {
+        setInterventionImages((prev) => [...prev, result.url!]);
+      } else {
+        alert('Erro ao anexar imagem da tarefa. Tente novamente.');
+      }
+    } catch (error) {
+      console.error('Intervention upload error:', error);
+    } finally {
+      setIsInterventionUploading(false);
+      e.target.value = '';
+    }
+  };
+
   const filteredHistoryList = useMemo(() => {
     if (selectedSnapshotDate === "all") return history;
     return history.filter((h: any) => h.dateGroup === selectedSnapshotDate);
@@ -170,9 +291,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const groupedHistory = filteredHistoryList.reduce((groups: any, item: any) => { const group = groups[item.dateGroup] || []; group.push(item); group.sort((a: any, b: any) => b.id - a.id); groups[item.dateGroup] = group; return groups; }, {}); 
   const sortedDateKeys = Object.keys(groupedHistory).sort((a, b) => { if (a === "Hoje") return -1; if (b === "Hoje") return 1; if (a === "Ontem") return -1; if (b === "Ontem") return 1; return b.localeCompare(a); }); 
 
-  if (user.age <= 12 || user.anamnesisData?.formType === 'child') {
+  if (isKidsProfile) {
     return (
-        <div className="min-h-screen bg-[#F4F7FE] p-4 sm:p-6 flex flex-col items-center relative overflow-y-auto">
+        <div className="min-h-screen bg-gradient-to-b from-[#F2FAFF] via-[#F6F2FF] to-[#FFF8EF] p-4 sm:p-6 flex flex-col items-center relative overflow-y-auto">
             {(showFamilySuccess) && <SuccessOverlay />} 
             <div className="absolute top-0 left-0 w-full h-64 bg-gradient-to-b from-blue-100 to-transparent -z-0"></div>
             <div className="w-full max-w-md relative z-10 flex flex-col h-full">
@@ -221,6 +342,20 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
                 <div className="bg-white p-4 sm:p-6 rounded-[32px] sm:rounded-[40px] shadow-xl border border-blue-50 flex flex-col justify-center mb-6 relative overflow-hidden">
                     <div className="absolute top-0 right-0 w-24 sm:w-32 h-24 sm:h-32 bg-yellow-100 rounded-bl-full opacity-50 -z-0"></div>
+                    <div className="grid grid-cols-3 gap-2 mb-4">
+                      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-3 text-center">
+                        <p className="text-[10px] uppercase text-blue-600 font-bold tracking-widest">Registros 7d</p>
+                        <p className="text-lg font-extrabold text-blue-700">{kidsGamification.weekLogs}</p>
+                      </div>
+                      <div className="bg-yellow-50 border border-yellow-100 rounded-2xl p-3 text-center">
+                        <p className="text-[10px] uppercase text-yellow-600 font-bold tracking-widest">Estrelas</p>
+                        <p className="text-base sm:text-lg">{'⭐'.repeat(kidsGamification.stars)}</p>
+                      </div>
+                      <div className="bg-green-50 border border-green-100 rounded-2xl p-3 text-center">
+                        <p className="text-[10px] uppercase text-green-600 font-bold tracking-widest">Missões</p>
+                        <p className="text-lg font-extrabold text-green-700">{kidsGamification.totalTasksDone}</p>
+                      </div>
+                    </div>
                     <div className="flex items-center justify-between mb-4 sm:mb-6 px-1 sm:px-2">
                         <h2 className="text-lg sm:text-xl font-semibold text-gray-700 flex items-center gap-2"><Trophy className="text-yellow-500" size={20}/> Nível de Herói</h2>
                         <div className="relative w-28 sm:w-32">
@@ -237,9 +372,68 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 text-[#7a32fc] pointer-events-none" size={10} />
                         </div>
                     </div>
-                    <div className="w-full min-h-[300px] sm:min-h-[350px]">
-                        <EvolutionBarChart chartData={kidChartData} />
+                    <div className="mb-4 flex flex-wrap gap-2">
+                      <button
+                        onClick={() => setKidComparisonMode('all')}
+                        className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${kidComparisonMode === 'all' ? 'bg-[#7a32fc] text-white' : 'bg-gray-100 text-gray-600'}`}
+                      >
+                        Tudo
+                      </button>
+                      <button
+                        onClick={() => setKidComparisonMode('improved')}
+                        className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${kidComparisonMode === 'improved' ? 'bg-green-500 text-white' : 'bg-green-50 text-green-700'}`}
+                      >
+                        Melhora
+                      </button>
+                      <button
+                        onClick={() => setKidComparisonMode('declined')}
+                        className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${kidComparisonMode === 'declined' ? 'bg-red-500 text-white' : 'bg-red-50 text-red-700'}`}
+                      >
+                        Piora
+                      </button>
                     </div>
+                    <div className="w-full min-h-[300px] sm:min-h-[350px]">
+                        <EvolutionBarChart chartData={kidChartViewData} />
+                    </div>
+                    <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-widest text-center mt-2">Arraste lateralmente para melhor visualização</p>
+                </div>
+
+                <div className="bg-white p-4 sm:p-6 rounded-[28px] shadow-lg border border-blue-100 mb-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-sm sm:text-base font-semibold text-blue-700 tracking-tight">Últimos Registros do Diário da Família</h2>
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-blue-500 bg-blue-50 px-2 py-1 rounded-full">
+                      {familyDiaryHistory.length} itens
+                    </span>
+                  </div>
+                  {familyDiaryHistory.length > 0 ? (
+                    <div className="space-y-3">
+                      {familyDiaryHistory.map((entry: any) => (
+                        <div key={`family-${entry.id}`} className="rounded-2xl border border-blue-50 bg-blue-50/30 p-3">
+                          <div className="flex items-center justify-between gap-3 mb-2">
+                            <span className="text-[10px] font-semibold uppercase tracking-widest text-blue-500">
+                              {entry.type === 'photo' ? 'Foto enviada' : 'Registro da família'}
+                            </span>
+                            <span className="text-[10px] text-gray-500 font-medium">
+                              {formatDiaryTimestamp(entry.date || entry.created_at)}
+                            </span>
+                          </div>
+                          {entry.note && <p className="text-xs sm:text-sm text-gray-700 leading-relaxed mb-2">{entry.note}</p>}
+                          {(entry.imageUrl || entry.photoUrl || entry.url) && (
+                            <img
+                              src={entry.imageUrl || entry.photoUrl || entry.url}
+                              alt="Registro do diário"
+                              className="w-full max-h-40 object-cover rounded-xl border border-blue-100"
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-blue-200 bg-blue-50/40 p-5 text-center">
+                      <p className="text-sm font-semibold text-blue-700 mb-1">Vamos começar o Diário da Família?</p>
+                      <p className="text-xs text-blue-500">Registre texto, fotos e rabiscos para acompanhar a evolução da criança dia a dia.</p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-4 mb-10"> 
@@ -339,17 +533,37 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       setTimeout(() => { onMoodCheckin(selectedMood.value, moodNote, selectedMood.emoji, selectedTag); setIsMoodModalOpen(false); setShowMoodSuccess(false); setMoodNote(""); setSelectedMood(null); setSelectedTag(null); setDailyCheckinDone(true); }, 2000); 
     } 
   }; 
-  const openTaskModal = (task: any) => { setSelectedTask(task); setTaskEnergy(50); setTaskNote(""); setTaskStep(1); }; 
+  const openTaskModal = (task: any) => {
+    setSelectedTask(task);
+    setTaskEnergy(50);
+    setTaskNote("");
+    setInterventionResponse("");
+    setInterventionImages([]);
+    if (task.type === 'intervention' && isConventionalAdult) {
+      setTaskStep(0);
+    } else {
+      setTaskStep(1);
+    }
+  };
   const handleEnergyCommit = () => { setTaskStep(2); }; 
   const handleConfirmTask = () => { 
     if (selectedTask) { 
       setShowTaskSuccess(true); 
-      const finalNote = selectedTask.type === 'intervention' ? interventionResponse : taskNote;
+      const interventionDetails = [
+        interventionResponse?.trim() ? `Resposta:\n${interventionResponse.trim()}` : '',
+        taskNote?.trim() ? `Observação:\n${taskNote.trim()}` : '',
+        interventionImages.length > 0 ? `Anexos:\n${interventionImages.join('\n')}` : ''
+      ].filter(Boolean).join('\n\n');
+      const finalNote = selectedTask.type === 'intervention'
+        ? interventionDetails
+        : taskNote;
       setTimeout(() => { 
         onCompleteTask(selectedTask, taskEnergy, finalNote); 
         setShowTaskSuccess(false); 
         setSelectedTask(null); 
         setInterventionResponse("");
+        setInterventionImages([]);
+        setTaskStep(1);
       }, 2000); 
     } 
   }; 
@@ -366,7 +580,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   }, [history]);
 
   return ( 
-    <div className="min-h-screen bg-[#F4F7FE] p-6 flex flex-col overflow-x-hidden"> 
+    <div className={`min-h-screen p-6 flex flex-col overflow-x-hidden ${isConventionalAdult ? 'bg-gradient-to-b from-[#FFF9F3] to-[#F8F5FF]' : 'bg-[#F4F7FE]'}`}> 
       {(showTaskSuccess || showMoodSuccess) && <SuccessOverlay />} 
       {isMessagesOpen && ( 
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in" onClick={() => setIsMessagesOpen(false)}> 
@@ -510,6 +724,42 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             </div>
           </div>
         )}
+        {isConventionalAdult && (
+          <div className="mb-8 animate-fade-in">
+            <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+              <ImageIcon size={16} /> Últimos Registros Enviados
+            </h2>
+            {adultLatestUploads.length > 0 ? (
+              <div className="grid gap-3">
+                {adultLatestUploads.map((entry: any) => (
+                  <div key={`adult-entry-${entry.id}`} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <span className="text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">
+                        {entry.type === 'intervention' ? 'Tarefa de intervenção' : entry.type === 'task' ? 'Tarefa de avaliação' : 'Registro'}
+                      </span>
+                      <span className="text-[10px] text-gray-400 font-medium">
+                        {formatDiaryTimestamp(entry.date || entry.created_at)}
+                      </span>
+                    </div>
+                    {entry.note && <p className="text-sm text-gray-600 leading-relaxed mb-2 whitespace-pre-wrap">{entry.note}</p>}
+                    {(entry.imageUrl || entry.photoUrl || entry.url) && (
+                      <img
+                        src={entry.imageUrl || entry.photoUrl || entry.url}
+                        alt="Registro enviado"
+                        className="w-full max-h-44 object-cover rounded-xl border border-gray-100"
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="bg-white p-6 rounded-2xl border border-dashed border-gray-200 text-center">
+                <p className="text-sm font-semibold text-gray-600 mb-1">Nenhum registro enviado ainda</p>
+                <p className="text-xs text-gray-400">Assim que você concluir tarefas com texto ou fotos, elas vão aparecer aqui com data e horário.</p>
+              </div>
+            )}
+          </div>
+        )}
         <div className="mt-8 mb-6"> 
           <div className="flex items-center justify-between mb-4">
              <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest flex items-center gap-2"> <Trophy size={16} /> Histórico </h2>
@@ -537,7 +787,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     <HistoryCard 
                       key={item.id} 
                       item={item} 
-                      energyTags={ENERGY_TAGS} 
+                      energyTags={moodInfluenceTags} 
                       isTherapist={false} 
                       isKid={user.age <= 12}
                       fullHistory={history}
@@ -560,12 +810,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 <div className="inline-flex items-center gap-2 bg-gray-100 px-4 py-1.5 rounded-full mb-4"> <BatteryFull size={16} className="text-gray-500" /> <span className="text-sm font-semibold text-gray-600">Energia registrada: <span className="text-[#7a32fc]">{selectedMood.value}%</span></span> </div> 
               )}
               <div className="text-6xl mb-2 animate-bounce-slight">{selectedMood.emoji}</div> 
-              <h3 className="text-xl font-semibold text-gray-800 tracking-tight">{user.type === 'conventional' ? 'Como você se sente?' : 'O que influenciou?'}</h3> 
+              <h3 className="text-xl font-semibold text-gray-800 tracking-tight">O que influenciou?</h3> 
             </div> 
             <div className="grid grid-cols-2 gap-3 mb-4"> 
-              {energyTags.map((tag: any) => ( 
+              {moodInfluenceTags.map((tag: any) => ( 
                 <button key={tag.id} onClick={() => setSelectedTag(selectedTag === tag.id ? null : tag.id)} className={`p-3 rounded-2xl flex items-center gap-3 border-2 transition-all ${selectedTag === tag.id ? 'border-[#7a32fc] bg-[#7a32fc]/5 shadow-sm' : 'border-transparent bg-gray-100'}`} > 
-                  <div className={`p-2 rounded-xl ${tag.color} shrink-0`}> {tag.icon} </div> <span className={`text-xs font-semibold ${selectedTag === tag.id ? 'text-[#7a32fc]' : 'text-gray-500'}`}>{tag.label}</span> 
+                  <div className={`p-2 rounded-xl ${tag.color} shrink-0`}>{typeof tag.icon === 'string' ? <span className="text-base">{tag.icon}</span> : tag.icon}</div> <span className={`text-xs font-semibold ${selectedTag === tag.id ? 'text-[#7a32fc]' : 'text-gray-500'}`}>{tag.label}</span> 
                 </button> 
               ))} 
             </div> 
@@ -581,27 +831,138 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             <div className="text-center mb-6"> 
               <div className={`w-16 h-16 mx-auto rounded-2xl flex items-center justify-center text-3xl mb-3 ${selectedTask.color || 'bg-blue-100 text-blue-600'}`}> {selectedTask.icon || '📋'} </div> 
               <h3 className="text-xl font-semibold text-gray-800 tracking-tight">{selectedTask.title}</h3> 
-              <p className="text-gray-500 text-sm mt-1">{selectedTask.type === 'intervention' ? 'Instruções de Escrita' : 'Como foi realizar esta atividade?'}</p> 
+              <p className="text-gray-500 text-sm mt-1">
+                {selectedTask.type === 'intervention'
+                  ? 'Instruções da tarefa de intervenção'
+                  : isConventionalAdult
+                    ? 'Como foi realizar esta atividade em nível de esforço?'
+                    : 'Como foi realizar esta atividade?'}
+              </p> 
             </div> 
             {selectedTask.type === 'intervention' ? (
               <div className="animate-slide-up space-y-4">
-                <div className="bg-green-50 p-4 rounded-2xl border border-green-100">
-                  <p className="text-sm text-gray-600 font-medium leading-relaxed italic">"{selectedTask.description}"</p>
-                </div>
-                <textarea 
-                  className="w-full h-48 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-green-500/50 transition-all resize-none font-medium" 
-                  placeholder="Escreva sua resposta aqui..." 
-                  value={interventionResponse} 
-                  onChange={(e) => setInterventionResponse(e.target.value)} 
-                  autoFocus 
-                ></textarea> 
-                <button 
-                  onClick={handleConfirmTask} 
-                  disabled={showTaskSuccess || !interventionResponse.trim()} 
-                  className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showTaskSuccess ? 'bg-green-500 text-white' : 'bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'}`}
-                > 
-                  {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Enviar Resposta</React.Fragment>} 
-                </button> 
+                {isConventionalAdult && taskStep === 0 && (
+                  <div className="space-y-4">
+                    <div className="bg-green-50 p-4 rounded-2xl border border-green-100">
+                      <p className="text-[10px] text-green-700 uppercase tracking-widest font-semibold mb-2">Instruções do profissional</p>
+                      <p className="text-sm text-gray-600 font-medium leading-relaxed italic">"{selectedTask.description}"</p>
+                    </div>
+                    <button
+                      onClick={() => setTaskStep(1)}
+                      className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-[#7a32fc] text-white shadow-[#7a32fc]/30 hover:opacity-90"
+                    >
+                      Iniciar tarefa
+                    </button>
+                  </div>
+                )}
+
+                {(!isConventionalAdult || taskStep === 1) && (
+                  <React.Fragment>
+                    <div className="bg-green-50 p-4 rounded-2xl border border-green-100">
+                      <p className="text-sm text-gray-600 font-medium leading-relaxed italic">"{selectedTask.description}"</p>
+                    </div>
+                    <textarea 
+                      className="w-full h-40 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-green-500/50 transition-all resize-none font-medium" 
+                      placeholder="Escreva sua resposta aqui..." 
+                      value={interventionResponse} 
+                      onChange={(e) => setInterventionResponse(e.target.value)} 
+                      autoFocus 
+                    ></textarea>
+
+                    {isConventionalAdult && (
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2">
+                          <label className={`px-3 py-2 rounded-xl border border-dashed border-gray-300 text-xs font-semibold text-gray-500 cursor-pointer hover:border-[#7a32fc]/40 hover:text-[#7a32fc] transition-colors ${isInterventionUploading ? 'opacity-50 cursor-wait' : ''}`}>
+                            {isInterventionUploading ? 'Enviando...' : 'Anexar/Tirar Foto'}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              capture="environment"
+                              className="hidden"
+                              onChange={handleInterventionImageUpload}
+                              disabled={isInterventionUploading}
+                            />
+                          </label>
+                        </div>
+                        {interventionImages.length > 0 && (
+                          <div className="grid grid-cols-3 gap-2">
+                            {interventionImages.map((image, idx) => (
+                              <div key={`intervention-img-${idx}`} className="relative rounded-xl overflow-hidden border border-gray-200">
+                                <img src={image} alt={`Anexo ${idx + 1}`} className="w-full h-20 object-cover" />
+                                <button
+                                  onClick={() => setInterventionImages((prev) => prev.filter((_, i) => i !== idx))}
+                                  className="absolute top-1 right-1 p-1 rounded-full bg-white/90 text-red-500"
+                                >
+                                  <Trash2 size={10} />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {isConventionalAdult ? (
+                      <button
+                        onClick={handleEnergyCommit}
+                        disabled={!interventionResponse.trim()}
+                        className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Concluir escrita e informar esforço
+                      </button>
+                    ) : (
+                      <button 
+                        onClick={handleConfirmTask} 
+                        disabled={showTaskSuccess || !interventionResponse.trim()} 
+                        className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showTaskSuccess ? 'bg-green-500 text-white' : 'bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'}`}
+                      > 
+                        {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Enviar Resposta</React.Fragment>} 
+                      </button>
+                    )}
+                  </React.Fragment>
+                )}
+
+                {isConventionalAdult && taskStep === 2 && (
+                  <div className="space-y-4">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Nível de esforço</span>
+                        <div className="flex items-center gap-2 text-sm font-semibold text-[#7a32fc]">
+                          <span>{taskEnergy < 50 ? '😟' : '🙂'}</span>
+                          <span>{taskEnergy}%</span>
+                        </div>
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
+                        <div className="h-3 rounded-full bg-gradient-to-r from-[#EE5D50] via-[#FFB547] to-[#05CD99]" style={{ width: `${taskEnergy}%` }}></div>
+                      </div>
+                      <div className="flex justify-between text-[10px] text-gray-400 font-semibold mt-1">
+                        <span>Mais difícil 😟</span>
+                        <span>Mais fácil 🙂</span>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={taskEnergy}
+                      onChange={(e) => setTaskEnergy(Number(e.target.value))}
+                      className="w-full"
+                    />
+                    <textarea
+                      className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none font-medium"
+                      placeholder="Observação opcional sobre o esforço nesta tarefa..."
+                      value={taskNote}
+                      onChange={(e) => setTaskNote(e.target.value)}
+                    ></textarea>
+                    <button
+                      onClick={handleConfirmTask}
+                      disabled={showTaskSuccess}
+                      className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-500 text-white shadow-green-500/30 hover:opacity-90"
+                    >
+                      {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir</React.Fragment>}
+                    </button>
+                  </div>
+                )}
               </div>
             ) : taskStep === 1 ? ( 
               <div className="animate-slide-up"> 
@@ -662,8 +1023,39 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                   </div>
                 ) : (
                   <React.Fragment>
-                    <BigEnergySlider value={taskEnergy} onChange={(e: any) => setTaskEnergy(e.target.value)} onCommit={handleEnergyCommit} /> 
-                    <p className="text-center text-[10px] text-[#7a32fc]/50 mt-4 font-medium animate-pulse italic uppercase tracking-widest">(Solte para continuar)</p> 
+                    {isConventionalAdult ? (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-gray-700">Esforço</span>
+                          <div className="flex items-center gap-2 bg-white px-3 py-1 rounded-full shadow-sm">
+                            <span className="text-xl">{taskEnergy < 50 ? '😟' : '🙂'}</span>
+                            <span className="text-lg font-semibold text-[#7a32fc]">{taskEnergy}%</span>
+                          </div>
+                        </div>
+                        <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
+                          <div className="h-3 rounded-full bg-gradient-to-r from-[#EE5D50] via-[#FFB547] to-[#05CD99]" style={{ width: `${taskEnergy}%` }}></div>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          value={taskEnergy}
+                          onChange={(e) => setTaskEnergy(Number(e.target.value))}
+                          onMouseUp={handleEnergyCommit}
+                          onTouchEnd={handleEnergyCommit}
+                          className="w-full"
+                        />
+                        <div className="flex justify-between text-[10px] text-gray-400 font-semibold">
+                          <span>Mais difícil 😟</span>
+                          <span>Mais fácil 🙂</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <React.Fragment>
+                        <BigEnergySlider value={taskEnergy} onChange={(e: any) => setTaskEnergy(e.target.value)} onCommit={handleEnergyCommit} /> 
+                        <p className="text-center text-[10px] text-[#7a32fc]/50 mt-4 font-medium animate-pulse italic uppercase tracking-widest">(Solte para continuar)</p>
+                      </React.Fragment>
+                    )}
                   </React.Fragment>
                 )}
               </div> 
@@ -671,14 +1063,20 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <div className="animate-slide-up"> 
                 <div className="mb-4"> 
                   <div className="flex items-center justify-between mb-2"> 
-                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">{user.age <= 12 ? 'Sua Pontuação' : 'Energia'}</span> 
+                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">{user.age <= 12 ? 'Sua Pontuação' : isConventionalAdult ? 'Esforço' : 'Energia'}</span> 
                     <span className="text-sm font-semibold text-[#7a32fc]">{user.age <= 12 ? taskEnergy : `${taskEnergy}%`}</span> 
                   </div> 
                   <div className="w-full bg-gray-100 rounded-full h-2"> 
                     <div className="bg-[#7a32fc] h-2 rounded-full" style={{ width: user.age <= 12 ? `${taskEnergy * 100}%` : `${taskEnergy}%` }}></div> 
                   </div> 
+                  {isConventionalAdult && (
+                    <div className="flex justify-between text-[10px] text-gray-400 font-semibold mt-1">
+                      <span>Mais difícil 😟</span>
+                      <span>Mais fácil 🙂</span>
+                    </div>
+                  )}
                 </div> 
-                <textarea className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none mb-4 font-medium" placeholder={user.age <= 12 ? "Quer contar como foi?" : "Quer adicionar alguma observação?"} value={taskNote} onChange={(e) => setTaskNote(e.target.value)} autoFocus ></textarea> 
+                <textarea className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none mb-4 font-medium" placeholder={user.age <= 12 ? "Quer contar como foi?" : isConventionalAdult ? "Observação opcional sobre o esforço..." : "Quer adicionar alguma observação?"} value={taskNote} onChange={(e) => setTaskNote(e.target.value)} autoFocus ></textarea> 
                 <button onClick={handleConfirmTask} disabled={showTaskSuccess} className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-500 text-white shadow-green-500/30 hover:opacity-90" > {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir</React.Fragment>} </button> 
               </div> 
             )} 
