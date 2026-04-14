@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+﻿import React, { useState, useMemo, useEffect } from 'react';
 import { ChevronLeft, MessageCircle, FileText, SlidersHorizontal, ChevronDown, Calendar, FileOutput, Download, EyeOff, Share2, Eye, Edit, X, UploadCloud, FileUp, File, Trash2, Activity, Search, Plus, Filter, Target, Zap, Info, BarChart2, CheckCircle2, RotateCcw } from 'lucide-react';
 import { TutorialOverlay } from './Tutorial';
 import { AnamnesisModal } from './Anamnesis';
@@ -7,8 +7,8 @@ import { HistoryCard } from './History';
 import { SessionMode } from './SessionMode';
 import { ENERGY_TAGS } from './Common';
 
-export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem }: any) => { 
-  const [activeTab, setActiveTab] = useState('history'); 
+export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed }: any) => { 
+  const [activeTab, setActiveTab] = useState(initialTab); 
   const [newNote, setNewNote] = useState(""); 
   const [noteMode, setNoteMode] = useState('private'); 
   const [noteSearchQuery, setNoteSearchQuery] = useState("");
@@ -59,6 +59,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [selectedPEISkillId, setSelectedPEISkillId] = useState("");
   const [isSessionModeOpen, setIsSessionModeOpen] = useState(false);
   const [isUnlinkingModalOpen, setIsUnlinkingModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+  }, [initialTab, patient?.id]);
+
+  useEffect(() => {
+    if (openAnamnesisOnLoad) {
+      setShowAnamnesis(true);
+      onAnamnesisOpenConsumed?.();
+    }
+  }, [openAnamnesisOnLoad, onAnamnesisOpenConsumed, patient?.id]);
   
   const [patientFiles, setPatientFiles] = useState([
     { id: 1, name: 'Avaliação_Neuropsicológica.pdf', size: '2.4 MB', date: '15/01/2026', type: 'application/pdf' },
@@ -298,7 +309,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         
       const matchSubject = !noteSubjectFilter || (n.subject && n.subject.toLowerCase().includes(noteSubjectFilter.toLowerCase()));
       
-      // Date format in notes is "DD/MM/YYYY • HH:mm"
+      // Date format in notes is "DD/MM/YYYY â€¢ HH:mm"
       // noteDateFilter is "YYYY-MM-DD"
       let matchDate = true;
       if (noteDateFilter) {
@@ -388,7 +399,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         id: Date.now() + (isCreatingNewTask ? 1 : 0), 
         patientId: patient.id, 
         title: finalTaskTitle || newTaskName, 
-        icon: planType === 'intervention' ? "✍️" : "📋", 
+        icon: planType === 'intervention' ? "âœï¸" : "ðŸ“‹", 
         color: planType === 'intervention' ? "bg-green-100 text-green-600" : "bg-blue-100 text-blue-600", 
         completed: false, 
         type: planType, 
@@ -445,7 +456,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       onAddTask(taskPayload); 
     } else { 
       if (!message) { alert("Escreva uma mensagem."); return; } 
-      onAddTask({ id: Date.now(), patientId: patient.id, title: "Reforço Positivo", icon: "🌟", color: "bg-yellow-100 text-yellow-600", completed: false, type: 'reinforcement', scheduledAt: scheduledAt, description: message }); 
+      onAddTask({ id: Date.now(), patientId: patient.id, title: "Reforço Positivo", icon: "ðŸŒŸ", color: "bg-yellow-100 text-yellow-600", completed: false, type: 'reinforcement', scheduledAt: scheduledAt, description: message }); 
     } 
     setShowConfirmation(true); setMessage(''); setNewTaskName(''); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setNewProtocolName(''); setNewDomainName(''); setNewTaskCode(''); setNewTaskObjective(''); setNewTaskExample(''); setNewTaskCriteria(''); setNewTaskComment(''); setSelectedProtocolId(''); setSelectedDomainId(''); setSelectedSkillId(''); setLinkedTask(''); setLinkedInterventionProtocolId('');
   }; 
@@ -458,7 +469,35 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     return message && scheduleDate && scheduleTime; 
   }; 
   const handleSaveTaskEdit = () => { if (editingTask && editingTask.title) { onUpdateTask(editingTask.id, { title: editingTask.title, description: editingTask.description }); setEditingTask(null); } }; 
-  const handleUpdateAnamnesis = (updatedData: any) => { if (onUpdatePatient) { onUpdatePatient({ id: patient.id, name: updatedData.nome, phone: updatedData.telefone, address: updatedData.endereco, diagnosis: updatedData.motivoConsulta, anamnesisData: updatedData }); } }; 
+  const handleUpdateAnamnesis = (updatedData: any) => {
+    if (onUpdatePatient) {
+      onUpdatePatient({
+        id: patient.id,
+        name: updatedData.nome,
+        phone: updatedData.telefone,
+        address: updatedData.endereco,
+        diagnosis: updatedData.motivoConsulta,
+        anamnesisData: updatedData,
+        peiGeneratedAt: new Date().toISOString()
+      });
+    }
+
+    const ficheLabel = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.json`;
+    const fichePayload = JSON.stringify(updatedData, null, 2);
+    const sizeKb = Math.max(1, Math.round(fichePayload.length / 1024));
+    setPatientFiles((prev: any[]) => [
+      {
+        id: Date.now(),
+        name: ficheLabel,
+        size: `${sizeKb} KB`,
+        date: new Date().toLocaleDateString("pt-BR"),
+        type: "application/json",
+        source: "anamnesis",
+      },
+      ...prev,
+    ]);
+    setActiveTab("files");
+  }; 
   
   const handleUnlinkPatient = () => {
     if (onUpdatePatient) {
@@ -642,7 +681,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       {isTutorialActive && ( 
         <TutorialOverlay 
           steps={[
-            { targetId: 'back-btn', title: 'Voltar ao Dashboard', content: 'Clique aqui para retornar à tela principal a qualquer momento.', placement: 'bottom' },
+            { targetId: 'back-btn', title: 'Voltar ao Dashboard', content: 'Clique aqui para retornar Ã  tela principal a qualquer momento.', placement: 'bottom' },
             { targetId: 'patient-header-info', title: 'Informações do Paciente', content: 'Aqui você vê o nome, categoria (Criança/Adulto) e acessa o WhatsApp ou Ficha de Anamnese.', placement: 'bottom' },
             { targetId: 'tab-nav', title: 'Navegação por Abas', content: 'O prontuário é organizado em abas para facilitar o acesso a diferentes tipos de informação.', placement: 'bottom' },
             { targetId: 'tab-history', title: 'Aba Histórico', content: 'Veja a evolução clínica e o histórico de todas as atividades realizadas pelo paciente.', placement: 'bottom' },
@@ -808,7 +847,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       value={selectedSnapshotDate}
                       onChange={(e) => setSelectedSnapshotDate(e.target.value)}
                     >
-                      <option value="all">Visão Geral (Últimas Notas)</option>
+                      <option value="all">Visão Geral (Ãšltimas Notas)</option>
                       {availableSnapshots.map((date: any) => (
                         <option key={date} value={date}>Avaliação de {date}</option>
                       ))}
@@ -1483,7 +1522,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                   <div className="mt-2 p-3 bg-indigo-50 border border-indigo-100 rounded-xl flex items-center gap-2 animate-pulse">
                                     <Zap size={14} className="text-indigo-600" />
                                     <p className="text-[10px] font-semibold text-indigo-700">
-                                      Vinculado à Intervenção: <span className="underline">{patient.interventionTaskLinks[finalTaskTitle]}</span>
+                                      Vinculado Ã  Intervenção: <span className="underline">{patient.interventionTaskLinks[finalTaskTitle]}</span>
                                     </p>
                                   </div>
                                 )}
@@ -1545,14 +1584,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                   const isLinked = (patient.evaluationLinks && patient.evaluationLinks[s.name]) || (patient.interventionTaskLinks && patient.interventionTaskLinks[s.name]);
                                   return (
                                     <option key={s.id} value={s.name}>
-                                      {isLinked ? '✨ ' : ''}{s.name} ({s.protocol})
+                                      {isLinked ? 'âœ¨ ' : ''}{s.name} ({s.protocol})
                                     </option>
                                   );
                                 })}
                               </select>
                               {linkedTask && patient.evaluationLinks && patient.evaluationLinks[linkedTask] && (
                                 <p className="text-[9px] text-[#05CD99] mt-1 font-semibold animate-pulse">
-                                  ✨ Protocolo de intervenção sugerido automaticamente!
+                                  âœ¨ Protocolo de intervenção sugerido automaticamente!
                                 </p>
                               )}
                             </div>
@@ -1594,8 +1633,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   {(patientTasks?.length || 0) > 0 ? (patientTasks || []).map((task: any) => ( 
                     <div key={task.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between"> 
                       <div className="flex items-center gap-3"> 
-                        <span className="text-xl">{task.type === 'reinforcement' ? '🌟' : task.type === 'intervention' ? '✍️' : '📋'}</span> 
-                        <div><p className="font-semibold text-gray-800 text-sm tracking-tight">{task.title}</p><p className="text-xs text-gray-500">{new Date(task.scheduledAt).toLocaleDateString('pt-BR')} • {new Date(task.scheduledAt).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</p></div> 
+                        <span className="text-xl">{task.type === 'reinforcement' ? 'ðŸŒŸ' : task.type === 'intervention' ? 'âœï¸' : 'ðŸ“‹'}</span> 
+                        <div><p className="font-semibold text-gray-800 text-sm tracking-tight">{task.title}</p><p className="text-xs text-gray-500">{new Date(task.scheduledAt).toLocaleDateString('pt-BR')} â€¢ {new Date(task.scheduledAt).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</p></div> 
                       </div> 
                       <div className="flex items-center gap-2"> 
                         <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase ${task.type === 'reinforcement' ? 'bg-yellow-100 text-yellow-600' : task.type === 'intervention' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>{task.type === 'reinforcement' ? 'Reforço' : task.type === 'intervention' ? 'Intervenção' : (patient.age > 12 ? 'Avaliação' : 'Tarefa')}</span> 
@@ -1615,7 +1654,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               <div className="flex items-center justify-between mb-8 relative z-10">
                 <div>
                   <h3 className="text-2xl font-semibold text-gray-800 tracking-tight">Registro de Sessão</h3>
-                  <p className="text-xs text-gray-500 font-semibold uppercase tracking-widest mt-1">Pontuação Dinâmica de Metas Prioritárias</p>
+                  <p className="text-xs text-gray-500 font-semibold uppercase tracking-widest mt-1">Pontuação DinÃ¢mica de Metas Prioritárias</p>
                 </div>
                 <button 
                   id="session-start-btn"
@@ -1782,7 +1821,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                     </div>
                     <div>
                       <p className="font-semibold text-gray-800 text-sm truncate max-w-[200px] tracking-tight">{file.name}</p>
-                      <p className="text-[10px] text-gray-400 font-semibold uppercase">{file.size} • {file.date}</p>
+                      <p className="text-[10px] text-gray-400 font-semibold uppercase">{file.size} â€¢ {file.date}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1807,3 +1846,4 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     </div> 
   ); 
 };
+

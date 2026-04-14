@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+﻿import React, { useState, useMemo, useEffect } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -49,6 +49,7 @@ import { RoomReservation } from "./RoomReservation";
 import { ProtocolManagementSystem } from "./Protocols";
 import { CalendarWidget, DayDetailsModal } from "./Calendar";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
+import { LogoVerto } from "./Common";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   BarChart,
@@ -142,19 +143,19 @@ export function CoordinatorDashboard({
       date: "15/03/2026",
       amount: 149.9,
       status: "paid",
-      method: "CartÃ£o â€¢â€¢â€¢â€¢ 4242",
+      method: "Cartão Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢ 4242",
     },
     {
       date: "15/02/2026",
       amount: 149.9,
       status: "paid",
-      method: "CartÃ£o â€¢â€¢â€¢â€¢ 4242",
+      method: "Cartão Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢ 4242",
     },
     {
       date: "15/01/2026",
       amount: 149.9,
       status: "paid",
-      method: "CartÃ£o â€¢â€¢â€¢â€¢ 4242",
+      method: "Cartão Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢ 4242",
     },
   ];
 
@@ -168,12 +169,12 @@ export function CoordinatorDashboard({
     firstInterview: {
       date: "10/01/2024",
       therapist: "Dra. Ana Silva",
-      mainComplaint: "Dificuldades na interaÃ§Ã£o social e atraso na fala.",
+      mainComplaint: "Dificuldades na interação social e atraso na fala.",
       history:
-        "GestaÃ§Ã£o sem intercorrÃªncias. Marcos do desenvolvimento motores dentro do esperado, porÃ©m sem balbucio aos 12 meses.",
+        "Gestação sem intercorrências. Marcos do desenvolvimento motores dentro do esperado, porém sem balbucio aos 12 meses.",
       observations:
         "Paciente evita contato visual, apresenta estereotipias motoras (flapping).",
-      diagnosis: "TEA (Transtorno do Espectro Autista) - NÃ­vel 1 de suporte.",
+      diagnosis: "TEA (Transtorno do Espectro Autista) - Nível 1 de suporte.",
       recommendations: "Terapia ABA 20h semanais, Fonoaudiologia 2h semanais.",
     },
   };
@@ -187,6 +188,12 @@ export function CoordinatorDashboard({
   const [professionalFilter, setProfessionalFilter] = useState("all");
   const [isAddSessionModalOpen, setIsAddSessionModalOpen] = useState(false);
   const [isQuickRegisterModalOpen, setIsQuickRegisterModalOpen] = useState(false);
+  const [isPatientRegistrationModalOpen, setIsPatientRegistrationModalOpen] =
+    useState(false);
+  const [agendaSearchMode, setAgendaSearchMode] = useState<
+    "patient" | "professional"
+  >("patient");
+  const [agendaSearchTerm, setAgendaSearchTerm] = useState("");
   const [quickPatientName, setQuickPatientName] = useState("");
   const [quickPatientEmail, setQuickPatientEmail] = useState("");
   const [quickPatientPhone, setQuickPatientPhone] = useState("");
@@ -208,6 +215,14 @@ export function CoordinatorDashboard({
   >(null);
   const [selectedPatientId, setSelectedPatientId] = useState<any>(null);
   const [view, setView] = useState<"home" | "patient">("home");
+  const [patientOpenTab, setPatientOpenTab] = useState<
+    "history" | "notes" | "report" | "plan" | "session" | "files"
+  >("history");
+  const [openAnamnesisOnPatientOpen, setOpenAnamnesisOnPatientOpen] =
+    useState(false);
+  const [isPatientProfileModalOpen, setIsPatientProfileModalOpen] =
+    useState(false);
+  const [selectedPatientProfile, setSelectedPatientProfile] = useState<any>(null);
   const [filteredPatients, setFilteredPatients] = useState<any[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
@@ -221,6 +236,93 @@ export function CoordinatorDashboard({
   const [paymentReceipt, setPaymentReceipt] = useState<string | null>(null);
   const [paymentType, setPaymentType] = useState("particular");
   const [paymentInsurance, setPaymentInsurance] = useState("");
+  const [defaultSessionDuration, setDefaultSessionDuration] = useState(
+    String(user?.clinicSettings?.defaultSessionDuration || "50"),
+  );
+  const [workStart, setWorkStart] = useState(
+    user?.clinicSettings?.workStart || "08:00",
+  );
+  const [workEnd, setWorkEnd] = useState(
+    user?.clinicSettings?.workEnd || "18:00",
+  );
+  const [professionalSessionDurations, setProfessionalSessionDurations] =
+    useState<Record<string, string>>({});
+  const [financialSurveySubmitted, setFinancialSurveySubmitted] = useState(false);
+  const [financialSurveySelected, setFinancialSurveySelected] = useState<string[]>([]);
+  const [financialSurveyNotes, setFinancialSurveyNotes] = useState("");
+  const financialSurveyOptions = [
+    "Controle de recebimentos por paciente",
+    "Conciliação de PIX e cartão",
+    "Fluxo de caixa diário e mensal",
+    "Alertas de inadimplência",
+    "Cobrança automática por WhatsApp",
+    "Relatório por convênio",
+    "Comissão por profissional",
+    "Repasse automático aos terapeutas",
+    "DRE simplificado por clínica",
+    "Centro de custos por unidade",
+    "Gestão de reembolsos",
+    "Emissão de recibos",
+    "Upload de comprovantes",
+    "Assinatura digital de recibos",
+    "Previsão de faturamento",
+    "Metas financeiras mensais",
+    "Comparativo mês a mês",
+    "Exportação contábil (CSV)",
+    "Integração com Stripe completa",
+    "Painel de auditoria financeira",
+  ];
+  const [newPatientForm, setNewPatientForm] = useState<any>({
+    nome: "",
+    nomeSocial: "",
+    telefone: "",
+    dataNascimento: "",
+    genero: "",
+    convenioTipo: "particular",
+    convenioNome: "",
+    convenioCarteirinha: "",
+    grupo: "adulto",
+    comoConheceu: "",
+    rg: "",
+    cpf: "",
+    cep: "",
+    email: "",
+    logradouro: "",
+    numero: "",
+    complemento: "",
+    bairro: "",
+    cidade: "",
+    outrasInformacoes: "",
+    menorDeIdade: false,
+    responsavelNome: "",
+    responsavelDataNascimento: "",
+    responsavelCpf: "",
+    responsavelTelefone: "",
+    patientProfileType: "adult_conventional",
+  });
+
+  const insuranceOptions = [
+    "Particular",
+    "Unimed",
+    "Amil",
+    "Bradesco Saúde",
+    "SulAmérica",
+    "Hapvida",
+    "NotreDame Intermédica",
+    "Care Plus",
+    "Omint",
+    "Porto Seguro Saúde",
+    "Golden Cross",
+    "Seguros Unimed",
+    "Samp",
+    "São Cristóvão Saúde",
+    "CASSI",
+    "Geap",
+    "IPSEMG",
+    "Cabesp",
+    "Afresp",
+    "Outro",
+  ];
 
   useEffect(() => {
     const fetchPayments = async () => {
@@ -232,6 +334,26 @@ export function CoordinatorDashboard({
     if (activeTab === "financial") {
       fetchPayments();
     }
+  }, [activeTab]);
+
+  useEffect(() => {
+    const fetchFinancialSurvey = async () => {
+      if (activeTab !== "financial") return;
+      try {
+        const response = await fetch("/api/financial/feature-survey", {
+          credentials: "include",
+        });
+        const result = await response.json();
+        if (result?.success && result?.submitted) {
+          setFinancialSurveySubmitted(true);
+          setFinancialSurveySelected(result.data?.selected_features || []);
+          setFinancialSurveyNotes(result.data?.notes || "");
+        }
+      } catch (error) {
+        console.warn("Falha ao carregar pesquisa financeira.");
+      }
+    };
+    fetchFinancialSurvey();
   }, [activeTab]);
 
   const handleAddPayment = async () => {
@@ -247,7 +369,7 @@ export function CoordinatorDashboard({
       status: "paid",
       receipt_url: paymentReceipt,
       type: paymentType,
-      insurance_name: paymentType === "convÃªnio" ? paymentInsurance : null,
+      insurance_name: paymentType === "convênio" ? paymentInsurance : null,
     };
 
     const result = await dataService.savePayment(newPayment);
@@ -258,8 +380,45 @@ export function CoordinatorDashboard({
       setSelectedPaymentPatient(null);
       setPaymentReceipt(null);
       alert("Pagamento registrado com sucesso!");
+      onAddActivityLog(
+        "Pagamento registrado",
+        `Pagamento de R$ ${paymentAmount} para ${selectedPaymentPatient?.name || "paciente"}.`,
+        "management",
+      );
     } else {
       alert("Erro ao salvar pagamento.");
+    }
+  };
+
+  const handleSubmitFinancialSurvey = async () => {
+    if (financialSurveySelected.length === 0) {
+      alert("Selecione ao menos uma opção para enviar a pesquisa.");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/financial/feature-survey", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          selectedFeatures: financialSurveySelected,
+          notes: financialSurveyNotes,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error || "Não foi possível enviar a pesquisa.");
+      }
+      setFinancialSurveySubmitted(true);
+      onAddActivityLog(
+        "Pesquisa do financeiro enviada",
+        "A clínica enviou as preferências do módulo financeiro (em breve).",
+        "management",
+      );
+      alert("Pesquisa enviada com sucesso. Obrigado pelo feedback!");
+    } catch (error: any) {
+      alert(error.message || "Falha ao enviar pesquisa.");
     }
   };
 
@@ -297,18 +456,23 @@ export function CoordinatorDashboard({
 
   const handleSessionSubmit = async () => {
     if (!sessionPatientName || !sessionTime || !sessionRoom)
-      return alert("Preencha nome, horÃ¡rio e sala");
+      return alert("Preencha nome, horário e sala");
 
     if (editingAppointmentId) {
       const updates = {
         name: sessionPatientName,
         date: sessionDate,
         time: sessionTime,
-        type: sessionApproach || "Consulta PadrÃ£o",
+        type: sessionApproach || "Consulta Padrão",
         room: sessionRoom,
         professional: sessionProfessional,
       };
       onUpdateAppointment(editingAppointmentId, updates);
+      onAddActivityLog(
+        "Agendamento editado",
+        `Sessão de ${sessionPatientName} atualizada para ${sessionDate} às ${sessionTime}.`,
+        "management",
+      );
       setIsAddSessionModalOpen(false);
       resetSessionForm();
       return;
@@ -318,7 +482,7 @@ export function CoordinatorDashboard({
       patientName: sessionPatientName,
       date: sessionDate,
       time: sessionTime,
-      approach: sessionApproach || "Consulta PadrÃ£o",
+      approach: sessionApproach || "Consulta Padrão",
       room: sessionRoom,
       professional: sessionProfessional,
       numSessions: sessionNumSessions,
@@ -327,6 +491,11 @@ export function CoordinatorDashboard({
     if (result && !result.success) {
       return alert(result.errors.join("\n"));
     }
+    onAddActivityLog(
+      "Agendamento criado",
+      `Nova sessão agendada para ${sessionPatientName} em ${sessionDate} às ${sessionTime}.`,
+      "management",
+    );
 
     setIsAddSessionModalOpen(false);
     resetSessionForm();
@@ -359,6 +528,121 @@ export function CoordinatorDashboard({
 
   const handleStatusUpdate = (id: number, status: string) => {
     onUpdateAgendaStatus(id, status);
+    onAddActivityLog(
+      "Status de agenda atualizado",
+      `Agendamento ${id} atualizado para ${status}.`,
+      "management",
+    );
+  };
+
+  const handlePatientFormChange = (field: string, value: any) => {
+    setNewPatientForm((prev: any) => ({ ...prev, [field]: value }));
+  };
+
+  const resetPatientForm = () => {
+    setNewPatientForm({
+      nome: "",
+      nomeSocial: "",
+      telefone: "",
+      dataNascimento: "",
+      genero: "",
+      convenioTipo: "particular",
+      convenioNome: "",
+      convenioCarteirinha: "",
+      grupo: "adulto",
+      comoConheceu: "",
+      rg: "",
+      cpf: "",
+      cep: "",
+      email: "",
+      logradouro: "",
+      numero: "",
+      complemento: "",
+      bairro: "",
+      cidade: "",
+      outrasInformacoes: "",
+      menorDeIdade: false,
+      responsavelNome: "",
+      responsavelDataNascimento: "",
+      responsavelCpf: "",
+      responsavelTelefone: "",
+      patientProfileType: "adult_conventional",
+    });
+  };
+
+  const calculateAgeFromBirthDate = (birthDate: string) => {
+    if (!birthDate) return undefined;
+    const birth = new Date(birthDate);
+    if (Number.isNaN(birth.getTime())) return undefined;
+    const today = new Date();
+    let age = today.getFullYear() - birth.getFullYear();
+    const monthDiff = today.getMonth() - birth.getMonth();
+    if (
+      monthDiff < 0 ||
+      (monthDiff === 0 && today.getDate() < birth.getDate())
+    ) {
+      age -= 1;
+    }
+    return age >= 0 ? age : undefined;
+  };
+
+  const handleCreatePatientFromFullForm = () => {
+    if (!newPatientForm.nome?.trim()) {
+      alert("O nome do paciente é obrigatório.");
+      return;
+    }
+
+    const newPatient = {
+      id: crypto.randomUUID(),
+      name: newPatientForm.nome.trim(),
+      socialName: newPatientForm.nomeSocial?.trim() || null,
+      phone: String(newPatientForm.telefone || "").trim(),
+      email: String(newPatientForm.email || "").trim() || null,
+      age: calculateAgeFromBirthDate(newPatientForm.dataNascimento),
+      gender: newPatientForm.genero || null,
+      insuranceType: newPatientForm.convenioTipo || "particular",
+      insuranceName:
+        newPatientForm.convenioTipo === "convenio"
+          ? newPatientForm.convenioNome || null
+          : null,
+      cardNumber:
+        newPatientForm.convenioTipo === "convenio"
+          ? newPatientForm.convenioCarteirinha || null
+          : null,
+      group: newPatientForm.grupo || null,
+      source: newPatientForm.comoConheceu || null,
+      rg: newPatientForm.rg || null,
+      cpf: newPatientForm.cpf || null,
+      cep: newPatientForm.cep || null,
+      address: {
+        logradouro: newPatientForm.logradouro || null,
+        numero: newPatientForm.numero || null,
+        complemento: newPatientForm.complemento || null,
+        bairro: newPatientForm.bairro || null,
+        cidade: newPatientForm.cidade || null,
+      },
+      notes: newPatientForm.outrasInformacoes || null,
+      isMinor: Boolean(newPatientForm.menorDeIdade),
+      guardian: newPatientForm.menorDeIdade
+        ? {
+            nome: newPatientForm.responsavelNome || null,
+            dataNascimento: newPatientForm.responsavelDataNascimento || null,
+            cpf: newPatientForm.responsavelCpf || null,
+            telefone: newPatientForm.responsavelTelefone || null,
+          }
+        : null,
+      type: newPatientForm.patientProfileType || "adult_conventional",
+      createdAt: new Date().toISOString(),
+    };
+
+    onAddPatient(newPatient);
+    onAddActivityLog(
+      "Paciente cadastrado",
+      `Cadastro completo de ${newPatient.name} realizado pela coordenação.`,
+      "management",
+    );
+    setIsPatientRegistrationModalOpen(false);
+    resetPatientForm();
   };
 
   const handleEditAppointment = (appointment: any) => {
@@ -372,18 +656,76 @@ export function CoordinatorDashboard({
     setIsAddSessionModalOpen(true);
   };
 
-  const onPatientClick = (patientId: any) => {
+  const onPatientClick = (
+    patientId: any,
+    options?: {
+      tab?: "history" | "notes" | "report" | "plan" | "session" | "files";
+      openAnamnesis?: boolean;
+    },
+  ) => {
     setSelectedPatientId(patientId);
+    setPatientOpenTab(options?.tab || "history");
+    setOpenAnamnesisOnPatientOpen(Boolean(options?.openAnamnesis));
     setView("patient");
   };
 
+  const openPatientProfileModal = (patient: any) => {
+    setSelectedPatientProfile(patient);
+    setIsPatientProfileModalOpen(true);
+  };
+
+  const normalizedAgenda = useMemo(
+    () =>
+      (therapistAgenda || []).map((item: any) => ({
+        ...item,
+        patientName: item.patientName || item.name || "Paciente",
+        therapistName:
+          item.therapistName || item.professional || "Profissional",
+        type: item.type || item.approach || "Sessão",
+      })),
+    [therapistAgenda],
+  );
+
+  useEffect(() => {
+    const uniqueProfessionals = Array.from(
+      new Set(
+        normalizedAgenda
+          .map((a: any) => String(a.therapistName || "").trim())
+          .filter(Boolean),
+      ),
+    ) as string[];
+    setProfessionalSessionDurations((prev) => {
+      const next = { ...prev };
+      uniqueProfessionals.forEach((professional) => {
+        if (!next[professional]) {
+          next[professional] = String(defaultSessionDuration || "50");
+        }
+      });
+      return next;
+    });
+  }, [normalizedAgenda, defaultSessionDuration]);
+
   const filteredAgenda = useMemo(() => {
-    let filtered = therapistAgenda || [];
+    let filtered = normalizedAgenda || [];
     if (professionalFilter !== "all") {
       filtered = filtered.filter((a) => a.therapistName === professionalFilter);
     }
+
+    const search = agendaSearchTerm.trim().toLowerCase();
+    if (search) {
+      filtered = filtered.filter((a) =>
+        agendaSearchMode === "patient"
+          ? String(a.patientName || "")
+              .toLowerCase()
+              .includes(search)
+          : String(a.therapistName || "")
+              .toLowerCase()
+              .includes(search),
+      );
+    }
+
     return filtered;
-  }, [therapistAgenda, professionalFilter]);
+  }, [normalizedAgenda, professionalFilter, agendaSearchMode, agendaSearchTerm]);
 
   const currentViewAgenda = useMemo(() => {
     const today = new Date();
@@ -423,6 +765,170 @@ export function CoordinatorDashboard({
     return grouped;
   }, [agendaView, currentViewAgenda]);
 
+  const hourSlots = useMemo(
+    () =>
+      Array.from({ length: 14 }, (_, idx) => {
+        const hour = idx + 7;
+        return `${String(hour).padStart(2, "0")}:00`;
+      }),
+    [],
+  );
+
+  const weekDays = useMemo(() => {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return Array.from({ length: 7 }, (_, i) => {
+      const date = new Date(start);
+      date.setDate(start.getDate() + i);
+      const key = date.toISOString().split("T")[0];
+      return {
+        key,
+        label: date.toLocaleDateString("pt-BR", {
+          weekday: "short",
+          day: "2-digit",
+          month: "2-digit",
+        }),
+      };
+    });
+  }, []);
+
+  const renderGoogleDayGrid = () => {
+    const todayKey = new Date().toISOString().split("T")[0];
+    return (
+      <div className="rounded-3xl border border-slate-100 overflow-hidden">
+        <div className="grid grid-cols-[96px_1fr] bg-slate-50 border-b border-slate-100">
+          <div className="px-4 py-3 text-[10px] font-bold tracking-widest uppercase text-slate-400">
+            Horário
+          </div>
+          <div className="px-4 py-3 text-[10px] font-bold tracking-widest uppercase text-slate-400">
+            {new Date().toLocaleDateString("pt-BR", {
+              weekday: "long",
+              day: "2-digit",
+              month: "long",
+            })}
+          </div>
+        </div>
+
+        {hourSlots.map((slot) => {
+          const [hour] = slot.split(":");
+          const slotItems = currentViewAgenda.filter(
+            (item: any) =>
+              item.date === todayKey &&
+              String(item.time || "").startsWith(`${hour}:`),
+          );
+
+          return (
+            <div
+              key={slot}
+              className="grid grid-cols-[96px_1fr] border-b border-slate-50 min-h-[66px]"
+            >
+              <div className="px-4 py-3 text-xs font-semibold text-slate-500 bg-white">
+                {slot}
+              </div>
+              <div className="px-3 py-2 bg-white">
+                <div className="flex flex-wrap gap-2">
+                  {slotItems.length > 0 ? (
+                    slotItems.map((item: any) => (
+                      <button
+                        key={item.id}
+                        onClick={() => onPatientClick(item.patientId)}
+                        className="text-left min-w-[220px] rounded-xl border border-[#7a32fc]/20 bg-[#7a32fc]/5 px-3 py-2 hover:bg-[#7a32fc]/10 transition-all"
+                      >
+                        <p className="text-xs font-bold text-slate-900">
+                          {item.time} Â· {item.patientName}
+                        </p>
+                        <p className="text-[10px] text-slate-500">
+                          {item.therapistName} Â· Sala {item.room || "--"}
+                        </p>
+                      </button>
+                    ))
+                  ) : (
+                    <span className="text-[11px] text-slate-300">
+                      Sem agendamento
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderGoogleWeekGrid = () => {
+    const byDate: Record<string, any[]> = {};
+    weekDays.forEach((d) => {
+      byDate[d.key] = currentViewAgenda.filter((item: any) => item.date === d.key);
+    });
+
+    return (
+      <div className="overflow-x-auto">
+        <div className="min-w-[980px] rounded-3xl border border-slate-100 overflow-hidden">
+          <div className="grid grid-cols-[96px_repeat(7,minmax(0,1fr))] bg-slate-50 border-b border-slate-100">
+            <div className="px-3 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+              Hora
+            </div>
+            {weekDays.map((d) => (
+              <div
+                key={d.key}
+                className="px-3 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400 border-l border-slate-100"
+              >
+                {d.label}
+              </div>
+            ))}
+          </div>
+          {hourSlots.map((slot) => {
+            const [hour] = slot.split(":");
+            return (
+              <div
+                key={slot}
+                className="grid grid-cols-[96px_repeat(7,minmax(0,1fr))] border-b border-slate-50 min-h-[68px]"
+              >
+                <div className="px-3 py-3 text-xs font-semibold text-slate-500 bg-white">
+                  {slot}
+                </div>
+                {weekDays.map((d) => {
+                  const items = (byDate[d.key] || []).filter((item: any) =>
+                    String(item.time || "").startsWith(`${hour}:`),
+                  );
+
+                  return (
+                    <div
+                      key={`${d.key}-${slot}`}
+                      className="px-2 py-2 border-l border-slate-50 bg-white"
+                    >
+                      <div className="flex flex-col gap-1">
+                        {items.length > 0 ? (
+                          items.map((item: any) => (
+                            <button
+                              key={item.id}
+                              onClick={() => onPatientClick(item.patientId)}
+                              className="text-left rounded-lg border border-[#7a32fc]/20 bg-[#7a32fc]/5 px-2 py-1.5 hover:bg-[#7a32fc]/10 transition-all"
+                            >
+                              <p className="text-[10px] font-bold text-slate-800 truncate">
+                                {item.time} Â· {item.patientName}
+                              </p>
+                              <p className="text-[9px] text-slate-500 truncate">
+                                {item.therapistName}
+                              </p>
+                            </button>
+                          ))
+                        ) : (
+                          <span className="text-[10px] text-slate-300">-</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   const handleCheckout = async (planId: string) => {
     setLoading(true);
     try {
@@ -440,7 +946,7 @@ export function CoordinatorDashboard({
       }
     } catch (error) {
       console.error("Checkout error:", error);
-      alert("Erro de conexÃ£o ao processar pagamento.");
+      alert("Erro de conexão ao processar pagamento.");
     } finally {
       setLoading(false);
     }
@@ -488,13 +994,34 @@ export function CoordinatorDashboard({
     setRooms((prev) => prev.filter((r) => r.id !== id));
   };
 
+  const handleSaveClinicSettings = () => {
+    const clinicSettings = {
+      ...(user?.clinicSettings || {}),
+      defaultSessionDuration,
+      workStart,
+      workEnd,
+      professionalSessionDurations,
+    };
+
+    onUpdateProfile({
+      clinicSettings,
+    });
+
+    onAddActivityLog(
+      "Configurações atualizadas",
+      "A coordenação atualizou os horários e a duração de sessão por profissional.",
+      "management",
+    );
+    alert("Configurações salvas com sucesso.");
+  };
+
   // Mock data for DRE
   const dreData = [
     {
       label: "Receita Bruta",
       value: 45250,
       type: "income",
-      info: "Total de faturamento no mÃªs",
+      info: "Total de faturamento no mês",
     },
     {
       label: "Impostos (6%)",
@@ -503,19 +1030,19 @@ export function CoordinatorDashboard({
       info: "Simples Nacional",
     },
     {
-      label: "Receita LÃ­quida",
+      label: "Receita Líquida",
       value: 42535,
       type: "total",
-      info: "Faturamento apÃ³s impostos",
+      info: "Faturamento após impostos",
     },
     {
-      label: "Custos VariÃ¡veis (Repasses)",
+      label: "Custos Variáveis (Repasses)",
       value: -18100,
       type: "expense",
       info: "Pagamento de profissionais",
     },
     {
-      label: "Margem de ContribuiÃ§Ã£o",
+      label: "Margem de Contribuição",
       value: 24435,
       type: "total",
       info: "Sobra para custos fixos",
@@ -527,10 +1054,10 @@ export function CoordinatorDashboard({
       info: "Custos operacionais",
     },
     {
-      label: "Lucro LÃ­quido",
+      label: "Lucro Líquido",
       value: 15935,
       type: "profit",
-      info: "Resultado final do mÃªs",
+      info: "Resultado final do mês",
     },
   ];
 
@@ -560,7 +1087,7 @@ export function CoordinatorDashboard({
     {
       name: "Dr. Ricardo Souza",
       crp: "06/654321",
-      model: "SalÃ¡rio fixo R$ 4.500",
+      model: "Salário fixo R$ 4.500",
       forecast: 4500,
       payDate: "25/04/2026",
       patients: 12,
@@ -586,11 +1113,11 @@ export function CoordinatorDashboard({
               Agenda Global
             </h3>
             <p className="text-slate-500 text-sm hidden sm:block">
-              Gerencie todos os atendimentos.
+              Visualização diária, semanal e mensal estilo calendário.
             </p>
           </div>
           <button
-            onClick={() => setIsQuickRegisterModalOpen(true)}
+            onClick={() => setIsPatientRegistrationModalOpen(true)}
             className="flex items-center gap-2 px-4 py-2.5 bg-[#7a32fc] text-white rounded-2xl text-xs font-bold hover:opacity-90 transition-all shadow-lg shadow-[#7a32fc]/20"
           >
             <UserPlus size={16} />
@@ -615,190 +1142,76 @@ export function CoordinatorDashboard({
               onClick={() => setAgendaView("month")}
               className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === "month" ? "bg-white text-[#7a32fc] shadow-sm" : "text-slate-400"}`}
             >
-              <CalendarDays size={14} /> MÃªs
+              <CalendarDays size={14} /> Mês
             </button>
           </div>
         </div>
       </div>
 
       <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-slate-100">
-        <div className="mb-6 flex items-center gap-3 overflow-x-auto no-scrollbar pb-2">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap hidden sm:inline">
-            Filtrar Profissional:
-          </span>
-          <button
-            onClick={() => setProfessionalFilter("all")}
-            className={`px-4 py-1.5 rounded-xl text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${professionalFilter === "all" ? "bg-[#7a32fc] text-white shadow-md" : "bg-slate-50 text-slate-500 hover:bg-slate-100"}`}
-          >
-            Todos
-          </button>
-          {Array.from(new Set(therapistAgenda.map((a) => a.therapistName)))
-            .filter(Boolean)
-            .map((prof) => (
+        <div className="mb-6 space-y-3">
+          <div className="flex items-center gap-3 overflow-x-auto no-scrollbar pb-2">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap hidden sm:inline">
+              Filtrar profissional:
+            </span>
+            <button
+              onClick={() => setProfessionalFilter("all")}
+              className={`px-4 py-1.5 rounded-xl text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${professionalFilter === "all" ? "bg-[#7a32fc] text-white shadow-md" : "bg-slate-50 text-slate-500 hover:bg-slate-100"}`}
+            >
+              Todos
+            </button>
+            {Array.from(new Set(normalizedAgenda.map((a: any) => a.therapistName).filter(Boolean))).map((prof) => (
               <button
-                key={prof}
-                onClick={() => setProfessionalFilter(prof)}
+                key={String(prof)}
+                onClick={() => setProfessionalFilter(String(prof))}
                 className={`px-4 py-1.5 rounded-xl text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${professionalFilter === prof ? "bg-[#7a32fc] text-white shadow-md" : "bg-slate-50 text-slate-500 hover:bg-slate-100"}`}
               >
-                {prof}
+                {String(prof)}
               </button>
             ))}
+          </div>
+
+          <div className="flex flex-col md:flex-row md:items-center gap-2">
+            <div className="bg-slate-100 p-1 rounded-xl flex gap-1 w-full md:w-auto">
+              <button
+                onClick={() => setAgendaSearchMode("patient")}
+                className={`flex-1 md:flex-none px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${agendaSearchMode === "patient" ? "bg-white text-[#7a32fc] shadow-sm" : "text-slate-500"}`}
+              >
+                Paciente
+              </button>
+              <button
+                onClick={() => setAgendaSearchMode("professional")}
+                className={`flex-1 md:flex-none px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${agendaSearchMode === "professional" ? "bg-white text-[#7a32fc] shadow-sm" : "text-slate-500"}`}
+              >
+                Profissional
+              </button>
+            </div>
+            <div className="relative flex-1">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                value={agendaSearchTerm}
+                onChange={(e) => setAgendaSearchTerm(e.target.value)}
+                placeholder={`Filtrar por ${agendaSearchMode === "patient" ? "paciente" : "profissional"}...`}
+                className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2.5 pl-9 pr-3 text-xs font-medium text-slate-600 outline-none focus:border-[#7a32fc]/40"
+              />
+            </div>
+          </div>
         </div>
 
         {agendaView === "day" ? (
           <div className="space-y-4">
             <button
               onClick={() => setIsAddSessionModalOpen(true)}
-              className="w-full bg-white rounded-2xl border-2 border-dashed border-[#7a32fc]/40 p-3 sm:p-4 flex items-center justify-center cursor-pointer hover:bg-[#F4F7FE] transition-all gap-3 group mb-4"
+              className="w-full bg-white rounded-2xl border-2 border-dashed border-[#7a32fc]/40 p-3 sm:p-4 flex items-center justify-center cursor-pointer hover:bg-[#F4F7FE] transition-all gap-3 group"
             >
               <div className="w-8 h-8 rounded-full bg-[#7a32fc]/10 text-[#7a32fc] flex items-center justify-center group-hover:scale-110 transition-transform">
                 <Plus size={18} />
               </div>
               <span className="text-[10px] sm:text-xs font-semibold text-[#7a32fc] uppercase tracking-wider">
-                <span className="sm:hidden">Agendar</span>
-                <span className="hidden sm:inline">Novo Agendamento</span>
+                Novo Agendamento
               </span>
             </button>
-            {currentViewAgenda.length > 0 ? (
-              currentViewAgenda.map((item, i) => (
-                <div
-                  key={i}
-                  onClick={() => onPatientClick(item.patientId)}
-                  className="flex items-center gap-3 sm:gap-6 p-3 sm:p-4 bg-white hover:bg-slate-50 rounded-2xl transition-all border border-slate-100 hover:border-blue-500/30 group cursor-pointer relative"
-                >
-                  <div className="w-16 sm:w-20 text-center">
-                    <p className="text-sm font-bold text-[#7a32fc]">
-                      {item.time}
-                    </p>
-                    <p className="text-[10px] font-semibold text-slate-400 uppercase">
-                      Hoje
-                    </p>
-                  </div>
-                  <div className="w-1 h-10 bg-blue-100 rounded-full shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-slate-900 truncate">
-                      {item.patientName}
-                    </p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <p className="text-[10px] text-slate-400 font-medium truncate">
-                        Prof: {item.therapistName || "Dr. Ricardo"}
-                      </p>
-                      <span className="w-1 h-1 bg-slate-200 rounded-full" />
-                      <p className="text-[10px] text-slate-400 font-medium truncate">
-                        Sala: {item.room || "01"}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 sm:gap-3">
-                    <div className="hidden sm:flex items-center gap-1">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleStatusUpdate(item.id, "confirmed");
-                        }}
-                        className={`px-2 py-1 rounded-lg text-[8px] font-bold uppercase transition-all ${item.status === "confirmed" ? "bg-green-600 text-white" : "bg-green-50 text-green-600 hover:bg-green-600 hover:text-white"}`}
-                      >
-                        Conf
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleStatusUpdate(item.id, "pending");
-                        }}
-                        className={`px-2 py-1 rounded-lg text-[8px] font-bold uppercase transition-all ${item.status === "pending" ? "bg-yellow-500 text-white" : "bg-yellow-50 text-yellow-600 hover:bg-yellow-500 hover:text-white"}`}
-                      >
-                        Pend
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleStatusUpdate(item.id, "canceled");
-                        }}
-                        className={`px-2 py-1 rounded-lg text-[8px] font-bold uppercase transition-all ${item.status === "canceled" ? "bg-red-600 text-white" : "bg-red-50 text-red-600 hover:bg-red-600 hover:text-white"}`}
-                      >
-                        Canc
-                      </button>
-                    </div>
-
-                    <div className="relative">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenMenuId(
-                            openMenuId === item.id ? null : item.id,
-                          );
-                        }}
-                        className="p-2 text-slate-400 hover:text-[#7a32fc] hover:bg-blue-50 rounded-xl transition-all"
-                      >
-                        <MoreVertical size={16} />
-                      </button>
-
-                      {openMenuId === item.id && (
-                        <div className="absolute right-0 top-full mt-2 w-40 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 py-2 animate-in fade-in zoom-in duration-200">
-                          <div className="sm:hidden">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleStatusUpdate(item.id, "confirmed");
-                                setOpenMenuId(null);
-                              }}
-                              className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-all"
-                            >
-                              <CheckCircle2
-                                size={14}
-                                className="text-green-500"
-                              />{" "}
-                              Confirmar
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleStatusUpdate(item.id, "pending");
-                                setOpenMenuId(null);
-                              }}
-                              className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-all"
-                            >
-                              <Clock size={14} className="text-yellow-500" />{" "}
-                              Pendente
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleStatusUpdate(item.id, "canceled");
-                                setOpenMenuId(null);
-                              }}
-                              className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-all"
-                            >
-                              <XCircle size={14} className="text-red-500" />{" "}
-                              Cancelar
-                            </button>
-                            <div className="h-px bg-slate-50 my-1" />
-                          </div>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleEditAppointment(item);
-                              setOpenMenuId(null);
-                            }}
-                            className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-all"
-                          >
-                            <Settings size={14} className="text-slate-400" />{" "}
-                            Editar
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="text-center py-20 opacity-50">
-                <Calendar size={48} className="mx-auto mb-4 text-slate-300" />
-                <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">
-                  Nenhum atendimento para hoje
-                </p>
-              </div>
-            )}
+            {renderGoogleDayGrid()}
           </div>
         ) : agendaView === "month" ? (
           <CalendarWidget
@@ -811,63 +1224,7 @@ export function CoordinatorDashboard({
             }}
           />
         ) : (
-          <div className="space-y-8">
-            {groupedAgenda && Object.keys(groupedAgenda).length > 0 ? (
-              Object.keys(groupedAgenda).map((dateKey) => (
-                <div key={dateKey}>
-                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 ml-1 flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-[#7a32fc]" />
-                    {dateKey}
-                  </h4>
-                  <div className="space-y-3">
-                    {groupedAgenda[dateKey].map((item: any, i: number) => (
-                      <div
-                        key={i}
-                        className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex items-center justify-between hover:bg-white hover:shadow-md transition-all group"
-                      >
-                        <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-white rounded-xl flex flex-col items-center justify-center font-bold text-[#7a32fc] shadow-sm">
-                            <span className="text-[8px] opacity-50 uppercase">
-                              Ã€S
-                            </span>
-                            <span className="text-sm">{item.time}</span>
-                          </div>
-                          <div>
-                            <h3 className="font-bold text-slate-900 text-sm">
-                              {item.patientName}
-                            </h3>
-                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tight">
-                              Terapeuta: {item.therapistName}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span
-                            className={`px-2 py-1 rounded-lg text-[8px] font-bold uppercase ${item.status === "confirmed" ? "bg-green-100 text-green-600" : item.status === "pending" ? "bg-yellow-100 text-yellow-600" : "bg-red-100 text-red-500"}`}
-                          >
-                            {item.status}
-                          </span>
-                          <div className="px-2 py-1 bg-white text-slate-400 rounded-lg text-[8px] font-bold uppercase border border-slate-100">
-                            {item.type}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="text-center py-20 opacity-50">
-                <CalendarRange
-                  size={48}
-                  className="mx-auto mb-4 text-slate-300"
-                />
-                <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">
-                  Nenhum atendimento para esta semana
-                </p>
-              </div>
-            )}
-          </div>
+          renderGoogleWeekGrid()
         )}
       </div>
 
@@ -888,7 +1245,7 @@ export function CoordinatorDashboard({
         <div>
           <h3 className="text-lg sm:text-xl font-bold text-slate-900">Salas</h3>
           <p className="text-slate-500 text-sm hidden sm:block">
-            Configure as salas disponÃ­veis.
+            Configure as salas disponíveis.
           </p>
         </div>
         <button
@@ -940,7 +1297,7 @@ export function CoordinatorDashboard({
                     placeholder="Ex: ABA, TCC, Fono"
                   />
                   <p className="text-[9px] text-slate-400 mt-1 ml-1">
-                    Separe por vÃ­rgula
+                    Separe por vírgula
                   </p>
                 </div>
                 <button
@@ -958,7 +1315,7 @@ export function CoordinatorDashboard({
                     }}
                     className="w-full py-2 text-slate-400 text-[10px] font-bold uppercase tracking-widest"
                   >
-                    Cancelar EdiÃ§Ã£o
+                    Cancelar Edição
                   </button>
                 )}
               </form>
@@ -1035,12 +1392,12 @@ export function CoordinatorDashboard({
         {renderAgendaContent()}
       </section>
 
-      {/* GestÃ£o de Salas Section */}
+      {/* Gestão de Salas Section */}
       <section className="space-y-4 sm:space-y-6">
         {renderRoomsContent()}
       </section>
 
-      {/* GestÃ£o de Equipe Section */}
+      {/* Gestão de Equipe Section */}
       <section className="space-y-4 sm:space-y-6">
         <div className="bg-white p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100">
           <div className="flex items-center gap-3 mb-8">
@@ -1051,7 +1408,10 @@ export function CoordinatorDashboard({
               Equipe
             </h2>
           </div>
-          <TeamManagement user={user} />
+          <TeamManagement
+            user={user}
+            onRequestUpgrade={() => setActiveTab("billing")}
+          />
         </div>
       </section>
 
@@ -1068,7 +1428,7 @@ export function CoordinatorDashboard({
           },
           {
             id: "agenda",
-            label: "SessÃµes Realizadas",
+            label: "Sessões Realizadas",
             value: "142",
             icon: Calendar,
             trend: "+15",
@@ -1117,7 +1477,7 @@ export function CoordinatorDashboard({
             Financeiro (DRE)
           </h2>
           <p className="text-slate-400 text-sm font-medium hidden sm:block">
-            VisÃ£o detalhada da saÃºde financeira da clÃ­nica
+            Visão detalhada da saúde financeira da clínica
           </p>
         </div>
         <div className="flex gap-2 sm:gap-3">
@@ -1125,7 +1485,7 @@ export function CoordinatorDashboard({
             <Download size={14} className="sm:w-4 sm:h-4" /> Exportar
           </button>
           <button className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 sm:px-4 py-2 bg-[#7a32fc] text-white rounded-xl text-[10px] sm:text-xs font-bold hover:bg-blue-700 transition-all shadow-lg shadow-purple-500/20">
-            <Plus size={14} className="sm:w-4 sm:h-4" /> LanÃ§amento
+            <Plus size={14} className="sm:w-4 sm:h-4" /> Lançamento
           </button>
         </div>
       </div>
@@ -1138,15 +1498,15 @@ export function CoordinatorDashboard({
             </div>
             <div>
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                PerÃ­odo
+                Período
               </p>
-              <p className="text-sm font-bold text-slate-900">MarÃ§o de 2024</p>
+              <p className="text-sm font-bold text-slate-900">Março de 2024</p>
             </div>
           </div>
           <div className="flex items-center justify-between sm:justify-end gap-8">
             <div className="text-left sm:text-right">
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                Margem LÃ­quida
+                Margem Líquida
               </p>
               <p className="text-base sm:text-lg font-bold text-green-500">
                 35.2%
@@ -1154,7 +1514,7 @@ export function CoordinatorDashboard({
             </div>
             <div className="text-right">
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                Ponto EquilÃ­brio
+                Ponto Equilíbrio
               </p>
               <p className="text-base sm:text-lg font-bold text-slate-900">
                 R$ 14.166
@@ -1168,7 +1528,7 @@ export function CoordinatorDashboard({
             <thead>
               <tr className="text-left">
                 <th className="pb-6 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                  DescriÃ§Ã£o
+                  Descrição
                 </th>
                 <th className="pb-6 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">
                   Valor (R$)
@@ -1220,7 +1580,7 @@ export function CoordinatorDashboard({
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8 overflow-hidden">
         <div className="lg:col-span-2 bg-white p-6 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100">
           <h3 className="text-base sm:text-lg font-bold text-slate-900 mb-6">
-            ComposiÃ§Ã£o de Custos
+            Composição de Custos
           </h3>
           <div className="overflow-x-auto no-scrollbar -mx-6 sm:mx-0 px-6 sm:px-0">
             <div className="h-[250px] sm:h-[300px] min-w-[600px] sm:min-w-0">
@@ -1271,7 +1631,7 @@ export function CoordinatorDashboard({
         </div>
         <div className="bg-white p-6 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100">
           <h3 className="text-base sm:text-lg font-bold text-slate-900 mb-6">
-            DistribuiÃ§Ã£o
+            Distribuição
           </h3>
           <div className="overflow-x-auto no-scrollbar -mx-6 sm:mx-0 px-6 sm:px-0">
             <div className="h-[250px] sm:h-[300px] min-w-[300px] sm:min-w-0">
@@ -1344,7 +1704,7 @@ export function CoordinatorDashboard({
                 VERTO
               </span>
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">
-                GestÃ£o
+                Gestão
               </span>
             </div>
           </div>
@@ -1353,23 +1713,23 @@ export function CoordinatorDashboard({
             {[
               {
                 id: "dashboard",
-                label: "Painel de GestÃ£o",
+                label: "Painel de Gestão",
                 icon: LayoutDashboard,
               },
               {
                 id: "patients",
-                label: "GestÃ£o de Pacientes",
+                label: "Gestão de Pacientes",
                 icon: ClipboardList,
               },
               {
                 id: "protocols",
-                label: "Protocolos da ClÃ­nica",
+                label: "Protocolos da Clínica",
                 icon: ClipboardCheck,
               },
               { id: "logs", label: "Registros de Atividade", icon: History },
               {
                 id: "settings",
-                label: "ConfiguraÃ§Ãµes da ClÃ­nica",
+                label: "Configurações da Clínica",
                 icon: Settings,
               },
               { id: "financial", label: "Financeiro & DRE", icon: DollarSign },
@@ -1448,7 +1808,7 @@ export function CoordinatorDashboard({
               </button>
               <div>
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">
-                  ProntuÃ¡rio
+                  Prontuário
                 </p>
                 <h1 className="text-xl lg:text-3xl font-semibold text-slate-900 tracking-tight capitalize">
                   {patient?.name}
@@ -1505,11 +1865,9 @@ export function CoordinatorDashboard({
                 >
                   <div className="flex items-center justify-between mb-8">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-[#7a32fc] rounded-xl flex items-center justify-center text-white">
-                        <TrendingUp size={20} />
-                      </div>
-                      <span className="font-black text-xl text-slate-900 tracking-tighter">
-                        VERTO
+                      <LogoVerto size={40} />
+                      <span className="font-black text-xl text-slate-900 tracking-tighter lowercase">
+                        verto
                       </span>
                     </div>
                     <button
@@ -1524,7 +1882,7 @@ export function CoordinatorDashboard({
                     {[
                       {
                         id: "dashboard",
-                        label: "Dashboard",
+                        label: "Painel",
                         icon: LayoutDashboard,
                       },
                       {
@@ -1540,7 +1898,7 @@ export function CoordinatorDashboard({
                       { id: "logs", label: "Log de Atividades", icon: History },
                       {
                         id: "settings",
-                        label: "ConfiguraÃ§Ãµes",
+                        label: "Configurações",
                         icon: Settings,
                       },
                       {
@@ -1604,6 +1962,9 @@ export function CoordinatorDashboard({
             <PatientDetailView
               patient={patient}
               onBack={() => setView("home")}
+              initialTab={patientOpenTab}
+              openAnamnesisOnLoad={openAnamnesisOnPatientOpen}
+              onAnamnesisOpenConsumed={() => setOpenAnamnesisOnPatientOpen(false)}
               history={patientsHistory.filter(
                 (h) => h.patientId === selectedPatientId,
               )}
@@ -1632,13 +1993,11 @@ export function CoordinatorDashboard({
         className={`${isSidebarExpanded ? 'w-72' : 'w-24'} bg-white hidden lg:flex flex-col p-8 sticky top-0 h-screen border-r border-slate-100 transition-all duration-300 ease-in-out z-50`}
       >
         <div className={`flex items-center ${isSidebarExpanded ? 'gap-3' : 'justify-center'} mb-12 px-2 transition-all duration-300`}>
-          <div className="w-12 h-12 bg-[#7a32fc] rounded-[20px] flex items-center justify-center text-white shadow-xl shadow-purple-500/30 shrink-0">
-            <TrendingUp size={24} />
-          </div>
+          <LogoVerto size={48} />
           {isSidebarExpanded && (
             <div>
-              <span className="font-black text-2xl text-slate-900 tracking-tighter block leading-none">
-                VERTO
+              <span className="font-black text-2xl text-slate-900 tracking-tighter block leading-none lowercase">
+                verto
               </span>
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">
                 Gestão
@@ -1648,15 +2007,15 @@ export function CoordinatorDashboard({
         </div>
 
         <nav className="space-y-2 flex-1 overflow-y-auto no-scrollbar pr-2">
-          {[
-            { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-            { id: "patients", label: "Pacientes", icon: ClipboardList },
-            { id: "protocols", label: "Protocolos", icon: ClipboardCheck },
-            { id: "logs", label: "Log de Atividades", icon: History },
-            { id: "settings", label: "Configurações", icon: Settings },
-            {
-              id: "financial",
-              label: "Financeiro (DRE)",
+            {[
+              { id: "dashboard", label: "Painel", icon: LayoutDashboard },
+              { id: "patients", label: "Pacientes", icon: ClipboardList },
+              { id: "protocols", label: "Protocolos", icon: ClipboardCheck },
+              { id: "logs", label: "Log de Atividades", icon: History },
+              { id: "settings", label: "Configurações", icon: Settings },
+              {
+                id: "financial",
+                label: "Financeiro (DRE)",
               icon: DollarSign,
               badge: "EM BREVE",
             },
@@ -1746,7 +2105,7 @@ export function CoordinatorDashboard({
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">
                 {!isEditingRooms && activeTab === "rooms"
                   ? "Salas"
-                  : `PÃ¡ginas / ${activeTab}`}
+                  : `Páginas / ${activeTab}`}
               </p>
               <h1 className="text-xl lg:text-3xl font-semibold text-slate-900 tracking-tight capitalize">
                 {!isEditingRooms && activeTab === "rooms"
@@ -1837,7 +2196,7 @@ export function CoordinatorDashboard({
                     { id: "logs", label: "Registros", icon: History },
                     {
                       id: "settings",
-                      label: "ConfiguraÃ§Ãµes",
+                      label: "Configurações",
                       icon: Settings,
                     },
                     {
@@ -1951,20 +2310,20 @@ export function CoordinatorDashboard({
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
                       >
                         <option value="particular">Particular</option>
-                        <option value="convÃªnio">ConvÃªnio</option>
+                        <option value="convênio">Convênio</option>
                       </select>
                     </div>
-                    {paymentType === "convÃªnio" && (
+                    {paymentType === "convênio" && (
                       <div>
                         <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                          ConvÃªnio
+                          Convênio
                         </label>
                         <input
                           type="text"
                           value={paymentInsurance}
                           onChange={(e) => setPaymentInsurance(e.target.value)}
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
-                          placeholder="Nome do convÃªnio..."
+                          placeholder="Nome do convênio..."
                         />
                       </div>
                     )}
@@ -1996,7 +2355,7 @@ export function CoordinatorDashboard({
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                      MÃ©todo
+                      Método
                     </label>
                     <div className="grid grid-cols-3 gap-2">
                       {["pix", "card", "cash"].map((m) => (
@@ -2008,7 +2367,7 @@ export function CoordinatorDashboard({
                           {m === "pix"
                             ? "PIX"
                             : m === "card"
-                              ? "CartÃ£o"
+                              ? "Cartão"
                               : "Dinheiro"}
                         </button>
                       ))}
@@ -2084,13 +2443,13 @@ export function CoordinatorDashboard({
                     className="flex items-center gap-2 text-slate-400 hover:text-slate-900 font-bold text-xs uppercase tracking-widest transition-all"
                   >
                     <ChevronRight size={16} className="rotate-180" /> Voltar ao
-                    Dashboard
+                    Painel
                   </button>
                 </div>
-                <div className="mb-8">
-                  <RoleCapabilityMatrix />
-                </div>
-                <TeamManagement user={user} />
+                <TeamManagement
+                  user={user}
+                  onRequestUpgrade={() => setActiveTab("billing")}
+                />
               </motion.div>
             )}
             {activeTab === "financial" && (
@@ -2101,6 +2460,69 @@ export function CoordinatorDashboard({
                 exit={{ opacity: 0, y: -20 }}
                 className="space-y-8"
               >
+                <div className="bg-white border border-slate-100 rounded-[32px] p-6 shadow-sm">
+                  <div className="flex items-start justify-between gap-4 mb-4">
+                    <div>
+                      <h3 className="text-xl font-bold text-slate-900">
+                        Módulo Financeiro (em breve)
+                      </h3>
+                      <p className="text-sm text-slate-500">
+                        Estamos finalizando este módulo. Marque as funcionalidades que sua clínica mais precisa.
+                      </p>
+                    </div>
+                    {financialSurveySubmitted && (
+                      <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-widest">
+                        Pesquisa enviada
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {financialSurveyOptions.map((feature) => {
+                      const checked = financialSurveySelected.includes(feature);
+                      return (
+                        <label
+                          key={feature}
+                          className={`flex items-center gap-2 p-3 rounded-xl border text-xs font-medium transition-all ${checked ? "border-[#7a32fc] bg-[#7a32fc]/5 text-[#7a32fc]" : "border-slate-200 bg-slate-50 text-slate-600"}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={financialSurveySubmitted}
+                            onChange={(e) => {
+                              const isChecked = e.target.checked;
+                              setFinancialSurveySelected((prev) =>
+                                isChecked
+                                  ? [...prev, feature]
+                                  : prev.filter((f) => f !== feature),
+                              );
+                            }}
+                          />
+                          <span>{feature}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  <textarea
+                    value={financialSurveyNotes}
+                    disabled={financialSurveySubmitted}
+                    onChange={(e) => setFinancialSurveyNotes(e.target.value)}
+                    placeholder="Se quiser, descreva detalhes adicionais..."
+                    className="w-full mt-4 bg-slate-50 rounded-xl p-3 text-sm min-h-[96px] border border-slate-200"
+                  />
+                  {!financialSurveySubmitted && (
+                    <div className="flex justify-end mt-4">
+                      <button
+                        onClick={handleSubmitFinancialSurvey}
+                        className="px-5 py-2.5 rounded-xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-wider shadow-lg shadow-purple-500/20"
+                      >
+                        Enviar pesquisa
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-2xl font-bold text-slate-900 tracking-tight">
@@ -2173,7 +2595,7 @@ export function CoordinatorDashboard({
                     <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden">
                       <div className="p-8 border-b border-slate-50">
                         <h4 className="font-bold text-slate-900">
-                          Ãšltimos Recebimentos
+                          ÃƒÅ¡ltimos Recebimentos
                         </h4>
                       </div>
                       <div className="p-8 overflow-x-auto">
@@ -2193,7 +2615,7 @@ export function CoordinatorDashboard({
                                 Data
                               </th>
                               <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                                MÃ©todo
+                                Método
                               </th>
                               <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                                 Comprovante
@@ -2370,7 +2792,7 @@ export function CoordinatorDashboard({
                 <p className="text-slate-500 font-medium mb-8 max-w-md">
                   O coordenador vai poder gerenciar uma lista de espera
                   inteligente para que a agenda seja preenchida por outro
-                  paciente caso haja algum cancelamento e horÃ¡rio disponÃ­vel.
+                  paciente caso haja algum cancelamento e horário disponível.
                 </p>
                 <span className="px-6 py-2 bg-[#7a32fc] text-white rounded-full text-xs font-bold uppercase tracking-widest shadow-lg shadow-blue-500/20">
                   Em Breve
@@ -2392,9 +2814,9 @@ export function CoordinatorDashboard({
                   Aniversariantes
                 </h3>
                 <p className="text-slate-500 font-medium mb-8 max-w-md">
-                  ConfiguraÃ§Ã£o que possibilite o envio de mensagens
-                  automÃ¡ticas de feliz aniversÃ¡rio aos pacientes e
-                  profissionais da clÃ­nica.
+                  Configuração que possibilite o envio de mensagens
+                  automáticas de feliz aniversário aos pacientes e
+                  profissionais da clínica.
                 </p>
                 <span className="px-6 py-2 bg-[#7a32fc] text-white rounded-full text-xs font-bold uppercase tracking-widest shadow-lg shadow-blue-500/20">
                   Em Breve
@@ -2411,9 +2833,12 @@ export function CoordinatorDashboard({
               >
                 <div className="flex items-center justify-between mb-8">
                   <h3 className="text-lg sm:text-xl font-bold text-slate-900">
-                    GestÃ£o de Pacientes
+                    Gestão de Pacientes
                   </h3>
-                  <button className="px-4 sm:px-6 py-2 sm:py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-xs sm:text-sm shadow-lg shadow-purple-500/20 hover:bg-blue-700 transition-all">
+                  <button
+                    onClick={() => setIsPatientRegistrationModalOpen(true)}
+                    className="px-4 sm:px-6 py-2 sm:py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-xs sm:text-sm shadow-lg shadow-purple-500/20 hover:bg-blue-700 transition-all"
+                  >
                     Novo Paciente
                   </button>
                 </div>
@@ -2451,23 +2876,36 @@ export function CoordinatorDashboard({
                             <div className="absolute right-0 top-full mt-2 w-40 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 py-2 animate-in fade-in zoom-in duration-200">
                               <button
                                 onClick={() => {
-                                  onPatientClick(patient.id);
+                                  onPatientClick(patient.id, { tab: "history" });
                                   setOpenMenuId(null);
                                 }}
                                 className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
                               >
                                 <FileText size={14} className="text-blue-500" />{" "}
-                                ProntuÃ¡rio
+                                Prontuário
                               </button>
                               <button
                                 onClick={() => {
-                                  onPatientClick(patient.id);
+                                  openPatientProfileModal(patient);
                                   setOpenMenuId(null);
                                 }}
                                 className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
                               >
                                 <Search size={14} className="text-[#7a32fc]" />{" "}
-                                Ver Detalhes
+                                Ver mais (cadastro)
+                              </button>
+                              <button
+                                onClick={() => {
+                                  onPatientClick(patient.id, {
+                                    tab: "history",
+                                    openAnamnesis: true,
+                                  });
+                                  setOpenMenuId(null);
+                                }}
+                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                              >
+                                <ClipboardCheck size={14} className="text-purple-500" />
+                                Ficha Anamnese
                               </button>
                               <button className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all">
                                 <Edit2 size={14} className="text-slate-400" />{" "}
@@ -2491,6 +2929,25 @@ export function CoordinatorDashboard({
                           {patient.id.startsWith("P") ? "Infantil" : "Adulto"}
                         </div>
                       </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() =>
+                            onPatientClick(patient.id, {
+                              tab: "history",
+                              openAnamnesis: true,
+                            })
+                          }
+                          className="px-3 py-2 rounded-xl bg-purple-50 text-purple-700 text-[10px] font-bold uppercase tracking-wider hover:bg-purple-100 transition-all"
+                        >
+                          Ficha Anamnese
+                        </button>
+                        <button
+                          onClick={() => onPatientClick(patient.id, { tab: "files" })}
+                          className="px-3 py-2 rounded-xl bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider hover:bg-slate-200 transition-all"
+                        >
+                          Arquivos
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -2510,7 +2967,7 @@ export function CoordinatorDashboard({
                     className="flex items-center gap-2 text-slate-400 hover:text-slate-900 font-bold text-xs uppercase tracking-widest transition-all"
                   >
                     <ChevronRight size={16} className="rotate-180" /> Voltar ao
-                    Dashboard
+                    Painel
                   </button>
                 </div>
                 {renderAgendaContent()}
@@ -2553,13 +3010,13 @@ export function CoordinatorDashboard({
                     </div>
                     <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
-                        PrÃ³ximo Vencimento
+                        Próximo Vencimento
                       </p>
                       <h4 className="text-xl font-bold text-slate-900">
                         15/05/2026
                       </h4>
                       <p className="text-slate-400 text-xs font-medium mt-2">
-                        RenovaÃ§Ã£o automÃ¡tica
+                        Renovação automática
                       </p>
                     </div>
                     <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100">
@@ -2593,7 +3050,7 @@ export function CoordinatorDashboard({
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="bg-slate-50 p-6 rounded-[32px] border border-slate-100">
                           <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">
-                            HistÃ³rico de Pagamentos
+                            Histórico de Pagamentos
                           </h4>
                           <div className="space-y-3">
                             {billingHistory.map((bill, i) => (
@@ -2624,7 +3081,7 @@ export function CoordinatorDashboard({
                         </div>
                         <div className="bg-slate-50 p-6 rounded-[32px] border border-slate-100">
                           <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">
-                            PrÃ³ximos Vencimentos
+                            Próximos Vencimentos
                           </h4>
                           <div className="space-y-3">
                             {upcomingBills.map((bill, i) => (
@@ -2637,7 +3094,7 @@ export function CoordinatorDashboard({
                                     {bill.date}
                                   </p>
                                   <p className="text-[10px] text-slate-400 font-medium">
-                                    RenovaÃ§Ã£o AutomÃ¡tica
+                                    Renovação Automática
                                   </p>
                                 </div>
                                 <div className="text-right">
@@ -2670,7 +3127,7 @@ export function CoordinatorDashboard({
                             Crescimento
                           </h5>
                           <p className="text-slate-500 text-sm">
-                            Para clÃ­nicas em crescimento
+                            Para clínicas em crescimento
                           </p>
                         </div>
                         <div className="text-right">
@@ -2678,17 +3135,17 @@ export function CoordinatorDashboard({
                             R$ 399,90
                           </p>
                           <p className="text-[10px] font-bold text-slate-400 uppercase">
-                            por mÃªs
+                            por mês
                           </p>
                         </div>
                       </div>
                       <ul className="space-y-3 mb-8">
                         {[
                           "3 a 7 Profissionais",
-                          "Dashboard de EvoluÃ§Ã£o ClÃ­nica",
-                          "RelatÃ³rios Consolidados",
-                          "GestÃ£o Financeira AvanÃ§ada",
-                          "Suporte PrioritÃ¡rio",
+                          "Dashboard de Evolução Clínica",
+                          "Relatórios Consolidados",
+                          "Gestão Financeira Avançada",
+                          "Suporte Prioritário",
                         ].map((feat) => (
                           <li
                             key={feat}
@@ -2714,15 +3171,15 @@ export function CoordinatorDashboard({
                     </div>
 
                     <div
-                      className={`p-8 rounded-[40px] border-2 transition-all ${user.planName === "AvanÃ§ado" ? "border-[#7a32fc] bg-blue-50/30" : "border-slate-100 hover:border-blue-200"}`}
+                      className={`p-8 rounded-[40px] border-2 transition-all ${user.planName === "Avançado" ? "border-[#7a32fc] bg-blue-50/30" : "border-slate-100 hover:border-blue-200"}`}
                     >
                       <div className="flex justify-between items-start mb-6">
                         <div>
                           <h5 className="text-xl font-bold text-slate-900">
-                            AvanÃ§ado
+                            Avançado
                           </h5>
                           <p className="text-slate-500 text-sm">
-                            Para clÃ­nicas estabelecidas
+                            Para clínicas estabelecidas
                           </p>
                         </div>
                         <div className="text-right">
@@ -2730,15 +3187,15 @@ export function CoordinatorDashboard({
                             R$ 679,90
                           </p>
                           <p className="text-[10px] font-bold text-slate-400 uppercase">
-                            por mÃªs
+                            por mês
                           </p>
                         </div>
                       </div>
                       <ul className="space-y-3 mb-8">
                         {[
                           "7 a 12 Profissionais",
-                          "MÃºltiplos Workspaces de PEI",
-                          "API de IntegraÃ§Ã£o de Dados",
+                          "Múltiplos Workspaces de PEI",
+                          "API de Integração de Dados",
                           "Gerente de Conta Dedicado",
                         ].map((feat) => (
                           <li
@@ -2755,10 +3212,10 @@ export function CoordinatorDashboard({
                       </ul>
                       <button
                         onClick={() => handleCheckout("advanced_plan_id")}
-                        disabled={loading || user.planName === "AvanÃ§ado"}
-                        className={`w-full py-4 rounded-2xl font-bold text-sm transition-all ${user.planName === "AvanÃ§ado" ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-slate-900 text-white shadow-lg shadow-slate-900/20 hover:scale-[1.02]"}`}
+                        disabled={loading || user.planName === "Avançado"}
+                        className={`w-full py-4 rounded-2xl font-bold text-sm transition-all ${user.planName === "Avançado" ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-slate-900 text-white shadow-lg shadow-slate-900/20 hover:scale-[1.02]"}`}
                       >
-                        {user.planName === "AvanÃ§ado"
+                        {user.planName === "Avançado"
                           ? "Plano Atual"
                           : "Fazer Upgrade"}
                       </button>
@@ -2787,9 +3244,9 @@ export function CoordinatorDashboard({
                         {[
                           "12+ Profissionais",
                           "Workspaces Ilimitados",
-                          "Dashboard de OrganizaÃ§Ã£o",
+                          "Dashboard de Organização",
                           "Faturamento Centralizado",
-                          "OpÃ§Ãµes de White-label",
+                          "Opções de White-label",
                         ].map((feat) => (
                           <li
                             key={feat}
@@ -2831,7 +3288,7 @@ export function CoordinatorDashboard({
                     className="flex items-center gap-2 text-slate-400 hover:text-slate-900 font-bold text-xs uppercase tracking-widest transition-all"
                   >
                     <ChevronRight size={16} className="rotate-180" /> Voltar ao
-                    Dashboard
+                    Painel
                   </button>
                 </div>
                 {renderRoomsContent()}
@@ -2911,8 +3368,8 @@ export function CoordinatorDashboard({
                           Nenhuma atividade registrada
                         </h4>
                         <p className="text-sm text-slate-400 max-w-xs mx-auto">
-                          As aÃ§Ãµes realizadas no sistema aparecerÃ£o aqui para
-                          acompanhamento da coordenaÃ§Ã£o.
+                          As ações realizadas no sistema aparecerão aqui para
+                          acompanhamento da coordenação.
                         </p>
                       </div>
                     )}
@@ -2930,27 +3387,29 @@ export function CoordinatorDashboard({
               >
                 <div className="flex items-center justify-between mb-8">
                   <h3 className="text-xl font-bold text-slate-900">
-                    ConfiguraÃ§Ãµes da ClÃ­nica
+                    Configurações da Clínica
                   </h3>
-                  <button className="px-6 py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-sm shadow-lg shadow-purple-500/20 hover:bg-blue-700 transition-all">
-                    Salvar AlteraÃ§Ãµes
+                  <button
+                    onClick={handleSaveClinicSettings}
+                    className="px-6 py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-sm shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all"
+                  >
+                    Salvar Alterações
                   </button>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-6">
                     <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">
-                      HorÃ¡rios e SessÃµes
+                      Horários e Sessões
                     </h4>
                     <div className="space-y-4">
                       <div>
                         <label className="block text-xs font-bold text-slate-700 mb-2">
-                          DuraÃ§Ã£o PadrÃ£o da SessÃ£o
+                          Duração Padrão da Sessão
                         </label>
                         <select
-                          defaultValue={
-                            user.clinicSettings?.defaultSessionDuration || "50"
-                          }
+                          value={defaultSessionDuration}
+                          onChange={(e) => setDefaultSessionDuration(e.target.value)}
                           className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
                         >
                           <option value="30">30 minutos</option>
@@ -2962,13 +3421,12 @@ export function CoordinatorDashboard({
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <label className="block text-xs font-bold text-slate-700 mb-2">
-                            InÃ­cio do Expediente
+                            Início do Expediente
                           </label>
                           <input
                             type="time"
-                            defaultValue={
-                              user.clinicSettings?.workStart || "08:00"
-                            }
+                            value={workStart}
+                            onChange={(e) => setWorkStart(e.target.value)}
                             className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
                           />
                         </div>
@@ -2978,11 +3436,50 @@ export function CoordinatorDashboard({
                           </label>
                           <input
                             type="time"
-                            defaultValue={
-                              user.clinicSettings?.workEnd || "18:00"
-                            }
+                            value={workEnd}
+                            onChange={(e) => setWorkEnd(e.target.value)}
                             className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
                           />
+                        </div>
+                      </div>
+                      <div className="pt-4 border-t border-slate-100">
+                        <label className="block text-xs font-bold text-slate-700 mb-3">
+                          Duração por profissional
+                        </label>
+                        <div className="space-y-3">
+                          {Object.keys(professionalSessionDurations).length === 0 && (
+                            <p className="text-xs text-slate-400">
+                              Cadastre ou agende com profissionais para configurar a duração individual.
+                            </p>
+                          )}
+                          {Object.entries(professionalSessionDurations).map(
+                            ([professional, duration]) => (
+                              <div
+                                key={professional}
+                                className="grid grid-cols-[1fr_130px] gap-3 items-center"
+                              >
+                                <p className="text-sm font-semibold text-slate-700 truncate">
+                                  {professional}
+                                </p>
+                                <select
+                                  value={duration}
+                                  onChange={(e) =>
+                                    setProfessionalSessionDurations((prev) => ({
+                                      ...prev,
+                                      [professional]: e.target.value,
+                                    }))
+                                  }
+                                  className="w-full p-3 bg-slate-50 border-none rounded-xl text-xs font-semibold outline-none"
+                                >
+                                  <option value="30">30 min</option>
+                                  <option value="45">45 min</option>
+                                  <option value="50">50 min</option>
+                                  <option value="60">60 min</option>
+                                  <option value="90">90 min</option>
+                                </select>
+                              </div>
+                            ),
+                          )}
                         </div>
                       </div>
                     </div>
@@ -3002,12 +3499,12 @@ export function CoordinatorDashboard({
                         </span>
                       </div>
                       <p className="text-xs text-blue-600 mb-6">
-                        Sua clÃ­nica possui acesso a todas as ferramentas de
-                        gestÃ£o e prontuÃ¡rio eletrÃ´nico.
+                        Sua clínica possui acesso a todas as ferramentas de
+                        gestão e prontuário eletrÃƒÂ´nico.
                       </p>
                       <button
                         onClick={() => setActiveTab("billing")}
-                        className="w-full py-3 bg-white text-[#7a32fc] rounded-2xl font-bold text-xs shadow-sm hover:shadow-md transition-all"
+                        className="w-full py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-xs shadow-sm hover:opacity-90 transition-all"
                       >
                         Gerenciar Assinatura
                       </button>
@@ -3044,7 +3541,7 @@ export function CoordinatorDashboard({
             </button>
             <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-2 tracking-tight">
               <CalendarPlus size={24} className="text-[#7a32fc]" />{" "}
-              {editingAppointmentId ? "Editar Agendamento" : "Agendar SessÃ£o"}
+              {editingAppointmentId ? "Editar Agendamento" : "Agendar Sessão"}
             </h2>
             <div className="space-y-4">
               <div className="relative">
@@ -3110,11 +3607,11 @@ export function CoordinatorDashboard({
                     onChange={(e) => setSessionApproach(e.target.value)}
                   >
                     <option value="">Selecione...</option>
-                    <option value="Consulta PadrÃ£o">Consulta PadrÃ£o</option>
+                    <option value="Consulta Padrão">Consulta Padrão</option>
                     <option value="TCC">TCC</option>
                     <option value="ABA">ABA</option>
-                    <option value="IntegraÃ§Ã£o Sensorial">
-                      IntegraÃ§Ã£o Sensorial
+                    <option value="Integração Sensorial">
+                      Integração Sensorial
                     </option>
                   </select>
                 </div>
@@ -3138,7 +3635,7 @@ export function CoordinatorDashboard({
               </div>
               <div>
                 <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
-                  Terapeuta ResponsÃ¡vel
+                  Terapeuta Responsável
                 </label>
                 <input
                   type="text"
@@ -3153,7 +3650,7 @@ export function CoordinatorDashboard({
                 className="w-full bg-[#7a32fc] text-white font-bold py-4 rounded-xl shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all mt-2 active:scale-95 uppercase tracking-widest"
               >
                 {editingAppointmentId
-                  ? "Salvar AlteraÃ§Ãµes"
+                  ? "Salvar Alterações"
                   : "Confirmar Agendamento"}
               </button>
             </div>
@@ -3243,6 +3740,160 @@ export function CoordinatorDashboard({
           </div>
         </div>
       )}
+
+      {isPatientProfileModalOpen && selectedPatientProfile && (
+        <div
+          className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+          onClick={() => setIsPatientProfileModalOpen(false)}
+        >
+          <div
+            className="bg-white w-full max-w-2xl rounded-3xl p-6 md:p-8 shadow-2xl max-h-[85vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-xl font-bold text-slate-900">
+                Informações cadastrais
+              </h3>
+              <button
+                onClick={() => setIsPatientProfileModalOpen(false)}
+                className="text-slate-400 hover:text-slate-700"
+              >
+                <X size={22} />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+              <div><span className="text-slate-400">Nome:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.name || "-"}</p></div>
+              <div><span className="text-slate-400">Nome social:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.socialName || "-"}</p></div>
+              <div><span className="text-slate-400">Telefone:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.phone || "-"}</p></div>
+              <div><span className="text-slate-400">Email:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.email || "-"}</p></div>
+              <div><span className="text-slate-400">Convênio:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.insuranceName || selectedPatientProfile.insuranceType || "-"}</p></div>
+              <div><span className="text-slate-400">Carteirinha:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.cardNumber || "-"}</p></div>
+              <div><span className="text-slate-400">RG:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.rg || "-"}</p></div>
+              <div><span className="text-slate-400">CPF:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.cpf || "-"}</p></div>
+              <div className="md:col-span-2"><span className="text-slate-400">Endereço:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.address?.logradouro || "-"} {selectedPatientProfile.address?.numero || ""} - {selectedPatientProfile.address?.bairro || ""} - {selectedPatientProfile.address?.cidade || ""}</p></div>
+              <div className="md:col-span-2"><span className="text-slate-400">Observações:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.notes || "-"}</p></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isPatientRegistrationModalOpen && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"
+          onClick={() => setIsPatientRegistrationModalOpen(false)}
+        >
+          <div
+            className="bg-white w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-[32px] p-6 md:p-8 shadow-2xl animate-pop relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setIsPatientRegistrationModalOpen(false)}
+              className="absolute top-5 right-5 text-slate-400 hover:text-slate-600"
+            >
+              <X size={24} />
+            </button>
+
+            <h2 className="text-2xl font-bold text-slate-900 mb-6">
+              Cadastro Completo de Paciente
+            </h2>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Nome*" value={newPatientForm.nome} onChange={(e) => handlePatientFormChange("nome", e.target.value)} />
+              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Nome social" value={newPatientForm.nomeSocial} onChange={(e) => handlePatientFormChange("nomeSocial", e.target.value)} />
+              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Telefone*" value={newPatientForm.telefone} onChange={(e) => handlePatientFormChange("telefone", e.target.value)} />
+              <input type="date" className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.dataNascimento} onChange={(e) => handlePatientFormChange("dataNascimento", e.target.value)} />
+              <select className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.genero} onChange={(e) => handlePatientFormChange("genero", e.target.value)}>
+                <option value="">Gênero</option>
+                <option value="feminino">Feminino</option>
+                <option value="masculino">Masculino</option>
+                <option value="nao_binario">Não binário</option>
+                <option value="prefiro_nao_informar">Prefiro não informar</option>
+              </select>
+              <select className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.grupo} onChange={(e) => handlePatientFormChange("grupo", e.target.value)}>
+                <option value="infantil">Infantil</option>
+                <option value="adolescente">Adolescente</option>
+                <option value="adulto">Adulto</option>
+                <option value="idoso">Idoso</option>
+              </select>
+              <select className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.convenioTipo} onChange={(e) => handlePatientFormChange("convenioTipo", e.target.value)}>
+                <option value="particular">Particular</option>
+                <option value="convenio">Convênio</option>
+              </select>
+              <select className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.convenioNome} onChange={(e) => handlePatientFormChange("convenioNome", e.target.value)}>
+                <option value="">Selecione o convênio</option>
+                {insuranceOptions.map((ins) => (
+                  <option key={ins} value={ins}>{ins}</option>
+                ))}
+              </select>
+              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Carteirinha do convênio" value={newPatientForm.convenioCarteirinha} onChange={(e) => handlePatientFormChange("convenioCarteirinha", e.target.value)} />
+              <select className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.comoConheceu} onChange={(e) => handlePatientFormChange("comoConheceu", e.target.value)}>
+                <option value="">Como conheceu a clínica?</option>
+                <option value="google">Google</option>
+                <option value="indicacao">Indicação</option>
+                <option value="email">Email</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="rede_social">Rede social</option>
+                <option value="evento">Evento</option>
+                <option value="convenio">Convênio</option>
+                <option value="outro">Outro</option>
+              </select>
+              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="RG" value={newPatientForm.rg} onChange={(e) => handlePatientFormChange("rg", e.target.value)} />
+              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="CPF" value={newPatientForm.cpf} onChange={(e) => handlePatientFormChange("cpf", e.target.value)} />
+              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="CEP" value={newPatientForm.cep} onChange={(e) => handlePatientFormChange("cep", e.target.value)} />
+              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="E-mail" value={newPatientForm.email} onChange={(e) => handlePatientFormChange("email", e.target.value)} />
+              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Logradouro" value={newPatientForm.logradouro} onChange={(e) => handlePatientFormChange("logradouro", e.target.value)} />
+              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Número" value={newPatientForm.numero} onChange={(e) => handlePatientFormChange("numero", e.target.value)} />
+              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Complemento" value={newPatientForm.complemento} onChange={(e) => handlePatientFormChange("complemento", e.target.value)} />
+              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Bairro" value={newPatientForm.bairro} onChange={(e) => handlePatientFormChange("bairro", e.target.value)} />
+              <input className="bg-slate-50 rounded-xl p-3 text-sm md:col-span-2" placeholder="Cidade" value={newPatientForm.cidade} onChange={(e) => handlePatientFormChange("cidade", e.target.value)} />
+
+              <select className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.patientProfileType} onChange={(e) => handlePatientFormChange("patientProfileType", e.target.value)}>
+                <option value="kids_tea">Paciente Kids TEA</option>
+                <option value="adult_tea">Paciente Adulto TEA</option>
+                <option value="adult_conventional">Paciente Adulto Convencional</option>
+              </select>
+
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" checked={newPatientForm.menorDeIdade} onChange={(e) => handlePatientFormChange("menorDeIdade", e.target.checked)} />
+                Menor de idade
+              </label>
+            </div>
+
+            {newPatientForm.menorDeIdade && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Nome do responsável" value={newPatientForm.responsavelNome} onChange={(e) => handlePatientFormChange("responsavelNome", e.target.value)} />
+                <input type="date" className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.responsavelDataNascimento} onChange={(e) => handlePatientFormChange("responsavelDataNascimento", e.target.value)} />
+                <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="CPF do responsável" value={newPatientForm.responsavelCpf} onChange={(e) => handlePatientFormChange("responsavelCpf", e.target.value)} />
+                <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Telefone do responsável" value={newPatientForm.responsavelTelefone} onChange={(e) => handlePatientFormChange("responsavelTelefone", e.target.value)} />
+              </div>
+            )}
+
+            <textarea
+              className="w-full mt-4 bg-slate-50 rounded-xl p-3 text-sm min-h-[110px]"
+              placeholder="Outras informações"
+              value={newPatientForm.outrasInformacoes}
+              onChange={(e) => handlePatientFormChange("outrasInformacoes", e.target.value)}
+            />
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setIsPatientRegistrationModalOpen(false)}
+                className="px-6 py-3 rounded-xl bg-slate-100 text-slate-700 font-semibold"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleCreatePatientFromFullForm}
+                className="px-6 py-3 rounded-xl bg-[#7a32fc] text-white font-semibold shadow-lg shadow-purple-500/20"
+              >
+                Cadastrar paciente
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+

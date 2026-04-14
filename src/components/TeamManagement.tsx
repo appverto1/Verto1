@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { 
   Users, 
   UserPlus, 
@@ -19,7 +19,6 @@ import {
 import { dataService } from '../services/dataService';
 import { motion, AnimatePresence } from 'framer-motion';
 import { RoleCapabilityMatrix } from './RoleCapabilityMatrix';
-import { getRoleDescription } from '../constants/roleCapabilities';
 
 interface Member {
   id: string;
@@ -39,7 +38,13 @@ const PLAN_LIMITS: Record<string, number> = {
   'Paciente': 0
 };
 
-export function TeamManagement({ user }: { user: any }) {
+export function TeamManagement({
+  user,
+  onRequestUpgrade,
+}: {
+  user: any;
+  onRequestUpgrade?: () => void;
+}) {
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -147,12 +152,6 @@ export function TeamManagement({ user }: { user: any }) {
     admin: 'Admin'
   };
 
-  const roleDescriptions = {
-    coordinator: getRoleDescription('coordinator'),
-    therapist: getRoleDescription('therapist'),
-    receptionist: getRoleDescription('receptionist')
-  };
-
   const filteredMembers = members.filter(m => 
     m.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
     m.email.toLowerCase().includes(searchTerm.toLowerCase())
@@ -171,10 +170,8 @@ export function TeamManagement({ user }: { user: any }) {
         <div className="flex items-center gap-3">
           {!canInvite && (
             <button 
-              onClick={() => {
-                window.alert('Para aumentar o limite de profissionais, por favor faça o upgrade do seu plano na aba de Configurações.');
-              }}
-              className="px-4 py-2 bg-amber-500 text-white rounded-xl text-xs font-bold uppercase shadow-lg shadow-amber-500/20 hover:scale-105 transition-all"
+              onClick={() => onRequestUpgrade?.()}
+              className="px-4 py-2 bg-[#7a32fc] text-white rounded-xl text-xs font-bold uppercase shadow-lg shadow-purple-500/20 hover:scale-105 transition-all"
             >
               Fazer Upgrade
             </button>
@@ -192,123 +189,7 @@ export function TeamManagement({ user }: { user: any }) {
         </div>
       </div>
 
-      <div className="mb-8">
-        <RoleCapabilityMatrix />
-      </div>
-
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Atribuir Papel */}
-        <div className="lg:col-span-1">
-          <div className="bg-white rounded-[32px] p-8 shadow-sm border border-slate-100 sticky top-6">
-            <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mb-6">
-              <UserPlus size={24} />
-            </div>
-            <h2 className="text-lg font-bold text-slate-900 mb-2">Atribuir Novo Papel</h2>
-            <p className="text-slate-500 text-xs mb-6">O colaborador já deve ter uma conta cadastrada na Verto.</p>
-
-            <form onSubmit={handleInvite} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">E-mail do Colaborador</label>
-                <div className="relative">
-                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                  <input 
-                    type="email"
-                    required
-                    value={newMemberEmail}
-                    onChange={(e) => setNewMemberEmail(e.target.value)}
-                    placeholder="exemplo@email.com"
-                    className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border-none rounded-2xl text-sm focus:ring-2 focus:ring-blue-500/20 transition-all"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Papel / Nível de Acesso</label>
-                <div className="grid grid-cols-1 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setNewMemberRole('therapist')}
-                    className={`flex items-center gap-3 p-4 rounded-2xl border-2 transition-all text-left ${newMemberRole === 'therapist' ? 'border-blue-500 bg-blue-50/50' : 'border-slate-100 hover:border-slate-200'}`}
-                  >
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${newMemberRole === 'therapist' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                      <Stethoscope size={20} />
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-900">Terapeuta</p>
-                      <p className="text-[10px] text-slate-500">Prontuários e Agendas</p>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setNewMemberRole('receptionist')}
-                    className={`flex items-center gap-3 p-4 rounded-2xl border-2 transition-all text-left ${newMemberRole === 'receptionist' ? 'border-green-500 bg-green-50/50' : 'border-slate-100 hover:border-slate-200'}`}
-                  >
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${newMemberRole === 'receptionist' ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                      <Calendar size={20} />
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-900">Recepcionista</p>
-                      <p className="text-[10px] text-slate-500">Apenas Agendas</p>
-                    </div>
-                  </button>
-                </div>
-              </div>
-
-              {error && (
-                <div className="p-4 bg-red-50 text-red-600 rounded-2xl text-xs flex items-center gap-2 animate-shake">
-                  <AlertCircle size={16} />
-                  {error}
-                </div>
-              )}
-
-              {success && (
-                <div className="p-4 bg-green-50 text-green-600 rounded-2xl text-xs flex items-center gap-2 animate-pop">
-                  <CheckCircle2 size={16} />
-                  {success}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={isAssigning || !canInvite}
-                className={`w-full py-4 rounded-2xl font-bold text-sm shadow-lg transition-all ${
-                  !canInvite 
-                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed shadow-none' 
-                    : 'bg-[#4318FF] text-white shadow-blue-500/20 hover:scale-[1.02] active:scale-[0.98]'
-                } disabled:opacity-50 disabled:scale-100`}
-              >
-                {isAssigning ? 'Enviando...' : !canInvite ? 'Limite de Plano Atingido' : 'Enviar Convite'}
-              </button>
-            </form>
-
-            {/* Pending Invitations */}
-            {(invitations?.length || 0) > 0 && (
-              <div className="mt-12">
-                <h3 className="text-lg font-bold text-slate-900 mb-6">Convites Pendentes</h3>
-                <div className="space-y-3">
-                  {invitations.map((inv) => (
-                    <div key={inv.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-slate-400">
-                          <Mail size={20} />
-                        </div>
-                        <div>
-                          <p className="font-bold text-slate-900 text-sm">{inv.email}</p>
-                          <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-widest">{inv.role}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="px-3 py-1 bg-amber-100 text-amber-600 rounded-full text-[10px] font-bold uppercase tracking-widest">Pendente</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
         {/* Lista de Membros */}
         <div className="lg:col-span-2">
           <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 overflow-hidden">
@@ -410,35 +291,126 @@ export function TeamManagement({ user }: { user: any }) {
               )}
             </div>
           </div>
+        </div>
 
-          {/* Info Card */}
-          <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-purple-50 p-6 rounded-[28px] border border-purple-100">
-              <div className="w-10 h-10 bg-purple-500 text-white rounded-xl flex items-center justify-center mb-4">
-                <Shield size={20} />
-              </div>
-              <h3 className="font-bold text-purple-900 text-sm mb-1">Coordenador</h3>
-              <p className="text-purple-700/70 text-[10px] leading-relaxed">Gestão total da clínica, faturamento e equipe.</p>
+        {/* Atribuir Papel */}
+        <div className="lg:col-span-1">
+          <div className="bg-white rounded-[32px] p-8 shadow-sm border border-slate-100 sticky top-6">
+            <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mb-6">
+              <UserPlus size={24} />
             </div>
+            <h2 className="text-lg font-bold text-slate-900 mb-2">Atribuir Novo Papel</h2>
+            <p className="text-slate-500 text-xs mb-6">Se o colaborador ainda não tiver conta, ele poderá criar pelo próprio convite via e-mail.</p>
 
-            <div className="bg-blue-50 p-6 rounded-[28px] border border-blue-100">
-              <div className="w-10 h-10 bg-blue-500 text-white rounded-xl flex items-center justify-center mb-4">
-                <Stethoscope size={20} />
+            <form onSubmit={handleInvite} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">E-mail do Colaborador</label>
+                <div className="relative">
+                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <input 
+                    type="email"
+                    required
+                    value={newMemberEmail}
+                    onChange={(e) => setNewMemberEmail(e.target.value)}
+                    placeholder="exemplo@email.com"
+                    className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border-none rounded-2xl text-sm focus:ring-2 focus:ring-blue-500/20 transition-all"
+                  />
+                </div>
               </div>
-              <h3 className="font-bold text-blue-900 text-sm mb-1">Terapeuta</h3>
-              <p className="text-blue-700/70 text-[10px] leading-relaxed">Foco no atendimento, prontuários e evoluções.</p>
-            </div>
 
-            <div className="bg-green-50 p-6 rounded-[28px] border border-green-100">
-              <div className="w-10 h-10 bg-green-500 text-white rounded-xl flex items-center justify-center mb-4">
-                <Calendar size={20} />
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Papel / Nível de Acesso</label>
+                <div className="grid grid-cols-1 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setNewMemberRole('therapist')}
+                    className={`flex items-center gap-3 p-4 rounded-2xl border-2 transition-all text-left ${newMemberRole === 'therapist' ? 'border-blue-500 bg-blue-50/50' : 'border-slate-100 hover:border-slate-200'}`}
+                  >
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${newMemberRole === 'therapist' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                      <Stethoscope size={20} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-900">Terapeuta</p>
+                      <p className="text-[10px] text-slate-500">Prontuários e Agendas</p>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setNewMemberRole('receptionist')}
+                    className={`flex items-center gap-3 p-4 rounded-2xl border-2 transition-all text-left ${newMemberRole === 'receptionist' ? 'border-green-500 bg-green-50/50' : 'border-slate-100 hover:border-slate-200'}`}
+                  >
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${newMemberRole === 'receptionist' ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                      <Calendar size={20} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-900">Recepcionista</p>
+                      <p className="text-[10px] text-slate-500">Apenas Agendas</p>
+                    </div>
+                  </button>
+                </div>
               </div>
-              <h3 className="font-bold text-green-900 text-sm mb-1">Recepcionista</h3>
-              <p className="text-green-700/70 text-[10px] leading-relaxed">Gestão de agendas, faltas e reagendamentos.</p>
-            </div>
+
+              {error && (
+                <div className="p-4 bg-red-50 text-red-600 rounded-2xl text-xs flex items-center gap-2 animate-shake">
+                  <AlertCircle size={16} />
+                  {error}
+                </div>
+              )}
+
+              {success && (
+                <div className="p-4 bg-green-50 text-green-600 rounded-2xl text-xs flex items-center gap-2 animate-pop">
+                  <CheckCircle2 size={16} />
+                  {success}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isAssigning || !canInvite}
+                className={`w-full py-4 rounded-2xl font-bold text-sm shadow-lg transition-all ${
+                  !canInvite 
+                    ? 'bg-[#7a32fc] text-white cursor-pointer shadow-purple-500/20' 
+                    : 'bg-[#4318FF] text-white shadow-blue-500/20 hover:scale-[1.02] active:scale-[0.98]'
+                } disabled:opacity-50 disabled:scale-100`}
+                onClick={!canInvite ? () => onRequestUpgrade?.() : undefined}
+              >
+                {isAssigning ? 'Enviando...' : !canInvite ? 'Upgrade' : 'Enviar Convite'}
+              </button>
+            </form>
+
+            {/* Pending Invitations */}
+            {(invitations?.length || 0) > 0 && (
+              <div className="mt-12">
+                <h3 className="text-lg font-bold text-slate-900 mb-6">Convites Pendentes</h3>
+                <div className="space-y-3">
+                  {invitations.map((inv) => (
+                    <div key={inv.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-slate-400">
+                          <Mail size={20} />
+                        </div>
+                        <div>
+                          <p className="font-bold text-slate-900 text-sm">{inv.email}</p>
+                          <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-widest">{inv.role}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="px-3 py-1 bg-amber-100 text-amber-600 rounded-full text-[10px] font-bold uppercase tracking-widest">Pendente</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
+        </div>
+
+        <div className="lg:col-span-3">
+          <RoleCapabilityMatrix />
         </div>
       </div>
     </div>
   );
 }
+

@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+﻿import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Camera, CheckCircle2, Mail, Plus, UserPlus, X } from 'lucide-react';
 import { dataService } from '../services/dataService';
@@ -123,6 +123,42 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<'therapist' | 'receptionist'>('therapist');
 
+  useEffect(() => {
+    const loadExistingProfile = async () => {
+      try {
+        const result = await dataService.getUserProfile(user.id);
+        const profile = result?.data?.professional_profile;
+        if (!profile) return;
+
+        setFullName(profile.full_name || user.name || "");
+        setBirthDate(profile.birth_date || "");
+        setGender(profile.gender || "");
+        setCountryCode(profile.country_code || "+55");
+        setPhone(profile.phone || "");
+        setProfilePicture(profile.profile_photo_url || null);
+        setClinicName(profile.clinic_name || "");
+        setClinicLogoUrl(profile.clinic_logo_url || null);
+        setClinicPhone(profile.clinic_phone || "");
+        setSpecialty(profile.specialty || "");
+        setCouncil(profile.council || "");
+        setCouncilNumber(profile.council_number || "");
+        setSignatureDataUrl(profile.signature_data_url || null);
+        setSessionDurationMinutes(String(profile.metadata?.sessionDurationMinutes || "50"));
+
+        const address = profile.address || {};
+        setCep(address.cep || "");
+        setLogradouro(address.logradouro || "");
+        setNumber(address.number || "");
+        setComplement(address.complement || "");
+        setBairro(address.bairro || "");
+        setCidade(address.cidade || "");
+      } catch (error) {
+        console.warn("Não foi possível carregar perfil existente para pré-preenchimento.");
+      }
+    };
+    loadExistingProfile();
+  }, [user.id, user.name]);
+
   const canGoNextPersonal = fullName.trim() && birthDate && gender && cep && logradouro && number && bairro && cidade && phone;
   const councilRequired = isCoordinator || isTherapist;
   const canGoNextClinic = !isCoordinator || (clinicName.trim() && specialty.trim() && (!councilRequired || (council.trim() && councilNumber.trim())));
@@ -237,8 +273,8 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                   <div className="w-20 h-20 rounded-2xl border border-dashed border-slate-300 overflow-hidden flex items-center justify-center bg-slate-50">
                     {profilePicture ? <img src={profilePicture} alt="Foto" className="w-full h-full object-cover" /> : <Camera size={24} className="text-slate-400" />}
                   </div>
-                  <label className="text-xs font-semibold text-slate-700 cursor-pointer">
-                    Enviar foto
+                  <label className="text-xs font-semibold text-slate-700 cursor-pointer px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 transition-all">
+                    Escolher foto
                     <input
                       type="file"
                       className="hidden"
@@ -294,10 +330,10 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                     <input value={clinicPhone} onChange={(e) => setClinicPhone(e.target.value)} placeholder="Telefone comercial" className="px-4 py-3 rounded-xl bg-slate-50" />
                     <input value={specialty} onChange={(e) => setSpecialty(e.target.value)} placeholder="Especialidade" className="px-4 py-3 rounded-xl bg-slate-50" />
                     <div>
-                      <label className="text-xs text-slate-500">Logotipo da clinica</label>
+                      <label className="text-xs text-slate-500 block mb-1">Logotipo da clínica</label>
                       <input
                         type="file"
-                        className="mt-1 block w-full text-xs"
+                        className="block w-full text-xs bg-slate-50 p-3 rounded-xl"
                         accept="image/*"
                         onChange={(e) => {
                           const file = e.target.files?.[0];
@@ -305,7 +341,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                         }}
                       />
                     </div>
-                    {clinicLogoUrl && <img src={clinicLogoUrl} alt="Logo" className="h-16 object-contain" />}
+                    {clinicLogoUrl && <img src={clinicLogoUrl} alt="Logo" className="h-16 object-contain rounded-xl border border-slate-200 p-2 bg-white" />}
                   </div>
                 )}
 
@@ -405,3 +441,5 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
     </div>
   );
 }
+
+

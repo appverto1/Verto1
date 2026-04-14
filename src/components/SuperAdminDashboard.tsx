@@ -46,6 +46,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   });
   const [allCustomers, setAllCustomers] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [financialFeatureSurveys, setFinancialFeatureSurveys] = useState<any[]>([]);
 
   React.useEffect(() => {
     const fetchData = async () => {
@@ -55,15 +56,17 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         const token = session?.access_token;
         const headers = { Authorization: token ? `Bearer ${token}` : '' };
 
-        const [statsRes, financialRes, customersRes] = await Promise.all([
+        const [statsRes, financialRes, customersRes, surveysRes] = await Promise.all([
           fetch('/api/owner/stats', { credentials: 'include', headers }),
           fetch('/api/owner/financial-overview', { credentials: 'include', headers }),
-          fetch('/api/owner/clients', { credentials: 'include', headers })
+          fetch('/api/owner/clients', { credentials: 'include', headers }),
+          fetch('/api/owner/financial-feature-surveys', { credentials: 'include', headers })
         ]);
 
         const statsData = await statsRes.json();
         const financialData = await financialRes.json();
         const customersData = await customersRes.json();
+        const surveysData = await surveysRes.json();
 
         if (!statsRes.ok || !financialRes.ok || !customersRes.ok) {
           throw new Error('Erro ao carregar dados do super admin.');
@@ -72,6 +75,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         if (statsData.success) setStats(statsData.stats);
         if (financialData.success) setFinancial(financialData.data);
         if (customersData.success) setAllCustomers(customersData.data || []);
+        if (surveysData.success) setFinancialFeatureSurveys(surveysData.data || []);
       } catch (error: any) {
         console.error('Owner dashboard error:', error);
         alert(error.message || 'Nao foi possivel carregar o painel.');
@@ -88,18 +92,21 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     const token = session?.access_token;
     const headers = { Authorization: token ? `Bearer ${token}` : '' };
 
-    const [statsRes, financialRes, customersRes] = await Promise.all([
+    const [statsRes, financialRes, customersRes, surveysRes] = await Promise.all([
       fetch('/api/owner/stats', { credentials: 'include', headers }),
       fetch('/api/owner/financial-overview', { credentials: 'include', headers }),
-      fetch('/api/owner/clients', { credentials: 'include', headers })
+      fetch('/api/owner/clients', { credentials: 'include', headers }),
+      fetch('/api/owner/financial-feature-surveys', { credentials: 'include', headers })
     ]);
 
     const statsData = await statsRes.json();
     const financialData = await financialRes.json();
     const customersData = await customersRes.json();
+    const surveysData = await surveysRes.json();
     if (statsData.success) setStats(statsData.stats);
     if (financialData.success) setFinancial(financialData.data);
     if (customersData.success) setAllCustomers(customersData.data || []);
+    if (surveysData.success) setFinancialFeatureSurveys(surveysData.data || []);
   };
 
   const handleBootstrapFinance = async () => {
@@ -410,6 +417,38 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                   ))}
                 </tbody>
               </table>
+            </div>
+
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
+              <h3 className="text-lg font-black mb-4">Pesquisa do Módulo Financeiro</h3>
+              {financialFeatureSurveys.length === 0 ? (
+                <p className="text-sm text-slate-500">Ainda não há respostas.</p>
+              ) : (
+                <div className="space-y-3 max-h-[340px] overflow-y-auto pr-1">
+                  {financialFeatureSurveys.map((item: any, idx: number) => (
+                    <div
+                      key={`${item.clinic_id}-${item.user_id}-${idx}`}
+                      className="p-4 rounded-2xl border border-slate-100 bg-slate-50"
+                    >
+                      <p className="text-sm font-bold text-slate-800">
+                        {item.user_email || "Usuário sem e-mail"}
+                      </p>
+                      <p className="text-[11px] text-slate-500 mb-2">Clínica: {item.clinic_id}</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(item.selected_features || []).map((feature: string) => (
+                          <span
+                            key={feature}
+                            className="px-2 py-1 rounded-full bg-purple-100 text-[#7a32fc] text-[10px] font-semibold"
+                          >
+                            {feature}
+                          </span>
+                        ))}
+                      </div>
+                      {item.notes && <p className="text-xs text-slate-600 mt-2">{item.notes}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}

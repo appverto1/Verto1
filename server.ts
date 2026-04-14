@@ -2264,6 +2264,64 @@ async function startServer() {
     }
   });
 
+  app.get('/api/financial/feature-survey', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const user = req.session.user;
+      const clinicId = currentClinicId(user);
+      if (!clinicId) return res.json({ success: true, submitted: false, data: null });
+
+      const { data, error } = await supabase
+        .from('financial_module_feedback')
+        .select('*')
+        .eq('clinic_id', clinicId)
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+      res.json({ success: true, submitted: !!data, data: data || null });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message || String(error) });
+    }
+  });
+
+  app.post('/api/financial/feature-survey', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const user = req.session.user;
+      const clinicId = currentClinicId(user);
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+
+      const selectedFeaturesRaw = Array.isArray(req.body?.selectedFeatures) ? req.body.selectedFeatures : [];
+      const selectedFeatures = selectedFeaturesRaw
+        .map((f: any) => sanitizeString(f, 140))
+        .filter((f: string) => Boolean(f));
+      const notes = sanitizeString(req.body?.notes, 1200);
+
+      if (selectedFeatures.length === 0) {
+        return res.status(400).json({ success: false, error: 'Selecione ao menos uma funcionalidade.' });
+      }
+
+      const { error } = await supabase
+        .from('financial_module_feedback')
+        .upsert([{
+          clinic_id: clinicId,
+          user_id: user.id,
+          user_email: sanitizeEmail(user.email),
+          selected_features: selectedFeatures,
+          notes: notes || null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }], { onConflict: 'clinic_id,user_id' });
+
+      if (error) throw error;
+
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message || String(error) });
+    }
+  });
+
   const checkOwner = (req: any, res: any, next: any) => {
     if (req.session.user?.role === 'owner') {
       return next();
@@ -2475,6 +2533,19 @@ async function startServer() {
       });
     } catch (error) {
       return res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.get('/api/owner/financial-feature-surveys', checkAuth, checkOwner, async (_req: any, res) => {
+    try {
+      const { data, error } = await supabase
+        .from('financial_module_feedback')
+        .select('clinic_id,user_id,user_email,selected_features,notes,created_at');
+
+      if (error) throw error;
+      res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message || String(error) });
     }
   });
 

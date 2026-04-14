@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+﻿import React, { useState, useRef, useEffect } from 'react';
 import { 
   Settings, 
   Users, 
@@ -159,6 +159,22 @@ export function SettingsMenu({
                 </button>
               )}
 
+              {canManageTeam && (
+                <button
+                  onClick={() => {
+                    setIsOpen(false);
+                    onViewBilling?.();
+                  }}
+                  className="w-full flex items-center justify-between p-3 text-[#7a32fc] bg-purple-50 hover:bg-purple-100 rounded-xl transition-all group"
+                >
+                  <div className="flex items-center gap-3">
+                    <CreditCard size={18} className="text-[#7a32fc]" />
+                    <span className="text-sm font-semibold">Upgrade Simplificado</span>
+                  </div>
+                  <ChevronRight size={14} className="text-[#7a32fc]" />
+                </button>
+              )}
+
               <button
                 onClick={() => {
                   setIsOpen(false);
@@ -195,3 +211,4 @@ export function SettingsMenu({
     </div>
   );
 }
+
