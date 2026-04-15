@@ -1847,18 +1847,19 @@ export function CoordinatorDashboard({
 
   if (view === "patient" && selectedPatientId) {
     const patient = allPatients.find((p) => p.id === selectedPatientId);
-    const patientSidebarExpanded = true;
     return (
       <div className="min-h-screen bg-[#F4F7FE] flex">
         {/* Sidebar */}
         <div
-          className={`w-64 bg-white hidden lg:flex flex-col p-5 sticky top-0 h-screen border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
+          onMouseEnter={() => setIsSidebarExpanded(true)}
+          onMouseLeave={() => setIsSidebarExpanded(false)}
+          className={`${isSidebarExpanded ? "w-64" : "w-20"} bg-white hidden lg:flex flex-col p-5 sticky top-0 h-screen border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
         >
           <div
-            className={`flex items-center ${patientSidebarExpanded ? "gap-2" : "justify-center"} mb-7 px-1 transition-all duration-300`}
+            className={`flex items-center ${isSidebarExpanded ? "gap-2" : "justify-center"} mb-7 px-1 transition-all duration-300`}
           >
             <LogoVerto size={38} />
-            {patientSidebarExpanded && (
+            {isSidebarExpanded && (
               <div>
                 <span className="font-black text-xl text-slate-900 tracking-tighter block leading-none lowercase">
                   verto
@@ -1915,28 +1916,28 @@ export function CoordinatorDashboard({
                   navigateToTab(item.id as any);
                   setView("home");
                 }}
-                className={`w-full flex items-center ${patientSidebarExpanded ? "gap-3 px-4" : "justify-center"} py-3.5 rounded-2xl transition-all font-medium text-sm ${
+                className={`w-full flex items-center ${isSidebarExpanded ? "gap-3 px-4" : "justify-center"} py-3.5 rounded-2xl transition-all font-medium text-sm ${
                   activeTab === item.id
                     ? "text-[#7a32fc] bg-purple-50 shadow-sm"
                     : "text-slate-400 hover:text-slate-900 hover:bg-slate-50"
                 }`}
-                title={!patientSidebarExpanded ? item.label : ""}
+                title={!isSidebarExpanded ? item.label : ""}
               >
                 <item.icon size={20} />
-                {patientSidebarExpanded && item.label}
+                {isSidebarExpanded && item.label}
               </button>
             ))}
           </nav>
 
           <div className="mt-auto pt-4 border-t border-slate-50">
             <div
-              className={`bg-slate-50 rounded-2xl ${patientSidebarExpanded ? "p-3 mb-3" : "p-2 mb-2"} transition-all`}
+              className={`bg-slate-50 rounded-2xl ${isSidebarExpanded ? "p-3 mb-3" : "p-2 mb-2"} transition-all`}
             >
-              <div className={`flex items-center ${patientSidebarExpanded ? "gap-3" : "justify-center"}`}>
-                <div className={`${patientSidebarExpanded ? "w-10 h-10 rounded-xl" : "w-9 h-9 rounded-lg"} bg-white flex items-center justify-center font-bold text-[#7a32fc] shadow-sm`}>
+              <div className={`flex items-center ${isSidebarExpanded ? "gap-3" : "justify-center"}`}>
+                <div className={`${isSidebarExpanded ? "w-10 h-10 rounded-xl" : "w-9 h-9 rounded-lg"} bg-white flex items-center justify-center font-bold text-[#7a32fc] shadow-sm`}>
                   {user.name?.[0]}
                 </div>
-                {patientSidebarExpanded && (
+                {isSidebarExpanded && (
                   <div className="overflow-hidden">
                     <p className="text-sm font-bold text-slate-900 truncate">
                       {repairMojibake(user.name)}
@@ -1950,10 +1951,10 @@ export function CoordinatorDashboard({
             </div>
             <button
               onClick={onLogout}
-              className={`w-full flex items-center ${patientSidebarExpanded ? "gap-3 justify-start px-3" : "justify-center px-2"} py-2.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all font-bold text-sm`}
+              className={`w-full flex items-center ${isSidebarExpanded ? "gap-3 justify-start px-3" : "justify-center px-2"} py-2.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all font-bold text-sm`}
             >
               <LogOut size={18} />
-              {patientSidebarExpanded && "Sair do Sistema"}
+              {isSidebarExpanded && "Sair do Sistema"}
             </button>
           </div>
         </div>

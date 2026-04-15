@@ -811,7 +811,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         <TutorialOverlay 
           steps={[
             { targetId: 'back-btn', title: 'Voltar ao Dashboard', content: 'Clique aqui para retornar Ã  tela principal a qualquer momento.', placement: 'bottom' },
-            { targetId: 'patient-header-info', title: 'Informações do Paciente', content: 'Aqui você vê o nome, categoria (Criança/Adulto) e acessa o WhatsApp ou Ficha de Anamnese.', placement: 'bottom' },
+            { targetId: 'patient-header-info', title: 'Informações do Paciente', content: 'Aqui você vê o nome e acessa o WhatsApp ou Ficha de Anamnese.', placement: 'bottom' },
             { targetId: 'tab-nav', title: 'Navegação por Abas', content: 'O prontuário é organizado em abas para facilitar o acesso a diferentes tipos de informação.', placement: 'bottom' },
             { targetId: 'tab-history', title: 'Aba Histórico', content: 'Veja a evolução clínica e o histórico de todas as atividades realizadas pelo paciente.', placement: 'bottom' },
             { targetId: 'history-filters', title: 'Filtros e Comparação', content: 'Filtre por protocolo ou data para comparar o desempenho em diferentes momentos.', placement: 'bottom' },
@@ -904,9 +904,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             <div id="patient-header-info">
                 <div className="flex items-center gap-2">
                     <h1 className="text-2xl font-semibold text-gray-800 tracking-tight">{patient.name}</h1>
-                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full uppercase tracking-wider ${patientCategory === 'Criança' ? 'bg-pink-100 text-pink-500' : 'bg-indigo-50 text-indigo-500'}`}>
-                       {patientCategory === 'Criança' ? 'Criança' : 'Adulto'}
-                    </span>
                 </div>
                 <p className="text-gray-500 text-xs">Detalhes do Paciente</p>
             </div> 
