@@ -248,8 +248,8 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   };
 
   return (
-    <div className="fixed inset-0 z-[200] bg-slate-50 flex items-center justify-center p-4 overflow-y-auto">
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-white w-full max-w-5xl rounded-3xl shadow-xl border border-slate-100">
+    <div className="fixed inset-0 z-[200] bg-slate-50 flex items-start md:items-center justify-center p-4 md:p-6 overflow-y-auto">
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-white w-full max-w-5xl rounded-3xl shadow-xl border border-slate-100 my-2 md:my-6">
         <div className="grid md:grid-cols-[320px_1fr] min-h-[680px]">
           <div className="bg-[#7a32fc] text-white p-8 rounded-l-3xl">
             <h2 className="text-2xl font-bold">Boas-vindas a Verto</h2>
