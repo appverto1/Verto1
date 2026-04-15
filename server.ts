@@ -286,6 +286,7 @@ async function ensureClinicAndMembershipForCoordinator(userId: string, clinicNam
 // Initialize Supabase Admin Client (using service role for backend access)
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
 
 if (!supabaseUrl || !supabaseServiceKey) {
   console.error("--- ERRO DE CONFIGURAÇÃO CRÍTICO ---");
@@ -315,6 +316,7 @@ if (!supabaseUrl || !supabaseServiceKey) {
 
 // Only create client if we have the credentials to avoid crash
 let supabase: any = null;
+let supabaseAuthClient: any = null;
 try {
   if (supabaseUrl && supabaseServiceKey) {
     supabase = createClient(supabaseUrl, supabaseServiceKey, {
@@ -324,11 +326,45 @@ try {
         detectSessionInUrl: false
       }
     });
+    if (supabaseUrl && supabaseAnonKey) {
+      supabaseAuthClient = createClient(supabaseUrl, supabaseAnonKey, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+          detectSessionInUrl: false
+        }
+      });
+    }
   } else {
     console.warn("Supabase client NOT initialized due to missing credentials.");
   }
 } catch (err: any) {
   console.error("Failed to create Supabase client:", err.message);
+}
+
+async function getUserFromAccessToken(accessToken: string) {
+  if (!accessToken) return { user: null, error: 'Token ausente' };
+
+  const clients = [supabase, supabaseAuthClient].filter(Boolean);
+  let lastError = 'Falha ao validar token.';
+
+  for (const client of clients) {
+    try {
+      const { data: { user }, error } = await client.auth.getUser(accessToken);
+      if (!error && user) {
+        return { user, error: null };
+      }
+      if (error?.message) {
+        lastError = error.message;
+      }
+    } catch (err: any) {
+      if (err?.message) {
+        lastError = err.message;
+      }
+    }
+  }
+
+  return { user: null, error: lastError };
 }
 
 if (!process.env.STRIPE_SECRET_KEY) {
@@ -492,7 +528,7 @@ async function startServer() {
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.split(' ')[1];
       try {
-        const { data: { user }, error } = await supabase.auth.getUser(token);
+        const { user, error } = await getUserFromAccessToken(token);
         if (!error && user) {
           // Re-populate session if missing but token is valid
           const { data: profile } = await supabase.from('users').select('*').eq('id', user.id).single();
@@ -876,10 +912,10 @@ async function startServer() {
         return res.status(500).json({ error: "Erro de configuração no servidor (Supabase client not initialized)" });
       }
 
-      const { data: { user }, error } = await supabase.auth.getUser(accessToken);
+      const { user, error } = await getUserFromAccessToken(accessToken);
       
       if (error || !user) {
-        console.error('[Auth] Supabase auth error during token verification:', error?.message || 'No user found');
+        console.error('[Auth] Supabase auth error during token verification:', error || 'No user found');
         return res.status(401).json({ error: "Sessão expirada ou inválida. Por favor, faça login novamente." });
       }
 
@@ -3014,3 +3050,4 @@ startServer().catch(err => {
   console.error('FATAL ERROR STARTING SERVER:', err);
   process.exit(1);
 });
+
