@@ -504,6 +504,7 @@ async function startServer() {
               email: user.email,
               role: selectedWorkspace?.role || profile.role,
               name: profile.name,
+              profilePicture: sanitizeUrl(profile.profile_picture) || null,
               type: profile.type || user.user_metadata?.type || null,
               age: typeof profile.age === 'number' ? profile.age : null,
               subscriptionStatus: profile.subscription_status,
@@ -717,6 +718,7 @@ async function startServer() {
         email: user.email,
         role: selectedWorkspace?.role || profile.role,
         name: profile.name,
+        profilePicture: sanitizeUrl(profile.profile_picture) || null,
         type: profile.type || user.user_metadata?.type || null,
         age: typeof profile.age === 'number' ? profile.age : null,
         subscriptionStatus: profile.subscription_status,
@@ -829,6 +831,7 @@ async function startServer() {
           email: email,
           role: roleToUse,
           name: name || email.split('@')[0],
+          profilePicture: sanitizeUrl(newProfile.profile_picture) || null,
           type: newProfile.type || null,
           age: typeof newProfile.age === 'number' ? newProfile.age : null,
           subscriptionStatus: 'pending',
@@ -1036,6 +1039,7 @@ async function startServer() {
         email: user.email,
         role: roleForSession,
         name: profile.name,
+        profilePicture: sanitizeUrl(profile.profile_picture) || null,
         type: profile.type || user.user_metadata?.type || null,
         age: typeof profile.age === 'number' ? profile.age : null,
         subscriptionStatus: profile.subscription_status,
@@ -2020,6 +2024,7 @@ async function startServer() {
         .from('users')
         .update({
           name: fullName,
+          profile_picture: profilePicture,
           subscription_status: 'active',
           updated_at: new Date().toISOString()
         })
