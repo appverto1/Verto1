@@ -79,6 +79,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [pendingAnamnesisPayload, setPendingAnamnesisPayload] = useState<string>("");
   const [anamnesisFileName, setAnamnesisFileName] = useState("");
   const [anamnesisFileDate, setAnamnesisFileDate] = useState(new Date().toISOString().slice(0, 10));
+  const [isPreparingAnamnesisSave, setIsPreparingAnamnesisSave] = useState(false);
   const [previewFile, setPreviewFile] = useState<any>(null);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -695,6 +696,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   }; 
   const handleSaveTaskEdit = () => { if (editingTask && editingTask.title) { onUpdateTask(editingTask.id, { title: editingTask.title, description: editingTask.description }); setEditingTask(null); } }; 
   const handleUpdateAnamnesis = (updatedData: any) => {
+    if (isPreparingAnamnesisSave || showAnamnesisFileModal) return;
+    setIsPreparingAnamnesisSave(true);
     if (onUpdatePatient) {
       onUpdatePatient({
         id: patient.id,
@@ -712,7 +715,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     setPendingAnamnesisPayload(fichePayload);
     setAnamnesisFileName(defaultName);
     setAnamnesisFileDate(new Date().toISOString().slice(0, 10));
+    setShowAnamnesis(false);
     setShowAnamnesisFileModal(true);
+    setIsPreparingAnamnesisSave(false);
     onAddActivityLog?.(
       "Ficha de anamnese salva",
       `A ficha de anamnese do paciente ${patient.name} foi registrada e anexada aos arquivos do prontuário.`,
@@ -834,6 +839,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     ]);
     setShowAnamnesisFileModal(false);
     setPendingAnamnesisPayload("");
+    setIsPreparingAnamnesisSave(false);
     setActiveTab("files");
   };
 
@@ -2153,12 +2159,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       </div> 
 
       {showAnamnesisFileModal && (
-        <div className="fixed inset-0 z-[120] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[190] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-lg rounded-3xl p-6 shadow-2xl">
             <h3 className="text-lg font-bold text-slate-900 mb-2">Salvar ficha de anamnese em Arquivos</h3>
             <p className="text-sm text-slate-500 mb-5">
               Defina o nome e a data de referência para visualizar e baixar este documento depois.
             </p>
+            <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
+              Ficha preenchida com sucesso. Confirme abaixo para finalizar o salvamento.
+            </div>
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-2">Nome do arquivo</label>
@@ -2183,6 +2192,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 onClick={() => {
                   setShowAnamnesisFileModal(false);
                   setPendingAnamnesisPayload("");
+                  setIsPreparingAnamnesisSave(false);
                 }}
                 className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-semibold text-sm"
               >
