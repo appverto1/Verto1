@@ -13,7 +13,6 @@ interface ProfessionalOnboardingProps {
 function SignaturePad({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [drawing, setDrawing] = useState(false);
-  const [hasStroke, setHasStroke] = useState(false);
 
   const getPoint = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -31,7 +30,6 @@ function SignaturePad({ value, onChange }: { value: string | null; onChange: (v:
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     setDrawing(true);
-    setHasStroke(false);
     const p = getPoint(e);
     ctx.beginPath();
     ctx.moveTo(p.x, p.y);
@@ -44,7 +42,6 @@ function SignaturePad({ value, onChange }: { value: string | null; onChange: (v:
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const p = getPoint(e);
-    setHasStroke(true);
     ctx.lineWidth = 2;
     ctx.lineCap = 'round';
     ctx.strokeStyle = '#0f172a';
@@ -56,10 +53,8 @@ function SignaturePad({ value, onChange }: { value: string | null; onChange: (v:
     const canvas = canvasRef.current;
     if (!canvas) return;
     setDrawing(false);
-    if (!hasStroke) return;
     const data = canvas.toDataURL('image/png');
     onChange(data);
-    setHasStroke(false);
   };
 
   const clear = () => {
@@ -253,8 +248,8 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   };
 
   return (
-    <div className="fixed inset-0 z-[200] bg-slate-50 flex items-start justify-center p-4 md:p-6 overflow-y-auto">
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-white w-full max-w-5xl rounded-3xl shadow-xl border border-slate-100 my-2 max-h-[94vh] overflow-hidden">
+    <div className="fixed inset-0 z-[200] bg-slate-50 flex items-center justify-center p-4 overflow-y-auto">
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-white w-full max-w-5xl rounded-3xl shadow-xl border border-slate-100">
         <div className="grid md:grid-cols-[320px_1fr] min-h-[680px]">
           <div className="bg-[#7a32fc] text-white p-8 rounded-l-3xl">
             <h2 className="text-2xl font-bold">Boas-vindas a Verto</h2>
@@ -266,7 +261,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
             </div>
           </div>
 
-          <div className="p-8 relative overflow-y-auto max-h-[94vh]">
+          <div className="p-8 relative">
             {onClose && (
               <button onClick={onClose} className="absolute right-6 top-6 text-slate-400 hover:text-slate-600">
                 <X size={18} />

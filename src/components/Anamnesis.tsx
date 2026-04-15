@@ -236,6 +236,22 @@ export const AnamnesisModal = ({
     }));
   };
 
+  const updateCustomQuestion = (id: string, updates: Partial<CustomQuestion>) => {
+    setTemplateState((prev) => ({
+      ...prev,
+      customQuestions: prev.customQuestions.map((q) => {
+        if (q.id !== id) return q;
+        const next = { ...q, ...updates };
+        if (next.type === 'dissertativa') {
+          next.options = [];
+        } else if (!Array.isArray(next.options)) {
+          next.options = [];
+        }
+        return next;
+      })
+    }));
+  };
+
   const saveTemplate = async () => {
     if (!onTemplateSave) return;
     await onTemplateSave(templateState);
@@ -316,11 +332,58 @@ export const AnamnesisModal = ({
               {templateState.customQuestions.length > 0 && (
                 <div className="space-y-2">
                   {templateState.customQuestions.map((q) => (
-                    <div key={q.id} className="flex items-center justify-between gap-3 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2">
-                      <div>
-                        <p className="text-sm font-semibold text-gray-700">{q.label}</p>
-                        <p className="text-[10px] uppercase tracking-wider text-gray-400">{q.type} • {q.appliesTo}</p>
+                    <div key={q.id} className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-3">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={q.label}
+                          onChange={(e) => updateCustomQuestion(q.id, { label: e.target.value })}
+                          className="bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none"
+                          placeholder="Pergunta"
+                        />
+                        <select
+                          value={q.type}
+                          onChange={(e) => updateCustomQuestion(q.id, { type: e.target.value as CustomQuestion["type"] })}
+                          className="bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none"
+                        >
+                          <option value="dissertativa">Dissertativa</option>
+                          <option value="multipla_escolha">Múltipla escolha (1)</option>
+                          <option value="multipla_selecao">Múltipla seleção</option>
+                        </select>
+                        <select
+                          value={q.appliesTo}
+                          onChange={(e) => updateCustomQuestion(q.id, { appliesTo: e.target.value as CustomQuestion["appliesTo"] })}
+                          className="bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none"
+                        >
+                          <option value="both">Adulto e Criança</option>
+                          <option value="adult">Só Adulto</option>
+                          <option value="child">Só Criança</option>
+                        </select>
+                        <label className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs font-semibold text-gray-700">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(q.required)}
+                            onChange={(e) => updateCustomQuestion(q.id, { required: e.target.checked })}
+                          />
+                          Obrigatória
+                        </label>
                       </div>
+                      {q.type !== "dissertativa" && (
+                        <input
+                          type="text"
+                          value={q.options.join(", ")}
+                          onChange={(e) =>
+                            updateCustomQuestion(q.id, {
+                              options: e.target.value
+                                .split(",")
+                                .map((opt) => opt.trim())
+                                .filter(Boolean),
+                            })
+                          }
+                          className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none"
+                          placeholder="Opções separadas por vírgula"
+                        />
+                      )}
                       <div className="flex items-center gap-2">
                         <button type="button" onClick={() => toggleCustomQuestionActive(q.id)} className={`px-2 py-1 rounded-lg text-[10px] font-bold ${q.active ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'}`}>
                           {q.active ? "ATIVA" : "INATIVA"}

@@ -87,9 +87,15 @@ function sanitizeDate(value: unknown): string | null {
 }
 
 function sanitizeUrl(value: unknown): string | null {
-  const url = sanitizeString(value, 2000);
+  const url = typeof value === 'string' ? value.trim() : '';
   if (!url) return null;
-  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:image/')) {
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    return sanitizeString(url, 4000);
+  }
+  if (url.startsWith('data:image/')) {
+    // Data URLs (logo/assinatura/foto) podem passar de 2k caracteres.
+    // Mantemos limite de 1MB para evitar payloads abusivos.
+    if (url.length > 1_000_000) return null;
     return url;
   }
   return null;
@@ -2068,9 +2074,25 @@ async function startServer() {
           }], { onConflict: 'id' });
       }
 
+      const nextClinicSettings = cleanObject({
+        ...(req.session.user?.clinicSettings || {}),
+        clinicName: clinicName || null,
+        clinicLogoUrl: clinicLogoUrl || null,
+        clinicCnpj: clinicCnpj || null,
+        clinicPhone: clinicPhone || null,
+        specialty: specialty || null,
+        council: council || null,
+        councilNumber: councilNumber || null,
+        signatureDataUrl: signatureDataUrl || null,
+        defaultSessionDuration: sessionDurationMinutes,
+        workStart: req.session.user?.clinicSettings?.workStart || '08:00',
+        workEnd: req.session.user?.clinicSettings?.workEnd || '18:00',
+        clinicAddress: [logradouro, number, bairro, cidade].filter(Boolean).join(', ')
+      });
+
       await supabase.auth.admin.updateUserById(userId, {
         user_metadata: {
-          ...(req.session.user?.clinicSettings ? { clinic_settings: req.session.user.clinicSettings } : {}),
+          clinic_settings: nextClinicSettings,
           first_login_completed: true
         }
       });
@@ -2079,6 +2101,7 @@ async function startServer() {
       req.session.user.firstLoginCompleted = true;
       req.session.user.subscriptionStatus = 'active';
       req.session.user.profilePicture = profilePicture || req.session.user.profilePicture || null;
+      req.session.user.clinicSettings = nextClinicSettings;
       req.session.user.workspaces = await fetchUserWorkspaces(userId);
 
       req.session.save((err: any) => {

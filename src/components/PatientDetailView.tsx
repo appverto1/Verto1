@@ -139,35 +139,68 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ficha de Anamnese - ${escapeHtml(patient?.name || "Paciente")}</title>
+  <style>
+    @page { size: A4; margin: 18mm; }
+    body { font-family: 'Inter', 'Segoe UI', Arial, sans-serif; background: #f5f7ff; color: #0f172a; margin: 0; }
+    .sheet { max-width: 960px; margin: 24px auto; background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 12px 32px rgba(15,23,42,.08); }
+    .header { padding: 22px 24px; background: linear-gradient(135deg,#eef2ff,#f8f5ff); border-bottom: 1px solid #e2e8f0; display:flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+    .title { margin: 0 0 6px 0; font-size: 22px; color: #312e81; }
+    .meta { margin: 2px 0; font-size: 13px; color: #475569; }
+    .logo { width: 90px; height: 90px; object-fit: contain; border-radius: 12px; border: 1px solid #e2e8f0; background: #fff; padding: 8px; }
+    .content { padding: 20px 24px; }
+    .patient { margin: 0 0 14px 0; font-size: 13px; color: #334155; }
+    .table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .th { padding: 9px 10px; border: 1px solid #e2e8f0; background: #f8fafc; font-weight: 700; color: #334155; width: 35%; vertical-align: top; }
+    .td { padding: 9px 10px; border: 1px solid #e2e8f0; color: #0f172a; white-space: pre-wrap; }
+    .footer { padding: 16px 24px; border-top: 1px solid #e2e8f0; display:flex; justify-content: space-between; align-items: flex-end; gap: 14px; }
+    .signature { text-align: right; min-width: 240px; }
+    .signature img { height: 46px; max-width: 220px; object-fit: contain; display:block; margin-left:auto; }
+    .signature-line { margin-top: 6px; border-top: 1px solid #cbd5e1; padding-top: 4px; font-size: 11px; color: #64748b; }
+    .note { margin: 0; font-size: 12px; color: #64748b; }
+  </style>
 </head>
-<body style="font-family:Inter,Arial,sans-serif;background:#ffffff;color:#0f172a;padding:24px;">
-  <div style="max-width:960px;margin:0 auto;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
-    <div style="padding:18px 20px;background:#f8fafc;border-bottom:1px solid #e2e8f0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
+<body>
+  <div class="sheet">
+    <div class="header">
       <div>
-        <h1 style="font-size:20px;margin:0 0 6px 0;color:#1e1b4b;">Ficha de Anamnese</h1>
-        <p style="margin:0;font-size:13px;color:#475569;"><strong>Clínica:</strong> ${escapeHtml(c.clinicName || "Clínica Verto")}</p>
-        <p style="margin:2px 0 0 0;font-size:13px;color:#475569;"><strong>CNPJ:</strong> ${escapeHtml(c.cnpj || "-")}</p>
-        <p style="margin:2px 0 0 0;font-size:13px;color:#475569;"><strong>Endereço:</strong> ${escapeHtml(c.address || "-")}</p>
+        <h1 class="title">Ficha de Anamnese</h1>
+        <p class="meta"><strong>Clínica:</strong> ${escapeHtml(c.clinicName || "Clínica Verto")}</p>
+        <p class="meta"><strong>CNPJ:</strong> ${escapeHtml(c.cnpj || "-")}</p>
+        <p class="meta"><strong>Endereço:</strong> ${escapeHtml(c.address || "-")}</p>
       </div>
-      ${c.logoUrl ? `<img src="${escapeHtml(c.logoUrl)}" style="width:84px;height:84px;object-fit:contain;border-radius:10px;border:1px solid #e2e8f0;background:#fff;padding:6px;" />` : ""}
+      ${c.logoUrl ? `<img src="${escapeHtml(c.logoUrl)}" class="logo" />` : ""}
     </div>
-    <div style="padding:18px 20px;">
-      <p style="margin:0 0 2px 0;font-size:13px;color:#475569;"><strong>Paciente:</strong> ${escapeHtml(patient?.name || "-")}</p>
-      <p style="margin:0 0 18px 0;font-size:13px;color:#475569;"><strong>Data da ficha:</strong> ${escapeHtml(fichaDate)}</p>
-      <table style="width:100%;border-collapse:collapse;font-size:13px;">${lines || `<tr><td style="padding:10px;color:#64748b;">Sem campos preenchidos.</td></tr>`}</table>
+    <div class="content">
+      <p class="patient"><strong>Paciente:</strong> ${escapeHtml(patient?.name || "-")} | <strong>Data da ficha:</strong> ${escapeHtml(fichaDate)}</p>
+      <table class="table">${lines || `<tr><td class="td">Sem campos preenchidos.</td></tr>`}</table>
     </div>
-    <div style="padding:16px 20px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:flex-end;gap:12px;">
+    <div class="footer">
       <div>
-        <p style="margin:0;font-size:12px;color:#64748b;">Documento gerado automaticamente pela plataforma Verto.</p>
+        <p class="note">Documento gerado automaticamente pela plataforma Verto.</p>
       </div>
-      <div style="text-align:right;">
-        ${c.signatureUrl ? `<img src="${escapeHtml(c.signatureUrl)}" style="height:42px;object-fit:contain;display:block;margin-left:auto;" />` : ""}
-        <p style="margin:4px 0 0 0;font-size:11px;color:#64748b;">Assinatura profissional</p>
+      <div class="signature">
+        ${c.signatureUrl ? `<img src="${escapeHtml(c.signatureUrl)}" />` : ""}
+        <p class="signature-line">Assinatura profissional</p>
       </div>
     </div>
   </div>
 </body>
 </html>`;
+  };
+
+  const openPrintWindowForPdf = (htmlContent: string) => {
+    const printWindow = window.open("", "_blank", "noopener,noreferrer,width=1100,height=900");
+    if (!printWindow) {
+      alert("Não foi possível abrir a janela de impressão. Verifique se o bloqueador de pop-up está ativo.");
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      printWindow.print();
+    }, 350);
   };
 
   const availableSnapshots = useMemo(() => {
@@ -556,7 +589,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     }
 
     const fichePayload = buildAnamnesisDocumentHtml(updatedData, anamnesisFileDate);
-    const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.html`;
+    const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.pdf`;
     setPendingAnamnesisPayload(fichePayload);
     setAnamnesisFileName(defaultName);
     setAnamnesisFileDate(new Date().toISOString().slice(0, 10));
@@ -652,9 +685,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const handleConfirmAnamnesisFile = () => {
     if (!pendingAnamnesisPayload) return;
     const fileName = (anamnesisFileName || `Ficha_Anamnese_${patient.name}`).trim();
-    const normalizedName = fileName.toLowerCase().endsWith(".html")
+    const normalizedName = fileName.toLowerCase().endsWith(".pdf")
       ? fileName
-      : `${fileName}.html`;
+      : `${fileName}.pdf`;
     const sizeKb = Math.max(1, Math.round(pendingAnamnesisPayload.length / 1024));
     const payloadDate = anamnesisFileDate
       ? new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString("pt-BR")
@@ -681,6 +714,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   };
 
   const handleDownloadPatientFile = (file: any) => {
+    if (file?.source === "anamnesis" && file?.content) {
+      openPrintWindowForPdf(file.content);
+      return;
+    }
+
     const href = file.objectUrl || file.url;
     if (href) {
       const a = document.createElement("a");
@@ -811,7 +849,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         <TutorialOverlay 
           steps={[
             { targetId: 'back-btn', title: 'Voltar ao Dashboard', content: 'Clique aqui para retornar Ã  tela principal a qualquer momento.', placement: 'bottom' },
-            { targetId: 'patient-header-info', title: 'Informações do Paciente', content: 'Aqui você vê o nome e acessa o WhatsApp ou Ficha de Anamnese.', placement: 'bottom' },
+            { targetId: 'patient-header-info', title: 'Informações do Paciente', content: 'Aqui você vê o nome, categoria (Criança/Adulto) e acessa o WhatsApp ou Ficha de Anamnese.', placement: 'bottom' },
             { targetId: 'tab-nav', title: 'Navegação por Abas', content: 'O prontuário é organizado em abas para facilitar o acesso a diferentes tipos de informação.', placement: 'bottom' },
             { targetId: 'tab-history', title: 'Aba Histórico', content: 'Veja a evolução clínica e o histórico de todas as atividades realizadas pelo paciente.', placement: 'bottom' },
             { targetId: 'history-filters', title: 'Filtros e Comparação', content: 'Filtre por protocolo ou data para comparar o desempenho em diferentes momentos.', placement: 'bottom' },
@@ -904,6 +942,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             <div id="patient-header-info">
                 <div className="flex items-center gap-2">
                     <h1 className="text-2xl font-semibold text-gray-800 tracking-tight">{patient.name}</h1>
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full uppercase tracking-wider ${patientCategory === 'Criança' ? 'bg-pink-100 text-pink-500' : 'bg-indigo-50 text-indigo-500'}`}>
+                       {patientCategory === 'Criança' ? 'Criança' : 'Adulto'}
+                    </span>
                 </div>
                 <p className="text-gray-500 text-xs">Detalhes do Paciente</p>
             </div> 
