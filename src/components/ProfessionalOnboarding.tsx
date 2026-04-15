@@ -113,6 +113,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
 
   const [clinicName, setClinicName] = useState('');
   const [clinicLogoUrl, setClinicLogoUrl] = useState<string | null>(null);
+  const [clinicCnpj, setClinicCnpj] = useState('');
   const [clinicPhone, setClinicPhone] = useState('');
   const [specialty, setSpecialty] = useState('');
   const [council, setCouncil] = useState('');
@@ -138,6 +139,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         setProfilePicture(profile.profile_photo_url || null);
         setClinicName(profile.clinic_name || "");
         setClinicLogoUrl(profile.clinic_logo_url || null);
+        setClinicCnpj(profile.metadata?.clinicCnpj || profile.address?.cnpj || "");
         setClinicPhone(profile.clinic_phone || "");
         setSpecialty(profile.specialty || "");
         setCouncil(profile.council || "");
@@ -217,6 +219,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
           phone,
           clinicName,
           clinicLogoUrl,
+          clinicCnpj,
           clinicPhone,
           specialty,
           council,
@@ -327,21 +330,30 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                 {isCoordinator && (
                   <div className="grid md:grid-cols-2 gap-4">
                     <input value={clinicName} onChange={(e) => setClinicName(e.target.value)} placeholder="Nome da clinica" className="px-4 py-3 rounded-xl bg-slate-50" />
+                    <input value={clinicCnpj} onChange={(e) => setClinicCnpj(e.target.value)} placeholder="CNPJ da clinica" className="px-4 py-3 rounded-xl bg-slate-50" />
                     <input value={clinicPhone} onChange={(e) => setClinicPhone(e.target.value)} placeholder="Telefone comercial" className="px-4 py-3 rounded-xl bg-slate-50" />
                     <input value={specialty} onChange={(e) => setSpecialty(e.target.value)} placeholder="Especialidade" className="px-4 py-3 rounded-xl bg-slate-50" />
-                    <div>
-                      <label className="text-xs text-slate-500 block mb-1">Logotipo da clínica</label>
+                    <label className="md:col-span-2 block cursor-pointer">
+                      <span className="text-xs text-slate-500 block mb-2">Logotipo da clínica</span>
+                      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 flex items-center gap-4 hover:border-[#7a32fc] transition-all">
+                        <div className="w-16 h-16 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden">
+                          {clinicLogoUrl ? <img src={clinicLogoUrl} alt="Logo" className="w-full h-full object-cover" /> : <UploadCloud size={20} className="text-slate-400" />}
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold text-slate-800">Enviar logo da clínica</p>
+                          <p className="text-xs text-slate-500">JPG ou PNG. Esta logo aparecerá em documentos e relatórios.</p>
+                        </div>
+                      </div>
                       <input
                         type="file"
-                        className="block w-full text-xs bg-slate-50 p-3 rounded-xl"
+                        className="hidden"
                         accept="image/*"
                         onChange={(e) => {
                           const file = e.target.files?.[0];
                           if (file) toBase64(file, setClinicLogoUrl);
                         }}
                       />
-                    </div>
-                    {clinicLogoUrl && <img src={clinicLogoUrl} alt="Logo" className="h-16 object-contain rounded-xl border border-slate-200 p-2 bg-white" />}
+                    </label>
                   </div>
                 )}
 
@@ -361,18 +373,26 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                 {(isCoordinator || isTherapist) && (
                   <div>
                     <p className="text-sm font-semibold text-slate-800 mb-2">Assinatura para relatorios</p>
-                    <div className="mb-3">
-                      <label className="text-xs text-slate-600">Ou envie uma imagem pronta</label>
+                    <label className="block cursor-pointer mb-3">
+                      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 flex items-center gap-4 hover:border-[#7a32fc] transition-all">
+                        <div className="w-16 h-16 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden">
+                          {signatureDataUrl ? <img src={signatureDataUrl} alt="Assinatura" className="w-full h-full object-contain" /> : <UploadCloud size={20} className="text-slate-400" />}
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold text-slate-800">Enviar assinatura pronta</p>
+                          <p className="text-xs text-slate-500">Opcional. Você também pode assinar no campo abaixo.</p>
+                        </div>
+                      </div>
                       <input
                         type="file"
-                        className="mt-1 block w-full text-xs"
+                        className="hidden"
                         accept="image/*"
                         onChange={(e) => {
                           const file = e.target.files?.[0];
                           if (file) toBase64(file, setSignatureDataUrl);
                         }}
                       />
-                    </div>
+                    </label>
                     <SignaturePad value={signatureDataUrl} onChange={setSignatureDataUrl} />
                   </div>
                 )}

@@ -7,7 +7,7 @@ import { HistoryCard } from './History';
 import { SessionMode } from './SessionMode';
 import { ENERGY_TAGS } from './Common';
 
-export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed }: any) => { 
+export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext }: any) => { 
   const [activeTab, setActiveTab] = useState(initialTab); 
   const [newNote, setNewNote] = useState(""); 
   const [noteMode, setNoteMode] = useState('private'); 
@@ -101,6 +101,74 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     return protocols[0]?.id || '';
   });
   const [selectedSnapshotDate, setSelectedSnapshotDate] = useState("all");
+
+  const escapeHtml = (value: any) =>
+    String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+
+  const buildAnamnesisDocumentHtml = (anamnesis: any, fichaDateIso: string) => {
+    const c = clinicContext || {};
+    const formatFieldLabel = (key: string) =>
+      key
+        .replace(/([a-z])([A-Z])/g, "$1 $2")
+        .replaceAll("_", " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/^./, (l) => l.toUpperCase());
+    const lines = Object.entries(anamnesis || {})
+      .filter(([key, value]) => value !== null && value !== undefined && String(value).trim() !== "")
+      .map(
+        ([key, value]) => `
+          <tr>
+            <td style="padding:8px 10px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;color:#334155;width:35%;">${escapeHtml(formatFieldLabel(key))}</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8f0;color:#0f172a;">${escapeHtml(value)}</td>
+          </tr>`,
+      )
+      .join("");
+
+    const fichaDate = fichaDateIso
+      ? new Date(`${fichaDateIso}T00:00:00`).toLocaleDateString("pt-BR")
+      : new Date().toLocaleDateString("pt-BR");
+
+    return `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ficha de Anamnese - ${escapeHtml(patient?.name || "Paciente")}</title>
+</head>
+<body style="font-family:Inter,Arial,sans-serif;background:#ffffff;color:#0f172a;padding:24px;">
+  <div style="max-width:960px;margin:0 auto;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
+    <div style="padding:18px 20px;background:#f8fafc;border-bottom:1px solid #e2e8f0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
+      <div>
+        <h1 style="font-size:20px;margin:0 0 6px 0;color:#1e1b4b;">Ficha de Anamnese</h1>
+        <p style="margin:0;font-size:13px;color:#475569;"><strong>Clínica:</strong> ${escapeHtml(c.clinicName || "Clínica Verto")}</p>
+        <p style="margin:2px 0 0 0;font-size:13px;color:#475569;"><strong>CNPJ:</strong> ${escapeHtml(c.cnpj || "-")}</p>
+        <p style="margin:2px 0 0 0;font-size:13px;color:#475569;"><strong>Endereço:</strong> ${escapeHtml(c.address || "-")}</p>
+      </div>
+      ${c.logoUrl ? `<img src="${escapeHtml(c.logoUrl)}" style="width:84px;height:84px;object-fit:contain;border-radius:10px;border:1px solid #e2e8f0;background:#fff;padding:6px;" />` : ""}
+    </div>
+    <div style="padding:18px 20px;">
+      <p style="margin:0 0 2px 0;font-size:13px;color:#475569;"><strong>Paciente:</strong> ${escapeHtml(patient?.name || "-")}</p>
+      <p style="margin:0 0 18px 0;font-size:13px;color:#475569;"><strong>Data da ficha:</strong> ${escapeHtml(fichaDate)}</p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">${lines || `<tr><td style="padding:10px;color:#64748b;">Sem campos preenchidos.</td></tr>`}</table>
+    </div>
+    <div style="padding:16px 20px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:flex-end;gap:12px;">
+      <div>
+        <p style="margin:0;font-size:12px;color:#64748b;">Documento gerado automaticamente pela plataforma Verto.</p>
+      </div>
+      <div style="text-align:right;">
+        ${c.signatureUrl ? `<img src="${escapeHtml(c.signatureUrl)}" style="height:42px;object-fit:contain;display:block;margin-left:auto;" />` : ""}
+        <p style="margin:4px 0 0 0;font-size:11px;color:#64748b;">Assinatura profissional</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+  };
 
   const availableSnapshots = useMemo(() => {
     const dates = (history || [])
@@ -487,8 +555,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       });
     }
 
-    const fichePayload = JSON.stringify(updatedData, null, 2);
-    const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.json`;
+    const fichePayload = buildAnamnesisDocumentHtml(updatedData, anamnesisFileDate);
+    const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.html`;
     setPendingAnamnesisPayload(fichePayload);
     setAnamnesisFileName(defaultName);
     setAnamnesisFileDate(new Date().toISOString().slice(0, 10));
@@ -584,23 +652,26 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const handleConfirmAnamnesisFile = () => {
     if (!pendingAnamnesisPayload) return;
     const fileName = (anamnesisFileName || `Ficha_Anamnese_${patient.name}`).trim();
-    const normalizedName = fileName.toLowerCase().endsWith(".json")
+    const normalizedName = fileName.toLowerCase().endsWith(".html")
       ? fileName
-      : `${fileName}.json`;
+      : `${fileName}.html`;
     const sizeKb = Math.max(1, Math.round(pendingAnamnesisPayload.length / 1024));
     const payloadDate = anamnesisFileDate
       ? new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString("pt-BR")
       : new Date().toLocaleDateString("pt-BR");
 
+    const htmlBlob = new Blob([pendingAnamnesisPayload], { type: "text/html" });
+    const htmlObjectUrl = URL.createObjectURL(htmlBlob);
     setPatientFiles((prev: any[]) => [
       {
         id: Date.now(),
         name: normalizedName,
         size: `${sizeKb} KB`,
         date: payloadDate,
-        type: "application/json",
+        type: "text/html",
         source: "anamnesis",
         content: pendingAnamnesisPayload,
+        objectUrl: htmlObjectUrl,
       },
       ...prev,
     ]);
@@ -1980,6 +2051,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               <img src={previewFile.objectUrl || previewFile.url} alt={previewFile.name} className="w-full rounded-xl border border-slate-200" />
             ) : previewFile.type?.includes("pdf") && (previewFile.objectUrl || previewFile.url) ? (
               <iframe src={previewFile.objectUrl || previewFile.url} title={previewFile.name} className="w-full h-[65vh] rounded-xl border border-slate-200" />
+            ) : previewFile.type?.includes("html") && (previewFile.objectUrl || previewFile.url) ? (
+              <iframe src={previewFile.objectUrl || previewFile.url} title={previewFile.name} className="w-full h-[70vh] rounded-xl border border-slate-200 bg-white" />
             ) : previewFile.content ? (
               <pre className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs overflow-auto whitespace-pre-wrap">
                 {previewFile.content}

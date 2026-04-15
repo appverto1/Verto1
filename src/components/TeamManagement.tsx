@@ -61,7 +61,11 @@ export function TeamManagement({
 
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
-  const planName = user.planName || 'Essencial';
+  const rawPlanName = String(user?.planName || '').trim();
+  const planName =
+    !rawPlanName || rawPlanName === 'Verto Pro' || rawPlanName === 'Plano Pro'
+      ? 'Essencial'
+      : rawPlanName;
   const inviteLimit = PLAN_LIMITS[planName] || 2;
   const totalUsed = (members?.length || 0) + (invitations?.filter(i => i.status === 'pending').length || 0);
   const canInvite = totalUsed < inviteLimit;
@@ -175,7 +179,7 @@ export function TeamManagement({
           {!canInvite && (
             <button 
               onClick={() => onRequestUpgrade?.()}
-              className="px-4 py-2 bg-[#7a32fc] text-white rounded-xl text-xs font-bold uppercase shadow-lg shadow-purple-500/20 hover:scale-105 transition-all"
+              className="px-4 py-2 bg-gradient-to-r from-[#6D28FF] to-[#9F67FF] text-white rounded-xl text-xs font-bold uppercase shadow-lg shadow-purple-500/30 hover:scale-105 transition-all"
             >
               Fazer Upgrade
             </button>
@@ -390,9 +394,9 @@ export function TeamManagement({
                 type="submit"
                 disabled={isAssigning || !canInvite}
                 className={`w-full py-4 rounded-2xl font-bold text-sm shadow-lg transition-all ${
-                  !canInvite 
-                    ? 'bg-[#7a32fc] text-white cursor-pointer shadow-purple-500/20' 
-                    : 'bg-[#4318FF] text-white shadow-blue-500/20 hover:scale-[1.02] active:scale-[0.98]'
+                  !canInvite
+                    ? 'bg-gradient-to-r from-[#6D28FF] to-[#9F67FF] text-white cursor-pointer shadow-purple-500/30'
+                    : 'bg-gradient-to-r from-[#6D28FF] to-[#9F67FF] text-white shadow-purple-500/30 hover:scale-[1.02] active:scale-[0.98]'
                 } disabled:opacity-50 disabled:scale-100`}
                 onClick={!canInvite ? () => onRequestUpgrade?.() : undefined}
               >

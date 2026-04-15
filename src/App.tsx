@@ -291,11 +291,11 @@ export default function App() {
     { id: 'room4', name: 'Sala 04 - TO', specialties: ['Integração Sensorial', 'TO'] },
   ]);
   const [therapistAgenda, setTherapistAgenda] = useState<any[]>([ 
-    { id: 101, name: 'Alexandre', date: todayStr, time: '09:00', status: 'confirmed', type: 'ABA', color: 'bg-blue-100 text-blue-600', room: 'room1', professional: 'Dra. Raísa', professionalId: 'prof1' }, 
-    { id: 102, name: 'Júlia S.', date: todayStr, time: '10:30', status: 'pending', type: 'Neuropsicologia', color: 'bg-pink-100 text-pink-600', room: 'room3', professional: 'Dra. Raísa', professionalId: 'prof1' },
-    { id: 103, name: 'Marcos P.', date: tomorrowStr, time: '14:00', status: 'confirmed', type: 'TCC', color: 'bg-green-100 text-green-600', room: 'room1', professional: 'Dra. Raísa', professionalId: 'prof1' },
-    { id: 104, name: 'Ana Clara', date: nextWeekStr, time: '11:00', status: 'pending', type: 'Integração Sensorial', color: 'bg-orange-100 text-orange-600', room: 'room2', professional: 'Dra. Raísa', professionalId: 'prof1' },
-    { id: 105, name: 'Pedro H.', date: todayStr, time: '16:00', status: 'canceled', type: 'TO', color: 'bg-red-100 text-red-600', room: 'room4', professional: 'Dra. Raísa', professionalId: 'prof1' }
+    { id: 101, name: 'Alexandre', date: todayStr, time: '09:00', status: 'confirmed', type: 'ABA', color: 'bg-blue-100 text-blue-600', room: 'room1', professional: 'Terapeuta Teste', professionalId: 'prof1' }, 
+    { id: 102, name: 'Júlia S.', date: todayStr, time: '10:30', status: 'pending', type: 'Neuropsicologia', color: 'bg-pink-100 text-pink-600', room: 'room3', professional: 'Terapeuta Teste', professionalId: 'prof1' },
+    { id: 103, name: 'Marcos P.', date: tomorrowStr, time: '14:00', status: 'confirmed', type: 'TCC', color: 'bg-green-100 text-green-600', room: 'room1', professional: 'Terapeuta Teste', professionalId: 'prof1' },
+    { id: 104, name: 'Ana Clara', date: nextWeekStr, time: '11:00', status: 'pending', type: 'Integração Sensorial', color: 'bg-orange-100 text-orange-600', room: 'room2', professional: 'Terapeuta Teste', professionalId: 'prof1' },
+    { id: 105, name: 'Pedro H.', date: todayStr, time: '16:00', status: 'canceled', type: 'TO', color: 'bg-red-100 text-red-600', room: 'room4', professional: 'Terapeuta Teste', professionalId: 'prof1' }
   ]);
 
   const [specialtySettings, setSpecialtySettings] = useState<any>({
@@ -321,7 +321,7 @@ export default function App() {
         roomId: item.room,
         roomName: rooms.find(r => r.id === item.room)?.name || item.room,
         professionalId: item.professionalId || 'prof1',
-        professionalName: item.professional || 'Dra. Raísa',
+        professionalName: item.professional || 'Terapeuta Teste',
         patientName: item.name,
         date: item.date,
         startTime: item.time,
@@ -1345,8 +1345,11 @@ export default function App() {
           onUpdateProfile={(data: any) => {
             if (data.profilePicture !== undefined) setProfilePicture(data.profilePicture);
             if (data.crp !== undefined) setCrp(data.crp);
-            setUser({ ...user, ...data });
+            const nextUser = { ...user, ...data };
+            setUser(nextUser);
+            dataService.saveUserProfile(user.id, nextUser);
           }}
+          onUpdatePatient={handleUpdatePatient}
           allTasks={tasks}
         />
       ) : user.role === 'receptionist' ? (

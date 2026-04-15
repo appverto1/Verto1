@@ -39,6 +39,8 @@ import {
   Menu,
   MoreVertical,
   Clock,
+  Moon,
+  Sun,
   XCircle,
   Paperclip,
 } from "lucide-react";
@@ -95,6 +97,7 @@ interface CoordinatorDashboardProps {
     subject?: string,
   ) => void;
   onUpdateProfile: (updates: any) => void;
+  onUpdatePatient?: (patient: any) => void;
   allTasks?: any[];
 }
 
@@ -120,6 +123,7 @@ export function CoordinatorDashboard({
   therapistNotes,
   onAddNote,
   onUpdateProfile,
+  onUpdatePatient,
   allTasks = [],
 }: CoordinatorDashboardProps) {
   const [activeTab, setActiveTab] = useState<
@@ -246,6 +250,9 @@ export function CoordinatorDashboard({
   const [isDayDetailsModalOpen, setIsDayDetailsModalOpen] = useState(false);
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [theme, setTheme] = useState<"light" | "dark">(
+    (localStorage.getItem("verto_theme") as "light" | "dark") || "light",
+  );
   const [sessionDate, setSessionDate] = useState(
     new Date().toISOString().split("T")[0],
   );
@@ -295,6 +302,9 @@ export function CoordinatorDashboard({
   const [financialSurveySubmitted, setFinancialSurveySubmitted] = useState(false);
   const [financialSurveySelected, setFinancialSurveySelected] = useState<string[]>([]);
   const [financialSurveyNotes, setFinancialSurveyNotes] = useState("");
+  const [clinicCnpj, setClinicCnpj] = useState(
+    String(user?.clinicSettings?.clinicCnpj || ""),
+  );
   const financialSurveyOptions = [
     "Controle de recebimentos por paciente",
     "Conciliação de PIX e cartão",
@@ -345,6 +355,7 @@ export function CoordinatorDashboard({
     responsavelTelefone: "",
     patientProfileType: "adult_conventional",
   });
+  const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
 
   const insuranceOptions = [
     "Particular",
@@ -474,6 +485,49 @@ export function CoordinatorDashboard({
   }, []);
 
   useEffect(() => {
+    document.body.classList.toggle("theme-dark", theme === "dark");
+    localStorage.setItem("verto_theme", theme);
+  }, [theme]);
+
+  const repairMojibake = (value: any) => {
+    const text = String(value || "");
+    if (!text) return "";
+    try {
+      if (text.includes("Ã") || text.includes("â")) {
+        const bytes = Uint8Array.from([...text].map((c) => c.charCodeAt(0)));
+        const fixed = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+        if (fixed && !fixed.includes("�")) return fixed;
+      }
+    } catch (_e) {
+      // fallback below
+    }
+    return text
+      .replaceAll("Ã¡", "á")
+      .replaceAll("Ãà", "à")
+      .replaceAll("Ã¢", "â")
+      .replaceAll("Ãã", "ã")
+      .replaceAll("Ã©", "é")
+      .replaceAll("Ãª", "ê")
+      .replaceAll("Ã­", "í")
+      .replaceAll("Ã³", "ó")
+      .replaceAll("Ã´", "ô")
+      .replaceAll("Ãµ", "õ")
+      .replaceAll("Ãº", "ú")
+      .replaceAll("Ã§", "ç")
+      .replaceAll("Â·", "•")
+      .replaceAll("â€¢", "•")
+      .replaceAll("Â", "");
+  };
+
+  const normalizedPlanName = (() => {
+    const raw = repairMojibake(user?.planName || "").trim();
+    if (!raw || raw === "Verto Pro" || raw === "Plano Pro" || raw === "Pro") {
+      return "Essencial";
+    }
+    return raw;
+  })();
+
+  useEffect(() => {
     if (sessionPatientName && allPatients) {
       const matches = allPatients.filter((p: any) =>
         p.name.toLowerCase().includes(sessionPatientName.toLowerCase()),
@@ -585,6 +639,7 @@ export function CoordinatorDashboard({
   };
 
   const resetPatientForm = () => {
+    setEditingPatientId(null);
     setNewPatientForm({
       nome: "",
       nomeSocial: "",
@@ -638,7 +693,7 @@ export function CoordinatorDashboard({
     }
 
     const newPatient = {
-      id: crypto.randomUUID(),
+      id: editingPatientId || crypto.randomUUID(),
       name: newPatientForm.nome.trim(),
       socialName: newPatientForm.nomeSocial?.trim() || null,
       phone: String(newPatientForm.telefone || "").trim(),
@@ -680,14 +735,56 @@ export function CoordinatorDashboard({
       createdAt: new Date().toISOString(),
     };
 
-    onAddPatient(newPatient);
-    onAddActivityLog(
-      "Paciente cadastrado",
-      `Cadastro completo de ${newPatient.name} realizado pela coordenação.`,
-      "management",
-    );
+    if (editingPatientId && onUpdatePatient) {
+      onUpdatePatient(newPatient);
+      onAddActivityLog(
+        "Paciente atualizado",
+        `Cadastro de ${newPatient.name} atualizado pela coordenação.`,
+        "management",
+      );
+    } else {
+      onAddPatient(newPatient);
+      onAddActivityLog(
+        "Paciente cadastrado",
+        `Cadastro completo de ${newPatient.name} realizado pela coordenação.`,
+        "management",
+      );
+    }
     setIsPatientRegistrationModalOpen(false);
     resetPatientForm();
+  };
+
+  const handleEditPatient = (patient: any) => {
+    setEditingPatientId(String(patient.id));
+    setNewPatientForm({
+      nome: patient.name || "",
+      nomeSocial: patient.socialName || "",
+      telefone: patient.phone || "",
+      dataNascimento: patient.birthDate || "",
+      genero: patient.gender || "",
+      convenioTipo: patient.insuranceType === "convenio" ? "convenio" : "particular",
+      convenioNome: patient.insuranceName || "",
+      convenioCarteirinha: patient.cardNumber || "",
+      grupo: patient.group || "adulto",
+      comoConheceu: patient.source || "",
+      rg: patient.rg || "",
+      cpf: patient.cpf || "",
+      cep: patient.cep || patient.address?.cep || "",
+      email: patient.email || "",
+      logradouro: patient.address?.logradouro || "",
+      numero: patient.address?.numero || "",
+      complemento: patient.address?.complemento || "",
+      bairro: patient.address?.bairro || "",
+      cidade: patient.address?.cidade || "",
+      outrasInformacoes: patient.notes || "",
+      menorDeIdade: Boolean(patient.isMinor),
+      responsavelNome: patient.guardian?.nome || "",
+      responsavelDataNascimento: patient.guardian?.dataNascimento || "",
+      responsavelCpf: patient.guardian?.cpf || "",
+      responsavelTelefone: patient.guardian?.telefone || "",
+      patientProfileType: patient.type || "adult_conventional",
+    });
+    setIsPatientRegistrationModalOpen(true);
   };
 
   const handleEditAppointment = (appointment: any) => {
@@ -723,10 +820,11 @@ export function CoordinatorDashboard({
     () =>
       (therapistAgenda || []).map((item: any) => ({
         ...item,
-        patientName: item.patientName || item.name || "Paciente",
-        therapistName:
+        patientName: repairMojibake(item.patientName || item.name || "Paciente"),
+        therapistName: repairMojibake(
           item.therapistName || item.professional || "Profissional",
-        type: item.type || item.approach || "Sessão",
+        ),
+        type: repairMojibake(item.type || item.approach || "Sessão"),
       })),
     [therapistAgenda],
   );
@@ -880,10 +978,10 @@ export function CoordinatorDashboard({
                         className="text-left min-w-[220px] rounded-xl border border-[#7a32fc]/20 bg-[#7a32fc]/5 px-3 py-2 hover:bg-[#7a32fc]/10 transition-all"
                       >
                         <p className="text-xs font-bold text-slate-900">
-                          {item.time} Â· {item.patientName}
+                          {item.time} • {item.patientName}
                         </p>
                         <p className="text-[10px] text-slate-500">
-                          {item.therapistName} Â· Sala {item.room || "--"}
+                          {item.therapistName} • Sala {item.room || "--"}
                         </p>
                       </button>
                     ))
@@ -952,7 +1050,7 @@ export function CoordinatorDashboard({
                               className="text-left rounded-lg border border-[#7a32fc]/20 bg-[#7a32fc]/5 px-2 py-1.5 hover:bg-[#7a32fc]/10 transition-all"
                             >
                               <p className="text-[10px] font-bold text-slate-800 truncate">
-                                {item.time} Â· {item.patientName}
+                                {item.time} • {item.patientName}
                               </p>
                               <p className="text-[9px] text-slate-500 truncate">
                                 {item.therapistName}
@@ -1046,6 +1144,7 @@ export function CoordinatorDashboard({
       workStart,
       workEnd,
       professionalSessionDurations,
+      clinicCnpj,
     };
 
     onUpdateProfile({
@@ -1162,7 +1261,10 @@ export function CoordinatorDashboard({
             </p>
           </div>
           <button
-            onClick={() => setIsPatientRegistrationModalOpen(true)}
+            onClick={() => {
+              resetPatientForm();
+              setIsPatientRegistrationModalOpen(true);
+            }}
             className="flex items-center gap-2 px-4 py-2.5 bg-[#7a32fc] text-white rounded-2xl text-xs font-bold hover:opacity-90 transition-all shadow-lg shadow-[#7a32fc]/20"
           >
             <UserPlus size={16} />
@@ -1748,43 +1850,56 @@ export function CoordinatorDashboard({
     return (
       <div className="min-h-screen bg-[#F4F7FE] flex">
         {/* Sidebar */}
-        <div className="w-72 bg-white hidden lg:flex flex-col p-8 sticky top-0 h-screen border-r border-slate-100">
-          <div className="flex items-center gap-3 mb-12 px-2">
-            <LogoVerto size={48} />
-            <div>
-              <span className="font-black text-2xl text-slate-900 tracking-tighter block leading-none lowercase">
-                verto
-              </span>
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">
-                Gestão
-              </span>
-            </div>
+        <div
+          onMouseEnter={() => setIsSidebarExpanded(true)}
+          onMouseLeave={() => setIsSidebarExpanded(false)}
+          className={`${isSidebarExpanded ? "w-64" : "w-20"} bg-white hidden lg:flex flex-col p-5 sticky top-0 h-screen border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
+        >
+          <div
+            className={`flex items-center ${isSidebarExpanded ? "gap-2" : "justify-center"} mb-7 px-1 transition-all duration-300`}
+          >
+            <LogoVerto size={isSidebarExpanded ? 38 : 30} />
+            {isSidebarExpanded && (
+              <div>
+                <span className="font-black text-xl text-slate-900 tracking-tighter block leading-none lowercase">
+                  verto
+                </span>
+                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-[0.18em]">
+                  Gestão
+                </span>
+              </div>
+            )}
           </div>
 
-          <nav className="space-y-2 flex-1 overflow-y-auto no-scrollbar pr-2">
+          <nav className="space-y-1 flex-1 overflow-y-auto no-scrollbar pr-1">
             {[
               {
                 id: "dashboard",
-                label: "Painel de Gestão",
+                label: "Painel",
                 icon: LayoutDashboard,
               },
               {
                 id: "patients",
-                label: "Gestão de Pacientes",
+                label: "Pacientes",
                 icon: ClipboardList,
               },
               {
                 id: "protocols",
-                label: "Protocolos da Clínica",
+                label: "Protocolos",
                 icon: ClipboardCheck,
               },
-              { id: "logs", label: "Registros de Atividade", icon: History },
+              { id: "logs", label: "Log de Atividades", icon: History },
               {
                 id: "settings",
                 label: "Configurações da Clínica",
                 icon: Settings,
               },
-              { id: "financial", label: "Financeiro & DRE", icon: DollarSign },
+              {
+                id: "financial",
+                label: "Financeiro (DRE)",
+                icon: DollarSign,
+                badge: "EM BREVE",
+              },
               {
                 id: "flow",
                 label: "Fluxo Verto",
@@ -1804,16 +1919,17 @@ export function CoordinatorDashboard({
                   navigateToTab(item.id as any);
                   setView("home");
                 }}
-                className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl transition-all font-bold text-sm ${
+                className={`w-full flex items-center ${isSidebarExpanded ? "gap-3 justify-start px-4" : "justify-center px-3"} py-3 rounded-xl transition-all font-bold text-sm ${
                   activeTab === item.id
-                    ? "text-[#7a32fc] bg-blue-50 shadow-sm"
+                    ? "text-[#7a32fc] bg-purple-50 shadow-sm"
                     : "text-slate-400 hover:text-slate-900 hover:bg-slate-50"
                 }`}
+                title={!isSidebarExpanded ? item.label : ""}
               >
-                <item.icon size={20} />
-                {item.label}
+                <item.icon size={18} />
+                {isSidebarExpanded && item.label}
                 {item.badge && (
-                  <span className="ml-auto text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">
+                  <span className={`${isSidebarExpanded ? "ml-auto" : "absolute right-1 top-1"} text-[8px] bg-purple-100 text-[#7a32fc] px-1.5 py-0.5 rounded-full`}>
                     {item.badge}
                   </span>
                 )}
@@ -1821,28 +1937,32 @@ export function CoordinatorDashboard({
             ))}
           </nav>
 
-          <div className="mt-auto pt-8 border-t border-slate-50">
-            <div className="bg-slate-50 rounded-3xl p-4 mb-6">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center font-bold text-[#7a32fc] shadow-sm">
+          <div className="mt-auto pt-4 border-t border-slate-50">
+            <div
+              className={`bg-slate-50 rounded-2xl ${isSidebarExpanded ? "p-3 mb-3" : "p-2 mb-2"} transition-all`}
+            >
+              <div className={`flex items-center ${isSidebarExpanded ? "gap-3" : "justify-center"}`}>
+                <div className={`${isSidebarExpanded ? "w-10 h-10 rounded-xl" : "w-9 h-9 rounded-lg"} bg-white flex items-center justify-center font-bold text-[#7a32fc] shadow-sm`}>
                   {user.name?.[0]}
                 </div>
-                <div className="overflow-hidden">
-                  <p className="text-xs font-bold text-slate-900 truncate">
-                    {user.name}
-                  </p>
-                  <p className="text-[10px] font-medium text-slate-400 truncate">
-                    {user.email}
-                  </p>
-                </div>
+                {isSidebarExpanded && (
+                  <div className="overflow-hidden">
+                    <p className="text-sm font-bold text-slate-900 truncate">
+                      {repairMojibake(user.name)}
+                    </p>
+                    <p className="text-xs font-medium text-slate-400 truncate">
+                      {user.email}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
             <button
               onClick={onLogout}
-              className="w-full flex items-center gap-4 px-6 py-4 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-2xl transition-all font-bold text-sm"
+              className={`w-full flex items-center ${isSidebarExpanded ? "gap-3 justify-start px-3" : "justify-center px-2"} py-2.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all font-bold text-sm`}
             >
-              <LogOut size={20} />
-              Sair do Sistema
+              <LogOut size={18} />
+              {isSidebarExpanded && "Sair do Sistema"}
             </button>
           </div>
         </div>
@@ -1850,7 +1970,7 @@ export function CoordinatorDashboard({
         {/* Main Content */}
         <div className="flex-1 overflow-y-auto">
           {/* Header */}
-          <header className="px-4 lg:px-8 py-6 flex items-center justify-between sticky top-0 bg-[#F4F7FE]/80 backdrop-blur-md z-30">
+          <header className="px-4 lg:px-8 py-3 flex items-center justify-between sticky top-0 bg-[#F4F7FE]/80 backdrop-blur-md z-30">
             <div className="flex items-center gap-4">
               <button
                 onClick={() => setView("home")}
@@ -1869,6 +1989,13 @@ export function CoordinatorDashboard({
             </div>
 
             <div className="flex items-center gap-2 lg:gap-4 bg-white p-1.5 lg:p-2 rounded-[24px] shadow-sm border border-slate-100">
+              <button
+                onClick={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))}
+                className="p-2.5 text-slate-400 hover:text-slate-700 hover:bg-slate-50 rounded-xl transition-all"
+                title={theme === "light" ? "Ativar tema escuro" : "Ativar tema claro"}
+              >
+                {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
+              </button>
               <SettingsMenu
                 user={user}
                 onLogout={onLogout}
@@ -2014,6 +2141,19 @@ export function CoordinatorDashboard({
             <PatientDetailView
               patient={patient}
               onBack={() => setView("home")}
+              clinicContext={{
+                clinicName:
+                  user?.clinicSettings?.clinicName ||
+                  user?.name ||
+                  "Clínica Verto",
+                cnpj: user?.clinicSettings?.clinicCnpj || "",
+                address: user?.clinicSettings?.clinicAddress || "",
+                logoUrl:
+                  user?.clinicSettings?.clinicLogoUrl ||
+                  user?.profilePicture ||
+                  null,
+                signatureUrl: user?.clinicSettings?.signatureDataUrl || null,
+              }}
               initialTab={patientOpenTab}
               openAnamnesisOnLoad={openAnamnesisOnPatientOpen}
               onAnamnesisOpenConsumed={() => setOpenAnamnesisOnPatientOpen(false)}
@@ -2042,13 +2182,13 @@ export function CoordinatorDashboard({
       <aside 
         onMouseEnter={() => setIsSidebarExpanded(true)}
         onMouseLeave={() => setIsSidebarExpanded(false)}
-        className={`${isSidebarExpanded ? 'w-72' : 'w-24'} bg-white hidden lg:flex flex-col p-8 sticky top-0 h-screen border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
+        className={`${isSidebarExpanded ? 'w-64' : 'w-20'} bg-white hidden lg:flex flex-col p-5 sticky top-0 h-screen border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
       >
-        <div className={`flex items-center ${isSidebarExpanded ? 'gap-3' : 'justify-center'} mb-12 px-2 transition-all duration-300`}>
-          <LogoVerto size={48} />
+        <div className={`flex items-center ${isSidebarExpanded ? 'gap-2' : 'justify-center'} mb-7 px-1 transition-all duration-300`}>
+          <LogoVerto size={38} />
           {isSidebarExpanded && (
             <div>
-              <span className="font-black text-2xl text-slate-900 tracking-tighter block leading-none lowercase">
+              <span className="font-black text-xl text-slate-900 tracking-tighter block leading-none lowercase">
                 verto
               </span>
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">
@@ -2082,7 +2222,7 @@ export function CoordinatorDashboard({
             <button
               key={item.id}
               onClick={() => navigateToTab(item.id as any)}
-              className={`w-full flex items-center ${isSidebarExpanded ? 'gap-4 px-6' : 'justify-center'} py-4 rounded-2xl transition-all font-medium text-sm ${
+              className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 px-4' : 'justify-center'} py-3.5 rounded-2xl transition-all font-medium text-sm ${
                 activeTab === item.id
                   ? "text-[#7a32fc] bg-purple-50 shadow-sm"
                   : "text-slate-400 hover:text-slate-900 hover:bg-slate-50"
@@ -2104,7 +2244,7 @@ export function CoordinatorDashboard({
           ))}
         </nav>
         <div
-          className={`mt-3 mb-1 text-[10px] text-slate-400 font-semibold uppercase tracking-wider flex items-center ${
+          className={`mt-2 mb-0 text-[9px] text-slate-400 font-semibold uppercase tracking-wider flex items-center ${
             isSidebarExpanded ? "gap-1 px-2" : "justify-center"
           }`}
           title={!isSidebarExpanded ? "Role para ver mais módulos" : ""}
@@ -2113,19 +2253,16 @@ export function CoordinatorDashboard({
           {isSidebarExpanded && "Role para ver mais módulos"}
         </div>
 
-        <div className="mt-auto pt-8 border-t border-slate-50">
+        <div className="mt-auto pt-4 border-t border-slate-50">
           {isSidebarExpanded && (
-            <div className="bg-slate-50 rounded-3xl p-4 mb-6">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center font-bold text-[#7a32fc] shadow-sm">
+            <div className="bg-slate-50 rounded-2xl p-3 mb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center font-bold text-[#7a32fc] shadow-sm text-xs">
                   {user.name?.[0]}
                 </div>
                 <div className="overflow-hidden">
-                  <p className="text-xs font-bold text-slate-900 truncate">
-                    {user.name}
-                  </p>
-                  <p className="text-[10px] font-medium text-slate-400 truncate">
-                    {user.email}
+                  <p className="text-[11px] font-bold text-slate-900 truncate">
+                    {repairMojibake(user.name)}
                   </p>
                 </div>
               </div>
@@ -2133,7 +2270,7 @@ export function CoordinatorDashboard({
           )}
           <button
             onClick={onLogout}
-            className={`w-full flex items-center ${isSidebarExpanded ? 'gap-4 px-6' : 'justify-center'} py-4 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-2xl transition-all font-bold text-sm`}
+            className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 px-4' : 'justify-center'} py-3 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-2xl transition-all font-bold text-sm`}
             title={!isSidebarExpanded ? "Sair" : ""}
           >
             <LogOut size={20} />
@@ -2145,7 +2282,7 @@ export function CoordinatorDashboard({
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto relative z-10">
         {/* Header */}
-        <header className="px-4 lg:px-8 py-6 flex items-center justify-between sticky top-0 bg-[#F4F7FE]/80 backdrop-blur-md z-30">
+        <header className="px-4 lg:px-8 py-4 flex items-center justify-between sticky top-0 bg-[#F4F7FE]/80 backdrop-blur-md z-30">
           <div className="flex items-center gap-4">
             {(tabHistory.length > 1 ||
               (!isEditingRooms && activeTab === "rooms")) && (
@@ -2194,6 +2331,14 @@ export function CoordinatorDashboard({
               className="lg:hidden p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
             >
               <Menu size={20} />
+            </button>
+
+            <button
+              onClick={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))}
+              className="p-2.5 text-slate-500 hover:text-slate-900 hover:bg-slate-50 rounded-xl transition-all"
+              title={theme === "light" ? "Ativar tema escuro" : "Ativar tema claro"}
+            >
+              {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
             </button>
 
             <SettingsMenu
@@ -2312,7 +2457,7 @@ export function CoordinatorDashboard({
           )}
         </AnimatePresence>
 
-        <main className="p-4 lg:p-8 pb-20">
+        <main className="px-4 lg:px-8 pt-2 pb-16">
           {isPaymentModalOpen && (
             <div
               className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"
@@ -2901,7 +3046,10 @@ export function CoordinatorDashboard({
                     Gestão de Pacientes
                   </h3>
                   <button
-                    onClick={() => setIsPatientRegistrationModalOpen(true)}
+                    onClick={() => {
+                      resetPatientForm();
+                      setIsPatientRegistrationModalOpen(true);
+                    }}
                     className="px-4 sm:px-6 py-2 sm:py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-xs sm:text-sm shadow-lg shadow-purple-500/20 hover:bg-blue-700 transition-all"
                   >
                     Novo Paciente
@@ -2919,7 +3067,7 @@ export function CoordinatorDashboard({
                         </div>
                         <div className="flex-1 min-w-0">
                           <h4 className="font-medium text-slate-900 truncate">
-                            {patient.name}
+                            {repairMojibake(patient.name)}
                           </h4>
                           <p className="text-[10px] text-slate-400 font-medium">
                             ID: {patient.id}
@@ -2972,7 +3120,13 @@ export function CoordinatorDashboard({
                                 <ClipboardCheck size={14} className="text-purple-500" />
                                 Ficha Anamnese
                               </button>
-                              <button className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all">
+                              <button
+                                onClick={() => {
+                                  handleEditPatient(patient);
+                                  setOpenMenuId(null);
+                                }}
+                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                              >
                                 <Edit2 size={14} className="text-slate-400" />{" "}
                                 Editar
                               </button>
@@ -3066,7 +3220,7 @@ export function CoordinatorDashboard({
                         Plano Atual
                       </p>
                       <h4 className="text-xl font-bold text-slate-900">
-                        {user.planName || "Verto Pro"}
+                        {normalizedPlanName}
                       </h4>
                       <p className="text-emerald-500 text-xs font-bold mt-2 flex items-center gap-1">
                         <CheckCircle2 size={12} /> Ativo
@@ -3277,7 +3431,7 @@ export function CoordinatorDashboard({
                       <button
                         onClick={() => handleCheckout("advanced_plan_id")}
                         disabled={loading || user.planName === "Avançado"}
-                        className={`w-full py-4 rounded-2xl font-bold text-sm transition-all ${user.planName === "Avançado" ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-slate-900 text-white shadow-lg shadow-slate-900/20 hover:scale-[1.02]"}`}
+                        className={`w-full py-4 rounded-2xl font-bold text-sm transition-all ${user.planName === "Avançado" ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-[#7a32fc] text-white shadow-lg shadow-purple-500/30 hover:scale-[1.02]"}`}
                       >
                         {user.planName === "Avançado"
                           ? "Plano Atual"
@@ -3328,7 +3482,7 @@ export function CoordinatorDashboard({
                         onClick={() =>
                           window.open("https://wa.me/5511999999999", "_blank")
                         }
-                        className="w-full py-4 bg-white border-2 border-slate-900 text-slate-900 rounded-2xl font-bold text-sm hover:bg-slate-900 hover:text-white transition-all flex items-center justify-center gap-2"
+                        className="w-full py-4 bg-white border-2 border-[#7a32fc] text-[#7a32fc] rounded-2xl font-bold text-sm hover:bg-[#7a32fc] hover:text-white transition-all flex items-center justify-center gap-2"
                       >
                         <MessageCircle size={18} />
                         Falar com Especialista
@@ -3463,24 +3617,9 @@ export function CoordinatorDashboard({
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-6">
                     <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">
-                      Horários e Sessões
+                      Horários da Clínica
                     </h4>
                     <div className="space-y-4">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-2">
-                          Duração Padrão da Sessão
-                        </label>
-                        <select
-                          value={defaultSessionDuration}
-                          onChange={(e) => setDefaultSessionDuration(e.target.value)}
-                          className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
-                        >
-                          <option value="30">30 minutos</option>
-                          <option value="45">45 minutos</option>
-                          <option value="50">50 minutos</option>
-                          <option value="60">60 minutos</option>
-                        </select>
-                      </div>
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <label className="block text-xs font-bold text-slate-700 mb-2">
@@ -3505,6 +3644,18 @@ export function CoordinatorDashboard({
                           />
                         </div>
                       </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-2">
+                          CNPJ da Clínica
+                        </label>
+                        <input
+                          type="text"
+                          value={clinicCnpj}
+                          onChange={(e) => setClinicCnpj(e.target.value)}
+                          placeholder="00.000.000/0000-00"
+                          className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -3515,7 +3666,7 @@ export function CoordinatorDashboard({
                     <div className="p-6 bg-blue-50 rounded-3xl border border-blue-100">
                       <div className="flex items-center justify-between mb-4">
                         <p className="text-sm font-bold text-blue-900">
-                          Plano {user.planName || "Essencial"}
+                          Plano {normalizedPlanName}
                         </p>
                         <span className="px-3 py-1 bg-blue-100 text-[#7a32fc] rounded-lg text-[10px] font-bold uppercase">
                           Ativo
@@ -3817,7 +3968,9 @@ export function CoordinatorDashboard({
             </button>
 
             <h2 className="text-2xl font-bold text-slate-900 mb-6">
-              Cadastro Completo de Paciente
+              {editingPatientId
+                ? "Editar Cadastro de Paciente"
+                : "Cadastro Completo de Paciente"}
             </h2>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -3917,7 +4070,7 @@ export function CoordinatorDashboard({
                 onClick={handleCreatePatientFromFullForm}
                 className="px-6 py-3 rounded-xl bg-[#7a32fc] text-white font-semibold shadow-lg shadow-purple-500/20"
               >
-                Cadastrar paciente
+                {editingPatientId ? "Salvar alterações" : "Cadastrar paciente"}
               </button>
             </div>
           </div>

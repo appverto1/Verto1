@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { BatteryCharging, BatteryFull, Ear, Users, Brain, Check, CheckCircle, Activity, DollarSign, Briefcase, Heart, Plus } from 'lucide-react';
 
 export const ENERGY_TAGS = [
@@ -45,6 +45,27 @@ export const LogoVerto = ({ size = 64, className = "", showText = false }: { siz
 export const GlobalStyles = () => (
   <style>{`
     body { background-color: #F4F7FE; font-family: 'Inter', sans-serif; }
+    body.theme-dark { background-color: #0b1220; color: #e2e8f0; }
+    body.theme-dark .bg-white { background-color: #111b2f !important; }
+    body.theme-dark .bg-slate-50,
+    body.theme-dark .bg-slate-50\\/50,
+    body.theme-dark .bg-slate-100 { background-color: #16243b !important; }
+    body.theme-dark .text-slate-900 { color: #e5e7eb !important; }
+    body.theme-dark .text-slate-700,
+    body.theme-dark .text-slate-600,
+    body.theme-dark .text-slate-500 { color: #cbd5e1 !important; }
+    body.theme-dark .text-slate-400 { color: #94a3b8 !important; }
+    body.theme-dark .border-slate-50,
+    body.theme-dark .border-slate-100,
+    body.theme-dark .border-slate-200 { border-color: #25344f !important; }
+    body.theme-dark .shadow-sm,
+    body.theme-dark .shadow-lg,
+    body.theme-dark .shadow-xl { box-shadow: 0 10px 28px rgba(2, 6, 23, 0.45) !important; }
+    body.theme-dark input,
+    body.theme-dark textarea,
+    body.theme-dark select { color: #e2e8f0; background-color: #16243b !important; }
+    body.theme-dark input::placeholder,
+    body.theme-dark textarea::placeholder { color: #94a3b8; }
     .no-scrollbar::-webkit-scrollbar { display: none; }
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     
@@ -106,11 +127,11 @@ export const SuccessOverlay = ({ title = "Fantástico!", message = "Você está 
 
 export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true }: any) => { 
   const getMoodEmoji = (val: number) => { 
-    if (val < 20) return "😫"; 
-    if (val < 40) return "😕"; 
-    if (val < 60) return "😐"; 
-    if (val < 80) return "🙂"; 
-    return "🤩"; 
+    if (val < 20) return "ðŸ˜«"; 
+    if (val < 40) return "ðŸ˜•"; 
+    if (val < 60) return "ðŸ˜"; 
+    if (val < 80) return "ðŸ™‚"; 
+    return "ðŸ¤©"; 
   }; 
   return ( 
     <div className="w-full"> 
@@ -132,3 +153,4 @@ export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true }:
     </div> 
   ); 
 };
+

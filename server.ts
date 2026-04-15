@@ -1992,6 +1992,7 @@ async function startServer() {
       const phone = sanitizePhone(req.body?.phone);
       const clinicName = sanitizeString(req.body?.clinicName, 160);
       const clinicLogoUrl = sanitizeUrl(req.body?.clinicLogoUrl);
+      const clinicCnpj = sanitizeString(req.body?.clinicCnpj, 24);
       const clinicPhone = sanitizePhone(req.body?.clinicPhone);
       const specialty = sanitizeString(req.body?.specialty, 120);
       const council = sanitizeString(req.body?.council, 80);
@@ -2007,7 +2008,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Terapeuta precisa informar conselho e numero do conselho.' });
       }
 
-      const address = { cep, logradouro, number, complement, bairro, cidade };
+      const address = { cep, logradouro, number, complement, bairro, cidade, cnpj: clinicCnpj || null };
 
       const { error: userUpdateError } = await supabase
         .from('users')
@@ -2041,7 +2042,8 @@ async function startServer() {
           address,
           metadata: {
             role,
-            sessionDurationMinutes
+            sessionDurationMinutes,
+            clinicCnpj: clinicCnpj || null
           },
           updated_at: new Date().toISOString()
         }], { onConflict: 'user_id' });
