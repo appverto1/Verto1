@@ -37,17 +37,26 @@ async function handleDataError(error: unknown, operationType: OperationType, pat
   throw new Error(JSON.stringify(errInfo));
 }
 
-async function getAuthHeaders() {
+async function getAuthHeaders(includeBearer = false) {
   const supabase = await getSupabase();
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token;
   const headers: any = {
     'Content-Type': 'application/json'
   };
-  if (token) {
+  if (includeBearer && token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
   return headers;
+}
+
+async function safeJson(response: Response) {
+  const text = await response.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    return { success: false, error: `HTTP ${response.status}`, raw: text };
+  }
 }
 
 // Helper to handle offline-first saving
@@ -441,7 +450,7 @@ export const dataService = {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
-      return await response.json();
+      return await safeJson(response);
     } catch (error) {
       console.error('Error fetching anamnesis template:', error);
       return { success: false, error: String(error) };
@@ -456,7 +465,7 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify({ template })
       });
-      return await response.json();
+      return await safeJson(response);
     } catch (error) {
       console.error('Error saving anamnesis template:', error);
       return { success: false, error: String(error) };

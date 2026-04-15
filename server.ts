@@ -101,6 +101,14 @@ function sanitizeUrl(value: unknown): string | null {
   return null;
 }
 
+function sanitizeSessionUrl(value: unknown): string | null {
+  const url = sanitizeUrl(value);
+  if (!url) return null;
+  // Never keep large data URLs inside session payload.
+  if (url.startsWith('data:image/')) return null;
+  return sanitizeString(url, 1500);
+}
+
 function asSafeNumber(value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): number | null {
   if (typeof value !== 'number' && typeof value !== 'string') return null;
   const num = Number(value);
@@ -254,10 +262,57 @@ async function fetchUserWorkspaces(userId: string) {
     return {
       clinicId: sanitizeString(clinic.id || membership.clinic_id, 120),
       clinicName: sanitizeString(clinic.name, 160) || 'Clinica',
-      clinicLogoUrl: sanitizeUrl(clinic.logo_url),
+      clinicLogoUrl: sanitizeSessionUrl(clinic.logo_url),
       role: ensureRole(membership.role) ? membership.role : 'therapist'
     };
   }).filter((w: any) => w.clinicId);
+}
+
+function compactClinicSettingsForSession(settings: any) {
+  if (!settings || typeof settings !== 'object') return null;
+  return cleanObject({
+    clinicName: sanitizeString(settings.clinicName, 160) || null,
+    clinicCnpj: sanitizeString(settings.clinicCnpj, 30) || null,
+    clinicPhone: sanitizeString(settings.clinicPhone, 30) || null,
+    specialty: sanitizeString(settings.specialty, 160) || null,
+    council: sanitizeString(settings.council, 80) || null,
+    councilNumber: sanitizeString(settings.councilNumber, 80) || null,
+    clinicAddress: sanitizeString(settings.clinicAddress, 240) || null,
+    clinicLogoUrl: sanitizeSessionUrl(settings.clinicLogoUrl),
+    signatureDataUrl: sanitizeSessionUrl(settings.signatureDataUrl),
+    defaultSessionDuration: asSafeNumber(settings.defaultSessionDuration, 20, 240) || 50,
+    workStart: sanitizeString(settings.workStart, 5) || '08:00',
+    workEnd: sanitizeString(settings.workEnd, 5) || '18:00'
+  });
+}
+
+function compactWorkspacesForSession(workspaces: any[]) {
+  if (!Array.isArray(workspaces)) return [];
+  return workspaces.slice(0, 30).map((w: any) => ({
+    clinicId: sanitizeString(w?.clinicId, 120),
+    clinicName: sanitizeString(w?.clinicName, 160) || 'Clinica',
+    clinicLogoUrl: sanitizeSessionUrl(w?.clinicLogoUrl),
+    role: ensureRole(w?.role) ? w.role : 'therapist'
+  })).filter((w: any) => w.clinicId);
+}
+
+function buildSessionUserPayload(input: any) {
+  return {
+    id: sanitizeString(input?.id, 120),
+    email: sanitizeEmail(input?.email) || sanitizeString(input?.email, 320),
+    role: ensureRole(input?.role) ? input.role : 'therapist',
+    name: sanitizeString(input?.name, 180),
+    profilePicture: sanitizeSessionUrl(input?.profilePicture),
+    type: sanitizeString(input?.type, 80) || null,
+    age: typeof input?.age === 'number' ? input.age : null,
+    subscriptionStatus: sanitizeString(input?.subscriptionStatus, 40) || null,
+    planName: sanitizeString(input?.planName, 80) || null,
+    planPrice: asSafeNumber(input?.planPrice, 0, 100000) || null,
+    clinicId: sanitizeString(input?.clinicId, 120) || null,
+    firstLoginCompleted: Boolean(input?.firstLoginCompleted),
+    clinicSettings: compactClinicSettingsForSession(input?.clinicSettings),
+    workspaces: compactWorkspacesForSession(input?.workspaces || [])
+  };
 }
 
 async function ensureClinicAndMembershipForCoordinator(userId: string, clinicName?: string | null) {
@@ -586,7 +641,7 @@ async function startServer() {
           if (profile) {
             const workspaces = await fetchUserWorkspaces(user.id);
             const selectedWorkspace = workspaces.find((w: any) => w.clinicId === profile.clinic_id) || workspaces[0] || null;
-            req.session.user = {
+            req.session.user = buildSessionUserPayload({
               id: user.id,
               email: user.email,
               role: selectedWorkspace?.role || profile.role,
@@ -601,7 +656,7 @@ async function startServer() {
               firstLoginCompleted: profile.first_login_completed || user.user_metadata?.first_login_completed,
               clinicSettings: user.user_metadata?.clinic_settings || null,
               workspaces
-            };
+            });
             return next();
           }
         }
@@ -829,7 +884,7 @@ async function startServer() {
         workspaces
       };
       
-      req.session.user = userData;
+      req.session.user = buildSessionUserPayload(userData);
       res.json({ success: true, user: userData });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -943,7 +998,7 @@ async function startServer() {
           workspaces
         };
 
-        req.session.user = userData;
+        req.session.user = buildSessionUserPayload(userData);
         req.session.isFirstLogin = true;
         
         req.session.save((err) => {
@@ -1221,7 +1276,7 @@ async function startServer() {
         workspaces
       };
 
-      req.session.user = userData;
+      req.session.user = buildSessionUserPayload(userData);
       console.log(`[Auth] Saving session for ${user.email}. Session ID: ${req.sessionID}`);
       req.session.save((err) => {
         if (err) {
@@ -1259,7 +1314,7 @@ async function startServer() {
   app.get('/api/workspaces', checkAuth, async (req: any, res) => {
     try {
       const workspaces = await fetchUserWorkspaces(req.session.user.id);
-      req.session.user.workspaces = workspaces;
+      req.session.user.workspaces = compactWorkspacesForSession(workspaces);
       res.json({ success: true, data: workspaces });
     } catch (error) {
       res.status(500).json({ success: false, error: String(error) });
@@ -1289,7 +1344,7 @@ async function startServer() {
 
       req.session.user.clinicId = clinicId;
       req.session.user.role = selected.role;
-      req.session.user.workspaces = workspaces;
+      req.session.user.workspaces = compactWorkspacesForSession(workspaces);
 
       req.session.save((err: any) => {
         if (err) {
@@ -1480,7 +1535,7 @@ async function startServer() {
 
       req.session.user.clinicId = invitation.clinic_id;
       req.session.user.role = invitation.role;
-      req.session.user.workspaces = await fetchUserWorkspaces(user.id);
+      req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(user.id));
 
       res.json({ success: true });
     } catch (error) {
@@ -2275,9 +2330,9 @@ async function startServer() {
       req.session.user.name = fullName;
       req.session.user.firstLoginCompleted = true;
       req.session.user.subscriptionStatus = 'active';
-      req.session.user.profilePicture = profilePicture || req.session.user.profilePicture || null;
-      req.session.user.clinicSettings = nextClinicSettings;
-      req.session.user.workspaces = await fetchUserWorkspaces(userId);
+      req.session.user.profilePicture = sanitizeSessionUrl(profilePicture) || req.session.user.profilePicture || null;
+      req.session.user.clinicSettings = compactClinicSettingsForSession(nextClinicSettings);
+      req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(userId));
 
       req.session.save((err: any) => {
         if (err) {
