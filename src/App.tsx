@@ -165,7 +165,11 @@ export default function App() {
     }
   }, []);
 
-  const handleLoginSuccess = async (supabaseSession: any, intendedRole?: string) => {
+  const handleLoginSuccess = async (
+    supabaseSession: any,
+    intendedRole?: string,
+    credentials?: { email?: string; password?: string },
+  ) => {
     try {
       if (!supabaseSession) {
         // If no session provided, we might already have the user from signup-direct
@@ -207,7 +211,12 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ accessToken, intendedRole })
+        body: JSON.stringify({
+          accessToken,
+          intendedRole,
+          email: credentials?.email || null,
+          password: credentials?.password || null,
+        })
       });
 
       if (!response.ok) {

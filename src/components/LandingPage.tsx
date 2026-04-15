@@ -106,7 +106,10 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
         // Call onLogin (which is handleLoginSuccess in App.tsx)
         // This will exchange the supabase token for a server session
-        const loginRes = await onLogin(data.session, loginType);
+        const loginRes = await onLogin(data.session, loginType, {
+          email,
+          password
+        });
         
         if (loginRes?.twoFactorRequired) {
           setTwoFactorRequired(true);

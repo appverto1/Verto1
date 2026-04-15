@@ -966,11 +966,39 @@ async function startServer() {
   // --- AUTH ROUTES ---
   // Login (receives Supabase access token from client, verifies it, and sets session)
   app.post('/api/auth/login', async (req, res) => {
-    const { accessToken, intendedRole } = req.body;
-    console.log('Login attempt with token:', !!accessToken, 'intendedRole:', intendedRole);
-    if (!accessToken) return res.status(400).json({ error: "Access token required" });
+    const { intendedRole } = req.body;
+    let accessToken = sanitizeString(req.body?.accessToken, 8000);
+    const credentialEmail = sanitizeEmail(req.body?.email);
+    const credentialPassword = typeof req.body?.password === 'string' ? req.body.password : '';
+    const hasCredentials = Boolean(credentialEmail && credentialPassword);
+    console.log('Login attempt with token:', !!accessToken, 'intendedRole:', intendedRole, 'hasCredentials:', hasCredentials);
 
     try {
+      if ((!accessToken || !tokenMatchesCurrentProject(accessToken).ok) && hasCredentials) {
+        if (!supabaseAuthClient) {
+          return res.status(500).json({
+            error: "AUTH_CONFIG_MISSING_PUBLIC_KEY",
+            message: "Configuração de autenticação pública ausente no servidor."
+          });
+        }
+
+        const { data: credData, error: credError } = await supabaseAuthClient.auth.signInWithPassword({
+          email: credentialEmail as string,
+          password: credentialPassword
+        });
+
+        if (credError || !credData?.session?.access_token) {
+          return res.status(401).json({
+            error: "INVALID_CREDENTIALS",
+            message: "E-mail ou senha inválidos."
+          });
+        }
+
+        accessToken = credData.session.access_token;
+      }
+
+      if (!accessToken) return res.status(400).json({ error: "Access token required" });
+
       const tokenMatch = tokenMatchesCurrentProject(accessToken);
       if (!tokenMatch.ok) {
         console.error('[Auth] Project mismatch in /api/auth/login:', tokenMatch.reason);
