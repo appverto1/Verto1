@@ -457,6 +457,19 @@ export const dataService = {
     }
   },
 
+  async getDefaultClinicAnamnesisTemplate() {
+    try {
+      const response = await fetch('/api/clinic/anamnesis-template/defaults', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching default anamnesis template:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
   async saveClinicAnamnesisTemplate(template: any) {
     try {
       const response = await fetch('/api/clinic/anamnesis-template', {

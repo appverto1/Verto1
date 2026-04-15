@@ -49,6 +49,10 @@ import {
   Reservation as RoomReservationType,
 } from "./RoomReservation";
 import { dataService } from "../services/dataService";
+import {
+  getDefaultAnamnesisTemplate,
+  normalizeAnamnesisTemplate,
+} from "../lib/anamnesisSchema";
 
 const ProfileView = ({
   user,
@@ -329,7 +333,9 @@ export const TherapistDashboard = ({
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [anamnesisTemplate, setAnamnesisTemplate] = useState<any>({ hiddenFields: [], customQuestions: [] });
+  const [anamnesisTemplate, setAnamnesisTemplate] = useState<any>(
+    getDefaultAnamnesisTemplate(),
+  );
 
   const handleCheckout = async (planId: string) => {
     setLoading(true);
@@ -364,9 +370,9 @@ export const TherapistDashboard = ({
   useEffect(() => {
     const loadTemplate = async () => {
       const result = await dataService.getClinicAnamnesisTemplate();
-      if (result?.success && result?.data) {
-        setAnamnesisTemplate(result.data);
-      }
+      setAnamnesisTemplate(
+        normalizeAnamnesisTemplate(result?.data || getDefaultAnamnesisTemplate()),
+      );
     };
     loadTemplate();
   }, []);
@@ -374,7 +380,7 @@ export const TherapistDashboard = ({
   const handleTemplateSave = async (nextTemplate: any) => {
     const result = await dataService.saveClinicAnamnesisTemplate(nextTemplate);
     if (result?.success) {
-      setAnamnesisTemplate(nextTemplate);
+      setAnamnesisTemplate(normalizeAnamnesisTemplate(result?.data || nextTemplate));
       return;
     }
     alert(result?.warning || result?.error || "Não foi possível salvar o template da clínica.");
@@ -1361,7 +1367,7 @@ export const TherapistDashboard = ({
               mode="create"
               template={anamnesisTemplate}
               onTemplateSave={handleTemplateSave}
-              canEditTemplate={true}
+              canEditTemplate={false}
             />
 
             {isPaymentModalOpen && (

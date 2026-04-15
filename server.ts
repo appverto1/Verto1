@@ -202,41 +202,284 @@ function pseudonymizeValue(value: string): string {
   return crypto.createHmac('sha256', secret).update(value).digest('hex').slice(0, 24);
 }
 
-function sanitizeAnamnesisTemplate(input: any) {
-  const hiddenFields = Array.isArray(input?.hiddenFields)
-    ? input.hiddenFields.map((f: any) => sanitizeString(f, 80)).filter(Boolean).slice(0, 500)
-    : [];
-  const deletedFields = Array.isArray(input?.deletedFields)
-    ? input.deletedFields.map((f: any) => sanitizeString(f, 80)).filter(Boolean).slice(0, 500)
-    : [];
+function getDefaultAnamnesisTemplate() {
+  const commonSections = [
+    { id: 'identificacao', title: 'Identificacao', order: 1, active: true },
+    { id: 'cadastro_operacional', title: 'Cadastro Operacional (MVP)', order: 2, active: true },
+    { id: 'responsavel_legal', title: 'Responsavel Legal (menor de idade)', order: 3, active: true },
+    { id: 'personalizadas', title: 'Perguntas Personalizadas', order: 99, active: true }
+  ];
 
-  const customQuestions = Array.isArray(input?.customQuestions)
-    ? input.customQuestions.slice(0, 300).map((q: any, index: number) => {
-        const typeRaw = sanitizeString(q?.type, 40);
-        const type = ['dissertativa', 'multipla_escolha', 'multipla_selecao'].includes(typeRaw)
-          ? typeRaw
-          : 'dissertativa';
-        return cleanObject({
-          id: sanitizeString(q?.id, 80) || `custom_${Date.now()}_${index}`,
-          label: sanitizeString(q?.label, 240),
-          type,
-          options: Array.isArray(q?.options)
-            ? q.options.map((o: any) => sanitizeString(o, 120)).filter(Boolean).slice(0, 30)
-            : [],
-          active: q?.active !== false,
-          required: q?.required === true,
-          appliesTo: ['adult', 'child', 'both'].includes(sanitizeString(q?.appliesTo, 20))
-            ? sanitizeString(q?.appliesTo, 20)
-            : 'both'
-        });
-      })
-    : [];
+  const commonQuestions = [
+    { id: 'nome', sectionId: 'identificacao', label: 'Nome completo', type: 'dissertativa', required: true, active: true, order: 1 },
+    { id: 'email', sectionId: 'identificacao', label: 'E-mail do paciente', type: 'dissertativa', required: false, active: true, order: 2 },
+    { id: 'dataNascimento', sectionId: 'identificacao', label: 'Nascimento', type: 'data', required: false, active: true, order: 3 },
+    { id: 'idade', sectionId: 'identificacao', label: 'Idade', type: 'numero', required: false, active: true, order: 4 },
+    { id: 'genero', sectionId: 'identificacao', label: 'Genero', type: 'multipla_escolha', options: ['Feminino', 'Masculino', 'Nao-binario', 'Prefere nao informar'], required: false, active: true, order: 5 },
+    { id: 'nomeSocial', sectionId: 'cadastro_operacional', label: 'Nome social', type: 'dissertativa', required: false, active: true, order: 1 },
+    { id: 'telefone', sectionId: 'cadastro_operacional', label: 'Telefone', type: 'telefone', required: false, active: true, order: 2 },
+    { id: 'grupo', sectionId: 'cadastro_operacional', label: 'Grupo', type: 'multipla_escolha', options: ['Infantil', 'Adolescente', 'Adulto', 'Idoso'], required: false, active: true, order: 3 },
+    { id: 'convenioTipo', sectionId: 'cadastro_operacional', label: 'Convenio ou particular', type: 'multipla_escolha', options: ['Particular', 'Convenio'], required: false, active: true, order: 4 },
+    { id: 'convenioNome', sectionId: 'cadastro_operacional', label: 'Convenio', type: 'dissertativa', required: false, active: true, order: 5 },
+    { id: 'convenioCarteirinha', sectionId: 'cadastro_operacional', label: 'Numero da carteirinha', type: 'dissertativa', required: false, active: true, order: 6 },
+    { id: 'comoConheceu', sectionId: 'cadastro_operacional', label: 'Como conheceu a clinica', type: 'multipla_escolha', options: ['Google', 'Indicacao', 'Email', 'WhatsApp', 'Rede social', 'Evento', 'Convenio', 'Outro'], required: false, active: true, order: 7 },
+    { id: 'rg', sectionId: 'cadastro_operacional', label: 'RG', type: 'dissertativa', required: false, active: true, order: 8 },
+    { id: 'cpf', sectionId: 'cadastro_operacional', label: 'CPF', type: 'dissertativa', required: false, active: true, order: 9 },
+    { id: 'cep', sectionId: 'cadastro_operacional', label: 'CEP', type: 'dissertativa', required: false, active: true, order: 10 },
+    { id: 'logradouro', sectionId: 'cadastro_operacional', label: 'Logradouro', type: 'dissertativa', required: false, active: true, order: 11 },
+    { id: 'numero', sectionId: 'cadastro_operacional', label: 'Numero', type: 'dissertativa', required: false, active: true, order: 12 },
+    { id: 'complemento', sectionId: 'cadastro_operacional', label: 'Complemento', type: 'dissertativa', required: false, active: true, order: 13 },
+    { id: 'bairro', sectionId: 'cadastro_operacional', label: 'Bairro', type: 'dissertativa', required: false, active: true, order: 14 },
+    { id: 'cidade', sectionId: 'cadastro_operacional', label: 'Cidade', type: 'dissertativa', required: false, active: true, order: 15 },
+    { id: 'outrasInformacoes', sectionId: 'cadastro_operacional', label: 'Outras informacoes', type: 'dissertativa', required: false, active: true, order: 16 },
+    { id: 'menorDeIdade', sectionId: 'responsavel_legal', label: 'Paciente menor de idade?', type: 'sim_nao', required: false, active: true, order: 1 },
+    { id: 'responsavelNome', sectionId: 'responsavel_legal', label: 'Nome do responsavel', type: 'dissertativa', required: false, active: true, order: 2 },
+    { id: 'responsavelDataNascimento', sectionId: 'responsavel_legal', label: 'Nascimento do responsavel', type: 'data', required: false, active: true, order: 3 },
+    { id: 'responsavelCpf', sectionId: 'responsavel_legal', label: 'CPF do responsavel', type: 'dissertativa', required: false, active: true, order: 4 },
+    { id: 'responsavelTelefone', sectionId: 'responsavel_legal', label: 'Telefone do responsavel', type: 'telefone', required: false, active: true, order: 5 }
+  ];
+
+  const adultSections = [
+    { id: 'historia_clinica', title: 'Historia Atual e Motivo da Consulta', order: 10, active: true },
+    { id: 'familia_ambiente', title: 'Familia e Ambiente', order: 11, active: true },
+    { id: 'saude_rotina', title: 'Saude, Habitos e Rotina', order: 12, active: true },
+    { id: 'processos_previos', title: 'Processos Terapeuticos Previos', order: 13, active: true }
+  ];
+
+  const adultQuestions = [
+    { id: 'estadoCivil', sectionId: 'historia_clinica', label: 'Estado civil', type: 'multipla_escolha', options: ['Solteiro(a)', 'Casado(a)', 'Divorciado(a)', 'Uniao estavel', 'Outro'], required: false, active: true, order: 1 },
+    { id: 'profissao', sectionId: 'historia_clinica', label: 'Profissao', type: 'dissertativa', required: false, active: true, order: 2 },
+    { id: 'motivoConsulta', sectionId: 'historia_clinica', label: 'Motivo da consulta', type: 'dissertativa', required: true, active: true, order: 3 },
+    { id: 'iniciativaTratamento', sectionId: 'historia_clinica', label: 'Iniciativa do tratamento', type: 'dissertativa', required: false, active: true, order: 4 },
+    { id: 'expectativa', sectionId: 'historia_clinica', label: 'Expectativa com o processo terapeutico', type: 'dissertativa', required: false, active: true, order: 5 },
+    { id: 'familiaConstituicao', sectionId: 'familia_ambiente', label: 'Constituicao familiar', type: 'dissertativa', required: false, active: true, order: 1 },
+    { id: 'familiaClima', sectionId: 'familia_ambiente', label: 'Clima familiar atual', type: 'dissertativa', required: false, active: true, order: 2 },
+    { id: 'vidaSocialGeral', sectionId: 'familia_ambiente', label: 'Como descreve a vida social', type: 'dissertativa', required: false, active: true, order: 3 },
+    { id: 'dificuldadesSociais', sectionId: 'familia_ambiente', label: 'Dificuldades sociais percebidas', type: 'dissertativa', required: false, active: true, order: 4 },
+    { id: 'sonoSonho', sectionId: 'saude_rotina', label: 'Qualidade do sono', type: 'dissertativa', required: false, active: true, order: 1 },
+    { id: 'alimentacao', sectionId: 'saude_rotina', label: 'Alimentacao', type: 'dissertativa', required: false, active: true, order: 2 },
+    { id: 'exercicio', sectionId: 'saude_rotina', label: 'Atividade fisica', type: 'dissertativa', required: false, active: true, order: 3 },
+    { id: 'habitosNocivos', sectionId: 'saude_rotina', label: 'Habitos nocivos', type: 'dissertativa', required: false, active: true, order: 4 },
+    { id: 'previoTipo', sectionId: 'processos_previos', label: 'Tipo de tratamento anterior', type: 'dissertativa', required: false, active: true, order: 1 },
+    { id: 'previoDuracao', sectionId: 'processos_previos', label: 'Duracao do tratamento anterior', type: 'dissertativa', required: false, active: true, order: 2 },
+    { id: 'previoMotivo', sectionId: 'processos_previos', label: 'Motivo da consulta anterior', type: 'dissertativa', required: false, active: true, order: 3 },
+    { id: 'previoInterrupcao', sectionId: 'processos_previos', label: 'Motivo da interrupcao anterior', type: 'dissertativa', required: false, active: true, order: 4 }
+  ];
+
+  const childSections = [
+    { id: 'escola', title: 'Escola e Aprendizagem', order: 10, active: true },
+    { id: 'desenvolvimento', title: 'Desenvolvimento e Comportamento', order: 11, active: true },
+    { id: 'saude_geral', title: 'Saude e Acompanhamentos', order: 12, active: true },
+    { id: 'contexto_familiar', title: 'Contexto Familiar', order: 13, active: true }
+  ];
+
+  const childQuestions = [
+    { id: 'nomeEscola', sectionId: 'escola', label: 'Nome da escola', type: 'dissertativa', required: false, active: true, order: 1 },
+    { id: 'tipoEscola', sectionId: 'escola', label: 'Tipo de escola', type: 'multipla_escolha', options: ['Publica', 'Privada', 'Mista'], required: false, active: true, order: 2 },
+    { id: 'serie', sectionId: 'escola', label: 'Serie', type: 'dissertativa', required: false, active: true, order: 3 },
+    { id: 'desenvolvimentoGestacional', sectionId: 'desenvolvimento', label: 'Resumo do desenvolvimento gestacional', type: 'dissertativa', required: false, active: true, order: 1 },
+    { id: 'desenvolvimentoSocial', sectionId: 'desenvolvimento', label: 'Desenvolvimento social', type: 'dissertativa', required: false, active: true, order: 2 },
+    { id: 'estereotipias', sectionId: 'desenvolvimento', label: 'Estereotipias observadas', type: 'dissertativa', required: false, active: true, order: 3 },
+    { id: 'sensibilidades', sectionId: 'desenvolvimento', label: 'Sensibilidades sensoriais', type: 'dissertativa', required: false, active: true, order: 4 },
+    { id: 'dificuldadesHabilidades', sectionId: 'desenvolvimento', label: 'Dificuldades e habilidades', type: 'dissertativa', required: false, active: true, order: 5 },
+    { id: 'temDiagnostico', sectionId: 'saude_geral', label: 'Ja possui diagnostico?', type: 'sim_nao', required: false, active: true, order: 1 },
+    { id: 'diagnosticoQual', sectionId: 'saude_geral', label: 'Qual diagnostico', type: 'dissertativa', required: false, active: true, order: 2 },
+    { id: 'acompanhamentoMedico', sectionId: 'saude_geral', label: 'Acompanhamento medico atual', type: 'dissertativa', required: false, active: true, order: 3 },
+    { id: 'medicacaoAtual', sectionId: 'saude_geral', label: 'Medicacao atual', type: 'dissertativa', required: false, active: true, order: 4 },
+    { id: 'acompanhamentoMultidisciplinar', sectionId: 'saude_geral', label: 'Acompanhamento multidisciplinar', type: 'dissertativa', required: false, active: true, order: 5 },
+    { id: 'nomeMae', sectionId: 'contexto_familiar', label: 'Nome da mae', type: 'dissertativa', required: false, active: true, order: 1 },
+    { id: 'nomePaiBiologico', sectionId: 'contexto_familiar', label: 'Nome do pai', type: 'dissertativa', required: false, active: true, order: 2 },
+    { id: 'irmaosIdade', sectionId: 'contexto_familiar', label: 'Irmaos e idades', type: 'dissertativa', required: false, active: true, order: 3 },
+    { id: 'estadoCivilPais', sectionId: 'contexto_familiar', label: 'Estado civil dos pais', type: 'dissertativa', required: false, active: true, order: 4 },
+    { id: 'pessoasMoramCrianca', sectionId: 'contexto_familiar', label: 'Quem mora com a crianca', type: 'dissertativa', required: false, active: true, order: 5 }
+  ];
 
   return {
-    hiddenFields: Array.from(new Set(hiddenFields)),
-    deletedFields: Array.from(new Set(deletedFields)),
-    customQuestions
+    version: 1,
+    profiles: {
+      adult: {
+        sections: [...commonSections, ...adultSections],
+        questions: [...commonQuestions, ...adultQuestions]
+      },
+      child: {
+        sections: [...commonSections, ...childSections],
+        questions: [...commonQuestions, ...childQuestions]
+      }
+    }
   };
+}
+
+function sanitizeAnamnesisTemplate(input: any) {
+  const safeType = (value: any) => {
+    const parsed = sanitizeString(value, 40);
+    return ['dissertativa', 'multipla_escolha', 'multipla_selecao', 'data', 'numero', 'telefone', 'sim_nao'].includes(parsed)
+      ? parsed
+      : 'dissertativa';
+  };
+
+  const sanitizeSection = (section: any, fallbackOrder: number) => cleanObject({
+    id: sanitizeString(section?.id, 120) || `section_${fallbackOrder}`,
+    title: sanitizeString(section?.title, 220) || `Seção ${fallbackOrder}`,
+    order: Number.isFinite(Number(section?.order)) ? Number(section?.order) : fallbackOrder,
+    active: section?.active !== false
+  });
+
+  const sanitizeQuestion = (question: any, fallbackOrder: number) => {
+    const type = safeType(question?.type);
+    const options =
+      type === 'multipla_escolha' || type === 'multipla_selecao'
+        ? Array.isArray(question?.options)
+          ? question.options.map((option: any) => sanitizeString(option, 120)).filter(Boolean).slice(0, 30)
+          : []
+        : undefined;
+    return cleanObject({
+      id: sanitizeString(question?.id, 120) || `q_${Date.now()}_${fallbackOrder}`,
+      sectionId: sanitizeString(question?.sectionId, 120),
+      label: sanitizeString(question?.label, 240),
+      type,
+      options,
+      required: question?.required === true,
+      active: question?.active !== false,
+      order: Number.isFinite(Number(question?.order)) ? Number(question?.order) : fallbackOrder
+    });
+  };
+
+  const sanitizeProfile = (profileInput: any, profileFallback: any) => {
+    const sections = (Array.isArray(profileInput?.sections) ? profileInput.sections : profileFallback.sections)
+      .slice(0, 120)
+      .map((section: any, index: number) => sanitizeSection(section, index + 1))
+      .filter((section: any) => section.id && section.title);
+    const sectionIds = new Set(sections.map((section: any) => section.id));
+
+    const questions = (Array.isArray(profileInput?.questions) ? profileInput.questions : profileFallback.questions)
+      .slice(0, 1000)
+      .map((question: any, index: number) => sanitizeQuestion(question, index + 1))
+      .filter((question: any) => question.id && question.sectionId && sectionIds.has(question.sectionId) && question.label);
+
+    return {
+      sections: sections.sort((a: any, b: any) => Number(a.order || 0) - Number(b.order || 0)),
+      questions: questions.sort((a: any, b: any) => Number(a.order || 0) - Number(b.order || 0))
+    };
+  };
+
+  const defaultTemplate = getDefaultAnamnesisTemplate();
+  const legacyHidden = new Set(Array.isArray(input?.hiddenFields) ? input.hiddenFields.map((f: any) => sanitizeString(f, 120)) : []);
+  const legacyDeleted = new Set(Array.isArray(input?.deletedFields) ? input.deletedFields.map((f: any) => sanitizeString(f, 120)) : []);
+  const legacyCustom = Array.isArray(input?.customQuestions) ? input.customQuestions.slice(0, 300) : [];
+  const looksLegacy = legacyHidden.size > 0 || legacyDeleted.size > 0 || legacyCustom.length > 0;
+
+  const mergedInput = looksLegacy
+    ? {
+        ...defaultTemplate,
+        profiles: {
+          adult: {
+            ...defaultTemplate.profiles.adult,
+            questions: [
+              ...defaultTemplate.profiles.adult.questions.map((question: any) => ({
+                ...question,
+                active: !(legacyHidden.has(question.id) || legacyDeleted.has(question.id))
+              })),
+              ...legacyCustom
+                .filter((question: any) => ['both', 'adult', ''].includes(sanitizeString(question?.appliesTo, 20)))
+                .map((question: any, index: number) => ({
+                  id: sanitizeString(question?.id, 120) || `legacy_adult_${index + 1}`,
+                  sectionId: 'personalizadas',
+                  label: sanitizeString(question?.label, 240) || `Pergunta personalizada ${index + 1}`,
+                  type: safeType(question?.type),
+                  options: Array.isArray(question?.options) ? question.options : [],
+                  required: question?.required === true,
+                  active: question?.active !== false,
+                  order: 900 + index
+                }))
+            ]
+          },
+          child: {
+            ...defaultTemplate.profiles.child,
+            questions: [
+              ...defaultTemplate.profiles.child.questions.map((question: any) => ({
+                ...question,
+                active: !(legacyHidden.has(question.id) || legacyDeleted.has(question.id))
+              })),
+              ...legacyCustom
+                .filter((question: any) => ['both', 'child', ''].includes(sanitizeString(question?.appliesTo, 20)))
+                .map((question: any, index: number) => ({
+                  id: sanitizeString(question?.id, 120) || `legacy_child_${index + 1}`,
+                  sectionId: 'personalizadas',
+                  label: sanitizeString(question?.label, 240) || `Pergunta personalizada ${index + 1}`,
+                  type: safeType(question?.type),
+                  options: Array.isArray(question?.options) ? question.options : [],
+                  required: question?.required === true,
+                  active: question?.active !== false,
+                  order: 900 + index
+                }))
+            ]
+          }
+        }
+      }
+    : input;
+
+  const version = Number.isFinite(Number(mergedInput?.version)) ? Math.max(1, Number(mergedInput.version)) : 1;
+  const profileType = sanitizeString(mergedInput?.profileType, 20) === 'child' ? 'child' : 'adult';
+
+  return {
+    version,
+    profileType,
+    profiles: {
+      adult: sanitizeProfile(mergedInput?.profiles?.adult, defaultTemplate.profiles.adult),
+      child: sanitizeProfile(mergedInput?.profiles?.child, defaultTemplate.profiles.child)
+    }
+  };
+}
+
+function listAnamnesisTemplateChanges(previousTemplate: any, nextTemplate: any): string[] {
+  const changes: string[] = [];
+  const safePrev = sanitizeAnamnesisTemplate(previousTemplate || {});
+  const safeNext = sanitizeAnamnesisTemplate(nextTemplate || {});
+
+  (['adult', 'child'] as Array<'adult' | 'child'>).forEach((profileType) => {
+    const prevProfile = safePrev.profiles?.[profileType];
+    const nextProfile = safeNext.profiles?.[profileType];
+
+    const prevSections = new Map((prevProfile?.sections || []).map((section: any) => [section.id, section]));
+    const nextSections = new Map((nextProfile?.sections || []).map((section: any) => [section.id, section]));
+
+    nextSections.forEach((section: any, sectionId: string) => {
+      const prevSection = prevSections.get(sectionId);
+      if (!prevSection) {
+        changes.push(`[${profileType}] Seção criada: ${section.title}`);
+        return;
+      }
+      if (prevSection.title !== section.title) {
+        changes.push(`[${profileType}] Seção editada: ${prevSection.title} -> ${section.title}`);
+      }
+      if (prevSection.active !== section.active) {
+        changes.push(`[${profileType}] Seção ${section.active ? 'reativada' : 'desativada'}: ${section.title}`);
+      }
+    });
+
+    const prevQuestions = new Map((prevProfile?.questions || []).map((question: any) => [question.id, question]));
+    const nextQuestions = new Map((nextProfile?.questions || []).map((question: any) => [question.id, question]));
+
+    nextQuestions.forEach((question: any, questionId: string) => {
+      const prevQuestion = prevQuestions.get(questionId);
+      if (!prevQuestion) {
+        changes.push(`[${profileType}] Pergunta criada: ${question.label}`);
+        return;
+      }
+      if (prevQuestion.label !== question.label || prevQuestion.type !== question.type || prevQuestion.required !== question.required) {
+        changes.push(`[${profileType}] Pergunta editada: ${question.label}`);
+      }
+      if (prevQuestion.active !== question.active) {
+        changes.push(`[${profileType}] Pergunta ${question.active ? 'reativada' : 'desativada'}: ${question.label}`);
+      }
+    });
+  });
+
+  if (safePrev.version !== safeNext.version) {
+    changes.push(`Publicação de versão da anamnese: v${safePrev.version} -> v${safeNext.version}`);
+  }
+
+  return Array.from(new Set(changes)).slice(0, 40);
 }
 
 function currentClinicId(user: any): string | null {
@@ -1705,7 +1948,7 @@ async function startServer() {
 
       if (error) {
         if (String(error?.message || '').toLowerCase().includes('clinic_anamnesis_templates')) {
-          return res.json({ success: true, data: { hiddenFields: [], customQuestions: [] }, warning: 'Tabela de template nÃ£o criada.' });
+          return res.json({ success: true, data: getDefaultAnamnesisTemplate(), warning: 'Tabela de template não criada.' });
         }
         throw error;
       }
@@ -1717,15 +1960,30 @@ async function startServer() {
     }
   });
 
-  app.post('/api/clinic/anamnesis-template', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/clinic/anamnesis-template/defaults', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (_req: any, res) => {
+    return res.json({ success: true, data: getDefaultAnamnesisTemplate() });
+  });
+
+  app.post('/api/clinic/anamnesis-template', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
-      const template = sanitizeAnamnesisTemplate(req.body?.template);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
+
+      const previousResult = await supabase
+        .from('clinic_anamnesis_templates')
+        .select('template_json')
+        .eq('clinic_id', clinicId)
+        .maybeSingle();
+      const previousTemplate = sanitizeAnamnesisTemplate(previousResult?.data?.template_json || getDefaultAnamnesisTemplate());
+      const nextTemplate = sanitizeAnamnesisTemplate(req.body?.template || {});
+      nextTemplate.version = Math.max(1, Number(previousTemplate?.version || 0) + 1);
+      const templateChanges = listAnamnesisTemplateChanges(previousTemplate, nextTemplate);
 
       const payload = {
         clinic_id: clinicId,
-        template_json: template,
-        updated_by: sanitizeString(req.session.user?.id, 120),
+        template_json: nextTemplate,
+        updated_by: actorId,
         updated_at: new Date().toISOString()
       };
 
@@ -1737,13 +1995,26 @@ async function startServer() {
         if (String(error?.message || '').toLowerCase().includes('clinic_anamnesis_templates')) {
           return res.status(200).json({
             success: false,
-            warning: 'Tabela clinic_anamnesis_templates nÃ£o existe. Rode o SQL de foundation.'
+            warning: 'Tabela clinic_anamnesis_templates não existe. Rode o SQL de foundation.'
           });
         }
         throw error;
       }
 
-      return res.json({ success: true, data: template });
+      if (actorId) {
+        for (const item of templateChanges.length > 0 ? templateChanges : ['Template de anamnese publicado sem alterações detectadas.']) {
+          void persistActivityLog({
+            userId: actorId,
+            clinicId,
+            actorName,
+            title: 'Template de anamnese atualizado',
+            content: item,
+            type: 'audit'
+          });
+        }
+      }
+
+      return res.json({ success: true, data: nextTemplate });
     } catch (error) {
       return res.status(500).json({ error: String(error) });
     }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+﻿import React, { useState, useEffect, useMemo } from "react";
 // test
 import {
   HelpCircle,
@@ -51,6 +51,10 @@ import {
 } from "./RoomReservation";
 import { RECEPTIONIST_ALLOWED_VIEWS } from "../constants/roleCapabilities";
 import { dataService } from "../services/dataService";
+import {
+  getDefaultAnamnesisTemplate,
+  normalizeAnamnesisTemplate,
+} from "../lib/anamnesisSchema";
 
 const ProfileView = ({
   user,
@@ -336,7 +340,9 @@ export const ReceptionistDashboard = ({
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [anamnesisTemplate, setAnamnesisTemplate] = useState<any>({ hiddenFields: [], customQuestions: [] });
+  const [anamnesisTemplate, setAnamnesisTemplate] = useState<any>(
+    getDefaultAnamnesisTemplate(),
+  );
   const autoSchedulingLink = useMemo(
     () => `${window.location.origin}/?autoSchedule=${encodeURIComponent(user?.clinicId || user?.id || "clinica")}`,
     [user?.clinicId, user?.id]
@@ -375,9 +381,9 @@ export const ReceptionistDashboard = ({
   useEffect(() => {
     const loadTemplate = async () => {
       const result = await dataService.getClinicAnamnesisTemplate();
-      if (result?.success && result?.data) {
-        setAnamnesisTemplate(result.data);
-      }
+      setAnamnesisTemplate(
+        normalizeAnamnesisTemplate(result?.data || getDefaultAnamnesisTemplate()),
+      );
     };
     loadTemplate();
   }, []);
@@ -385,7 +391,7 @@ export const ReceptionistDashboard = ({
   const handleTemplateSave = async (nextTemplate: any) => {
     const result = await dataService.saveClinicAnamnesisTemplate(nextTemplate);
     if (result?.success) {
-      setAnamnesisTemplate(nextTemplate);
+      setAnamnesisTemplate(normalizeAnamnesisTemplate(result?.data || nextTemplate));
       return;
     }
     alert(result?.warning || result?.error || "Não foi possível salvar o template da clínica.");
@@ -955,7 +961,7 @@ export const ReceptionistDashboard = ({
                     Método de Pagamento
                   </p>
                   <h3 className="text-xl font-bold text-slate-900">
-                    Cartão •••• 4242
+                    Cartão â€¢â€¢â€¢â€¢ 4242
                   </h3>
                   <p className="text-blue-500 text-xs font-bold mt-2 cursor-pointer hover:underline">
                     Alterar
@@ -1137,7 +1143,7 @@ export const ReceptionistDashboard = ({
               <div className="lg:col-span-2 space-y-6">
                 <div className="bg-white rounded-[32px] p-8 shadow-sm border border-slate-100">
                   <h3 className="text-lg font-bold text-slate-900 mb-6">
-                    Últimos Recebimentos
+                    Ãšltimos Recebimentos
                   </h3>
                   <div className="overflow-x-auto">
                     <table className="w-full">
@@ -1315,7 +1321,7 @@ export const ReceptionistDashboard = ({
               mode={editingPatient ? "edit" : "create"}
               template={anamnesisTemplate}
               onTemplateSave={handleTemplateSave}
-              canEditTemplate={true}
+              canEditTemplate={false}
             />
 
             {isPaymentModalOpen && (
@@ -1572,7 +1578,7 @@ export const ReceptionistDashboard = ({
                       </div>
                       <div>
                         <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">
-                          Nº de Sessões
+                          NÂº de Sessões
                         </label>
                         <input
                           type="number"
@@ -2022,7 +2028,7 @@ export const ReceptionistDashboard = ({
                                     {item.name}
                                   </h3>
                                   <p className="text-xs text-gray-500">
-                                    {item.type} •{" "}
+                                    {item.type} â€¢{" "}
                                     {item.status === "confirmed"
                                       ? "Confirmado"
                                       : "Pendente"}
@@ -2268,3 +2274,4 @@ export const ReceptionistDashboard = ({
     </div>
   );
 };
+

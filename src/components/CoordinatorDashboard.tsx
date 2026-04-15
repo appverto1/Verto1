@@ -70,6 +70,10 @@ import {
   Pie,
 } from "recharts";
 import { dataService } from "../services/dataService";
+import {
+  getDefaultAnamnesisTemplate,
+  normalizeAnamnesisTemplate,
+} from "../lib/anamnesisSchema";
 
 interface CoordinatorDashboardProps {
   user: any;
@@ -303,11 +307,9 @@ export function CoordinatorDashboard({
   const [financialSurveySubmitted, setFinancialSurveySubmitted] = useState(false);
   const [financialSurveySelected, setFinancialSurveySelected] = useState<string[]>([]);
   const [financialSurveyNotes, setFinancialSurveyNotes] = useState("");
-  const [anamnesisTemplate, setAnamnesisTemplate] = useState<any>({
-    hiddenFields: [],
-    deletedFields: [],
-    customQuestions: [],
-  });
+  const [anamnesisTemplate, setAnamnesisTemplate] = useState<any>(
+    getDefaultAnamnesisTemplate(),
+  );
   const [isAnamnesisTemplateModalOpen, setIsAnamnesisTemplateModalOpen] =
     useState(false);
   const [loadingAnamnesisTemplate, setLoadingAnamnesisTemplate] =
@@ -1188,7 +1190,9 @@ export function CoordinatorDashboard({
       const result = await dataService.getClinicAnamnesisTemplate();
       if (result?.success) {
         setAnamnesisTemplate(
-          result.data || { hiddenFields: [], deletedFields: [], customQuestions: [] },
+          normalizeAnamnesisTemplate(
+            result.data || getDefaultAnamnesisTemplate(),
+          ),
         );
       }
     } catch (error) {
@@ -1205,12 +1209,16 @@ export function CoordinatorDashboard({
         result?.error || "Não foi possível salvar o template da anamnese.",
       );
     }
-    setAnamnesisTemplate(result?.data || template);
+    const normalizedSavedTemplate = normalizeAnamnesisTemplate(
+      result?.data || template,
+    );
+    setAnamnesisTemplate(normalizedSavedTemplate);
     onAddActivityLog(
       "Template de anamnese atualizado",
       "A coordenação personalizou perguntas e campos da ficha de anamnese.",
       "management",
     );
+    return normalizedSavedTemplate;
   };
 
   // Mock data for DRE

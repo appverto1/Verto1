@@ -200,7 +200,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       "formType",
     ];
 
-    const rawEntries = Object.entries(anamnesis || {}).filter(([key]) => key !== "anamnesisTemplateVersion");
+    const dynamicLabelMap =
+      anamnesis && typeof anamnesis.questionLabels === "object" ? anamnesis.questionLabels : {};
+    const excludedKeys = new Set([
+      "anamnesisTemplateVersion",
+      "template_version",
+      "template_snapshot",
+      "questionLabels",
+    ]);
+    const rawEntries = Object.entries(anamnesis || {}).filter(
+      ([key]) => !excludedKeys.has(key),
+    );
     const prioritySet = new Set(priorityFields);
     const priorityEntries: Array<[string, any]> = [];
     const extraEntries: Array<[string, any]> = [];
@@ -219,7 +229,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       .map(([key, value]) => {
         const normalized = normalizeValue(key, value);
         if (!normalized.trim()) return "";
-        const label = fieldLabelMap[key] || fallbackLabel(key);
+        const label = dynamicLabelMap[key] || fieldLabelMap[key] || fallbackLabel(key);
         return `
           <tr>
             <td style="padding:8px 10px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;color:#334155;width:35%;">${escapeHtml(label)}</td>
