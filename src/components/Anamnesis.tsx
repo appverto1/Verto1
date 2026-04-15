@@ -165,38 +165,52 @@ export const AnamnesisModal = ({
     }
   };
 
-  const repairMojibakeText = (value: string) => {
-    let output = String(value || "");
-    if (!output) return "";
+  const decodeEscapedLatin1 = (input: string) => {
+    try {
+      // eslint-disable-next-line no-restricted-globals
+      return decodeURIComponent(escape(input));
+    } catch {
+      return input;
+    }
+  };
 
-    for (let i = 0; i < 4; i++) {
-      if (!/[ÃƒÃ‚Ã¢Ã¯]/.test(output)) break;
-      const decoded = decodeLatin1ToUtf8(output);
-      if (!decoded || decoded === output) break;
-      output = decoded;
+  const mojibakeScore = (input: string) => {
+    const weird = (input.match(/[ÃÂ�]/g) || []).length;
+    const replacement = (input.match(/�/g) || []).length * 3;
+    return weird + replacement;
+  };
+
+  const repairMojibakeText = (value: string) => {
+    const original = String(value || "");
+    if (!original) return "";
+
+    let best = original;
+    let bestScore = mojibakeScore(original);
+    let current = original;
+
+    for (let i = 0; i < 3; i++) {
+      const a = decodeLatin1ToUtf8(current);
+      const b = decodeEscapedLatin1(current);
+      const candidates = [a, b];
+      let improved = false;
+
+      for (const candidate of candidates) {
+        const score = mojibakeScore(candidate);
+        if (score < bestScore) {
+          best = candidate;
+          bestScore = score;
+          improved = true;
+        }
+      }
+
+      if (!improved) break;
+      current = best;
     }
 
-    return output
-      .replaceAll("ÃƒÂ¡", "Ã¡")
-      .replaceAll("ÃƒÃ ", "Ã ")
-      .replaceAll("ÃƒÂ¢", "Ã¢")
-      .replaceAll("ÃƒÃ£", "Ã£")
-      .replaceAll("ÃƒÃ©", "Ã©")
-      .replaceAll("ÃƒÃª", "Ãª")
-      .replaceAll("ÃƒÃ­", "Ã­")
-      .replaceAll("ÃƒÃ³", "Ã³")
-      .replaceAll("ÃƒÃ´", "Ã´")
-      .replaceAll("ÃƒÃµ", "Ãµ")
-      .replaceAll("ÃƒÃº", "Ãº")
-      .replaceAll("ÃƒÃ§", "Ã§")
-      .replaceAll("ÃƒÃ", "Ã")
-      .replaceAll("ÃƒÃ‰", "Ã‰")
-      .replaceAll("ÃƒÃ", "Ã")
-      .replaceAll("ÃƒÃ“", "Ã“")
-      .replaceAll("ÃƒÃš", "Ãš")
-      .replaceAll("ÃƒÃ‡", "Ã‡")
-      .replaceAll("Ã‚", "")
-      .replaceAll("ï¿½", "");
+    return best
+      .replaceAll("Â ", " ")
+      .replaceAll("Â", "")
+      .replaceAll("�", "");
   };
 
 useEffect(() => { 
