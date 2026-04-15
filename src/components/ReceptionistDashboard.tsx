@@ -1294,6 +1294,7 @@ export const ReceptionistDashboard = ({
                   onUpdatePatient={onUpdatePatient}
                   onRecordTrial={onRecordTrial}
                   onDeleteHistoryItem={onDeleteHistoryItem}
+                  anamnesisTemplate={anamnesisTemplate}
                 />
               );
             })()}

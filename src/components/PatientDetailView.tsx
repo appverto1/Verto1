@@ -7,7 +7,7 @@ import { HistoryCard } from './History';
 import { SessionMode } from './SessionMode';
 import { ENERGY_TAGS } from './Common';
 
-export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false }: any) => { 
+export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate }: any) => { 
   const [activeTab, setActiveTab] = useState(initialTab); 
   const [newNote, setNewNote] = useState(""); 
   const [noteMode, setNoteMode] = useState('private'); 
@@ -1024,7 +1024,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           </div> 
         </div> 
       )} 
-      <AnamnesisModal isOpen={showAnamnesis} onClose={() => setShowAnamnesis(false)} initialData={patient.anamnesisData || { nome: patient.name }} onSave={handleUpdateAnamnesis} mode="edit" /> 
+      <AnamnesisModal
+        isOpen={showAnamnesis}
+        onClose={() => setShowAnamnesis(false)}
+        initialData={patient.anamnesisData || { nome: patient.name }}
+        onSave={handleUpdateAnamnesis}
+        mode="edit"
+        template={anamnesisTemplate}
+      /> 
       
       {isUnlinkingModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">

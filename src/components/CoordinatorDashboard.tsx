@@ -2230,6 +2230,7 @@ export function CoordinatorDashboard({
               onAddActivityLog={onAddActivityLog}
               protocols={protocols}
               userRole={user.role}
+              anamnesisTemplate={anamnesisTemplate}
             />
           </main>
         </div>
