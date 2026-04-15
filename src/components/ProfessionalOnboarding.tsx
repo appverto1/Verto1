@@ -2,7 +2,6 @@
 import { motion } from 'framer-motion';
 import { Camera, CheckCircle2, Mail, Plus, UploadCloud, UserPlus, X } from 'lucide-react';
 import { dataService } from '../services/dataService';
-import { getSupabase } from '../lib/supabase';
 
 interface ProfessionalOnboardingProps {
   user: any;
@@ -167,9 +166,22 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   const canGoNextClinic = !isCoordinator || (clinicName.trim() && specialty.trim() && (!councilRequired || (council.trim() && councilNumber.trim())));
 
   const toBase64 = (file: File, cb: (v: string) => void) => {
+    if (file.size > 900 * 1024) {
+      alert('A imagem está muito grande. Use um arquivo com até 900KB.');
+      return;
+    }
     const reader = new FileReader();
     reader.onloadend = () => cb(reader.result as string);
     reader.readAsDataURL(file);
+  };
+
+  const parseJsonSafe = async (response: Response) => {
+    const text = await response.text();
+    try {
+      return text ? JSON.parse(text) : {};
+    } catch {
+      return { success: false, error: `Resposta inválida do servidor (HTTP ${response.status})` };
+    }
   };
 
   const addInvite = () => {
@@ -177,6 +189,35 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
     if (invites.some(i => i.email.toLowerCase() === inviteEmail.toLowerCase())) return;
     setInvites(prev => [...prev, { email: inviteEmail.trim(), role: inviteRole }]);
     setInviteEmail('');
+  };
+
+  const uploadImageIfNeeded = async (input: string | null, kind: 'profile' | 'logo' | 'signature') => {
+    if (!input) return null;
+    if (!input.startsWith('data:image/')) return input;
+
+    const mimeMatch = input.match(/^data:([^;]+);base64,/);
+    const contentType = mimeMatch?.[1] || 'image/png';
+    const extension = contentType.includes('jpeg') || contentType.includes('jpg') ? 'jpg' : 'png';
+    const safeKind = kind === 'profile' ? 'perfil' : kind === 'logo' ? 'logo' : 'assinatura';
+    const objectPath = `onboarding/${user.id}/${safeKind}-${Date.now()}.${extension}`;
+
+    const uploadResponse = await fetch('/api/storage/upload', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bucket: 'patient-photos',
+        path: objectPath,
+        contentType,
+        fileBase64: input
+      })
+    });
+
+    const uploadResult = await parseJsonSafe(uploadResponse);
+    if (!uploadResponse.ok || !uploadResult?.success || !uploadResult?.url) {
+      throw new Error(uploadResult?.error || `Não foi possível enviar a imagem (${safeKind}).`);
+    }
+    return uploadResult.url as string;
   };
 
   const finish = async () => {
@@ -195,15 +236,17 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         await dataService.inviteToClinic(invite.email, invite.role, { requiresCouncil: invite.role === 'therapist' });
       }
 
-      const supabase = await getSupabase();
-      const { data: { session } } = await supabase.auth.getSession();
+      const [profilePictureUrl, clinicLogoUploadedUrl, signatureUploadedUrl] = await Promise.all([
+        uploadImageIfNeeded(profilePicture, 'profile'),
+        uploadImageIfNeeded(clinicLogoUrl, 'logo'),
+        uploadImageIfNeeded(signatureDataUrl, 'signature')
+      ]);
 
       const response = await fetch(`/api/profile/${user.id}/complete-onboarding`, {
         method: 'POST',
         credentials: 'include',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': session?.access_token ? `Bearer ${session.access_token}` : ''
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           fullName,
@@ -219,25 +262,25 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
           countryCode,
           phone,
           clinicName,
-          clinicLogoUrl,
+          clinicLogoUrl: clinicLogoUploadedUrl,
           clinicCnpj,
           clinicPhone,
           specialty,
           council,
           councilNumber,
-          signatureDataUrl,
-          profilePicture
+          signatureDataUrl: signatureUploadedUrl,
+          profilePicture: profilePictureUrl
         })
       });
 
-      const result = await response.json();
+      const result = await parseJsonSafe(response);
       if (!response.ok || !result.success) {
         throw new Error(result.error || 'Falha ao concluir onboarding');
       }
 
       onComplete({
         name: fullName,
-        profilePicture,
+        profilePicture: profilePictureUrl,
         firstLoginCompleted: true,
         subscriptionStatus: 'active'
       });
