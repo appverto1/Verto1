@@ -52,6 +52,7 @@ function SignaturePad({ value, onChange }: { value: string | null; onChange: (v:
   const end = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    if (!drawing) return;
     setDrawing(false);
     const data = canvas.toDataURL('image/png');
     onChange(data);
@@ -248,8 +249,9 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   };
 
   return (
-    <div className="fixed inset-0 z-[200] bg-slate-50 flex items-start md:items-center justify-center p-4 md:p-6 overflow-y-auto">
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-white w-full max-w-5xl rounded-3xl shadow-xl border border-slate-100 my-2 md:my-6">
+    <div className="fixed inset-0 z-[200] bg-slate-50 overflow-y-auto p-4 md:p-6">
+      <div className="min-h-full w-full flex items-start justify-center py-2 md:py-6">
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-white w-full max-w-5xl rounded-3xl shadow-xl border border-slate-100">
         <div className="grid md:grid-cols-[320px_1fr] min-h-[680px]">
           <div className="bg-[#7a32fc] text-white p-8 rounded-l-3xl">
             <h2 className="text-2xl font-bold">Boas-vindas a Verto</h2>
@@ -458,6 +460,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
           </div>
         </div>
       </motion.div>
+      </div>
     </div>
   );
 }
