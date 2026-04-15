@@ -290,6 +290,47 @@ const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABA
 const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || "";
 const supabasePublicClientKey = supabasePublishableKey || supabaseAnonKey;
 
+function getProjectRefFromSupabaseUrl(url: string): string | null {
+  try {
+    const host = new URL(url).host.toLowerCase();
+    if (!host.endsWith('.supabase.co')) return null;
+    const ref = host.split('.')[0];
+    return ref || null;
+  } catch {
+    return null;
+  }
+}
+
+function decodeJwtPayload(token: string): Record<string, any> | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+    const payloadB64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = payloadB64 + '='.repeat((4 - (payloadB64.length % 4)) % 4);
+    const json = Buffer.from(padded, 'base64').toString('utf8');
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+function tokenMatchesCurrentProject(token: string): { ok: boolean; reason?: string } {
+  const payload = decodeJwtPayload(token);
+  const iss = String(payload?.iss || '');
+  const refFromToken = (() => {
+    const m = iss.match(/https:\/\/([a-z0-9-]+)\.supabase\.co\/auth\/v1/i);
+    return m?.[1]?.toLowerCase() || null;
+  })();
+  const refFromServer = getProjectRefFromSupabaseUrl(supabaseUrl)?.toLowerCase() || null;
+  if (!refFromToken || !refFromServer) {
+    return { ok: true };
+  }
+  if (refFromToken !== refFromServer) {
+    return { ok: false, reason: `token_ref=${refFromToken}, server_ref=${refFromServer}` };
+  }
+  return { ok: true };
+}
+
 if (!supabaseUrl || !supabaseServiceKey) {
   console.error("--- ERRO DE CONFIGURAÇÃO CRÍTICO ---");
   console.error("Data/Hora:", new Date().toISOString());
@@ -529,6 +570,14 @@ async function startServer() {
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.split(' ')[1];
+      const tokenMatch = tokenMatchesCurrentProject(token);
+      if (!tokenMatch.ok) {
+        console.error('[Auth] Project mismatch during checkAuth:', tokenMatch.reason);
+        return res.status(401).json({
+          error: 'AUTH_PROJECT_MISMATCH',
+          message: 'Token emitido por outro projeto Supabase.'
+        });
+      }
       try {
         const { user, error } = await getUserFromAccessToken(token);
         if (!error && user) {
@@ -606,9 +655,22 @@ async function startServer() {
   };
 
   app.get('/api/config', (req, res) => {
-    let url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
+    let url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
     if (url && !url.startsWith('http')) {
       url = `https://${url}`;
+    }
+    const publicKey =
+      process.env.SUPABASE_PUBLISHABLE_KEY ||
+      process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+      process.env.SUPABASE_ANON_KEY ||
+      process.env.VITE_SUPABASE_ANON_KEY ||
+      "";
+
+    if (!url || !publicKey) {
+      return res.status(500).json({
+        error: 'CONFIG_MISSING',
+        message: 'Configuração de autenticação incompleta no servidor.'
+      });
     }
     
     // Cache config for 1 minute to reduce server load
@@ -616,11 +678,8 @@ async function startServer() {
     
     res.json({
       supabaseUrl: url,
-      supabaseAnonKey:
-        process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-        process.env.SUPABASE_PUBLISHABLE_KEY ||
-        process.env.VITE_SUPABASE_ANON_KEY ||
-        process.env.SUPABASE_ANON_KEY
+      supabaseAnonKey: publicKey,
+      projectRef: getProjectRefFromSupabaseUrl(url)
     });
   });
 
@@ -912,6 +971,15 @@ async function startServer() {
     if (!accessToken) return res.status(400).json({ error: "Access token required" });
 
     try {
+      const tokenMatch = tokenMatchesCurrentProject(accessToken);
+      if (!tokenMatch.ok) {
+        console.error('[Auth] Project mismatch in /api/auth/login:', tokenMatch.reason);
+        return res.status(401).json({
+          error: "AUTH_PROJECT_MISMATCH",
+          message: "Token de autenticação não pertence a este ambiente."
+        });
+      }
+
       // Verify token with Supabase
       if (!supabase || !supabaseServiceKey) {
         console.error('[Auth] Supabase client or service key is missing. Cannot verify token.');

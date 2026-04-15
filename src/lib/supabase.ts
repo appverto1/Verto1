@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+﻿import { createClient } from '@supabase/supabase-js';
 
 // Fetch the Supabase configuration from the server to keep it out of the bundle
 const fetchConfig = async (retries = 3, delay = 1000) => {
@@ -41,14 +41,19 @@ export const getSupabase = async () => {
 
   initPromise = (async () => {
     const config = await fetchConfig();
-    const url = config?.supabaseUrl || import.meta.env.VITE_SUPABASE_URL;
-    const key = config?.supabaseAnonKey || import.meta.env.VITE_SUPABASE_ANON_KEY;
+    const isProd = import.meta.env.PROD;
+    const url = isProd
+      ? config?.supabaseUrl
+      : (config?.supabaseUrl || import.meta.env.VITE_SUPABASE_URL);
+    const key = isProd
+      ? config?.supabaseAnonKey
+      : (config?.supabaseAnonKey || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY);
 
     if (url && key) {
       supabaseClient = createClient(url, key, {
         auth: {
           autoRefreshToken: true,
-          persistSession: false,
+          persistSession: true,
           detectSessionInUrl: true
         }
       });
@@ -66,10 +71,15 @@ export const getSupabase = async () => {
       console.error('ERRO CRÍTICO: Configurações do Supabase não encontradas!', {
         hasUrl: !!url,
         hasKey: !!key,
+        configError: config?.error || null,
         origin: window.location.origin
       });
       initPromise = null; // Allow retry
-      throw new Error('O sistema não pôde inicializar a conexão com o banco de dados.');
+      throw new Error(
+        isProd
+          ? 'Falha de configuração segura do ambiente de autenticação (AUTH_CONFIG_PROD_MISSING).'
+          : 'O sistema não pôde inicializar a conexão com o banco de dados.'
+      );
     }
   })();
 
