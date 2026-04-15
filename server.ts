@@ -1008,13 +1008,24 @@ async function startServer() {
         });
       }
 
-      // Verify token with Supabase
-      if (!supabase || !supabaseServiceKey) {
-        console.error('[Auth] Supabase client or service key is missing. Cannot verify token.');
+      if (!supabase) {
+        console.error('[Auth] Supabase client is missing. Cannot continue login.');
         return res.status(500).json({ error: "Erro de configuraÃ§Ã£o no servidor (Supabase client not initialized)" });
       }
 
+      // 1) Primary verification path (service-side).
       let { user, error } = await getUserFromAccessToken(accessToken);
+
+      // 2) Fallback: verify token with public auth client (avoids hard dependency on service verification path).
+      if ((error || !user) && supabaseAuthClient) {
+        const publicUserRes = await supabaseAuthClient.auth.getUser(accessToken);
+        if (!publicUserRes.error && publicUserRes.data?.user) {
+          user = publicUserRes.data.user;
+          error = null;
+        }
+      }
+
+      // 3) Final fallback: if credentials exist, sign in server-side and use returned user/session.
       if ((error || !user) && hasCredentials) {
         console.warn('[Auth] Token verification failed. Retrying with server-side credentials sign-in...');
 
@@ -1030,11 +1041,10 @@ async function startServer() {
           password: credentialPassword
         });
 
-        if (!retryCredError && retryCredData?.session?.access_token) {
+        if (!retryCredError && retryCredData?.session?.access_token && retryCredData?.user) {
           accessToken = retryCredData.session.access_token;
-          const retried = await getUserFromAccessToken(accessToken);
-          user = retried.user;
-          error = retried.error;
+          user = retryCredData.user;
+          error = null;
         }
       }
 
