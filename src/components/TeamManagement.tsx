@@ -391,8 +391,8 @@ export function TeamManagement({
               )}
 
               <button
-                type="submit"
-                disabled={isAssigning || !canInvite}
+                type={!canInvite ? "button" : "submit"}
+                disabled={isAssigning}
                 className={`w-full py-4 rounded-2xl font-bold text-sm shadow-lg transition-all ${
                   !canInvite
                     ? 'bg-gradient-to-r from-[#6D28FF] to-[#9F67FF] text-white cursor-pointer shadow-purple-500/30'

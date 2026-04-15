@@ -7,7 +7,7 @@ import { HistoryCard } from './History';
 import { SessionMode } from './SessionMode';
 import { ENERGY_TAGS } from './Common';
 
-export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext }: any) => { 
+export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false }: any) => { 
   const [activeTab, setActiveTab] = useState(initialTab); 
   const [newNote, setNewNote] = useState(""); 
   const [noteMode, setNoteMode] = useState('private'); 
@@ -895,10 +895,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       <div className="bg-white px-6 pt-10 pb-6 shadow-sm z-20"> 
         <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-4"> 
           <div className="flex items-center gap-4"> 
-            <button id="back-btn" onClick={onBack} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-xl transition-all border border-slate-100 text-slate-400 hover:text-[#7a32fc] group">
-              <ChevronLeft size={20} className="group-hover:-translate-x-0.5 transition-transform" />
-              <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">Painel</span>
-            </button>
+            {!hideBackButton && (
+              <button id="back-btn" onClick={onBack} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-xl transition-all border border-slate-100 text-slate-400 hover:text-[#7a32fc] group">
+                <ChevronLeft size={20} className="group-hover:-translate-x-0.5 transition-transform" />
+                <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">Painel</span>
+              </button>
+            )}
             <div id="patient-header-info">
                 <div className="flex items-center gap-2">
                     <h1 className="text-2xl font-semibold text-gray-800 tracking-tight">{patient.name}</h1>
