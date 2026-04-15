@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { X, Baby, UserPlus, FileText, User, ChevronDown, Phone, Eye, Briefcase, Heart, Check, ShoppingBag, Rocket, ClipboardList } from 'lucide-react';
 
 interface CustomQuestion {
@@ -13,6 +13,7 @@ interface CustomQuestion {
 
 interface AnamnesisTemplate {
   hiddenFields: string[];
+  deletedFields?: string[];
   customQuestions: CustomQuestion[];
 }
 
@@ -30,17 +31,17 @@ export const AnamnesisModal = ({
     "Particular",
     "Unimed",
     "Amil",
-    "Bradesco Saúde",
-    "SulAmérica",
+    "Bradesco SaÃºde",
+    "SulAmÃ©rica",
     "Hapvida",
-    "NotreDame Intermédica",
+    "NotreDame IntermÃ©dica",
     "Care Plus",
     "Omint",
-    "Porto Seguro Saúde",
+    "Porto Seguro SaÃºde",
     "Golden Cross",
     "Seguros Unimed",
     "Samp",
-    "São Cristóvão Saúde",
+    "SÃ£o CristÃ³vÃ£o SaÃºde",
     "CASSI",
     "Geap",
     "IPSEMG",
@@ -74,9 +75,9 @@ export const AnamnesisModal = ({
 
   const defaultData = { 
     nome: "", email: "", dataNascimento: "", idade: "", genero: "", estadoCivil: "", profissao: "", religiao: "", endereco: "", telefone: "", pessoaReferencia: "", telefoneReferencia: "", familiaHabita: "", familiaConstituicao: "", familiaClima: "", paiDados: "", paiRelacaoPassada: "", paiRelacaoAtual: "", maeDados: "", maeRelacaoPassada: "", maeRelacaoAtual: "", irmaosDados: "", irmaosRelacaoPassada: "", irmaosRelacaoAtual: "", parDados: "", parRelacaoPassada: "", parRelacaoAtual: "", filhosDados: "", filhosRelacaoPassada: "", filhosRelacaoAtual: "", outrosDados: "", outrosRelacaoPassada: "", outrosRelacaoAtual: "", relacoesProfissionais: "", relacoesAfetivas: "", relacoesSignificativas: "", vidaSocialGeral: "", dificuldadesSociais: "", grauInstrucao: "", descProfissional: "", dificuldadesLaborais: "", situacaoEconomica: "", dependenciaEconomica: "", alimentacao: "", sonoSonho: "", limpezaHigiene: "", exercicio: "", controleMedico: "", habitosNocivos: "", outrosTratamentos: "", contatoProfSaude: "", interesses: "", disponibilidadeTempo: "", empregoTempoLivre: "", interessesPotenciais: "", atividadesIndividuais: "", atividadesGrupais: "", motivoConsulta: "", iniciativaTratamento: "", referenciaTerapeuta: "", expectativa: "", previoTipo: "", previoDuracao: "", previoMotivo: "", previoInterrupcao: "",
-    // Criança Script Fields
+    // CrianÃ§a Script Fields
     dataHoje: new Date().toISOString().split('T')[0],
-    profissional: "Dra. Raísa",
+    profissional: "Dra. RaÃ­sa",
     crp: "06/123456",
     nomeEscola: "",
     tipoEscola: "",
@@ -87,7 +88,7 @@ export const AnamnesisModal = ({
     estadoCivilPais: "",
     idadeSeparacao: "",
     pessoasMoramCrianca: "",
-    temDiagnostico: "Não",
+    temDiagnostico: "NÃ£o",
     diagnosticoQual: "",
     acompanhamentoMedico: "",
     medicacaoAtual: "",
@@ -112,8 +113,36 @@ export const AnamnesisModal = ({
   const [registerTime, setRegisterTime] = useState(""); 
   const [consultationApproach, setConsultationApproach] = useState(""); 
   const [consultationRoom, setConsultationRoom] = useState(""); 
-  const [consultationProfessional, setConsultationProfessional] = useState("Dra. Raísa");
-  const [templateState, setTemplateState] = useState<AnamnesisTemplate>({ hiddenFields: [], customQuestions: [] });
+  const [consultationProfessional, setConsultationProfessional] = useState("Dra. RaÃ­sa");
+  const defaultTemplateState: AnamnesisTemplate = { hiddenFields: [], deletedFields: [], customQuestions: [] };
+  const fixedQuestionCatalog: Array<{ key: string; label: string }> = [
+    { key: "nome", label: "Nome completo" },
+    { key: "nomeSocial", label: "Nome social" },
+    { key: "telefone", label: "Telefone" },
+    { key: "dataNascimento", label: "Data de nascimento" },
+    { key: "genero", label: "GÃªnero" },
+    { key: "convenioTipo", label: "ConvÃªnio ou particular" },
+    { key: "convenioNome", label: "ConvÃªnio" },
+    { key: "convenioCarteirinha", label: "NÃºmero da carteirinha" },
+    { key: "grupo", label: "Grupo" },
+    { key: "comoConheceu", label: "Como conheceu a clÃ­nica" },
+    { key: "rg", label: "RG" },
+    { key: "cpf", label: "CPF" },
+    { key: "cep", label: "CEP" },
+    { key: "logradouro", label: "Logradouro" },
+    { key: "numero", label: "NÃºmero" },
+    { key: "complemento", label: "Complemento" },
+    { key: "bairro", label: "Bairro" },
+    { key: "cidade", label: "Cidade" },
+    { key: "outrasInformacoes", label: "Outras informaÃ§Ãµes" },
+    { key: "menorDeIdade", label: "Paciente menor de idade" },
+    { key: "responsavelNome", label: "Nome do responsÃ¡vel" },
+    { key: "responsavelDataNascimento", label: "Nascimento do responsÃ¡vel" },
+    { key: "responsavelCpf", label: "CPF do responsÃ¡vel" },
+    { key: "responsavelTelefone", label: "Telefone do responsÃ¡vel" }
+  ];
+  const [templateState, setTemplateState] = useState<AnamnesisTemplate>(defaultTemplateState);
+  const [selectedFixedFields, setSelectedFixedFields] = useState<string[]>([]);
   const [newQuestionLabel, setNewQuestionLabel] = useState("");
   const [newQuestionType, setNewQuestionType] = useState<'dissertativa' | 'multipla_escolha' | 'multipla_selecao'>('dissertativa');
   const [newQuestionOptions, setNewQuestionOptions] = useState("");
@@ -130,8 +159,10 @@ export const AnamnesisModal = ({
   useEffect(() => {
     setTemplateState({
       hiddenFields: Array.isArray(template?.hiddenFields) ? template.hiddenFields : [],
+      deletedFields: Array.isArray(template?.deletedFields) ? template.deletedFields : [],
       customQuestions: Array.isArray(template?.customQuestions) ? template.customQuestions : []
     });
+    setSelectedFixedFields([]);
   }, [template]);
 
   useEffect(() => {
@@ -140,13 +171,13 @@ export const AnamnesisModal = ({
       nome: "Nome Completo",
       nomeSocial: "Nome Social",
       telefone: "Telefone",
-      genero: "Gênero",
-      convenioNome: "Convênio",
+      genero: "GÃªnero",
+      convenioNome: "ConvÃªnio",
       convenioCarteirinha: "Carteirinha",
       rg: "RG",
       cpf: "CPF",
-      responsavelNome: "Nome do responsável",
-      responsavelCpf: "CPF do responsável"
+      responsavelNome: "Nome do responsÃ¡vel",
+      responsavelCpf: "CPF do responsÃ¡vel"
     };
 
     const normalize = (txt: string) =>
@@ -189,16 +220,41 @@ export const AnamnesisModal = ({
       return newData;
     }); 
   }; 
-  const isFieldActive = (field: string) => !templateState.hiddenFields.includes(field);
+  const isFieldDeleted = (field: string) => Boolean(templateState.deletedFields?.includes(field));
+  const isFieldActive = (field: string) => !templateState.hiddenFields.includes(field) && !isFieldDeleted(field);
 
-  const toggleField = (field: string) => {
+  const toggleFixedFieldSelection = (field: string) => {
+    setSelectedFixedFields((prev) =>
+      prev.includes(field) ? prev.filter((f) => f !== field) : [...prev, field]
+    );
+  };
+
+  const applyFixedFieldAction = (action: "inactivate" | "exclude" | "restore") => {
+    if (selectedFixedFields.length === 0) return;
     setTemplateState((prev) => {
-      const exists = prev.hiddenFields.includes(field);
+      const deleted = new Set(prev.deletedFields || []);
+      const hidden = new Set(prev.hiddenFields || []);
+      selectedFixedFields.forEach((field) => {
+        if (action === "inactivate") {
+          hidden.add(field);
+          deleted.delete(field);
+        }
+        if (action === "exclude") {
+          hidden.add(field);
+          deleted.add(field);
+        }
+        if (action === "restore") {
+          hidden.delete(field);
+          deleted.delete(field);
+        }
+      });
       return {
         ...prev,
-        hiddenFields: exists ? prev.hiddenFields.filter((f) => f !== field) : [...prev.hiddenFields, field]
+        hiddenFields: Array.from(hidden),
+        deletedFields: Array.from(deleted)
       };
     });
+    setSelectedFixedFields([]);
   };
 
   const handleAddCustomQuestion = () => {
@@ -255,7 +311,7 @@ export const AnamnesisModal = ({
   const saveTemplate = async () => {
     if (!onTemplateSave) return;
     await onTemplateSave(templateState);
-    alert("Template de anamnese salvo para a clínica.");
+    alert("Template de anamnese salvo para a clÃ­nica.");
   };
 
   const handleSubmit = () => { 
@@ -271,41 +327,61 @@ export const AnamnesisModal = ({
         <div className="absolute top-6 right-6 flex items-center gap-3">
           <div className="bg-gray-100 p-1 rounded-xl flex gap-1">
             <button onClick={() => setFormType('adult')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${formType === 'adult' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-400'}`}>Adulto</button>
-            <button onClick={() => setFormType('child')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${formType === 'child' ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-gray-400'}`}>Criança</button>
+            <button onClick={() => setFormType('child')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${formType === 'child' ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-gray-400'}`}>CrianÃ§a</button>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-red-500 transition-colors p-2"><X size={24}/></button> 
         </div>
 
         <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2"> 
           <div className="p-2 bg-[#7a32fc]/10 rounded-xl text-[#7a32fc]">{formType === 'child' ? <Baby size={24}/> : (mode === 'create' ? <UserPlus size={24} /> : <FileText size={24}/>)}</div> 
-          {mode === 'create' ? `Prontuário de Admissão (${formType === 'child' ? 'Criança' : 'Adulto'})` : `Editar Ficha (${formType === 'child' ? 'Criança' : 'Adulto'})`} 
+          {mode === 'create' ? `ProntuÃ¡rio de AdmissÃ£o (${formType === 'child' ? 'CrianÃ§a' : 'Adulto'})` : `Editar Ficha (${formType === 'child' ? 'CrianÃ§a' : 'Adulto'})`} 
         </h2> 
 
         {canEditTemplate && (
           <details className="mb-4 bg-white border border-[#7a32fc]/20 rounded-2xl overflow-hidden group">
             <summary className="p-4 cursor-pointer font-bold text-[#7a32fc] flex justify-between items-center group-open:bg-[#F4F7FE] transition-colors">
-              Personalização da Ficha da Clínica
+              PersonalizaÃ§Ã£o da Ficha da ClÃ­nica
               <ChevronDown className="group-open:rotate-180 transition-transform text-[#7a32fc]" size={20}/>
             </summary>
             <div className="p-4 border-t border-[#7a32fc]/10 space-y-4">
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
-                {[
-                  ['nome', 'Nome'],
-                  ['nomeSocial', 'Nome Social'],
-                  ['telefone', 'Telefone'],
-                  ['genero', 'Gênero'],
-                  ['convenioNome', 'Convênio'],
-                  ['convenioCarteirinha', 'Carteirinha'],
-                  ['rg', 'RG'],
-                  ['cpf', 'CPF'],
-                  ['responsavelNome', 'Responsável'],
-                  ['responsavelCpf', 'CPF Responsável']
-                ].map(([key, label]) => (
-                  <label key={key} className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2 border border-gray-200">
-                    <input type="checkbox" checked={isFieldActive(key)} onChange={() => toggleField(key)} />
-                    <span className="font-semibold text-gray-700">{label}</span>
-                  </label>
-                ))}
+              <div className="space-y-3">
+                <p className="text-xs font-bold text-gray-600 uppercase tracking-wider">Perguntas fixas (selecione para gerenciar)</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                  {fixedQuestionCatalog.map(({ key, label }) => (
+                    <label key={key} className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2 border border-gray-200">
+                      <input
+                        type="checkbox"
+                        checked={selectedFixedFields.includes(key)}
+                        onChange={() => toggleFixedFieldSelection(key)}
+                      />
+                      <span className="font-semibold text-gray-700">{label}</span>
+                      <span className={`ml-auto text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                        isFieldDeleted(key)
+                          ? "bg-red-100 text-red-600"
+                          : isFieldActive(key)
+                            ? "bg-green-100 text-green-600"
+                            : "bg-yellow-100 text-yellow-700"
+                      }`}>
+                        {isFieldDeleted(key) ? "EXCLUÍDA" : isFieldActive(key) ? "ATIVA" : "INATIVA"}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                  <button type="button" onClick={() => applyFixedFieldAction("inactivate")} className="bg-yellow-100 text-yellow-800 rounded-xl py-2 text-[11px] font-bold uppercase tracking-wider">Inativar selecionadas</button>
+                  <button type="button" onClick={() => applyFixedFieldAction("exclude")} className="bg-red-100 text-red-700 rounded-xl py-2 text-[11px] font-bold uppercase tracking-wider">Excluir selecionadas</button>
+                  <button type="button" onClick={() => applyFixedFieldAction("restore")} className="bg-green-100 text-green-700 rounded-xl py-2 text-[11px] font-bold uppercase tracking-wider">Restaurar selecionadas</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTemplateState(defaultTemplateState);
+                      setSelectedFixedFields([]);
+                    }}
+                    className="bg-[#F4F7FE] text-[#7a32fc] rounded-xl py-2 text-[11px] font-bold uppercase tracking-wider"
+                  >
+                    ↻ Restaurar ficha original
+                  </button>
+                </div>
               </div>
 
               <div className="bg-gray-50 rounded-2xl border border-gray-200 p-3 space-y-3">
@@ -314,18 +390,18 @@ export const AnamnesisModal = ({
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                   <select value={newQuestionType} onChange={(e) => setNewQuestionType(e.target.value as any)} className="bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none">
                     <option value="dissertativa">Dissertativa</option>
-                    <option value="multipla_escolha">Múltipla escolha (1)</option>
-                    <option value="multipla_selecao">Múltipla seleção</option>
+                    <option value="multipla_escolha">MÃºltipla escolha (1)</option>
+                    <option value="multipla_selecao">MÃºltipla seleÃ§Ã£o</option>
                   </select>
                   <select value={newQuestionAppliesTo} onChange={(e) => setNewQuestionAppliesTo(e.target.value as any)} className="bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none">
-                    <option value="both">Adulto e Criança</option>
-                    <option value="adult">Só Adulto</option>
-                    <option value="child">Só Criança</option>
+                    <option value="both">Adulto e CrianÃ§a</option>
+                    <option value="adult">SÃ³ Adulto</option>
+                    <option value="child">SÃ³ CrianÃ§a</option>
                   </select>
                   <button type="button" onClick={handleAddCustomQuestion} className="bg-[#7a32fc] text-white rounded-xl font-bold text-xs uppercase tracking-wider">Adicionar</button>
                 </div>
                 {newQuestionType !== "dissertativa" && (
-                  <input type="text" value={newQuestionOptions} onChange={(e) => setNewQuestionOptions(e.target.value)} placeholder="Opções separadas por vírgula" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none" />
+                  <input type="text" value={newQuestionOptions} onChange={(e) => setNewQuestionOptions(e.target.value)} placeholder="OpÃ§Ãµes separadas por vÃ­rgula" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none" />
                 )}
               </div>
 
@@ -347,17 +423,17 @@ export const AnamnesisModal = ({
                           className="bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none"
                         >
                           <option value="dissertativa">Dissertativa</option>
-                          <option value="multipla_escolha">Múltipla escolha (1)</option>
-                          <option value="multipla_selecao">Múltipla seleção</option>
+                          <option value="multipla_escolha">MÃºltipla escolha (1)</option>
+                          <option value="multipla_selecao">MÃºltipla seleÃ§Ã£o</option>
                         </select>
                         <select
                           value={q.appliesTo}
                           onChange={(e) => updateCustomQuestion(q.id, { appliesTo: e.target.value as CustomQuestion["appliesTo"] })}
                           className="bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none"
                         >
-                          <option value="both">Adulto e Criança</option>
-                          <option value="adult">Só Adulto</option>
-                          <option value="child">Só Criança</option>
+                          <option value="both">Adulto e CrianÃ§a</option>
+                          <option value="adult">SÃ³ Adulto</option>
+                          <option value="child">SÃ³ CrianÃ§a</option>
                         </select>
                         <label className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs font-semibold text-gray-700">
                           <input
@@ -365,7 +441,7 @@ export const AnamnesisModal = ({
                             checked={Boolean(q.required)}
                             onChange={(e) => updateCustomQuestion(q.id, { required: e.target.checked })}
                           />
-                          Obrigatória
+                          ObrigatÃ³ria
                         </label>
                       </div>
                       {q.type !== "dissertativa" && (
@@ -381,7 +457,7 @@ export const AnamnesisModal = ({
                             })
                           }
                           className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none"
-                          placeholder="Opções separadas por vírgula"
+                          placeholder="OpÃ§Ãµes separadas por vÃ­rgula"
                         />
                       )}
                       <div className="flex items-center gap-2">
@@ -398,7 +474,7 @@ export const AnamnesisModal = ({
               )}
 
               <button type="button" onClick={saveTemplate} className="w-full bg-[#7a32fc] text-white rounded-xl py-2 text-xs font-bold uppercase tracking-wider">
-                Salvar Personalização da Clínica
+                Salvar PersonalizaÃ§Ã£o da ClÃ­nica
               </button>
             </div>
           </details>
@@ -406,13 +482,13 @@ export const AnamnesisModal = ({
 
         <div className="space-y-4"> 
           <div className="bg-gray-50 p-4 rounded-2xl border border-gray-200"> 
-            <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mb-4 flex items-center gap-2"><User size={16} /> Identificação</h3> 
+            <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mb-4 flex items-center gap-2"><User size={16} /> IdentificaÃ§Ã£o</h3> 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4"> 
               {isFieldActive('nome') && <div className="md:col-span-2"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Nome Completo</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.nome} onChange={e => handleChange('nome', e.target.value)} /></div>} 
               <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. E-mail do Paciente</label><input type="email" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="paciente@email.com" value={formData.email} onChange={e => handleChange('email', e.target.value)} /></div>
               <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Nascimento</label><input type="date" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.dataNascimento} onChange={e => handleChange('dataNascimento', e.target.value)} /></div> 
               <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Idade</label><input type="number" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.idade} onChange={e => handleChange('idade', e.target.value)} /></div> 
-              {isFieldActive('genero') && <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">5. Gênero</label><select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.genero} onChange={e => handleChange('genero', e.target.value)}><option value="">Selecione...</option><option value="Masculino">Masculino</option><option value="Feminino">Feminino</option><option value="Outro">Outro</option></select></div>} 
+              {isFieldActive('genero') && <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">5. GÃªnero</label><select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.genero} onChange={e => handleChange('genero', e.target.value)}><option value="">Selecione...</option><option value="Masculino">Masculino</option><option value="Feminino">Feminino</option><option value="Outro">Outro</option></select></div>} 
               {formType === 'child' && (
                 <React.Fragment>
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Data de Hoje</label><input type="date" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.dataHoje} onChange={e => handleChange('dataHoje', e.target.value)} /></div>
@@ -420,13 +496,13 @@ export const AnamnesisModal = ({
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">CRP</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.crp} onChange={e => handleChange('crp', e.target.value)} /></div>
                 </React.Fragment>
               )}
-              <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">6. Religião</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.religiao} onChange={e => handleChange('religiao', e.target.value)} /></div>
+              <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">6. ReligiÃ£o</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.religiao} onChange={e => handleChange('religiao', e.target.value)} /></div>
               {formType === 'adult' ? (
-                <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">7. Estado Civil</label><select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.estadoCivil} onChange={e => handleChange('estadoCivil', e.target.value)}><option value="">Selecione...</option><option value="Solteiro(a)">Solteiro(a)</option><option value="Casado(a)">Casado(a)</option><option value="Divorciado(a)">Divorciado(a)</option><option value="Viúvo(a)">Viúvo(a)</option></select></div>
+                <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">7. Estado Civil</label><select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.estadoCivil} onChange={e => handleChange('estadoCivil', e.target.value)}><option value="">Selecione...</option><option value="Solteiro(a)">Solteiro(a)</option><option value="Casado(a)">Casado(a)</option><option value="Divorciado(a)">Divorciado(a)</option><option value="ViÃºvo(a)">ViÃºvo(a)</option></select></div>
               ) : (
-                <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">7. Série</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.serie} onChange={e => handleChange('serie', e.target.value)} placeholder="Ex: 2º ano Fundamental" /></div>
+                <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">7. SÃ©rie</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.serie} onChange={e => handleChange('serie', e.target.value)} placeholder="Ex: 2Âº ano Fundamental" /></div>
               )}
-              <div className="md:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">{formType === 'child' ? '8. Nome da Mãe' : '8. Profissão'}</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formType === 'child' ? formData.nomeMae : formData.profissao} onChange={e => handleChange(formType === 'child' ? 'nomeMae' : 'profissao', e.target.value)} /></div> 
+              <div className="md:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">{formType === 'child' ? '8. Nome da MÃ£e' : '8. ProfissÃ£o'}</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formType === 'child' ? formData.nomeMae : formData.profissao} onChange={e => handleChange(formType === 'child' ? 'nomeMae' : 'profissao', e.target.value)} /></div> 
             </div> 
           </div>
 
@@ -454,14 +530,14 @@ export const AnamnesisModal = ({
                 </select>
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Convênio ou Particular</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">ConvÃªnio ou Particular</label>
                 <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.convenioTipo} onChange={e => handleChange('convenioTipo', e.target.value)}>
                   <option value="particular">Particular</option>
-                  <option value="convenio">Convênio</option>
+                  <option value="convenio">ConvÃªnio</option>
                 </select>
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Convênio</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">ConvÃªnio</label>
                 <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.convenioNome} onChange={e => handleChange('convenioNome', e.target.value)}>
                   <option value="">Selecione...</option>
                   {insuranceOptions.map((option) => (
@@ -470,20 +546,20 @@ export const AnamnesisModal = ({
                 </select>
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nº Carteirinha (Convênio)</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">NÂº Carteirinha (ConvÃªnio)</label>
                 <input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.convenioCarteirinha} onChange={e => handleChange('convenioCarteirinha', e.target.value)} />
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Como conheceu a clínica</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Como conheceu a clÃ­nica</label>
                 <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.comoConheceu} onChange={e => handleChange('comoConheceu', e.target.value)}>
                   <option value="">Selecione...</option>
                   <option value="Google">Google</option>
-                  <option value="Indicação">Indicação</option>
+                  <option value="IndicaÃ§Ã£o">IndicaÃ§Ã£o</option>
                   <option value="Email">Email</option>
                   <option value="WhatsApp">WhatsApp</option>
                   <option value="Rede Social">Rede Social</option>
                   <option value="Evento">Evento</option>
-                  <option value="Convênio">Convênio</option>
+                  <option value="ConvÃªnio">ConvÃªnio</option>
                   <option value="Outro">Outro</option>
                 </select>
               </div>
@@ -504,7 +580,7 @@ export const AnamnesisModal = ({
                 <input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.logradouro} onChange={e => handleChange('logradouro', e.target.value)} />
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Número</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">NÃºmero</label>
                 <input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.numero} onChange={e => handleChange('numero', e.target.value)} />
               </div>
               <div>
@@ -520,7 +596,7 @@ export const AnamnesisModal = ({
                 <input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.cidade} onChange={e => handleChange('cidade', e.target.value)} />
               </div>
               <div className="md:col-span-3">
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Outras informações</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Outras informaÃ§Ãµes</label>
                 <textarea className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc] resize-none" rows={3} value={formData.outrasInformacoes} onChange={e => handleChange('outrasInformacoes', e.target.value)} />
               </div>
               <div className="md:col-span-3">
@@ -532,19 +608,19 @@ export const AnamnesisModal = ({
               {formData.menorDeIdade && (
                 <React.Fragment>
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nome do responsável</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nome do responsÃ¡vel</label>
                     <input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.responsavelNome} onChange={e => handleChange('responsavelNome', e.target.value)} />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nascimento do responsável</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nascimento do responsÃ¡vel</label>
                     <input type="date" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.responsavelDataNascimento} onChange={e => handleChange('responsavelDataNascimento', e.target.value)} />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">CPF do responsável</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">CPF do responsÃ¡vel</label>
                     <input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.responsavelCpf} onChange={e => handleChange('responsavelCpf', e.target.value)} />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Telefone do responsável</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Telefone do responsÃ¡vel</label>
                     <input type="tel" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.responsavelTelefone} onChange={e => handleChange('responsavelTelefone', e.target.value)} />
                   </div>
                 </React.Fragment>
@@ -555,7 +631,7 @@ export const AnamnesisModal = ({
           {templateState.customQuestions.filter((q) => q.active && (q.appliesTo === 'both' || q.appliesTo === formType)).length > 0 && (
             <div className="bg-gray-50 p-4 rounded-2xl border border-gray-200">
               <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mb-4 flex items-center gap-2">
-                <ClipboardList size={16} /> Perguntas Personalizadas da Clínica
+                <ClipboardList size={16} /> Perguntas Personalizadas da ClÃ­nica
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {templateState.customQuestions
@@ -613,28 +689,28 @@ export const AnamnesisModal = ({
           {formType === 'child' ? (
             <React.Fragment>
               <div className="bg-gray-50 p-4 rounded-2xl border border-gray-200">
-                <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mb-4 flex items-center gap-2"><UserPlus size={16} /> Família e Contato</h3>
+                <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mb-4 flex items-center gap-2"><UserPlus size={16} /> FamÃ­lia e Contato</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Telefone de Contato</label><input type="tel" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="(00) 00000-0000" value={formData.telefone} onChange={e => handleChange('telefone', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Endereço</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.endereco} onChange={e => handleChange('endereco', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nome do Pai Biológico</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.nomePaiBiologico} onChange={e => handleChange('nomePaiBiologico', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nome de Irmãos e Idade</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.irmaosIdade} onChange={e => handleChange('irmaosIdade', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Estado Civil dos Pais Biológicos</label><select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.estadoCivilPais} onChange={e => handleChange('estadoCivilPais', e.target.value)}><option value="">Selecione...</option><option value="Casados">Casados</option><option value="Separados">Separados</option><option value="Divorciados">Divorciados</option><option value="Outro">Outro</option></select></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Se separados: Idade da criança na época</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.idadeSeparacao} onChange={e => handleChange('idadeSeparacao', e.target.value)} /></div>
-                  <div className="md:col-span-2"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Pessoas que atualmente moram com a criança</label><textarea className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc] resize-none" rows={2} value={formData.pessoasMoramCrianca} onChange={e => handleChange('pessoasMoramCrianca', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">EndereÃ§o</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.endereco} onChange={e => handleChange('endereco', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nome do Pai BiolÃ³gico</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.nomePaiBiologico} onChange={e => handleChange('nomePaiBiologico', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nome de IrmÃ£os e Idade</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.irmaosIdade} onChange={e => handleChange('irmaosIdade', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Estado Civil dos Pais BiolÃ³gicos</label><select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.estadoCivilPais} onChange={e => handleChange('estadoCivilPais', e.target.value)}><option value="">Selecione...</option><option value="Casados">Casados</option><option value="Separados">Separados</option><option value="Divorciados">Divorciados</option><option value="Outro">Outro</option></select></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Se separados: Idade da crianÃ§a na Ã©poca</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.idadeSeparacao} onChange={e => handleChange('idadeSeparacao', e.target.value)} /></div>
+                  <div className="md:col-span-2"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Pessoas que atualmente moram com a crianÃ§a</label><textarea className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc] resize-none" rows={2} value={formData.pessoasMoramCrianca} onChange={e => handleChange('pessoasMoramCrianca', e.target.value)}></textarea></div>
                 </div>
               </div>
 
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group" open>
-                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">Diagnóstico e Medicação<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
+                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">DiagnÃ³stico e MedicaÃ§Ã£o<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-4 border-t border-gray-100">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">A criança já tem algum diagnóstico?</label><select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-xs outline-none" value={formData.temDiagnostico} onChange={e => handleChange('temDiagnostico', e.target.value)}><option value="Não">Não</option><option value="Sim">Sim</option></select></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">A crianÃ§a jÃ¡ tem algum diagnÃ³stico?</label><select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-xs outline-none" value={formData.temDiagnostico} onChange={e => handleChange('temDiagnostico', e.target.value)}><option value="NÃ£o">NÃ£o</option><option value="Sim">Sim</option></select></div>
                     {formData.temDiagnostico === 'Sim' && <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Qual?</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-xs outline-none" value={formData.diagnosticoQual} onChange={e => handleChange('diagnosticoQual', e.target.value)} /></div>}
                   </div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Está sendo acompanhada por algum médico? Qual?</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-xs outline-none" value={formData.acompanhamentoMedico} onChange={e => handleChange('acompanhamentoMedico', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">MEDICAÇÃO ATUAL (Medicação, Para que, Dosagem, Quando iniciou)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.medicacaoAtual} onChange={e => handleChange('medicacaoAtual', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">ACOMPANHAMENTO MULTIDISCIPLINAR (Especialidade, Frequência, Quando iniciou)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.acompanhamentoMultidisciplinar} onChange={e => handleChange('acompanhamentoMultidisciplinar', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">EstÃ¡ sendo acompanhada por algum mÃ©dico? Qual?</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-xs outline-none" value={formData.acompanhamentoMedico} onChange={e => handleChange('acompanhamentoMedico', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">MEDICAÃ‡ÃƒO ATUAL (MedicaÃ§Ã£o, Para que, Dosagem, Quando iniciou)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.medicacaoAtual} onChange={e => handleChange('medicacaoAtual', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">ACOMPANHAMENTO MULTIDISCIPLINAR (Especialidade, FrequÃªncia, Quando iniciou)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.acompanhamentoMultidisciplinar} onChange={e => handleChange('acompanhamentoMultidisciplinar', e.target.value)}></textarea></div>
                 </div>
               </details>
 
@@ -644,7 +720,7 @@ export const AnamnesisModal = ({
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">DESENVOLVIMENTO GESTACIONAL</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.desenvolvimentoGestacional} onChange={e => handleChange('desenvolvimentoGestacional', e.target.value)}></textarea></div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Sono</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.comportamentoSono} onChange={e => handleChange('comportamentoSono', e.target.value)}></textarea></div>
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Alimentação</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.comportamentoAlimentacao} onChange={e => handleChange('comportamentoAlimentacao', e.target.value)}></textarea></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">AlimentaÃ§Ã£o</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.comportamentoAlimentacao} onChange={e => handleChange('comportamentoAlimentacao', e.target.value)}></textarea></div>
                   </div>
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Desenvolvimento Social</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.desenvolvimentoSocial} onChange={e => handleChange('desenvolvimentoSocial', e.target.value)}></textarea></div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -656,15 +732,15 @@ export const AnamnesisModal = ({
               </details>
 
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group">
-                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">Escolaridade e Histórico Médico<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
+                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">Escolaridade e HistÃ³rico MÃ©dico<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-4 border-t border-gray-100">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nome da Escola</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-xs outline-none" value={formData.nomeEscola} onChange={e => handleChange('nomeEscola', e.target.value)} /></div>
                     <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Tipo de Escola</label><select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-xs outline-none" value={formData.tipoEscola} onChange={e => handleChange('tipoEscola', e.target.value)}><option value="">Selecione...</option><option value="Particular">Particular</option><option value="Municipal">Municipal</option><option value="Estadual">Estadual</option><option value="Outra">Outra</option></select></div>
                   </div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">HISTÓRICO MÉDICO da criança</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.historicoMedicoCrianca} onChange={e => handleChange('historicoMedicoCrianca', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">HISTÓRICO MÉDICO da família</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.historicoMedicoFamilia} onChange={e => handleChange('historicoMedicoFamilia', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Lista de interesses e possíveis reforçadores</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.interessesReforcadores} onChange={e => handleChange('interessesReforcadores', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">HISTÃ“RICO MÃ‰DICO da crianÃ§a</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.historicoMedicoCrianca} onChange={e => handleChange('historicoMedicoCrianca', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">HISTÃ“RICO MÃ‰DICO da famÃ­lia</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.historicoMedicoFamilia} onChange={e => handleChange('historicoMedicoFamilia', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Lista de interesses e possÃ­veis reforÃ§adores</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.interessesReforcadores} onChange={e => handleChange('interessesReforcadores', e.target.value)}></textarea></div>
                 </div>
               </details>
             </React.Fragment>
@@ -673,22 +749,22 @@ export const AnamnesisModal = ({
               <div className="bg-gray-50 p-4 rounded-2xl border border-gray-200">
                 <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mb-4 flex items-center gap-2"><Phone size={16} /> Contatos</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="md:col-span-2"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Endereço Domiciliar</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="Endereço completo" value={formData.endereco} onChange={e => handleChange('endereco', e.target.value)} /></div>
+                  <div className="md:col-span-2"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. EndereÃ§o Domiciliar</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="EndereÃ§o completo" value={formData.endereco} onChange={e => handleChange('endereco', e.target.value)} /></div>
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. Telefone para Contato</label><input type="tel" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="(00) 00000-0000" value={formData.telefone} onChange={e => handleChange('telefone', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Pessoa de Referência</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="Nome do contato" value={formData.pessoaReferencia} onChange={e => handleChange('pessoaReferencia', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Telefone de Referência</label><input type="tel" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="(00) 00000-0000" value={formData.telefoneReferencia} onChange={e => handleChange('telefoneReferencia', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Pessoa de ReferÃªncia</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="Nome do contato" value={formData.pessoaReferencia} onChange={e => handleChange('pessoaReferencia', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Telefone de ReferÃªncia</label><input type="tel" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="(00) 00000-0000" value={formData.telefoneReferencia} onChange={e => handleChange('telefoneReferencia', e.target.value)} /></div>
                 </div>
               </div> 
-              <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mt-6 mb-2 flex items-center gap-2"><Eye size={16} /> Observação por Áreas</h3> 
+              <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mt-6 mb-2 flex items-center gap-2"><Eye size={16} /> ObservaÃ§Ã£o por Ãreas</h3> 
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group">
-                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">Família & Ambiente<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
+                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">FamÃ­lia & Ambiente<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-3 border-t border-gray-100">
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Pessoas com quem habita</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.familiaHabita} onChange={e => handleChange('familiaHabita', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. Constitution da família (Passado/Atualidade)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.familiaConstituicao} onChange={e => handleChange('familiaConstituicao', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. Constitution da famÃ­lia (Passado/Atualidade)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.familiaConstituicao} onChange={e => handleChange('familiaConstituicao', e.target.value)}></textarea></div>
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Clima e atmosfera familiar</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.familiaClima} onChange={e => handleChange('familiaClima', e.target.value)}></textarea></div>
                 </div>
               </details> 
-              {['Pai', 'Mãe', 'Irmãos', 'Par', 'Filhos', 'Outros Membros Significativos'].map((entity, idx) => { 
+              {['Pai', 'MÃ£e', 'IrmÃ£os', 'Par', 'Filhos', 'Outros Membros Significativos'].map((entity, idx) => { 
                 const prefix = entity.toLowerCase().split(' ')[0].normalize("NFD").replace(/[\u0300-\u036f]/g, ""); 
                 return ( 
                   <details key={idx} className="bg-white border border-gray-200 rounded-xl overflow-hidden group"> 
@@ -696,52 +772,52 @@ export const AnamnesisModal = ({
                     <div className="p-4 space-y-3 border-t border-gray-100"> 
                       <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Dados pessoais</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData[`${prefix}Dados`] || ''} onChange={e => handleChange(`${prefix}Dados`, e.target.value)} /></div> 
                       <div className="grid grid-cols-2 gap-3"> 
-                        <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. Relação Passada</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData[`${prefix}RelacaoPassada`] || ''} onChange={e => handleChange(`${prefix}RelacaoPassada`, e.target.value)}></textarea></div> 
-                        <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Relação Atual</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData[`${prefix}RelacaoAtual`] || ''} onChange={e => handleChange(`${prefix}RelacaoAtual`, e.target.value)}></textarea></div> 
+                        <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. RelaÃ§Ã£o Passada</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData[`${prefix}RelacaoPassada`] || ''} onChange={e => handleChange(`${prefix}RelacaoPassada`, e.target.value)}></textarea></div> 
+                        <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. RelaÃ§Ã£o Atual</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData[`${prefix}RelacaoAtual`] || ''} onChange={e => handleChange(`${prefix}RelacaoAtual`, e.target.value)}></textarea></div> 
                       </div> 
                     </div> 
                   </details> 
                 ); 
               })} 
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group">
-                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">Relações Sociais<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
+                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">RelaÃ§Ãµes Sociais<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-3 border-t border-gray-100">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Relações Profissionais</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.relacoesProfissionais} onChange={e => handleChange('relacoesProfissionais', e.target.value)}></textarea></div>
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. Relações Afetivas</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.relacoesAfetivas} onChange={e => handleChange('relacoesAfetivas', e.target.value)}></textarea></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. RelaÃ§Ãµes Profissionais</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.relacoesProfissionais} onChange={e => handleChange('relacoesProfissionais', e.target.value)}></textarea></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. RelaÃ§Ãµes Afetivas</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.relacoesAfetivas} onChange={e => handleChange('relacoesAfetivas', e.target.value)}></textarea></div>
                   </div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Relações Significativas (Passado/Atual)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.relacoesSignificativas} onChange={e => handleChange('relacoesSignificativas', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Descrição Geral Vida Social Atual</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.vidaSocialGeral} onChange={e => handleChange('vidaSocialGeral', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. RelaÃ§Ãµes Significativas (Passado/Atual)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.relacoesSignificativas} onChange={e => handleChange('relacoesSignificativas', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. DescriÃ§Ã£o Geral Vida Social Atual</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.vidaSocialGeral} onChange={e => handleChange('vidaSocialGeral', e.target.value)}></textarea></div>
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">5. Dificuldades Atuais na Vida Social</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.dificuldadesSociais} onChange={e => handleChange('dificuldadesSociais', e.target.value)}></textarea></div>
                 </div>
               </details> 
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group">
                 <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors"><div className="flex items-center gap-2"><Briefcase size={16} /> Profissional</div><ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-3 border-t border-gray-100">
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Grau de Instrução</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.grauInstrucao} onChange={e => handleChange('grauInstrucao', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. Descrição da Área Profissional</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.descProfissional} onChange={e => handleChange('descProfissional', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Dificuldades Atuais na Área Laboral</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.dificuldadesLaborais} onChange={e => handleChange('dificuldadesLaborais', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Grau de InstruÃ§Ã£o</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.grauInstrucao} onChange={e => handleChange('grauInstrucao', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. DescriÃ§Ã£o da Ãrea Profissional</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.descProfissional} onChange={e => handleChange('descProfissional', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Dificuldades Atuais na Ãrea Laboral</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.dificuldadesLaborais} onChange={e => handleChange('dificuldadesLaborais', e.target.value)}></textarea></div>
                   <div className="grid grid-cols-2 gap-3">
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Situação Econômica</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.situacaoEconomica} onChange={e => handleChange('situacaoEconomica', e.target.value)} /></div>
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">5. Dependência Econômica</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.dependenciaEconomica} onChange={e => handleChange('dependenciaEconomica', e.target.value)} /></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. SituaÃ§Ã£o EconÃ´mica</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.situacaoEconomica} onChange={e => handleChange('situacaoEconomica', e.target.value)} /></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">5. DependÃªncia EconÃ´mica</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.dependenciaEconomica} onChange={e => handleChange('dependenciaEconomica', e.target.value)} /></div>
                   </div>
                 </div>
               </details> 
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group">
-                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors"><div className="flex items-center gap-2"><Heart size={16} /> Saúde e Higiene Pessoal</div><ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
+                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors"><div className="flex items-center gap-2"><Heart size={16} /> SaÃºde e Higiene Pessoal</div><ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-3 border-t border-gray-100">
                   <div className="grid grid-cols-2 gap-3">
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Alimentação</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.alimentacao} onChange={e => handleChange('alimentacao', e.target.value)} /></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. AlimentaÃ§Ã£o</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.alimentacao} onChange={e => handleChange('alimentacao', e.target.value)} /></div>
                     <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. Sono e Sonho</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.sonoSonho} onChange={e => handleChange('sonoSonho', e.target.value)} /></div>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Limpeza e Higiene</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.limpezaHigiene} onChange={e => handleChange('limpezaHigiene', e.target.value)} /></div>
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Exercício Físico</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.exercicio} onChange={e => handleChange('exercicio', e.target.value)} /></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. ExercÃ­cio FÃ­sico</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.exercicio} onChange={e => handleChange('exercicio', e.target.value)} /></div>
                   </div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">5. Controle Médico e Tratamentos</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.controleMedico} onChange={e => handleChange('controleMedico', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">6. Hábitos Nocivos</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.habitosNocivos} onChange={e => handleChange('habitosNocivos', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">7. Demais tratamentos de saúde</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.outrosTratamentos} onChange={e => handleChange('outrosTratamentos', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">8. Contato profissionais de saúde</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.contatoProfSaude} onChange={e => handleChange('contatoProfSaude', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">5. Controle MÃ©dico e Tratamentos</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.controleMedico} onChange={e => handleChange('controleMedico', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">6. HÃ¡bitos Nocivos</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.habitosNocivos} onChange={e => handleChange('habitosNocivos', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">7. Demais tratamentos de saÃºde</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.outrosTratamentos} onChange={e => handleChange('outrosTratamentos', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">8. Contato profissionais de saÃºde</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.contatoProfSaude} onChange={e => handleChange('contatoProfSaude', e.target.value)} /></div>
                 </div>
               </details> 
 
@@ -764,24 +840,24 @@ export const AnamnesisModal = ({
               </details>
 
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group">
-                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors"><div className="flex items-center gap-2"><ClipboardList size={16} /> História Atual e Motivo da Consulta</div><ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
+                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors"><div className="flex items-center gap-2"><ClipboardList size={16} /> HistÃ³ria Atual e Motivo da Consulta</div><ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-3 border-t border-gray-100">
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Motivo de Consulta</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.motivoConsulta} onChange={e => handleChange('motivoConsulta', e.target.value)}></textarea></div>
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. Iniciativa do Tratamento</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.iniciativaTratamento} onChange={e => handleChange('iniciativaTratamento', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Referência do terapeuta e motivo de eleição</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.referenciaTerapeuta} onChange={e => handleChange('referenciaTerapeuta', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Expectativa do paciente quanto ao processo terapêutico</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.expectativa} onChange={e => handleChange('expectativa', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. ReferÃªncia do terapeuta e motivo de eleiÃ§Ã£o</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.referenciaTerapeuta} onChange={e => handleChange('referenciaTerapeuta', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Expectativa do paciente quanto ao processo terapÃªutico</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.expectativa} onChange={e => handleChange('expectativa', e.target.value)}></textarea></div>
                 </div>
               </details>
 
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group">
-                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors"><div className="flex items-center gap-2"><FileText size={16} /> Processos Terapêuticos Prévios</div><ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
+                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors"><div className="flex items-center gap-2"><FileText size={16} /> Processos TerapÃªuticos PrÃ©vios</div><ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-3 border-t border-gray-100">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Tipo de Tratamento</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.previoTipo} onChange={e => handleChange('previoTipo', e.target.value)} /></div>
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. Duração</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.previoDuracao} onChange={e => handleChange('previoDuracao', e.target.value)} /></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. DuraÃ§Ã£o</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.previoDuracao} onChange={e => handleChange('previoDuracao', e.target.value)} /></div>
                   </div>
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Motivo da Consulta (Anterior)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.previoMotivo} onChange={e => handleChange('previoMotivo', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Motivo de Interrupção</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.previoInterrupcao} onChange={e => handleChange('previoInterrupcao', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Motivo de InterrupÃ§Ã£o</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.previoInterrupcao} onChange={e => handleChange('previoInterrupcao', e.target.value)}></textarea></div>
                 </div>
               </details>
             </React.Fragment>
@@ -805,10 +881,10 @@ export const AnamnesisModal = ({
                       <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Abordagem</label>
                       <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none" value={consultationApproach} onChange={e => setConsultationApproach(e.target.value)}>
                         <option value="">Selecione...</option>
-                        <option value="Avaliação Inicial">Avaliação Inicial</option>
+                        <option value="AvaliaÃ§Ã£o Inicial">AvaliaÃ§Ã£o Inicial</option>
                         <option value="TCC">TCC</option>
                         <option value="ABA">ABA</option>
-                        <option value="Integração Sensorial">Integração Sensorial</option>
+                        <option value="IntegraÃ§Ã£o Sensorial">IntegraÃ§Ã£o Sensorial</option>
                       </select>
                     </div>
                     <div>
@@ -817,7 +893,7 @@ export const AnamnesisModal = ({
                     </div>
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Profissional Responsável</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Profissional ResponsÃ¡vel</label>
                     <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" placeholder="Nome do Profissional" value={consultationProfessional} onChange={e => setConsultationProfessional(e.target.value)} />
                   </div>
                 </div>
@@ -826,12 +902,13 @@ export const AnamnesisModal = ({
           )}
           
           <button onClick={handleSubmit} className="w-full bg-[#7a32fc] text-white font-bold py-4 rounded-xl shadow-lg shadow-[#7a32fc]/30 hover:opacity-90 transition-all mt-2 active:scale-95">
-            {mode === 'create' ? 'Salvar Prontuário' : 'Salvar Alterações'}
+            {mode === 'create' ? 'Salvar ProntuÃ¡rio' : 'Salvar AlteraÃ§Ãµes'}
           </button>
         </div>
       </div>
     </div> 
   ); 
 };
+
 
 

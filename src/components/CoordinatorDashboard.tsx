@@ -305,6 +305,7 @@ export function CoordinatorDashboard({
   const [financialSurveyNotes, setFinancialSurveyNotes] = useState("");
   const [anamnesisTemplate, setAnamnesisTemplate] = useState<any>({
     hiddenFields: [],
+    deletedFields: [],
     customQuestions: [],
   });
   const [isAnamnesisTemplateModalOpen, setIsAnamnesisTemplateModalOpen] =
@@ -1187,7 +1188,7 @@ export function CoordinatorDashboard({
       const result = await dataService.getClinicAnamnesisTemplate();
       if (result?.success) {
         setAnamnesisTemplate(
-          result.template || { hiddenFields: [], customQuestions: [] },
+          result.data || { hiddenFields: [], deletedFields: [], customQuestions: [] },
         );
       }
     } catch (error) {
@@ -1204,7 +1205,7 @@ export function CoordinatorDashboard({
         result?.error || "Não foi possível salvar o template da anamnese.",
       );
     }
-    setAnamnesisTemplate(template);
+    setAnamnesisTemplate(result?.data || template);
     onAddActivityLog(
       "Template de anamnese atualizado",
       "A coordenação personalizou perguntas e campos da ficha de anamnese.",

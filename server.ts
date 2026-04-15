@@ -206,6 +206,9 @@ function sanitizeAnamnesisTemplate(input: any) {
   const hiddenFields = Array.isArray(input?.hiddenFields)
     ? input.hiddenFields.map((f: any) => sanitizeString(f, 80)).filter(Boolean).slice(0, 500)
     : [];
+  const deletedFields = Array.isArray(input?.deletedFields)
+    ? input.deletedFields.map((f: any) => sanitizeString(f, 80)).filter(Boolean).slice(0, 500)
+    : [];
 
   const customQuestions = Array.isArray(input?.customQuestions)
     ? input.customQuestions.slice(0, 300).map((q: any, index: number) => {
@@ -229,7 +232,11 @@ function sanitizeAnamnesisTemplate(input: any) {
       })
     : [];
 
-  return { hiddenFields, customQuestions };
+  return {
+    hiddenFields: Array.from(new Set(hiddenFields)),
+    deletedFields: Array.from(new Set(deletedFields)),
+    customQuestions
+  };
 }
 
 function currentClinicId(user: any): string | null {
@@ -668,6 +675,84 @@ async function startServer() {
     console.warn(`[Auth] Unauthorized access attempt to ${req.path}`);
     res.status(401).json({ error: 'Unauthorized - No valid session or token' });
   };
+
+  const persistActivityLog = async ({
+    userId,
+    clinicId,
+    actorName,
+    title,
+    content,
+    type = 'management'
+  }: {
+    userId: string;
+    clinicId?: string | null;
+    actorName?: string | null;
+    title: string;
+    content: string;
+    type?: string;
+  }) => {
+    try {
+      const basePayload: any = {
+        id: crypto.randomUUID(),
+        user_id: sanitizeString(userId, 120),
+        title: sanitizeString(title, 180),
+        content: sanitizeString(content, 2000),
+        type: sanitizeString(type, 40) || 'management',
+        timestamp: new Date().toISOString()
+      };
+
+      const extendedPayload = {
+        ...basePayload,
+        clinic_id: sanitizeString(clinicId, 120) || null,
+        actor_name: sanitizeString(actorName, 180) || null
+      };
+
+      const insert = await supabase.from('activity_logs').insert([extendedPayload]);
+      if (!insert.error) return;
+
+      // Backward compatibility if clinic_id/actor_name columns don't exist yet.
+      await supabase.from('activity_logs').insert([basePayload]);
+    } catch (error) {
+      console.warn('[ActivityLog] Failed to persist audit event:', String(error));
+    }
+  };
+
+  app.use('/api', (req: any, res: any, next: any) => {
+    const isMutation = ['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method);
+    const shouldAudit = isMutation &&
+      req.path !== '/auth/login' &&
+      req.path !== '/auth/logout' &&
+      req.path !== '/auth/signup-direct' &&
+      req.path !== '/auth/verify-2fa' &&
+      req.path !== '/logs' &&
+      req.path !== '/config';
+
+    if (!shouldAudit) return next();
+
+    const startedAt = Date.now();
+    const actor = req.session?.user || null;
+    const actorName = sanitizeString(actor?.name || actor?.email || 'Usuário', 180);
+    const actorId = sanitizeString(actor?.id, 120);
+    const clinicId = sanitizeString(actor?.clinicId || actor?.clinic_id || actor?.id, 120);
+
+    res.on('finish', () => {
+      if (!actorId) return;
+      if (res.statusCode < 200 || res.statusCode >= 400) return;
+      const pathSafe = sanitizeString(req.path, 180);
+      const durationMs = Date.now() - startedAt;
+      const action = req.method === 'POST' ? 'adição' : req.method === 'PATCH' ? 'edição' : req.method === 'DELETE' ? 'exclusão' : 'atualização';
+      void persistActivityLog({
+        userId: actorId,
+        clinicId,
+        actorName,
+        title: `${action.toUpperCase()} registrada em ${pathSafe}`,
+        content: `${actorName} realizou ${action} no endpoint ${pathSafe} em ${new Date().toLocaleString('pt-BR')} (${durationMs} ms).`,
+        type: 'audit'
+      });
+    });
+
+    return next();
+  });
 
   // Ownership Middleware (IDOR Protection)
   const checkPatientAccess = async (req: any, res: any, next: any) => {
@@ -2165,11 +2250,31 @@ async function startServer() {
   // Activity Logs
   app.get('/api/logs', checkAuth, async (req: any, res) => {
     try {
-      const { data, error } = await supabase
+      const role = req.session.user.role as AppRole;
+      const clinicId = currentClinicId(req.session.user);
+      let query = supabase
         .from('activity_logs')
         .select('*')
-        .eq('user_id', req.session.user.id)
-        .order('timestamp', { ascending: false });
+        .order('timestamp', { ascending: false })
+        .limit(500);
+
+      if ((role === 'coordinator' || role === 'admin' || role === 'owner') && clinicId) {
+        query = query.eq('clinic_id', clinicId);
+      } else {
+        query = query.eq('user_id', req.session.user.id);
+      }
+
+      let { data, error } = await query;
+      if (error && /clinic_id/i.test(String(error?.message || ''))) {
+        const fallback = await supabase
+          .from('activity_logs')
+          .select('*')
+          .eq('user_id', req.session.user.id)
+          .order('timestamp', { ascending: false })
+          .limit(500);
+        data = fallback.data;
+        error = fallback.error;
+      }
       
       if (error) {
         console.error('Supabase logs fetch error:', error);
@@ -2184,15 +2289,33 @@ async function startServer() {
 
   app.post('/api/logs', checkAuth, async (req: any, res) => {
     try {
-      const { data, error } = await supabase
+      const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
+      let { data, error } = await supabase
         .from('activity_logs')
         .upsert([{
           ...req.body,
-          user_id: req.session.user.id
+          user_id: req.session.user.id,
+          actor_name: actorName,
+          clinic_id: currentClinicId(req.session.user),
+          timestamp: req.body?.timestamp || new Date().toISOString()
         }], { onConflict: 'id' })
         .select()
         .single();
       
+      if (error && /actor_name|clinic_id/i.test(String(error?.message || ''))) {
+        const fallback = await supabase
+          .from('activity_logs')
+          .upsert([{
+            ...req.body,
+            user_id: req.session.user.id,
+            timestamp: req.body?.timestamp || new Date().toISOString()
+          }], { onConflict: 'id' })
+          .select()
+          .single();
+        data = fallback.data;
+        error = fallback.error;
+      }
+
       if (error) throw error;
       res.json({ success: true, id: data.id });
     } catch (error: any) {
