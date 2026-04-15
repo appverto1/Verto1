@@ -31,17 +31,17 @@ export const AnamnesisModal = ({
     "Particular",
     "Unimed",
     "Amil",
-    "Bradesco SaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºde",
-    "SulAmÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©rica",
+    "Bradesco SaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºde",
+    "SulAmÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©rica",
     "Hapvida",
-    "NotreDame IntermÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©dica",
+    "NotreDame IntermÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©dica",
     "Care Plus",
     "Omint",
-    "Porto Seguro SaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºde",
+    "Porto Seguro SaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºde",
     "Golden Cross",
     "Seguros Unimed",
     "Samp",
-    "SÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o CristÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³vÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o SaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºde",
+    "SÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o CristÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³vÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o SaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºde",
     "CASSI",
     "Geap",
     "IPSEMG",
@@ -75,9 +75,9 @@ export const AnamnesisModal = ({
 
   const defaultData = { 
     nome: "", email: "", dataNascimento: "", idade: "", genero: "", estadoCivil: "", profissao: "", religiao: "", endereco: "", telefone: "", pessoaReferencia: "", telefoneReferencia: "", familiaHabita: "", familiaConstituicao: "", familiaClima: "", paiDados: "", paiRelacaoPassada: "", paiRelacaoAtual: "", maeDados: "", maeRelacaoPassada: "", maeRelacaoAtual: "", irmaosDados: "", irmaosRelacaoPassada: "", irmaosRelacaoAtual: "", parDados: "", parRelacaoPassada: "", parRelacaoAtual: "", filhosDados: "", filhosRelacaoPassada: "", filhosRelacaoAtual: "", outrosDados: "", outrosRelacaoPassada: "", outrosRelacaoAtual: "", relacoesProfissionais: "", relacoesAfetivas: "", relacoesSignificativas: "", vidaSocialGeral: "", dificuldadesSociais: "", grauInstrucao: "", descProfissional: "", dificuldadesLaborais: "", situacaoEconomica: "", dependenciaEconomica: "", alimentacao: "", sonoSonho: "", limpezaHigiene: "", exercicio: "", controleMedico: "", habitosNocivos: "", outrosTratamentos: "", contatoProfSaude: "", interesses: "", disponibilidadeTempo: "", empregoTempoLivre: "", interessesPotenciais: "", atividadesIndividuais: "", atividadesGrupais: "", motivoConsulta: "", iniciativaTratamento: "", referenciaTerapeuta: "", expectativa: "", previoTipo: "", previoDuracao: "", previoMotivo: "", previoInterrupcao: "",
-    // CrianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a Script Fields
+    // CrianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a Script Fields
     dataHoje: new Date().toISOString().split('T')[0],
-    profissional: "Dra. RaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­sa",
+    profissional: "Dra. RaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­sa",
     crp: "06/123456",
     nomeEscola: "",
     tipoEscola: "",
@@ -88,7 +88,7 @@ export const AnamnesisModal = ({
     estadoCivilPais: "",
     idadeSeparacao: "",
     pessoasMoramCrianca: "",
-    temDiagnostico: "NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o",
+    temDiagnostico: "NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o",
     diagnosticoQual: "",
     acompanhamentoMedico: "",
     medicacaoAtual: "",
@@ -113,41 +113,41 @@ export const AnamnesisModal = ({
   const [registerTime, setRegisterTime] = useState(""); 
   const [consultationApproach, setConsultationApproach] = useState(""); 
   const [consultationRoom, setConsultationRoom] = useState(""); 
-  const [consultationProfessional, setConsultationProfessional] = useState("Dra. RaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­sa");
+  const [consultationProfessional, setConsultationProfessional] = useState("Dra. RaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­sa");
   const defaultTemplateState: AnamnesisTemplate = { hiddenFields: [], deletedFields: [], customQuestions: [] };
   const fixedQuestionCatalog: Array<{ key: string; label: string }> = [
     { key: "nome", label: "Nome completo" },
     { key: "nomeSocial", label: "Nome social" },
     { key: "telefone", label: "Telefone" },
     { key: "dataNascimento", label: "Data de nascimento" },
-    { key: "genero", label: "GÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnero" },
-    { key: "convenioTipo", label: "ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio ou particular" },
-    { key: "convenioNome", label: "ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio" },
-    { key: "convenioCarteirinha", label: "NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºmero da carteirinha" },
+    { key: "genero", label: "GÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnero" },
+    { key: "convenioTipo", label: "ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio ou particular" },
+    { key: "convenioNome", label: "ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio" },
+    { key: "convenioCarteirinha", label: "NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºmero da carteirinha" },
     { key: "grupo", label: "Grupo" },
-    { key: "comoConheceu", label: "Como conheceu a clÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nica" },
+    { key: "comoConheceu", label: "Como conheceu a clÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nica" },
     { key: "rg", label: "RG" },
     { key: "cpf", label: "CPF" },
     { key: "cep", label: "CEP" },
     { key: "logradouro", label: "Logradouro" },
-    { key: "numero", label: "NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºmero" },
+    { key: "numero", label: "NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºmero" },
     { key: "complemento", label: "Complemento" },
     { key: "bairro", label: "Bairro" },
     { key: "cidade", label: "Cidade" },
-    { key: "outrasInformacoes", label: "Outras informaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes" },
+    { key: "outrasInformacoes", label: "Outras informaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes" },
     { key: "menorDeIdade", label: "Paciente menor de idade" },
-    { key: "responsavelNome", label: "Nome do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel" },
-    { key: "responsavelDataNascimento", label: "Nascimento do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel" },
-    { key: "responsavelCpf", label: "CPF do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel" },
-    { key: "responsavelTelefone", label: "Telefone do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel" },
-    { key: "section_familia_ambiente", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: FamÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­lia e Ambiente" },
-    { key: "section_relacoes_sociais", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: RelaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes Sociais" },
-    { key: "section_profissional", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: Profissional" },
-    { key: "section_saude_higiene", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: SaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºde e Higiene Pessoal" },
-    { key: "section_hobbies_tempo_livre", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: Hobbies e Tempo Livre" },
-    { key: "section_desenvolvimento_pessoal", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: Desenvolvimento Pessoal" },
-    { key: "section_historia_motivo", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: HistÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ria Atual e Motivo da Consulta" },
-    { key: "section_processos_previos", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: Processos TerapÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªuticos PrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©vios" }
+    { key: "responsavelNome", label: "Nome do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel" },
+    { key: "responsavelDataNascimento", label: "Nascimento do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel" },
+    { key: "responsavelCpf", label: "CPF do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel" },
+    { key: "responsavelTelefone", label: "Telefone do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel" },
+    { key: "section_familia_ambiente", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: FamÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­lia e Ambiente" },
+    { key: "section_relacoes_sociais", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: RelaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes Sociais" },
+    { key: "section_profissional", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: Profissional" },
+    { key: "section_saude_higiene", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: SaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºde e Higiene Pessoal" },
+    { key: "section_hobbies_tempo_livre", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: Hobbies e Tempo Livre" },
+    { key: "section_desenvolvimento_pessoal", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: Desenvolvimento Pessoal" },
+    { key: "section_historia_motivo", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: HistÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ria Atual e Motivo da Consulta" },
+    { key: "section_processos_previos", label: "SeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o: Processos TerapÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªuticos PrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©vios" }
   ];
   const [templateState, setTemplateState] = useState<AnamnesisTemplate>(defaultTemplateState);
   const [selectedFixedFields, setSelectedFixedFields] = useState<string[]>([]);
@@ -170,33 +170,33 @@ export const AnamnesisModal = ({
     if (!output) return "";
 
     for (let i = 0; i < 4; i++) {
-      if (!/[ÃÂâï]/.test(output)) break;
+      if (!/[ÃƒÃ‚Ã¢Ã¯]/.test(output)) break;
       const decoded = decodeLatin1ToUtf8(output);
       if (!decoded || decoded === output) break;
       output = decoded;
     }
 
     return output
-      .replaceAll("Ã¡", "á")
-      .replaceAll("Ãà", "à")
-      .replaceAll("Ã¢", "â")
-      .replaceAll("Ãã", "ã")
-      .replaceAll("Ãé", "é")
-      .replaceAll("Ãê", "ê")
-      .replaceAll("Ãí", "í")
-      .replaceAll("Ãó", "ó")
-      .replaceAll("Ãô", "ô")
-      .replaceAll("Ãõ", "õ")
-      .replaceAll("Ãú", "ú")
-      .replaceAll("Ãç", "ç")
-      .replaceAll("ÃÁ", "Á")
-      .replaceAll("ÃÉ", "É")
-      .replaceAll("ÃÍ", "Í")
-      .replaceAll("ÃÓ", "Ó")
-      .replaceAll("ÃÚ", "Ú")
-      .replaceAll("ÃÇ", "Ç")
-      .replaceAll("Â", "")
-      .replaceAll("�", "");
+      .replaceAll("ÃƒÂ¡", "Ã¡")
+      .replaceAll("ÃƒÃ ", "Ã ")
+      .replaceAll("ÃƒÂ¢", "Ã¢")
+      .replaceAll("ÃƒÃ£", "Ã£")
+      .replaceAll("ÃƒÃ©", "Ã©")
+      .replaceAll("ÃƒÃª", "Ãª")
+      .replaceAll("ÃƒÃ­", "Ã­")
+      .replaceAll("ÃƒÃ³", "Ã³")
+      .replaceAll("ÃƒÃ´", "Ã´")
+      .replaceAll("ÃƒÃµ", "Ãµ")
+      .replaceAll("ÃƒÃº", "Ãº")
+      .replaceAll("ÃƒÃ§", "Ã§")
+      .replaceAll("ÃƒÃ", "Ã")
+      .replaceAll("ÃƒÃ‰", "Ã‰")
+      .replaceAll("ÃƒÃ", "Ã")
+      .replaceAll("ÃƒÃ“", "Ã“")
+      .replaceAll("ÃƒÃš", "Ãš")
+      .replaceAll("ÃƒÃ‡", "Ã‡")
+      .replaceAll("Ã‚", "")
+      .replaceAll("ï¿½", "");
   };
 
 useEffect(() => { 
@@ -393,7 +393,7 @@ useEffect(() => {
   const saveTemplate = async () => {
     if (!onTemplateSave) return;
     await onTemplateSave(templateState);
-    alert("Template de anamnese salvo para a clÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nica.");
+    alert("Template de anamnese salvo para a clÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nica.");
   };
 
   const handleSubmit = () => { 
@@ -409,20 +409,20 @@ useEffect(() => {
         <div className="absolute top-6 right-6 flex items-center gap-3">
           <div className="bg-gray-100 p-1 rounded-xl flex gap-1">
             <button onClick={() => setFormType('adult')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${formType === 'adult' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-400'}`}>Adulto</button>
-            <button onClick={() => setFormType('child')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${formType === 'child' ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-gray-400'}`}>CrianÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§a</button>
+            <button onClick={() => setFormType('child')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${formType === 'child' ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-gray-400'}`}>Criança</button>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-red-500 transition-colors p-2"><X size={24}/></button> 
         </div>
 
         <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2"> 
           <div className="p-2 bg-[#7a32fc]/10 rounded-xl text-[#7a32fc]">{formType === 'child' ? <Baby size={24}/> : (mode === 'create' ? <UserPlus size={24} /> : <FileText size={24}/>)}</div> 
-          {mode === 'create' ? `ProntuÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡rio de AdmissÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o (${formType === 'child' ? 'CrianÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§a' : 'Adulto'})` : `Editar Ficha (${formType === 'child' ? 'CrianÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§a' : 'Adulto'})`} 
+          {mode === 'create' ? `Prontuário de Admissão (${formType === 'child' ? 'Criança' : 'Adulto'})` : `Editar Ficha (${formType === 'child' ? 'Criança' : 'Adulto'})`} 
         </h2> 
 
         {canEditTemplate && (
           <details className="mb-4 bg-white border border-[#7a32fc]/20 rounded-2xl overflow-hidden group">
             <summary className="p-4 cursor-pointer font-bold text-[#7a32fc] flex justify-between items-center group-open:bg-[#F4F7FE] transition-colors">
-              PersonalizaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o da Ficha da ClÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nica
+              Personalização da Ficha da Clínica
               <ChevronDown className="group-open:rotate-180 transition-transform text-[#7a32fc]" size={20}/>
             </summary>
             <div className="p-4 border-t border-[#7a32fc]/10 space-y-4">
@@ -444,7 +444,7 @@ useEffect(() => {
                             ? "bg-green-100 text-green-600"
                             : "bg-yellow-100 text-yellow-700"
                       }`}>
-                        {isFieldDeleted(key) ? "EXCLUÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¿ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â½DA" : isFieldActive(key) ? "ATIVA" : "INATIVA"}
+                        {isFieldDeleted(key) ? "EXCLUÍDA" : isFieldActive(key) ? "ATIVA" : "INATIVA"}
                       </span>
                     </label>
                   ))}
@@ -461,7 +461,7 @@ useEffect(() => {
                     }}
                     className="bg-[#F4F7FE] text-[#7a32fc] rounded-xl py-2 text-[11px] font-bold uppercase tracking-wider"
                   >
-                    ? Restaurar ficha original
+                    ↺ Restaurar ficha original
                   </button>
                 </div>
               </div>
@@ -472,18 +472,18 @@ useEffect(() => {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                   <select value={newQuestionType} onChange={(e) => setNewQuestionType(e.target.value as any)} className="bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none">
                     <option value="dissertativa">Dissertativa</option>
-                    <option value="multipla_escolha">MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºltipla escolha (1)</option>
-                    <option value="multipla_selecao">MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºltipla seleÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</option>
+                    <option value="multipla_escolha">Múltipla escolha (1)</option>
+                    <option value="multipla_selecao">Múltipla seleção</option>
                   </select>
                   <select value={newQuestionAppliesTo} onChange={(e) => setNewQuestionAppliesTo(e.target.value as any)} className="bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none">
-                    <option value="both">Adulto e CrianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a</option>
-                    <option value="adult">SÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ Adulto</option>
-                    <option value="child">SÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ CrianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a</option>
+                    <option value="both">Adulto e Criança</option>
+                    <option value="adult">Só Adulto</option>
+                    <option value="child">Só Criança</option>
                   </select>
                   <button type="button" onClick={handleAddCustomQuestion} className="bg-[#7a32fc] text-white rounded-xl font-bold text-xs uppercase tracking-wider">Adicionar</button>
                 </div>
                 {newQuestionType !== "dissertativa" && (
-                  <input type="text" value={newQuestionOptions} onChange={(e) => setNewQuestionOptions(e.target.value)} placeholder="OpÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes separadas por vÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­rgula" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none" />
+                  <input type="text" value={newQuestionOptions} onChange={(e) => setNewQuestionOptions(e.target.value)} placeholder="Opções separadas por vírgula" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none" />
                 )}
               </div>
 
@@ -505,17 +505,17 @@ useEffect(() => {
                           className="bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none"
                         >
                           <option value="dissertativa">Dissertativa</option>
-                          <option value="multipla_escolha">MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºltipla escolha (1)</option>
-                          <option value="multipla_selecao">MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºltipla seleÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</option>
+                          <option value="multipla_escolha">Múltipla escolha (1)</option>
+                          <option value="multipla_selecao">Múltipla seleção</option>
                         </select>
                         <select
                           value={q.appliesTo}
                           onChange={(e) => updateCustomQuestion(q.id, { appliesTo: e.target.value as CustomQuestion["appliesTo"] })}
                           className="bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none"
                         >
-                          <option value="both">Adulto e CrianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a</option>
-                          <option value="adult">SÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ Adulto</option>
-                          <option value="child">SÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ CrianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a</option>
+                          <option value="both">Adulto e Criança</option>
+                          <option value="adult">Só Adulto</option>
+                          <option value="child">Só Criança</option>
                         </select>
                         <label className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs font-semibold text-gray-700">
                           <input
@@ -523,7 +523,7 @@ useEffect(() => {
                             checked={Boolean(q.required)}
                             onChange={(e) => updateCustomQuestion(q.id, { required: e.target.checked })}
                           />
-                          ObrigatÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ria
+                          Obrigatória
                         </label>
                       </div>
                       {q.type !== "dissertativa" && (
@@ -539,7 +539,7 @@ useEffect(() => {
                             })
                           }
                           className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none"
-                          placeholder="OpÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes separadas por vÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­rgula"
+                          placeholder="Opções separadas por vírgula"
                         />
                       )}
                       <div className="flex items-center gap-2">
@@ -556,7 +556,7 @@ useEffect(() => {
               )}
 
               <button type="button" onClick={saveTemplate} className="w-full bg-[#7a32fc] text-white rounded-xl py-2 text-xs font-bold uppercase tracking-wider">
-                Salvar PersonalizaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o da ClÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nica
+                Salvar Personalização da Clínica
               </button>
             </div>
           </details>
@@ -564,13 +564,13 @@ useEffect(() => {
 
         <div className="space-y-4"> 
           <div className="bg-gray-50 p-4 rounded-2xl border border-gray-200"> 
-            <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mb-4 flex items-center gap-2"><User size={16} /> IdentificaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</h3> 
+            <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mb-4 flex items-center gap-2"><User size={16} /> Identificação</h3> 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4"> 
               {isFieldActive('nome') && <div className="md:col-span-2"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Nome Completo</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.nome} onChange={e => handleChange('nome', e.target.value)} /></div>} 
               <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. E-mail do Paciente</label><input type="email" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="paciente@email.com" value={formData.email} onChange={e => handleChange('email', e.target.value)} /></div>
               <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Nascimento</label><input type="date" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.dataNascimento} onChange={e => handleChange('dataNascimento', e.target.value)} /></div> 
               <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Idade</label><input type="number" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.idade} onChange={e => handleChange('idade', e.target.value)} /></div> 
-              {isFieldActive('genero') && <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">5. GÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnero</label><select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.genero} onChange={e => handleChange('genero', e.target.value)}><option value="">Selecione...</option><option value="Masculino">Masculino</option><option value="Feminino">Feminino</option><option value="Outro">Outro</option></select></div>} 
+              {isFieldActive('genero') && <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">5. Gênero</label><select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.genero} onChange={e => handleChange('genero', e.target.value)}><option value="">Selecione...</option><option value="Masculino">Masculino</option><option value="Feminino">Feminino</option><option value="Outro">Outro</option></select></div>} 
               {formType === 'child' && (
                 <React.Fragment>
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Data de Hoje</label><input type="date" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.dataHoje} onChange={e => handleChange('dataHoje', e.target.value)} /></div>
@@ -578,13 +578,13 @@ useEffect(() => {
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">CRP</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.crp} onChange={e => handleChange('crp', e.target.value)} /></div>
                 </React.Fragment>
               )}
-              <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">6. ReligiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.religiao} onChange={e => handleChange('religiao', e.target.value)} /></div>
+              <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">6. ReligiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.religiao} onChange={e => handleChange('religiao', e.target.value)} /></div>
               {formType === 'adult' ? (
-                <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">7. Estado Civil</label><select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.estadoCivil} onChange={e => handleChange('estadoCivil', e.target.value)}><option value="">Selecione...</option><option value="Solteiro(a)">Solteiro(a)</option><option value="Casado(a)">Casado(a)</option><option value="Divorciado(a)">Divorciado(a)</option><option value="ViÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºvo(a)">ViÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºvo(a)</option></select></div>
+                <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">7. Estado Civil</label><select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.estadoCivil} onChange={e => handleChange('estadoCivil', e.target.value)}><option value="">Selecione...</option><option value="Solteiro(a)">Solteiro(a)</option><option value="Casado(a)">Casado(a)</option><option value="Divorciado(a)">Divorciado(a)</option><option value="ViÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºvo(a)">ViÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºvo(a)</option></select></div>
               ) : (
-                <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">7. SÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©rie</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.serie} onChange={e => handleChange('serie', e.target.value)} placeholder="Ex: 2ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âº ano Fundamental" /></div>
+                <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">7. SÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©rie</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.serie} onChange={e => handleChange('serie', e.target.value)} placeholder="Ex: 2ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âº ano Fundamental" /></div>
               )}
-              <div className="md:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">{formType === 'child' ? '8. Nome da MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£e' : '8. ProfissÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o'}</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formType === 'child' ? formData.nomeMae : formData.profissao} onChange={e => handleChange(formType === 'child' ? 'nomeMae' : 'profissao', e.target.value)} /></div> 
+              <div className="md:col-span-1"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">{formType === 'child' ? '8. Nome da MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£e' : '8. ProfissÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o'}</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formType === 'child' ? formData.nomeMae : formData.profissao} onChange={e => handleChange(formType === 'child' ? 'nomeMae' : 'profissao', e.target.value)} /></div> 
             </div> 
           </div>
 
@@ -612,14 +612,14 @@ useEffect(() => {
                 </select>
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio ou Particular</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio ou Particular</label>
                 <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.convenioTipo} onChange={e => handleChange('convenioTipo', e.target.value)}>
                   <option value="particular">Particular</option>
-                  <option value="convenio">ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio</option>
+                  <option value="convenio">ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio</option>
                 </select>
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio</label>
                 <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.convenioNome} onChange={e => handleChange('convenioNome', e.target.value)}>
                   <option value="">Selecione...</option>
                   {insuranceOptions.map((option) => (
@@ -628,20 +628,20 @@ useEffect(() => {
                 </select>
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">NÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âº Carteirinha (ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio)</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âº Carteirinha (ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio)</label>
                 <input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.convenioCarteirinha} onChange={e => handleChange('convenioCarteirinha', e.target.value)} />
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Como conheceu a clÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nica</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Como conheceu a clÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nica</label>
                 <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.comoConheceu} onChange={e => handleChange('comoConheceu', e.target.value)}>
                   <option value="">Selecione...</option>
                   <option value="Google">Google</option>
-                  <option value="IndicaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o">IndicaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</option>
+                  <option value="IndicaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o">IndicaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</option>
                   <option value="Email">Email</option>
                   <option value="WhatsApp">WhatsApp</option>
                   <option value="Rede Social">Rede Social</option>
                   <option value="Evento">Evento</option>
-                  <option value="ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio">ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio</option>
+                  <option value="ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio">ConvÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªnio</option>
                   <option value="Outro">Outro</option>
                 </select>
               </div>
@@ -662,7 +662,7 @@ useEffect(() => {
                 <input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.logradouro} onChange={e => handleChange('logradouro', e.target.value)} />
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºmero</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºmero</label>
                 <input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.numero} onChange={e => handleChange('numero', e.target.value)} />
               </div>
               <div>
@@ -678,7 +678,7 @@ useEffect(() => {
                 <input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.cidade} onChange={e => handleChange('cidade', e.target.value)} />
               </div>
               <div className="md:col-span-3">
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Outras informaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes</label>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Outras informaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes</label>
                 <textarea className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc] resize-none" rows={3} value={formData.outrasInformacoes} onChange={e => handleChange('outrasInformacoes', e.target.value)} />
               </div>
               <div className="md:col-span-3">
@@ -690,19 +690,19 @@ useEffect(() => {
               {formData.menorDeIdade && (
                 <React.Fragment>
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nome do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nome do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel</label>
                     <input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.responsavelNome} onChange={e => handleChange('responsavelNome', e.target.value)} />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nascimento do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nascimento do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel</label>
                     <input type="date" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.responsavelDataNascimento} onChange={e => handleChange('responsavelDataNascimento', e.target.value)} />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">CPF do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">CPF do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel</label>
                     <input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.responsavelCpf} onChange={e => handleChange('responsavelCpf', e.target.value)} />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Telefone do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Telefone do responsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel</label>
                     <input type="tel" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.responsavelTelefone} onChange={e => handleChange('responsavelTelefone', e.target.value)} />
                   </div>
                 </React.Fragment>
@@ -713,7 +713,7 @@ useEffect(() => {
           {templateState.customQuestions.filter((q) => q.active && (q.appliesTo === 'both' || q.appliesTo === formType)).length > 0 && (
             <div className="bg-gray-50 p-4 rounded-2xl border border-gray-200">
               <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mb-4 flex items-center gap-2">
-                <ClipboardList size={16} /> Perguntas Personalizadas da ClÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­nica
+                <ClipboardList size={16} /> Perguntas Personalizadas da Clínica
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {templateState.customQuestions
@@ -771,28 +771,28 @@ useEffect(() => {
           {formType === 'child' ? (
             <React.Fragment>
               <div className="bg-gray-50 p-4 rounded-2xl border border-gray-200">
-                <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mb-4 flex items-center gap-2"><UserPlus size={16} /> FamÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­lia e Contato</h3>
+                <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mb-4 flex items-center gap-2"><UserPlus size={16} /> FamÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­lia e Contato</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Telefone de Contato</label><input type="tel" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="(00) 00000-0000" value={formData.telefone} onChange={e => handleChange('telefone', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">EndereÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§o</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.endereco} onChange={e => handleChange('endereco', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nome do Pai BiolÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³gico</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.nomePaiBiologico} onChange={e => handleChange('nomePaiBiologico', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nome de IrmÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£os e Idade</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.irmaosIdade} onChange={e => handleChange('irmaosIdade', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Estado Civil dos Pais BiolÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³gicos</label><select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.estadoCivilPais} onChange={e => handleChange('estadoCivilPais', e.target.value)}><option value="">Selecione...</option><option value="Casados">Casados</option><option value="Separados">Separados</option><option value="Divorciados">Divorciados</option><option value="Outro">Outro</option></select></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Se separados: Idade da crianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a na ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©poca</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.idadeSeparacao} onChange={e => handleChange('idadeSeparacao', e.target.value)} /></div>
-                  <div className="md:col-span-2"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Pessoas que atualmente moram com a crianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a</label><textarea className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc] resize-none" rows={2} value={formData.pessoasMoramCrianca} onChange={e => handleChange('pessoasMoramCrianca', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">EndereÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§o</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.endereco} onChange={e => handleChange('endereco', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nome do Pai BiolÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³gico</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.nomePaiBiologico} onChange={e => handleChange('nomePaiBiologico', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nome de IrmÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£os e Idade</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.irmaosIdade} onChange={e => handleChange('irmaosIdade', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Estado Civil dos Pais BiolÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³gicos</label><select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.estadoCivilPais} onChange={e => handleChange('estadoCivilPais', e.target.value)}><option value="">Selecione...</option><option value="Casados">Casados</option><option value="Separados">Separados</option><option value="Divorciados">Divorciados</option><option value="Outro">Outro</option></select></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Se separados: Idade da crianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a na ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©poca</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.idadeSeparacao} onChange={e => handleChange('idadeSeparacao', e.target.value)} /></div>
+                  <div className="md:col-span-2"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Pessoas que atualmente moram com a crianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a</label><textarea className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc] resize-none" rows={2} value={formData.pessoasMoramCrianca} onChange={e => handleChange('pessoasMoramCrianca', e.target.value)}></textarea></div>
                 </div>
               </div>
 
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group" open>
-                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">DiagnÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³stico e MedicaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
+                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">DiagnÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³stico e MedicaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-4 border-t border-gray-100">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">A crianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a jÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ tem algum diagnÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³stico?</label><select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-xs outline-none" value={formData.temDiagnostico} onChange={e => handleChange('temDiagnostico', e.target.value)}><option value="NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o">NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</option><option value="Sim">Sim</option></select></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">A crianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a jÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ tem algum diagnÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³stico?</label><select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-xs outline-none" value={formData.temDiagnostico} onChange={e => handleChange('temDiagnostico', e.target.value)}><option value="NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o">NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</option><option value="Sim">Sim</option></select></div>
                     {formData.temDiagnostico === 'Sim' && <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Qual?</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-xs outline-none" value={formData.diagnosticoQual} onChange={e => handleChange('diagnosticoQual', e.target.value)} /></div>}
                   </div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">EstÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ sendo acompanhada por algum mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©dico? Qual?</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-xs outline-none" value={formData.acompanhamentoMedico} onChange={e => handleChange('acompanhamentoMedico', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">MEDICAÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢O ATUAL (MedicaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o, Para que, Dosagem, Quando iniciou)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.medicacaoAtual} onChange={e => handleChange('medicacaoAtual', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">ACOMPANHAMENTO MULTIDISCIPLINAR (Especialidade, FrequÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia, Quando iniciou)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.acompanhamentoMultidisciplinar} onChange={e => handleChange('acompanhamentoMultidisciplinar', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">EstÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ sendo acompanhada por algum mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©dico? Qual?</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-xs outline-none" value={formData.acompanhamentoMedico} onChange={e => handleChange('acompanhamentoMedico', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">MEDICAÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢O ATUAL (MedicaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o, Para que, Dosagem, Quando iniciou)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.medicacaoAtual} onChange={e => handleChange('medicacaoAtual', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">ACOMPANHAMENTO MULTIDISCIPLINAR (Especialidade, FrequÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia, Quando iniciou)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.acompanhamentoMultidisciplinar} onChange={e => handleChange('acompanhamentoMultidisciplinar', e.target.value)}></textarea></div>
                 </div>
               </details>
 
@@ -803,7 +803,7 @@ useEffect(() => {
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">DESENVOLVIMENTO GESTACIONAL</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.desenvolvimentoGestacional} onChange={e => handleChange('desenvolvimentoGestacional', e.target.value)}></textarea></div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Sono</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.comportamentoSono} onChange={e => handleChange('comportamentoSono', e.target.value)}></textarea></div>
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">AlimentaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.comportamentoAlimentacao} onChange={e => handleChange('comportamentoAlimentacao', e.target.value)}></textarea></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">AlimentaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.comportamentoAlimentacao} onChange={e => handleChange('comportamentoAlimentacao', e.target.value)}></textarea></div>
                   </div>
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Desenvolvimento Social</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.desenvolvimentoSocial} onChange={e => handleChange('desenvolvimentoSocial', e.target.value)}></textarea></div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -816,15 +816,15 @@ useEffect(() => {
               )}
 
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group">
-                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">Escolaridade e HistÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³rico MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©dico<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
+                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">Escolaridade e HistÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³rico MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©dico<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-4 border-t border-gray-100">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nome da Escola</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-xs outline-none" value={formData.nomeEscola} onChange={e => handleChange('nomeEscola', e.target.value)} /></div>
                     <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Tipo de Escola</label><select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-xs outline-none" value={formData.tipoEscola} onChange={e => handleChange('tipoEscola', e.target.value)}><option value="">Selecione...</option><option value="Particular">Particular</option><option value="Municipal">Municipal</option><option value="Estadual">Estadual</option><option value="Outra">Outra</option></select></div>
                   </div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">HISTÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“RICO MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â°DICO da crianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.historicoMedicoCrianca} onChange={e => handleChange('historicoMedicoCrianca', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">HISTÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“RICO MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â°DICO da famÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­lia</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.historicoMedicoFamilia} onChange={e => handleChange('historicoMedicoFamilia', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Lista de interesses e possÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­veis reforÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§adores</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.interessesReforcadores} onChange={e => handleChange('interessesReforcadores', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">HISTÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œRICO MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°DICO da crianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.historicoMedicoCrianca} onChange={e => handleChange('historicoMedicoCrianca', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">HISTÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œRICO MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°DICO da famÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­lia</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.historicoMedicoFamilia} onChange={e => handleChange('historicoMedicoFamilia', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Lista de interesses e possÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­veis reforÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§adores</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={3} value={formData.interessesReforcadores} onChange={e => handleChange('interessesReforcadores', e.target.value)}></textarea></div>
                 </div>
               </details>
             </React.Fragment>
@@ -833,18 +833,18 @@ useEffect(() => {
               <div className="bg-gray-50 p-4 rounded-2xl border border-gray-200">
                 <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mb-4 flex items-center gap-2"><Phone size={16} /> Contatos</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="md:col-span-2"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. EndereÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§o Domiciliar</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="EndereÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§o completo" value={formData.endereco} onChange={e => handleChange('endereco', e.target.value)} /></div>
+                  <div className="md:col-span-2"><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. EndereÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§o Domiciliar</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="EndereÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§o completo" value={formData.endereco} onChange={e => handleChange('endereco', e.target.value)} /></div>
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. Telefone para Contato</label><input type="tel" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="(00) 00000-0000" value={formData.telefone} onChange={e => handleChange('telefone', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Pessoa de ReferÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="Nome do contato" value={formData.pessoaReferencia} onChange={e => handleChange('pessoaReferencia', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Telefone de ReferÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia</label><input type="tel" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="(00) 00000-0000" value={formData.telefoneReferencia} onChange={e => handleChange('telefoneReferencia', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Pessoa de ReferÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="Nome do contato" value={formData.pessoaReferencia} onChange={e => handleChange('pessoaReferencia', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Telefone de ReferÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia</label><input type="tel" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" placeholder="(00) 00000-0000" value={formData.telefoneReferencia} onChange={e => handleChange('telefoneReferencia', e.target.value)} /></div>
                 </div>
               </div> 
-              <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mt-6 mb-2 flex items-center gap-2"><Eye size={16} /> ObservaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o por ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âreas</h3> 
+              <h3 className="text-sm font-bold text-[#7a32fc] uppercase tracking-wider mt-6 mb-2 flex items-center gap-2"><Eye size={16} /> ObservaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o por ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âreas</h3> 
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group">
-                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">FamÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­lia & Ambiente<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
+                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">FamÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­lia & Ambiente<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-3 border-t border-gray-100">
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Pessoas com quem habita</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.familiaHabita} onChange={e => handleChange('familiaHabita', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. Constitution da famÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­lia (Passado/Atualidade)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.familiaConstituicao} onChange={e => handleChange('familiaConstituicao', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. Constitution da famÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­lia (Passado/Atualidade)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.familiaConstituicao} onChange={e => handleChange('familiaConstituicao', e.target.value)}></textarea></div>
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Clima e atmosfera familiar</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.familiaClima} onChange={e => handleChange('familiaClima', e.target.value)}></textarea></div>
                 </div>
               </details>
@@ -856,8 +856,8 @@ useEffect(() => {
                     <div className="p-4 space-y-3 border-t border-gray-100"> 
                       <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Dados pessoais</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData[`${prefix}Dados`] || ''} onChange={e => handleChange(`${prefix}Dados`, e.target.value)} /></div> 
                       <div className="grid grid-cols-2 gap-3"> 
-                        <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. RelaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o Passada</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData[`${prefix}RelacaoPassada`] || ''} onChange={e => handleChange(`${prefix}RelacaoPassada`, e.target.value)}></textarea></div> 
-                        <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. RelaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o Atual</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData[`${prefix}RelacaoAtual`] || ''} onChange={e => handleChange(`${prefix}RelacaoAtual`, e.target.value)}></textarea></div> 
+                        <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. RelaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o Passada</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData[`${prefix}RelacaoPassada`] || ''} onChange={e => handleChange(`${prefix}RelacaoPassada`, e.target.value)}></textarea></div> 
+                        <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. RelaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o Atual</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData[`${prefix}RelacaoAtual`] || ''} onChange={e => handleChange(`${prefix}RelacaoAtual`, e.target.value)}></textarea></div> 
                       </div> 
                     </div> 
                   </details> 
@@ -865,14 +865,14 @@ useEffect(() => {
               })} 
               {isFieldActive('section_relacoes_sociais') && (
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group">
-                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">RelaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes Sociais<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
+                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors">RelaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes Sociais<ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-3 border-t border-gray-100">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. RelaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes Profissionais</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.relacoesProfissionais} onChange={e => handleChange('relacoesProfissionais', e.target.value)}></textarea></div>
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. RelaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes Afetivas</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.relacoesAfetivas} onChange={e => handleChange('relacoesAfetivas', e.target.value)}></textarea></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. RelaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes Profissionais</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.relacoesProfissionais} onChange={e => handleChange('relacoesProfissionais', e.target.value)}></textarea></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. RelaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes Afetivas</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.relacoesAfetivas} onChange={e => handleChange('relacoesAfetivas', e.target.value)}></textarea></div>
                   </div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. RelaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes Significativas (Passado/Atual)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.relacoesSignificativas} onChange={e => handleChange('relacoesSignificativas', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. DescriÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o Geral Vida Social Atual</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.vidaSocialGeral} onChange={e => handleChange('vidaSocialGeral', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. RelaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes Significativas (Passado/Atual)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.relacoesSignificativas} onChange={e => handleChange('relacoesSignificativas', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. DescriÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o Geral Vida Social Atual</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.vidaSocialGeral} onChange={e => handleChange('vidaSocialGeral', e.target.value)}></textarea></div>
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">5. Dificuldades Atuais na Vida Social</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.dificuldadesSociais} onChange={e => handleChange('dificuldadesSociais', e.target.value)}></textarea></div>
                 </div>
               </details>
@@ -881,32 +881,32 @@ useEffect(() => {
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group">
                 <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors"><div className="flex items-center gap-2"><Briefcase size={16} /> Profissional</div><ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-3 border-t border-gray-100">
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Grau de InstruÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.grauInstrucao} onChange={e => handleChange('grauInstrucao', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. DescriÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o da ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Ârea Profissional</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.descProfissional} onChange={e => handleChange('descProfissional', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Dificuldades Atuais na ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Ârea Laboral</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.dificuldadesLaborais} onChange={e => handleChange('dificuldadesLaborais', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Grau de InstruÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.grauInstrucao} onChange={e => handleChange('grauInstrucao', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. DescriÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o da ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Ârea Profissional</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.descProfissional} onChange={e => handleChange('descProfissional', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Dificuldades Atuais na ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Ârea Laboral</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.dificuldadesLaborais} onChange={e => handleChange('dificuldadesLaborais', e.target.value)}></textarea></div>
                   <div className="grid grid-cols-2 gap-3">
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. SituaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o EconÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â´mica</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.situacaoEconomica} onChange={e => handleChange('situacaoEconomica', e.target.value)} /></div>
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">5. DependÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia EconÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â´mica</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.dependenciaEconomica} onChange={e => handleChange('dependenciaEconomica', e.target.value)} /></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. SituaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o EconÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â´mica</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.situacaoEconomica} onChange={e => handleChange('situacaoEconomica', e.target.value)} /></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">5. DependÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia EconÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â´mica</label><input type="text" className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={formData.dependenciaEconomica} onChange={e => handleChange('dependenciaEconomica', e.target.value)} /></div>
                   </div>
                 </div>
               </details>
               )}
               {isFieldActive('section_saude_higiene') && (
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group">
-                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors"><div className="flex items-center gap-2"><Heart size={16} /> SaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºde e Higiene Pessoal</div><ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
+                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors"><div className="flex items-center gap-2"><Heart size={16} /> SaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºde e Higiene Pessoal</div><ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-3 border-t border-gray-100">
                   <div className="grid grid-cols-2 gap-3">
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. AlimentaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.alimentacao} onChange={e => handleChange('alimentacao', e.target.value)} /></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. AlimentaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.alimentacao} onChange={e => handleChange('alimentacao', e.target.value)} /></div>
                     <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. Sono e Sonho</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.sonoSonho} onChange={e => handleChange('sonoSonho', e.target.value)} /></div>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Limpeza e Higiene</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.limpezaHigiene} onChange={e => handleChange('limpezaHigiene', e.target.value)} /></div>
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. ExercÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­cio FÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­sico</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.exercicio} onChange={e => handleChange('exercicio', e.target.value)} /></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. ExercÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­cio FÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­sico</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.exercicio} onChange={e => handleChange('exercicio', e.target.value)} /></div>
                   </div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">5. Controle MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©dico e Tratamentos</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.controleMedico} onChange={e => handleChange('controleMedico', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">6. HÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡bitos Nocivos</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.habitosNocivos} onChange={e => handleChange('habitosNocivos', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">7. Demais tratamentos de saÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºde</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.outrosTratamentos} onChange={e => handleChange('outrosTratamentos', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">8. Contato profissionais de saÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºde</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.contatoProfSaude} onChange={e => handleChange('contatoProfSaude', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">5. Controle MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©dico e Tratamentos</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.controleMedico} onChange={e => handleChange('controleMedico', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">6. HÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡bitos Nocivos</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.habitosNocivos} onChange={e => handleChange('habitosNocivos', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">7. Demais tratamentos de saÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºde</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.outrosTratamentos} onChange={e => handleChange('outrosTratamentos', e.target.value)} /></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">8. Contato profissionais de saÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºde</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.contatoProfSaude} onChange={e => handleChange('contatoProfSaude', e.target.value)} /></div>
                 </div>
               </details>
               )}
@@ -935,26 +935,26 @@ useEffect(() => {
 
               {isFieldActive('section_historia_motivo') && (
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group">
-                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors"><div className="flex items-center gap-2"><ClipboardList size={16} /> HistÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ria Atual e Motivo da Consulta</div><ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
+                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors"><div className="flex items-center gap-2"><ClipboardList size={16} /> HistÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ria Atual e Motivo da Consulta</div><ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-3 border-t border-gray-100">
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Motivo de Consulta</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.motivoConsulta} onChange={e => handleChange('motivoConsulta', e.target.value)}></textarea></div>
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. Iniciativa do Tratamento</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.iniciativaTratamento} onChange={e => handleChange('iniciativaTratamento', e.target.value)} /></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. ReferÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia do terapeuta e motivo de eleiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.referenciaTerapeuta} onChange={e => handleChange('referenciaTerapeuta', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Expectativa do paciente quanto ao processo terapÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªutico</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.expectativa} onChange={e => handleChange('expectativa', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. ReferÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia do terapeuta e motivo de eleiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.referenciaTerapeuta} onChange={e => handleChange('referenciaTerapeuta', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Expectativa do paciente quanto ao processo terapÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªutico</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.expectativa} onChange={e => handleChange('expectativa', e.target.value)}></textarea></div>
                 </div>
               </details>
               )}
 
               {isFieldActive('section_processos_previos') && (
               <details className="bg-white border border-gray-200 rounded-xl overflow-hidden group">
-                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors"><div className="flex items-center gap-2"><FileText size={16} /> Processos TerapÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªuticos PrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©vios</div><ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
+                <summary className="p-4 cursor-pointer font-bold text-gray-700 flex justify-between items-center group-open:bg-gray-50 transition-colors"><div className="flex items-center gap-2"><FileText size={16} /> Processos TerapÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªuticos PrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©vios</div><ChevronDown className="group-open:rotate-180 transition-transform text-gray-400" size={20}/></summary>
                 <div className="p-4 space-y-3 border-t border-gray-100">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">1. Tipo de Tratamento</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.previoTipo} onChange={e => handleChange('previoTipo', e.target.value)} /></div>
-                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. DuraÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.previoDuracao} onChange={e => handleChange('previoDuracao', e.target.value)} /></div>
+                    <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">2. DuraÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</label><input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" value={formData.previoDuracao} onChange={e => handleChange('previoDuracao', e.target.value)} /></div>
                   </div>
                   <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">3. Motivo da Consulta (Anterior)</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.previoMotivo} onChange={e => handleChange('previoMotivo', e.target.value)}></textarea></div>
-                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Motivo de InterrupÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.previoInterrupcao} onChange={e => handleChange('previoInterrupcao', e.target.value)}></textarea></div>
+                  <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">4. Motivo de InterrupÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o</label><textarea className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none resize-none" rows={2} value={formData.previoInterrupcao} onChange={e => handleChange('previoInterrupcao', e.target.value)}></textarea></div>
                 </div>
               </details>
               )}
@@ -979,10 +979,10 @@ useEffect(() => {
                       <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Abordagem</label>
                       <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none" value={consultationApproach} onChange={e => setConsultationApproach(e.target.value)}>
                         <option value="">Selecione...</option>
-                        <option value="AvaliaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o Inicial">AvaliaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o Inicial</option>
+                        <option value="AvaliaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o Inicial">AvaliaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o Inicial</option>
                         <option value="TCC">TCC</option>
                         <option value="ABA">ABA</option>
-                        <option value="IntegraÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o Sensorial">IntegraÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o Sensorial</option>
+                        <option value="IntegraÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o Sensorial">IntegraÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o Sensorial</option>
                       </select>
                     </div>
                     <div>
@@ -991,7 +991,7 @@ useEffect(() => {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Profissional ResponsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel</label>
+                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Profissional ResponsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡vel</label>
                     <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none" placeholder="Nome do Profissional" value={consultationProfessional} onChange={e => setConsultationProfessional(e.target.value)} />
                   </div>
                 </div>
@@ -1000,7 +1000,7 @@ useEffect(() => {
           )}
           
           <button onClick={handleSubmit} className="w-full bg-[#7a32fc] text-white font-bold py-4 rounded-xl shadow-lg shadow-[#7a32fc]/30 hover:opacity-90 transition-all mt-2 active:scale-95">
-            {mode === 'create' ? 'Salvar ProntuÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡rio' : 'Salvar AlteraÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes'}
+            {mode === 'create' ? 'Salvar ProntuÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡rio' : 'Salvar AlteraÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes'}
           </button>
         </div>
       </div>
