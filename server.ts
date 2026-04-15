@@ -287,6 +287,8 @@ async function ensureClinicAndMembershipForCoordinator(userId: string, clinicNam
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || "";
+const supabasePublicClientKey = supabasePublishableKey || supabaseAnonKey;
 
 if (!supabaseUrl || !supabaseServiceKey) {
   console.error("--- ERRO DE CONFIGURAÇÃO CRÍTICO ---");
@@ -326,15 +328,15 @@ try {
         detectSessionInUrl: false
       }
     });
-    if (supabaseUrl && supabaseAnonKey) {
-      supabaseAuthClient = createClient(supabaseUrl, supabaseAnonKey, {
-        auth: {
-          persistSession: false,
-          autoRefreshToken: false,
-          detectSessionInUrl: false
-        }
-      });
-    }
+  }
+  if (supabaseUrl && supabasePublicClientKey) {
+    supabaseAuthClient = createClient(supabaseUrl, supabasePublicClientKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false
+      }
+    });
   } else {
     console.warn("Supabase client NOT initialized due to missing credentials.");
   }
@@ -614,7 +616,11 @@ async function startServer() {
     
     res.json({
       supabaseUrl: url,
-      supabaseAnonKey: process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
+      supabaseAnonKey:
+        process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+        process.env.SUPABASE_PUBLISHABLE_KEY ||
+        process.env.VITE_SUPABASE_ANON_KEY ||
+        process.env.SUPABASE_ANON_KEY
     });
   });
 
