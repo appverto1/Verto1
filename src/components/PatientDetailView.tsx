@@ -111,22 +111,122 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
   const buildAnamnesisDocumentHtml = (anamnesis: any, fichaDateIso: string) => {
     const c = clinicContext || {};
-    const formatFieldLabel = (key: string) =>
+    const fieldLabelMap: Record<string, string> = {
+      nome: "Nome completo",
+      nomeSocial: "Nome social",
+      dataNascimento: "Data de nascimento",
+      idade: "Idade",
+      genero: "Gênero",
+      estadoCivil: "Estado civil",
+      profissao: "Profissão",
+      religiao: "Religião",
+      telefone: "Telefone",
+      email: "E-mail",
+      endereco: "Endereço",
+      cep: "CEP",
+      logradouro: "Logradouro",
+      numero: "Número",
+      complemento: "Complemento",
+      bairro: "Bairro",
+      cidade: "Cidade",
+      rg: "RG",
+      cpf: "CPF",
+      convenioTipo: "Tipo de convênio",
+      convenioNome: "Convênio",
+      convenioCarteirinha: "Número da carteirinha",
+      grupo: "Grupo",
+      comoConheceu: "Como conheceu a clínica",
+      outrasInformacoes: "Outras informações",
+      menorDeIdade: "Paciente menor de idade",
+      responsavelNome: "Nome do responsável",
+      responsavelDataNascimento: "Nascimento do responsável",
+      responsavelCpf: "CPF do responsável",
+      responsavelTelefone: "Telefone do responsável",
+      profissional: "Profissional",
+      crp: "CRP",
+      formType: "Tipo de ficha",
+    };
+
+    const fallbackLabel = (key: string) =>
       key
         .replace(/([a-z])([A-Z])/g, "$1 $2")
         .replaceAll("_", " ")
         .replace(/\s+/g, " ")
         .trim()
         .replace(/^./, (l) => l.toUpperCase());
-    const lines = Object.entries(anamnesis || {})
-      .filter(([key, value]) => value !== null && value !== undefined && String(value).trim() !== "")
-      .map(
-        ([key, value]) => `
+
+    const normalizeValue = (key: string, value: any) => {
+      if (value === null || value === undefined) return "";
+      if (key === "menorDeIdade") return value ? "Sim" : "Não";
+      if (key === "formType") {
+        if (value === "adult") return "Adulto";
+        if (value === "child") return "Criança";
+        return String(value);
+      }
+      if (Array.isArray(value)) return value.join(", ");
+      if (typeof value === "object") return "";
+      return String(value);
+    };
+
+    const priorityFields = [
+      "nome",
+      "nomeSocial",
+      "dataNascimento",
+      "idade",
+      "genero",
+      "telefone",
+      "email",
+      "rg",
+      "cpf",
+      "convenioTipo",
+      "convenioNome",
+      "convenioCarteirinha",
+      "grupo",
+      "comoConheceu",
+      "cep",
+      "logradouro",
+      "numero",
+      "complemento",
+      "bairro",
+      "cidade",
+      "endereco",
+      "menorDeIdade",
+      "responsavelNome",
+      "responsavelDataNascimento",
+      "responsavelCpf",
+      "responsavelTelefone",
+      "profissional",
+      "crp",
+      "formType",
+    ];
+
+    const rawEntries = Object.entries(anamnesis || {}).filter(([key]) => key !== "anamnesisTemplateVersion");
+    const prioritySet = new Set(priorityFields);
+    const priorityEntries: Array<[string, any]> = [];
+    const extraEntries: Array<[string, any]> = [];
+
+    priorityFields.forEach((field) => {
+      const found = rawEntries.find(([k]) => k === field);
+      if (found) priorityEntries.push(found);
+    });
+    rawEntries.forEach((entry) => {
+      if (!prioritySet.has(entry[0])) extraEntries.push(entry);
+    });
+
+    const orderedEntries = [...priorityEntries, ...extraEntries];
+
+    const lines = orderedEntries
+      .map(([key, value]) => {
+        const normalized = normalizeValue(key, value);
+        if (!normalized.trim()) return "";
+        const label = fieldLabelMap[key] || fallbackLabel(key);
+        return `
           <tr>
-            <td style="padding:8px 10px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;color:#334155;width:35%;">${escapeHtml(formatFieldLabel(key))}</td>
-            <td style="padding:8px 10px;border:1px solid #e2e8f0;color:#0f172a;">${escapeHtml(value)}</td>
-          </tr>`,
-      )
+            <td style="padding:8px 10px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;color:#334155;width:35%;">${escapeHtml(label)}</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8f0;color:#0f172a;">${escapeHtml(normalized)}</td>
+          </tr>`;
+      })
+      .filter(Boolean)
       .join("");
 
     const fichaDate = fichaDateIso
