@@ -7,7 +7,7 @@ import { HistoryCard } from './History';
 import { SessionMode } from './SessionMode';
 import { ENERGY_TAGS } from './Common';
 
-export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false }: any) => { 
+export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false }: any) => { 
   const [activeTab, setActiveTab] = useState(initialTab); 
   const [newNote, setNewNote] = useState(""); 
   const [noteMode, setNoteMode] = useState('private'); 
@@ -289,18 +289,27 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   };
 
   const openPrintWindowForPdf = (htmlContent: string) => {
-    const printWindow = window.open("", "_blank", "noopener,noreferrer,width=1100,height=900");
+    const htmlBlob = new Blob([htmlContent], { type: "text/html;charset=utf-8" });
+    const htmlUrl = URL.createObjectURL(htmlBlob);
+    const printWindow = window.open(htmlUrl, "_blank", "noopener,noreferrer,width=1100,height=900");
     if (!printWindow) {
       alert("Não foi possível abrir a janela de impressão. Verifique se o bloqueador de pop-up está ativo.");
+      URL.revokeObjectURL(htmlUrl);
       return;
     }
-    printWindow.document.open();
-    printWindow.document.write(htmlContent);
-    printWindow.document.close();
-    printWindow.focus();
-    setTimeout(() => {
-      printWindow.print();
-    }, 350);
+    const cleanupUrl = () => {
+      try {
+        URL.revokeObjectURL(htmlUrl);
+      } catch {}
+    };
+    printWindow.onload = () => {
+      try {
+        printWindow.focus();
+        printWindow.print();
+      } finally {
+        setTimeout(cleanupUrl, 1200);
+      }
+    };
   };
 
   const availableSnapshots = useMemo(() => {
@@ -694,6 +703,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     setAnamnesisFileName(defaultName);
     setAnamnesisFileDate(new Date().toISOString().slice(0, 10));
     setShowAnamnesisFileModal(true);
+    onAddActivityLog?.(
+      "Ficha de anamnese salva",
+      `A ficha de anamnese do paciente ${patient.name} foi registrada e anexada aos arquivos do prontuário.`,
+      "clinical",
+    );
   }; 
   
   const handleUnlinkPatient = () => {
@@ -1030,7 +1044,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         </div>
       )}
 
-      <div className="bg-white px-6 pt-10 pb-6 shadow-sm z-20"> 
+      <div className="bg-white px-6 pt-6 pb-6 shadow-sm z-20"> 
         <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-4"> 
           <div className="flex items-center gap-4"> 
             {!hideBackButton && (
@@ -1042,9 +1056,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             <div id="patient-header-info">
                 <div className="flex items-center gap-2">
                     <h1 className="text-2xl font-semibold text-gray-800 tracking-tight">{patient.name}</h1>
-                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full uppercase tracking-wider ${patientCategory === 'Criança' ? 'bg-pink-100 text-pink-500' : 'bg-indigo-50 text-indigo-500'}`}>
-                       {patientCategory === 'Criança' ? 'Criança' : 'Adulto'}
-                    </span>
                 </div>
                 <p className="text-gray-500 text-xs">Detalhes do Paciente</p>
             </div> 

@@ -409,6 +409,12 @@ export function CoordinatorDashboard({
   }, [activeTab]);
 
   useEffect(() => {
+    if (view === "patient") {
+      setIsSidebarExpanded(false);
+    }
+  }, [view]);
+
+  useEffect(() => {
     const fetchFinancialSurvey = async () => {
       if (activeTab !== "financial") return;
       try {
@@ -1894,12 +1900,14 @@ export function CoordinatorDashboard({
 
   if (view === "patient" && selectedPatientId) {
     const patient = allPatients.find((p) => p.id === selectedPatientId);
-    const patientSidebarExpanded = true;
+    const patientSidebarExpanded = isSidebarExpanded;
     return (
       <div className="min-h-screen bg-[#F4F7FE] flex">
         {/* Sidebar */}
         <div
-          className={`w-64 bg-white hidden lg:flex flex-col p-5 sticky top-0 h-screen border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
+          onMouseEnter={() => setIsSidebarExpanded(true)}
+          onMouseLeave={() => setIsSidebarExpanded(false)}
+          className={`${patientSidebarExpanded ? "w-64" : "w-20"} bg-white hidden lg:flex flex-col p-5 sticky top-0 h-screen border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
         >
           <div
             className={`flex items-center ${patientSidebarExpanded ? "gap-2" : "justify-center"} mb-7 px-1 transition-all duration-300`}
@@ -2008,7 +2016,7 @@ export function CoordinatorDashboard({
         {/* Main Content */}
         <div className="flex-1 overflow-y-auto">
           {/* Header */}
-          <header className="px-4 lg:px-8 py-3 flex items-center justify-between sticky top-0 bg-[#F4F7FE]/80 backdrop-blur-md z-30">
+          <header className="px-4 lg:px-6 py-2.5 flex items-center justify-between sticky top-0 bg-[#F4F7FE]/80 backdrop-blur-md z-30">
             <div className="flex items-center gap-4">
               <button
                 onClick={() => {
@@ -2024,8 +2032,8 @@ export function CoordinatorDashboard({
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">
                   Prontuário
                 </p>
-                <h1 className="text-xl lg:text-3xl font-semibold text-slate-900 tracking-tight capitalize">
-                  {patient?.name}
+                <h1 className="text-lg lg:text-2xl font-semibold text-slate-900 tracking-tight">
+                  Prontuário do Paciente
                 </h1>
               </div>
             </div>
@@ -2210,6 +2218,7 @@ export function CoordinatorDashboard({
                 (t) => t.patientId === selectedPatientId,
               )}
               onAddNote={onAddNote}
+              onAddActivityLog={onAddActivityLog}
               protocols={protocols}
               userRole={user.role}
             />
