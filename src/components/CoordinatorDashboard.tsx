@@ -645,6 +645,7 @@ export function CoordinatorDashboard({
       email: quickPatientEmail,
       phone: quickPatientPhone,
       age: quickPatientAge ? parseInt(quickPatientAge) : undefined,
+      anamnesisPending: true,
       createdAt: new Date().toISOString(),
     };
 
@@ -658,6 +659,9 @@ export function CoordinatorDashboard({
     onAddActivityLog(
       "Novo Paciente",
       `Paciente ${quickPatientName} cadastrado via registro rápido.`,
+    );
+    alert(
+      "Novo paciente cadastrado. Aviso financeiro: este cadastro gerará custo de R$ 4,90 para a clínica.",
     );
   };
 
@@ -728,6 +732,10 @@ export function CoordinatorDashboard({
       return;
     }
 
+    const existingPatient = editingPatientId
+      ? allPatients.find((p: any) => String(p.id) === String(editingPatientId))
+      : null;
+
     const newPatient = {
       id: editingPatientId || crypto.randomUUID(),
       name: newPatientForm.nome.trim(),
@@ -768,6 +776,9 @@ export function CoordinatorDashboard({
           }
         : null,
       type: newPatientForm.patientProfileType || "adult_conventional",
+      anamnesisPending: existingPatient
+        ? isPatientPendingAnamnesis(existingPatient)
+        : true,
       createdAt: new Date().toISOString(),
     };
 
@@ -785,9 +796,21 @@ export function CoordinatorDashboard({
         `Cadastro completo de ${newPatient.name} realizado pela coordenação.`,
         "management",
       );
+      alert(
+        "Novo paciente cadastrado. Aviso financeiro: este cadastro gerará custo de R$ 4,90 para a clínica.",
+      );
     }
     setIsPatientRegistrationModalOpen(false);
     resetPatientForm();
+  };
+
+  const isPatientPendingAnamnesis = (patient: any) => {
+    if (!patient) return false;
+    if (typeof patient.anamnesisPending === "boolean") {
+      return patient.anamnesisPending;
+    }
+    const data = patient.anamnesisData;
+    return !(data && typeof data === "object" && Object.keys(data).length > 0);
   };
 
   const handleEditPatient = (patient: any) => {
@@ -883,15 +906,38 @@ export function CoordinatorDashboard({
 
   const normalizedAgenda = useMemo(
     () =>
-      (therapistAgenda || []).map((item: any) => ({
-        ...item,
-        patientName: repairMojibake(item.patientName || item.name || "Paciente"),
-        therapistName: repairMojibake(
-          item.therapistName || item.professional || "Profissional",
-        ),
-        type: repairMojibake(item.type || item.approach || "Sessão"),
-      })),
-    [therapistAgenda],
+      (therapistAgenda || []).map((item: any) => {
+        const agendaPatientName = repairMojibake(
+          item.patientName || item.name || "Paciente",
+        );
+        const normalizedAgendaPatientName = agendaPatientName
+          .trim()
+          .toLowerCase();
+        const resolvedPatient =
+          allPatients.find(
+            (p: any) =>
+              item?.patientId !== undefined &&
+              item?.patientId !== null &&
+              String(p?.id) === String(item.patientId),
+          ) ||
+          allPatients.find(
+            (p: any) =>
+              repairMojibake(String(p?.name || ""))
+                .trim()
+                .toLowerCase() === normalizedAgendaPatientName,
+          );
+
+        return {
+          ...item,
+          patientName: agendaPatientName,
+          therapistName: repairMojibake(
+            item.therapistName || item.professional || "Profissional",
+          ),
+          type: repairMojibake(item.type || item.approach || "Sessão"),
+          anamnesisPending: isPatientPendingAnamnesis(resolvedPatient),
+        };
+      }),
+    [therapistAgenda, allPatients],
   );
 
   useEffect(() => {
@@ -1044,8 +1090,16 @@ export function CoordinatorDashboard({
                         }
                         className="text-left min-w-[220px] rounded-xl border border-[#7a32fc]/20 bg-[#7a32fc]/5 px-3 py-2 hover:bg-[#7a32fc]/10 transition-all"
                       >
-                        <p className="text-xs font-bold text-slate-900">
+                        <p className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                           {item.time} • {item.patientName}
+                          {item.anamnesisPending && (
+                            <span
+                              title="Paciente pendente de ficha anamnese"
+                              className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-100 text-amber-700 text-[10px] font-black"
+                            >
+                              !
+                            </span>
+                          )}
                         </p>
                         <p className="text-[10px] text-slate-500">
                           {item.therapistName} • Sala {item.room || "--"}
@@ -1118,8 +1172,16 @@ export function CoordinatorDashboard({
                               }
                               className="text-left rounded-lg border border-[#7a32fc]/20 bg-[#7a32fc]/5 px-2 py-1.5 hover:bg-[#7a32fc]/10 transition-all"
                             >
-                              <p className="text-[10px] font-bold text-slate-800 truncate">
+                              <p className="text-[10px] font-bold text-slate-800 truncate flex items-center gap-1.5">
                                 {item.time} • {item.patientName}
+                                {item.anamnesisPending && (
+                                  <span
+                                    title="Pendente de anamnese"
+                                    className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-amber-100 text-amber-700 text-[9px] font-black shrink-0"
+                                  >
+                                    !
+                                  </span>
+                                )}
                               </p>
                               <p className="text-[9px] text-slate-500 truncate">
                                 {item.therapistName}
@@ -1640,45 +1702,8 @@ export function CoordinatorDashboard({
 
   const renderDashboard = () => (
     <div className="space-y-8 sm:space-y-12 animate-in fade-in duration-500">
-      {/* Agenda Global Section */}
-      <section className="space-y-4 sm:space-y-6">
-        {renderAgendaContent()}
-      </section>
-
-      {/* Gestão de Salas Section */}
-      <section className="space-y-4 sm:space-y-6">
-        {renderRoomsContent()}
-      </section>
-
-      {/* Gestão de Equipe Section */}
-      <section className="space-y-4 sm:space-y-6">
-        <div className="bg-white p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100">
-          <div className="flex items-center gap-3 mb-8">
-            <div className="p-2 bg-purple-50 text-purple-600 rounded-xl">
-              <Users size={20} className="sm:w-6 sm:h-6" />
-            </div>
-            <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-              Equipe
-            </h2>
-          </div>
-          <TeamManagement
-            user={user}
-            onRequestUpgrade={() => navigateToTab("billing")}
-            memberSessionDurations={professionalSessionDurations}
-            onUpdateMemberSessionDuration={(member, duration) =>
-              setProfessionalSessionDurations((prev) => ({
-                ...prev,
-                [member.id]: duration,
-                [member.email]: duration,
-                [member.name]: duration,
-              }))
-            }
-          />
-        </div>
-      </section>
-
-      {/* Stats Grid - Moved below */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 pt-8 border-t border-slate-100">
+      {/* Stats Grid - Topo do painel */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
         {[
           {
             id: "patients",
@@ -1726,6 +1751,43 @@ export function CoordinatorDashboard({
           </div>
         ))}
       </div>
+
+      {/* Agenda Global Section */}
+      <section className="space-y-4 sm:space-y-6">
+        {renderAgendaContent()}
+      </section>
+
+      {/* Gestão de Salas Section */}
+      <section className="space-y-4 sm:space-y-6">
+        {renderRoomsContent()}
+      </section>
+
+      {/* Gestão de Equipe Section */}
+      <section className="space-y-4 sm:space-y-6">
+        <div className="bg-white p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="p-2 bg-purple-50 text-purple-600 rounded-xl">
+              <Users size={20} className="sm:w-6 sm:h-6" />
+            </div>
+            <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+              Equipe
+            </h2>
+          </div>
+          <TeamManagement
+            user={user}
+            onRequestUpgrade={() => navigateToTab("billing")}
+            memberSessionDurations={professionalSessionDurations}
+            onUpdateMemberSessionDuration={(member, duration) =>
+              setProfessionalSessionDurations((prev) => ({
+                ...prev,
+                [member.id]: duration,
+                [member.email]: duration,
+                [member.name]: duration,
+              }))
+            }
+          />
+        </div>
+      </section>
 
       {/* Removed financial and performance charts as they belong to DRE */}
     </div>
@@ -3193,8 +3255,16 @@ export function CoordinatorDashboard({
                           {patient.name[0]}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <h4 className="font-medium text-slate-900 truncate">
+                          <h4 className="font-medium text-slate-900 truncate flex items-center gap-2">
                             {repairMojibake(patient.name)}
+                            {isPatientPendingAnamnesis(patient) && (
+                              <span
+                                title="Novo paciente pendente de ficha anamnese"
+                                className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-100 text-amber-700 text-xs font-black shrink-0"
+                              >
+                                !
+                              </span>
+                            )}
                           </h4>
                           <p className="text-[10px] text-slate-400 font-medium">
                             ID: {patient.id}
@@ -3266,9 +3336,13 @@ export function CoordinatorDashboard({
                       </div>
                       <div className="flex items-center justify-between pt-4 border-t border-slate-200/50">
                         <div className="flex items-center gap-2">
-                          <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                          <span
+                            className={`w-2 h-2 rounded-full animate-pulse ${isPatientPendingAnamnesis(patient) ? "bg-amber-500" : "bg-green-500"}`}
+                          />
                           <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">
-                            Paciente Ativo
+                            {isPatientPendingAnamnesis(patient)
+                              ? "Pendente de Anamnese"
+                              : "Paciente Ativo"}
                           </span>
                         </div>
                         <div className="px-2 py-1 bg-slate-100 text-slate-500 rounded-lg text-[8px] font-bold uppercase">

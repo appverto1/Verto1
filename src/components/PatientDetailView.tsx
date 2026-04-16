@@ -968,6 +968,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
             address: pendingAnamnesisData.endereco || patient?.address,
             diagnosis: pendingAnamnesisData.motivoConsulta || patient?.diagnosis,
             anamnesisData: pendingAnamnesisData,
+            anamnesisPending: false,
             peiGeneratedAt: new Date().toISOString()
           });
         }
