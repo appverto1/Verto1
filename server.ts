@@ -491,6 +491,86 @@ function currentClinicId(user: any): string | null {
   return id || null;
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+function isUuid(value: string | null | undefined): boolean {
+  if (!value) return false;
+  return UUID_REGEX.test(value);
+}
+
+function derivePatientNameFromLegacyId(rawId: string): string {
+  const base = rawId
+    .replace(/^mock-/i, '')
+    .replace(/-\d+$/i, '')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  if (!base) return 'Paciente';
+  return base
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
+async function resolvePatientIdForRequest(
+  rawPatientId: string,
+  user: any,
+  options: { createIfMissing?: boolean; fallbackName?: string } = {}
+): Promise<string | null> {
+  const safeRaw = sanitizeString(rawPatientId, 120);
+  if (!safeRaw) return null;
+  if (isUuid(safeRaw)) return safeRaw;
+
+  const clinicId = currentClinicId(user);
+  if (!clinicId) return null;
+
+  const guessedName = sanitizeString(options.fallbackName, 160) || derivePatientNameFromLegacyId(safeRaw);
+  let { data: foundByName } = await supabase
+    .from('patients')
+    .select('id, name')
+    .eq('clinic_id', clinicId)
+    .ilike('name', guessedName)
+    .limit(1)
+    .maybeSingle();
+
+  if (!foundByName && guessedName) {
+    const relaxed = await supabase
+      .from('patients')
+      .select('id, name')
+      .eq('clinic_id', clinicId)
+      .ilike('name', `%${guessedName}%`)
+      .limit(1)
+      .maybeSingle();
+    foundByName = relaxed.data || null;
+  }
+
+  if (foundByName?.id) return sanitizeString(foundByName.id, 120);
+  if (!options.createIfMissing) return null;
+
+  const role = sanitizeString(user?.role, 40).toLowerCase();
+  if (!['owner', 'admin', 'coordinator', 'receptionist', 'therapist'].includes(role)) return null;
+
+  const insertPayload = {
+    name: guessedName || 'Paciente',
+    email: null,
+    phone: null,
+    age: null,
+    diagnosis: null,
+    status: 'active',
+    clinic_id: clinicId,
+    therapist_id: sanitizeString(user?.id, 120) || null,
+    created_at: new Date().toISOString()
+  };
+
+  const { data: created, error: createError } = await supabase
+    .from('patients')
+    .insert([insertPayload])
+    .select('id')
+    .single();
+
+  if (createError || !created?.id) return null;
+  return sanitizeString(created.id, 120);
+}
+
 async function fetchUserWorkspaces(userId: string) {
   const { data, error } = await supabase
     .from('clinic_memberships')
@@ -1004,22 +1084,28 @@ async function startServer() {
   // Ownership Middleware (IDOR Protection)
   const checkPatientAccess = async (req: any, res: any, next: any) => {
     const user = req.session.user;
-    const patientId = req.params.patientId || req.body.patient_id;
+    const rawPatientId = sanitizeString(req.params.patientId || req.body.patient_id, 120);
 
-    if (!patientId) return next();
+    if (!rawPatientId) return next();
 
     try {
+      const resolvedPatientId = await resolvePatientIdForRequest(rawPatientId, user, { createIfMissing: false });
+      req.resolvedPatientId = resolvedPatientId || rawPatientId;
+
       // Admin bypass
       if (user.role === 'admin' || user.role === 'coordinator' || user.role === 'receptionist') return next();
 
       // Check if user is the patient themselves
-      if (user.id === patientId) return next();
+      if (user.id === rawPatientId || (resolvedPatientId && user.id === resolvedPatientId)) return next();
+      if (!resolvedPatientId) {
+        return res.status(404).json({ error: 'Paciente não encontrado' });
+      }
 
       // Check if user is the therapist for this patient
       const { data: patient, error } = await supabase
         .from('patients')
         .select('therapist_id, clinic_id')
-        .eq('id', patientId)
+        .eq('id', resolvedPatientId)
         .single();
 
       if (error || !patient) {
@@ -2182,10 +2268,14 @@ async function startServer() {
 
   app.post('/api/patient-anamnesis/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
-      const patientId = sanitizeString(req.params.patientId, 100);
+      const rawPatientId = sanitizeString(req.params.patientId, 100);
       const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
       const professionalId = sanitizeString(req.session.user?.id, 100);
-      const title = sanitizeString(req.body?.title, 220) || `Ficha_Anamnese_${patientId}`;
+      const patientId = await resolvePatientIdForRequest(rawPatientId, req.session.user, {
+        createIfMissing: true,
+        fallbackName: sanitizeString(req.body?.anamnesisData?.nome, 160) || sanitizeString(req.body?.anamnesisData?.name, 160)
+      });
+      const title = sanitizeString(req.body?.title, 220) || `Ficha_Anamnese_${rawPatientId}`;
       const referenceDate = sanitizeDate(req.body?.referenceDate) || new Date().toISOString().slice(0, 10);
       const templateVersion = asSafeNumber(req.body?.templateVersion, 1, 10_000);
       const profileType = sanitizeString(req.body?.profileType, 20) === 'child' ? 'child' : 'adult';
@@ -2242,8 +2332,9 @@ async function startServer() {
 
   app.get('/api/patient-anamnesis/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
-      const patientId = sanitizeString(req.params.patientId, 100);
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
       const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const { data, error } = await supabase
         .from('patient_anamnesis_submissions')
         .select('*')
@@ -2544,7 +2635,11 @@ async function startServer() {
   // Secure patient record storage (encrypted JSON payload)
   app.post('/api/patient-records/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
     try {
-      const patientId = sanitizeString(req.params.patientId, 100);
+      const rawPatientId = sanitizeString(req.params.patientId, 100);
+      const patientId = await resolvePatientIdForRequest(rawPatientId, req.session.user, {
+        createIfMissing: true,
+        fallbackName: sanitizeString(req.body?.payload?.nome, 160) || sanitizeString(req.body?.payload?.name, 160)
+      });
       if (!patientId) return res.status(400).json({ error: 'patientId invÃ¡lido' });
 
       const payload = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
@@ -2632,8 +2727,9 @@ async function startServer() {
 
   app.get('/api/patient-files/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
     try {
-      const patientId = sanitizeString(req.params.patientId, 100);
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
       if (!patientId) return res.status(400).json({ success: false, error: 'patientId inválido.' });
+      if (!isUuid(patientId)) return res.json({ success: true, data: [] });
 
       const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
       const { data, error } = await supabase
@@ -2680,7 +2776,7 @@ async function startServer() {
 
   app.post('/api/patient-files/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
-      const patientId = sanitizeString(req.params.patientId, 100);
+      const rawPatientId = sanitizeString(req.params.patientId, 100);
       const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
       const uploadedBy = sanitizeString(req.session.user?.id, 120);
       const rawName = sanitizeString(req.body?.fileName, 220) || `arquivo_${Date.now()}`;
@@ -2689,6 +2785,11 @@ async function startServer() {
       const contentType = sanitizeString(req.body?.contentType, 120) || 'application/octet-stream';
       const dataUrl = sanitizeString(req.body?.fileBase64, 20_000_000);
       const metadata = req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {};
+
+      const patientId = await resolvePatientIdForRequest(rawPatientId, req.session.user, {
+        createIfMissing: true,
+        fallbackName: sanitizeString(req.body?.metadata?.patientName, 160)
+      });
 
       if (!patientId || !clinicId || !uploadedBy) {
         return res.status(400).json({ success: false, error: 'Dados obrigatórios ausentes.' });
@@ -2791,12 +2892,13 @@ async function startServer() {
 
   app.delete('/api/patient-files/:patientId/:fileId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
-      const patientId = sanitizeString(req.params.patientId, 100);
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
       const fileId = sanitizeString(req.params.fileId, 120);
       const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
       if (!patientId || !fileId || !clinicId) {
         return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
       }
+      if (!isUuid(patientId)) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
 
       const { data: existing, error: existingError } = await supabase
         .from('patient_files')
@@ -2840,8 +2942,9 @@ async function startServer() {
 
   app.get('/api/patient-records/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
     try {
-      const patientId = sanitizeString(req.params.patientId, 100);
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
       if (!patientId) return res.status(400).json({ error: 'patientId invÃ¡lido' });
+      if (!isUuid(patientId)) return res.json({ success: true, data: null });
 
       const { data, error } = await supabase
         .from('patient_records')
@@ -2877,10 +2980,12 @@ async function startServer() {
   // Notes
   app.get('/api/notes/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
     try {
+      const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
+      if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const { data, error } = await supabase
         .from('notes')
         .select('*')
-        .eq('patient_id', req.params.patientId)
+        .eq('patient_id', patientId)
         .order('created_at', { ascending: false });
       
       if (error) throw error;
@@ -2919,10 +3024,15 @@ async function startServer() {
 
   app.post('/api/notes', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
     try {
+      const resolvedPatientId = await resolvePatientIdForRequest(
+        sanitizeString(req.body?.patient_id, 120),
+        req.session.user,
+        { createIfMissing: true, fallbackName: sanitizeString(req.body?.patient_name, 160) }
+      );
       const safeVisibility = new Set(['private', 'shared', 'family', 'professional', 'patient']);
       const payload = cleanObject({
         id: sanitizeString(req.body?.id, 120) || undefined,
-        patient_id: sanitizeString(req.body?.patient_id, 120),
+        patient_id: resolvedPatientId,
         patient_email: sanitizeEmail(req.body?.patient_email),
         text: sanitizeString(req.body?.text, 12000),
         visibility: safeVisibility.has(String(req.body?.visibility)) ? String(req.body?.visibility) : 'private',
@@ -2948,7 +3058,7 @@ async function startServer() {
         clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
         actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
         title: 'Nota registrada no prontuário',
-        content: `Nota salva para paciente ${docData.patient_id}. Visibilidade: ${docData.visibility || 'privada'}.`,
+        content: `Nota salva para paciente ${payload.patient_id}. Visibilidade: ${payload.visibility || 'privada'}.`,
         type: 'clinical'
       });
       res.json({ success: true, data });
@@ -2960,10 +3070,12 @@ async function startServer() {
   // History
   app.get('/api/history/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
     try {
+      const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
+      if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const { data, error } = await supabase
         .from('history')
         .select('*')
-        .eq('patient_id', req.params.patientId)
+        .eq('patient_id', patientId)
         .order('created_at', { ascending: false });
       
       if (error) throw error;
@@ -3002,10 +3114,15 @@ async function startServer() {
 
   app.post('/api/history', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
     try {
+      const resolvedPatientId = await resolvePatientIdForRequest(
+        sanitizeString(req.body?.patient_id, 120),
+        req.session.user,
+        { createIfMissing: true, fallbackName: sanitizeString(req.body?.patient_name, 160) }
+      );
       const safeType = sanitizeString(req.body?.type, 80) || 'task';
       const docData = cleanObject({
         id: sanitizeString(req.body?.id, 120) || undefined,
-        patient_id: sanitizeString(req.body?.patient_id, 120),
+        patient_id: resolvedPatientId,
         patient_email: sanitizeEmail(req.body?.patient_email),
         type: safeType,
         title: sanitizeString(req.body?.title, 180),
@@ -3313,10 +3430,12 @@ async function startServer() {
   // Tasks
   app.get('/api/tasks/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
     try {
+      const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
+      if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const { data, error } = await supabase
         .from('tasks')
         .select('*')
-        .eq('patient_id', req.params.patientId)
+        .eq('patient_id', patientId)
         .order('created_at', { ascending: false });
       
       if (error) throw error;
@@ -3355,9 +3474,14 @@ async function startServer() {
 
   app.post('/api/tasks', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
+      const resolvedPatientId = await resolvePatientIdForRequest(
+        sanitizeString(req.body?.patient_id, 120),
+        req.session.user,
+        { createIfMissing: true, fallbackName: sanitizeString(req.body?.patient_name, 160) }
+      );
       const payload = cleanObject({
         id: sanitizeString(req.body?.id, 120) || undefined,
-        patient_id: sanitizeString(req.body?.patient_id, 120),
+        patient_id: resolvedPatientId,
         patient_email: sanitizeEmail(req.body?.patient_email),
         title: sanitizeString(req.body?.title, 180),
         description: sanitizeString(req.body?.description, 4000),

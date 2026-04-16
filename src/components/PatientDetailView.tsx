@@ -806,7 +806,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         fileName: file.name,
         contentType: file.type,
         fileBase64: dataUrl,
-        source: 'upload'
+        source: 'upload',
+        metadata: {
+          patientName: patient?.name || null
+        }
       });
       if (!uploadResult?.success || !uploadResult?.data) {
         throw new Error(uploadResult?.warning || uploadResult?.error || 'Falha no upload');
@@ -889,7 +892,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           contentType: "text/html",
           fileBase64: reader.result,
           source: "anamnesis",
-          metadata: { referenceDate: payloadDate }
+          metadata: { referenceDate: payloadDate, patientName: patient?.name || null }
         });
         if (!uploadResult?.success || !uploadResult?.data) {
           throw new Error(uploadResult?.warning || uploadResult?.error || 'Falha ao salvar a ficha.');
