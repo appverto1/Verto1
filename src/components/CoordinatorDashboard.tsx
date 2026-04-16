@@ -840,8 +840,37 @@ export function CoordinatorDashboard({
       tab?: "history" | "notes" | "report" | "plan" | "session" | "files";
       openAnamnesis?: boolean;
     },
+    fallbackPatientName?: string,
   ) => {
-    setSelectedPatientId(patientId);
+    const normalizedFallback = repairMojibake(
+      String(fallbackPatientName || ""),
+    )
+      .trim()
+      .toLowerCase();
+
+    const resolvedPatient =
+      allPatients.find(
+        (p) =>
+          patientId !== undefined &&
+          patientId !== null &&
+          String(p.id) === String(patientId),
+      ) ||
+      allPatients.find(
+        (p) =>
+          normalizedFallback.length > 0 &&
+          repairMojibake(String(p?.name || ""))
+            .trim()
+            .toLowerCase() === normalizedFallback,
+      );
+
+    if (!resolvedPatient?.id) {
+      alert(
+        "Este agendamento ainda não está vinculado a um paciente cadastrado. Vincule o paciente no cadastro para abrir o prontuário.",
+      );
+      return;
+    }
+
+    setSelectedPatientId(resolvedPatient.id);
     setPatientOpenTab(options?.tab || "history");
     setOpenAnamnesisOnPatientOpen(Boolean(options?.openAnamnesis));
     setView("patient");
@@ -1010,7 +1039,9 @@ export function CoordinatorDashboard({
                     slotItems.map((item: any) => (
                       <button
                         key={item.id}
-                        onClick={() => onPatientClick(item.patientId)}
+                        onClick={() =>
+                          onPatientClick(item.patientId, undefined, item.patientName)
+                        }
                         className="text-left min-w-[220px] rounded-xl border border-[#7a32fc]/20 bg-[#7a32fc]/5 px-3 py-2 hover:bg-[#7a32fc]/10 transition-all"
                       >
                         <p className="text-xs font-bold text-slate-900">
@@ -1082,7 +1113,9 @@ export function CoordinatorDashboard({
                           items.map((item: any) => (
                             <button
                               key={item.id}
-                              onClick={() => onPatientClick(item.patientId)}
+                              onClick={() =>
+                                onPatientClick(item.patientId, undefined, item.patientName)
+                              }
                               className="text-left rounded-lg border border-[#7a32fc]/20 bg-[#7a32fc]/5 px-2 py-1.5 hover:bg-[#7a32fc]/10 transition-all"
                             >
                               <p className="text-[10px] font-bold text-slate-800 truncate">
@@ -1919,7 +1952,30 @@ export function CoordinatorDashboard({
   );
 
   if (view === "patient" && selectedPatientId) {
-    const patient = allPatients.find((p) => p.id === selectedPatientId);
+    const patient = allPatients.find(
+      (p) => String(p.id) === String(selectedPatientId),
+    );
+    if (!patient) {
+      return (
+        <div className="min-h-screen bg-[#F4F7FE] flex items-center justify-center p-6">
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8 max-w-lg w-full text-center">
+            <h2 className="text-xl font-black text-slate-900 mb-2">
+              Paciente não encontrado
+            </h2>
+            <p className="text-sm text-slate-500 mb-6">
+              Este agendamento não está vinculado a um paciente válido no
+              cadastro.
+            </p>
+            <button
+              onClick={() => setView("home")}
+              className="px-5 py-2.5 rounded-xl bg-[#7a32fc] text-white font-semibold"
+            >
+              Voltar ao painel
+            </button>
+          </div>
+        </div>
+      );
+    }
     const patientSidebarExpanded = isSidebarExpanded;
     return (
       <div className="min-h-screen bg-[#F4F7FE] flex">

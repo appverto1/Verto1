@@ -8,7 +8,7 @@ import { SessionMode } from './SessionMode';
 import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 
-export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate }: any) => { 
+export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate }: any) => { 
   const [activeTab, setActiveTab] = useState(initialTab); 
   const [newNote, setNewNote] = useState(""); 
   const [noteMode, setNoteMode] = useState('private'); 
@@ -211,7 +211,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [reportEndDate, setReportEndDate] = useState("");
 
   const [selectedChartProtocolId, setSelectedChartProtocolId] = useState(() => {
-    const isKid = (patient.age !== undefined && patient.age <= 12) || patient.anamnesisData?.formType === 'child';
+    const isKid = (patient?.age !== undefined && patient?.age <= 12) || patient?.anamnesisData?.formType === 'child';
     if (isKid) {
       const vbmapp = protocols.find((p: any) => p.title.includes('VB-MAPP'));
       if (vbmapp) return vbmapp.id;
