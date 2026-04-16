@@ -21,7 +21,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
   const [reportPeriod, setReportPeriod] = useState('monthly');
   const [comparisonDate1, setComparisonDate1] = useState('');
   const [comparisonDate2, setComparisonDate2] = useState('');
-  const [selectedReportNotes, setSelectedReportNotes] = useState<number[]>([]);
+  const [selectedReportNotes, setSelectedReportNotes] = useState<string[]>([]);
   const [planType, setPlanType] = useState('task'); 
   const [isCreatingNewTask, setIsCreatingNewTask] = useState(false); 
   const [filterAge, setFilterAge] = useState(""); 
@@ -192,12 +192,12 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     const dataFromSubmission = parseAnamnesisData(previewFile?.anamnesisData)
       ? parseAnamnesisData(previewFile?.anamnesisData)
       : null;
-    const html = buildAnamnesisDocumentHtml(
-      dataFromSubmission || patient?.anamnesisData || {},
-      previewDate
+    const anamnesisSource = dataFromSubmission || patient?.anamnesisData || {};
+    const pdfBytes = createSimplePdf(
+      `Ficha de Anamnese - ${patient?.name || "Paciente"}`,
+      buildAnamnesisPdfLines(anamnesisSource, previewDate),
     );
-
-    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const blob = new Blob([pdfBytes], { type: "application/pdf" });
     return URL.createObjectURL(blob);
   }, [previewFile, patient?.anamnesisData]);
 
@@ -358,7 +358,51 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
       if (!prioritySet.has(entry[0])) extraEntries.push(entry);
     });
 
-    const orderedEntries = [...priorityEntries, ...extraEntries];
+    const snapshotQuestions = Array.isArray(anamnesis?.template_snapshot?.questions)
+      ? anamnesis.template_snapshot.questions
+      : [];
+    const snapshotSections = Array.isArray(anamnesis?.template_snapshot?.sections)
+      ? anamnesis.template_snapshot.sections
+      : [];
+    const sectionTitleById = new Map(
+      snapshotSections.map((section: any) => [String(section?.id || ""), String(section?.title || "")]),
+    );
+    const questionById = new Map<string, any>(
+      snapshotQuestions.map((question: any) => [String(question?.id || ""), question]),
+    );
+    const isCustomQuestion = (key: string) => {
+      const question = questionById.get(key);
+      if (!question) return key.startsWith("q_");
+      const sectionId = String(question?.sectionId || "");
+      const sectionTitle = String(sectionTitleById.get(sectionId) || "");
+      return sectionId === "personalizadas" || sectionTitle.toLowerCase().includes("personaliz");
+    };
+
+    const templateOrderedExtras = snapshotQuestions
+      .filter((question: any) => question?.active !== false && !prioritySet.has(String(question?.id || "")))
+      .sort((a: any, b: any) => Number(a?.order || 0) - Number(b?.order || 0))
+      .map((question: any) => extraEntries.find(([key]) => key === String(question?.id || "")))
+      .filter(Boolean) as Array<[string, any]>;
+
+    const templateExtraSet = new Set(templateOrderedExtras.map(([key]) => key));
+    const remainderExtras = extraEntries.filter(([key]) => !templateExtraSet.has(key));
+    const clinicalExtras = templateOrderedExtras
+      .concat(remainderExtras)
+      .filter(([key]) => !isCustomQuestion(key));
+    const customExtras = templateOrderedExtras
+      .concat(remainderExtras)
+      .filter(([key]) => isCustomQuestion(key));
+
+    const uniqueByKey = (entries: Array<[string, any]>) => {
+      const seen = new Set<string>();
+      return entries.filter(([key]) => {
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    };
+
+    const orderedEntries = uniqueByKey([...priorityEntries, ...clinicalExtras, ...customExtras]);
 
     const lines = orderedEntries
       .map(([key, value]) => {
@@ -433,42 +477,243 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
 </html>`;
   }
 
-  const downloadTextDocument = (content: string, fileName: string, mimeType: string) => {
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 500);
-  };
+  function buildAnamnesisPdfLines(anamnesis: any, fichaDateIso: string) {
+    const c = clinicContext || {};
+    const questionLabels =
+      anamnesis && typeof anamnesis.questionLabels === "object" ? anamnesis.questionLabels : {};
 
-  const ensureHtmlFilename = (fileName: string) => {
-    const cleaned = (fileName || "documento").trim();
-    if (cleaned.toLowerCase().endsWith(".html")) return cleaned;
-    if (cleaned.toLowerCase().endsWith(".pdf")) return `${cleaned.replace(/\.pdf$/i, "")}.html`;
-    return `${cleaned}.html`;
-  };
+    const priorityFields = [
+      "nome","nomeSocial","dataNascimento","idade","genero","telefone","email","rg","cpf",
+      "convenioTipo","convenioNome","convenioCarteirinha","grupo","comoConheceu","cep","logradouro",
+      "numero","complemento","bairro","cidade","endereco","menorDeIdade","responsavelNome",
+      "responsavelDataNascimento","responsavelCpf","responsavelTelefone","profissional","crp","formType"
+    ];
+    const excludedKeys = new Set(["anamnesisTemplateVersion","template_version","template_snapshot","questionLabels"]);
+    const prioritySet = new Set(priorityFields);
+    const rawEntries = Object.entries(anamnesis || {}).filter(([key]) => !excludedKeys.has(key));
+
+    const snapshotQuestions = Array.isArray(anamnesis?.template_snapshot?.questions)
+      ? anamnesis.template_snapshot.questions
+      : [];
+    const snapshotSections = Array.isArray(anamnesis?.template_snapshot?.sections)
+      ? anamnesis.template_snapshot.sections
+      : [];
+    const sectionTitleById = new Map(
+      snapshotSections.map((section: any) => [String(section?.id || ""), String(section?.title || "")]),
+    );
+    const questionById = new Map<string, any>(
+      snapshotQuestions.map((question: any) => [String(question?.id || ""), question]),
+    );
+    const isCustomQuestion = (key: string) => {
+      const question = questionById.get(key);
+      if (!question) return key.startsWith("q_");
+      const sectionId = String(question?.sectionId || "");
+      const sectionTitle = String(sectionTitleById.get(sectionId) || "");
+      return sectionId === "personalizadas" || sectionTitle.toLowerCase().includes("personaliz");
+    };
+
+    const priorityEntries = priorityFields
+      .map((field) => rawEntries.find(([key]) => key === field))
+      .filter(Boolean) as Array<[string, any]>;
+    const extraEntries = rawEntries.filter(([key]) => !prioritySet.has(key));
+    const templateOrderedExtras = snapshotQuestions
+      .filter((question: any) => question?.active !== false && !prioritySet.has(String(question?.id || "")))
+      .sort((a: any, b: any) => Number(a?.order || 0) - Number(b?.order || 0))
+      .map((question: any) => extraEntries.find(([key]) => key === String(question?.id || "")))
+      .filter(Boolean) as Array<[string, any]>;
+    const templateExtraSet = new Set(templateOrderedExtras.map(([key]) => key));
+    const remainderExtras = extraEntries.filter(([key]) => !templateExtraSet.has(key));
+    const clinicalExtras = templateOrderedExtras.concat(remainderExtras).filter(([key]) => !isCustomQuestion(key));
+    const customExtras = templateOrderedExtras.concat(remainderExtras).filter(([key]) => isCustomQuestion(key));
+    const seen = new Set<string>();
+    const orderedEntries = [...priorityEntries, ...clinicalExtras, ...customExtras].filter(([key]) => {
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    const normalizeValue = (key: string, value: any) => {
+      if (value === null || value === undefined) return "";
+      if (key === "menorDeIdade") return value ? "Sim" : "Não";
+      if (typeof value === "boolean") return value ? "Sim" : "Não";
+      if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === "true") return "Sim";
+        if (normalized === "false") return "Não";
+      }
+      if (key === "formType") {
+        if (value === "adult") return "Adulto";
+        if (value === "child") return "Criança";
+      }
+      if (Array.isArray(value)) return value.join(", ");
+      if (typeof value === "object") return "";
+      return String(value);
+    };
+
+    const fallbackLabel = (key: string) =>
+      key
+        .replace(/([a-z])([A-Z])/g, "$1 $2")
+        .replaceAll("_", " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/^./, (l) => l.toUpperCase());
+
+    const fichaDate = fichaDateIso
+      ? new Date(`${fichaDateIso}T00:00:00`).toLocaleDateString("pt-BR")
+      : new Date().toLocaleDateString("pt-BR");
+
+    const lines = [
+      `Ficha de Anamnese - ${patient?.name || "Paciente"}`,
+      `Clínica: ${c.clinicName || "Clínica Verto"}`,
+      `CNPJ: ${c.cnpj || "-"}`,
+      `Data da ficha: ${fichaDate}`,
+      " "
+    ];
+
+    orderedEntries.forEach(([key, value]) => {
+      const normalized = normalizeValue(key, value);
+      if (!String(normalized || "").trim()) return;
+      const label = questionLabels[key] || fallbackLabel(key);
+      lines.push(`${label}: ${normalized}`);
+    });
+
+    return lines;
+  }
 
   const normalizeDateString = (dateStr: string) => {
     if (!dateStr) return null;
+    const cleanedRaw = String(dateStr).trim().replace(",", "");
     if (dateStr.includes("T")) {
-      const iso = new Date(dateStr);
+      const iso = new Date(cleanedRaw);
       if (!Number.isNaN(iso.getTime())) return iso;
     }
-    if (dateStr.includes("/")) {
-      const parts = dateStr.split(" ")[0].split("/");
+    if (cleanedRaw.includes("/")) {
+      const parts = cleanedRaw.split(" ")[0].split("/");
       if (parts.length === 3) {
-        const [dd, mm, yyyy] = parts;
+        const [dd, mm, yyyyRaw] = parts;
+        const yyyy = String(yyyyRaw || "").replace(/\D/g, "");
         const parsed = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
         if (!Number.isNaN(parsed.getTime())) return parsed;
       }
     }
-    const parsed = new Date(dateStr);
+    const parsed = new Date(cleanedRaw);
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   };
+
+  const toLatin1 = (text: string) => {
+    const normalized = String(text || "");
+    const bytes: number[] = [];
+    for (let i = 0; i < normalized.length; i += 1) {
+      const code = normalized.charCodeAt(i);
+      bytes.push(code <= 255 ? code : 63);
+    }
+    return bytes;
+  };
+
+  const pdfEscape = (text: string) =>
+    String(text || "")
+      .replace(/\\/g, "\\\\")
+      .replace(/\(/g, "\\(")
+      .replace(/\)/g, "\\)");
+
+  const uint8ToBase64 = (bytes: Uint8Array) => {
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+    return btoa(binary);
+  };
+
+  function createSimplePdf(title: string, lines: string[]) {
+    const pageHeight = 842;
+    const lineHeight = 14;
+    const marginTop = 60;
+    const marginLeft = 45;
+    const marginBottom = 50;
+    const usableHeight = pageHeight - marginTop - marginBottom;
+    const linesPerPage = Math.max(1, Math.floor(usableHeight / lineHeight));
+
+    const chunks: string[][] = [];
+    for (let i = 0; i < lines.length; i += linesPerPage) {
+      chunks.push(lines.slice(i, i + linesPerPage));
+    }
+    if (!chunks.length) chunks.push(["Sem conteúdo."]);
+
+    const objects = new Map<number, Uint8Array>();
+    const offsets: number[] = [0];
+    const encoder = new TextEncoder();
+    const addObject = (id: number, obj: string | Uint8Array) => {
+      const bytes = typeof obj === "string" ? encoder.encode(obj) : obj;
+      objects.set(id, bytes);
+    };
+
+    addObject(1, "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+    addObject(2, `2 0 obj << /Type /Pages /Count ${chunks.length} /Kids [${chunks.map((_, idx) => `${4 + idx * 2} 0 R`).join(" ")}] >> endobj\n`);
+    addObject(3, "3 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n");
+
+    chunks.forEach((pageLines, idx) => {
+      const pageObj = 4 + idx * 2;
+      const contentObj = pageObj + 1;
+      addObject(
+        pageObj,
+        `${pageObj} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObj} 0 R >> endobj\n`,
+      );
+
+      const yStart = pageHeight - marginTop;
+      const streamLines = [
+        "BT",
+        "/F1 11 Tf",
+        `${marginLeft} ${yStart} Td`,
+        `(${pdfEscape(pageLines[0] || "")}) Tj`
+      ];
+      for (let i = 1; i < pageLines.length; i += 1) {
+        streamLines.push(`0 -${lineHeight} Td`);
+        streamLines.push(`(${pdfEscape(pageLines[i])}) Tj`);
+      }
+      streamLines.push("ET");
+      const streamContent = streamLines.join("\n");
+      const streamBytes = new Uint8Array(toLatin1(streamContent));
+      const header = encoder.encode(`${contentObj} 0 obj << /Length ${streamBytes.length} >> stream\n`);
+      const footer = encoder.encode("\nendstream endobj\n");
+      const joined = new Uint8Array(header.length + streamBytes.length + footer.length);
+      joined.set(header, 0);
+      joined.set(streamBytes, header.length);
+      joined.set(footer, header.length + streamBytes.length);
+      addObject(contentObj, joined);
+    });
+
+    const header = encoder.encode("%PDF-1.4\n");
+    let size = header.length;
+    const parts: Uint8Array[] = [header];
+
+    const objectCount = objects.size;
+    for (let objectId = 1; objectId <= objectCount; objectId += 1) {
+      const part = objects.get(objectId) || new Uint8Array();
+      offsets.push(size);
+      parts.push(part);
+      size += part.length;
+    }
+
+    const xrefStart = size;
+    let xref = `xref\n0 ${objectCount + 1}\n0000000000 65535 f \n`;
+    for (let i = 1; i < offsets.length; i += 1) {
+      xref += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
+    }
+    const trailer = `trailer << /Size ${objectCount + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+    parts.push(encoder.encode(xref));
+    parts.push(encoder.encode(trailer));
+
+    const total = parts.reduce((sum, part) => sum + part.length, 0);
+    const out = new Uint8Array(total);
+    let cursor = 0;
+    parts.forEach((part) => {
+      out.set(part, cursor);
+      cursor += part.length;
+    });
+    return out;
+  }
 
   const periodLabelMap: Record<string, string> = {
     monthly: "Mensal",
@@ -766,9 +1011,10 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     return data;
   }, [history, protocols, selectedChartProtocolId, patient.id, comparisonDate1, comparisonDate2]);
 
-  const toggleReportNote = (id: number) => {
+  const toggleReportNote = (id: any) => {
+    const noteId = String(id);
     setSelectedReportNotes(prev => 
-      prev.includes(id) ? prev.filter(nId => nId !== id) : [...prev, id]
+      prev.includes(noteId) ? prev.filter(nId => nId !== noteId) : [...prev, noteId]
     );
   };
   
@@ -971,19 +1217,22 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     const normalizedName = fileName.toLowerCase().endsWith(".pdf")
       ? fileName
       : `${fileName}.pdf`;
-    const sizeKb = Math.max(1, Math.round(pendingAnamnesisPayload.length / 1024));
     const payloadDate = anamnesisFileDate
       ? new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString("pt-BR")
       : new Date().toLocaleDateString("pt-BR");
+    const anamnesisSource = pendingAnamnesisData || patient?.anamnesisData || {};
+    const pdfBytes = createSimplePdf(
+      `Ficha de Anamnese - ${patient?.name || "Paciente"}`,
+      buildAnamnesisPdfLines(anamnesisSource, anamnesisFileDate),
+    );
+    const base64Pdf = uint8ToBase64(pdfBytes);
 
-    const htmlBlob = new Blob([pendingAnamnesisPayload], { type: "text/html;charset=utf-8" });
-    const reader = new FileReader();
-    reader.onload = async () => {
+    (async () => {
       try {
         const uploadResult = await dataService.uploadPatientFile(String(patient.id), {
           fileName: normalizedName,
-          contentType: "text/html",
-          fileBase64: reader.result,
+          contentType: "application/pdf",
+          fileBase64: `data:application/pdf;base64,${base64Pdf}`,
           source: "anamnesis",
           metadata: { referenceDate: payloadDate, patientName: patient?.name || null }
         });
@@ -993,7 +1242,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
         await dataService.savePatientAnamnesisSubmission(String(patient.id), {
           title: normalizedName,
           referenceDate: anamnesisFileDate,
-          anamnesisData: pendingAnamnesisData || patient?.anamnesisData || {},
+          anamnesisData: anamnesisSource,
           templateVersion: Number(anamnesisTemplate?.version || 1),
           profileType: (pendingAnamnesisData?.formType || patient?.anamnesisData?.formType) === 'child' ? 'child' : 'adult',
           patientFileId: String(uploadResult.data.id || '')
@@ -1018,7 +1267,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
         setPatientFiles((prev) => [
           normalizeFileRecord({
             ...uploadResult.data,
-            anamnesisData: pendingAnamnesisData || patient?.anamnesisData || {},
+            anamnesisData: anamnesisSource,
             referenceDate: anamnesisFileDate || null
           }),
           ...prev
@@ -1032,33 +1281,31 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
         console.error('Falha ao persistir ficha de anamnese em arquivos:', error);
         alert('A ficha foi preenchida, mas houve falha ao salvar em Arquivos. Tente novamente.');
       }
-    };
-    reader.onerror = () => {
-      alert('Falha ao processar o arquivo da ficha para upload seguro.');
-    };
-    reader.readAsDataURL(htmlBlob);
-  };
-
-  const resolveAnamnesisHtml = (file: any) => {
-    if (typeof file?.content === "string" && file.content.trim().toLowerCase().includes("<html")) {
-      return file.content;
-    }
-    return buildAnamnesisDocumentHtml(
-      (file?.anamnesisData && typeof file.anamnesisData === "object")
-        ? file.anamnesisData
-        : patient?.anamnesisData || {},
-      file?.referenceDate || new Date().toISOString().slice(0, 10),
-    );
+    })();
   };
 
   const handleDownloadPatientFile = (file: any) => {
     if (isAnamnesisFile(file)) {
-      const html = resolveAnamnesisHtml(file);
-      const htmlName = ensureHtmlFilename(file?.name || `Ficha_Anamnese_${patient?.name || "paciente"}`);
-      downloadTextDocument(html, htmlName, "text/html;charset=utf-8");
+      const anamnesisSource =
+        (file?.anamnesisData && typeof file.anamnesisData === "object")
+          ? file.anamnesisData
+          : patient?.anamnesisData || {};
+      const pdfBytes = createSimplePdf(
+        `Ficha de Anamnese - ${patient?.name || "Paciente"}`,
+        buildAnamnesisPdfLines(anamnesisSource, file?.referenceDate || new Date().toISOString().slice(0, 10)),
+      );
+      const pdfBlob = new Blob([pdfBytes], { type: "application/pdf" });
+      const pdfUrl = URL.createObjectURL(pdfBlob);
+      const a = document.createElement("a");
+      a.href = pdfUrl;
+      a.download = (file?.name || `Ficha_Anamnese_${patient?.name || "paciente"}.pdf`).replace(/\.html$/i, ".pdf");
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(pdfUrl), 500);
       onAddActivityLog?.(
         "Download de ficha de anamnese",
-        `Arquivo ${htmlName} baixado do prontuário do paciente ${patient?.name || "-"}.`,
+        `Arquivo PDF baixado do prontuário do paciente ${patient?.name || "-"}.`,
         "clinical",
       );
       return;
@@ -1097,7 +1344,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     const start = new Date(reportStartDate);
     const end = new Date(reportEndDate);
     const reportData = notes.filter((n: any) => {
-      if (n.patientId !== patient.id) return false;
+      if (String(n.patientId) !== String(patient.id)) return false;
       const noteDate = normalizeDateString(n?.date) || normalizeDateString(n?.created_at);
       if (!noteDate) return false;
       return noteDate >= start && noteDate <= end;
@@ -1137,77 +1384,58 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     if (!sortedComparisonDates) return [];
     const [start, end] = sortedComparisonDates;
     return (notes || [])
-      .filter((n: any) => n.patientId === patient.id)
+      .filter((n: any) => String(n.patientId) === String(patient.id))
       .filter((n: any) => {
         const noteDate = normalizeDateString(n?.date) || normalizeDateString(n?.created_at);
         if (!noteDate) return false;
         return noteDate >= start && noteDate <= end;
+      })
+      .sort((a: any, b: any) => {
+        const da = normalizeDateString(a?.date) || normalizeDateString(a?.created_at) || new Date(0);
+        const db = normalizeDateString(b?.date) || normalizeDateString(b?.created_at) || new Date(0);
+        return db.getTime() - da.getTime();
       });
   }, [notes, patient.id, sortedComparisonDates]);
 
-  const buildReportDocumentHtml = () => {
+  useEffect(() => {
+    const validIds = new Set(reportNotesInRange.map((note: any) => String(note.id)));
+    setSelectedReportNotes((prev) => prev.filter((id) => validIds.has(String(id))));
+  }, [reportNotesInRange]);
+
+  const buildReportPdfLines = () => {
     const periodLabel = periodLabelMap[reportPeriod] || "Período personalizado";
     const selectedProtocol = protocols.find((p: any) => String(p.id) === String(selectedChartProtocolId));
-    const selectedNotes = reportNotesInRange.filter((n: any) => selectedReportNotes.includes(n.id));
-    const chartRows = comparisonChartData
-      .map((row: any) => {
+    const selectedNotes = reportNotesInRange.filter((n: any) => selectedReportNotes.includes(String(n.id)));
+    const lines: string[] = [
+      `Relatório de Evolução - ${patient?.name || "Paciente"}`,
+      `Período: ${periodLabel}`,
+      `Protocolo: ${selectedProtocol?.title || "Não selecionado"}`,
+      `Comparação: ${comparisonDate1 || "-"} x ${comparisonDate2 || "-"}`,
+      " ",
+      "Comparativo dos domínios:"
+    ];
+
+    if (comparisonChartData.length === 0) {
+      lines.push("Sem dados de comparação.");
+    } else {
+      comparisonChartData.forEach((row: any) => {
         const keys = Object.keys(row).filter((k) => k !== "name");
         const colA = keys[0] || "Período A";
         const colB = keys[1] || "Período B";
-        return `<tr><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row[colA] ?? "-")}</td><td>${escapeHtml(row[colB] ?? "-")}</td></tr>`;
-      })
-      .join("");
-    const notesRows = selectedNotes.length
-      ? selectedNotes
-          .map(
-            (note: any) =>
-              `<li><strong>${escapeHtml(note.date || "-")}</strong> - ${escapeHtml(note.subject || "Sem assunto")}<br/>${escapeHtml(note.text || "")}</li>`,
-          )
-          .join("")
-      : "<li>Nenhuma anotação selecionada para este período.</li>";
+        lines.push(`- ${row.name}: ${colA}=${row[colA] ?? "-"} | ${colB}=${row[colB] ?? "-"}`);
+      });
+    }
 
-    return `<!doctype html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Relatório de Evolução - ${escapeHtml(patient?.name || "Paciente")}</title>
-  <style>
-    body{font-family:Arial,sans-serif;background:#f5f7ff;color:#111827;padding:24px}
-    .sheet{max-width:980px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden}
-    .header{padding:20px 24px;background:#eef2ff;border-bottom:1px solid #e2e8f0}
-    .title{margin:0;color:#312e81;font-size:26px}
-    .meta{font-size:13px;color:#475569;margin-top:8px}
-    .section{padding:20px 24px;border-top:1px solid #eef2ff}
-    .section h2{margin:0 0 12px 0;color:#1e1b4b;font-size:18px}
-    table{width:100%;border-collapse:collapse;font-size:13px}
-    th,td{border:1px solid #cbd5e1;padding:8px;text-align:left}
-    th{background:#f8fafc}
-    ul{margin:0;padding-left:20px}
-    li{margin-bottom:12px}
-  </style>
-</head>
-<body>
-  <div class="sheet">
-    <div class="header">
-      <h1 class="title">Relatório de Evolução</h1>
-      <p class="meta"><strong>Paciente:</strong> ${escapeHtml(patient?.name || "-")} | <strong>Período:</strong> ${escapeHtml(periodLabel)} | <strong>Protocolo:</strong> ${escapeHtml(selectedProtocol?.title || "Não selecionado")}</p>
-      <p class="meta"><strong>Comparação:</strong> ${escapeHtml(comparisonDate1 || "-")} x ${escapeHtml(comparisonDate2 || "-")}</p>
-    </div>
-    <div class="section">
-      <h2>Comparativo dos domínios</h2>
-      <table>
-        <thead><tr><th>Domínio</th><th>Período A</th><th>Período B</th></tr></thead>
-        <tbody>${chartRows || "<tr><td colspan='3'>Sem dados para exibir.</td></tr>"}</tbody>
-      </table>
-    </div>
-    <div class="section">
-      <h2>Anotações clínicas selecionadas</h2>
-      <ul>${notesRows}</ul>
-    </div>
-  </div>
-</body>
-</html>`;
+    lines.push(" ", "Anotações selecionadas:");
+    if (selectedNotes.length === 0) {
+      lines.push("Nenhuma anotação selecionada para este período.");
+    } else {
+      selectedNotes.forEach((note: any) => {
+        lines.push(`- ${note.date || "-"} | ${note.subject || "Sem assunto"}`);
+        lines.push(`  ${String(note.text || "").replace(/\s+/g, " ").trim()}`);
+      });
+    }
+    return lines;
   };
 
   const handlePreviewReport = () => {
@@ -1215,8 +1443,11 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
       alert("Selecione as duas datas de comparação para visualizar o relatório.");
       return;
     }
-    const html = buildReportDocumentHtml();
-    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const pdfBytes = createSimplePdf(
+      `Relatório de Evolução - ${patient?.name || "Paciente"}`,
+      buildReportPdfLines(),
+    );
+    const blob = new Blob([pdfBytes], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
     setReportPreviewUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
@@ -1235,9 +1466,19 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
       alert("Selecione as duas datas de comparação para gerar o relatório.");
       return;
     }
-    const html = buildReportDocumentHtml();
-    const fileName = ensureHtmlFilename(`Relatorio_Evolucao_${patient?.name || "paciente"}_${new Date().toISOString().slice(0, 10)}.pdf`);
-    downloadTextDocument(html, fileName, "text/html;charset=utf-8");
+    const pdfBytes = createSimplePdf(
+      `Relatório de Evolução - ${patient?.name || "Paciente"}`,
+      buildReportPdfLines(),
+    );
+    const pdfBlob = new Blob([pdfBytes], { type: "application/pdf" });
+    const pdfUrl = URL.createObjectURL(pdfBlob);
+    const link = document.createElement("a");
+    link.href = pdfUrl;
+    link.download = `Relatorio_Evolucao_${patient?.name || "paciente"}_${new Date().toISOString().slice(0, 10)}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(pdfUrl), 500);
     onAddActivityLog?.(
       "Download de relatório",
       `Relatório de evolução baixado para ${patient?.name || "-"}.`,
@@ -1703,7 +1944,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                     <FileText size={18} className="text-[#7a32fc]" /> Observações Selecionadas para o Relatório
                   </h4>
                   <div className="space-y-4">
-                    {notes.filter((n: any) => selectedReportNotes.includes(n.id)).map((note: any) => (
+                    {reportNotesInRange.filter((n: any) => selectedReportNotes.includes(String(n.id))).map((note: any) => (
                       <div key={note.id} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
                         <div className="flex justify-between items-center mb-3">
                           <span className="text-[10px] font-semibold text-gray-400 uppercase">{note.date}</span>
@@ -1728,11 +1969,11 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                     <div 
                       key={note.id} 
                       onClick={() => toggleReportNote(note.id)}
-                      className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedReportNotes.includes(note.id) ? 'border-[#7a32fc] bg-blue-50/50 shadow-sm' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200'}`}
+                      className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedReportNotes.includes(String(note.id)) ? 'border-[#7a32fc] bg-blue-50/50 shadow-sm' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200'}`}
                     >
                       <div className="flex justify-between items-start mb-2">
                         <span className="text-[9px] font-semibold text-gray-400 uppercase">{note.date}</span>
-                        {selectedReportNotes.includes(note.id) && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
+                        {selectedReportNotes.includes(String(note.id)) && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
                       </div>
                       <p className="text-xs text-gray-600 line-clamp-3">{note.text}</p>
                     </div>
