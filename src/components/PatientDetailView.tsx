@@ -181,29 +181,47 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
   const [pendingTrial, setPendingTrial] = useState<any>(null);
   const [showTrialConfirmation, setShowTrialConfirmation] = useState(false);
   const [trialObservation, setTrialObservation] = useState("");
+  const [anamnesisPreviewUrl, setAnamnesisPreviewUrl] = useState<string | null>(null);
 
   const isAnamnesisFile = (file: any) =>
     file?.source === "anamnesis" ||
     String(file?.name || "").toLowerCase().includes("ficha_anamnese");
 
-  const anamnesisPreviewUrl = useMemo(() => {
-    if (!previewFile || !isAnamnesisFile(previewFile)) return null;
-    const previewDate = previewFile?.referenceDate || new Date().toISOString().slice(0, 10);
-    const dataFromSubmission = parseAnamnesisData(previewFile?.anamnesisData)
-      ? parseAnamnesisData(previewFile?.anamnesisData)
-      : null;
-    const anamnesisSource = dataFromSubmission || patient?.anamnesisData || {};
-    const pdfBytes = createSimplePdf(
-      `Ficha de Anamnese - ${patient?.name || "Paciente"}`,
-      buildAnamnesisPdfLines(anamnesisSource, previewDate),
-    );
-    const blob = new Blob([pdfBytes], { type: "application/pdf" });
-    return URL.createObjectURL(blob);
-  }, [previewFile, patient?.anamnesisData]);
+  useEffect(() => {
+    if (!previewFile || !isAnamnesisFile(previewFile)) {
+      setAnamnesisPreviewUrl(null);
+      return;
+    }
+
+    if (previewFile?.objectUrl || previewFile?.url) {
+      setAnamnesisPreviewUrl(previewFile.objectUrl || previewFile.url);
+      return;
+    }
+
+    try {
+      const previewDate = previewFile?.referenceDate || new Date().toISOString().slice(0, 10);
+      const dataFromSubmission = parseAnamnesisData(previewFile?.anamnesisData)
+        ? parseAnamnesisData(previewFile?.anamnesisData)
+        : null;
+      const anamnesisSource = dataFromSubmission || patient?.anamnesisData || {};
+      const pdfBytes = createSimplePdf(
+        `Ficha de Anamnese - ${patient?.name || "Paciente"}`,
+        buildAnamnesisPdfLines(anamnesisSource, previewDate),
+      );
+      const blob = new Blob([pdfBytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      setAnamnesisPreviewUrl(url);
+    } catch (error) {
+      console.error("Falha ao gerar preview da ficha de anamnese:", error);
+      setAnamnesisPreviewUrl(null);
+    }
+  }, [previewFile, patient?.anamnesisData, patient?.name]);
 
   useEffect(() => {
     return () => {
-      if (anamnesisPreviewUrl) URL.revokeObjectURL(anamnesisPreviewUrl);
+      if (anamnesisPreviewUrl && anamnesisPreviewUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(anamnesisPreviewUrl);
+      }
     };
   }, [anamnesisPreviewUrl]);
 
