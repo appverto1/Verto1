@@ -79,16 +79,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   };
 
   const normalizeFileRecord = (file: any) => {
-    const safeName = String(file?.name || 'arquivo');
-    const safeType = String(file?.type || 'application/octet-stream');
+    const safeName = String(file?.name || file?.fileName || 'arquivo');
+    const safeType = String(file?.type || file?.mimeType || 'application/octet-stream');
     const safeContent = typeof file?.content === 'string' ? file.content : '';
-    const safeUrl = typeof file?.url === 'string' ? file.url : '';
-    const objectUrl = safeUrl || (safeContent && safeType !== 'text/html' ? safeContent : undefined);
+    const safeUrl = typeof file?.url === 'string' ? file.url : (typeof file?.signedUrl === 'string' ? file.signedUrl : '');
+    const objectUrl = safeUrl || (safeContent ? safeContent : undefined);
     return {
-      id: file?.id || Date.now(),
+      id: String(file?.id || Date.now()),
       name: safeName,
-      size: String(file?.size || ''),
-      date: String(file?.date || new Date().toLocaleDateString('pt-BR')),
+      size: String(file?.size || (file?.sizeBytes ? `${Math.max(1, Math.round(Number(file.sizeBytes) / 1024))} KB` : '')),
+      date: String(file?.date || (file?.createdAt ? new Date(file.createdAt).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR'))),
       type: safeType,
       source: file?.source || 'upload',
       content: safeContent,
@@ -97,29 +97,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     };
   };
 
-  const persistPatientFiles = async (nextFiles: any[]) => {
-    if (!patient?.id) return;
-    const filesPayload = nextFiles.map((file: any) => ({
-      id: file.id,
-      name: file.name,
-      size: file.size,
-      date: file.date,
-      type: file.type,
-      source: file.source || 'upload',
-      content: typeof file.content === 'string' ? file.content : '',
-      url: typeof file.url === 'string' ? file.url : (typeof file.objectUrl === 'string' ? file.objectUrl : '')
-    }));
-
-    await dataService.savePatientRecord(String(patient.id), { files: filesPayload });
-  };
-
   useEffect(() => {
     const loadPersistedFiles = async () => {
       if (!patient?.id) return;
       setIsLoadingFiles(true);
       try {
-        const result = await dataService.getPatientRecord(String(patient.id));
-        const persistedFiles = Array.isArray(result?.data?.payload?.files) ? result.data.payload.files : [];
+        const result = await dataService.getPatientFiles(String(patient.id));
+        if (result?.success && Array.isArray(result?.data)) {
+          setPatientFiles(result.data.map(normalizeFileRecord));
+          return;
+        }
+        const fallbackRecord = await dataService.getPatientRecord(String(patient.id));
+        const persistedFiles = Array.isArray(fallbackRecord?.data?.payload?.files) ? fallbackRecord.data.payload.files : [];
         setPatientFiles(persistedFiles.map(normalizeFileRecord));
       } catch (error) {
         console.error('Erro ao carregar arquivos persistidos do paciente:', error);
@@ -134,6 +123,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [showAnamnesisFileModal, setShowAnamnesisFileModal] = useState(false);
   const [pendingAnamnesisPayload, setPendingAnamnesisPayload] = useState<string>("");
+  const [pendingAnamnesisData, setPendingAnamnesisData] = useState<any>(null);
   const [anamnesisFileName, setAnamnesisFileName] = useState("");
   const [anamnesisFileDate, setAnamnesisFileDate] = useState(new Date().toISOString().slice(0, 10));
   const [isPreparingAnamnesisSave, setIsPreparingAnamnesisSave] = useState(false);
@@ -770,6 +760,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const fichePayload = buildAnamnesisDocumentHtml(updatedData, anamnesisFileDate);
     const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.pdf`;
     setPendingAnamnesisPayload(fichePayload);
+    setPendingAnamnesisData(updatedData);
     setAnamnesisFileName(defaultName);
     setAnamnesisFileDate(new Date().toISOString().slice(0, 10));
     setShowAnamnesis(false);
@@ -811,20 +802,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       });
       setUploadProgress(80);
 
-      const newFile = normalizeFileRecord({
-        id: Date.now(),
-        name: file.name,
-        size: (file.size / (1024 * 1024)).toFixed(1) + ' MB',
-        date: new Date().toLocaleDateString('pt-BR'),
-        type: file.type,
-        source: 'upload',
-        content: dataUrl,
-        url: dataUrl
+      const uploadResult = await dataService.uploadPatientFile(String(patient.id), {
+        fileName: file.name,
+        contentType: file.type,
+        fileBase64: dataUrl,
+        source: 'upload'
       });
+      if (!uploadResult?.success || !uploadResult?.data) {
+        throw new Error(uploadResult?.warning || uploadResult?.error || 'Falha no upload');
+      }
+      const newFile = normalizeFileRecord(uploadResult.data);
 
-      const nextFiles = [newFile, ...patientFiles];
-      setPatientFiles(nextFiles);
-      await persistPatientFiles(nextFiles);
+      setPatientFiles((prev) => [newFile, ...prev]);
       setUploadProgress(100);
     } catch (error) {
       console.error('Falha ao salvar arquivo do paciente:', error);
@@ -870,9 +859,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
   const removeFile = async (id: any) => {
       if (confirm("Deseja remover este arquivo?")) {
-          const nextFiles = patientFiles.filter((f: any) => f.id !== id);
+          const removeResult = await dataService.deletePatientFile(String(patient.id), String(id));
+          if (!removeResult?.success) {
+            alert(removeResult?.warning || removeResult?.error || 'Não foi possível excluir o arquivo.');
+            return;
+          }
+          const nextFiles = patientFiles.filter((f: any) => String(f.id) !== String(id));
           setPatientFiles(nextFiles);
-          await persistPatientFiles(nextFiles);
       }
   };
 
@@ -887,31 +880,43 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       ? new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString("pt-BR")
       : new Date().toLocaleDateString("pt-BR");
 
-    const nextFiles = [
-      normalizeFileRecord({
-        id: Date.now(),
-        name: normalizedName,
-        size: `${sizeKb} KB`,
-        date: payloadDate,
-        type: "text/html",
-        source: "anamnesis",
-        content: pendingAnamnesisPayload
-      }),
-      ...patientFiles
-    ];
-
-    setPatientFiles(nextFiles);
-    persistPatientFiles(nextFiles)
-      .then(() => {
+    const htmlBlob = new Blob([pendingAnamnesisPayload], { type: "text/html;charset=utf-8" });
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const uploadResult = await dataService.uploadPatientFile(String(patient.id), {
+          fileName: normalizedName,
+          contentType: "text/html",
+          fileBase64: reader.result,
+          source: "anamnesis",
+          metadata: { referenceDate: payloadDate }
+        });
+        if (!uploadResult?.success || !uploadResult?.data) {
+          throw new Error(uploadResult?.warning || uploadResult?.error || 'Falha ao salvar a ficha.');
+        }
+        await dataService.savePatientAnamnesisSubmission(String(patient.id), {
+          title: normalizedName,
+          referenceDate: anamnesisFileDate,
+          anamnesisData: pendingAnamnesisData || patient?.anamnesisData || {},
+          templateVersion: Number(anamnesisTemplate?.version || 1),
+          profileType: (pendingAnamnesisData?.formType || patient?.anamnesisData?.formType) === 'child' ? 'child' : 'adult',
+          patientFileId: String(uploadResult.data.id || '')
+        });
+        setPatientFiles((prev) => [normalizeFileRecord(uploadResult.data), ...prev]);
         setShowAnamnesisFileModal(false);
         setPendingAnamnesisPayload("");
+        setPendingAnamnesisData(null);
         setIsPreparingAnamnesisSave(false);
         setActiveTab("files");
-      })
-      .catch((error) => {
+      } catch (error) {
         console.error('Falha ao persistir ficha de anamnese em arquivos:', error);
         alert('A ficha foi preenchida, mas houve falha ao salvar em Arquivos. Tente novamente.');
-      });
+      }
+    };
+    reader.onerror = () => {
+      alert('Falha ao processar o arquivo da ficha para upload seguro.');
+    };
+    reader.readAsDataURL(htmlBlob);
   };
 
   const handleDownloadPatientFile = (file: any) => {
@@ -2267,6 +2272,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 onClick={() => {
                   setShowAnamnesisFileModal(false);
                   setPendingAnamnesisPayload("");
+                  setPendingAnamnesisData(null);
                   setIsPreparingAnamnesisSave(false);
                 }}
                 className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-semibold text-sm"

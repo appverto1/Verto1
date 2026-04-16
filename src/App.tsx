@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS } from './components/Common';
 import { LandingPage } from './components/LandingPage';
 import { PatientDashboard } from './components/PatientDashboard';
@@ -343,6 +343,8 @@ export default function App() {
   const [crp, setCrp] = useState<string>('');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
+  const [clinicStateHydrated, setClinicStateHydrated] = useState(false);
+  const clinicStateSyncTimerRef = useRef<any>(null);
 
   const onAddActivityLog = async (action: string, details: string, category: 'clinical' | 'management' | 'system' = 'clinical') => {
     const newLog = {
@@ -542,6 +544,19 @@ export default function App() {
         const { dataService } = await import('./services/dataService');
         
         if (user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') {
+          const clinicStateRes = await dataService.getClinicState();
+          if (clinicStateRes?.success && clinicStateRes?.data) {
+            if (Array.isArray(clinicStateRes.data.rooms)) setRooms(clinicStateRes.data.rooms);
+            if (Array.isArray(clinicStateRes.data.appointments)) setTherapistAgenda(clinicStateRes.data.appointments);
+            if (Array.isArray(clinicStateRes.data.protocols) && clinicStateRes.data.protocols.length > 0) {
+              setProtocols(clinicStateRes.data.protocols);
+            }
+            if (clinicStateRes.data.specialtySettings && typeof clinicStateRes.data.specialtySettings === 'object') {
+              setSpecialtySettings(clinicStateRes.data.specialtySettings);
+            }
+          }
+          setClinicStateHydrated(true);
+
           // Load Patients
           const patientsRes = await dataService.getPatients();
           if (patientsRes.success && patientsRes.data) {
@@ -620,6 +635,35 @@ export default function App() {
     };
     fetchData();
   }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    if (!(user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist')) return;
+    if (!clinicStateHydrated) return;
+
+    if (clinicStateSyncTimerRef.current) {
+      clearTimeout(clinicStateSyncTimerRef.current);
+    }
+
+    clinicStateSyncTimerRef.current = setTimeout(async () => {
+      try {
+        await dataService.saveClinicState({
+          rooms,
+          appointments: therapistAgenda,
+          protocols,
+          specialtySettings
+        });
+      } catch (error) {
+        console.error('Erro ao sincronizar estado clínico no Supabase:', error);
+      }
+    }, 800);
+
+    return () => {
+      if (clinicStateSyncTimerRef.current) {
+        clearTimeout(clinicStateSyncTimerRef.current);
+      }
+    };
+  }, [user, clinicStateHydrated, rooms, therapistAgenda, protocols, specialtySettings]);
 
   // Fetch activity logs from Backend on load
   useEffect(() => {

@@ -150,7 +150,11 @@ function requireRoles(...allowedRoles: AppRole[]) {
 
 function getEncryptionKey(): Buffer | null {
   const raw = (process.env.DATA_ENCRYPTION_KEY || '').trim();
-  if (!raw) return null;
+  if (!raw) {
+    const sessionSecret = (process.env.SESSION_SECRET || '').trim();
+    if (!sessionSecret) return null;
+    return crypto.createHash('sha256').update(sessionSecret).digest();
+  }
 
   if (/^[0-9a-fA-F]{64}$/.test(raw)) {
     return Buffer.from(raw, 'hex');
@@ -2020,6 +2024,247 @@ async function startServer() {
     }
   });
 
+  app.get('/api/clinic/state', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = currentClinicId(req.session.user);
+      const { data, error } = await supabase
+        .from('clinic_state')
+        .select('clinic_id, rooms, appointments, protocols, specialty_settings, updated_at')
+        .eq('clinic_id', clinicId)
+        .maybeSingle();
+
+      if (error) {
+        if (String(error?.message || '').toLowerCase().includes('clinic_state')) {
+          return res.json({
+            success: true,
+            data: {
+              clinicId,
+              rooms: [],
+              appointments: [],
+              protocols: [],
+              specialtySettings: {},
+              updatedAt: null
+            },
+            warning: 'Tabela clinic_state não criada.'
+          });
+        }
+        throw error;
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          clinicId,
+          rooms: Array.isArray(data?.rooms) ? data.rooms : [],
+          appointments: Array.isArray(data?.appointments) ? data.appointments : [],
+          protocols: Array.isArray(data?.protocols) ? data.protocols : [],
+          specialtySettings: data?.specialty_settings && typeof data.specialty_settings === 'object' ? data.specialty_settings : {},
+          updatedAt: data?.updated_at || null
+        }
+      });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: String(error) });
+    }
+  });
+
+  app.post('/api/clinic/state', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = currentClinicId(req.session.user);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
+
+      const nextRooms = Array.isArray(req.body?.rooms) ? req.body.rooms.slice(0, 400) : undefined;
+      const nextAppointments = Array.isArray(req.body?.appointments) ? req.body.appointments.slice(0, 5000) : undefined;
+      const nextProtocols = Array.isArray(req.body?.protocols) ? req.body.protocols.slice(0, 600) : undefined;
+      const nextSpecialtySettings =
+        req.body?.specialtySettings && typeof req.body.specialtySettings === 'object'
+          ? req.body.specialtySettings
+          : undefined;
+
+      if (
+        nextRooms === undefined &&
+        nextAppointments === undefined &&
+        nextProtocols === undefined &&
+        nextSpecialtySettings === undefined
+      ) {
+        return res.status(400).json({ success: false, error: 'Nenhum payload de estado enviado.' });
+      }
+
+      const previous = await supabase
+        .from('clinic_state')
+        .select('rooms, appointments, protocols, specialty_settings')
+        .eq('clinic_id', clinicId)
+        .maybeSingle();
+
+      const payload = cleanObject({
+        clinic_id: clinicId,
+        rooms: nextRooms,
+        appointments: nextAppointments,
+        protocols: nextProtocols,
+        specialty_settings: nextSpecialtySettings,
+        updated_by: actorId,
+        updated_at: new Date().toISOString()
+      });
+
+      const { data, error } = await supabase
+        .from('clinic_state')
+        .upsert([payload], { onConflict: 'clinic_id' })
+        .select('clinic_id, rooms, appointments, protocols, specialty_settings, updated_at')
+        .single();
+
+      if (error) {
+        if (String(error?.message || '').toLowerCase().includes('clinic_state')) {
+          return res.status(200).json({
+            success: false,
+            warning: 'Tabela clinic_state não existe. Rode a migração de ativação do Supabase.'
+          });
+        }
+        throw error;
+      }
+
+      const prevData = previous.data || {};
+      if (nextRooms !== undefined && JSON.stringify(prevData.rooms || []) !== JSON.stringify(nextRooms)) {
+        void persistActivityLog({
+          userId: actorId,
+          clinicId,
+          actorName,
+          title: 'Salas atualizadas',
+          content: `${actorName} atualizou as salas da clínica (${Array.isArray(nextRooms) ? nextRooms.length : 0} itens).`,
+          type: 'management'
+        });
+      }
+      if (nextAppointments !== undefined && JSON.stringify(prevData.appointments || []) !== JSON.stringify(nextAppointments)) {
+        void persistActivityLog({
+          userId: actorId,
+          clinicId,
+          actorName,
+          title: 'Agenda clínica atualizada',
+          content: `${actorName} atualizou os agendamentos da clínica (${Array.isArray(nextAppointments) ? nextAppointments.length : 0} itens).`,
+          type: 'management'
+        });
+      }
+      if (nextProtocols !== undefined && JSON.stringify(prevData.protocols || []) !== JSON.stringify(nextProtocols)) {
+        void persistActivityLog({
+          userId: actorId,
+          clinicId,
+          actorName,
+          title: 'Protocolos atualizados',
+          content: `${actorName} atualizou os protocolos/PEIs da clínica (${Array.isArray(nextProtocols) ? nextProtocols.length : 0} itens).`,
+          type: 'clinical'
+        });
+      }
+      if (nextSpecialtySettings !== undefined && JSON.stringify(prevData.specialty_settings || {}) !== JSON.stringify(nextSpecialtySettings)) {
+        void persistActivityLog({
+          userId: actorId,
+          clinicId,
+          actorName,
+          title: 'Configurações de duração de sessão atualizadas',
+          content: `${actorName} atualizou as durações por abordagem/profissional.`,
+          type: 'management'
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          clinicId: data.clinic_id,
+          rooms: Array.isArray(data.rooms) ? data.rooms : [],
+          appointments: Array.isArray(data.appointments) ? data.appointments : [],
+          protocols: Array.isArray(data.protocols) ? data.protocols : [],
+          specialtySettings: data.specialty_settings && typeof data.specialty_settings === 'object' ? data.specialty_settings : {},
+          updatedAt: data.updated_at || null
+        }
+      });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: String(error) });
+    }
+  });
+
+  app.post('/api/patient-anamnesis/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.params.patientId, 100);
+      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      const professionalId = sanitizeString(req.session.user?.id, 100);
+      const title = sanitizeString(req.body?.title, 220) || `Ficha_Anamnese_${patientId}`;
+      const referenceDate = sanitizeDate(req.body?.referenceDate) || new Date().toISOString().slice(0, 10);
+      const templateVersion = asSafeNumber(req.body?.templateVersion, 1, 10_000);
+      const profileType = sanitizeString(req.body?.profileType, 20) === 'child' ? 'child' : 'adult';
+      const patientFileId = sanitizeString(req.body?.patientFileId, 120) || null;
+      const anamnesisData = req.body?.anamnesisData && typeof req.body.anamnesisData === 'object' ? req.body.anamnesisData : {};
+
+      if (!patientId || !clinicId || !professionalId) {
+        return res.status(400).json({ success: false, error: 'Dados obrigatórios ausentes.' });
+      }
+
+      const payload = {
+        patient_id: patientId,
+        clinic_id: clinicId,
+        professional_id: professionalId,
+        title,
+        reference_date: referenceDate,
+        profile_type: profileType,
+        template_version: templateVersion,
+        anamnesis_data: anamnesisData,
+        patient_file_id: patientFileId,
+        created_at: new Date().toISOString()
+      };
+
+      const { data, error } = await supabase
+        .from('patient_anamnesis_submissions')
+        .insert([payload])
+        .select('*')
+        .single();
+
+      if (error) {
+        if (String(error?.message || '').toLowerCase().includes('patient_anamnesis_submissions')) {
+          return res.status(200).json({
+            success: false,
+            warning: 'Tabela patient_anamnesis_submissions não existe. Rode a migração de ativação.'
+          });
+        }
+        throw error;
+      }
+
+      void persistActivityLog({
+        userId: professionalId,
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+        title: 'Ficha de anamnese arquivada',
+        content: `${title} foi registrada para o paciente ${patientId} em ${referenceDate}.`,
+        type: 'clinical'
+      });
+
+      return res.json({ success: true, data });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: String(error) });
+    }
+  });
+
+  app.get('/api/patient-anamnesis/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.params.patientId, 100);
+      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      const { data, error } = await supabase
+        .from('patient_anamnesis_submissions')
+        .select('*')
+        .eq('patient_id', patientId)
+        .eq('clinic_id', clinicId)
+        .order('created_at', { ascending: false })
+        .limit(200);
+
+      if (error) {
+        if (String(error?.message || '').toLowerCase().includes('patient_anamnesis_submissions')) {
+          return res.json({ success: true, data: [], warning: 'Tabela patient_anamnesis_submissions não criada.' });
+        }
+        throw error;
+      }
+
+      return res.json({ success: true, data: data || [] });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: String(error) });
+    }
+  });
+
   // Create Patient User Account (called by therapist when adding a patient)
   app.post('/api/patients/create-user', checkAuth, async (req: any, res) => {
     const { email, name } = req.body;
@@ -2250,6 +2495,14 @@ async function startServer() {
         .single();
       
       if (error) throw error;
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+        title: 'Paciente cadastrado/atualizado',
+        content: `Paciente ${safeBody.name} (${data?.id || safeBody.id || 'sem-id'}) foi salvo no sistema.`,
+        type: 'management'
+      });
       res.json({ success: true, data });
     } catch (error) {
       res.status(500).json({ error: String(error) });
@@ -2274,6 +2527,14 @@ async function startServer() {
         .eq('id', req.params.id);
       
       if (error) throw error;
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+        title: 'Cadastro de paciente atualizado',
+        content: `Paciente ${sanitizeString(req.params.id, 120)} teve dados cadastrais atualizados.`,
+        type: 'management'
+      });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: String(error) });
@@ -2366,6 +2627,214 @@ async function startServer() {
       res.json({ success: true, encrypted: !!encrypted });
     } catch (error) {
       res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.get('/api/patient-files/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.params.patientId, 100);
+      if (!patientId) return res.status(400).json({ success: false, error: 'patientId inválido.' });
+
+      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      const { data, error } = await supabase
+        .from('patient_files')
+        .select('id, patient_id, clinic_id, file_name, storage_path, mime_type, file_size_bytes, source, created_at, metadata')
+        .eq('patient_id', patientId)
+        .eq('clinic_id', clinicId)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        if (String(error?.message || '').toLowerCase().includes('patient_files')) {
+          return res.status(200).json({ success: true, data: [], warning: 'Tabela patient_files não criada.' });
+        }
+        throw error;
+      }
+
+      const withUrls: any[] = [];
+      for (const row of data || []) {
+        const { data: signed, error: signedError } = await supabase.storage
+          .from('patient-files-private')
+          .createSignedUrl(row.storage_path, 60 * 10);
+        if (signedError) {
+          console.warn('[PatientFiles] Falha ao assinar URL:', signedError.message);
+        }
+        withUrls.push({
+          id: row.id,
+          patientId: row.patient_id,
+          fileName: row.file_name,
+          path: row.storage_path,
+          mimeType: row.mime_type,
+          sizeBytes: row.file_size_bytes,
+          source: row.source || 'upload',
+          createdAt: row.created_at,
+          metadata: row.metadata || {},
+          signedUrl: signed?.signedUrl || null
+        });
+      }
+
+      return res.json({ success: true, data: withUrls });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error.message || String(error) });
+    }
+  });
+
+  app.post('/api/patient-files/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.params.patientId, 100);
+      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      const uploadedBy = sanitizeString(req.session.user?.id, 120);
+      const rawName = sanitizeString(req.body?.fileName, 220) || `arquivo_${Date.now()}`;
+      const safeName = rawName.replace(/[^\w.\-() ]+/g, '_').slice(0, 220);
+      const source = sanitizeString(req.body?.source, 40) || 'upload';
+      const contentType = sanitizeString(req.body?.contentType, 120) || 'application/octet-stream';
+      const dataUrl = sanitizeString(req.body?.fileBase64, 20_000_000);
+      const metadata = req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {};
+
+      if (!patientId || !clinicId || !uploadedBy) {
+        return res.status(400).json({ success: false, error: 'Dados obrigatórios ausentes.' });
+      }
+      if (!dataUrl) {
+        return res.status(400).json({ success: false, error: 'Arquivo ausente.' });
+      }
+
+      const matches = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+      const base64Payload = matches?.[2] || dataUrl;
+      const mimeFromDataUrl = matches?.[1] || contentType;
+      const fileBuffer = Buffer.from(base64Payload, 'base64');
+      if (!fileBuffer.length || fileBuffer.length > 10 * 1024 * 1024) {
+        return res.status(400).json({ success: false, error: 'Arquivo inválido ou acima de 10MB.' });
+      }
+
+      const bucketName = 'patient-files-private';
+      const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+      if (listError) throw listError;
+      const exists = (buckets || []).find((b: any) => b.name === bucketName);
+      if (!exists) {
+        const { error: createError } = await supabase.storage.createBucket(bucketName, {
+          public: false,
+          fileSizeLimit: 10 * 1024 * 1024
+        });
+        if (createError) throw createError;
+      }
+
+      const storagePath = `${clinicId}/${patientId}/${Date.now()}_${safeName}`;
+      const { error: uploadError } = await supabase.storage
+        .from(bucketName)
+        .upload(storagePath, fileBuffer, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType: mimeFromDataUrl
+        });
+      if (uploadError) throw uploadError;
+
+      const insertPayload = {
+        patient_id: patientId,
+        clinic_id: clinicId,
+        uploaded_by: uploadedBy,
+        file_name: safeName,
+        storage_path: storagePath,
+        mime_type: mimeFromDataUrl,
+        file_size_bytes: fileBuffer.length,
+        source,
+        metadata
+      };
+
+      const { data: inserted, error: insertError } = await supabase
+        .from('patient_files')
+        .insert([insertPayload])
+        .select('*')
+        .single();
+
+      if (insertError) {
+        if (String(insertError?.message || '').toLowerCase().includes('patient_files')) {
+          return res.status(200).json({
+            success: false,
+            warning: 'Tabela patient_files não existe. Rode a migração de arquivos.'
+          });
+        }
+        throw insertError;
+      }
+
+      const { data: signedData, error: signedError } = await supabase.storage
+        .from(bucketName)
+        .createSignedUrl(storagePath, 60 * 10);
+      if (signedError) throw signedError;
+
+      void persistActivityLog({
+        userId: uploadedBy,
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+        title: 'Arquivo salvo no prontuário',
+        content: `${safeName} foi salvo na pasta segura do paciente ${patientId}.`,
+        type: 'clinical'
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          id: inserted.id,
+          patientId: inserted.patient_id,
+          fileName: inserted.file_name,
+          path: inserted.storage_path,
+          mimeType: inserted.mime_type,
+          sizeBytes: inserted.file_size_bytes,
+          source: inserted.source || 'upload',
+          createdAt: inserted.created_at,
+          metadata: inserted.metadata || {},
+          signedUrl: signedData.signedUrl
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error.message || String(error) });
+    }
+  });
+
+  app.delete('/api/patient-files/:patientId/:fileId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.params.patientId, 100);
+      const fileId = sanitizeString(req.params.fileId, 120);
+      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      if (!patientId || !fileId || !clinicId) {
+        return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+      }
+
+      const { data: existing, error: existingError } = await supabase
+        .from('patient_files')
+        .select('id, storage_path, file_name')
+        .eq('id', fileId)
+        .eq('patient_id', patientId)
+        .eq('clinic_id', clinicId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) return res.status(404).json({ success: false, error: 'Arquivo não encontrado.' });
+
+      const { error: removeStorageError } = await supabase.storage
+        .from('patient-files-private')
+        .remove([existing.storage_path]);
+      if (removeStorageError) {
+        console.warn('[PatientFiles] Falha ao remover do storage:', removeStorageError.message);
+      }
+
+      const { error: deleteRowError } = await supabase
+        .from('patient_files')
+        .delete()
+        .eq('id', fileId)
+        .eq('patient_id', patientId)
+        .eq('clinic_id', clinicId);
+      if (deleteRowError) throw deleteRowError;
+
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+        title: 'Arquivo removido do prontuário',
+        content: `${existing.file_name} foi removido da pasta segura do paciente ${patientId}.`,
+        type: 'clinical'
+      });
+
+      return res.json({ success: true });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error.message || String(error) });
     }
   });
 
@@ -2474,6 +2943,14 @@ async function startServer() {
         .single();
       
       if (error) throw error;
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+        title: 'Nota registrada no prontuário',
+        content: `Nota salva para paciente ${docData.patient_id}. Visibilidade: ${docData.visibility || 'privada'}.`,
+        type: 'clinical'
+      });
       res.json({ success: true, data });
     } catch (error) {
       res.status(500).json({ error: String(error) });
@@ -2552,6 +3029,14 @@ async function startServer() {
         .single();
       
       if (error) throw error;
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+        title: 'Registro de evolução salvo',
+        content: `${docData.title} foi salvo no histórico do paciente ${docData.patient_id}.`,
+        type: 'clinical'
+      });
       res.json({ success: true, data });
     } catch (error) {
       res.status(500).json({ error: String(error) });
@@ -2897,6 +3382,14 @@ async function startServer() {
         .single();
       
       if (error) throw error;
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+        title: 'Tarefa/PEI salva',
+        content: `Tarefa "${payload.title}" registrada para paciente ${payload.patient_id}.`,
+        type: 'clinical'
+      });
       res.json({ success: true, data });
     } catch (error) {
       res.status(500).json({ error: String(error) });
@@ -2947,6 +3440,14 @@ async function startServer() {
         .single();
       
       if (error) throw error;
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+        title: 'Pagamento registrado',
+        content: `Pagamento de ${payload.amount} para paciente ${payload.patient_name || payload.patient_id} foi salvo (${payload.status}).`,
+        type: 'management'
+      });
       res.json({ success: true, data });
     } catch (error) {
       res.status(500).json({ error: String(error) });

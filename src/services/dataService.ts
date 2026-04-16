@@ -157,6 +157,48 @@ export const dataService = {
     }
   },
 
+  async getPatientFiles(patientId: string) {
+    try {
+      const response = await fetch(`/api/patient-files/${patientId}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient files:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async uploadPatientFile(patientId: string, payload: any) {
+    try {
+      const response = await fetch(`/api/patient-files/${patientId}`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error uploading patient file:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async deletePatientFile(patientId: string, fileId: string) {
+    try {
+      const response = await fetch(`/api/patient-files/${patientId}/${fileId}`, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error deleting patient file:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
   async createPatientUser(email: string, name: string) {
     try {
       const response = await fetch('/api/patients/create-user', {
@@ -601,6 +643,61 @@ export const dataService = {
       return await response.json();
     } catch (error) {
       console.error('Error selecting workspace:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async getClinicState() {
+    try {
+      const response = await fetch('/api/clinic/state', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching clinic state:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async saveClinicState(payload: {
+    rooms?: any[];
+    appointments?: any[];
+    protocols?: any[];
+    specialtySettings?: Record<string, number>;
+  }) {
+    try {
+      const response = await fetch('/api/clinic/state', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error saving clinic state:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async savePatientAnamnesisSubmission(patientId: string, payload: {
+    title: string;
+    referenceDate?: string;
+    anamnesisData?: any;
+    templateVersion?: number | null;
+    profileType?: 'adult' | 'child';
+    patientFileId?: string | null;
+  }) {
+    try {
+      const response = await fetch(`/api/patient-anamnesis/${patientId}`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error saving patient anamnesis submission:', error);
       return { success: false, error: String(error) };
     }
   }
