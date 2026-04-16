@@ -60,6 +60,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
   const [selectedPEISkillId, setSelectedPEISkillId] = useState("");
   const [isSessionModeOpen, setIsSessionModeOpen] = useState(false);
   const [isUnlinkingModalOpen, setIsUnlinkingModalOpen] = useState(false);
+  const [actionPopup, setActionPopup] = useState<{ title: string; message: string } | null>(null);
 
   useEffect(() => {
     if (initialTab) setActiveTab(initialTab);
@@ -844,6 +845,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
         unlinkedAt: new Date().toISOString()
       });
       setIsUnlinkingModalOpen(false);
+      window.alert(`Paciente ${patient?.name || "selecionado"} desvinculado com sucesso.`);
       onBack(); // Go back to dashboard
     }
   };
@@ -2419,6 +2421,23 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                 Pré-visualização indisponível para este arquivo. Use o botão de download.
               </p>
             )}
+          </div>
+        </div>
+      )}
+
+      {actionPopup && (
+        <div className="fixed inset-0 z-[180] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl border border-slate-100 p-6">
+            <h3 className="text-lg font-bold text-slate-900">{actionPopup.title}</h3>
+            <p className="text-sm text-slate-600 mt-2">{actionPopup.message}</p>
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={() => setActionPopup(null)}
+                className="px-4 py-2.5 rounded-xl bg-[#7a32fc] text-white font-semibold text-sm"
+              >
+                OK
+              </button>
+            </div>
           </div>
         </div>
       )}

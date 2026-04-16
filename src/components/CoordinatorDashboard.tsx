@@ -255,6 +255,10 @@ export function CoordinatorDashboard({
   const [isDayDetailsModalOpen, setIsDayDetailsModalOpen] = useState(false);
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [actionPopup, setActionPopup] = useState<{
+    title: string;
+    message: string;
+  } | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">(
     (localStorage.getItem("verto_theme") as "light" | "dark") || "light",
   );
@@ -660,6 +664,10 @@ export function CoordinatorDashboard({
       "Novo Paciente",
       `Paciente ${quickPatientName} cadastrado via registro rápido.`,
     );
+    setActionPopup({
+      title: "Paciente adicionado",
+      message: `O paciente ${quickPatientName} foi cadastrado com sucesso.`,
+    });
     alert(
       "Novo paciente cadastrado. Aviso financeiro: este cadastro gerará custo de R$ 4,90 para a clínica.",
     );
@@ -789,6 +797,10 @@ export function CoordinatorDashboard({
         `Cadastro de ${newPatient.name} atualizado pela coordenação.`,
         "management",
       );
+      setActionPopup({
+        title: "Paciente editado",
+        message: `As informações de ${newPatient.name} foram atualizadas com sucesso.`,
+      });
     } else {
       onAddPatient(newPatient);
       onAddActivityLog(
@@ -796,6 +808,10 @@ export function CoordinatorDashboard({
         `Cadastro completo de ${newPatient.name} realizado pela coordenação.`,
         "management",
       );
+      setActionPopup({
+        title: "Paciente adicionado",
+        message: `O paciente ${newPatient.name} foi cadastrado com sucesso.`,
+      });
       alert(
         "Novo paciente cadastrado. Aviso financeiro: este cadastro gerará custo de R$ 4,90 para a clínica.",
       );
@@ -868,6 +884,10 @@ export function CoordinatorDashboard({
       `Paciente ${patientName} foi excluído da clínica.`,
       "management",
     );
+    setActionPopup({
+      title: "Paciente excluído",
+      message: `O paciente ${patientName} foi excluído com sucesso.`,
+    });
     setOpenMenuId(null);
   };
 
@@ -4314,6 +4334,23 @@ export function CoordinatorDashboard({
                 className="px-6 py-3 rounded-xl bg-[#7a32fc] text-white font-semibold shadow-lg shadow-purple-500/20"
               >
                 {editingPatientId ? "Salvar alterações" : "Cadastrar paciente"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {actionPopup && (
+        <div className="fixed inset-0 z-[170] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl border border-slate-100 p-6">
+            <h3 className="text-lg font-bold text-slate-900">{actionPopup.title}</h3>
+            <p className="text-sm text-slate-600 mt-2">{actionPopup.message}</p>
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={() => setActionPopup(null)}
+                className="px-4 py-2.5 rounded-xl bg-[#7a32fc] text-white font-semibold text-sm"
+              >
+                OK
               </button>
             </div>
           </div>
