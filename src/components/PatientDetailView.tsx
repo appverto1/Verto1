@@ -95,7 +95,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       size: String(file?.size || (file?.sizeBytes ? `${Math.max(1, Math.round(Number(file.sizeBytes) / 1024))} KB` : '')),
       date: String(file?.date || (file?.createdAt ? new Date(file.createdAt).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR'))),
       type: safeType,
-      source: file?.source || 'upload',
+      source: file?.source || (safeName.toLowerCase().includes('ficha_anamnese') ? 'anamnesis' : 'upload'),
       content: safeContent,
       url: safeUrl || undefined,
       objectUrl
@@ -140,6 +140,29 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [pendingTrial, setPendingTrial] = useState<any>(null);
   const [showTrialConfirmation, setShowTrialConfirmation] = useState(false);
   const [trialObservation, setTrialObservation] = useState("");
+
+  const isAnamnesisFile = (file: any) =>
+    file?.source === "anamnesis" ||
+    String(file?.name || "").toLowerCase().includes("ficha_anamnese");
+
+  const anamnesisPreviewUrl = useMemo(() => {
+    if (!previewFile || !isAnamnesisFile(previewFile)) return null;
+
+    const rawContent = typeof previewFile?.content === "string" ? previewFile.content : "";
+    const hasHtmlContent = rawContent.trim().toLowerCase().includes("<html");
+    const html = hasHtmlContent
+      ? rawContent
+      : buildAnamnesisDocumentHtml(patient?.anamnesisData || {}, new Date().toISOString().slice(0, 10));
+
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    return URL.createObjectURL(blob);
+  }, [previewFile, patient?.anamnesisData]);
+
+  useEffect(() => {
+    return () => {
+      if (anamnesisPreviewUrl) URL.revokeObjectURL(anamnesisPreviewUrl);
+    };
+  }, [anamnesisPreviewUrl]);
   const [isSavingObservation, setIsSavingObservation] = useState(false);
 
   const [reportStartDate, setReportStartDate] = useState("");
@@ -162,7 +185,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
 
-  const buildAnamnesisDocumentHtml = (anamnesis: any, fichaDateIso: string) => {
+  function buildAnamnesisDocumentHtml(anamnesis: any, fichaDateIso: string) {
     const c = clinicContext || {};
     const fieldLabelMap: Record<string, string> = {
       nome: "Nome completo",
@@ -349,7 +372,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   </div>
 </body>
 </html>`;
-  };
+  }
 
   const openPrintWindowForPdf = (htmlContent: string) => {
     const htmlBlob = new Blob([htmlContent], { type: "text/html;charset=utf-8" });
@@ -2314,7 +2337,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </button>
             </div>
 
-            {previewFile.type?.includes("image") && (previewFile.objectUrl || previewFile.url) ? (
+            {isAnamnesisFile(previewFile) && anamnesisPreviewUrl ? (
+              <iframe src={anamnesisPreviewUrl} title={previewFile.name} className="w-full h-[70vh] rounded-xl border border-slate-200 bg-white" />
+            ) : previewFile.type?.includes("image") && (previewFile.objectUrl || previewFile.url) ? (
               <img src={previewFile.objectUrl || previewFile.url} alt={previewFile.name} className="w-full rounded-xl border border-slate-200" />
             ) : previewFile.type?.includes("pdf") && (previewFile.objectUrl || previewFile.url) ? (
               <iframe src={previewFile.objectUrl || previewFile.url} title={previewFile.name} className="w-full h-[65vh] rounded-xl border border-slate-200" />

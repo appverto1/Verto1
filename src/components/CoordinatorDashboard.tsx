@@ -322,6 +322,7 @@ export function CoordinatorDashboard({
     const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96'><rect width='100%' height='100%' rx='18' fill='#7a32fc'/><text x='50%' y='56%' text-anchor='middle' font-size='42' font-family='Arial,sans-serif' fill='white'>${initial}</text></svg>`;
     return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
   };
+  const coordinatorAvatarUrl = user?.profilePicture || user?.profile_picture || null;
   const financialSurveyOptions = [
     "Controle de recebimentos por paciente",
     "Conciliação de PIX e cartão",
@@ -2002,8 +2003,12 @@ export function CoordinatorDashboard({
               className={`bg-slate-50 rounded-2xl ${patientSidebarExpanded ? "p-3 mb-3" : "p-2 mb-2"} transition-all`}
             >
               <div className={`flex items-center ${patientSidebarExpanded ? "gap-3" : "justify-center"}`}>
-                <div className={`${patientSidebarExpanded ? "w-10 h-10 rounded-xl" : "w-9 h-9 rounded-lg"} bg-white flex items-center justify-center font-bold text-[#7a32fc] shadow-sm`}>
-                  {user.name?.[0]}
+                <div className={`${patientSidebarExpanded ? "w-10 h-10 rounded-xl" : "w-9 h-9 rounded-lg"} bg-white flex items-center justify-center font-bold text-[#7a32fc] shadow-sm overflow-hidden`}>
+                  {coordinatorAvatarUrl ? (
+                    <img src={coordinatorAvatarUrl} alt={user?.name || "Perfil"} className="w-full h-full object-cover" />
+                  ) : (
+                    user.name?.[0]
+                  )}
                 </div>
                 {patientSidebarExpanded && (
                   <div className="overflow-hidden">
@@ -2325,9 +2330,13 @@ export function CoordinatorDashboard({
           {isSidebarExpanded && (
             <div className="bg-slate-50 rounded-2xl p-3 mb-3">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center font-bold text-[#7a32fc] shadow-sm text-xs">
-                  {user.name?.[0]}
-                </div>
+                  <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center font-bold text-[#7a32fc] shadow-sm text-xs overflow-hidden">
+                    {coordinatorAvatarUrl ? (
+                      <img src={coordinatorAvatarUrl} alt={user?.name || "Perfil"} className="w-full h-full object-cover" />
+                    ) : (
+                      user.name?.[0]
+                    )}
+                  </div>
                 <div className="overflow-hidden">
                   <p className="text-[11px] font-bold text-slate-900 truncate">
                     {repairMojibake(user.name)}
@@ -3617,6 +3626,9 @@ export function CoordinatorDashboard({
                             </div>
                             <p className="text-xs text-slate-500 leading-relaxed">
                               {log.content || log.details || "Ação registrada no sistema."}
+                            </p>
+                            <p className="text-[11px] text-slate-400 mt-1">
+                              por {log.actor_name || log.professional || "Profissional"}
                             </p>
                           </div>
                         </div>

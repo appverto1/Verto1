@@ -102,6 +102,12 @@ export default function App() {
       title,
       content,
       type,
+      actor_name:
+        raw?.actor_name ||
+        raw?.professional ||
+        raw?.user_name ||
+        user?.name ||
+        'Profissional',
       timestamp: hasValidDate ? parsedDate.toISOString() : new Date().toISOString(),
       time: raw?.time || (hasValidDate ? parsedDate.toLocaleString('pt-BR') : 'Agora')
     };
@@ -186,8 +192,10 @@ export default function App() {
         const data = await response.json();
         if (data.user) {
           setUser(data.user);
+          setProfilePicture(data.user?.profilePicture || data.user?.profile_picture || null);
         } else {
           setUser(null);
+          setProfilePicture(null);
         }
       } catch (error) {
         console.error('Session check error:', error);
@@ -289,6 +297,7 @@ export default function App() {
         const data = await response.json();
         if (data.user) {
           setUser(data.user);
+          setProfilePicture(data.user?.profilePicture || data.user?.profile_picture || null);
           setShowWorkspacePicker(Array.isArray(data.user.workspaces) && data.user.workspaces.length > 1);
           return data;
         }
@@ -331,6 +340,7 @@ export default function App() {
           return { success: true, twoFactorRequired: true, email: data.email };
         }
         setUser(data.user);
+        setProfilePicture(data.user?.profilePicture || data.user?.profile_picture || null);
         setShowWorkspacePicker(Array.isArray(data.user.workspaces) && data.user.workspaces.length > 1);
         return { success: true, user: data.user };
       } else {
@@ -440,6 +450,7 @@ export default function App() {
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
       professional: user?.name || "Profissional",
+      actor_name: user?.name || "Profissional",
       action,
       details,
       category
