@@ -17,6 +17,58 @@ export default function App() {
   const [user, setUser] = useState<any>(null); 
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  const isUuidLike = (value: unknown) =>
+    typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
+  const normalizeTextKey = (value: unknown) =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+
+  const getPatientIdentityKey = (patient: any) => {
+    const email = String(patient?.email || '').trim().toLowerCase();
+    if (email) return `email:${email}`;
+
+    const normalizedName = normalizeTextKey(patient?.name);
+    if (normalizedName) return `name:${normalizedName}`;
+
+    return `id:${String(patient?.id || '')}`;
+  };
+
+  const mergePatients = (current: any[], incoming: any[]) => {
+    const merged = new Map<string, any>();
+    const all = [...(current || []), ...(incoming || [])];
+
+    for (const patient of all) {
+      const key = getPatientIdentityKey(patient);
+      const existing = merged.get(key);
+      if (!existing) {
+        merged.set(key, patient);
+        continue;
+      }
+
+      const existingIsUuid = isUuidLike(existing?.id);
+      const nextIsUuid = isUuidLike(patient?.id);
+
+      if (!existingIsUuid && nextIsUuid) {
+        merged.set(key, { ...existing, ...patient });
+        continue;
+      }
+
+      if (existingIsUuid && !nextIsUuid) {
+        merged.set(key, { ...patient, ...existing });
+        continue;
+      }
+
+      merged.set(key, { ...existing, ...patient });
+    }
+
+    return Array.from(merged.values());
+  };
   
   useEffect(() => {
     const handleOnline = () => {
@@ -560,11 +612,8 @@ export default function App() {
           // Load Patients
           const patientsRes = await dataService.getPatients();
           if (patientsRes.success && patientsRes.data) {
-            setAllPatients(prev => {
-              const existingIds = prev.map(p => p.id);
-              const newPatients = patientsRes.data.filter((p: any) => !existingIds.includes(p.id));
-              return [...prev, ...newPatients];
-            });
+            const mergedPatients = mergePatients(allPatients, patientsRes.data);
+            setAllPatients(mergedPatients);
 
             // Load Notes, History and Tasks for each patient
             const allNotes: any[] = [];
@@ -572,9 +621,7 @@ export default function App() {
             const allTasks: any[] = [];
 
             // Only fetch for real patients (UUIDs from DB)
-            const realPatients = [...allPatients, ...patientsRes.data].filter(p => 
-              p.id && typeof p.id === 'string' && p.id.length > 10
-            );
+            const realPatients = mergedPatients.filter((p: any) => isUuidLike(p?.id));
 
             if (realPatients.length > 0) {
               for (const patient of realPatients) {
@@ -769,7 +816,7 @@ export default function App() {
       interventionTaskLinks: data.interventionTaskLinks || {}
     };
 
-    setAllPatients(prev => [...prev, newPatient]); 
+    setAllPatients(prev => mergePatients(prev, [newPatient])); 
     setClinicalRecords(prev => [...prev, newClinicalRecord]);
 
     if(data.scheduleImmediate) setTherapistAgenda(prev => [...prev, {id: newId, name: data.name, date: data.date || todayStr, time: data.time, status: 'pending', type: 'Primeira', color: 'bg-blue-100 text-blue-600'}].sort((a,b) => a.time.localeCompare(b.time))); 
@@ -826,7 +873,10 @@ export default function App() {
     let persistedPatientId: string | number = newId;
     if (fbResult.success && fbResult.data) {
       const realId = fbResult.data.id;
-      setAllPatients(prev => prev.map(p => p.id === newId ? { ...p, id: realId } : p));
+      setAllPatients(prev => mergePatients(
+        prev.map(p => p.id === newId ? { ...p, id: realId } : p),
+        [{ ...newPatient, id: realId }]
+      ));
       setClinicalRecords(prev => prev.map(r => r.patientId === newId ? { ...r, patientId: realId } : r));
       persistedPatientId = realId;
     }
