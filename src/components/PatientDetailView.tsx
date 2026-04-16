@@ -612,6 +612,64 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   };
 
+  const createPdfFromHtml = async (html: string) => {
+    const { jsPDF } = await import("jspdf");
+    await import("html2canvas");
+
+    const container = document.createElement("div");
+    container.style.position = "fixed";
+    container.style.left = "-10000px";
+    container.style.top = "0";
+    container.style.width = "794px";
+    container.style.background = "#ffffff";
+    container.innerHTML = html;
+    document.body.appendChild(container);
+
+    try {
+      if (document.fonts?.ready) {
+        await document.fonts.ready;
+      }
+
+      const images = Array.from(container.querySelectorAll("img"));
+      await Promise.all(
+        images.map(
+          (img) =>
+            new Promise<void>((resolve) => {
+              if (img.complete) {
+                resolve();
+                return;
+              }
+              img.onload = () => resolve();
+              img.onerror = () => resolve();
+            }),
+        ),
+      );
+
+      const doc = new jsPDF({
+        orientation: "portrait",
+        unit: "pt",
+        format: "a4",
+      });
+
+      await doc.html(container, {
+        x: 12,
+        y: 12,
+        width: 571,
+        windowWidth: 794,
+        autoPaging: "text",
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: "#ffffff",
+        },
+      });
+
+      return doc.output("blob");
+    } finally {
+      document.body.removeChild(container);
+    }
+  };
+
   const toLatin1 = (text: string) => {
     const normalized = String(text || "");
     const bytes: number[] = [];
@@ -1296,30 +1354,36 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     })();
   };
 
-  const handleDownloadPatientFile = (file: any) => {
+  const handleDownloadPatientFile = async (file: any) => {
     if (isAnamnesisFile(file)) {
       const anamnesisSource =
         (file?.anamnesisData && typeof file.anamnesisData === "object")
           ? file.anamnesisData
           : patient?.anamnesisData || {};
-      const pdfBytes = createSimplePdf(
-        `Ficha de Anamnese - ${patient?.name || "Paciente"}`,
-        buildAnamnesisPdfLines(anamnesisSource, file?.referenceDate || new Date().toISOString().slice(0, 10)),
-      );
-      const pdfBlob = new Blob([pdfBytes], { type: "application/pdf" });
-      const pdfUrl = URL.createObjectURL(pdfBlob);
-      const a = document.createElement("a");
-      a.href = pdfUrl;
-      a.download = (file?.name || `Ficha_Anamnese_${patient?.name || "paciente"}.pdf`).replace(/\.html$/i, ".pdf");
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(pdfUrl), 500);
-      onAddActivityLog?.(
-        "Download de ficha de anamnese",
-        `Arquivo PDF baixado do prontuário do paciente ${patient?.name || "-"}.`,
-        "clinical",
-      );
+      const previewDate = file?.referenceDate || new Date().toISOString().slice(0, 10);
+      const html =
+        typeof file?.content === "string" && file.content.trim().toLowerCase().includes("<html")
+          ? file.content
+          : buildAnamnesisDocumentHtml(anamnesisSource, previewDate);
+      try {
+        const pdfBlob = await createPdfFromHtml(html);
+        const pdfUrl = URL.createObjectURL(pdfBlob);
+        const a = document.createElement("a");
+        a.href = pdfUrl;
+        a.download = (file?.name || `Ficha_Anamnese_${patient?.name || "paciente"}.pdf`).replace(/\.html$/i, ".pdf");
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(pdfUrl), 500);
+        onAddActivityLog?.(
+          "Download de ficha de anamnese",
+          `Arquivo PDF baixado do prontuário do paciente ${patient?.name || "-"}.`,
+          "clinical",
+        );
+      } catch (error) {
+        console.error("Falha ao gerar PDF da ficha de anamnese:", error);
+        alert("Não foi possível gerar o PDF da ficha agora. Tente novamente.");
+      }
       return;
     }
 
