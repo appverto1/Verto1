@@ -259,6 +259,14 @@ export function CoordinatorDashboard({
     title: string;
     message: string;
   } | null>(null);
+  const [toast, setToast] = useState<{
+    type: "success" | "error" | "info";
+    message: string;
+  } | null>(null);
+  const [processingState, setProcessingState] = useState<{
+    active: boolean;
+    message: string;
+  }>({ active: false, message: "Processando..." });
   const [theme, setTheme] = useState<"light" | "dark">(
     (localStorage.getItem("verto_theme") as "light" | "dark") || "light",
   );
@@ -349,6 +357,27 @@ export function CoordinatorDashboard({
     "Integração com Stripe completa",
     "Painel de auditoria financeira",
   ];
+
+  const showToast = (
+    message: string,
+    type: "success" | "error" | "info" = "success",
+  ) => {
+    setToast({ type, message });
+  };
+
+  const showProcessing = (message = "Processando...") => {
+    setProcessingState({ active: true, message });
+  };
+
+  const hideProcessing = () => {
+    setProcessingState((prev) => ({ ...prev, active: false }));
+  };
+
+  useEffect(() => {
+    if (!toast) return;
+    const timeout = setTimeout(() => setToast(null), 3200);
+    return () => clearTimeout(timeout);
+  }, [toast]);
   const [newPatientForm, setNewPatientForm] = useState<any>({
     nome: "",
     nomeSocial: "",
@@ -594,8 +623,13 @@ export function CoordinatorDashboard({
   };
 
   const handleSessionSubmit = async () => {
-    if (!sessionPatientName || !sessionTime || !sessionRoom)
-      return alert("Preencha nome, horário e sala");
+    if (!sessionPatientName || !sessionTime || !sessionRoom) {
+      showToast("Preencha nome, horário e sala.", "error");
+      return;
+    }
+    showProcessing(
+      editingAppointmentId ? "Salvando agendamento..." : "Criando agendamento...",
+    );
 
     if (editingAppointmentId) {
       const updates = {
@@ -614,6 +648,8 @@ export function CoordinatorDashboard({
       );
       setIsAddSessionModalOpen(false);
       resetSessionForm();
+      hideProcessing();
+      showToast("Dados salvos com sucesso!");
       return;
     }
 
@@ -628,7 +664,9 @@ export function CoordinatorDashboard({
     };
     const result = onScheduleSession(newSession);
     if (result && !result.success) {
-      return alert(result.errors.join("\n"));
+      hideProcessing();
+      showToast(result.errors.join(" | "), "error");
+      return;
     }
     onAddActivityLog(
       "Agendamento criado",
@@ -638,10 +676,16 @@ export function CoordinatorDashboard({
 
     setIsAddSessionModalOpen(false);
     resetSessionForm();
+    hideProcessing();
+    showToast("Agendamento criado com sucesso!");
   };
 
   const handleQuickRegister = async () => {
-    if (!quickPatientName) return alert("Nome é obrigatório");
+    if (!quickPatientName) {
+      showToast("Nome é obrigatório.", "error");
+      return;
+    }
+    showProcessing("Cadastrando paciente...");
 
     const newPatient = {
       id: Date.now(),
@@ -668,8 +712,10 @@ export function CoordinatorDashboard({
       title: "Paciente adicionado",
       message: `O paciente ${quickPatientName} foi cadastrado com sucesso.`,
     });
-    alert(
-      "Novo paciente cadastrado. Aviso financeiro: este cadastro gerará custo de R$ 4,90 para a clínica.",
+    hideProcessing();
+    showToast(
+      "Dados salvos com sucesso! Custo de R$ 4,90 será cobrado da clínica.",
+      "info",
     );
   };
 
@@ -736,9 +782,14 @@ export function CoordinatorDashboard({
 
   const handleCreatePatientFromFullForm = () => {
     if (!newPatientForm.nome?.trim()) {
-      alert("O nome do paciente é obrigatório.");
+      showToast("O nome do paciente é obrigatório.", "error");
       return;
     }
+    showProcessing(
+      editingPatientId
+        ? "Salvando alterações do paciente..."
+        : "Cadastrando paciente...",
+    );
 
     const existingPatient = editingPatientId
       ? allPatients.find((p: any) => String(p.id) === String(editingPatientId))
@@ -801,6 +852,7 @@ export function CoordinatorDashboard({
         title: "Paciente editado",
         message: `As informações de ${newPatient.name} foram atualizadas com sucesso.`,
       });
+      showToast("Dados salvos com sucesso!");
     } else {
       onAddPatient(newPatient);
       onAddActivityLog(
@@ -812,12 +864,14 @@ export function CoordinatorDashboard({
         title: "Paciente adicionado",
         message: `O paciente ${newPatient.name} foi cadastrado com sucesso.`,
       });
-      alert(
-        "Novo paciente cadastrado. Aviso financeiro: este cadastro gerará custo de R$ 4,90 para a clínica.",
+      showToast(
+        "Dados salvos com sucesso! Custo de R$ 4,90 será cobrado da clínica.",
+        "info",
       );
     }
     setIsPatientRegistrationModalOpen(false);
     resetPatientForm();
+    hideProcessing();
   };
 
   const isPatientPendingAnamnesis = (patient: any) => {
@@ -869,6 +923,7 @@ export function CoordinatorDashboard({
       `Deseja excluir o paciente ${patientName}? Esta ação removerá o paciente da clínica.`,
     );
     if (!shouldDelete) return;
+    showProcessing("Excluindo paciente...");
 
     if (onUpdatePatient) {
       onUpdatePatient({
@@ -888,6 +943,8 @@ export function CoordinatorDashboard({
       title: "Paciente excluído",
       message: `O paciente ${patientName} foi excluído com sucesso.`,
     });
+    hideProcessing();
+    showToast("Paciente excluído com sucesso!");
     setOpenMenuId(null);
   };
 
@@ -1314,6 +1371,7 @@ export function CoordinatorDashboard({
   };
 
   const handleSaveClinicSettings = () => {
+    showProcessing("Salvando configurações da clínica...");
     const clinicSettings = {
       ...(user?.clinicSettings || {}),
       defaultSessionDuration,
@@ -1332,7 +1390,8 @@ export function CoordinatorDashboard({
       "A coordenação atualizou os horários e a duração de sessão por profissional.",
       "management",
     );
-    alert("Configurações salvas com sucesso.");
+    hideProcessing();
+    showToast("Configurações salvas com sucesso!");
   };
 
   const loadClinicAnamnesisTemplate = async () => {
@@ -1354,8 +1413,10 @@ export function CoordinatorDashboard({
   };
 
   const handleSaveClinicAnamnesisTemplate = async (template: any) => {
+    showProcessing("Salvando personalização da ficha...");
     const result = await dataService.saveClinicAnamnesisTemplate(template);
     if (!result?.success) {
+      hideProcessing();
       throw new Error(
         result?.error || "Não foi possível salvar o template da anamnese.",
       );
@@ -1369,6 +1430,8 @@ export function CoordinatorDashboard({
       "A coordenação personalizou perguntas e campos da ficha de anamnese.",
       "management",
     );
+    hideProcessing();
+    showToast("Dados salvos com sucesso!");
     return normalizedSavedTemplate;
   };
 
@@ -4236,7 +4299,7 @@ export function CoordinatorDashboard({
                 : "Cadastro Completo de Paciente"}
             </h2>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
               <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Nome*" value={newPatientForm.nome} onChange={(e) => handlePatientFormChange("nome", e.target.value)} />
               <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Nome social" value={newPatientForm.nomeSocial} onChange={(e) => handlePatientFormChange("nomeSocial", e.target.value)} />
               <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Telefone*" value={newPatientForm.telefone} onChange={(e) => handlePatientFormChange("telefone", e.target.value)} />
@@ -4286,7 +4349,7 @@ export function CoordinatorDashboard({
               <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Bairro" value={newPatientForm.bairro} onChange={(e) => handlePatientFormChange("bairro", e.target.value)} />
               <input className="bg-slate-50 rounded-xl p-3 text-sm md:col-span-2" placeholder="Cidade" value={newPatientForm.cidade} onChange={(e) => handlePatientFormChange("cidade", e.target.value)} />
 
-              <div className="md:col-span-2">
+              <div className="md:col-span-2 xl:col-span-3">
                 <label className="block text-xs font-bold text-slate-600 mb-2">
                   Selecione o tipo de portal desse paciente
                 </label>
@@ -4294,7 +4357,7 @@ export function CoordinatorDashboard({
                   Qual a área de acesso do paciente no aplicativo?
                 </p>
               </div>
-              <select className="bg-slate-50 rounded-xl p-3 text-sm md:col-span-2" value={newPatientForm.patientProfileType} onChange={(e) => handlePatientFormChange("patientProfileType", e.target.value)}>
+              <select className="bg-slate-50 rounded-xl p-3 text-sm md:col-span-2 xl:col-span-3" value={newPatientForm.patientProfileType} onChange={(e) => handlePatientFormChange("patientProfileType", e.target.value)}>
                 <option value="kids_tea">Paciente Kids TEA</option>
                 <option value="adult_tea">Paciente Adulto TEA</option>
                 <option value="adult_conventional">Paciente Adulto Convencional</option>
@@ -4336,6 +4399,33 @@ export function CoordinatorDashboard({
                 {editingPatientId ? "Salvar alterações" : "Cadastrar paciente"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {processingState.active && (
+        <div className="fixed inset-0 z-[175] bg-black/30 backdrop-blur-[1px] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl px-6 py-5 shadow-2xl border border-slate-100 flex items-center gap-3">
+            <div className="w-5 h-5 border-2 border-[#7a32fc]/30 border-t-[#7a32fc] rounded-full animate-spin" />
+            <span className="text-sm font-semibold text-slate-700">
+              {processingState.message || "Processando..."}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-[176] max-w-sm">
+          <div
+            className={`rounded-2xl px-4 py-3 shadow-xl border text-sm font-semibold ${
+              toast.type === "success"
+                ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                : toast.type === "error"
+                  ? "bg-red-50 border-red-200 text-red-700"
+                  : "bg-blue-50 border-blue-200 text-blue-700"
+            }`}
+          >
+            {toast.message}
           </div>
         </div>
       )}
