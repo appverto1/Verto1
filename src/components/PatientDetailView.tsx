@@ -178,12 +178,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   });
   const [selectedSnapshotDate, setSelectedSnapshotDate] = useState("all");
 
-  const escapeHtml = (value: any) =>
-    String(value ?? "")
+  function escapeHtml(value: any) {
+    return String(value ?? "")
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
+  }
 
   function buildAnamnesisDocumentHtml(anamnesis: any, fichaDateIso: string) {
     const c = clinicContext || {};

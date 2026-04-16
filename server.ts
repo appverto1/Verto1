@@ -1003,6 +1003,110 @@ async function startServer() {
     res.status(401).json({ error: 'Unauthorized - No valid session or token' });
   };
 
+  const persistActivityLogRow = async (mode: 'insert' | 'upsert', payload: any) => {
+    if (mode === 'upsert') {
+      return await supabase
+        .from('activity_logs')
+        .upsert([payload], { onConflict: 'id' })
+        .select()
+        .single();
+    }
+    return await supabase.from('activity_logs').insert([payload]).select().single();
+  };
+
+  const saveActivityLogCompat = async ({
+    mode,
+    userId,
+    clinicId,
+    actorName,
+    raw
+  }: {
+    mode: 'insert' | 'upsert';
+    userId: string;
+    clinicId?: string | null;
+    actorName?: string | null;
+    raw: any;
+  }) => {
+    const safeActor = sanitizeString(actorName, 180) || 'Usuário';
+    const timestamp = sanitizeString(raw?.timestamp, 80) || new Date().toISOString();
+    const title = sanitizeString(raw?.title || raw?.action || 'Atividade registrada', 180) || 'Atividade registrada';
+    const details = sanitizeString(raw?.details || raw?.content || raw?.description || 'Ação registrada no sistema.', 2000) || 'Ação registrada no sistema.';
+    const type = sanitizeString(raw?.type || raw?.category || 'management', 40) || 'management';
+    const id = sanitizeString(raw?.id, 120) || crypto.randomUUID();
+    const safeClinicId = sanitizeString(clinicId, 120) || null;
+
+    const variants: any[] = [
+      {
+        id,
+        user_id: sanitizeString(userId, 120),
+        title,
+        content: details,
+        details,
+        description: details,
+        action: sanitizeString(raw?.action || title, 180) || title,
+        type,
+        category: sanitizeString(raw?.category || type, 40) || type,
+        professional: safeActor,
+        actor_name: safeActor,
+        clinic_id: safeClinicId,
+        timestamp
+      },
+      {
+        id,
+        user_id: sanitizeString(userId, 120),
+        title,
+        details,
+        action: sanitizeString(raw?.action || title, 180) || title,
+        type,
+        category: sanitizeString(raw?.category || type, 40) || type,
+        professional: safeActor,
+        timestamp
+      },
+      {
+        id,
+        user_id: sanitizeString(userId, 120),
+        action: sanitizeString(raw?.action || title, 180) || title,
+        details,
+        category: sanitizeString(raw?.category || type, 40) || type,
+        professional: safeActor,
+        timestamp
+      },
+      {
+        id,
+        user_id: sanitizeString(userId, 120),
+        title,
+        details,
+        type,
+        timestamp
+      },
+      {
+        id,
+        user_id: sanitizeString(userId, 120),
+        title,
+        details
+      },
+      {
+        id,
+        user_id: sanitizeString(userId, 120),
+        action: sanitizeString(raw?.action || title, 180) || title,
+        details
+      },
+      {
+        id,
+        user_id: sanitizeString(userId, 120)
+      }
+    ];
+
+    let lastError: any = null;
+    for (const variant of variants) {
+      const { data, error } = await persistActivityLogRow(mode, variant);
+      if (!error) return { data, id: variant.id };
+      lastError = error;
+    }
+
+    throw lastError || new Error('Falha ao persistir log de atividade.');
+  };
+
   const persistActivityLog = async ({
     userId,
     clinicId,
@@ -1019,26 +1123,13 @@ async function startServer() {
     type?: string;
   }) => {
     try {
-      const basePayload: any = {
-        id: crypto.randomUUID(),
-        user_id: sanitizeString(userId, 120),
-        title: sanitizeString(title, 180),
-        content: sanitizeString(content, 2000),
-        type: sanitizeString(type, 40) || 'management',
-        timestamp: new Date().toISOString()
-      };
-
-      const extendedPayload = {
-        ...basePayload,
-        clinic_id: sanitizeString(clinicId, 120) || null,
-        actor_name: sanitizeString(actorName, 180) || null
-      };
-
-      const insert = await supabase.from('activity_logs').insert([extendedPayload]);
-      if (!insert.error) return;
-
-      // Backward compatibility if clinic_id/actor_name columns don't exist yet.
-      await supabase.from('activity_logs').insert([basePayload]);
+      await saveActivityLogCompat({
+        mode: 'insert',
+        userId,
+        clinicId,
+        actorName,
+        raw: { title, content, type }
+      });
     } catch (error) {
       console.warn('[ActivityLog] Failed to persist audit event:', String(error));
     }
@@ -3203,34 +3294,14 @@ async function startServer() {
   app.post('/api/logs', checkAuth, async (req: any, res) => {
     try {
       const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
-      let { data, error } = await supabase
-        .from('activity_logs')
-        .upsert([{
-          ...req.body,
-          user_id: req.session.user.id,
-          actor_name: actorName,
-          clinic_id: currentClinicId(req.session.user),
-          timestamp: req.body?.timestamp || new Date().toISOString()
-        }], { onConflict: 'id' })
-        .select()
-        .single();
-      
-      if (error && /actor_name|clinic_id/i.test(String(error?.message || ''))) {
-        const fallback = await supabase
-          .from('activity_logs')
-          .upsert([{
-            ...req.body,
-            user_id: req.session.user.id,
-            timestamp: req.body?.timestamp || new Date().toISOString()
-          }], { onConflict: 'id' })
-          .select()
-          .single();
-        data = fallback.data;
-        error = fallback.error;
-      }
-
-      if (error) throw error;
-      res.json({ success: true, id: data.id });
+      const saved = await saveActivityLogCompat({
+        mode: 'upsert',
+        userId: sanitizeString(req.session.user.id, 120),
+        clinicId: currentClinicId(req.session.user),
+        actorName,
+        raw: req.body || {}
+      });
+      res.json({ success: true, id: saved?.data?.id || saved?.id || req.body?.id });
     } catch (error: any) {
       console.error('[Logs] Error saving activity log:', error);
       res.status(500).json({ error: error.message || String(error) });
