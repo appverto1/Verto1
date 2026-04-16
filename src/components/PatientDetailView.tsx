@@ -182,10 +182,23 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
   const [showTrialConfirmation, setShowTrialConfirmation] = useState(false);
   const [trialObservation, setTrialObservation] = useState("");
   const [anamnesisPreviewUrl, setAnamnesisPreviewUrl] = useState<string | null>(null);
+  const [anamnesisRenewalMonths, setAnamnesisRenewalMonths] = useState("6");
 
   const isAnamnesisFile = (file: any) =>
     file?.source === "anamnesis" ||
     String(file?.name || "").toLowerCase().includes("ficha_anamnese");
+
+  const normalizeAnamnesisRenewalMonths = (value: any) => {
+    const months = Number(value);
+    if ([2, 3, 6, 12].includes(months)) return String(months);
+    return "6";
+  };
+
+  useEffect(() => {
+    setAnamnesisRenewalMonths(
+      normalizeAnamnesisRenewalMonths(patient?.anamnesisRenewalMonths),
+    );
+  }, [patient?.id, patient?.anamnesisRenewalMonths]);
 
   useEffect(() => {
     if (!previewFile || !isAnamnesisFile(previewFile)) {
@@ -1318,6 +1331,13 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
           patientFileId: String(uploadResult.data.id || '')
         });
         if (onUpdatePatient && pendingAnamnesisData) {
+          const renewalRaw = Number(patient?.anamnesisRenewalMonths ?? 6);
+          const renewalMonths = [2, 3, 6, 12].includes(renewalRaw)
+            ? renewalRaw
+            : 6;
+          const lastAnamnesisAt = anamnesisFileDate
+            ? new Date(`${anamnesisFileDate}T12:00:00`).toISOString()
+            : new Date().toISOString();
           onUpdatePatient({
             id: patient.id,
             name: pendingAnamnesisData.nome || patient?.name,
@@ -1326,6 +1346,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
             diagnosis: pendingAnamnesisData.motivoConsulta || patient?.diagnosis,
             anamnesisData: pendingAnamnesisData,
             anamnesisPending: false,
+            anamnesisRenewalMonths: renewalMonths,
+            lastAnamnesisAt,
             peiGeneratedAt: new Date().toISOString()
           });
         }
@@ -1757,6 +1779,36 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
             </button>
           </div>
         </div> 
+        <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            Renovação da ficha anamnese
+          </span>
+          <select
+            value={anamnesisRenewalMonths}
+            onChange={(e) => {
+              const nextValue = normalizeAnamnesisRenewalMonths(e.target.value);
+              setAnamnesisRenewalMonths(nextValue);
+              onUpdatePatient?.({
+                id: patient.id,
+                anamnesisRenewalMonths: Number(nextValue),
+              });
+              onAddActivityLog?.(
+                "Configuração da anamnese atualizada",
+                `Periodicidade da ficha de ${patient?.name || "paciente"} definida para ${nextValue} meses.`,
+                "management",
+              );
+            }}
+            className="w-full sm:w-auto bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700"
+          >
+            <option value="2">A cada 2 meses</option>
+            <option value="3">A cada 3 meses</option>
+            <option value="6">A cada 6 meses</option>
+            <option value="12">A cada 12 meses</option>
+          </select>
+          <span className="text-[11px] text-slate-400">
+            O alerta de pendência só volta quando esse prazo vencer.
+          </span>
+        </div>
         <div id="tab-nav" className="flex gap-2 bg-gray-100 p-1 rounded-xl overflow-x-auto no-scrollbar"> 
           <button id="tab-history" onClick={() => setActiveTab('history')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'history' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Histórico</button> 
           <button id="tab-notes" onClick={() => setActiveTab('notes')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'notes' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Anotações</button> 

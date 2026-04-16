@@ -405,6 +405,7 @@ export function CoordinatorDashboard({
     responsavelCpf: "",
     responsavelTelefone: "",
     patientProfileType: "adult_conventional",
+    anamnesisRenewalMonths: "6",
   });
   const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
 
@@ -694,6 +695,8 @@ export function CoordinatorDashboard({
       phone: quickPatientPhone,
       age: quickPatientAge ? parseInt(quickPatientAge) : undefined,
       anamnesisPending: true,
+      anamnesisRenewalMonths: 6,
+      lastAnamnesisAt: null,
       createdAt: new Date().toISOString(),
     };
 
@@ -761,7 +764,26 @@ export function CoordinatorDashboard({
       responsavelCpf: "",
       responsavelTelefone: "",
       patientProfileType: "adult_conventional",
+      anamnesisRenewalMonths: "6",
     });
+  };
+
+  const normalizeAnamnesisRenewalMonths = (value: any) => {
+    const months = Number(value);
+    if ([2, 3, 6, 12].includes(months)) return months;
+    return 6;
+  };
+
+  const resolveLastAnamnesisDate = (patient: any) => {
+    const candidate =
+      patient?.lastAnamnesisAt ||
+      patient?.anamnesisLastFilledAt ||
+      patient?.anamnesisUpdatedAt ||
+      patient?.peiGeneratedAt ||
+      null;
+    if (!candidate) return null;
+    const parsed = new Date(candidate);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   };
 
   const calculateAgeFromBirthDate = (birthDate: string) => {
@@ -794,6 +816,9 @@ export function CoordinatorDashboard({
     const existingPatient = editingPatientId
       ? allPatients.find((p: any) => String(p.id) === String(editingPatientId))
       : null;
+    const renewalMonths = normalizeAnamnesisRenewalMonths(
+      newPatientForm.anamnesisRenewalMonths,
+    );
 
     const newPatient = {
       id: editingPatientId || crypto.randomUUID(),
@@ -835,8 +860,13 @@ export function CoordinatorDashboard({
           }
         : null,
       type: newPatientForm.patientProfileType || "adult_conventional",
+      anamnesisRenewalMonths: renewalMonths,
+      lastAnamnesisAt: existingPatient?.lastAnamnesisAt || null,
       anamnesisPending: existingPatient
-        ? isPatientPendingAnamnesis(existingPatient)
+        ? isPatientPendingAnamnesis({
+            ...existingPatient,
+            anamnesisRenewalMonths: renewalMonths,
+          })
         : true,
       createdAt: new Date().toISOString(),
     };
@@ -876,11 +906,20 @@ export function CoordinatorDashboard({
 
   const isPatientPendingAnamnesis = (patient: any) => {
     if (!patient) return false;
-    if (typeof patient.anamnesisPending === "boolean") {
-      return patient.anamnesisPending;
-    }
     const data = patient.anamnesisData;
-    return !(data && typeof data === "object" && Object.keys(data).length > 0);
+    const hasAnamnesis =
+      !!(data && typeof data === "object" && Object.keys(data).length > 0);
+    if (!hasAnamnesis) return true;
+
+    const lastFilledAt = resolveLastAnamnesisDate(patient);
+    if (!lastFilledAt) return false;
+
+    const renewalMonths = normalizeAnamnesisRenewalMonths(
+      patient?.anamnesisRenewalMonths,
+    );
+    const dueDate = new Date(lastFilledAt);
+    dueDate.setMonth(dueDate.getMonth() + renewalMonths);
+    return dueDate.getTime() <= Date.now();
   };
 
   const handleEditPatient = (patient: any) => {
@@ -912,6 +951,9 @@ export function CoordinatorDashboard({
       responsavelCpf: patient.guardian?.cpf || "",
       responsavelTelefone: patient.guardian?.telefone || "",
       patientProfileType: patient.type || "adult_conventional",
+      anamnesisRenewalMonths: String(
+        normalizeAnamnesisRenewalMonths(patient.anamnesisRenewalMonths),
+      ),
     });
     setIsPatientRegistrationModalOpen(true);
   };
@@ -4273,6 +4315,7 @@ export function CoordinatorDashboard({
               <div><span className="text-slate-400">Carteirinha:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.cardNumber || "-"}</p></div>
               <div><span className="text-slate-400">RG:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.rg || "-"}</p></div>
               <div><span className="text-slate-400">CPF:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.cpf || "-"}</p></div>
+              <div><span className="text-slate-400">Renovação da anamnese:</span> <p className="font-semibold text-slate-800">{normalizeAnamnesisRenewalMonths(selectedPatientProfile.anamnesisRenewalMonths)} meses</p></div>
               <div className="md:col-span-2"><span className="text-slate-400">Endereço:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.address?.logradouro || "-"} {selectedPatientProfile.address?.numero || ""} - {selectedPatientProfile.address?.bairro || ""} - {selectedPatientProfile.address?.cidade || ""}</p></div>
               <div className="md:col-span-2"><span className="text-slate-400">Observações:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.notes || "-"}</p></div>
             </div>
@@ -4365,6 +4408,26 @@ export function CoordinatorDashboard({
                 <option value="adult_tea">Paciente Adulto TEA</option>
                 <option value="adult_conventional">Paciente Adulto Convencional</option>
               </select>
+              <div className="md:col-span-2 xl:col-span-3">
+                <label className="block text-xs font-bold text-slate-600 mb-2">
+                  Lembrete de renovação da ficha anamnese
+                </label>
+                <select
+                  className="bg-slate-50 rounded-xl p-3 text-sm w-full"
+                  value={String(newPatientForm.anamnesisRenewalMonths || "6")}
+                  onChange={(e) =>
+                    handlePatientFormChange("anamnesisRenewalMonths", e.target.value)
+                  }
+                >
+                  <option value="2">A cada 2 meses</option>
+                  <option value="3">A cada 3 meses</option>
+                  <option value="6">A cada 6 meses</option>
+                  <option value="12">A cada 12 meses</option>
+                </select>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  O alerta de pendência só voltará quando esse prazo vencer após a última ficha preenchida.
+                </p>
+              </div>
 
               <label className="flex items-center gap-2 text-sm text-slate-700">
                 <input type="checkbox" checked={newPatientForm.menorDeIdade} onChange={(e) => handlePatientFormChange("menorDeIdade", e.target.checked)} />

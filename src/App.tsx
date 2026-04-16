@@ -667,6 +667,8 @@ export default function App() {
             const allNotes: any[] = [];
             const allHistory: any[] = [];
             const allTasks: any[] = [];
+            const hydratedPatients: any[] = [];
+            const hydratedClinical: any[] = [];
 
             // Only fetch for real patients (UUIDs from DB)
             const realPatients = mergedPatients.filter((p: any) => isUuidLike(p?.id));
@@ -699,11 +701,84 @@ export default function App() {
                     patientId: t.patient_id
                   })));
                 }
+
+                const patientRecordRes = await dataService.getPatientRecord(String(patient.id));
+                const payload = patientRecordRes?.success ? patientRecordRes?.data?.payload : null;
+                if (payload && typeof payload === 'object') {
+                  const renewalRaw = Number(payload.anamnesisRenewalMonths ?? patient.anamnesisRenewalMonths ?? 6);
+                  const renewalMonths = [2, 3, 6, 12].includes(renewalRaw) ? renewalRaw : 6;
+                  const anamnesisData =
+                    payload.anamnese && typeof payload.anamnese === 'object'
+                      ? payload.anamnese
+                      : patient.anamnesisData;
+
+                  hydratedPatients.push({
+                    id: patient.id,
+                    socialName: payload.nomeSocial ?? patient.socialName ?? null,
+                    gender: payload.genero ?? patient.gender ?? null,
+                    insuranceType: payload.convenioTipo ?? patient.insuranceType ?? null,
+                    insuranceName: payload.convenioNome ?? patient.insuranceName ?? null,
+                    cardNumber: payload.convenioCarteirinha ?? patient.cardNumber ?? null,
+                    group: payload.grupo ?? patient.group ?? null,
+                    source: payload.comoConheceu ?? patient.source ?? null,
+                    rg: payload.rg ?? patient.rg ?? null,
+                    cpf: payload.cpf ?? patient.cpf ?? null,
+                    cep: payload.cep ?? patient.cep ?? null,
+                    notes: payload.outrasInformacoes ?? patient.notes ?? null,
+                    isMinor:
+                      typeof payload.menorDeIdade === 'boolean'
+                        ? payload.menorDeIdade
+                        : Boolean(patient.isMinor),
+                    guardian: {
+                      nome: payload.responsavelNome ?? patient.guardian?.nome ?? null,
+                      dataNascimento:
+                        payload.responsavelDataNascimento ??
+                        patient.guardian?.dataNascimento ??
+                        null,
+                      cpf: payload.responsavelCpf ?? patient.guardian?.cpf ?? null,
+                      telefone:
+                        payload.responsavelTelefone ?? patient.guardian?.telefone ?? null,
+                    },
+                    address: {
+                      logradouro: payload.logradouro ?? patient.address?.logradouro ?? null,
+                      numero: payload.numero ?? patient.address?.numero ?? null,
+                      complemento: payload.complemento ?? patient.address?.complemento ?? null,
+                      bairro: payload.bairro ?? patient.address?.bairro ?? null,
+                      cidade: payload.cidade ?? patient.address?.cidade ?? null,
+                    },
+                    anamnesisData: anamnesisData || null,
+                    anamnesisRenewalMonths: renewalMonths,
+                    lastAnamnesisAt:
+                      payload.lastAnamnesisAt ?? patient.lastAnamnesisAt ?? null,
+                  });
+
+                  hydratedClinical.push({
+                    patientId: patient.id,
+                    diagnosis: payload.diagnosis ?? patient.diagnosis ?? null,
+                    anamnesisData: anamnesisData || null,
+                  });
+                }
               }
 
               if (allNotes.length > 0) setTherapistNotes(allNotes);
               if (allHistory.length > 0) setHistory(allHistory);
               if (allTasks.length > 0) setTasks(allTasks);
+              if (hydratedPatients.length > 0) {
+                setAllPatients((prev) => mergePatients(prev, hydratedPatients));
+              }
+              if (hydratedClinical.length > 0) {
+                setClinicalRecords((prev) => {
+                  const map = new Map<string, any>(
+                    prev.map((row: any) => [String(row.patientId), row]),
+                  );
+                  hydratedClinical.forEach((row: any) => {
+                    const key = String(row.patientId);
+                    const current = map.get(key) || { patientId: row.patientId };
+                    map.set(key, { ...current, ...row });
+                  });
+                  return Array.from(map.values());
+                });
+              }
             }
           }
         } else if (user.role === 'patient') {
@@ -851,7 +926,12 @@ export default function App() {
       phone: data.phone, 
       age: data.anamnesisData?.idade || data.age || 0, 
       approach: data.approach, 
-      type: data.approach === 'ABA' ? 'neurodevelopment' : data.approach === 'TO' ? 'occupational' : 'conventional' 
+      type: data.approach === 'ABA' ? 'neurodevelopment' : data.approach === 'TO' ? 'occupational' : 'conventional',
+      anamnesisData: data.anamnesisData || null,
+      anamnesisRenewalMonths: [2, 3, 6, 12].includes(Number(data.anamnesisRenewalMonths))
+        ? Number(data.anamnesisRenewalMonths)
+        : 6,
+      lastAnamnesisAt: data.lastAnamnesisAt || null,
     };
 
     // Clinical Data (Sensitive - linked by ID only)
@@ -966,6 +1046,10 @@ export default function App() {
       responsavelDataNascimento: data.anamnesisData?.responsavelDataNascimento || "",
       responsavelCpf: data.anamnesisData?.responsavelCpf || "",
       responsavelTelefone: data.anamnesisData?.responsavelTelefone || "",
+      anamnesisRenewalMonths: [2, 3, 6, 12].includes(Number(data.anamnesisRenewalMonths))
+        ? Number(data.anamnesisRenewalMonths)
+        : 6,
+      lastAnamnesisAt: data.lastAnamnesisAt || null,
       anamnese: data.anamnesisData || {}
     });
   };
@@ -1012,36 +1096,54 @@ export default function App() {
         status: updatedData.status
       });
 
-      if (anamnesisData !== undefined || diagnosis !== undefined) {
-        await dataService.savePatientRecord(String(updatedData.id), {
-          nome: updatedData.name || anamnesisData?.nome || "",
-          nomeSocial: anamnesisData?.nomeSocial || "",
-          telefone: updatedData.phone || anamnesisData?.telefone || "",
-          dataNascimento: anamnesisData?.dataNascimento || "",
-          genero: anamnesisData?.genero || "",
-          convenioTipo: anamnesisData?.convenioTipo || "particular",
-          convenioNome: anamnesisData?.convenioNome || "",
-          convenioCarteirinha: anamnesisData?.convenioCarteirinha || "",
-          grupo: anamnesisData?.grupo || "",
-          comoConheceu: anamnesisData?.comoConheceu || "",
-          rg: anamnesisData?.rg || "",
-          cpf: anamnesisData?.cpf || "",
-          cep: anamnesisData?.cep || "",
-          email: updatedData.email || anamnesisData?.email || "",
-          logradouro: anamnesisData?.logradouro || "",
-          numero: anamnesisData?.numero || "",
-          complemento: anamnesisData?.complemento || "",
-          bairro: anamnesisData?.bairro || "",
-          cidade: anamnesisData?.cidade || "",
-          outrasInformacoes: anamnesisData?.outrasInformacoes || "",
-          menorDeIdade: Boolean(anamnesisData?.menorDeIdade),
-          responsavelNome: anamnesisData?.responsavelNome || "",
-          responsavelDataNascimento: anamnesisData?.responsavelDataNascimento || "",
-          responsavelCpf: anamnesisData?.responsavelCpf || "",
-          responsavelTelefone: anamnesisData?.responsavelTelefone || "",
-          diagnosis: diagnosis || "",
-          anamnese: anamnesisData || {}
-        });
+      if (
+        anamnesisData !== undefined ||
+        diagnosis !== undefined ||
+        updatedData?.anamnesisRenewalMonths !== undefined ||
+        updatedData?.lastAnamnesisAt !== undefined
+      ) {
+        const recordPayload: any = {
+          anamnesisRenewalMonths: [2, 3, 6, 12].includes(
+            Number(updatedData?.anamnesisRenewalMonths),
+          )
+            ? Number(updatedData?.anamnesisRenewalMonths)
+            : 6,
+          lastAnamnesisAt: updatedData?.lastAnamnesisAt || null,
+          ...(diagnosis !== undefined && { diagnosis: diagnosis || "" }),
+        };
+
+        if (anamnesisData !== undefined) {
+          Object.assign(recordPayload, {
+            nome: updatedData.name || anamnesisData?.nome || "",
+            nomeSocial: anamnesisData?.nomeSocial || "",
+            telefone: updatedData.phone || anamnesisData?.telefone || "",
+            dataNascimento: anamnesisData?.dataNascimento || "",
+            genero: anamnesisData?.genero || "",
+            convenioTipo: anamnesisData?.convenioTipo || "particular",
+            convenioNome: anamnesisData?.convenioNome || "",
+            convenioCarteirinha: anamnesisData?.convenioCarteirinha || "",
+            grupo: anamnesisData?.grupo || "",
+            comoConheceu: anamnesisData?.comoConheceu || "",
+            rg: anamnesisData?.rg || "",
+            cpf: anamnesisData?.cpf || "",
+            cep: anamnesisData?.cep || "",
+            email: updatedData.email || anamnesisData?.email || "",
+            logradouro: anamnesisData?.logradouro || "",
+            numero: anamnesisData?.numero || "",
+            complemento: anamnesisData?.complemento || "",
+            bairro: anamnesisData?.bairro || "",
+            cidade: anamnesisData?.cidade || "",
+            outrasInformacoes: anamnesisData?.outrasInformacoes || "",
+            menorDeIdade: Boolean(anamnesisData?.menorDeIdade),
+            responsavelNome: anamnesisData?.responsavelNome || "",
+            responsavelDataNascimento: anamnesisData?.responsavelDataNascimento || "",
+            responsavelCpf: anamnesisData?.responsavelCpf || "",
+            responsavelTelefone: anamnesisData?.responsavelTelefone || "",
+            anamnese: anamnesisData || {},
+          });
+        }
+
+        await dataService.savePatientRecord(String(updatedData.id), recordPayload);
       }
     }
   };
