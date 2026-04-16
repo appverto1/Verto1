@@ -846,6 +846,31 @@ export function CoordinatorDashboard({
     setIsPatientRegistrationModalOpen(true);
   };
 
+  const handleDeletePatient = (patient: any) => {
+    if (!patient?.id) return;
+    const patientName = repairMojibake(patient?.name || "Paciente");
+    const shouldDelete = window.confirm(
+      `Deseja excluir o paciente ${patientName}? Esta ação removerá o paciente da clínica.`,
+    );
+    if (!shouldDelete) return;
+
+    if (onUpdatePatient) {
+      onUpdatePatient({
+        id: patient.id,
+        clinic_id: null,
+        status: "deleted",
+        deletedAt: new Date().toISOString(),
+      });
+    }
+
+    onAddActivityLog(
+      "Paciente excluído",
+      `Paciente ${patientName} foi excluído da clínica.`,
+      "management",
+    );
+    setOpenMenuId(null);
+  };
+
   const handleEditAppointment = (appointment: any) => {
     setEditingAppointmentId(appointment.id);
     setSessionPatientName(appointment.name);
@@ -2362,6 +2387,7 @@ export function CoordinatorDashboard({
               )}
               onAddNote={onAddNote}
               onAddActivityLog={onAddActivityLog}
+              onUpdatePatient={onUpdatePatient}
               protocols={protocols}
               userRole={user.role}
               anamnesisTemplate={anamnesisTemplate}
@@ -3327,7 +3353,10 @@ export function CoordinatorDashboard({
                                 <Edit2 size={14} className="text-slate-400" />{" "}
                                 Editar
                               </button>
-                              <button className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-red-500 hover:bg-red-50 transition-all">
+                              <button
+                                onClick={() => handleDeletePatient(patient)}
+                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-red-500 hover:bg-red-50 transition-all"
+                              >
                                 <Trash2 size={14} /> Excluir
                               </button>
                             </div>

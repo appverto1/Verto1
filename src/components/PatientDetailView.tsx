@@ -277,6 +277,12 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     const normalizeValue = (key: string, value: any) => {
       if (value === null || value === undefined) return "";
       if (key === "menorDeIdade") return value ? "Sim" : "Não";
+      if (typeof value === "boolean") return value ? "Sim" : "Não";
+      if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === "true") return "Sim";
+        if (normalized === "false") return "Não";
+      }
       if (key === "formType") {
         if (value === "adult") return "Adulto";
         if (value === "child") return "Criança";
