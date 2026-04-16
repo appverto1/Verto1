@@ -3604,15 +3604,19 @@ export function CoordinatorDashboard({
                           <div className="flex-1">
                             <div className="flex items-center justify-between mb-1">
                               <p className="text-sm font-bold text-slate-900">
-                                {log.title}
+                                {log.title || log.action || "Atividade registrada"}
                               </p>
                               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                                 {log.time ||
-                                  new Date(log.created_at).toLocaleString()}
+                                  (log.timestamp
+                                    ? new Date(log.timestamp).toLocaleString("pt-BR")
+                                    : log.created_at
+                                      ? new Date(log.created_at).toLocaleString("pt-BR")
+                                      : "Agora")}
                               </span>
                             </div>
                             <p className="text-xs text-slate-500 leading-relaxed">
-                              {log.content}
+                              {log.content || log.details || "Ação registrada no sistema."}
                             </p>
                           </div>
                         </div>

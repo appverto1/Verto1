@@ -69,6 +69,43 @@ export default function App() {
 
     return Array.from(merged.values());
   };
+
+  const removeMockDuplicates = (patients: any[]) => {
+    const realKeys = new Set(
+      (patients || [])
+        .filter((p: any) => isUuidLike(p?.id))
+        .map((p: any) => getPatientIdentityKey(p))
+    );
+
+    return (patients || []).filter((p: any) => {
+      const isMock = typeof p?.id === 'string' && p.id.startsWith('mock-');
+      if (!isMock) return true;
+      return !realKeys.has(getPatientIdentityKey(p));
+    });
+  };
+
+  const normalizeActivityLog = (raw: any) => {
+    const title = raw?.title || raw?.action || 'Atividade registrada';
+    const content =
+      raw?.content ||
+      raw?.details ||
+      raw?.description ||
+      raw?.message ||
+      'Ação registrada no sistema.';
+    const type = raw?.type || raw?.category || 'system';
+    const isoDate = raw?.timestamp || raw?.created_at || raw?.date || null;
+    const parsedDate = isoDate ? new Date(isoDate) : null;
+    const hasValidDate = !!(parsedDate && !Number.isNaN(parsedDate.getTime()));
+
+    return {
+      ...raw,
+      title,
+      content,
+      type,
+      timestamp: hasValidDate ? parsedDate.toISOString() : new Date().toISOString(),
+      time: raw?.time || (hasValidDate ? parsedDate.toLocaleString('pt-BR') : 'Agora')
+    };
+  };
   
   useEffect(() => {
     const handleOnline = () => {
@@ -399,14 +436,14 @@ export default function App() {
   const clinicStateSyncTimerRef = useRef<any>(null);
 
   const onAddActivityLog = async (action: string, details: string, category: 'clinical' | 'management' | 'system' = 'clinical') => {
-    const newLog = {
+    const newLog = normalizeActivityLog({
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
       professional: user?.name || "Profissional",
       action,
       details,
       category
-    };
+    });
     
     setActivityLogs(prev => [newLog, ...prev]);
 
@@ -612,7 +649,7 @@ export default function App() {
           // Load Patients
           const patientsRes = await dataService.getPatients();
           if (patientsRes.success && patientsRes.data) {
-            const mergedPatients = mergePatients(allPatients, patientsRes.data);
+            const mergedPatients = removeMockDuplicates(mergePatients(allPatients, patientsRes.data));
             setAllPatients(mergedPatients);
 
             // Load Notes, History and Tasks for each patient
@@ -719,7 +756,7 @@ export default function App() {
         const { dataService } = await import('./services/dataService');
         const { success, data } = await dataService.getActivityLogs();
         if (success && data) {
-          setActivityLogs(data);
+          setActivityLogs((data || []).map(normalizeActivityLog));
         }
       }
     };
@@ -1367,6 +1404,8 @@ export default function App() {
     );
   }
 
+  const patientsForRender = removeMockDuplicates(allPatients);
+
   return (
     <React.Fragment>
       <GlobalStyles />
@@ -1424,7 +1463,7 @@ export default function App() {
         <CoordinatorDashboard 
           user={user} 
           onLogout={handleLogout} 
-          allPatients={allPatients} 
+          allPatients={patientsForRender} 
           therapistAgenda={therapistAgenda} 
           onOpenOnboarding={() => setShowOnboarding(true)}
           rooms={rooms}
@@ -1471,7 +1510,7 @@ export default function App() {
           onUpdateHistoryItem={handleUpdateHistoryItem}
           onAddPatient={handleAddPatient}
           onUpdateTask={handleUpdateTask}
-          allPatients={allPatients}
+          allPatients={patientsForRender}
           clinicalRecords={clinicalRecords}
           onScheduleSession={handleScheduleSession}
           onUpdatePatient={handleUpdatePatient}
@@ -1513,7 +1552,7 @@ export default function App() {
           onUpdateHistoryItem={handleUpdateHistoryItem} 
           onAddPatient={handleAddPatient} 
           onUpdateTask={handleUpdateTask} 
-          allPatients={allPatients} 
+          allPatients={patientsForRender} 
           clinicalRecords={clinicalRecords}
           onScheduleSession={handleScheduleSession} 
           onOpenOnboarding={() => setShowOnboarding(true)}

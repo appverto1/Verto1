@@ -83,7 +83,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const safeType = String(file?.type || file?.mimeType || 'application/octet-stream');
     const safeContent = typeof file?.content === 'string' ? file.content : '';
     const safeUrl = typeof file?.url === 'string' ? file.url : (typeof file?.signedUrl === 'string' ? file.signedUrl : '');
-    const objectUrl = safeUrl || (safeContent ? safeContent : undefined);
+    let objectUrl: string | undefined = safeUrl || undefined;
+    if (!objectUrl && safeContent.startsWith('data:')) {
+      objectUrl = safeContent;
+    } else if (!objectUrl && safeType.includes('html') && safeContent.trim().startsWith('<')) {
+      objectUrl = URL.createObjectURL(new Blob([safeContent], { type: 'text/html;charset=utf-8' }));
+    }
     return {
       id: String(file?.id || Date.now()),
       name: safeName,
@@ -758,7 +763,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     }
 
     const fichePayload = buildAnamnesisDocumentHtml(updatedData, anamnesisFileDate);
-    const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.pdf`;
+    const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.html`;
     setPendingAnamnesisPayload(fichePayload);
     setPendingAnamnesisData(updatedData);
     setAnamnesisFileName(defaultName);
@@ -875,9 +880,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const handleConfirmAnamnesisFile = () => {
     if (!pendingAnamnesisPayload) return;
     const fileName = (anamnesisFileName || `Ficha_Anamnese_${patient.name}`).trim();
-    const normalizedName = fileName.toLowerCase().endsWith(".pdf")
+    const normalizedName = fileName.toLowerCase().endsWith(".html")
       ? fileName
-      : `${fileName}.pdf`;
+      : `${fileName}.html`;
     const sizeKb = Math.max(1, Math.round(pendingAnamnesisPayload.length / 1024));
     const payloadDate = anamnesisFileDate
       ? new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString("pt-BR")
