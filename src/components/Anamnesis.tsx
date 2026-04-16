@@ -289,6 +289,25 @@ export const AnamnesisModal = ({
     };
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const currentProfile = getProfileTemplate(templateState, profileType);
+    setExpandedSections((prev) => {
+      const next = { ...prev };
+      currentProfile.sections.forEach((section) => {
+        if (typeof next[section.id] !== 'boolean') next[section.id] = true;
+      });
+      return next;
+    });
+    setFormData((prev) => {
+      const next = { ...prev };
+      currentProfile.questions.forEach((question) => {
+        next[question.id] = getFieldValue(next[question.id], question.type);
+      });
+      return next;
+    });
+  }, [templateState, profileType, isOpen]);
+
   const profileTemplate = useMemo(() => getProfileTemplate(templateState, profileType), [templateState, profileType]);
   const questionsBySection = useMemo(() => {
     const map = new Map<string, AnamnesisQuestion[]>();

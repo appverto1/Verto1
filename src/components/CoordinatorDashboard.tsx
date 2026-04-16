@@ -382,6 +382,11 @@ export function CoordinatorDashboard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, isAnamnesisTemplateModalOpen]);
 
+  useEffect(() => {
+    loadClinicAnamnesisTemplate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const insuranceOptions = [
     "Particular",
     "Unimed",

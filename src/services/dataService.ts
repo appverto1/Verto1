@@ -700,5 +700,18 @@ export const dataService = {
       console.error('Error saving patient anamnesis submission:', error);
       return { success: false, error: String(error) };
     }
+  },
+
+  async getPatientAnamnesisSubmissions(patientId: string) {
+    try {
+      const response = await fetch(`/api/patient-anamnesis/${patientId}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient anamnesis submissions:', error);
+      return { success: false, error: String(error) };
+    }
   }
 };

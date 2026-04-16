@@ -78,6 +78,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
   };
 
+  const parseAnamnesisData = (raw: any) => {
+    if (!raw) return null;
+    if (typeof raw === "object") return raw;
+    if (typeof raw === "string") {
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === "object" ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
+
   const normalizeFileRecord = (file: any) => {
     const safeName = String(file?.name || file?.fileName || 'arquivo');
     const safeType = String(file?.type || file?.mimeType || 'application/octet-stream');
@@ -97,6 +111,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       type: safeType,
       source: file?.source || (safeName.toLowerCase().includes('ficha_anamnese') ? 'anamnesis' : 'upload'),
       content: safeContent,
+      anamnesisData: parseAnamnesisData(file?.anamnesisData) || null,
+      referenceDate: file?.referenceDate || null,
       url: safeUrl || undefined,
       objectUrl
     };
@@ -107,9 +123,33 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       if (!patient?.id) return;
       setIsLoadingFiles(true);
       try {
+        const anamnesisResult = await dataService.getPatientAnamnesisSubmissions(String(patient.id));
+        const anamnesisByFileId = new Map<string, any>();
+        if (anamnesisResult?.success && Array.isArray(anamnesisResult?.data)) {
+          anamnesisResult.data.forEach((row: any) => {
+            const fileId = String(row?.patient_file_id || '').trim();
+            if (fileId) {
+              anamnesisByFileId.set(fileId, {
+                anamnesisData: parseAnamnesisData(row?.anamnesis_data) || null,
+                referenceDate: row?.reference_date || null
+              });
+            }
+          });
+        }
+
         const result = await dataService.getPatientFiles(String(patient.id));
         if (result?.success && Array.isArray(result?.data)) {
-          setPatientFiles(result.data.map(normalizeFileRecord));
+          setPatientFiles(
+            result.data.map((file: any) => {
+              const key = String(file?.id || '');
+              const linked = anamnesisByFileId.get(key);
+              return normalizeFileRecord({
+                ...file,
+                anamnesisData: linked?.anamnesisData || null,
+                referenceDate: linked?.referenceDate || null
+              });
+            })
+          );
           return;
         }
         const fallbackRecord = await dataService.getPatientRecord(String(patient.id));
@@ -147,13 +187,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
   const anamnesisPreviewUrl = useMemo(() => {
     if (!previewFile || !isAnamnesisFile(previewFile)) return null;
-    if (previewFile?.objectUrl || previewFile?.url) return null;
-
-    const rawContent = typeof previewFile?.content === "string" ? previewFile.content : "";
-    const hasHtmlContent = rawContent.trim().toLowerCase().includes("<html");
-    const html = hasHtmlContent
-      ? rawContent
-      : buildAnamnesisDocumentHtml(patient?.anamnesisData || {}, new Date().toISOString().slice(0, 10));
+    const previewDate = previewFile?.referenceDate || new Date().toISOString().slice(0, 10);
+    const dataFromSubmission = parseAnamnesisData(previewFile?.anamnesisData)
+      ? parseAnamnesisData(previewFile?.anamnesisData)
+      : null;
+    const html = buildAnamnesisDocumentHtml(
+      dataFromSubmission || patient?.anamnesisData || {},
+      previewDate
+    );
 
     const blob = new Blob([html], { type: "text/html;charset=utf-8" });
     return URL.createObjectURL(blob);
@@ -777,7 +818,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     setIsPreparingAnamnesisSave(true);
 
     const fichePayload = buildAnamnesisDocumentHtml(updatedData, anamnesisFileDate);
-    const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.html`;
+    const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.pdf`;
     setPendingAnamnesisPayload(fichePayload);
     setPendingAnamnesisData(updatedData);
     setAnamnesisFileName(defaultName);
@@ -889,9 +930,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const handleConfirmAnamnesisFile = () => {
     if (!pendingAnamnesisPayload) return;
     const fileName = (anamnesisFileName || `Ficha_Anamnese_${patient.name}`).trim();
-    const normalizedName = fileName.toLowerCase().endsWith(".html")
+    const normalizedName = fileName.toLowerCase().endsWith(".pdf")
       ? fileName
-      : `${fileName}.html`;
+      : `${fileName}.pdf`;
     const sizeKb = Math.max(1, Math.round(pendingAnamnesisPayload.length / 1024));
     const payloadDate = anamnesisFileDate
       ? new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString("pt-BR")
@@ -935,7 +976,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           `A ficha de anamnese do paciente ${patient.name} foi registrada e anexada aos arquivos do prontuário.`,
           "clinical",
         );
-        setPatientFiles((prev) => [normalizeFileRecord(uploadResult.data), ...prev]);
+        setPatientFiles((prev) => [
+          normalizeFileRecord({
+            ...uploadResult.data,
+            anamnesisData: pendingAnamnesisData || patient?.anamnesisData || {},
+            referenceDate: anamnesisFileDate || null
+          }),
+          ...prev
+        ]);
         setShowAnamnesisFileModal(false);
         setPendingAnamnesisPayload("");
         setPendingAnamnesisData(null);
@@ -953,8 +1001,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   };
 
   const handleDownloadPatientFile = (file: any) => {
-    if (file?.source === "anamnesis" && file?.content) {
-      openPrintWindowForPdf(file.content);
+    if (isAnamnesisFile(file)) {
+      const html = buildAnamnesisDocumentHtml(
+        (file?.anamnesisData && typeof file.anamnesisData === 'object')
+          ? file.anamnesisData
+          : patient?.anamnesisData || {},
+        file?.referenceDate || new Date().toISOString().slice(0, 10)
+      );
+      openPrintWindowForPdf(html);
       return;
     }
 
@@ -2339,10 +2393,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </button>
             </div>
 
-            {isAnamnesisFile(previewFile) && (previewFile.objectUrl || previewFile.url) ? (
-              <iframe src={previewFile.objectUrl || previewFile.url} title={previewFile.name} className="w-full h-[70vh] rounded-xl border border-slate-200 bg-white" />
-            ) : isAnamnesisFile(previewFile) && anamnesisPreviewUrl ? (
+            {isAnamnesisFile(previewFile) && anamnesisPreviewUrl ? (
               <iframe src={anamnesisPreviewUrl} title={previewFile.name} className="w-full h-[70vh] rounded-xl border border-slate-200 bg-white" />
+            ) : isAnamnesisFile(previewFile) && (previewFile.objectUrl || previewFile.url) ? (
+              <iframe src={previewFile.objectUrl || previewFile.url} title={previewFile.name} className="w-full h-[70vh] rounded-xl border border-slate-200 bg-white" />
             ) : previewFile.type?.includes("image") && (previewFile.objectUrl || previewFile.url) ? (
               <img src={previewFile.objectUrl || previewFile.url} alt={previewFile.name} className="w-full rounded-xl border border-slate-200" />
             ) : previewFile.type?.includes("pdf") && (previewFile.objectUrl || previewFile.url) ? (
