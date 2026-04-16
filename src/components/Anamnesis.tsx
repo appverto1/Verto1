@@ -10,6 +10,7 @@ import {
   getProfileTemplate,
   normalizeAnamnesisTemplate
 } from '../lib/anamnesisSchema';
+import { dataService } from '../services/dataService';
 
 type ModalMode = 'create' | 'edit';
 
@@ -268,6 +269,25 @@ export const AnamnesisModal = ({
     setConsultationRoom(initialData?.room || '');
     setConsultationProfessional(initialData?.professional || '');
   }, [isOpen, initialData, template, canEditTemplate]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let isActive = true;
+    const loadLatestTemplate = async () => {
+      try {
+        const result = await dataService.getClinicAnamnesisTemplate();
+        if (!isActive || !result?.success || !result?.data) return;
+        const latest = normalizeAnamnesisTemplate(result.data);
+        setTemplateState(latest);
+      } catch {
+        // usa template atual como fallback silencioso
+      }
+    };
+    void loadLatestTemplate();
+    return () => {
+      isActive = false;
+    };
+  }, [isOpen]);
 
   const profileTemplate = useMemo(() => getProfileTemplate(templateState, profileType), [templateState, profileType]);
   const questionsBySection = useMemo(() => {

@@ -147,6 +147,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
   const anamnesisPreviewUrl = useMemo(() => {
     if (!previewFile || !isAnamnesisFile(previewFile)) return null;
+    if (previewFile?.objectUrl || previewFile?.url) return null;
 
     const rawContent = typeof previewFile?.content === "string" ? previewFile.content : "";
     const hasHtmlContent = rawContent.trim().toLowerCase().includes("<html");
@@ -774,17 +775,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const handleUpdateAnamnesis = (updatedData: any) => {
     if (isPreparingAnamnesisSave || showAnamnesisFileModal) return;
     setIsPreparingAnamnesisSave(true);
-    if (onUpdatePatient) {
-      onUpdatePatient({
-        id: patient.id,
-        name: updatedData.nome,
-        phone: updatedData.telefone,
-        address: updatedData.endereco,
-        diagnosis: updatedData.motivoConsulta,
-        anamnesisData: updatedData,
-        peiGeneratedAt: new Date().toISOString()
-      });
-    }
 
     const fichePayload = buildAnamnesisDocumentHtml(updatedData, anamnesisFileDate);
     const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.html`;
@@ -795,11 +785,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     setShowAnamnesis(false);
     setShowAnamnesisFileModal(true);
     setIsPreparingAnamnesisSave(false);
-    onAddActivityLog?.(
-      "Ficha de anamnese salva",
-      `A ficha de anamnese do paciente ${patient.name} foi registrada e anexada aos arquivos do prontuário.`,
-      "clinical",
-    );
   }; 
   
   const handleUnlinkPatient = () => {
@@ -934,6 +919,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           profileType: (pendingAnamnesisData?.formType || patient?.anamnesisData?.formType) === 'child' ? 'child' : 'adult',
           patientFileId: String(uploadResult.data.id || '')
         });
+        if (onUpdatePatient && pendingAnamnesisData) {
+          onUpdatePatient({
+            id: patient.id,
+            name: pendingAnamnesisData.nome || patient?.name,
+            phone: pendingAnamnesisData.telefone || patient?.phone,
+            address: pendingAnamnesisData.endereco || patient?.address,
+            diagnosis: pendingAnamnesisData.motivoConsulta || patient?.diagnosis,
+            anamnesisData: pendingAnamnesisData,
+            peiGeneratedAt: new Date().toISOString()
+          });
+        }
+        onAddActivityLog?.(
+          "Ficha de anamnese salva",
+          `A ficha de anamnese do paciente ${patient.name} foi registrada e anexada aos arquivos do prontuário.`,
+          "clinical",
+        );
         setPatientFiles((prev) => [normalizeFileRecord(uploadResult.data), ...prev]);
         setShowAnamnesisFileModal(false);
         setPendingAnamnesisPayload("");
@@ -2338,7 +2339,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </button>
             </div>
 
-            {isAnamnesisFile(previewFile) && anamnesisPreviewUrl ? (
+            {isAnamnesisFile(previewFile) && (previewFile.objectUrl || previewFile.url) ? (
+              <iframe src={previewFile.objectUrl || previewFile.url} title={previewFile.name} className="w-full h-[70vh] rounded-xl border border-slate-200 bg-white" />
+            ) : isAnamnesisFile(previewFile) && anamnesisPreviewUrl ? (
               <iframe src={anamnesisPreviewUrl} title={previewFile.name} className="w-full h-[70vh] rounded-xl border border-slate-200 bg-white" />
             ) : previewFile.type?.includes("image") && (previewFile.objectUrl || previewFile.url) ? (
               <img src={previewFile.objectUrl || previewFile.url} alt={previewFile.name} className="w-full rounded-xl border border-slate-200" />
