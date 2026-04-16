@@ -1099,9 +1099,13 @@ async function startServer() {
 
     let lastError: any = null;
     for (const variant of variants) {
-      const { data, error } = await persistActivityLogRow(mode, variant);
-      if (!error) return { data, id: variant.id };
-      lastError = error;
+      try {
+        const { data, error } = await persistActivityLogRow(mode, variant);
+        if (!error) return { data, id: variant.id };
+        lastError = error;
+      } catch (attemptError: any) {
+        lastError = attemptError;
+      }
     }
 
     throw lastError || new Error('Falha ao persistir log de atividade.');
@@ -3155,6 +3159,44 @@ async function startServer() {
       res.json({ success: true, data });
     } catch (error) {
       res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.delete('/api/notes/:id', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const noteId = sanitizeString(req.params?.id, 120);
+      if (!noteId) {
+        return res.status(400).json({ success: false, error: 'id da nota é obrigatório.' });
+      }
+
+      const { data: existing, error: existingError } = await supabase
+        .from('notes')
+        .select('id, patient_id, visibility, subject')
+        .eq('id', noteId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) {
+        return res.status(404).json({ success: false, error: 'Nota não encontrada.' });
+      }
+
+      const { error } = await supabase
+        .from('notes')
+        .delete()
+        .eq('id', noteId);
+      if (error) throw error;
+
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+        title: 'Nota removida do prontuário',
+        content: `Nota ${noteId} removida do paciente ${existing.patient_id}. Visibilidade: ${existing.visibility || 'privada'}.`,
+        type: 'clinical'
+      });
+
+      return res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ success: false, error: String(error) });
     }
   });
 

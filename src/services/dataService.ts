@@ -284,6 +284,20 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'note', '/api/notes');
   },
 
+  async deleteNote(noteId: string) {
+    try {
+      const response = await fetch(`/api/notes/${noteId}`, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error deleting note:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
   async getHistory(patientId: string) {
     try {
       const response = await fetch(`/api/history/${patientId}`, {

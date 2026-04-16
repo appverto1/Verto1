@@ -879,7 +879,18 @@ export default function App() {
       if (userResult.success) {
         console.log(`User account created for patient: ${data.email}`);
         if (userResult.tempPassword) {
-          alert(`Conta criada para o paciente!\nEmail: ${data.email}\nSenha temporária: ${userResult.tempPassword}\n\nPor favor, informe ao paciente.`);
+          const safePassword = String(userResult.tempPassword);
+          try {
+            if (navigator?.clipboard?.writeText) {
+              await navigator.clipboard.writeText(safePassword);
+            }
+          } catch (error) {
+            console.warn('Não foi possível copiar a senha temporária automaticamente:', error);
+          }
+          window.prompt(
+            `Conta criada para o paciente ${data.email}. Copie a senha temporária abaixo e compartilhe com segurança:`,
+            safePassword
+          );
         } else if (userResult.message === 'User already exists') {
           // If user already exists, we should inform that history will be linked
           alert(`O paciente com o email ${data.email} já possui uma conta no sistema. Todo o histórico clínico anterior será vinculado a este novo prontuário.`);
@@ -1286,9 +1297,20 @@ export default function App() {
         const noteIndex = prev.findIndex(n => n.id === id);
         if (noteIndex === -1) return prev;
         const note = prev[noteIndex];
+        const targetLabel = (targetVisibility === 'patient' || targetVisibility === 'shared') ? 'paciente' : 'profissionais';
+        const originalPatientName = allPatients.find((p) => p.id === note.patientId)?.name || `ID ${note.patientId}`;
 
         // If trying to remove a copy
         if ((note.visibility === targetVisibility || note.type === targetVisibility) && note.originalId) {
+          onAddActivityLog(
+            "Remoção de compartilhamento de anotação",
+            `Cópia de anotação removida da visibilidade ${targetLabel} no prontuário de ${originalPatientName}.`,
+            "clinical"
+          );
+          (async () => {
+            const { dataService } = await import('./services/dataService');
+            await dataService.deleteNote(String(note.id));
+          })();
           const newNotes = prev.filter(n => n.id !== id);
           return newNotes.map(n => {
             if (n.id === note.originalId) {
@@ -1306,6 +1328,15 @@ export default function App() {
           const copy = prev.find(n => n.originalId === id && (n.visibility === targetVisibility || n.type === targetVisibility));
           let newNotes = prev;
           if (copy) {
+            onAddActivityLog(
+              "Remoção de compartilhamento de anotação",
+              `Cópia de anotação removida da visibilidade ${targetLabel} no prontuário de ${originalPatientName}.`,
+              "clinical"
+            );
+            (async () => {
+              const { dataService } = await import('./services/dataService');
+              await dataService.deleteNote(String(copy.id));
+            })();
             newNotes = prev.filter(n => n.id !== copy.id);
           }
           return newNotes.map(n => n.id === id ? { ...n, [copyKey]: false } : n);
@@ -1334,7 +1365,17 @@ export default function App() {
             subject: note.subject || "Geral",
             original_id: String(id)
           });
+          await dataService.saveActivityLog({
+            title: "Compartilhamento de anotação",
+            details: `Anotação compartilhada com ${targetLabel} no prontuário de ${patient?.name || `ID ${note.patientId}`}.`,
+            category: "clinical"
+          });
         })();
+        onAddActivityLog(
+          "Compartilhamento de anotação",
+          `Anotação compartilhada com ${targetLabel} no prontuário de ${originalPatientName}.`,
+          "clinical"
+        );
 
         return prev.map(n => n.id === id ? { ...n, [copyKey]: true } : n).concat(newCopy);
       });

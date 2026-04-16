@@ -3863,12 +3863,15 @@ export function CoordinatorDashboard({
                                 {log.title || log.action || "Atividade registrada"}
                               </p>
                               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                                {log.time ||
-                                  (log.timestamp
-                                    ? new Date(log.timestamp).toLocaleString("pt-BR")
-                                    : log.created_at
-                                      ? new Date(log.created_at).toLocaleString("pt-BR")
-                                      : "Agora")}
+                                {(() => {
+                                  if (log.time) return log.time;
+                                  const rawTs = log.timestamp || log.created_at || log.date;
+                                  if (!rawTs) return "Agora";
+                                  const parsed = new Date(rawTs);
+                                  return Number.isNaN(parsed.getTime())
+                                    ? "Agora"
+                                    : parsed.toLocaleString("pt-BR");
+                                })()}
                               </span>
                             </div>
                             <p className="text-xs text-slate-500 leading-relaxed">

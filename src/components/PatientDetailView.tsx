@@ -206,10 +206,19 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
       if (anamnesisPreviewUrl) URL.revokeObjectURL(anamnesisPreviewUrl);
     };
   }, [anamnesisPreviewUrl]);
+
   const [isSavingObservation, setIsSavingObservation] = useState(false);
 
   const [reportStartDate, setReportStartDate] = useState("");
   const [reportEndDate, setReportEndDate] = useState("");
+  const [reportPreviewUrl, setReportPreviewUrl] = useState<string | null>(null);
+  const [isReportPreviewOpen, setIsReportPreviewOpen] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (reportPreviewUrl) URL.revokeObjectURL(reportPreviewUrl);
+    };
+  }, [reportPreviewUrl]);
 
   const [selectedChartProtocolId, setSelectedChartProtocolId] = useState(() => {
     const isKid = (patient?.age !== undefined && patient?.age <= 12) || patient?.anamnesisData?.formType === 'child';
@@ -424,28 +433,49 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
 </html>`;
   }
 
-  const openPrintWindowForPdf = (htmlContent: string) => {
-    const htmlBlob = new Blob([htmlContent], { type: "text/html;charset=utf-8" });
-    const htmlUrl = URL.createObjectURL(htmlBlob);
-    const printWindow = window.open(htmlUrl, "_blank", "noopener,noreferrer,width=1100,height=900");
-    if (!printWindow) {
-      alert("Não foi possível abrir a janela de impressão. Verifique se o bloqueador de pop-up está ativo.");
-      URL.revokeObjectURL(htmlUrl);
-      return;
+  const downloadTextDocument = (content: string, fileName: string, mimeType: string) => {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 500);
+  };
+
+  const ensureHtmlFilename = (fileName: string) => {
+    const cleaned = (fileName || "documento").trim();
+    if (cleaned.toLowerCase().endsWith(".html")) return cleaned;
+    if (cleaned.toLowerCase().endsWith(".pdf")) return `${cleaned.replace(/\.pdf$/i, "")}.html`;
+    return `${cleaned}.html`;
+  };
+
+  const normalizeDateString = (dateStr: string) => {
+    if (!dateStr) return null;
+    if (dateStr.includes("T")) {
+      const iso = new Date(dateStr);
+      if (!Number.isNaN(iso.getTime())) return iso;
     }
-    const cleanupUrl = () => {
-      try {
-        URL.revokeObjectURL(htmlUrl);
-      } catch {}
-    };
-    printWindow.onload = () => {
-      try {
-        printWindow.focus();
-        printWindow.print();
-      } finally {
-        setTimeout(cleanupUrl, 1200);
+    if (dateStr.includes("/")) {
+      const parts = dateStr.split(" ")[0].split("/");
+      if (parts.length === 3) {
+        const [dd, mm, yyyy] = parts;
+        const parsed = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+        if (!Number.isNaN(parsed.getTime())) return parsed;
       }
-    };
+    }
+    const parsed = new Date(dateStr);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+
+  const periodLabelMap: Record<string, string> = {
+    monthly: "Mensal",
+    bimonthly: "Bimestral",
+    quarterly: "Trimestral",
+    semiannual: "Semestral",
+    annual: "Anual"
   };
 
   const availableSnapshots = useMemo(() => {
@@ -1009,15 +1039,28 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     reader.readAsDataURL(htmlBlob);
   };
 
+  const resolveAnamnesisHtml = (file: any) => {
+    if (typeof file?.content === "string" && file.content.trim().toLowerCase().includes("<html")) {
+      return file.content;
+    }
+    return buildAnamnesisDocumentHtml(
+      (file?.anamnesisData && typeof file.anamnesisData === "object")
+        ? file.anamnesisData
+        : patient?.anamnesisData || {},
+      file?.referenceDate || new Date().toISOString().slice(0, 10),
+    );
+  };
+
   const handleDownloadPatientFile = (file: any) => {
     if (isAnamnesisFile(file)) {
-      const html = buildAnamnesisDocumentHtml(
-        (file?.anamnesisData && typeof file.anamnesisData === 'object')
-          ? file.anamnesisData
-          : patient?.anamnesisData || {},
-        file?.referenceDate || new Date().toISOString().slice(0, 10)
+      const html = resolveAnamnesisHtml(file);
+      const htmlName = ensureHtmlFilename(file?.name || `Ficha_Anamnese_${patient?.name || "paciente"}`);
+      downloadTextDocument(html, htmlName, "text/html;charset=utf-8");
+      onAddActivityLog?.(
+        "Download de ficha de anamnese",
+        `Arquivo ${htmlName} baixado do prontuário do paciente ${patient?.name || "-"}.`,
+        "clinical",
       );
-      openPrintWindowForPdf(html);
       return;
     }
 
@@ -1046,18 +1089,17 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     }
   };
 
-  const handleDownloadReport = () => {
+  const handleDownloadNotesCsv = () => {
     if (!reportStartDate || !reportEndDate) {
       alert("Selecione o período para gerar o relatório.");
       return;
     }
     const start = new Date(reportStartDate);
     const end = new Date(reportEndDate);
-    
     const reportData = notes.filter((n: any) => {
       if (n.patientId !== patient.id) return false;
-      const parts = n.date.split(' ')[0].split('/');
-      const noteDate = new Date(parts[2], parts[1]-1, parts[0]);
+      const noteDate = normalizeDateString(n?.date) || normalizeDateString(n?.created_at);
+      if (!noteDate) return false;
       return noteDate >= start && noteDate <= end;
     });
 
@@ -1068,7 +1110,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
 
     let csvContent = "Data,Tipo,Anotacao\n";
     reportData.forEach((n: any) => {
-      csvContent += `"${n.date}","${(n.visibility === 'patient' || n.type === 'shared') ? 'Paciente' : (n.visibility === 'professional' || n.type === 'professional') ? 'Profissional' : 'Privada'}","${n.text.replace(/"/g, '""')}"\n`;
+      csvContent += `"${n.date}","${(n.visibility === 'patient' || n.type === 'shared') ? 'Paciente' : (n.visibility === 'professional' || n.type === 'professional') ? 'Profissional' : 'Privada'}","${String(n.text || '').replace(/"/g, '""')}"\n`;
     });
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -1080,6 +1122,127 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 500);
+  };
+
+  const sortedComparisonDates = useMemo(() => {
+    if (!comparisonDate1 || !comparisonDate2) return null;
+    const d1 = normalizeDateString(comparisonDate1);
+    const d2 = normalizeDateString(comparisonDate2);
+    if (!d1 || !d2) return null;
+    return d1 <= d2 ? [d1, d2] : [d2, d1];
+  }, [comparisonDate1, comparisonDate2]);
+
+  const reportNotesInRange = useMemo(() => {
+    if (!sortedComparisonDates) return [];
+    const [start, end] = sortedComparisonDates;
+    return (notes || [])
+      .filter((n: any) => n.patientId === patient.id)
+      .filter((n: any) => {
+        const noteDate = normalizeDateString(n?.date) || normalizeDateString(n?.created_at);
+        if (!noteDate) return false;
+        return noteDate >= start && noteDate <= end;
+      });
+  }, [notes, patient.id, sortedComparisonDates]);
+
+  const buildReportDocumentHtml = () => {
+    const periodLabel = periodLabelMap[reportPeriod] || "Período personalizado";
+    const selectedProtocol = protocols.find((p: any) => String(p.id) === String(selectedChartProtocolId));
+    const selectedNotes = reportNotesInRange.filter((n: any) => selectedReportNotes.includes(n.id));
+    const chartRows = comparisonChartData
+      .map((row: any) => {
+        const keys = Object.keys(row).filter((k) => k !== "name");
+        const colA = keys[0] || "Período A";
+        const colB = keys[1] || "Período B";
+        return `<tr><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row[colA] ?? "-")}</td><td>${escapeHtml(row[colB] ?? "-")}</td></tr>`;
+      })
+      .join("");
+    const notesRows = selectedNotes.length
+      ? selectedNotes
+          .map(
+            (note: any) =>
+              `<li><strong>${escapeHtml(note.date || "-")}</strong> - ${escapeHtml(note.subject || "Sem assunto")}<br/>${escapeHtml(note.text || "")}</li>`,
+          )
+          .join("")
+      : "<li>Nenhuma anotação selecionada para este período.</li>";
+
+    return `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Relatório de Evolução - ${escapeHtml(patient?.name || "Paciente")}</title>
+  <style>
+    body{font-family:Arial,sans-serif;background:#f5f7ff;color:#111827;padding:24px}
+    .sheet{max-width:980px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden}
+    .header{padding:20px 24px;background:#eef2ff;border-bottom:1px solid #e2e8f0}
+    .title{margin:0;color:#312e81;font-size:26px}
+    .meta{font-size:13px;color:#475569;margin-top:8px}
+    .section{padding:20px 24px;border-top:1px solid #eef2ff}
+    .section h2{margin:0 0 12px 0;color:#1e1b4b;font-size:18px}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th,td{border:1px solid #cbd5e1;padding:8px;text-align:left}
+    th{background:#f8fafc}
+    ul{margin:0;padding-left:20px}
+    li{margin-bottom:12px}
+  </style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="header">
+      <h1 class="title">Relatório de Evolução</h1>
+      <p class="meta"><strong>Paciente:</strong> ${escapeHtml(patient?.name || "-")} | <strong>Período:</strong> ${escapeHtml(periodLabel)} | <strong>Protocolo:</strong> ${escapeHtml(selectedProtocol?.title || "Não selecionado")}</p>
+      <p class="meta"><strong>Comparação:</strong> ${escapeHtml(comparisonDate1 || "-")} x ${escapeHtml(comparisonDate2 || "-")}</p>
+    </div>
+    <div class="section">
+      <h2>Comparativo dos domínios</h2>
+      <table>
+        <thead><tr><th>Domínio</th><th>Período A</th><th>Período B</th></tr></thead>
+        <tbody>${chartRows || "<tr><td colspan='3'>Sem dados para exibir.</td></tr>"}</tbody>
+      </table>
+    </div>
+    <div class="section">
+      <h2>Anotações clínicas selecionadas</h2>
+      <ul>${notesRows}</ul>
+    </div>
+  </div>
+</body>
+</html>`;
+  };
+
+  const handlePreviewReport = () => {
+    if (!comparisonDate1 || !comparisonDate2) {
+      alert("Selecione as duas datas de comparação para visualizar o relatório.");
+      return;
+    }
+    const html = buildReportDocumentHtml();
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    setReportPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return url;
+    });
+    setIsReportPreviewOpen(true);
+    onAddActivityLog?.(
+      "Visualização de relatório",
+      `Relatório de evolução visualizado para ${patient?.name || "-"}.`,
+      "clinical",
+    );
+  };
+
+  const handleDownloadReport = () => {
+    if (!comparisonDate1 || !comparisonDate2) {
+      alert("Selecione as duas datas de comparação para gerar o relatório.");
+      return;
+    }
+    const html = buildReportDocumentHtml();
+    const fileName = ensureHtmlFilename(`Relatorio_Evolucao_${patient?.name || "paciente"}_${new Date().toISOString().slice(0, 10)}.pdf`);
+    downloadTextDocument(html, fileName, "text/html;charset=utf-8");
+    onAddActivityLog?.(
+      "Download de relatório",
+      `Relatório de evolução baixado para ${patient?.name || "-"}.`,
+      "clinical",
+    );
   };
 
   const getMasteryProgress = (skillName: string) => {
@@ -1379,7 +1542,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                 </div>
                 <button 
                   id="note-export-btn"
-                  onClick={handleDownloadReport}
+                  onClick={handleDownloadNotesCsv}
                   className="bg-[#7a32fc] text-white font-semibold px-6 py-2.5 rounded-xl shadow-md shadow-[#7a32fc]/20 hover:opacity-90 active:scale-95 transition-all flex items-center justify-center gap-2 text-xs whitespace-nowrap"
                 >
                   <Download size={16} /> Baixar .CSV
@@ -1561,7 +1724,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                   <span className="text-[10px] font-semibold text-gray-400 uppercase">{selectedReportNotes.length} selecionadas</span>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                  {notes.filter((n: any) => n.patientId === patient.id).map((note: any) => (
+                  {reportNotesInRange.map((note: any) => (
                     <div 
                       key={note.id} 
                       onClick={() => toggleReportNote(note.id)}
@@ -1578,8 +1741,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
               </div>
 
               <div className="mt-8 flex justify-end gap-3">
-                <button className="px-6 py-3 bg-gray-100 text-gray-600 font-semibold rounded-xl text-xs hover:bg-gray-200 transition-all">Visualizar PDF</button>
-                <button id="report-download-btn" className="px-6 py-3 bg-[#7a32fc] text-white font-semibold rounded-xl text-xs shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 transition-all flex items-center gap-2">
+                <button onClick={handlePreviewReport} className="px-6 py-3 bg-gray-100 text-gray-600 font-semibold rounded-xl text-xs hover:bg-gray-200 transition-all">Visualizar PDF</button>
+                <button id="report-download-btn" onClick={handleDownloadReport} className="px-6 py-3 bg-[#7a32fc] text-white font-semibold rounded-xl text-xs shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 transition-all flex items-center gap-2">
                   <Download size={16} /> Gerar Relatório Final
                 </button>
               </div>
@@ -2421,6 +2584,27 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                 Pré-visualização indisponível para este arquivo. Use o botão de download.
               </p>
             )}
+          </div>
+        </div>
+      )}
+
+      {isReportPreviewOpen && reportPreviewUrl && (
+        <div className="fixed inset-0 z-[130] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-5xl max-h-[90vh] overflow-hidden rounded-3xl shadow-2xl">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-slate-900">Pré-visualização do Relatório de Evolução</h3>
+              <button
+                onClick={() => {
+                  setIsReportPreviewOpen(false);
+                  if (reportPreviewUrl) URL.revokeObjectURL(reportPreviewUrl);
+                  setReportPreviewUrl(null);
+                }}
+                className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <iframe src={reportPreviewUrl} title="Prévia do relatório" className="w-full h-[76vh] bg-white" />
           </div>
         </div>
       )}
