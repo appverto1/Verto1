@@ -336,6 +336,11 @@ export const TherapistDashboard = ({
   const [anamnesisTemplate, setAnamnesisTemplate] = useState<any>(
     getDefaultAnamnesisTemplate(),
   );
+  const buildInitialAvatarDataUrl = (name?: string) => {
+    const initial = (name || "P").trim().charAt(0).toUpperCase() || "P";
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96'><rect width='100%' height='100%' rx='18' fill='#7a32fc'/><text x='50%' y='56%' text-anchor='middle' font-size='42' font-family='Arial,sans-serif' fill='white'>${initial}</text></svg>`;
+    return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+  };
 
   const handleCheckout = async (planId: string) => {
     setLoading(true);
@@ -1352,6 +1357,20 @@ export const TherapistDashboard = ({
                   onRecordTrial={onRecordTrial}
                   onDeleteHistoryItem={onDeleteHistoryItem}
                   anamnesisTemplate={anamnesisTemplate}
+                  clinicContext={{
+                    clinicName:
+                      user?.clinicSettings?.clinicName ||
+                      user?.name ||
+                      "Clínica Verto",
+                    cnpj: user?.clinicSettings?.clinicCnpj || "",
+                    address: user?.clinicSettings?.clinicAddress || "",
+                    logoUrl:
+                      user?.clinicSettings?.clinicLogoUrl ||
+                      user?.profilePicture ||
+                      buildInitialAvatarDataUrl(user?.name),
+                    professionalName: user?.name || "Profissional",
+                    signatureUrl: user?.clinicSettings?.signatureDataUrl || null,
+                  }}
                 />
               );
             })()}

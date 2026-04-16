@@ -6,6 +6,7 @@ import { ComparisonBarChart, EvolutionLineChart } from './Charts';
 import { HistoryCard } from './History';
 import { SessionMode } from './SessionMode';
 import { ENERGY_TAGS } from './Common';
+import { dataService } from '../services/dataService';
 
 export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate }: any) => { 
   const [activeTab, setActiveTab] = useState(initialTab); 
@@ -70,11 +71,67 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       onAnamnesisOpenConsumed?.();
     }
   }, [openAnamnesisOnLoad, onAnamnesisOpenConsumed, patient?.id]);
+
+  const buildInitialAvatarDataUrl = (name?: string) => {
+    const initial = (name || 'P').trim().charAt(0).toUpperCase() || 'P';
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96'><rect width='100%' height='100%' rx='18' fill='#7a32fc'/><text x='50%' y='56%' text-anchor='middle' font-size='42' font-family='Arial,sans-serif' fill='white'>${initial}</text></svg>`;
+    return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+  };
+
+  const normalizeFileRecord = (file: any) => {
+    const safeName = String(file?.name || 'arquivo');
+    const safeType = String(file?.type || 'application/octet-stream');
+    const safeContent = typeof file?.content === 'string' ? file.content : '';
+    const safeUrl = typeof file?.url === 'string' ? file.url : '';
+    const objectUrl = safeUrl || (safeContent && safeType !== 'text/html' ? safeContent : undefined);
+    return {
+      id: file?.id || Date.now(),
+      name: safeName,
+      size: String(file?.size || ''),
+      date: String(file?.date || new Date().toLocaleDateString('pt-BR')),
+      type: safeType,
+      source: file?.source || 'upload',
+      content: safeContent,
+      url: safeUrl || undefined,
+      objectUrl
+    };
+  };
+
+  const persistPatientFiles = async (nextFiles: any[]) => {
+    if (!patient?.id) return;
+    const filesPayload = nextFiles.map((file: any) => ({
+      id: file.id,
+      name: file.name,
+      size: file.size,
+      date: file.date,
+      type: file.type,
+      source: file.source || 'upload',
+      content: typeof file.content === 'string' ? file.content : '',
+      url: typeof file.url === 'string' ? file.url : (typeof file.objectUrl === 'string' ? file.objectUrl : '')
+    }));
+
+    await dataService.savePatientRecord(String(patient.id), { files: filesPayload });
+  };
+
+  useEffect(() => {
+    const loadPersistedFiles = async () => {
+      if (!patient?.id) return;
+      setIsLoadingFiles(true);
+      try {
+        const result = await dataService.getPatientRecord(String(patient.id));
+        const persistedFiles = Array.isArray(result?.data?.payload?.files) ? result.data.payload.files : [];
+        setPatientFiles(persistedFiles.map(normalizeFileRecord));
+      } catch (error) {
+        console.error('Erro ao carregar arquivos persistidos do paciente:', error);
+      } finally {
+        setIsLoadingFiles(false);
+      }
+    };
+    loadPersistedFiles();
+  }, [patient?.id]);
   
-  const [patientFiles, setPatientFiles] = useState([
-    { id: 1, name: 'Avaliação_Neuropsicológica.pdf', size: '2.4 MB', date: '15/01/2026', type: 'application/pdf' },
-    { id: 2, name: 'Exame_EEG_Resultado.jpg', size: '840 KB', date: '20/01/2026', type: 'image/jpeg' }
-  ]);
+  const [patientFiles, setPatientFiles] = useState<any[]>([]);
+  const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [showAnamnesisFileModal, setShowAnamnesisFileModal] = useState(false);
   const [pendingAnamnesisPayload, setPendingAnamnesisPayload] = useState<string>("");
   const [anamnesisFileName, setAnamnesisFileName] = useState("");
@@ -279,7 +336,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         <p class="meta"><strong>CNPJ:</strong> ${escapeHtml(c.cnpj || "-")}</p>
         <p class="meta"><strong>Endereço:</strong> ${escapeHtml(c.address || "-")}</p>
       </div>
-      ${c.logoUrl ? `<img src="${escapeHtml(c.logoUrl)}" class="logo" />` : ""}
+      <img src="${escapeHtml(c.logoUrl || buildInitialAvatarDataUrl(c.professionalName || patient?.name || 'Profissional'))}" class="logo" />
     </div>
     <div class="content">
       <p class="patient"><strong>Paciente:</strong> ${escapeHtml(patient?.name || "-")} | <strong>Data da ficha:</strong> ${escapeHtml(fichaDate)}</p>
@@ -739,32 +796,45 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     }
   };
   
-  const handleFileUpload = (e: any) => {
+  const handleFileUpload = async (e: any) => {
     const file = e.target.files[0];
     if (!file) return;
     setIsUploadingFile(true);
     setUploadProgress(0);
-    
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += 10;
-      setUploadProgress(progress);
-      if (progress >= 100) {
-        clearInterval(interval);
-        setTimeout(() => {
-          const newFile = {
-            id: Date.now(),
-            name: file.name,
-            size: (file.size / (1024 * 1024)).toFixed(1) + ' MB',
-            date: new Date().toLocaleDateString('pt-BR'),
-            type: file.type,
-            objectUrl: URL.createObjectURL(file)
-          };
-          setPatientFiles((prev: any) => [newFile, ...prev]);
-          setIsUploadingFile(false);
-        }, 500);
-      }
-    }, 150);
+    setUploadProgress(25);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      setUploadProgress(80);
+
+      const newFile = normalizeFileRecord({
+        id: Date.now(),
+        name: file.name,
+        size: (file.size / (1024 * 1024)).toFixed(1) + ' MB',
+        date: new Date().toLocaleDateString('pt-BR'),
+        type: file.type,
+        source: 'upload',
+        content: dataUrl,
+        url: dataUrl
+      });
+
+      const nextFiles = [newFile, ...patientFiles];
+      setPatientFiles(nextFiles);
+      await persistPatientFiles(nextFiles);
+      setUploadProgress(100);
+    } catch (error) {
+      console.error('Falha ao salvar arquivo do paciente:', error);
+      alert('Não foi possível salvar o arquivo. Tente novamente.');
+    } finally {
+      setTimeout(() => {
+        setIsUploadingFile(false);
+        setUploadProgress(0);
+      }, 250);
+    }
   };
 
   const handleRecordTrialWithConfirmation = (pid: any, goalId: any, title: string, score: number) => {
@@ -798,16 +868,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     }
   };
 
-  const removeFile = (id: any) => {
+  const removeFile = async (id: any) => {
       if (confirm("Deseja remover este arquivo?")) {
-          setPatientFiles((prev: any) =>
-            prev.filter((f: any) => {
-              if (f.id === id && f.objectUrl) {
-                URL.revokeObjectURL(f.objectUrl);
-              }
-              return f.id !== id;
-            }),
-          );
+          const nextFiles = patientFiles.filter((f: any) => f.id !== id);
+          setPatientFiles(nextFiles);
+          await persistPatientFiles(nextFiles);
       }
   };
 
@@ -822,25 +887,31 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       ? new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString("pt-BR")
       : new Date().toLocaleDateString("pt-BR");
 
-    const htmlBlob = new Blob([pendingAnamnesisPayload], { type: "text/html" });
-    const htmlObjectUrl = URL.createObjectURL(htmlBlob);
-    setPatientFiles((prev: any[]) => [
-      {
+    const nextFiles = [
+      normalizeFileRecord({
         id: Date.now(),
         name: normalizedName,
         size: `${sizeKb} KB`,
         date: payloadDate,
         type: "text/html",
         source: "anamnesis",
-        content: pendingAnamnesisPayload,
-        objectUrl: htmlObjectUrl,
-      },
-      ...prev,
-    ]);
-    setShowAnamnesisFileModal(false);
-    setPendingAnamnesisPayload("");
-    setIsPreparingAnamnesisSave(false);
-    setActiveTab("files");
+        content: pendingAnamnesisPayload
+      }),
+      ...patientFiles
+    ];
+
+    setPatientFiles(nextFiles);
+    persistPatientFiles(nextFiles)
+      .then(() => {
+        setShowAnamnesisFileModal(false);
+        setPendingAnamnesisPayload("");
+        setIsPreparingAnamnesisSave(false);
+        setActiveTab("files");
+      })
+      .catch((error) => {
+        console.error('Falha ao persistir ficha de anamnese em arquivos:', error);
+        alert('A ficha foi preenchida, mas houve falha ao salvar em Arquivos. Tente novamente.');
+      });
   };
 
   const handleDownloadPatientFile = (file: any) => {
@@ -2116,7 +2187,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider ml-2 flex items-center gap-2 tracking-widest">
                 <File size={16} /> Arquivos Salvos ({patientFiles.length})
               </h3>
-              {patientFiles.length > 0 ? patientFiles.map((file: any) => (
+              {isLoadingFiles ? (
+                <div className="text-center py-10 bg-white/50 rounded-3xl border border-dashed border-gray-200">
+                  <p className="text-sm text-gray-500 font-medium">Carregando arquivos do prontuário...</p>
+                </div>
+              ) : patientFiles.length > 0 ? patientFiles.map((file: any) => (
                 <div key={file.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between group hover:border-blue-100 transition-all animate-slide-up">
                   <div className="flex items-center gap-4">
                     <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center text-[#7a32fc]">

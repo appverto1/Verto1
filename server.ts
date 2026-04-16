@@ -2287,11 +2287,22 @@ async function startServer() {
       if (!patientId) return res.status(400).json({ error: 'patientId invÃ¡lido' });
 
       const payload = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
-      const encrypted = encryptJsonPayload(payload);
+      const { data: existingRow } = await supabase
+        .from('patient_records')
+        .select('payload_encrypted')
+        .eq('patient_id', patientId)
+        .maybeSingle();
+      const existingPayload = decryptJsonPayload(existingRow?.payload_encrypted) || {};
+      const mergedPayload = cleanObject({
+        ...existingPayload,
+        ...payload
+      });
+
+      const encrypted = encryptJsonPayload(mergedPayload);
       const pseudonymSeed = [
-        sanitizeString(payload?.cpf, 30),
-        sanitizeString(payload?.email, 320),
-        sanitizePhone(payload?.telefone) || ''
+        sanitizeString(mergedPayload?.cpf, 30),
+        sanitizeString(mergedPayload?.email, 320),
+        sanitizePhone(mergedPayload?.telefone) || ''
       ].filter(Boolean).join('|') || patientId;
 
       const row = cleanObject({
@@ -2301,10 +2312,10 @@ async function startServer() {
         pseudonym_id: `pt_${pseudonymizeValue(pseudonymSeed)}`,
         payload_encrypted: encrypted || null,
         payload_preview: cleanObject({
-          nome: sanitizeString(payload?.nome, 120),
-          nomeSocial: sanitizeString(payload?.nomeSocial, 120),
-          grupo: sanitizeString(payload?.grupo, 60),
-          convenioNome: sanitizeString(payload?.convenioNome, 120)
+          nome: sanitizeString(mergedPayload?.nome, 120),
+          nomeSocial: sanitizeString(mergedPayload?.nomeSocial, 120),
+          grupo: sanitizeString(mergedPayload?.grupo, 60),
+          convenioNome: sanitizeString(mergedPayload?.convenioNome, 120)
         }),
         updated_at: new Date().toISOString()
       });
@@ -2321,6 +2332,35 @@ async function startServer() {
           });
         }
         throw error;
+      }
+
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
+      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120);
+      const hasFilesPayload = Array.isArray(mergedPayload?.files);
+      const hasAnamnesisPayload = Boolean(mergedPayload?.template_version || mergedPayload?.anamnesisTemplateVersion || mergedPayload?.anamnese);
+      const filesCount = hasFilesPayload ? mergedPayload.files.length : 0;
+      if (actorId) {
+        if (hasAnamnesisPayload) {
+          void persistActivityLog({
+            userId: actorId,
+            clinicId,
+            actorName,
+            title: 'Ficha de anamnese registrada',
+            content: `${actorName} registrou/atualizou a ficha de anamnese do paciente ${patientId} em ${new Date().toLocaleString('pt-BR')}.`,
+            type: 'clinical'
+          });
+        }
+        if (hasFilesPayload) {
+          void persistActivityLog({
+            userId: actorId,
+            clinicId,
+            actorName,
+            title: 'Arquivos do prontuário atualizados',
+            content: `${actorName} atualizou os arquivos do paciente ${patientId}. Total de arquivos armazenados: ${filesCount}.`,
+            type: 'clinical'
+          });
+        }
       }
 
       res.json({ success: true, encrypted: !!encrypted });
