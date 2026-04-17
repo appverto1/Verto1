@@ -2720,33 +2720,72 @@ async function startServer() {
 
   app.patch('/api/patients/:id', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
+      const patientId = sanitizeString(req.params.id, 120);
+      if (!isUuid(patientId)) {
+        return res.status(400).json({ success: false, error: 'ID de paciente inválido.' });
+      }
+
+      const rawClinicId = req.body?.clinic_id;
+      let clinicIdUpdate: string | null | undefined = undefined;
+      if (rawClinicId !== undefined) {
+        if (rawClinicId === null) {
+          clinicIdUpdate = null;
+        } else {
+          const safeClinicId = sanitizeString(rawClinicId, 100);
+          if (safeClinicId && !isUuid(safeClinicId)) {
+            return res.status(400).json({ success: false, error: 'clinic_id inválido.' });
+          }
+          clinicIdUpdate = safeClinicId || null;
+        }
+      }
+
       const updates = cleanObject({
         name: req.body?.name !== undefined ? sanitizeString(req.body?.name, 160) : undefined,
         email: req.body?.email !== undefined ? sanitizeEmail(req.body?.email) : undefined,
         phone: req.body?.phone !== undefined ? sanitizePhone(req.body?.phone) : undefined,
         age: req.body?.age !== undefined ? asSafeNumber(req.body?.age, 0, 130) : undefined,
         diagnosis: req.body?.diagnosis !== undefined ? sanitizeString(req.body?.diagnosis, 2000) : undefined,
-        clinic_id: req.body?.clinic_id !== undefined ? sanitizeString(req.body?.clinic_id, 100) : undefined,
+        clinic_id: clinicIdUpdate,
         status: req.body?.status !== undefined ? sanitizeString(req.body?.status, 40) : undefined
       });
 
-      const { error } = await supabase
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ success: false, error: 'Nenhum campo válido para atualizar.' });
+      }
+
+      const { data: updatedPatient, error } = await supabase
         .from('patients')
         .update(updates)
-        .eq('id', req.params.id);
+        .eq('id', patientId)
+        .select('id, name, clinic_id, status')
+        .maybeSingle();
       
       if (error) throw error;
+      if (!updatedPatient?.id) {
+        return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+      }
+
+      const isUnlinkAction = rawClinicId === null || updates.status === 'unlinked';
+      const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
+      const patientName = sanitizeString(updatedPatient?.name, 160) || patientId;
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
-        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
-        title: 'Cadastro de paciente atualizado',
-        content: `Paciente ${sanitizeString(req.params.id, 120)} teve dados cadastrais atualizados.`,
+        actorName,
+        title: isUnlinkAction ? 'Paciente desvinculado' : 'Cadastro de paciente atualizado',
+        content: isUnlinkAction
+          ? `${actorName} desvinculou o paciente ${patientName} (${patientId}) da clínica.`
+          : `${actorName} atualizou o cadastro do paciente ${patientName} (${patientId}).`,
         type: 'management'
       });
-      res.json({ success: true });
+      res.json({ success: true, data: updatedPatient });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      const errorMessage =
+        typeof error === 'object' && error !== null && 'message' in (error as any)
+          ? String((error as any).message)
+          : String(error);
+      console.error('[PATCH /api/patients/:id] Error:', errorMessage);
+      res.status(500).json({ success: false, error: errorMessage });
     }
   });
 
