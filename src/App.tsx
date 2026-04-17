@@ -902,13 +902,17 @@ export default function App() {
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
-    await dataService.addNote({
-      patient_id: String(pid),
-      patient_email: patient?.email || null,
-      text: txt,
-      visibility,
-      subject: subject || "Geral"
-    });
+    try {
+      await dataService.addNote({
+        patient_id: String(pid),
+        patient_email: patient?.email || null,
+        text: txt,
+        visibility,
+        subject: subject || "Geral"
+      });
+    } catch (error) {
+      console.error("Falha ao sincronizar nota no servidor:", error);
+    }
   };
   const handleUpdateHistoryItem = (id: any, updates: any) => { 
     const item = history.find(i => i.id === id);
@@ -1330,7 +1334,7 @@ export default function App() {
     };
     
     // Add a note about the trial
-    const noteText = `🎯 NOVO REGISTRO\nAtividade: ${title}\nPontuação: ${score}${evalComment ? `\nAnotações do Profissional: ${evalComment}` : ""}`;
+    const noteText = `🎯 NOVO REGISTRO\nAtividade: ${title}\nPontuação: ${finalScore}${evalComment ? `\nAnotações do Profissional: ${evalComment}` : ""}`;
     handleAddNote(pid, noteText, 'private', 'Sessão');
 
     onAddActivityLog("Registro de Avaliação", `Avaliação da habilidade "${title}" registrada para o paciente ID ${pid}. Pontuação: ${score}.`);

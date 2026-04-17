@@ -900,25 +900,14 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
       const useMasteryLogic = selectedProto.title.includes('VB-MAPP');
       
       const skillLatestScoreMap: any = {};
-      const skillLatestIdMap: any = {};
       const skillScoresMap: any = {};
       
       latestHistory.forEach((evalItem: any) => {
         const title = evalItem.title.trim().toLowerCase();
         if (skillNames.includes(title)) {
           if (useMasteryLogic) {
-            // Logic for VB-MAPP: Latest score / Mastery
-            if (!skillLatestIdMap[title] || evalItem.id > skillLatestIdMap[title]) {
-              skillLatestIdMap[title] = evalItem.id;
-              
-              // Check if mastered in PEI first
-              const peiGoal = peiGoals.find((g: any) => g.name.trim().toLowerCase() === title);
-              if (peiGoal?.status === 'completed') {
-                skillLatestScoreMap[title] = 1;
-              } else {
-                skillLatestScoreMap[title] = evalItem.score;
-              }
-            }
+            if (!skillScoresMap[title]) skillScoresMap[title] = [];
+            skillScoresMap[title].push(evalItem);
           } else {
             // Logic for AFLS and others: Averages
             if (!skillScoresMap[title]) skillScoresMap[title] = [];
@@ -928,6 +917,39 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
       });
 
       if (useMasteryLogic) {
+        Object.entries(skillScoresMap).forEach(([skillTitle, entries]: [string, any]) => {
+          const ordered = Array.isArray(entries)
+            ? [...entries].sort((a: any, b: any) => Number(b.id || 0) - Number(a.id || 0))
+            : [];
+          if (ordered.length === 0) return;
+
+          const peiGoal = peiGoals.find(
+            (g: any) => String(g?.name || '').trim().toLowerCase() === skillTitle,
+          );
+          const goalStartId = Number(peiGoal?.id || 0);
+          const scoped = ordered.filter((item: any) => Number(item?.id || 0) > goalStartId);
+          const source = scoped.length > 0 ? scoped : ordered;
+
+          let consecutiveOnes = 0;
+          for (const item of source) {
+            if (Number(item?.score) === 1) consecutiveOnes++;
+            else break;
+          }
+
+          if (peiGoal?.status === 'completed' || consecutiveOnes >= 5) {
+            skillLatestScoreMap[skillTitle] = 1;
+            return;
+          }
+
+          const fallback = source.find((item: any, idx: number) => idx >= consecutiveOnes && Number(item?.score) !== 1);
+          if (fallback) {
+            skillLatestScoreMap[skillTitle] = Number(fallback.score) || 0;
+            return;
+          }
+
+          const latest = source[0];
+          skillLatestScoreMap[skillTitle] = Number(latest?.score) === 1 ? 0 : (Number(latest?.score) || 0);
+        });
         const latestScores: any[] = Object.values(skillLatestScoreMap);
         return latestScores.length > 0 ? (latestScores.reduce((a: any, b: any) => a + b, 0) / latestScores.length) : 0;
       } else {

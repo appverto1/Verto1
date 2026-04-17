@@ -3186,16 +3186,20 @@ async function startServer() {
       req.session.user,
       { createIfMissing: false, fallbackName: sanitizeString(req.body?.patient_name, 160) }
       );
+      const rawNoteId = sanitizeString(req.body?.id, 120);
+      const safeNoteId = isUuid(rawNoteId) ? rawNoteId : undefined;
+      const rawTherapistId = sanitizeString(req.session.user?.id, 120);
+      const safeTherapistId = isUuid(rawTherapistId) ? rawTherapistId : undefined;
       const safeVisibility = new Set(['private', 'shared', 'family', 'professional', 'patient']);
       const payload = cleanObject({
-        id: sanitizeString(req.body?.id, 120) || undefined,
+        id: safeNoteId,
         patient_id: resolvedPatientId,
         patient_email: sanitizeEmail(req.body?.patient_email),
         text: sanitizeString(req.body?.text, 12000),
         visibility: safeVisibility.has(String(req.body?.visibility)) ? String(req.body?.visibility) : 'private',
         subject: sanitizeString(req.body?.subject, 100) || 'Geral',
         original_id: sanitizeString(req.body?.original_id, 120) || undefined,
-        therapist_id: sanitizeString(req.session.user.id, 120),
+        therapist_id: safeTherapistId,
         created_at: sanitizeString(req.body?.created_at, 40) || new Date().toISOString()
       });
 
@@ -3203,11 +3207,23 @@ async function startServer() {
         return res.status(400).json({ error: 'patient_id e texto sÃ£o obrigatÃ³rios.' });
       }
 
-      const { data, error } = await supabase
-        .from('notes')
-        .upsert([payload], { onConflict: 'id' })
-        .select()
-        .single();
+      let data: any = null;
+      let error: any = null;
+      if (payload.id) {
+        ({ data, error } = await supabase
+          .from('notes')
+          .upsert([payload], { onConflict: 'id' })
+          .select()
+          .single());
+      } else {
+        const payloadWithoutId = { ...payload };
+        delete payloadWithoutId.id;
+        ({ data, error } = await supabase
+          .from('notes')
+          .insert([payloadWithoutId])
+          .select()
+          .single());
+      }
       
       if (error) throw error;
       void persistActivityLog({
