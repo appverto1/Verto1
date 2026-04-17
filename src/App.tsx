@@ -1676,6 +1676,9 @@ export default function App() {
             dataService.saveUserProfile(user.id, nextUser);
           }}
           onUpdatePatient={handleUpdatePatient}
+          onRecordTrial={handleRecordTrial}
+          onDeleteHistoryItem={handleDeleteHistoryItem}
+          onEvaluateHistoryItem={handleUpdateHistoryItem}
           allTasks={tasks}
         />
       ) : user.role === 'receptionist' ? (

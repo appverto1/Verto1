@@ -1299,10 +1299,26 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     setPendingTrial(null);
   };
 
-  const handleSaveTrialObservation = () => {
+  const handleSaveTrialObservation = async () => {
     if (pendingTrial) {
       setIsSavingObservation(true);
-      const newId = onRecordTrial(pendingTrial.pid, pendingTrial.title, pendingTrial.score, trialObservation);
+      if (typeof onRecordTrial !== "function") {
+        console.error("onRecordTrial não está disponível no PatientDetailView.");
+        setIsSavingObservation(false);
+        setShowTrialConfirmation(false);
+        setLastRecordedGoalId(null);
+        setPendingTrial(null);
+        alert("Não foi possível registrar a sessão agora. Recarregue a página e tente novamente.");
+        return;
+      }
+      const newId = await Promise.resolve(
+        onRecordTrial(
+          pendingTrial.pid,
+          pendingTrial.title,
+          pendingTrial.score,
+          trialObservation,
+        ),
+      );
       setLastRecordedTrialId(newId);
       
       setTimeout(() => {

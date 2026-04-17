@@ -34,10 +34,26 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, onDeleteHistoryIt
     setPendingTrial(null);
   };
 
-  const handleSaveTrialObservation = () => {
+  const handleSaveTrialObservation = async () => {
     if (pendingTrial) {
       setIsSavingObservation(true);
-      const newId = onRecordTrial(patient.id, pendingTrial.goal.name, pendingTrial.score, trialObservation);
+      if (typeof onRecordTrial !== "function") {
+        console.error("onRecordTrial não foi fornecido ao SessionMode.");
+        setIsSavingObservation(false);
+        setShowTrialConfirmation(false);
+        setLastRecordedGoalId(null);
+        setPendingTrial(null);
+        alert("Não foi possível registrar a sessão agora. Recarregue a página e tente novamente.");
+        return;
+      }
+      const newId = await Promise.resolve(
+        onRecordTrial(
+          patient.id,
+          pendingTrial.goal.name,
+          pendingTrial.score,
+          trialObservation,
+        ),
+      );
       setTrialCount(prev => prev + 1);
       setLastRecordedTrialId(newId);
       

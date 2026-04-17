@@ -103,6 +103,14 @@ interface CoordinatorDashboardProps {
   ) => void;
   onUpdateProfile: (updates: any) => void;
   onUpdatePatient?: (patient: any) => void;
+  onRecordTrial?: (
+    pid: any,
+    title: string,
+    score: number,
+    evalComment?: string,
+  ) => any;
+  onDeleteHistoryItem?: (id: any) => void;
+  onEvaluateHistoryItem?: (id: any, score: number, note: string) => void;
   allTasks?: any[];
 }
 
@@ -129,6 +137,9 @@ export function CoordinatorDashboard({
   onAddNote,
   onUpdateProfile,
   onUpdatePatient,
+  onRecordTrial,
+  onDeleteHistoryItem,
+  onEvaluateHistoryItem,
   allTasks = [],
 }: CoordinatorDashboardProps) {
   const [activeTab, setActiveTab] = useState<
@@ -2513,6 +2524,9 @@ export function CoordinatorDashboard({
               onAddNote={onAddNote}
               onAddActivityLog={onAddActivityLog}
               onUpdatePatient={onUpdatePatient}
+              onRecordTrial={onRecordTrial}
+              onDeleteHistoryItem={onDeleteHistoryItem}
+              onEvaluateHistoryItem={onEvaluateHistoryItem}
               protocols={protocols}
               userRole={user.role}
               anamnesisTemplate={anamnesisTemplate}
