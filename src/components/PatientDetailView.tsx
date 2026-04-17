@@ -194,6 +194,41 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     return "6";
   };
 
+  const normalizePeiGoal = (goal: any, index: number) => {
+    const normalizedTerm = String(goal?.term || "short").toLowerCase();
+    const term = ["short", "medium", "long"].includes(normalizedTerm)
+      ? normalizedTerm
+      : "short";
+    const normalizedStatus = String(goal?.status || "not_started").toLowerCase();
+    const status = ["not_started", "in_progress", "completed"].includes(normalizedStatus)
+      ? normalizedStatus
+      : "not_started";
+    const progressValue = Number(goal?.progress);
+    const progress = Number.isFinite(progressValue)
+      ? Math.max(0, Math.min(100, Math.round(progressValue)))
+      : 0;
+    return {
+      ...goal,
+      id: goal?.id ?? `${Date.now()}-${index}`,
+      term,
+      status,
+      progress,
+      isPriority: Boolean(goal?.isPriority),
+    };
+  };
+
+  const peiGoals = useMemo(
+    () => (Array.isArray(patient?.pei) ? patient.pei : []).map(normalizePeiGoal),
+    [patient?.pei],
+  );
+
+  const savePeiGoals = (nextGoals: any[]) => {
+    onUpdatePatient?.({
+      ...patient,
+      pei: nextGoals.map(normalizePeiGoal),
+    });
+  };
+
   useEffect(() => {
     setAnamnesisRenewalMonths(
       normalizeAnamnesisRenewalMonths(patient?.anamnesisRenewalMonths),
@@ -877,7 +912,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
               skillLatestIdMap[title] = evalItem.id;
               
               // Check if mastered in PEI first
-              const peiGoal = patient.pei?.find((g: any) => g.name.trim().toLowerCase() === title);
+              const peiGoal = peiGoals.find((g: any) => g.name.trim().toLowerCase() === title);
               if (peiGoal?.status === 'completed') {
                 skillLatestScoreMap[title] = 1;
               } else {
@@ -1586,7 +1621,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
 
   const getMasteryProgress = (skillName: string) => {
     if (patientCategory !== 'Criança') return null;
-    const goal = patient.pei?.find((g: any) => g.name === skillName);
+    const goal = peiGoals.find((g: any) => g.name === skillName);
     const skillHistory = history
       .filter((h: any) => h.patientId === patient.id && h.title === skillName && h.type === 'task' && (!goal || h.id > goal.id))
       .sort((a: any, b: any) => b.id - a.id);
@@ -1883,7 +1918,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                       protocols={protocols} 
                       isKid={patientCategory === 'Criança'}
                       fullHistory={(history || []).filter((h: any) => h.patientId === patient.id)}
-                      peiGoals={patient.pei || []}
+                      peiGoals={peiGoals}
                     />
                   ))} 
                 </div> 
@@ -2128,7 +2163,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                     <p className="text-xs text-gray-500 font-semibold uppercase tracking-widest mt-1">Metas e Objetivos de Intervenção</p>
                   </div>
                   <div className="flex gap-2">
-                    {patient.pei?.some((g: any) => g.isPriority || g.status === 'in_progress') && (
+                    {peiGoals.some((g: any) => g.isPriority || g.status === 'in_progress') && (
                       <button 
                         onClick={() => setIsSessionModeOpen(true)}
                         className="bg-[#7a32fc] text-white font-semibold px-6 py-3 rounded-2xl shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 active:scale-95 transition-all flex items-center gap-2 text-sm"
@@ -2215,11 +2250,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                     protocolTitle: protocols.find((p: any) => String(p.id) === String(selectedPEIProtocolId))?.title,
                                     domainName: protocols.find((p: any) => String(p.id) === String(selectedPEIProtocolId))?.data.find((d: any) => String(d.id) === String(selectedPEIDomainId))?.name
                                   };
-                                  const updatedPatient = {
-                                    ...patient,
-                                    pei: [...(patient.pei || []), peiGoal]
-                                  };
-                                  onUpdatePatient(updatedPatient);
+                                  savePeiGoals([...peiGoals, peiGoal]);
                                   setIsAddingPEIGoal(false);
                                   setSelectedPEIProtocolId("");
                                   setSelectedPEIDomainId("");
@@ -2242,9 +2273,9 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                   )}
 
                   <div className="space-y-6">
-                    {patient.pei && patient.pei.length > 0 ? (
+                    {peiGoals.length > 0 ? (
                       ['short', 'medium', 'long'].map(term => {
-                        const termGoals = patient.pei.filter((g: any) => g.term === term);
+                        const termGoals = peiGoals.filter((g: any) => g.term === term);
                         if (termGoals.length === 0) return null;
                         
                         return (
@@ -2263,8 +2294,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                         className="text-[9px] font-semibold bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full uppercase outline-none"
                                         value={goal.term}
                                         onChange={(e) => {
-                                          const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, term: e.target.value } : g);
-                                          onUpdatePatient({ ...patient, pei: updatedPEI });
+                                          const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? { ...g, term: e.target.value } : g);
+                                          savePeiGoals(updatedPEI);
                                         }}
                                       >
                                         <option value="short">Curto Prazo</option>
@@ -2276,8 +2307,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                       {goal.name}
                                       <button 
                                         onClick={() => {
-                                          const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, isPriority: !g.isPriority } : g);
-                                          onUpdatePatient({ ...patient, pei: updatedPEI });
+                                          const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? { ...g, isPriority: !g.isPriority } : g);
+                                          savePeiGoals(updatedPEI);
                                         }}
                                         className={`p-1 rounded-md transition-all ${goal.isPriority ? 'text-orange-500 bg-orange-50' : 'text-gray-300 hover:text-orange-300'}`}
                                         title={goal.isPriority ? "Remover Prioridade" : "Marcar como Prioridade para Sessão"}
@@ -2301,8 +2332,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                         }`}
                                         value={goal.status}
                                         onChange={(e) => {
-                                          const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, status: e.target.value } : g);
-                                          onUpdatePatient({ ...patient, pei: updatedPEI });
+                                          const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? { ...g, status: e.target.value } : g);
+                                          savePeiGoals(updatedPEI);
                                         }}
                                       >
                                         <option value="not_started">Não Iniciado</option>
@@ -2313,8 +2344,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                         <button 
                                           onClick={() => {
                                             if (confirm("Deseja zerar o progresso de maestria desta meta? Isso reiniciará a contagem de acertos consecutivos.")) {
-                                              const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, id: Date.now(), progress: 0, status: 'not_started' } : g);
-                                              onUpdatePatient({ ...patient, pei: updatedPEI });
+                                              const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? { ...g, id: Date.now(), progress: 0, status: 'not_started' } : g);
+                                              savePeiGoals(updatedPEI);
                                             }
                                           }}
                                           className="p-2 text-gray-300 hover:text-orange-500 hover:bg-orange-50 rounded-xl transition-all"
@@ -2325,8 +2356,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                       )}
                                       <button 
                                         onClick={() => {
-                                          const updatedPEI = patient.pei.filter((g: any) => g.id !== goal.id);
-                                          onUpdatePatient({ ...patient, pei: updatedPEI });
+                                          const updatedPEI = peiGoals.filter((g: any) => g.id !== goal.id);
+                                          savePeiGoals(updatedPEI);
                                         }}
                                         className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
                                       >
@@ -2373,8 +2404,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                       className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                                       value={goal.progress}
                                       onChange={(e) => {
-                                        const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, progress: parseInt(e.target.value) } : g);
-                                        onUpdatePatient({ ...patient, pei: updatedPEI });
+                                        const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? { ...g, progress: parseInt(e.target.value) } : g);
+                                        savePeiGoals(updatedPEI);
                                       }}
                                     />
                                   </div>
@@ -2485,7 +2516,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                 onChange={e => { setSelectedProtocolId(e.target.value); setSelectedDomainId(''); setSelectedSkillId(''); }}
                               >
                                 <option value="">Selecione...</option>
-                                {planType === 'task' && patient.pei && patient.pei.length > 0 && (
+                                {planType === 'task' && peiGoals.length > 0 && (
                                   <optgroup label="Plano de Ensino (PEI)">
                                     <option value="pei-goals">Metas do PEI</option>
                                   </optgroup>
@@ -2502,7 +2533,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                   className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" 
                                   value={selectedSkillId} 
                                   onChange={e => {
-                                    const goal = patient.pei.find((g: any) => String(g.id) === e.target.value);
+                                    const goal = peiGoals.find((g: any) => String(g.id) === e.target.value);
                                     setSelectedSkillId(e.target.value);
                                     if (goal) {
                                       setFinalTaskTitle(goal.name);
@@ -2511,7 +2542,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                   }}
                                 >
                                   <option value="">Selecione uma meta...</option>
-                                  {patient.pei.map((g: any) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                                  {peiGoals.map((g: any) => <option key={g.id} value={g.id}>{g.name}</option>)}
                                 </select>
                               </div>
                             ) : (
@@ -2673,8 +2704,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
               </div>
 
               <div className="space-y-6">
-                {patient.pei?.filter((g: any) => g.isPriority || g.status === 'in_progress').length > 0 ? (
-                  patient.pei.filter((g: any) => g.isPriority || g.status === 'in_progress').map((goal: any) => (
+                {peiGoals.filter((g: any) => g.isPriority || g.status === 'in_progress').length > 0 ? (
+                  peiGoals.filter((g: any) => g.isPriority || g.status === 'in_progress').map((goal: any) => (
                       <div key={goal.id} className="bg-gray-50 p-6 rounded-[32px] border border-gray-100 relative group">
                         {showTrialConfirmation && lastRecordedGoalId === goal.id && (
                           <div className="absolute inset-x-0 bottom-0 z-30 bg-white/95 backdrop-blur-sm border-t border-gray-100 p-4 animate-slide-up rounded-b-[32px]">

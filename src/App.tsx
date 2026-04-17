@@ -1083,6 +1083,16 @@ export default function App() {
       }
 
       if (diagnosis !== undefined || anamnesisData !== undefined || pei !== undefined || evaluationLinks !== undefined || interventionTaskLinks !== undefined) {
+        const clinicalPatch: any = {
+          ...(diagnosis !== undefined && { diagnosis }),
+          ...(anamnesisData !== undefined && { anamnesisData }),
+          ...(pei !== undefined && { pei }),
+          ...(evaluationLinks !== undefined && { evaluationLinks }),
+          ...(interventionTaskLinks !== undefined && { interventionTaskLinks })
+        };
+        setAllPatients(prev =>
+          prev.map(p => p.id === updatedData.id ? { ...p, ...clinicalPatch } : p)
+        );
         setClinicalRecords(prev => prev.map(r => r.patientId === updatedData.id ? { 
           ...r, 
           ...(diagnosis !== undefined && { diagnosis }),
@@ -1113,6 +1123,9 @@ export default function App() {
       if (
         anamnesisData !== undefined ||
         diagnosis !== undefined ||
+        pei !== undefined ||
+        evaluationLinks !== undefined ||
+        interventionTaskLinks !== undefined ||
         updatedData?.anamnesisRenewalMonths !== undefined ||
         updatedData?.lastAnamnesisAt !== undefined
       ) {
@@ -1124,6 +1137,9 @@ export default function App() {
             : 6,
           lastAnamnesisAt: updatedData?.lastAnamnesisAt || null,
           ...(diagnosis !== undefined && { diagnosis: diagnosis || "" }),
+          ...(pei !== undefined && { pei }),
+          ...(evaluationLinks !== undefined && { evaluationLinks }),
+          ...(interventionTaskLinks !== undefined && { interventionTaskLinks }),
         };
 
         if (anamnesisData !== undefined) {
