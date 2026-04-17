@@ -30,6 +30,9 @@ export default function App() {
       .trim();
 
   const getPatientIdentityKey = (patient: any) => {
+    const rawId = String(patient?.id || '').trim();
+    if (rawId && isUuidLike(rawId)) return `id:${rawId.toLowerCase()}`;
+
     const email = String(patient?.email || '').trim().toLowerCase();
     if (email) return `email:${email}`;
 
@@ -37,6 +40,14 @@ export default function App() {
     if (normalizedName) return `name:${normalizedName}`;
 
     return `id:${String(patient?.id || '')}`;
+  };
+
+  const getPatientAliasKey = (patient: any) => {
+    const email = String(patient?.email || '').trim().toLowerCase();
+    if (email) return `email:${email}`;
+    const normalizedName = normalizeTextKey(patient?.name);
+    if (normalizedName) return `name:${normalizedName}`;
+    return '';
   };
 
   const mergePatients = (current: any[], incoming: any[]) => {
@@ -71,16 +82,19 @@ export default function App() {
   };
 
   const removeMockDuplicates = (patients: any[]) => {
-    const realKeys = new Set(
+    const realAliases = new Set(
       (patients || [])
         .filter((p: any) => isUuidLike(p?.id))
-        .map((p: any) => getPatientIdentityKey(p))
+        .map((p: any) => getPatientAliasKey(p))
+        .filter(Boolean)
     );
 
     return (patients || []).filter((p: any) => {
       const isMock = typeof p?.id === 'string' && p.id.startsWith('mock-');
       if (!isMock) return true;
-      return !realKeys.has(getPatientIdentityKey(p));
+      const alias = getPatientAliasKey(p);
+      if (alias && realAliases.has(alias)) return false;
+      return true;
     });
   };
 

@@ -2367,7 +2367,7 @@ async function startServer() {
       const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
       const professionalId = sanitizeString(req.session.user?.id, 100);
       const patientId = await resolvePatientIdForRequest(rawPatientId, req.session.user, {
-        createIfMissing: true,
+        createIfMissing: false,
         fallbackName: sanitizeString(req.body?.anamnesisData?.nome, 160) || sanitizeString(req.body?.anamnesisData?.name, 160)
       });
       const title = sanitizeString(req.body?.title, 220) || `Ficha_Anamnese_${rawPatientId}`;
@@ -2755,7 +2755,7 @@ async function startServer() {
     try {
       const rawPatientId = sanitizeString(req.params.patientId, 100);
       const patientId = await resolvePatientIdForRequest(rawPatientId, req.session.user, {
-        createIfMissing: true,
+        createIfMissing: false,
         fallbackName: sanitizeString(req.body?.payload?.nome, 160) || sanitizeString(req.body?.payload?.name, 160)
       });
       if (!patientId) return res.status(400).json({ error: 'patientId invÃ¡lido' });
@@ -2905,7 +2905,7 @@ async function startServer() {
       const metadata = req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {};
 
       const patientId = await resolvePatientIdForRequest(rawPatientId, req.session.user, {
-        createIfMissing: true,
+        createIfMissing: false,
         fallbackName: sanitizeString(req.body?.metadata?.patientName, 160)
       });
 
@@ -3144,8 +3144,8 @@ async function startServer() {
     try {
       const resolvedPatientId = await resolvePatientIdForRequest(
         sanitizeString(req.body?.patient_id, 120),
-        req.session.user,
-        { createIfMissing: true, fallbackName: sanitizeString(req.body?.patient_name, 160) }
+      req.session.user,
+      { createIfMissing: false, fallbackName: sanitizeString(req.body?.patient_name, 160) }
       );
       const safeVisibility = new Set(['private', 'shared', 'family', 'professional', 'patient']);
       const payload = cleanObject({
@@ -3272,8 +3272,8 @@ async function startServer() {
     try {
       const resolvedPatientId = await resolvePatientIdForRequest(
         sanitizeString(req.body?.patient_id, 120),
-        req.session.user,
-        { createIfMissing: true, fallbackName: sanitizeString(req.body?.patient_name, 160) }
+      req.session.user,
+      { createIfMissing: false, fallbackName: sanitizeString(req.body?.patient_name, 160) }
       );
       const safeType = sanitizeString(req.body?.type, 80) || 'task';
       const docData = cleanObject({
@@ -3612,8 +3612,8 @@ async function startServer() {
     try {
       const resolvedPatientId = await resolvePatientIdForRequest(
         sanitizeString(req.body?.patient_id, 120),
-        req.session.user,
-        { createIfMissing: true, fallbackName: sanitizeString(req.body?.patient_name, 160) }
+      req.session.user,
+      { createIfMissing: false, fallbackName: sanitizeString(req.body?.patient_name, 160) }
       );
       const payload = cleanObject({
         id: sanitizeString(req.body?.id, 120) || undefined,
