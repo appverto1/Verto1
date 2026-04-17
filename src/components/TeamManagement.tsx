@@ -227,7 +227,7 @@ export function TeamManagement({
                   <div key={member.id} className="p-6 hover:bg-slate-50/50 transition-all flex items-center justify-between group">
                     <div className="flex items-center gap-4">
                       <div className="w-12 h-12 bg-slate-100 rounded-2xl flex items-center justify-center text-slate-400 font-bold text-lg">
-                        {member.name.charAt(0)}
+                    {(String(member?.name || 'P').trim().charAt(0) || 'P').toUpperCase()}
                       </div>
                       <div>
                         <div className="flex items-center gap-2">

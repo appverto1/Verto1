@@ -1510,7 +1510,7 @@ export const ReceptionistDashboard = ({
                               className="p-3 hover:bg-[#F4F7FE] cursor-pointer text-sm font-semibold text-gray-700 border-b border-gray-50 last:border-0 flex items-center gap-2"
                             >
                               <div className="w-6 h-6 rounded-full bg-[#7a32fc]/10 text-[#7a32fc] flex items-center justify-center text-xs">
-                                {p.name.charAt(0)}
+                        {(String(p?.name || "P").trim().charAt(0) || "P").toUpperCase()}
                               </div>
                               {p.name}
                             </div>
@@ -1953,7 +1953,7 @@ export const ReceptionistDashboard = ({
                               <div
                                 className={`w-8 h-8 rounded-full flex items-center justify-center font-semibold text-xs mb-1 ${isKid ? "bg-pink-400 text-white" : "bg-indigo-400 text-white"}`}
                               >
-                                {patientItem.name.charAt(0)}
+                              {(String(patientItem?.name || "P").trim().charAt(0) || "P").toUpperCase()}
                               </div>
                               <h3 className="font-semibold text-gray-700 text-sm truncate tracking-tight max-w-[100px]">
                                 {patientItem.name}

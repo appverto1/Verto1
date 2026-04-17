@@ -3403,7 +3403,7 @@ export function CoordinatorDashboard({
                     >
                       <div className="flex items-center gap-4 mb-4">
                         <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white rounded-2xl flex items-center justify-center font-bold text-slate-900 shadow-sm group-hover:scale-110 transition-transform">
-                          {patient.name[0]}
+                          {(String(patient?.name || "P").trim().charAt(0) || "P").toUpperCase()}
                         </div>
                         <div className="flex-1 min-w-0">
                           <h4 className="font-medium text-slate-900 truncate flex items-center gap-2">
@@ -4109,7 +4109,7 @@ export function CoordinatorDashboard({
                         className="p-3 hover:bg-slate-50 cursor-pointer text-sm font-semibold text-slate-700 border-b border-slate-50 last:border-0 flex items-center gap-2"
                       >
                         <div className="w-6 h-6 rounded-full bg-blue-50 text-[#7a32fc] flex items-center justify-center text-xs">
-                          {p.name.charAt(0)}
+                          {(String(p?.name || "P").trim().charAt(0) || "P").toUpperCase()}
                         </div>
                         {p.name}
                       </div>

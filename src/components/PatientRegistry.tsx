@@ -90,7 +90,7 @@ export const PatientRegistry = ({ patients, clinicalRecords, onBack, onSelectPat
                 <div key={p.id} onClick={() => onSelectPatient(p.id)} className={`bg-white p-5 rounded-[24px] shadow-sm border transition-all cursor-pointer group relative overflow-hidden ${category === 'Criança' ? 'border-pink-100 hover:border-pink-300 hover:shadow-pink-100' : 'border-indigo-100 hover:border-indigo-300 hover:shadow-indigo-100'}`}> 
                   <div className={`absolute top-0 right-0 w-16 h-16 rounded-bl-full opacity-10 transition-transform group-hover:scale-110 ${category === 'Criança' ? 'bg-pink-500' : 'bg-indigo-500'}`}></div> 
                   <div className="flex items-center gap-4 mb-3"> 
-                    <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg text-white ${category === 'Criança' ? 'bg-pink-400' : 'bg-indigo-400'}`}> {p.name.charAt(0)} </div> 
+                        <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg text-white ${category === 'Criança' ? 'bg-pink-400' : 'bg-indigo-400'}`}> {(String(p?.name || 'P').trim().charAt(0) || 'P').toUpperCase()} </div>
                     <div> 
                       <div className="flex items-center gap-2">
                         <h3 className="font-bold text-gray-800 text-lg tracking-tight">{p.name}</h3> 

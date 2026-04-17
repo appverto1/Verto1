@@ -94,7 +94,7 @@ export const DayDetailsModal = ({ isOpen, onClose, date, agenda, onAddSession, o
                 <div key={apt.id} onClick={() => onPatientClick(apt.id)} className="bg-gray-50 p-4 rounded-2xl border border-gray-100 flex items-center justify-between hover:bg-white hover:shadow-sm hover:border-blue-100 transition-all group cursor-pointer">
                       <div className="flex items-center gap-3">
                         <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm text-white ${apt.color.replace('text', 'bg').replace('-100', '-500')}`}>
-                            {apt.name.charAt(0)}
+                      {(String(apt?.name || 'P').trim().charAt(0) || 'P').toUpperCase()}
                         </div>
                         <div>
                             <h4 className="font-bold text-gray-800 text-sm group-hover:text-[#4318FF] transition-colors">{apt.name}</h4>

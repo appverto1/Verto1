@@ -2657,16 +2657,19 @@ async function startServer() {
 
   app.post('/api/patients', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
+      const safeName = sanitizeString(req.body?.name || req.body?.nome, 160);
+      const safeClinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      const safeTherapistId = sanitizeString(req.body?.therapist_id || req.session.user?.id, 100);
       const safeBody = cleanObject({
-        id: sanitizeString(req.body?.id, 100) || undefined,
-        name: sanitizeString(req.body?.name || req.body?.nome, 160),
+        id: isUuid(sanitizeString(req.body?.id, 120)) ? sanitizeString(req.body?.id, 120) : undefined,
+        name: safeName,
         email: sanitizeEmail(req.body?.email),
         phone: sanitizePhone(req.body?.phone || req.body?.telefone),
         age: asSafeNumber(req.body?.age, 0, 130),
         diagnosis: sanitizeString(req.body?.diagnosis, 2000),
         status: sanitizeString(req.body?.status, 40) || undefined,
-        clinic_id: sanitizeString(req.session.user.clinicId || req.session.user.id, 100),
-        therapist_id: sanitizeString(req.body?.therapist_id || req.session.user.id, 100),
+        clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
+        therapist_id: isUuid(safeTherapistId) ? safeTherapistId : undefined,
         created_at: sanitizeString(req.body?.created_at, 40) || new Date().toISOString()
       });
 
@@ -2674,12 +2677,32 @@ async function startServer() {
         return res.status(400).json({ error: 'Nome do paciente Ã© obrigatÃ³rio.' });
       }
 
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('patients')
         .upsert([safeBody], { onConflict: 'id' })
         .select()
         .single();
-      
+
+      if (error) {
+        const fallbackRow = cleanObject({
+          id: safeBody.id,
+          name: safeBody.name,
+          email: safeBody.email,
+          phone: safeBody.phone,
+          age: safeBody.age,
+          diagnosis: safeBody.diagnosis
+        });
+
+        const fallbackResult = await supabase
+          .from('patients')
+          .upsert([fallbackRow], { onConflict: 'id' })
+          .select()
+          .single();
+
+        data = fallbackResult.data;
+        error = fallbackResult.error;
+      }
+
       if (error) throw error;
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
