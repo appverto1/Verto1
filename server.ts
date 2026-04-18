@@ -2677,6 +2677,32 @@ async function startServer() {
         return res.status(400).json({ error: 'Nome do paciente Ã© obrigatÃ³rio.' });
       }
 
+      if (!safeBody.id && safeBody.clinic_id) {
+        let dedupeQuery = supabase
+          .from('patients')
+          .select('*')
+          .eq('clinic_id', safeBody.clinic_id)
+          .ilike('name', safeBody.name)
+          .limit(1)
+          .maybeSingle();
+
+        if (safeBody.phone) {
+          dedupeQuery = supabase
+            .from('patients')
+            .select('*')
+            .eq('clinic_id', safeBody.clinic_id)
+            .eq('phone', safeBody.phone)
+            .ilike('name', safeBody.name)
+            .limit(1)
+            .maybeSingle();
+        }
+
+        const dedupeResult = await dedupeQuery;
+        if (!dedupeResult.error && dedupeResult.data?.id) {
+          return res.json({ success: true, data: dedupeResult.data, deduped: true });
+        }
+      }
+
       let { data, error } = await supabase
         .from('patients')
         .upsert([safeBody], { onConflict: 'id' })

@@ -194,6 +194,55 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     return "6";
   };
 
+  const baseAnamnesisData = useMemo(() => {
+    const existing = (patient?.anamnesisData && typeof patient.anamnesisData === "object")
+      ? patient.anamnesisData
+      : {};
+    const addressObj = (patient?.address && typeof patient.address === "object")
+      ? patient.address
+      : {};
+    const birthDate = String(existing?.dataNascimento || patient?.birthDate || "").trim();
+    const computedAge = Number.isFinite(Number(existing?.idade))
+      ? Number(existing?.idade)
+      : (Number.isFinite(Number(patient?.age)) ? Number(patient.age) : undefined);
+    const normalizedGroup = String(existing?.grupo || patient?.group || "").trim().toLowerCase();
+    const isMinorByGroup = normalizedGroup === "infantil" || normalizedGroup === "adolescente";
+    const isMinorByAge = Number.isFinite(Number(computedAge)) ? Number(computedAge) < 18 : false;
+    const menorDeIdade = existing?.menorDeIdade !== undefined
+      ? Boolean(existing.menorDeIdade)
+      : Boolean(patient?.isMinor || isMinorByGroup || isMinorByAge);
+
+    return {
+      ...existing,
+      nome: existing?.nome || patient?.name || "",
+      nomeSocial: existing?.nomeSocial || patient?.socialName || "",
+      telefone: existing?.telefone || patient?.phone || "",
+      dataNascimento: birthDate,
+      idade: existing?.idade || (computedAge !== undefined ? String(computedAge) : ""),
+      genero: existing?.genero || patient?.gender || "",
+      convenioTipo: existing?.convenioTipo || patient?.insuranceType || "particular",
+      convenioNome: existing?.convenioNome || patient?.insuranceName || "",
+      convenioCarteirinha: existing?.convenioCarteirinha || patient?.cardNumber || "",
+      grupo: existing?.grupo || patient?.group || "",
+      comoConheceu: existing?.comoConheceu || patient?.source || "",
+      rg: existing?.rg || patient?.rg || "",
+      cpf: existing?.cpf || patient?.cpf || "",
+      cep: existing?.cep || patient?.cep || addressObj?.cep || "",
+      email: existing?.email || patient?.email || "",
+      logradouro: existing?.logradouro || addressObj?.logradouro || "",
+      numero: existing?.numero || addressObj?.numero || "",
+      complemento: existing?.complemento || addressObj?.complemento || "",
+      bairro: existing?.bairro || addressObj?.bairro || "",
+      cidade: existing?.cidade || addressObj?.cidade || "",
+      outrasInformacoes: existing?.outrasInformacoes || patient?.notes || "",
+      menorDeIdade,
+      responsavelNome: existing?.responsavelNome || patient?.guardian?.nome || "",
+      responsavelDataNascimento: existing?.responsavelDataNascimento || patient?.guardian?.dataNascimento || "",
+      responsavelCpf: existing?.responsavelCpf || patient?.guardian?.cpf || "",
+      responsavelTelefone: existing?.responsavelTelefone || patient?.guardian?.telefone || "",
+    };
+  }, [patient]);
+
   const normalizePeiGoal = (goal: any, index: number) => {
     const normalizedTerm = String(goal?.term || "short").toLowerCase();
     const term = ["short", "medium", "long"].includes(normalizedTerm)
@@ -1240,10 +1289,15 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     if (isPreparingAnamnesisSave || showAnamnesisFileModal) return;
     setIsPreparingAnamnesisSave(true);
 
-    const fichePayload = buildAnamnesisDocumentHtml(updatedData, anamnesisFileDate);
-    const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.pdf`;
+    const mergedAnamnesisData = {
+      ...baseAnamnesisData,
+      ...(updatedData && typeof updatedData === "object" ? updatedData : {})
+    };
+    const fichePayload = buildAnamnesisDocumentHtml(mergedAnamnesisData, anamnesisFileDate);
+    const safePatientName = String(patient?.name || "Paciente").replace(/\s+/g, "_");
+    const defaultName = `Ficha_Anamnese_${safePatientName}_${new Date().toISOString().slice(0, 10)}.pdf`;
     setPendingAnamnesisPayload(fichePayload);
-    setPendingAnamnesisData(updatedData);
+    setPendingAnamnesisData(mergedAnamnesisData);
     setAnamnesisFileName(defaultName);
     setAnamnesisFileDate(new Date().toISOString().slice(0, 10));
     setShowAnamnesis(false);
@@ -1413,10 +1467,10 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
             : new Date().toISOString();
           onUpdatePatient({
             id: patient.id,
-            name: pendingAnamnesisData.nome || patient?.name,
-            phone: pendingAnamnesisData.telefone || patient?.phone,
-            address: pendingAnamnesisData.endereco || patient?.address,
-            diagnosis: pendingAnamnesisData.motivoConsulta || patient?.diagnosis,
+            name: patient?.name,
+            phone: patient?.phone,
+            address: patient?.address,
+            diagnosis: pendingAnamnesisData?.motivoConsulta || patient?.diagnosis,
             anamnesisData: pendingAnamnesisData,
             anamnesisPending: false,
             anamnesisRenewalMonths: renewalMonths,
@@ -1780,7 +1834,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
       <AnamnesisModal
         isOpen={showAnamnesis}
         onClose={() => setShowAnamnesis(false)}
-        initialData={patient.anamnesisData || { nome: patient.name }}
+        initialData={baseAnamnesisData}
         onSave={handleUpdateAnamnesis}
         mode="edit"
         template={anamnesisTemplate}
