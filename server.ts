@@ -571,6 +571,23 @@ async function resolvePatientIdForRequest(
   return sanitizeString(created.id, 120);
 }
 
+async function resolvePatientPortalTypeByEmail(email: string | null | undefined): Promise<string | null> {
+  const safeEmail = sanitizeEmail(email);
+  if (!safeEmail) return null;
+  const { data, error } = await supabase
+    .from('patients')
+    .select('type')
+    .eq('email', safeEmail)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  const safeType = sanitizeString(data.type, 40);
+  return safeType === 'kids_tea' || safeType === 'adult_tea' || safeType === 'adult_conventional'
+    ? safeType
+    : null;
+}
+
 async function fetchUserWorkspaces(userId: string) {
   const { data, error } = await supabase
     .from('clinic_memberships')
@@ -1454,7 +1471,7 @@ async function startServer() {
           'Essencial': 149.90,
           'Crescimento': 399.90,
           'AvanÃ§ado': 679.90,
-          'Paciente': 4.90
+          'Paciente': 0
         };
 
         const finalPlanName = roleToUse === 'patient' ? 'Paciente' : normalizeProfessionalPlan(planName);
@@ -1466,7 +1483,7 @@ async function startServer() {
           name: name || email.split('@')[0],
           role: roleToUse,
           clinic_id: roleToUse === 'coordinator' ? userId : null, // Workspace ativo inicial
-          subscription_status: 'pending', // Default to pending until onboarding/payment
+          subscription_status: roleToUse === 'patient' ? 'active' : 'pending',
           plan_name: finalPlanName,
           plan_price: finalPlanPrice,
           created_at: new Date().toISOString()
@@ -1503,7 +1520,7 @@ async function startServer() {
           profilePicture: sanitizeUrl(newProfile.profile_picture) || null,
           type: newProfile.type || null,
           age: typeof newProfile.age === 'number' ? newProfile.age : null,
-          subscriptionStatus: 'pending',
+          subscriptionStatus: roleToUse === 'patient' ? 'active' : 'pending',
           planName: finalPlanName,
           planPrice: finalPlanPrice,
           clinicId: newProfile.clinic_id,
@@ -1675,9 +1692,9 @@ async function startServer() {
           name: user.user_metadata?.full_name || user.email?.split('@')[0],
           role: finalRole,
           clinic_id: clinicId,
-          subscription_status: 'pending',
+          subscription_status: finalRole === 'patient' ? 'active' : 'pending',
           plan_name: finalRole === 'patient' ? 'Paciente' : null,
-          plan_price: finalRole === 'patient' ? 4.90 : null,
+          plan_price: finalRole === 'patient' ? 0 : null,
           created_at: new Date().toISOString()
         };
 
@@ -1771,6 +1788,10 @@ async function startServer() {
       const selectedWorkspace = workspaces.find((w: any) => w.clinicId === profile.clinic_id) || workspaces[0] || null;
       const roleForSession = selectedWorkspace?.role || profile.role;
       const clinicForSession = selectedWorkspace?.clinicId || profile.clinic_id;
+      const patientPortalType =
+        roleForSession === 'patient'
+          ? await resolvePatientPortalTypeByEmail(user.email)
+          : null;
 
       const userData = {
         id: user.id,
@@ -1778,7 +1799,7 @@ async function startServer() {
         role: roleForSession,
         name: profile.name,
         profilePicture: sanitizeUrl(profile.profile_picture) || null,
-        type: profile.type || user.user_metadata?.type || null,
+        type: patientPortalType || profile.type || user.user_metadata?.type || null,
         age: typeof profile.age === 'number' ? profile.age : null,
         subscriptionStatus: profile.subscription_status,
         planName: profile.plan_name,
@@ -2454,6 +2475,11 @@ async function startServer() {
   // Create Patient User Account (called by therapist when adding a patient)
   app.post('/api/patients/create-user', checkAuth, async (req: any, res) => {
     const { email, name } = req.body;
+    const incomingType = sanitizeString(req.body?.type, 40);
+    const safePatientType =
+      incomingType === 'kids_tea' || incomingType === 'adult_tea' || incomingType === 'adult_conventional'
+        ? incomingType
+        : null;
     if (!email) return res.status(400).json({ error: 'Email is required' });
 
     try {
@@ -2494,8 +2520,10 @@ async function startServer() {
               email: email,
               name: name || email.split('@')[0],
               role: 'patient',
-              subscription_status: 'pending',
-              plan_price: 4.90,
+              type: safePatientType,
+              subscription_status: 'active',
+              plan_name: 'Paciente',
+              plan_price: 0,
               created_at: new Date().toISOString()
             };
             await supabase.from('users').insert([newProfile]);
@@ -2512,8 +2540,10 @@ async function startServer() {
           email: email,
           name: name || email.split('@')[0],
           role: 'patient',
-          subscription_status: 'pending',
-          plan_price: 4.90,
+          type: safePatientType,
+          subscription_status: 'active',
+          plan_name: 'Paciente',
+          plan_price: 0,
           created_at: new Date().toISOString()
         };
 
@@ -2660,12 +2690,18 @@ async function startServer() {
       const safeName = sanitizeString(req.body?.name || req.body?.nome, 160);
       const safeClinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
       const safeTherapistId = sanitizeString(req.body?.therapist_id || req.session.user?.id, 100);
+      const safePortalTypeRaw = sanitizeString(req.body?.type || req.body?.patientProfileType, 40);
+      const safePortalType =
+        safePortalTypeRaw === 'kids_tea' || safePortalTypeRaw === 'adult_tea' || safePortalTypeRaw === 'adult_conventional'
+          ? safePortalTypeRaw
+          : undefined;
       const safeBody = cleanObject({
         id: isUuid(sanitizeString(req.body?.id, 120)) ? sanitizeString(req.body?.id, 120) : undefined,
         name: safeName,
         email: sanitizeEmail(req.body?.email),
         phone: sanitizePhone(req.body?.phone || req.body?.telefone),
         age: asSafeNumber(req.body?.age, 0, 130),
+        type: safePortalType,
         diagnosis: sanitizeString(req.body?.diagnosis, 2000),
         status: sanitizeString(req.body?.status, 40) || undefined,
         clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
@@ -2716,6 +2752,7 @@ async function startServer() {
           email: safeBody.email,
           phone: safeBody.phone,
           age: safeBody.age,
+          type: safeBody.type,
           diagnosis: safeBody.diagnosis
         });
 
@@ -2770,6 +2807,14 @@ async function startServer() {
         email: req.body?.email !== undefined ? sanitizeEmail(req.body?.email) : undefined,
         phone: req.body?.phone !== undefined ? sanitizePhone(req.body?.phone) : undefined,
         age: req.body?.age !== undefined ? asSafeNumber(req.body?.age, 0, 130) : undefined,
+        type: req.body?.type !== undefined
+          ? (() => {
+              const safeType = sanitizeString(req.body?.type, 40);
+              return safeType === 'kids_tea' || safeType === 'adult_tea' || safeType === 'adult_conventional'
+                ? safeType
+                : undefined;
+            })()
+          : undefined,
         diagnosis: req.body?.diagnosis !== undefined ? sanitizeString(req.body?.diagnosis, 2000) : undefined,
         clinic_id: clinicIdUpdate,
         status: req.body?.status !== undefined ? sanitizeString(req.body?.status, 40) : undefined

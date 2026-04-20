@@ -905,10 +905,7 @@ export function CoordinatorDashboard({
         title: "Paciente adicionado",
         message: `O paciente ${newPatient.name} foi cadastrado com sucesso.`,
       });
-      showToast(
-        "Dados salvos com sucesso! Custo de R$ 4,90 será cobrado da clínica.",
-        "info",
-      );
+      showToast("Dados salvos com sucesso!", "info");
     }
     setIsPatientRegistrationModalOpen(false);
     resetPatientForm();
@@ -3514,7 +3511,11 @@ export function CoordinatorDashboard({
                           </span>
                         </div>
                         <div className="px-2 py-1 bg-slate-100 text-slate-500 rounded-lg text-[8px] font-bold uppercase">
-                          {patient.id.startsWith("P") ? "Infantil" : "Adulto"}
+                          {patient.type === "kids_tea"
+                            ? "Kids TEA"
+                            : patient.type === "adult_tea"
+                              ? "Adulto TEA"
+                              : "Adulto Convencional"}
                         </div>
                       </div>
                       <div className="mt-3 grid grid-cols-2 gap-2">

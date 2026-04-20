@@ -199,13 +199,13 @@ export const dataService = {
     }
   },
 
-  async createPatientUser(email: string, name: string) {
+  async createPatientUser(email: string, name: string, type?: string) {
     try {
       const response = await fetch('/api/patients/create-user', {
         method: 'POST',
         headers: await getAuthHeaders(),
         credentials: 'include',
-        body: JSON.stringify({ email, name })
+        body: JSON.stringify({ email, name, type })
       });
       if (response.ok) {
         return await response.json();

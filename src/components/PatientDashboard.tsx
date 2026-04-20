@@ -45,7 +45,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const isKidsProfile =
     userType === 'kids_tea' ||
     (!hasExplicitPatientType && ((userAge !== null && userAge <= 12) || user.anamnesisData?.formType === 'child'));
-  const isConventionalAdult = userType === 'conventional' && !isKidsProfile;
+  const isConventionalAdult = (userType === 'conventional' || userType === 'adult_conventional') && !isKidsProfile;
 
   const conventionalMoodTags = [
     { id: 'family', label: 'Família', icon: '👨‍👩‍👧‍👦', color: 'bg-blue-100 text-blue-600' },
@@ -675,7 +675,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       </div> 
       {!dailyCheckinDone ? ( 
         <div className="mb-8 animate-slide-up"> 
-          <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2 px-1"> {user.type === 'conventional' ? <Smile size={16} /> : <BatteryCharging size={16} />} {user.type === 'conventional' ? 'Como você se sente?' : 'Como se sente agora?'} </h2> 
+          <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2 px-1"> {(user.type === 'conventional' || user.type === 'adult_conventional') ? <Smile size={16} /> : <BatteryCharging size={16} />} {(user.type === 'conventional' || user.type === 'adult_conventional') ? 'Como você se sente?' : 'Como se sente agora?'} </h2> 
           <div className="flex overflow-x-auto pb-8 pt-4 -mx-6 px-6 gap-4 snap-x snap-mandatory no-scrollbar items-center"> 
             {moodOptions.map((mood) => { 
               const isHovered = hoveredMood === mood.value; 
@@ -684,7 +684,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 <button key={mood.value} onClick={() => handleEmojiClick(mood)} onMouseEnter={() => setHoveredMood(mood.value)} onMouseLeave={() => setHoveredMood(null)} className={` snap-center shrink-0 w-40 h-56 sm:w-48 sm:h-64 rounded-[32px] flex flex-col items-center p-6 transition-all duration-500 border-4 shadow-lg ${mood.color} ${isHovered ? 'scale-110 -translate-y-4 shadow-2xl z-10 rotate-1' : 'scale-100'} ${isDimmed ? 'opacity-50 scale-95 blur-[1px]' : 'opacity-100'} group relative overflow-hidden `} > 
                   <div className="absolute top-[-20%] right-[-20%] w-24 h-24 rounded-full bg-white/20 blur-xl"></div> 
                   <div className="absolute bottom-[-10%] left-[-10%] w-20 h-20 rounded-full bg-white/30 blur-lg"></div> 
-                  <div className="w-full flex justify-between items-center opacity-60 group-hover:opacity-100 transition-opacity z-10"> {user.type !== 'conventional' && <React.Fragment><BatteryFull size={20} className="text-gray-700" /> <span className="text-xs font-semibold text-gray-700">{mood.value}%</span></React.Fragment>} </div> 
+                  <div className="w-full flex justify-between items-center opacity-60 group-hover:opacity-100 transition-opacity z-10"> {(user.type !== 'conventional' && user.type !== 'adult_conventional') && <React.Fragment><BatteryFull size={20} className="text-gray-700" /> <span className="text-xs font-semibold text-gray-700">{mood.value}%</span></React.Fragment>} </div> 
                   <span className="text-7xl sm:text-8xl filter drop-shadow-md transform transition-transform duration-500 group-hover:scale-125 group-hover:rotate-12 z-10 my-auto"> {mood.emoji} </span> 
                 </button> 
               ); 
@@ -794,7 +794,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-pop relative"> 
             <button onClick={closeMoodModal} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button> 
             <div className="text-center mb-4"> 
-              {user.type !== 'conventional' && (
+              {(user.type !== 'conventional' && user.type !== 'adult_conventional') && (
                 <div className="inline-flex items-center gap-2 bg-gray-100 px-4 py-1.5 rounded-full mb-4"> <BatteryFull size={16} className="text-gray-500" /> <span className="text-sm font-semibold text-gray-600">Energia registrada: <span className="text-[#7a32fc]">{selectedMood.value}%</span></span> </div> 
               )}
               <div className="text-6xl mb-2 animate-bounce-slight">{selectedMood.emoji}</div> 

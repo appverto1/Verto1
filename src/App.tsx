@@ -728,6 +728,7 @@ export default function App() {
 
                   hydratedPatients.push({
                     id: patient.id,
+                    type: payload.patientProfileType ?? payload.type ?? patient.type ?? null,
                     socialName: payload.nomeSocial ?? patient.socialName ?? null,
                     gender: payload.genero ?? patient.gender ?? null,
                     insuranceType: payload.convenioTipo ?? patient.insuranceType ?? null,
@@ -937,6 +938,15 @@ export default function App() {
     const newId = data.id || Date.now(); 
     
     // Identity Data (Pseudonymized)
+    const resolvedPortalType =
+      data.type ||
+      data.patientProfileType ||
+      (data.approach === 'ABA'
+        ? 'kids_tea'
+        : data.approach === 'TO'
+          ? 'adult_tea'
+          : 'adult_conventional');
+
     const newPatient = { 
       id: newId, 
       name: data.name, 
@@ -944,7 +954,7 @@ export default function App() {
       phone: data.phone, 
       age: data.anamnesisData?.idade || data.age || 0, 
       approach: data.approach, 
-      type: data.approach === 'ABA' ? 'neurodevelopment' : data.approach === 'TO' ? 'occupational' : 'conventional',
+      type: resolvedPortalType,
       anamnesisData: data.anamnesisData || null,
       anamnesisRenewalMonths: [2, 3, 6, 12].includes(Number(data.anamnesisRenewalMonths))
         ? Number(data.anamnesisRenewalMonths)
@@ -973,7 +983,11 @@ export default function App() {
     
     // 1. Create patient user account if email provided
     if (data.email) {
-      const userResult = await dataService.createPatientUser(data.email, data.name);
+      const userResult = await dataService.createPatientUser(
+        data.email,
+        data.name,
+        resolvedPortalType,
+      );
       if (userResult.success) {
         console.log(`User account created for patient: ${data.email}`);
         if (userResult.tempPassword) {
@@ -1024,7 +1038,8 @@ export default function App() {
       email: data.email || '',
       phone: data.phone,
       age: data.anamnesisData?.idade || data.age || 0,
-      diagnosis: data.diagnosis
+      diagnosis: data.diagnosis,
+      type: resolvedPortalType
     });
 
     let persistedPatientId: string | number = newId;
@@ -1068,6 +1083,7 @@ export default function App() {
         ? Number(data.anamnesisRenewalMonths)
         : 6,
       lastAnamnesisAt: data.lastAnamnesisAt || null,
+      patientProfileType: resolvedPortalType,
       anamnese: data.anamnesisData || {}
     });
   };
@@ -1120,6 +1136,7 @@ export default function App() {
         phone: updatedData.phone,
         age: updatedData.age,
         diagnosis: updatedData.diagnosis,
+        type: updatedData.type,
         clinic_id: updatedData.clinic_id,
         status: updatedData.status
       });
@@ -1127,6 +1144,7 @@ export default function App() {
       if (
         anamnesisData !== undefined ||
         diagnosis !== undefined ||
+        updatedData?.type !== undefined ||
         pei !== undefined ||
         evaluationLinks !== undefined ||
         interventionTaskLinks !== undefined ||
@@ -1141,6 +1159,7 @@ export default function App() {
             : 6,
           lastAnamnesisAt: updatedData?.lastAnamnesisAt || null,
           ...(diagnosis !== undefined && { diagnosis: diagnosis || "" }),
+          ...(updatedData?.type !== undefined && { patientProfileType: updatedData.type }),
           ...(pei !== undefined && { pei }),
           ...(evaluationLinks !== undefined && { evaluationLinks }),
           ...(interventionTaskLinks !== undefined && { interventionTaskLinks }),
@@ -1632,7 +1651,7 @@ export default function App() {
           }} 
           onClose={() => setShowOnboarding(false)}
         />
-      ) : user.subscriptionStatus === 'pending' ? (
+      ) : user.role !== 'patient' && user.subscriptionStatus === 'pending' ? (
         <SubscriptionRequired user={user} onLogout={handleLogout} />
       ) : user.role === 'patient' ? (
         <PatientDashboard 
@@ -1642,7 +1661,7 @@ export default function App() {
           tasks={tasks.filter(t => t.patientId === user.id)} 
           onCompleteTask={handleCompleteTask} 
           history={history.filter(h => h.patientId === user.id)} 
-          energyTags={user.type === 'conventional' ? ADULT_CONVENTIONAL_TAGS : ENERGY_TAGS} 
+          energyTags={(user.type === 'conventional' || user.type === 'adult_conventional') ? ADULT_CONVENTIONAL_TAGS : ENERGY_TAGS} 
           sharedNotes={therapistNotes.filter(n => n.patientId === user.id && n.type === 'shared')} 
           protocols={protocols} 
           onAddFamilyNote={handleAddFamilyNote} 
