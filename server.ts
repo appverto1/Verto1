@@ -59,6 +59,112 @@ const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ENCRYPTION_ALGO = 'aes-256-gcm';
 const paymentStatuses = new Set(['paid', 'pending', 'canceled', 'refunded', 'delinquent']);
+const MFA_REQUIRED_ROLES = new Set<AppRole>(['coordinator', 'therapist', 'receptionist']);
+const INVALID_LOGIN_ATTEMPTS_LIMIT = 5;
+const INVALID_LOGIN_WINDOW_MS = 60 * 1000;
+const BLACKLIST_STEPS_MS = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000];
+
+type LoginAttemptState = {
+  fails: number[];
+  level: number;
+  blockedUntil: number;
+};
+
+const loginAttemptTracker = new Map<string, LoginAttemptState>();
+
+function isMfaEnforcedRole(role: unknown): role is AppRole {
+  return ensureRole(role) && MFA_REQUIRED_ROLES.has(role);
+}
+
+function normalizeIpAddress(req: any): string {
+  const forwarded = sanitizeString(String(req.headers['x-forwarded-for'] || ''), 200);
+  const candidate = forwarded ? forwarded.split(',')[0].trim() : '';
+  return sanitizeString(candidate || req.ip || req.connection?.remoteAddress || 'unknown', 200) || 'unknown';
+}
+
+function isIpBlocked(ip: string): { blocked: boolean; retryAfterSec?: number } {
+  const state = loginAttemptTracker.get(ip);
+  if (!state) return { blocked: false };
+  if (Date.now() < state.blockedUntil) {
+    return { blocked: true, retryAfterSec: Math.max(1, Math.ceil((state.blockedUntil - Date.now()) / 1000)) };
+  }
+  if (state.blockedUntil > 0) {
+    state.blockedUntil = 0;
+    state.fails = [];
+    loginAttemptTracker.set(ip, state);
+  }
+  return { blocked: false };
+}
+
+function registerInvalidLoginAttempt(ip: string) {
+  const now = Date.now();
+  const state = loginAttemptTracker.get(ip) || { fails: [], level: 0, blockedUntil: 0 };
+  state.fails = state.fails.filter((ts) => now - ts <= INVALID_LOGIN_WINDOW_MS);
+  state.fails.push(now);
+
+  if (state.fails.length >= INVALID_LOGIN_ATTEMPTS_LIMIT) {
+    const level = Math.min(state.level, BLACKLIST_STEPS_MS.length - 1);
+    state.blockedUntil = now + BLACKLIST_STEPS_MS[level];
+    state.level = Math.min(state.level + 1, BLACKLIST_STEPS_MS.length - 1);
+    state.fails = [];
+  }
+  loginAttemptTracker.set(ip, state);
+}
+
+function clearInvalidLoginAttempts(ip: string) {
+  if (!loginAttemptTracker.has(ip)) return;
+  loginAttemptTracker.delete(ip);
+}
+
+function computeWeakETag(payload: unknown): string {
+  const json = JSON.stringify(payload ?? null);
+  const hash = crypto.createHash('sha1').update(json).digest('hex');
+  return `W/\"${hash}\"`;
+}
+
+function parseHeaderDateMillis(input: unknown): number | null {
+  if (typeof input !== 'string' || !input.trim()) return null;
+  const parsed = Date.parse(input);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+}
+
+function maxUpdatedAtMillis(rows: any[]): number {
+  if (!Array.isArray(rows) || rows.length === 0) return 0;
+  let max = 0;
+  for (const row of rows) {
+    const candidates = [row?.updated_at, row?.timestamp, row?.created_at];
+    for (const value of candidates) {
+      const t = parseHeaderDateMillis(String(value || ''));
+      if (t && t > max) max = t;
+    }
+  }
+  return max;
+}
+
+function respondWithConditionalCache(req: any, res: any, payload: unknown, rows: any[]) {
+  const etag = computeWeakETag(payload);
+  const latestMillis = maxUpdatedAtMillis(rows);
+  const lastModified = latestMillis > 0 ? new Date(latestMillis).toUTCString() : new Date().toUTCString();
+
+  res.setHeader('ETag', etag);
+  res.setHeader('Last-Modified', lastModified);
+  res.setHeader('Cache-Control', 'private, must-revalidate');
+
+  const ifNoneMatch = sanitizeString(String(req.headers['if-none-match'] || ''), 200);
+  const ifModifiedSinceMs = parseHeaderDateMillis(String(req.headers['if-modified-since'] || ''));
+  const localLastUpdatedRaw = Number(req.headers['x-last-updated']);
+  const localLastUpdatedMs = Number.isFinite(localLastUpdatedRaw) ? localLastUpdatedRaw : null;
+
+  const isFreshByEtag = ifNoneMatch && ifNoneMatch === etag;
+  const isFreshByModified = ifModifiedSinceMs != null && latestMillis > 0 && latestMillis <= ifModifiedSinceMs;
+  const isFreshByClientHint = localLastUpdatedMs != null && latestMillis > 0 && latestMillis <= localLastUpdatedMs;
+
+  if (isFreshByEtag || isFreshByModified || isFreshByClientHint) {
+    return res.status(304).end();
+  }
+  return res.status(200).json(payload);
+}
 
 function sanitizeString(value: unknown, maxLength = 5000): string {
   if (typeof value !== 'string') return '';
@@ -648,10 +754,17 @@ function compactWorkspacesForSession(workspaces: any[]) {
 }
 
 function buildSessionUserPayload(input: any) {
+  const role = ensureRole(input?.role) ? input.role : 'therapist';
+  const mfaEnabled = Boolean(input?.mfaEnabled);
+  const mfaVerified =
+    typeof input?.mfaVerified === 'boolean'
+      ? input.mfaVerified
+      : (isMfaEnforcedRole(role) ? false : true);
+
   return {
     id: sanitizeString(input?.id, 120),
     email: sanitizeEmail(input?.email) || sanitizeString(input?.email, 320),
-    role: ensureRole(input?.role) ? input.role : 'therapist',
+    role,
     name: sanitizeString(input?.name, 180),
     profilePicture: sanitizeSessionUrl(input?.profilePicture),
     type: sanitizeString(input?.type, 80) || null,
@@ -661,6 +774,8 @@ function buildSessionUserPayload(input: any) {
     planPrice: asSafeNumber(input?.planPrice, 0, 100000) || null,
     clinicId: sanitizeString(input?.clinicId, 120) || null,
     firstLoginCompleted: Boolean(input?.firstLoginCompleted),
+    mfaEnabled,
+    mfaVerified,
     clinicSettings: compactClinicSettingsForSession(input?.clinicSettings),
     workspaces: compactWorkspacesForSession(input?.workspaces || [])
   };
@@ -1005,6 +1120,8 @@ async function startServer() {
               planPrice: profile.plan_price,
               clinicId: selectedWorkspace?.clinicId || profile.clinic_id,
               firstLoginCompleted: profile.first_login_completed || user.user_metadata?.first_login_completed,
+              mfaEnabled: Boolean(profile.two_factor_enabled),
+              mfaVerified: !isMfaEnforcedRole(selectedWorkspace?.role || profile.role),
               clinicSettings: user.user_metadata?.clinic_settings || null,
               workspaces
             });
@@ -1018,6 +1135,60 @@ async function startServer() {
 
     console.warn(`[Auth] Unauthorized access attempt to ${req.path}`);
     res.status(401).json({ error: 'Unauthorized - No valid session or token' });
+  };
+
+  const checkProgressiveIpBlacklist = (req: any, res: any, next: any) => {
+    const ip = normalizeIpAddress(req);
+    const blocked = isIpBlocked(ip);
+    if (!blocked.blocked) return next();
+    return res.status(429).json({
+      error: 'Muitas tentativas inválidas de login. Tente novamente em alguns instantes.',
+      retryAfterSec: blocked.retryAfterSec || 60
+    });
+  };
+
+  const requireMfaForSensitiveApis = (req: any, res: any, next: any) => {
+    const sessionUser = req.session?.user;
+    if (!sessionUser) return res.status(401).json({ error: 'Não autenticado.' });
+    if (!isMfaEnforcedRole(sessionUser.role)) return next();
+    if (sessionUser.mfaEnabled === true && sessionUser.mfaVerified === true) return next();
+    return res.status(403).json({
+      error: 'MFA obrigatório para acesso a prontuário e relatório.',
+      code: 'MFA_REQUIRED'
+    });
+  };
+
+  const persistRecordReadAudit = async (params: {
+    req: any;
+    patientId: string | null;
+    targetRoute: string;
+    outcome: 'allowed' | 'denied';
+    reason?: string;
+  }) => {
+    const sessionUser = params.req?.session?.user;
+    const ip = normalizeIpAddress(params.req);
+    const userId = sanitizeString(sessionUser?.id, 120) || null;
+    const role = sanitizeString(sessionUser?.role, 40) || null;
+    const clinicId = sanitizeString(currentClinicId(sessionUser), 120) || null;
+    const patientId = sanitizeString(params.patientId, 120) || null;
+    const targetRoute = sanitizeString(params.targetRoute, 200) || '/api/unknown';
+    const reason = sanitizeString(params.reason, 500) || null;
+
+    try {
+      await supabase.from('record_read_audit').insert([{
+        user_id: userId,
+        clinic_id: clinicId,
+        role,
+        patient_id: patientId,
+        route: targetRoute,
+        ip_address: ip,
+        outcome: params.outcome,
+        reason,
+        created_at: new Date().toISOString()
+      }]);
+    } catch (error) {
+      console.warn('[ReadAudit] Falha ao persistir auditoria de leitura:', String(error));
+    }
   };
 
   const persistActivityLogRow = async (mode: 'insert' | 'upsert', payload: any) => {
@@ -1197,6 +1368,8 @@ async function startServer() {
   const checkPatientAccess = async (req: any, res: any, next: any) => {
     const user = req.session.user;
     const rawPatientId = sanitizeString(req.params.patientId || req.body.patient_id, 120);
+    const isReadAttempt = req.method === 'GET';
+    const targetRoute = sanitizeString(req.originalUrl || req.path, 220) || req.path;
 
     if (!rawPatientId) return next();
 
@@ -1205,11 +1378,42 @@ async function startServer() {
       req.resolvedPatientId = resolvedPatientId || rawPatientId;
 
       // Admin bypass
-      if (user.role === 'admin' || user.role === 'coordinator' || user.role === 'receptionist') return next();
+      if (user.role === 'admin' || user.role === 'coordinator' || user.role === 'receptionist') {
+        if (isReadAttempt) {
+          void persistRecordReadAudit({
+            req,
+            patientId: resolvedPatientId || rawPatientId,
+            targetRoute,
+            outcome: 'allowed',
+            reason: 'staff_role_access'
+          });
+        }
+        return next();
+      }
 
       // Check if user is the patient themselves
-      if (user.id === rawPatientId || (resolvedPatientId && user.id === resolvedPatientId)) return next();
+      if (user.id === rawPatientId || (resolvedPatientId && user.id === resolvedPatientId)) {
+        if (isReadAttempt) {
+          void persistRecordReadAudit({
+            req,
+            patientId: resolvedPatientId || rawPatientId,
+            targetRoute,
+            outcome: 'allowed',
+            reason: 'self_access'
+          });
+        }
+        return next();
+      }
       if (!resolvedPatientId) {
+        if (isReadAttempt) {
+          void persistRecordReadAudit({
+            req,
+            patientId: rawPatientId,
+            targetRoute,
+            outcome: 'denied',
+            reason: 'patient_not_found'
+          });
+        }
         return res.status(404).json({ error: 'Paciente não encontrado' });
       }
 
@@ -1221,20 +1425,78 @@ async function startServer() {
         .single();
 
       if (error || !patient) {
+        if (isReadAttempt) {
+          void persistRecordReadAudit({
+            req,
+            patientId: resolvedPatientId,
+            targetRoute,
+            outcome: 'denied',
+            reason: 'patient_not_found'
+          });
+        }
         return res.status(404).json({ error: 'Paciente nÃ£o encontrado' });
       }
 
       if (patient.therapist_id === user.id) {
+        if (isReadAttempt) {
+          void persistRecordReadAudit({
+            req,
+            patientId: resolvedPatientId,
+            targetRoute,
+            outcome: 'allowed',
+            reason: 'therapist_owner_access'
+          });
+        }
         return next();
       }
 
-      // If in the same clinic, allow access (for coordination)
+      // Therapist must be directly linked to the patient; same-clinic fallback is blocked.
+      if (user.role === 'therapist') {
+        if (isReadAttempt) {
+          void persistRecordReadAudit({
+            req,
+            patientId: resolvedPatientId,
+            targetRoute,
+            outcome: 'denied',
+            reason: 'therapist_not_linked_to_patient'
+          });
+        }
+        return res.status(403).json({ error: 'Acesso negado a este prontuÃ¡rio' });
+      }
+
       if (patient.clinic_id && patient.clinic_id === currentClinicId(user)) {
+        if (isReadAttempt) {
+          void persistRecordReadAudit({
+            req,
+            patientId: resolvedPatientId,
+            targetRoute,
+            outcome: 'allowed',
+            reason: 'same_clinic_access'
+          });
+        }
         return next();
       }
 
+      if (isReadAttempt) {
+        void persistRecordReadAudit({
+          req,
+          patientId: resolvedPatientId,
+          targetRoute,
+          outcome: 'denied',
+          reason: 'access_denied'
+        });
+      }
       return res.status(403).json({ error: 'Acesso negado a este prontuÃ¡rio' });
     } catch (err) {
+      if (isReadAttempt) {
+        void persistRecordReadAudit({
+          req,
+          patientId: rawPatientId,
+          targetRoute,
+          outcome: 'denied',
+          reason: 'access_check_error'
+        });
+      }
       return res.status(500).json({ error: 'Erro ao verificar permissÃµes' });
     }
   };
@@ -1328,6 +1590,9 @@ async function startServer() {
   // 2FA Setup - Generate Secret and QR Code
   app.post('/api/auth/2fa/setup', async (req, res) => {
     if (!req.session.user) return res.status(401).json({ error: "NÃ£o autenticado" });
+    if (!isMfaEnforcedRole(req.session.user.role) && req.session.user.role !== 'admin' && req.session.user.role !== 'owner') {
+      return res.status(403).json({ error: "MFA não é obrigatório para este perfil nesta fase." });
+    }
     
     const userEmail = req.session.user.email;
     const secret = generateSecret();
@@ -1350,6 +1615,9 @@ async function startServer() {
     if (!req.session.user || !req.session.temp2faSecret) {
       return res.status(401).json({ error: "SessÃ£o invÃ¡lida para setup de 2FA" });
     }
+    if (!isMfaEnforcedRole(req.session.user.role) && req.session.user.role !== 'admin' && req.session.user.role !== 'owner') {
+      return res.status(403).json({ error: "MFA não é obrigatório para este perfil nesta fase." });
+    }
     
     const { token } = req.body;
     const result = verifySync({ token, secret: req.session.temp2faSecret });
@@ -1370,30 +1638,43 @@ async function startServer() {
         
       if (error) throw error;
       
+      if (req.session.user) {
+        req.session.user.mfaEnabled = true;
+        req.session.user.mfaVerified = true;
+      }
       delete req.session.temp2faSecret;
-      res.json({ success: true });
+      req.session.save(() => {
+        res.json({ success: true, user: req.session.user || null });
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
   // 2FA Login Verification
-  app.post('/api/auth/2fa/login', async (req, res) => {
+  app.post('/api/auth/2fa/login', checkProgressiveIpBlacklist, async (req, res) => {
     const { email, token } = req.body;
     if (!email || !token) return res.status(400).json({ error: "E-mail e cÃ³digo sÃ£o obrigatÃ³rios" });
     
     try {
       const { data: { users } } = await supabase.auth.admin.listUsers();
       const user = users.find(u => u.email === email);
-      if (!user) return res.status(404).json({ error: "UsuÃ¡rio nÃ£o encontrado" });
+      if (!user) {
+        registerInvalidLoginAttempt(normalizeIpAddress(req));
+        return res.status(404).json({ error: "UsuÃ¡rio nÃ£o encontrado" });
+      }
       
       const { data: profile } = await supabase.from('users').select('*').eq('id', user.id).single();
       if (!profile || !profile.two_factor_enabled || !profile.two_factor_secret) {
+        registerInvalidLoginAttempt(normalizeIpAddress(req));
         return res.status(400).json({ error: "2FA nÃ£o habilitado para este usuÃ¡rio" });
       }
       
       const result = verifySync({ token, secret: profile.two_factor_secret });
-      if (!result.valid) return res.status(400).json({ error: 'Codigo invalido' });
+      if (!result.valid) {
+        registerInvalidLoginAttempt(normalizeIpAddress(req));
+        return res.status(400).json({ error: 'Codigo invalido' });
+      }
 
       const workspaces = await fetchUserWorkspaces(user.id);
       const selectedWorkspace = workspaces.find((w: any) => w.clinicId === profile.clinic_id) || workspaces[0] || null;
@@ -1411,10 +1692,13 @@ async function startServer() {
         planName: profile.plan_name,
         planPrice: profile.plan_price,
         clinicId: selectedWorkspace?.clinicId || profile.clinic_id,
+        mfaEnabled: Boolean(profile.two_factor_enabled),
+        mfaVerified: true,
         workspaces
       };
       
       req.session.user = buildSessionUserPayload(userData);
+      clearInvalidLoginAttempts(normalizeIpAddress(req));
       res.json({ success: true, user: userData });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1550,7 +1834,7 @@ async function startServer() {
 
   // --- AUTH ROUTES ---
   // Login (receives Supabase access token from client, verifies it, and sets session)
-  app.post('/api/auth/login', async (req, res) => {
+  app.post('/api/auth/login', checkProgressiveIpBlacklist, async (req, res) => {
     const { intendedRole } = req.body;
     let accessToken = sanitizeString(req.body?.accessToken, 8000);
     const credentialEmail = sanitizeEmail(req.body?.email);
@@ -1573,6 +1857,7 @@ async function startServer() {
         });
 
         if (credError || !credData?.session?.access_token) {
+          registerInvalidLoginAttempt(normalizeIpAddress(req));
           return res.status(401).json({
             error: "INVALID_CREDENTIALS",
             message: "E-mail ou senha invÃ¡lidos."
@@ -1587,6 +1872,7 @@ async function startServer() {
       const tokenMatch = tokenMatchesCurrentProject(accessToken);
       if (!tokenMatch.ok) {
         console.error('[Auth] Project mismatch in /api/auth/login:', tokenMatch.reason);
+        registerInvalidLoginAttempt(normalizeIpAddress(req));
         return res.status(401).json({
           error: "AUTH_PROJECT_MISMATCH",
           message: "Token de autenticaÃ§Ã£o nÃ£o pertence a este ambiente."
@@ -1635,6 +1921,7 @@ async function startServer() {
 
       if (error || !user) {
         console.error('[Auth] Supabase auth error during token verification:', error || 'No user found');
+        registerInvalidLoginAttempt(normalizeIpAddress(req));
         return res.status(401).json({ error: "SessÃ£o expirada ou invÃ¡lida. Por favor, faÃ§a login novamente." });
       }
 
@@ -1650,11 +1937,6 @@ async function startServer() {
       if (profileError && profileError.code !== 'PGRST116') {
         console.error('Profile fetch error:', profileError);
         return res.status(500).json({ error: "Erro ao buscar perfil do usuÃ¡rio", details: profileError.message });
-      }
-
-      // Check for 2FA
-      if (profile?.two_factor_enabled) {
-        return res.json({ success: true, twoFactorRequired: true, email: user.email });
       }
 
       // If profile doesn't exist (first time Google login), create it
@@ -1788,6 +2070,39 @@ async function startServer() {
       const selectedWorkspace = workspaces.find((w: any) => w.clinicId === profile.clinic_id) || workspaces[0] || null;
       const roleForSession = selectedWorkspace?.role || profile.role;
       const clinicForSession = selectedWorkspace?.clinicId || profile.clinic_id;
+      const mfaEnforced = isMfaEnforcedRole(roleForSession);
+
+      if (mfaEnforced && !profile?.two_factor_enabled) {
+        const bootstrapData = {
+          id: user.id,
+          email: user.email,
+          role: roleForSession,
+          name: profile?.name || user.user_metadata?.full_name || user.email?.split('@')[0],
+          profilePicture: sanitizeUrl(profile?.profile_picture) || null,
+          type: profile?.type || user.user_metadata?.type || null,
+          age: typeof profile?.age === 'number' ? profile.age : null,
+          subscriptionStatus: profile?.subscription_status || 'pending',
+          planName: profile?.plan_name || null,
+          planPrice: profile?.plan_price || null,
+          clinicId: clinicForSession || null,
+          firstLoginCompleted: profile?.first_login_completed || user.user_metadata?.first_login_completed,
+          mfaEnabled: false,
+          mfaVerified: false,
+          clinicSettings: user.user_metadata?.clinic_settings || null,
+          workspaces
+        };
+        req.session.user = buildSessionUserPayload(bootstrapData);
+        req.session.save(() => {
+          clearInvalidLoginAttempts(normalizeIpAddress(req));
+          res.json({ success: true, mfaSetupRequired: true, email: user.email });
+        });
+        return;
+      }
+
+      if (profile?.two_factor_enabled && mfaEnforced) {
+        clearInvalidLoginAttempts(normalizeIpAddress(req));
+        return res.json({ success: true, twoFactorRequired: true, email: user.email });
+      }
       const patientPortalType =
         roleForSession === 'patient'
           ? await resolvePatientPortalTypeByEmail(user.email)
@@ -1806,6 +2121,8 @@ async function startServer() {
         planPrice: profile.plan_price,
         clinicId: clinicForSession,
         firstLoginCompleted: profile.first_login_completed || user.user_metadata?.first_login_completed,
+        mfaEnabled: Boolean(profile.two_factor_enabled),
+        mfaVerified: !mfaEnforced,
         clinicSettings: user.user_metadata?.clinic_settings || null,
         workspaces
       };
@@ -1821,10 +2138,12 @@ async function startServer() {
           return;
         }
         res.json({ success: true, user: userData, isFirstLogin: req.session.isFirstLogin });
+        clearInvalidLoginAttempts(normalizeIpAddress(req));
         delete req.session.isFirstLogin;
       });
     } catch (error) {
       console.error("Login verification error:", error);
+      registerInvalidLoginAttempt(normalizeIpAddress(req));
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -1878,6 +2197,11 @@ async function startServer() {
 
       req.session.user.clinicId = clinicId;
       req.session.user.role = selected.role;
+      if (isMfaEnforcedRole(selected.role)) {
+        req.session.user.mfaVerified = Boolean(req.session.user.mfaEnabled && req.session.user.mfaVerified);
+      } else {
+        req.session.user.mfaVerified = true;
+      }
       req.session.user.workspaces = compactWorkspacesForSession(workspaces);
 
       req.session.save((err: any) => {
@@ -2382,7 +2706,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/patient-anamnesis/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/patient-anamnesis/:patientId', checkAuth, requireMfaForSensitiveApis, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const rawPatientId = sanitizeString(req.params.patientId, 100);
       const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
@@ -2446,7 +2770,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patient-anamnesis/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/patient-anamnesis/:patientId', checkAuth, requireMfaForSensitiveApis, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
       const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
@@ -2775,7 +3099,7 @@ async function startServer() {
         content: `Paciente ${safeBody.name} (${data?.id || safeBody.id || 'sem-id'}) foi salvo no sistema.`,
         type: 'management'
       });
-      res.json({ success: true, data });
+      return respondWithConditionalCache(req, res, { success: true, data }, data || []);
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }
@@ -2861,7 +3185,7 @@ async function startServer() {
   });
 
   // Secure patient record storage (encrypted JSON payload)
-  app.post('/api/patient-records/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
+  app.post('/api/patient-records/:patientId', checkAuth, requireMfaForSensitiveApis, checkPatientAccess, async (req: any, res) => {
     try {
       const rawPatientId = sanitizeString(req.params.patientId, 100);
       const patientId = await resolvePatientIdForRequest(rawPatientId, req.session.user, {
@@ -2953,7 +3277,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patient-files/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
+  app.get('/api/patient-files/:patientId', checkAuth, requireMfaForSensitiveApis, checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
       if (!patientId) return res.status(400).json({ success: false, error: 'patientId inválido.' });
@@ -3002,7 +3326,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/patient-files/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/patient-files/:patientId', checkAuth, requireMfaForSensitiveApis, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const rawPatientId = sanitizeString(req.params.patientId, 100);
       const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
@@ -3118,7 +3442,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/patient-files/:patientId/:fileId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.delete('/api/patient-files/:patientId/:fileId', checkAuth, requireMfaForSensitiveApis, checkPatientAccess, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
       const fileId = sanitizeString(req.params.fileId, 120);
@@ -3168,7 +3492,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patient-records/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
+  app.get('/api/patient-records/:patientId', checkAuth, requireMfaForSensitiveApis, checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
       if (!patientId) return res.status(400).json({ error: 'patientId invÃ¡lido' });
@@ -3206,7 +3530,7 @@ async function startServer() {
   });
 
   // Notes
-  app.get('/api/notes/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
+  app.get('/api/notes/:patientId', checkAuth, requireMfaForSensitiveApis, checkPatientAccess, async (req, res) => {
     try {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
@@ -3250,7 +3574,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/notes', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/notes', checkAuth, requireMfaForSensitiveApis, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
     try {
       const resolvedPatientId = await resolvePatientIdForRequest(
         sanitizeString(req.body?.patient_id, 120),
@@ -3305,13 +3629,13 @@ async function startServer() {
         content: `Nota salva para paciente ${payload.patient_id}. Visibilidade: ${payload.visibility || 'privada'}.`,
         type: 'clinical'
       });
-      res.json({ success: true, data });
+      return respondWithConditionalCache(req, res, { success: true, data }, data || []);
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }
   });
 
-  app.delete('/api/notes/:id', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.delete('/api/notes/:id', checkAuth, requireMfaForSensitiveApis, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const noteId = sanitizeString(req.params?.id, 120);
       if (!noteId) {
@@ -3350,7 +3674,7 @@ async function startServer() {
   });
 
   // History
-  app.get('/api/history/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
+  app.get('/api/history/:patientId', checkAuth, requireMfaForSensitiveApis, checkPatientAccess, async (req, res) => {
     try {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
@@ -3394,7 +3718,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/history', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/history', checkAuth, requireMfaForSensitiveApis, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
     try {
       const resolvedPatientId = await resolvePatientIdForRequest(
         sanitizeString(req.body?.patient_id, 120),
@@ -3690,7 +4014,7 @@ async function startServer() {
   });
 
   // Tasks
-  app.get('/api/tasks/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
+  app.get('/api/tasks/:patientId', checkAuth, requireMfaForSensitiveApis, checkPatientAccess, async (req, res) => {
     try {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
@@ -3734,7 +4058,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tasks', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/tasks', checkAuth, requireMfaForSensitiveApis, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const resolvedPatientId = await resolvePatientIdForRequest(
         sanitizeString(req.body?.patient_id, 120),

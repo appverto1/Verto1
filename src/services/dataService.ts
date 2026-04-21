@@ -1,5 +1,14 @@
 import { getSupabase } from '../lib/supabase';
-import { db, generateId } from './localDb';
+import {
+  generateId,
+  getEndpointCacheMeta,
+  getLatestTypeUpdate,
+  getRecordById,
+  getRecordsByType,
+  markRecordSyncStatus,
+  saveEncryptedRecord,
+  setEndpointCacheMeta
+} from './localDb';
 
 enum OperationType {
   CREATE = 'create',
@@ -59,10 +68,33 @@ async function safeJson(response: Response) {
   }
 }
 
+type OfflineType = 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment';
+
+async function buildConditionalHeaders(endpoint: string, type: OfflineType, includeBearer = false) {
+  const headers = await getAuthHeaders(includeBearer);
+  const meta = await getEndpointCacheMeta(endpoint);
+  const latest = await getLatestTypeUpdate(type);
+
+  if (meta?.etag) headers['If-None-Match'] = meta.etag;
+  if (meta?.last_modified) headers['If-Modified-Since'] = meta.last_modified;
+  if (latest) headers['X-Last-Updated'] = String(latest);
+
+  return headers;
+}
+
+async function cacheResponseMetadata(endpoint: string, response: Response, lastUpdated?: number | null) {
+  await setEndpointCacheMeta({
+    endpoint,
+    etag: response.headers.get('etag'),
+    last_modified: response.headers.get('last-modified'),
+    last_seen_updated: lastUpdated || null
+  });
+}
+
 // Helper to handle offline-first saving
-async function saveOfflineFirst(id: string, data: any, type: any, endpoint: string, method: 'POST' | 'PATCH' = 'POST') {
+async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' = 'POST') {
   // 1. Save locally first
-  await db.records.put({
+  await saveEncryptedRecord({
     id,
     data,
     type,
@@ -84,7 +116,7 @@ async function saveOfflineFirst(id: string, data: any, type: any, endpoint: stri
     if (response.ok) {
       const result = await response.json();
       // 3. Mark as synced if successful
-      await db.records.update(id, { sync_status: 'synced' });
+      await markRecordSyncStatus(id, 'synced');
       return result;
     }
   } catch (error) {
@@ -103,24 +135,40 @@ export const dataService = {
   },
 
   async getPatients() {
+    const endpoint = '/api/patients';
     try {
-      const response = await fetch('/api/patients', {
-        headers: await getAuthHeaders(),
+      const response = await fetch(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'patient'),
         credentials: 'include'
       });
+      if (response.status === 304) {
+        const local304 = await getRecordsByType('patient');
+        return { success: true, data: local304.map((r) => r.data) };
+      }
       if (response.ok) {
         const result = await response.json();
-        // Update local cache
-        for (const p of result.data) {
-          await db.records.put({ id: p.id, data: p, type: 'patient', sync_status: 'synced', last_updated: Date.now(), method: 'POST', endpoint: '/api/patients' });
+        let latest = 0;
+        for (const p of result.data || []) {
+          const updatedAtMs = p?.updated_at ? new Date(p.updated_at).getTime() : Date.now();
+          latest = Math.max(latest, Number.isFinite(updatedAtMs) ? updatedAtMs : Date.now());
+          await saveEncryptedRecord({
+            id: p.id,
+            data: p,
+            type: 'patient',
+            sync_status: 'synced',
+            last_updated: latest,
+            method: 'POST',
+            endpoint
+          });
         }
+        await cacheResponseMetadata(endpoint, response, latest || null);
         return result;
       }
     } catch (error) {
       console.log('Fetching patients from local storage...');
     }
-    const local = await db.records.where('type').equals('patient').toArray();
-    return { success: true, data: local.map(r => r.data) };
+    const local = await getRecordsByType('patient');
+    return { success: true, data: local.map((r) => r.data) };
   },
 
   async savePatient(patient: any) {
@@ -222,42 +270,76 @@ export const dataService = {
   },
 
   async getActivityLogs() {
+    const endpoint = '/api/logs';
     try {
-      const response = await fetch('/api/logs', {
-        headers: await getAuthHeaders(),
+      const response = await fetch(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'log'),
         credentials: 'include'
       });
+      if (response.status === 304) {
+        const local304 = await getRecordsByType('log');
+        return { success: true, data: local304.map((r) => r.data) };
+      }
       if (response.ok) {
         const result = await response.json();
-        for (const l of result.data) {
-          await db.records.put({ id: l.id, data: l, type: 'log', sync_status: 'synced', last_updated: Date.now(), method: 'POST', endpoint: '/api/logs' });
+        let latest = 0;
+        for (const l of result.data || []) {
+          const timestampMs = l?.timestamp ? new Date(l.timestamp).getTime() : Date.now();
+          latest = Math.max(latest, Number.isFinite(timestampMs) ? timestampMs : Date.now());
+          await saveEncryptedRecord({
+            id: l.id,
+            data: l,
+            type: 'log',
+            sync_status: 'synced',
+            last_updated: latest,
+            method: 'POST',
+            endpoint
+          });
         }
+        await cacheResponseMetadata(endpoint, response, latest || null);
         return result;
       }
     } catch (error) {
       console.log('Fetching logs from local storage...');
     }
-    const local = await db.records.where('type').equals('log').toArray();
+    const local = await getRecordsByType('log');
     return { success: true, data: local.map(r => r.data) };
   },
 
   async getNotes(patientId: string) {
+    const endpoint = `/api/notes/${patientId}`;
     try {
-      const response = await fetch(`/api/notes/${patientId}`, {
-        headers: await getAuthHeaders(),
+      const response = await fetch(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'note'),
         credentials: 'include'
       });
+      if (response.status === 304) {
+        const local304 = await getRecordsByType('note');
+        return { success: true, data: local304.filter((r) => r.data.patient_id === patientId).map((r) => r.data) };
+      }
       if (response.ok) {
         const result = await response.json();
-        for (const n of result.data) {
-          await db.records.put({ id: n.id, data: n, type: 'note', sync_status: 'synced', last_updated: Date.now(), method: 'POST', endpoint: '/api/notes' });
+        let latest = 0;
+        for (const n of result.data || []) {
+          const updatedAtMs = n?.updated_at ? new Date(n.updated_at).getTime() : (n?.created_at ? new Date(n.created_at).getTime() : Date.now());
+          latest = Math.max(latest, Number.isFinite(updatedAtMs) ? updatedAtMs : Date.now());
+          await saveEncryptedRecord({
+            id: n.id,
+            data: n,
+            type: 'note',
+            sync_status: 'synced',
+            last_updated: latest,
+            method: 'POST',
+            endpoint
+          });
         }
+        await cacheResponseMetadata(endpoint, response, latest || null);
         return result;
       }
     } catch (error) {
       console.log('Fetching notes from local storage...');
     }
-    const local = await db.records.where('type').equals('note').toArray();
+    const local = await getRecordsByType('note');
     return { success: true, data: local.filter(r => r.data.patient_id === patientId).map(r => r.data) };
   },
 
@@ -274,7 +356,7 @@ export const dataService = {
     } catch (error) {
       console.log('Fetching notes by email from local storage...');
     }
-    const local = await db.records.where('type').equals('note').toArray();
+    const local = await getRecordsByType('note');
     return { success: true, data: local.filter(r => r.data.patient_email === email).map(r => r.data) };
   },
 
@@ -307,14 +389,14 @@ export const dataService = {
       if (response.ok) {
         const result = await response.json();
         for (const h of result.data) {
-          await db.records.put({ id: h.id, data: h, type: 'history', sync_status: 'synced', last_updated: Date.now(), method: 'POST', endpoint: '/api/history' });
+          await saveEncryptedRecord({ id: h.id, data: h, type: 'history', sync_status: 'synced', last_updated: Date.now(), method: 'POST', endpoint: '/api/history' });
         }
         return result;
       }
     } catch (error) {
       console.log('Fetching history from local storage...');
     }
-    const local = await db.records.where('type').equals('history').toArray();
+    const local = await getRecordsByType('history');
     return { success: true, data: local.filter(r => r.data.patient_id === patientId).map(r => r.data) };
   },
 
@@ -331,7 +413,7 @@ export const dataService = {
     } catch (error) {
       console.log('Fetching history by email from local storage...');
     }
-    const local = await db.records.where('type').equals('history').toArray();
+    const local = await getRecordsByType('history');
     return { success: true, data: local.filter(r => r.data.patient_email === email).map(r => r.data) };
   },
 
@@ -350,14 +432,14 @@ export const dataService = {
       if (response.ok) {
         const result = await response.json();
         for (const t of result.data) {
-          await db.records.put({ id: t.id, data: t, type: 'task', sync_status: 'synced', last_updated: Date.now(), method: 'POST', endpoint: '/api/tasks' });
+          await saveEncryptedRecord({ id: t.id, data: t, type: 'task', sync_status: 'synced', last_updated: Date.now(), method: 'POST', endpoint: '/api/tasks' });
         }
         return result;
       }
     } catch (error) {
       console.log('Fetching tasks from local storage...');
     }
-    const local = await db.records.where('type').equals('task').toArray();
+    const local = await getRecordsByType('task');
     return { success: true, data: local.filter(r => r.data.patient_id === patientId).map(r => r.data) };
   },
 
@@ -374,7 +456,7 @@ export const dataService = {
     } catch (error) {
       console.log('Fetching tasks by email from local storage...');
     }
-    const local = await db.records.where('type').equals('task').toArray();
+    const local = await getRecordsByType('task');
     return { success: true, data: local.filter(r => r.data.patient_email === email).map(r => r.data) };
   },
 
@@ -418,13 +500,13 @@ export const dataService = {
       });
       if (response.ok) {
         const result = await response.json();
-        await db.records.put({ id: userId, data: result, type: 'profile', sync_status: 'synced', last_updated: Date.now(), method: 'POST', endpoint: `/api/profile/${userId}` });
+        await saveEncryptedRecord({ id: userId, data: result, type: 'profile', sync_status: 'synced', last_updated: Date.now(), method: 'POST', endpoint: `/api/profile/${userId}` });
         return result;
       }
     } catch (error) {
       console.log('Fetching profile from local storage...');
     }
-    const local = await db.records.get(userId);
+    const local = await getRecordById(userId);
     return local ? local.data : { success: false };
   },
 
