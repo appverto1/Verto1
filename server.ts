@@ -122,6 +122,73 @@ function sanitizeDate(value: unknown): string | null {
   return date;
 }
 
+const HTML_ESCAPE_MAP: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+  '`': '&#96;'
+};
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"'`]/g, (char) => HTML_ESCAPE_MAP[char] || char);
+}
+
+function sanitizeTextField(value: unknown, maxLength = 5000): string {
+  return escapeHtml(sanitizeString(value, maxLength));
+}
+
+function approximateBodySizeBytes(body: any): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(body || {}), 'utf8');
+  } catch {
+    return 0;
+  }
+}
+
+function enforcePayloadLimit(req: any, res: any, maxBytes: number, label: string): boolean {
+  const contentLength = Number(req.headers?.['content-length'] || 0);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    res.status(413).json({ error: `${label} excede o limite permitido.` });
+    return false;
+  }
+
+  const actualBytes = approximateBodySizeBytes(req.body);
+  if (actualBytes > maxBytes) {
+    res.status(413).json({ error: `${label} excede o limite permitido.` });
+    return false;
+  }
+  return true;
+}
+
+const DANGEROUS_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+
+function sanitizeClinicalPayload(input: any, depth = 0): any {
+  if (depth > 8) return null;
+  if (input === null || input === undefined) return null;
+
+  if (typeof input === 'string') {
+    return sanitizeTextField(input, 4000);
+  }
+  if (typeof input === 'number' || typeof input === 'boolean') {
+    return input;
+  }
+  if (Array.isArray(input)) {
+    return input.slice(0, 200).map((item) => sanitizeClinicalPayload(item, depth + 1));
+  }
+  if (typeof input !== 'object') return null;
+
+  const safe: Record<string, any> = {};
+  const entries = Object.entries(input).slice(0, 300);
+  for (const [rawKey, value] of entries) {
+    const key = sanitizeString(rawKey, 120);
+    if (!key || DANGEROUS_OBJECT_KEYS.has(key)) continue;
+    safe[key] = sanitizeClinicalPayload(value, depth + 1);
+  }
+  return safe;
+}
+
 function getTrustedMediaHosts(): Set<string> {
   const hosts = new Set<string>();
   const envHosts = sanitizeString(process.env.TRUSTED_MEDIA_HOSTS || '', 2000)
@@ -648,6 +715,25 @@ function listAnamnesisTemplateChanges(previousTemplate: any, nextTemplate: any):
 function currentClinicId(user: any): string | null {
   const id = sanitizeString(user?.clinicId || user?.clinic_id || user?.id, 120);
   return id || null;
+}
+
+function hasGlobalClinicAccess(user: any): boolean {
+  const role = sanitizeString(user?.role, 40).toLowerCase();
+  return role === 'admin' || role === 'owner';
+}
+
+async function getClinicPatientIdsByEmail(clinicId: string, patientEmail: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('patients')
+    .select('id')
+    .eq('clinic_id', clinicId)
+    .eq('email', patientEmail)
+    .limit(500);
+
+  if (error) return [];
+  return (data || [])
+    .map((row: any) => sanitizeString(row?.id, 120))
+    .filter((id: string) => isUuid(id));
 }
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -1271,8 +1357,8 @@ async function startServer() {
       const resolvedPatientId = await resolvePatientIdForRequest(rawPatientId, user, { createIfMissing: false });
       req.resolvedPatientId = resolvedPatientId || rawPatientId;
 
-      // Admin bypass
-      if (user.role === 'admin' || user.role === 'coordinator' || user.role === 'receptionist') return next();
+      // Global backoffice bypass only
+      if (hasGlobalClinicAccess(user)) return next();
 
       // Check if user is the patient themselves
       if (user.id === rawPatientId || (resolvedPatientId && user.id === resolvedPatientId)) return next();
@@ -2810,13 +2896,14 @@ async function startServer() {
 
   app.patch('/api/patients/:id', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
+      const canChangeClinic = hasGlobalClinicAccess(req.session.user);
       const updates = cleanObject({
         name: req.body?.name !== undefined ? sanitizeString(req.body?.name, 160) : undefined,
         email: req.body?.email !== undefined ? sanitizeEmail(req.body?.email) : undefined,
         phone: req.body?.phone !== undefined ? sanitizePhone(req.body?.phone) : undefined,
         age: req.body?.age !== undefined ? asSafeNumber(req.body?.age, 0, 130) : undefined,
         diagnosis: req.body?.diagnosis !== undefined ? sanitizeString(req.body?.diagnosis, 2000) : undefined,
-        clinic_id: req.body?.clinic_id !== undefined ? sanitizeString(req.body?.clinic_id, 100) : undefined,
+        clinic_id: canChangeClinic && req.body?.clinic_id !== undefined ? sanitizeString(req.body?.clinic_id, 100) : undefined,
         status: req.body?.status !== undefined ? sanitizeString(req.body?.status, 40) : undefined
       });
 
@@ -2843,24 +2930,31 @@ async function startServer() {
   // Secure patient record storage (encrypted JSON payload)
   app.post('/api/patient-records/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
     try {
+      if (!enforcePayloadLimit(req, res, 512 * 1024, 'Payload do prontuário')) return;
       const rawPatientId = sanitizeString(req.params.patientId, 100);
+      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      if (!clinicId) return res.status(400).json({ error: 'clinicId inválido' });
       const patientId = await resolvePatientIdForRequest(rawPatientId, req.session.user, {
         createIfMissing: true,
         fallbackName: sanitizeString(req.body?.payload?.nome, 160) || sanitizeString(req.body?.payload?.name, 160)
       });
       if (!patientId) return res.status(400).json({ error: 'patientId invÃ¡lido' });
 
-      const payload = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
-      const { data: existingRow } = await supabase
+      const payloadRaw = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
+      const payload = sanitizeClinicalPayload(payloadRaw);
+      let existingQuery = supabase
         .from('patient_records')
         .select('payload_encrypted')
-        .eq('patient_id', patientId)
-        .maybeSingle();
+        .eq('patient_id', patientId);
+      if (!hasGlobalClinicAccess(req.session.user)) {
+        existingQuery = existingQuery.eq('clinic_id', clinicId);
+      }
+      const { data: existingRow } = await existingQuery.maybeSingle();
       const existingPayload = decryptJsonPayload(existingRow?.payload_encrypted) || {};
-      const mergedPayload = cleanObject({
+      const mergedPayload = sanitizeClinicalPayload(cleanObject({
         ...existingPayload,
         ...payload
-      });
+      })) || {};
 
       const encrypted = encryptJsonPayload(mergedPayload);
       const pseudonymSeed = [
@@ -2871,7 +2965,7 @@ async function startServer() {
 
       const row = cleanObject({
         patient_id: patientId,
-        clinic_id: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100),
+        clinic_id: clinicId,
         therapist_id: sanitizeString(req.session.user?.id, 100),
         pseudonym_id: `pt_${pseudonymizeValue(pseudonymSeed)}`,
         payload_encrypted: encrypted || null,
@@ -2900,7 +2994,7 @@ async function startServer() {
 
       const actorId = sanitizeString(req.session.user?.id, 120);
       const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
-      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120);
+      const clinicAuditId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120);
       const hasFilesPayload = Array.isArray(mergedPayload?.files);
       const hasAnamnesisPayload = Boolean(mergedPayload?.template_version || mergedPayload?.anamnesisTemplateVersion || mergedPayload?.anamnese);
       const filesCount = hasFilesPayload ? mergedPayload.files.length : 0;
@@ -2908,7 +3002,7 @@ async function startServer() {
         if (hasAnamnesisPayload) {
           void persistActivityLog({
             userId: actorId,
-            clinicId,
+            clinicId: clinicAuditId,
             actorName,
             title: 'Ficha de anamnese registrada',
             content: `${actorName} registrou/atualizou a ficha de anamnese do paciente ${patientId} em ${new Date().toLocaleString('pt-BR')}.`,
@@ -2918,7 +3012,7 @@ async function startServer() {
         if (hasFilesPayload) {
           void persistActivityLog({
             userId: actorId,
-            clinicId,
+            clinicId: clinicAuditId,
             actorName,
             title: 'Arquivos do prontuário atualizados',
             content: `${actorName} atualizou os arquivos do paciente ${patientId}. Total de arquivos armazenados: ${filesCount}.`,
@@ -3156,14 +3250,21 @@ async function startServer() {
   app.get('/api/patient-records/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
+      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
       if (!patientId) return res.status(400).json({ error: 'patientId invÃ¡lido' });
       if (!isUuid(patientId)) return res.json({ success: true, data: null });
+      if (!clinicId && !hasGlobalClinicAccess(req.session.user)) {
+        return res.status(400).json({ error: 'clinicId inválido' });
+      }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('patient_records')
         .select('patient_id, pseudonym_id, payload_encrypted, payload_preview, updated_at')
-        .eq('patient_id', patientId)
-        .maybeSingle();
+        .eq('patient_id', patientId);
+      if (!hasGlobalClinicAccess(req.session.user)) {
+        query = query.eq('clinic_id', clinicId);
+      }
+      const { data, error } = await query.maybeSingle();
 
       if (error) {
         if (String(error?.message || '').toLowerCase().includes('patient_records')) {
@@ -3210,24 +3311,32 @@ async function startServer() {
 
   app.get('/api/notes/email/:email', checkAuth, async (req: any, res) => {
     try {
+      const safeEmail = sanitizeEmail(req.params.email);
+      if (!safeEmail) return res.status(400).json({ error: 'E-mail inválido.' });
+      const userRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const isPrivileged = ['therapist', 'coordinator', 'receptionist', 'admin', 'owner'].includes(userRole);
+      const isSelfRequest = sanitizeEmail(req.session.user?.email) === safeEmail;
+
       // Only allow if searching for own email OR if therapist
-      if (
-        req.session.user.role !== 'therapist' &&
-        req.session.user.role !== 'coordinator' &&
-        req.session.user.role !== 'receptionist' &&
-        req.session.user.role !== 'admin' &&
-        req.session.user.role !== 'owner' &&
-        req.session.user.email !== req.params.email
-      ) {
+      if (!isPrivileged && !isSelfRequest) {
         return res.status(403).json({ error: 'Acesso negado' });
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('notes')
         .select('*')
-        .eq('patient_email', req.params.email)
+        .eq('patient_email', safeEmail)
         .order('created_at', { ascending: false });
+
+      if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
+        const clinicId = currentClinicId(req.session.user);
+        if (!clinicId) return res.status(403).json({ error: 'Clínica não identificada.' });
+        const clinicPatientIds = await getClinicPatientIdsByEmail(clinicId, safeEmail);
+        if (clinicPatientIds.length === 0) return res.json({ success: true, data: [] });
+        query = query.in('patient_id', clinicPatientIds);
+      }
       
+      const { data, error } = await query;
       if (error) throw error;
       res.json({ success: true, data });
     } catch (error) {
@@ -3237,6 +3346,7 @@ async function startServer() {
 
   app.post('/api/notes', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
     try {
+      if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de anotações')) return;
       const resolvedPatientId = await resolvePatientIdForRequest(
         sanitizeString(req.body?.patient_id, 120),
         req.session.user,
@@ -3247,9 +3357,9 @@ async function startServer() {
         id: sanitizeString(req.body?.id, 120) || undefined,
         patient_id: resolvedPatientId,
         patient_email: sanitizeEmail(req.body?.patient_email),
-        text: sanitizeString(req.body?.text, 12000),
+        text: sanitizeTextField(req.body?.text, 12000),
         visibility: safeVisibility.has(String(req.body?.visibility)) ? String(req.body?.visibility) : 'private',
-        subject: sanitizeString(req.body?.subject, 100) || 'Geral',
+        subject: sanitizeTextField(req.body?.subject, 100) || 'Geral',
         original_id: sanitizeString(req.body?.original_id, 120) || undefined,
         therapist_id: sanitizeString(req.session.user.id, 120),
         created_at: sanitizeString(req.body?.created_at, 40) || new Date().toISOString()
@@ -3300,24 +3410,32 @@ async function startServer() {
 
   app.get('/api/history/email/:email', checkAuth, async (req: any, res) => {
     try {
+      const safeEmail = sanitizeEmail(req.params.email);
+      if (!safeEmail) return res.status(400).json({ error: 'E-mail inválido.' });
+      const userRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const isPrivileged = ['therapist', 'coordinator', 'receptionist', 'admin', 'owner'].includes(userRole);
+      const isSelfRequest = sanitizeEmail(req.session.user?.email) === safeEmail;
+
       // Only allow if searching for own email OR if therapist/admin
-      if (
-        req.session.user.role !== 'therapist' &&
-        req.session.user.role !== 'coordinator' &&
-        req.session.user.role !== 'receptionist' &&
-        req.session.user.role !== 'admin' &&
-        req.session.user.role !== 'owner' &&
-        req.session.user.email !== req.params.email
-      ) {
+      if (!isPrivileged && !isSelfRequest) {
         return res.status(403).json({ error: 'Acesso negado' });
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('history')
         .select('*')
-        .eq('patient_email', req.params.email)
+        .eq('patient_email', safeEmail)
         .order('created_at', { ascending: false });
+
+      if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
+        const clinicId = currentClinicId(req.session.user);
+        if (!clinicId) return res.status(403).json({ error: 'Clínica não identificada.' });
+        const clinicPatientIds = await getClinicPatientIdsByEmail(clinicId, safeEmail);
+        if (clinicPatientIds.length === 0) return res.json({ success: true, data: [] });
+        query = query.in('patient_id', clinicPatientIds);
+      }
       
+      const { data, error } = await query;
       if (error) throw error;
       res.json({ success: true, data });
     } catch (error) {
@@ -3327,6 +3445,7 @@ async function startServer() {
 
   app.post('/api/history', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
     try {
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload de relatório/evolução')) return;
       const resolvedPatientId = await resolvePatientIdForRequest(
         sanitizeString(req.body?.patient_id, 120),
         req.session.user,
@@ -3338,10 +3457,10 @@ async function startServer() {
         patient_id: resolvedPatientId,
         patient_email: sanitizeEmail(req.body?.patient_email),
         type: safeType,
-        title: sanitizeString(req.body?.title, 180),
+        title: sanitizeTextField(req.body?.title, 180),
         score: asSafeNumber(req.body?.score, 0, 100),
         energy: asSafeNumber(req.body?.energy, 0, 100),
-        note: sanitizeString(req.body?.note, 12000),
+        note: sanitizeTextField(req.body?.note, 12000),
         icon: sanitizeString(req.body?.icon, 40),
         image: sanitizeUrl(req.body?.image),
         therapist_id: sanitizeString(req.session.user.id, 120),
@@ -3660,24 +3779,32 @@ async function startServer() {
 
   app.get('/api/tasks/email/:email', checkAuth, async (req: any, res) => {
     try {
+      const safeEmail = sanitizeEmail(req.params.email);
+      if (!safeEmail) return res.status(400).json({ error: 'E-mail inválido.' });
+      const userRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const isPrivileged = ['therapist', 'coordinator', 'receptionist', 'admin', 'owner'].includes(userRole);
+      const isSelfRequest = sanitizeEmail(req.session.user?.email) === safeEmail;
+
       // Only allow if searching for own email OR if therapist/admin
-      if (
-        req.session.user.role !== 'therapist' &&
-        req.session.user.role !== 'coordinator' &&
-        req.session.user.role !== 'receptionist' &&
-        req.session.user.role !== 'admin' &&
-        req.session.user.role !== 'owner' &&
-        req.session.user.email !== req.params.email
-      ) {
+      if (!isPrivileged && !isSelfRequest) {
         return res.status(403).json({ error: 'Acesso negado' });
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('tasks')
         .select('*')
-        .eq('patient_email', req.params.email)
+        .eq('patient_email', safeEmail)
         .order('created_at', { ascending: false });
+
+      if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
+        const clinicId = currentClinicId(req.session.user);
+        if (!clinicId) return res.status(403).json({ error: 'Clínica não identificada.' });
+        const clinicPatientIds = await getClinicPatientIdsByEmail(clinicId, safeEmail);
+        if (clinicPatientIds.length === 0) return res.json({ success: true, data: [] });
+        query = query.in('patient_id', clinicPatientIds);
+      }
       
+      const { data, error } = await query;
       if (error) throw error;
       res.json({ success: true, data });
     } catch (error) {

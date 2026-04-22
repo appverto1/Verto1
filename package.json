@@ -10,6 +10,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "tsx server.ts",
+    "test:security": "node tests/security.regression.test.mjs",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"
   },
