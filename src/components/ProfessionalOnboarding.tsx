@@ -2,6 +2,7 @@
 import { motion } from 'framer-motion';
 import { Camera, CheckCircle2, Mail, Plus, UploadCloud, UserPlus, X } from 'lucide-react';
 import { dataService } from '../services/dataService';
+import { SecureImage } from './SecureMedia';
 
 interface ProfessionalOnboardingProps {
   user: any;
@@ -85,7 +86,7 @@ function SignaturePad({ value, onChange }: { value: string | null; onChange: (v:
         <p className="text-xs text-slate-500">Assine com o mouse ou toque.</p>
         <button type="button" onClick={clear} className="text-xs text-slate-600 hover:text-slate-900">Limpar</button>
       </div>
-      {value && <img src={value} alt="Assinatura" className="h-12 object-contain" />}
+      {value && <SecureImage src={value} alt="Assinatura" className="h-12 object-contain" />}
     </div>
   );
 }
@@ -319,7 +320,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
 
                 <div className="flex items-center gap-4">
                   <div className="w-20 h-20 rounded-2xl border border-dashed border-slate-300 overflow-hidden flex items-center justify-center bg-slate-50">
-                    {profilePicture ? <img src={profilePicture} alt="Foto" className="w-full h-full object-cover" /> : <Camera size={24} className="text-slate-400" />}
+                    {profilePicture ? <SecureImage src={profilePicture} alt="Foto" className="w-full h-full object-cover" /> : <Camera size={24} className="text-slate-400" />}
                   </div>
                   <label className="text-xs font-semibold text-slate-700 cursor-pointer px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 transition-all">
                     Escolher foto
@@ -382,7 +383,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                       <span className="text-xs text-slate-500 block mb-2">Logotipo da clínica</span>
                       <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 flex items-center gap-4 hover:border-[#7a32fc] transition-all">
                         <div className="w-16 h-16 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden">
-                          {clinicLogoUrl ? <img src={clinicLogoUrl} alt="Logo" className="w-full h-full object-cover" /> : <UploadCloud size={20} className="text-slate-400" />}
+                          {clinicLogoUrl ? <SecureImage src={clinicLogoUrl} alt="Logo" className="w-full h-full object-cover" /> : <UploadCloud size={20} className="text-slate-400" />}
                         </div>
                         <div>
                           <p className="text-sm font-semibold text-slate-800">Enviar logo da clínica</p>
@@ -421,7 +422,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                     <label className="block cursor-pointer mb-3">
                       <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 flex items-center gap-4 hover:border-[#7a32fc] transition-all">
                         <div className="w-16 h-16 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden">
-                          {signatureDataUrl ? <img src={signatureDataUrl} alt="Assinatura" className="w-full h-full object-contain" /> : <UploadCloud size={20} className="text-slate-400" />}
+                          {signatureDataUrl ? <SecureImage src={signatureDataUrl} alt="Assinatura" className="w-full h-full object-contain" /> : <UploadCloud size={20} className="text-slate-400" />}
                         </div>
                         <div>
                           <p className="text-sm font-semibold text-slate-800">Enviar assinatura pronta</p>
@@ -507,5 +508,6 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
     </div>
   );
 }
+
 
 

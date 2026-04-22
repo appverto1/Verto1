@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { X, ChevronLeft, Info, Zap, CheckCircle2, RotateCcw, Camera } from 'lucide-react';
 import { SuccessOverlay } from './Common';
+import { SecureImage } from './SecureMedia';
 
 export const SessionMode = ({ patient, onClose, onRecordTrial, onDeleteHistoryItem, onUpdateHistoryItem }: any) => {
   const sessionGoals = (patient.pei?.filter((g: any) => g.isPriority || g.status === 'in_progress') || [])
@@ -34,26 +35,10 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, onDeleteHistoryIt
     setPendingTrial(null);
   };
 
-  const handleSaveTrialObservation = async () => {
+  const handleSaveTrialObservation = () => {
     if (pendingTrial) {
       setIsSavingObservation(true);
-      if (typeof onRecordTrial !== "function") {
-        console.error("onRecordTrial não foi fornecido ao SessionMode.");
-        setIsSavingObservation(false);
-        setShowTrialConfirmation(false);
-        setLastRecordedGoalId(null);
-        setPendingTrial(null);
-        alert("Não foi possível registrar a sessão agora. Recarregue a página e tente novamente.");
-        return;
-      }
-      const newId = await Promise.resolve(
-        onRecordTrial(
-          patient.id,
-          pendingTrial.goal.name,
-          pendingTrial.score,
-          trialObservation,
-        ),
-      );
+      const newId = onRecordTrial(patient.id, pendingTrial.goal.name, pendingTrial.score, trialObservation);
       setTrialCount(prev => prev + 1);
       setLastRecordedTrialId(newId);
       
@@ -284,7 +269,7 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, onDeleteHistoryIt
             <div className="flex gap-4 overflow-x-auto pb-2 no-scrollbar">
               {patientPhotos.map((photo: any) => (
                 <div key={photo.id} className="shrink-0 w-32 h-32 rounded-2xl overflow-hidden border border-gray-100 shadow-sm hover:scale-105 transition-all cursor-pointer relative group">
-                  <img src={photo.image} alt="Foto do paciente" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                  <SecureImage src={photo.image} alt="Foto do paciente" className="w-full h-full object-cover" />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center p-2">
                     <p className="text-[8px] font-bold text-white text-center uppercase leading-tight">{photo.title}</p>
                   </div>

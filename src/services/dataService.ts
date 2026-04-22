@@ -91,12 +91,23 @@ async function cacheResponseMetadata(endpoint: string, response: Response, lastU
   });
 }
 
+function createIdempotencyKey(scope: string, entityId?: string) {
+  const baseId = entityId || generateId();
+  return `${scope}:${baseId}:${Date.now()}:${crypto.randomUUID()}`;
+}
+
 // Helper to handle offline-first saving
 async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' = 'POST') {
+  const idempotencyKey = createIdempotencyKey(`${method}:${endpoint}`, id);
+  const payloadWithIdempotency = {
+    ...(data || {}),
+    idempotencyKey
+  };
+
   // 1. Save locally first
   await saveEncryptedRecord({
     id,
-    data,
+    data: payloadWithIdempotency,
     type,
     sync_status: 'pending',
     last_updated: Date.now(),
@@ -108,9 +119,12 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
   try {
     const response = await fetch(endpoint, {
       method,
-      headers: await getAuthHeaders(),
+      headers: {
+        ...(await getAuthHeaders()),
+        'X-Idempotency-Key': idempotencyKey
+      },
       credentials: 'include',
-      body: JSON.stringify(data)
+      body: JSON.stringify(payloadWithIdempotency)
     });
 
     if (response.ok) {
@@ -124,7 +138,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
   }
 
   // 4. Return local data if offline or error
-  return { success: true, data, offline: true };
+  return { success: true, data: payloadWithIdempotency, offline: true };
 }
 
 export const dataService = {
@@ -763,11 +777,18 @@ export const dataService = {
     specialtySettings?: Record<string, number>;
   }) {
     try {
+      const idempotencyKey = createIdempotencyKey('POST:/api/clinic/state');
       const response = await fetch('/api/clinic/state', {
         method: 'POST',
-        headers: await getAuthHeaders(),
+        headers: {
+          ...(await getAuthHeaders()),
+          'X-Idempotency-Key': idempotencyKey
+        },
         credentials: 'include',
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          ...(payload || {}),
+          idempotencyKey
+        })
       });
       return await safeJson(response);
     } catch (error) {

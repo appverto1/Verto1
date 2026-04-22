@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Rocket, 
   ShieldCheck, 
@@ -27,6 +27,7 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { LogoVerto } from './Common';
+import { SecureImage } from './SecureMedia';
 import { getSupabase } from '../lib/supabase';
 import { dataService } from '../services/dataService';
 
@@ -87,7 +88,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
       if (error) {
         if (error.message.includes('Email not confirmed')) {
-          setLoginError('Seu e-mail ainda nÃ£o foi confirmado. Verifique sua caixa de entrada ou clique abaixo para reenviar o link.');
+          setLoginError('Seu e-mail ainda não foi confirmado. Verifique sua caixa de entrada ou clique abaixo para reenviar o link.');
           return;
         }
         throw error;
@@ -111,12 +112,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           password
         });
         
-        if (loginRes?.mfaSetupRequired) {
-          setTwoFactorRequired(false);
-          setTwoFactorEmail(loginRes.email || email);
-          await start2FASetup();
-          setShowLogin(true);
-        } else if (loginRes?.twoFactorRequired) {
+        if (loginRes?.twoFactorRequired) {
           setTwoFactorRequired(true);
           setTwoFactorEmail(loginRes.email);
           setLoginStep('password');
@@ -130,7 +126,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       }
     } catch (err: any) {
       console.error('Login error:', err);
-      setLoginError(`Erro no login: ${err.message || 'Credenciais invÃ¡lidas ou erro de conexÃ£o'}`);
+      setLoginError(`Erro no login: ${err.message || 'Credenciais inválidas ou erro de conexão'}`);
     } finally {
       setLoading(false);
     }
@@ -144,10 +140,10 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         email: email,
       });
       if (error) throw error;
-      setLoginError('E-mail de confirmaÃ§Ã£o reenviado com sucesso! Verifique sua caixa de entrada.');
+      setLoginError('E-mail de confirmação reenviado com sucesso! Verifique sua caixa de entrada.');
     } catch (err: any) {
       console.error('Resend error:', err);
-      setLoginError('Erro ao reenviar confirmaÃ§Ã£o: ' + err.message);
+      setLoginError('Erro ao reenviar confirmação: ' + err.message);
     }
   };
 
@@ -203,7 +199,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       });
       
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'CÃ³digo invÃ¡lido');
+      if (!response.ok) throw new Error(data.error || 'Código inválido');
       
       if (data.success) {
         window.location.reload(); // Reload to pick up new session
@@ -247,7 +243,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
       const response = await fetch('/api/auth/2fa/verify', {
         method: 'POST',
-        headers: {
+        headers: { 
           'Content-Type': 'application/json',
           'Authorization': token ? `Bearer ${token}` : ''
         },
@@ -257,12 +253,6 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       const data = await response.json();
       if (data.success) {
         setShow2FASetup(false);
-        if (data.user) {
-          setUser(data.user);
-          setShowLogin(false);
-          window.location.reload();
-          return;
-        }
         alert('2FA habilitado com sucesso! Use seu app Authenticator no próximo login.');
       } else {
         alert('Código inválido. Tente novamente.');
@@ -277,7 +267,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     setRegisterError('');
     
     if ((registerType === 'professional' || registerType === 'coordinator') && !crp) {
-      setRegisterError('CRP Ã© obrigatÃ³rio para profissionais.');
+      setRegisterError('CRP é obrigatório para profissionais.');
       return;
     }
 
@@ -336,7 +326,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         } else {
           // Fallback if Stripe fails
           console.error('Stripe creation failed:', checkoutData);
-          alert(`Conta criada com sucesso! No entanto, houve um erro ao iniciar o pagamento: ${checkoutData.error || 'Erro desconhecido'}. Por favor, faÃ§a login para tentar novamente.`);
+          alert(`Conta criada com sucesso! No entanto, houve um erro ao iniciar o pagamento: ${checkoutData.error || 'Erro desconhecido'}. Por favor, faça login para tentar novamente.`);
           setShowRegister(false);
           setLoginStep('email');
           setShowLogin(true);
@@ -344,8 +334,8 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       }
     } catch (error: any) {
       console.error('Register error:', error);
-      if (error.message.includes('already been registered') || error.message.includes('jÃ¡ estÃ¡ cadastrado')) {
-        setRegisterError('Este e-mail jÃ¡ estÃ¡ cadastrado. Por favor, faÃ§a login.');
+      if (error.message.includes('already been registered') || error.message.includes('já está cadastrado')) {
+        setRegisterError('Este e-mail já está cadastrado. Por favor, faça login.');
       } else {
         setRegisterError(error.message || 'Erro ao cadastrar. Tente novamente.');
       }
@@ -389,7 +379,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           <div className="hidden md:flex items-center gap-8">
             <a href="#funcionalidades" className="text-sm font-semibold text-gray-500 hover:text-[#7a32fc] transition-colors">Funcionalidades</a>
             <a href="#sobre" className="text-sm font-semibold text-gray-500 hover:text-[#7a32fc] transition-colors">Sobre</a>
-            <a href="#precos" className="text-sm font-semibold text-gray-500 hover:text-[#7a32fc] transition-colors">PreÃ§os</a>
+            <a href="#precos" className="text-sm font-semibold text-gray-500 hover:text-[#7a32fc] transition-colors">Preços</a>
           </div>
           <div className="flex items-center gap-4">
             <button 
@@ -426,12 +416,12 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
             </div>
             <h1 className="text-6xl md:text-7xl font-semibold leading-[0.9] tracking-tighter mb-8">
               O centro da <br />
-              terapia Ã© a <br />
-              <span className="text-[#7a32fc]">evoluÃ§Ã£o</span>.
+              terapia é a <br />
+              <span className="text-[#7a32fc]">evolução</span>.
             </h1>
             <p className="text-xl text-gray-500 font-normal leading-relaxed mb-10 max-w-lg">
-              A Verto Ã© a Ãºnica plataforma projetada para transformar avaliaÃ§Ãµes em resultados reais. 
-              Da primeira consulta Ã  alta, tudo converge para o progresso do seu paciente.
+              A Verto é a única plataforma projetada para transformar avaliações em resultados reais. 
+              Da primeira consulta à alta, tudo converge para o progresso do seu paciente.
             </p>
             <div className="flex flex-col sm:flex-row gap-4">
               <button 
@@ -440,7 +430,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 }}
                 className="bg-[#7a32fc] text-white px-10 py-5 rounded-3xl font-semibold text-lg shadow-2xl shadow-purple-500/30 hover:scale-105 transition-all flex items-center justify-center gap-3"
               >
-                Agendar uma demonstraÃ§Ã£o <ArrowRight size={20} />
+                Agendar uma demonstração <ArrowRight size={20} />
               </button>
             </div>
           </div>
@@ -467,13 +457,13 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                     <Activity size={24} />
                   </div>
                   <div>
-                    <p className="text-[10px] font-semibold text-[#7a32fc] uppercase tracking-widest">Insight ClÃ­nico</p>
-                    <p className="text-base font-semibold text-gray-900">AnÃ¡lise de Energia</p>
+                    <p className="text-[10px] font-semibold text-[#7a32fc] uppercase tracking-widest">Insight Clínico</p>
+                    <p className="text-base font-semibold text-gray-900">Análise de Energia</p>
                   </div>
                 </div>
                 <div className="space-y-3">
                   <div className="flex justify-between items-center">
-                    <span className="text-xs font-semibold text-gray-500">NÃ­vel Sensorial</span>
+                    <span className="text-xs font-semibold text-gray-500">Nível Sensorial</span>
                     <span className="text-xs font-semibold text-orange-500">ALTO</span>
                   </div>
                   <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
@@ -498,13 +488,13 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               <div className="relative bg-gray-50 rounded-[48px] p-8 shadow-inner border border-gray-100">
                 <div className="bg-white rounded-[32px] shadow-2xl p-6 border border-gray-100">
                   <div className="flex items-center justify-between mb-6">
-                    <h4 className="text-lg font-semibold text-gray-800 tracking-tight">Plano TerapÃªutico Inteligente</h4>
-                    <div className="px-4 py-1.5 bg-[#7a32fc]/10 text-[#7a32fc] rounded-full text-[10px] font-semibold uppercase tracking-widest">Em EvoluÃ§Ã£o</div>
+                    <h4 className="text-lg font-semibold text-gray-800 tracking-tight">Plano Terapêutico Inteligente</h4>
+                    <div className="px-4 py-1.5 bg-[#7a32fc]/10 text-[#7a32fc] rounded-full text-[10px] font-semibold uppercase tracking-widest">Em Evolução</div>
                   </div>
                   <div className="space-y-6">
                     <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
                       <div className="flex justify-between items-center mb-2">
-                        <span className="text-xs font-semibold text-gray-700">Habilidade: ComunicaÃ§Ã£o Funcional</span>
+                        <span className="text-xs font-semibold text-gray-700">Habilidade: Comunicação Funcional</span>
                         <span className="text-[10px] font-semibold text-blue-500 uppercase">65%</span>
                       </div>
                       <div className="h-2 w-full bg-gray-200 rounded-full overflow-hidden">
@@ -513,8 +503,8 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                     </div>
                     <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
                       <div className="flex justify-between items-center mb-2">
-                        <span className="text-xs font-semibold text-gray-700">Habilidade: InteraÃ§Ã£o Social</span>
-                        <span className="text-[10px] font-semibold text-green-500 uppercase">ConcluÃ­do</span>
+                        <span className="text-xs font-semibold text-gray-700">Habilidade: Interação Social</span>
+                        <span className="text-[10px] font-semibold text-green-500 uppercase">Concluído</span>
                       </div>
                       <div className="h-2 w-full bg-gray-200 rounded-full overflow-hidden">
                         <div className="h-full bg-green-500 w-full"></div>
@@ -527,14 +517,14 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
             </div>
             <div className="order-1 lg:order-2">
               <div className="inline-flex items-center gap-2 bg-purple-50 text-[#7a32fc] px-3 py-1 rounded-full text-[10px] font-semibold uppercase tracking-widest mb-4">
-                Nossa Proposta Ãšnica
+                Nossa Proposta Única
               </div>
-              <h2 className="text-4xl md:text-5xl font-semibold tracking-tighter mb-6">GestÃ£o do <span className="text-[#7a32fc]">Plano de Ensino</span> sem fricÃ§Ã£o.</h2>
+              <h2 className="text-4xl md:text-5xl font-semibold tracking-tighter mb-6">Gestão do <span className="text-[#7a32fc]">Plano de Ensino</span> sem fricção.</h2>
               <p className="text-lg text-gray-500 font-normal leading-relaxed mb-8">
-                EsqueÃ§a planilhas e papÃ©is. Na Verto, o planejamento individualizado Ã© o motor da sua clÃ­nica. Vincule avaliaÃ§Ãµes a intervenÃ§Ãµes automaticamente e veja o progresso ser desenhado em tempo real a cada sessÃ£o.
+                Esqueça planilhas e papéis. Na Verto, o planejamento individualizado é o motor da sua clínica. Vincule avaliações a intervenções automaticamente e veja o progresso ser desenhado em tempo real a cada sessão.
               </p>
               <ul className="space-y-4">
-                {['VinculaÃ§Ã£o automÃ¡tica AvaliaÃ§Ã£o-IntervenÃ§Ã£o', 'CritÃ©rios de maestria baseados em evidÃªncia', 'HistÃ³rico de evoluÃ§Ã£o por domÃ­nio', 'Ajustes dinÃ¢micos de metas'].map((item, i) => (
+                {['Vinculação automática Avaliação-Intervenção', 'Critérios de maestria baseados em evidência', 'Histórico de evolução por domínio', 'Ajustes dinâmicos de metas'].map((item, i) => (
                   <li key={i} className="flex items-center gap-3 text-gray-700 font-semibold">
                     <div className="w-6 h-6 bg-purple-100 text-[#7a32fc] rounded-full flex items-center justify-center">
                       <CheckCircle2 size={14} />
@@ -550,11 +540,11 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-24 items-center mb-32">
             <div className="order-1 lg:order-1">
               <div className="inline-flex items-center gap-2 bg-emerald-50 text-[#05CD99] px-3 py-1 rounded-full text-[10px] font-semibold uppercase tracking-widest mb-4">
-                RelatÃ³rios de Impacto
+                Relatórios de Impacto
               </div>
-              <h2 className="text-4xl md:text-5xl font-semibold tracking-tighter mb-6">RelatÃ³rios que provam o <span className="text-[#05CD99]">resultado clÃ­nico</span>.</h2>
+              <h2 className="text-4xl md:text-5xl font-semibold tracking-tighter mb-6">Relatórios que provam o <span className="text-[#05CD99]">resultado clínico</span>.</h2>
               <p className="text-lg text-gray-500 font-normal leading-relaxed mb-8">
-                NÃ£o entregue apenas anotaÃ§Ãµes, entregue evidÃªncias. Nossos relatÃ³rios profissionais compilam automaticamente os dados de cada sessÃ£o em grÃ¡ficos de fÃ¡cil compreensÃ£o para pais e operadoras de saÃºde.
+                Não entregue apenas anotações, entregue evidências. Nossos relatórios profissionais compilam automaticamente os dados de cada sessão em gráficos de fácil compreensão para pais e operadoras de saúde.
               </p>
               <div className="flex gap-4">
                 <div className="p-4 bg-gray-50 rounded-3xl border border-gray-100 flex-1">
@@ -562,7 +552,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                   <p className="text-2xl font-semibold text-gray-800">100%</p>
                 </div>
                 <div className="p-4 bg-gray-50 rounded-3xl border border-gray-100 flex-1">
-                  <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1">GeraÃ§Ã£o de RelatÃ³rios</p>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1">Geração de Relatórios</p>
                   <p className="text-2xl font-semibold text-gray-800">&lt; 1 min</p>
                 </div>
               </div>
@@ -574,7 +564,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                     <div className="w-10 h-10 bg-emerald-50 text-[#05CD99] rounded-xl flex items-center justify-center">
                       <Activity size={20} />
                     </div>
-                    <h4 className="text-lg font-semibold text-gray-800 tracking-tight">EvoluÃ§Ã£o por DomÃ­nio</h4>
+                    <h4 className="text-lg font-semibold text-gray-800 tracking-tight">Evolução por Domínio</h4>
                   </div>
                   <div className="flex items-end gap-3 h-48">
                     {[1, 0.7, 0.9, 1, 0.6, 0.8, 0.5].map((h, i) => (
@@ -592,7 +582,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                     <span>Intra</span>
                     <span>Social</span>
                     <span>Brincar</span>
-                    <span>ImitaÃ§Ã£o</span>
+                    <span>Imitação</span>
                     <span>Ecoico</span>
                   </div>
                 </div>
@@ -616,7 +606,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                     </div>
                   </div>
                   <p className="text-sm text-gray-500 font-normal leading-relaxed mb-6">
-                    "Alexandre completou 5 mandos independentes hoje. O progresso no PEI estÃ¡ acelerado!"
+                    "Alexandre completou 5 mandos independentes hoje. O progresso no PEI está acelerado!"
                   </p>
                   <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
                     <div className="h-full bg-pink-500 w-full animate-pulse"></div>
@@ -625,12 +615,12 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               </div>
             </div>
             <div className="order-1 lg:order-2">
-              <h2 className="text-4xl md:text-5xl font-semibold tracking-tighter mb-6">A <span className="text-pink-500">jornada</span> como conexÃ£o.</h2>
+              <h2 className="text-4xl md:text-5xl font-semibold tracking-tighter mb-6">A <span className="text-pink-500">jornada</span> como conexão.</h2>
               <p className="text-lg text-gray-500 font-normal leading-relaxed mb-8">
-                O progresso nÃ£o deve ficar guardado na gaveta. Na Verto, o plano de ensino Ã© compartilhado com the famÃ­lia de forma lÃºdica, transformando metas tÃ©cnicas em celebraÃ§Ãµes reais de desenvolvimento.
+                O progresso não deve ficar guardado na gaveta. Na Verto, o plano de ensino é compartilhado com the família de forma lúdica, transformando metas técnicas em celebrações reais de desenvolvimento.
               </p>
               <ul className="space-y-4">
-                {['Portal da FamÃ­lia integrado ao plano', 'Feedback imediato de conquistas', 'Engajamento lÃºdico para crianÃ§as', 'Protagonismo na evoluÃ§Ã£o para adultos'].map((item, i) => (
+                {['Portal da Família integrado ao plano', 'Feedback imediato de conquistas', 'Engajamento lúdico para crianças', 'Protagonismo na evolução para adultos'].map((item, i) => (
                   <li key={i} className="flex items-center gap-3 text-gray-700 font-semibold">
                     <div className="w-6 h-6 bg-pink-100 text-pink-600 rounded-full flex items-center justify-center">
                       <CheckCircle2 size={14} />
@@ -653,28 +643,28 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
         <div className="max-w-7xl mx-auto px-6 relative z-10">
           <div className="text-center mb-20">
-            <h2 className="text-4xl md:text-6xl font-semibold tracking-tighter mb-6">ExperiÃªncias que <span className="text-[#7a32fc]">transformam</span> vidas.</h2>
+            <h2 className="text-4xl md:text-6xl font-semibold tracking-tighter mb-6">Experiências que <span className="text-[#7a32fc]">transformam</span> vidas.</h2>
             <p className="text-xl text-gray-400 font-normal max-w-3xl mx-auto">
-              Projetamos interfaces especÃ­ficas para cada perfil, garantindo que a tecnologia seja uma aliada do engajamento e do resultado clÃ­nico individualizado.
+              Projetamos interfaces específicas para cada perfil, garantindo que a tecnologia seja uma aliada do engajamento e do resultado clínico individualizado.
             </p>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 mb-32">
-            {/* CrianÃ§a & FamÃ­lia */}
+            {/* Criança & Família */}
             <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-[56px] p-12 hover:bg-white/10 transition-all group">
               <div className="w-16 h-16 bg-pink-500/20 text-pink-400 rounded-2xl flex items-center justify-center mb-8 group-hover:scale-110 transition-transform">
                 <Heart size={32} />
               </div>
-              <h3 className="text-3xl font-semibold mb-6">O progresso na palma da mÃ£o</h3>
+              <h3 className="text-3xl font-semibold mb-6">O progresso na palma da mão</h3>
               <p className="text-lg text-gray-400 font-normal leading-relaxed mb-8">
-                Transformamos o planejamento tÃ©cnico em uma jornada de conquistas. O progresso da crianÃ§a se torna uma fonte de orgulho diÃ¡rio para os pais atravÃ©s de uma interface lÃºdica e gamificada.
+                Transformamos o planejamento técnico em uma jornada de conquistas. O progresso da criança se torna uma fonte de orgulho diário para os pais através de uma interface lúdica e gamificada.
               </p>
               <ul className="space-y-4">
                 {[
-                  "VisualizaÃ§Ã£o lÃºdica do desenvolvimento",
-                  "Acesso em tempo real Ã s metas alcanÃ§adas",
-                  "TransformaÃ§Ã£o de dados em vitÃ³rias familiares",
-                  "Engajamento atravÃ©s de reforÃ§adores digitais"
+                  "Visualização lúdica do desenvolvimento",
+                  "Acesso em tempo real às metas alcançadas",
+                  "Transformação de dados em vitórias familiares",
+                  "Engajamento através de reforçadores digitais"
                 ].map((item, i) => (
                   <li key={i} className="flex items-start gap-3 text-gray-300 font-semibold">
                     <Check size={20} className="text-pink-400 shrink-0 mt-1" />
@@ -689,15 +679,15 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               <div className="w-16 h-16 bg-orange-500/20 text-orange-400 rounded-2xl flex items-center justify-center mb-8 group-hover:scale-110 transition-transform">
                 <Zap size={32} />
               </div>
-              <h3 className="text-3xl font-semibold mb-6">Protagonismo na evoluÃ§Ã£o</h3>
+              <h3 className="text-3xl font-semibold mb-6">Protagonismo na evolução</h3>
               <p className="text-lg text-gray-400 font-normal leading-relaxed mb-8">
-                Diferencie sua clÃ­nica oferecendo ferramentas de autonomia. Seus pacientes adultos gerem o prÃ³prio plano, realizam tarefas terapÃªuticas e aceleram a prÃ³pria evoluÃ§Ã£o.
+                Diferencie sua clínica oferecendo ferramentas de autonomia. Seus pacientes adultos gerem o próprio plano, realizam tarefas terapêuticas e aceleram a própria evolução.
               </p>
               <ul className="space-y-4">
                 {[
-                  "GestÃ£o autÃ´noma de metas e objetivos",
-                  "Registro diÃ¡rio de evoluÃ§Ã£o e bem-estar",
-                  "Acompanhamento claro da prÃ³pria jornada",
+                  "Gestão autônoma de metas e objetivos",
+                  "Registro diário de evolução e bem-estar",
+                  "Acompanhamento claro da própria jornada",
                   "Lembretes inteligentes para metas de autonomia"
                 ].map((item, i) => (
                   <li key={i} className="flex items-start gap-3 text-gray-300 font-semibold">
@@ -716,14 +706,14 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               <div className="inline-flex items-center gap-2 bg-purple-500/20 text-purple-400 px-4 py-2 rounded-full text-[10px] font-semibold uppercase tracking-widest mb-8">
                 Jornada do Terapeuta
               </div>
-              <h3 className="text-4xl font-semibold mb-12 tracking-tighter">Do diagnÃ³stico Ã  <span className="text-purple-400">alta baseada em dados</span>.</h3>
+              <h3 className="text-4xl font-semibold mb-12 tracking-tighter">Do diagnóstico à <span className="text-purple-400">alta baseada em dados</span>.</h3>
               <div className="space-y-12 relative">
                 <div className="absolute left-[27px] top-0 bottom-0 w-0.5 bg-gradient-to-b from-purple-500/50 to-transparent"></div>
                 {[
-                  { step: "01", title: "AvaliaÃ§Ã£o Inicial", desc: "Aplique protocolos padrÃ£o ouro (VB-MAPP, AFLS) e identifique lacunas de desenvolvimento instantaneamente." },
-                  { step: "02", title: "Plano Individualizado", desc: "O sistema sugere metas e intervenÃ§Ãµes baseadas na avaliaÃ§Ã£o, criando um planejamento robusto em minutos." },
-                  { step: "03", title: "Registro em Tempo Real", desc: "Durante a sessÃ£o, registre tentativas e comportamentos. Os dados alimentam o progresso automaticamente." },
-                  { step: "04", title: "RelatÃ³rios de EvoluÃ§Ã£o", desc: "Gere relatÃ³rios profissionais com grÃ¡ficos de progresso por domÃ­nio, prontos para pais e operadoras." }
+                  { step: "01", title: "Avaliação Inicial", desc: "Aplique protocolos padrão ouro (VB-MAPP, AFLS) e identifique lacunas de desenvolvimento instantaneamente." },
+                  { step: "02", title: "Plano Individualizado", desc: "O sistema sugere metas e intervenções baseadas na avaliação, criando um planejamento robusto em minutos." },
+                  { step: "03", title: "Registro em Tempo Real", desc: "Durante a sessão, registre tentativas e comportamentos. Os dados alimentam o progresso automaticamente." },
+                  { step: "04", title: "Relatórios de Evolução", desc: "Gere relatórios profissionais com gráficos de progresso por domínio, prontos para pais e operadoras." }
                 ].map((item, i) => (
                   <div key={i} className="relative pl-20 group">
                     <div className="absolute left-0 top-0 w-14 h-14 bg-purple-500/20 border border-purple-500/30 rounded-2xl flex items-center justify-center text-purple-400 font-semibold text-xl group-hover:bg-purple-500 group-hover:text-white transition-all">
@@ -741,14 +731,14 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               <div className="inline-flex items-center gap-2 bg-pink-500/20 text-pink-400 px-4 py-2 rounded-full text-[10px] font-semibold uppercase tracking-widest mb-8">
                 Jornada do Paciente
               </div>
-              <h3 className="text-4xl font-semibold mb-12 tracking-tighter">Engajamento que acelera o <span className="text-pink-400">resultado clÃ­nico</span>.</h3>
+              <h3 className="text-4xl font-semibold mb-12 tracking-tighter">Engajamento que acelera o <span className="text-pink-400">resultado clínico</span>.</h3>
               <div className="space-y-12 relative">
                 <div className="absolute left-[27px] top-0 bottom-0 w-0.5 bg-gradient-to-b from-pink-500/50 to-transparent"></div>
                 {[
-                  { step: "01", title: "Portal Personalizado", desc: "Acesso a uma interface desenhada para o perfil do paciente (lÃºdica para crianÃ§as, funcional para adultos)." },
-                  { step: "02", title: "VisualizaÃ§Ã£o de Metas", desc: "O paciente e a famÃ­lia acompanham o progresso do tratamento de forma clara, celebrando cada conquista." },
-                  { step: "03", title: "Tarefas TerapÃªuticas", desc: "Engajamento contÃ­nuo fora da clÃ­nica com tarefas que reforÃ§am as habilidades trabalhadas no plano." },
-                  { step: "04", title: "CelebraÃ§Ã£o de VitÃ³rias", desc: "ReforÃ§o positivo imediato a cada meta batida, transformando o tratamento em uma jornada positiva." }
+                  { step: "01", title: "Portal Personalizado", desc: "Acesso a uma interface desenhada para o perfil do paciente (lúdica para crianças, funcional para adultos)." },
+                  { step: "02", title: "Visualização de Metas", desc: "O paciente e a família acompanham o progresso do tratamento de forma clara, celebrando cada conquista." },
+                  { step: "03", title: "Tarefas Terapêuticas", desc: "Engajamento contínuo fora da clínica com tarefas que reforçam as habilidades trabalhadas no plano." },
+                  { step: "04", title: "Celebração de Vitórias", desc: "Reforço positivo imediato a cada meta batida, transformando o tratamento em uma jornada positiva." }
                 ].map((item, i) => (
                   <div key={i} className="relative pl-20 group">
                     <div className="absolute left-0 top-0 w-14 h-14 bg-pink-500/20 border border-pink-500/30 rounded-2xl flex items-center justify-center text-pink-400 font-semibold text-xl group-hover:bg-pink-500 group-hover:text-white transition-all">
@@ -768,20 +758,20 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       <section id="funcionalidades" className="py-20 bg-gray-50">
         <div className="max-w-7xl mx-auto px-6">
           <div className="text-center mb-16">
-            <h2 className="text-4xl font-semibold tracking-tight mb-4">Tudo o que sua clÃ­nica precisa para escalar.</h2>
+            <h2 className="text-4xl font-semibold tracking-tight mb-4">Tudo o que sua clínica precisa para escalar.</h2>
             <p className="text-gray-500 font-medium max-w-2xl mx-auto text-lg">
-              Desenvolvemos ferramentas especÃ­ficas para cada etapa da operaÃ§Ã£o, do acolhimento Ã  alta.
+              Desenvolvemos ferramentas específicas para cada etapa da operação, do acolhimento à alta.
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             {[
-              { icon: <Brain />, title: "Plano Individualizado", desc: "CriaÃ§Ã£o e monitoramento dinÃ¢mico do planejamento terapÃªutico com vinculaÃ§Ã£o inteligente de metas.", color: "text-[#7a32fc]", bg: "bg-purple-100" },
-              { icon: <Activity />, title: "RelatÃ³rios de Progresso", desc: "Transforme dados de sessÃ£o em relatÃ³rios visuais automÃ¡ticos que provam a evoluÃ§Ã£o do paciente.", color: "text-[#05CD99]", bg: "bg-emerald-100" },
-              { icon: <Heart />, title: "Portal da FamÃ­lia", desc: "Compartilhe o progresso do tratamento de forma lÃºdica, celebrando cada pequena vitÃ³ria com os pais.", color: "text-pink-600", bg: "bg-pink-100" },
-              { icon: <Zap />, title: "Autonomia do Paciente", desc: "Pacientes adultos assumem o protagonismo do prÃ³prio tratamento atravÃ©s de tarefas e registros de bem-estar.", color: "text-orange-600", bg: "bg-orange-100" },
-              { icon: <Rocket />, title: "GestÃ£o da ClÃ­nica", desc: "Controle financeiro completo, DRE (Em Breve) e gestÃ£o administrativa simplificada para sua operaÃ§Ã£o.", color: "text-emerald-600", bg: "bg-emerald-50" },
-              { icon: <Users />, title: "Equipe Multidisciplinar", desc: "Equipe alinhada em torno do mesmo planejamento, garantindo consistÃªncia e troca de informaÃ§Ãµes.", color: "text-red-600", bg: "bg-red-100" }
+              { icon: <Brain />, title: "Plano Individualizado", desc: "Criação e monitoramento dinâmico do planejamento terapêutico com vinculação inteligente de metas.", color: "text-[#7a32fc]", bg: "bg-purple-100" },
+              { icon: <Activity />, title: "Relatórios de Progresso", desc: "Transforme dados de sessão em relatórios visuais automáticos que provam a evolução do paciente.", color: "text-[#05CD99]", bg: "bg-emerald-100" },
+              { icon: <Heart />, title: "Portal da Família", desc: "Compartilhe o progresso do tratamento de forma lúdica, celebrando cada pequena vitória com os pais.", color: "text-pink-600", bg: "bg-pink-100" },
+              { icon: <Zap />, title: "Autonomia do Paciente", desc: "Pacientes adultos assumem o protagonismo do próprio tratamento através de tarefas e registros de bem-estar.", color: "text-orange-600", bg: "bg-orange-100" },
+              { icon: <Rocket />, title: "Gestão da Clínica", desc: "Controle financeiro completo, DRE (Em Breve) e gestão administrativa simplificada para sua operação.", color: "text-emerald-600", bg: "bg-emerald-50" },
+              { icon: <Users />, title: "Equipe Multidisciplinar", desc: "Equipe alinhada em torno do mesmo planejamento, garantindo consistência e troca de informações.", color: "text-red-600", bg: "bg-red-100" }
             ].map((feature, i) => (
               <div 
                 key={i}
@@ -802,9 +792,9 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       <section id="precos" className="py-24 bg-white">
         <div className="max-w-7xl mx-auto px-6">
           <div className="text-center mb-20">
-            <h2 className="text-5xl font-semibold tracking-tighter mb-6">Planos que crescem com sua clÃ­nica e geram lucro real.</h2>
+            <h2 className="text-5xl font-semibold tracking-tighter mb-6">Planos que crescem com sua clínica e geram lucro real.</h2>
             <p className="text-xl text-gray-500 font-medium max-w-3xl mx-auto">
-              De clÃ­nicas boutique a grandes redes, a Verto oferece a infraestrutura para escalar sua operaÃ§Ã£o e entregar uma experiÃªncia premium.
+              De clínicas boutique a grandes redes, a Verto oferece a infraestrutura para escalar sua operação e entregar uma experiência premium.
             </p>
           </div>
 
@@ -813,10 +803,10 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
             <div className="bg-white border border-gray-100 rounded-[40px] p-8 shadow-sm hover:shadow-xl transition-all flex flex-col">
               <div className="mb-8">
                 <h3 className="text-xl font-semibold mb-2">Essencial</h3>
-                <p className="text-gray-400 text-xs font-semibold uppercase tracking-widest mb-6">Para clÃ­nicas boutique ou autÃ´nomos</p>
+                <p className="text-gray-400 text-xs font-semibold uppercase tracking-widest mb-6">Para clínicas boutique ou autônomos</p>
                 <div className="flex items-baseline gap-1">
                   <span className="text-3xl font-semibold">R$ 149,90</span>
-                  <span className="text-gray-400 font-semibold text-sm">/ mÃªs</span>
+                  <span className="text-gray-400 font-semibold text-sm">/ mês</span>
                 </div>
               </div>
               <button 
@@ -828,10 +818,10 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 }}
                 className="w-full bg-gray-900 text-white py-4 rounded-2xl font-semibold text-sm mb-8 hover:bg-black transition-all"
               >
-                ComeÃ§ar Agora
+                Começar Agora
               </button>
               <ul className="space-y-4 flex-1">
-                {['AtÃ© 2 Profissionais', 'Planos TerapÃªuticos Ilimitados', 'RelatÃ³rios de EvoluÃ§Ã£o AutomÃ¡ticos', 'Portal do Paciente', 'GestÃ£o Financeira BÃ¡sica', 'HistÃ³rico PortÃ¡til', 'Dashboard do Profissional'].map((f, i) => (
+                {['Até 2 Profissionais', 'Planos Terapêuticos Ilimitados', 'Relatórios de Evolução Automáticos', 'Portal do Paciente', 'Gestão Financeira Básica', 'Histórico Portátil', 'Dashboard do Profissional'].map((f, i) => (
                   <li key={i} className="flex items-start gap-3 text-sm font-medium text-gray-600">
                     <Check size={18} className="text-green-500 shrink-0 mt-0.5" />
                     {f}
@@ -845,10 +835,10 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-[#7a32fc] text-white px-4 py-1 rounded-full text-[10px] font-semibold uppercase tracking-widest">Mais Popular</div>
               <div className="mb-8">
                 <h3 className="text-xl font-semibold mb-2">Crescimento</h3>
-                <p className="text-gray-400 text-xs font-semibold uppercase tracking-widest mb-6">Para clÃ­nicas em crescimento</p>
+                <p className="text-gray-400 text-xs font-semibold uppercase tracking-widest mb-6">Para clínicas em crescimento</p>
                 <div className="flex items-baseline gap-1">
                   <span className="text-3xl font-semibold">R$ 399,90</span>
-                  <span className="text-gray-400 font-semibold text-sm">/ mÃªs</span>
+                  <span className="text-gray-400 font-semibold text-sm">/ mês</span>
                 </div>
               </div>
               <button 
@@ -860,11 +850,11 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 }}
                 className="w-full bg-[#7a32fc] text-white py-4 rounded-2xl font-semibold text-sm mb-8 shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all"
               >
-                ComeÃ§ar Agora
+                Começar Agora
               </button>
               <ul className="space-y-4 flex-1">
                 <li className="text-xs font-semibold text-[#7a32fc] uppercase tracking-widest mb-2">Tudo do Essencial +</li>
-                {['3 a 7 Profissionais', 'Dashboard de EvoluÃ§Ã£o ClÃ­nica', 'RelatÃ³rios Consolidados', 'GestÃ£o Financeira AvanÃ§ada', 'Suporte PrioritÃ¡rio'].map((f, i) => (
+                {['3 a 7 Profissionais', 'Dashboard de Evolução Clínica', 'Relatórios Consolidados', 'Gestão Financeira Avançada', 'Suporte Prioritário'].map((f, i) => (
                   <li key={i} className="flex items-start gap-3 text-sm font-medium text-gray-600">
                     <Check size={18} className="text-[#7a32fc] shrink-0 mt-0.5" />
                     {f}
@@ -873,30 +863,30 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               </ul>
             </div>
 
-            {/* AvanÃ§ado */}
+            {/* Avançado */}
             <div className="bg-white border border-gray-100 rounded-[40px] p-8 shadow-sm hover:shadow-xl transition-all flex flex-col">
               <div className="mb-8">
-                <h3 className="text-xl font-semibold mb-2">AvanÃ§ado</h3>
-                <p className="text-gray-400 text-xs font-semibold uppercase tracking-widest mb-6">Para clÃ­nicas estabelecidas</p>
+                <h3 className="text-xl font-semibold mb-2">Avançado</h3>
+                <p className="text-gray-400 text-xs font-semibold uppercase tracking-widest mb-6">Para clínicas estabelecidas</p>
                 <div className="flex items-baseline gap-1">
                   <span className="text-3xl font-semibold">R$ 679,90</span>
-                  <span className="text-gray-400 font-semibold text-sm">/ mÃªs</span>
+                  <span className="text-gray-400 font-semibold text-sm">/ mês</span>
                 </div>
               </div>
               <button 
                 onClick={() => {
-                  setSelectedPlan('AvanÃ§ado');
+                  setSelectedPlan('Avançado');
                   setRegisterType('professional');
                   setRegisterStep(2);
                   setShowRegister(true);
                 }}
                 className="w-full bg-gray-900 text-white py-4 rounded-2xl font-semibold text-sm mb-8 hover:bg-black transition-all"
               >
-                ComeÃ§ar Agora
+                Começar Agora
               </button>
               <ul className="space-y-4 flex-1">
                 <li className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">Tudo do Crescimento +</li>
-                {['7 a 12 Profissionais', 'MÃºltiplos Workspaces de PEI', 'API de IntegraÃ§Ã£o de Dados', 'Gerente de Conta Dedicado'].map((f, i) => (
+                {['7 a 12 Profissionais', 'Múltiplos Workspaces de PEI', 'API de Integração de Dados', 'Gerente de Conta Dedicado'].map((f, i) => (
                   <li key={i} className="flex items-start gap-3 text-sm font-medium text-gray-600">
                     <Check size={18} className="text-green-500 shrink-0 mt-0.5" />
                     {f}
@@ -920,11 +910,11 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 }}
                 className="w-full bg-slate-900 text-white py-4 rounded-2xl font-semibold text-sm mb-8 hover:bg-black transition-all"
               >
-                Agendar uma demonstraÃ§Ã£o
+                Agendar uma demonstração
               </button>
               <ul className="space-y-4 flex-1">
-                <li className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Tudo do AvanÃ§ado +</li>
-                {['12+ Profissionais', 'Workspaces Ilimitados', 'Dashboard de OrganizaÃ§Ã£o', 'Faturamento Centralizado', 'OpÃ§Ãµes de White-label'].map((f, i) => (
+                <li className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Tudo do Avançado +</li>
+                {['12+ Profissionais', 'Workspaces Ilimitados', 'Dashboard de Organização', 'Faturamento Centralizado', 'Opções de White-label'].map((f, i) => (
                   <li key={i} className="flex items-start gap-3 text-sm font-medium text-slate-600">
                     <Check size={18} className="text-[#7a32fc] shrink-0 mt-0.5" />
                     {f}
@@ -941,7 +931,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               <div>
                 <h3 className="text-3xl font-semibold mb-4">O Valor Real do Resultado</h3>
                 <p className="text-lg text-white/80 font-medium leading-relaxed">
-                  Ao oferecer um planejamento dinÃ¢mico e relatÃ³rios de evoluÃ§Ã£o automÃ¡ticos, sua clÃ­nica entrega um valor premium. O investimento se traduz em maior retenÃ§Ã£o e valorizaÃ§Ã£o do seu serviÃ§o.
+                  Ao oferecer um planejamento dinâmico e relatórios de evolução automáticos, sua clínica entrega um valor premium. O investimento se traduz em maior retenção e valorização do seu serviço.
                 </p>
               </div>
               <div className="flex justify-center lg:justify-end">
@@ -951,7 +941,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                       <Zap size={24} />
                     </div>
                     <div>
-                      <p className="text-xs font-semibold uppercase tracking-widest opacity-60">ValorizaÃ§Ã£o Estimada</p>
+                      <p className="text-xs font-semibold uppercase tracking-widest opacity-60">Valorização Estimada</p>
                       <p className="text-2xl font-semibold">+ 104%</p>
                     </div>
                   </div>
@@ -972,7 +962,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                   <th className="py-6 px-4 text-xs font-semibold text-gray-400 uppercase tracking-widest">Funcionalidade</th>
                   <th className="py-6 px-4 text-center text-sm font-semibold">Essencial</th>
                   <th className="py-6 px-4 text-center text-sm font-semibold text-[#7a32fc]">Crescimento</th>
-                  <th className="py-6 px-4 text-center text-sm font-semibold">AvanÃ§ado</th>
+                  <th className="py-6 px-4 text-center text-sm font-semibold">Avançado</th>
                   <th className="py-6 px-4 text-center text-sm font-semibold">Enterprise</th>
                 </tr>
               </thead>
@@ -980,30 +970,30 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 {[
                   { name: 'Plano Individualizado', p: true, eq: true, cl: true, en: true },
                   { name: 'Agenda Inteligente', p: true, eq: true, cl: true, en: true },
-                  { name: 'RelatÃ³rios de EvoluÃ§Ã£o', p: true, eq: true, cl: true, en: true },
+                  { name: 'Relatórios de Evolução', p: true, eq: true, cl: true, en: true },
                   { name: 'Portal do Paciente', p: true, eq: true, cl: true, en: true },
-                  { name: 'Dashboard de EvoluÃ§Ã£o ClÃ­nica', p: false, eq: true, cl: true, en: true },
-                  { name: 'RelatÃ³rios Consolidados', p: false, eq: true, cl: true, en: true },
-                  { name: 'MÃºltiplos Workspaces', p: false, eq: false, cl: 'AtÃ© 2', en: 'Ilimitados' },
-                  { name: 'API de IntegraÃ§Ã£o', p: false, eq: false, cl: true, en: true },
+                  { name: 'Dashboard de Evolução Clínica', p: false, eq: true, cl: true, en: true },
+                  { name: 'Relatórios Consolidados', p: false, eq: true, cl: true, en: true },
+                  { name: 'Múltiplos Workspaces', p: false, eq: false, cl: 'Até 2', en: 'Ilimitados' },
+                  { name: 'API de Integração', p: false, eq: false, cl: true, en: true },
                   { name: 'Dashboard de Rede', p: false, eq: false, cl: false, en: true },
                   { name: 'White-label', p: false, eq: false, cl: false, en: true },
                   { name: 'Gerente de Conta', p: false, eq: false, cl: true, en: true },
-                  { name: 'Suporte', p: 'E-mail', eq: 'PrioritÃ¡rio', cl: '24/7', en: 'Dedicado' },
+                  { name: 'Suporte', p: 'E-mail', eq: 'Prioritário', cl: '24/7', en: 'Dedicado' },
                 ].map((row, i) => (
                   <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
                     <td className="py-4 px-4 font-semibold text-gray-800">{row.name}</td>
                     <td className="py-4 px-4 text-center">
-                      {typeof row.p === 'boolean' ? (row.p ? <Check size={18} className="mx-auto text-green-500" /> : <span className="text-gray-200">â€”</span>) : row.p}
+                      {typeof row.p === 'boolean' ? (row.p ? <Check size={18} className="mx-auto text-green-500" /> : <span className="text-gray-200">—</span>) : row.p}
                     </td>
                     <td className="py-4 px-4 text-center">
-                      {typeof row.eq === 'boolean' ? (row.eq ? <Check size={18} className="mx-auto text-[#7a32fc]" /> : <span className="text-gray-200">â€”</span>) : row.eq}
+                      {typeof row.eq === 'boolean' ? (row.eq ? <Check size={18} className="mx-auto text-[#7a32fc]" /> : <span className="text-gray-200">—</span>) : row.eq}
                     </td>
                     <td className="py-4 px-4 text-center">
-                      {typeof row.cl === 'boolean' ? (row.cl ? <Check size={18} className="mx-auto text-green-500" /> : <span className="text-gray-200">â€”</span>) : row.cl}
+                      {typeof row.cl === 'boolean' ? (row.cl ? <Check size={18} className="mx-auto text-green-500" /> : <span className="text-gray-200">—</span>) : row.cl}
                     </td>
                     <td className="py-4 px-4 text-center">
-                      {typeof row.en === 'boolean' ? (row.en ? <Check size={18} className="mx-auto text-green-500" /> : <span className="text-gray-200">â€”</span>) : row.en}
+                      {typeof row.en === 'boolean' ? (row.en ? <Check size={18} className="mx-auto text-green-500" /> : <span className="text-gray-200">—</span>) : row.en}
                     </td>
                   </tr>
                 ))}
@@ -1018,11 +1008,11 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
             </div>
             <div className="space-y-4">
               {[
-                { q: "Como a Verto ajuda na criaÃ§Ã£o do plano terapÃªutico?", a: "A Verto automatiza a transiÃ§Ã£o da avaliaÃ§Ã£o para o planejamento. Ao identificar lacunas em protocolos como VB-MAPP ou AFLS, o sistema sugere metas e intervenÃ§Ãµes, permitindo que vocÃª monte um plano robusto em minutos." },
-                { q: "O progresso Ã© atualizado em tempo real?", a: "Sim. Cada registro de sessÃ£o alimenta automaticamente a evoluÃ§Ã£o das metas. VocÃª e a famÃ­lia podem ver o desenvolvimento acontecer sem a necessidade de compilaÃ§Ã£o manual de dados." },
-                { q: "Posso personalizar os critÃ©rios de maestria?", a: "Totalmente. Entendemos que cada paciente Ã© Ãºnico. VocÃª pode definir critÃ©rios de maestria especÃ­ficos para cada meta, garantindo que a progressÃ£o respeite o ritmo individual." },
-                { q: "Como os relatÃ³rios de evoluÃ§Ã£o sÃ£o gerados?", a: "Com um clique. O sistema compila todo o histÃ³rico de registros, anotaÃ§Ãµes profissionais e grÃ¡ficos de evoluÃ§Ã£o em um documento profissional pronto para ser compartilhado." },
-                { q: "Meus dados clÃ­nicos estÃ£o seguros?", a: "SeguranÃ§a Ã© nossa prioridade. Utilizamos criptografia de ponta a ponta e servidores em conformidade com HIPAA e LGPD para garantir que os dados sensÃ­veis estejam sempre protegidos." }
+                { q: "Como a Verto ajuda na criação do plano terapêutico?", a: "A Verto automatiza a transição da avaliação para o planejamento. Ao identificar lacunas em protocolos como VB-MAPP ou AFLS, o sistema sugere metas e intervenções, permitindo que você monte um plano robusto em minutos." },
+                { q: "O progresso é atualizado em tempo real?", a: "Sim. Cada registro de sessão alimenta automaticamente a evolução das metas. Você e a família podem ver o desenvolvimento acontecer sem a necessidade de compilação manual de dados." },
+                { q: "Posso personalizar os critérios de maestria?", a: "Totalmente. Entendemos que cada paciente é único. Você pode definir critérios de maestria específicos para cada meta, garantindo que a progressão respeite o ritmo individual." },
+                { q: "Como os relatórios de evolução são gerados?", a: "Com um clique. O sistema compila todo o histórico de registros, anotações profissionais e gráficos de evolução em um documento profissional pronto para ser compartilhado." },
+                { q: "Meus dados clínicos estão seguros?", a: "Segurança é nossa prioridade. Utilizamos criptografia de ponta a ponta e servidores em conformidade com HIPAA e LGPD para garantir que os dados sensíveis estejam sempre protegidos." }
               ].map((faq, i) => (
                 <div key={i} className="bg-gray-50 rounded-3xl overflow-hidden border border-gray-100">
                   <button 
@@ -1049,9 +1039,9 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               <div className="absolute bottom-10 right-10 w-32 h-32 bg-purple-200 rounded-full blur-3xl"></div>
             </div>
             <div className="relative z-10 max-w-2xl mx-auto">
-              <h3 className="text-4xl font-semibold mb-6">Ainda em dÃºvida?</h3>
+              <h3 className="text-4xl font-semibold mb-6">Ainda em dúvida?</h3>
               <p className="text-xl text-slate-600 font-normal mb-10">
-                Nossa equipe estÃ¡ pronta para entender seu desafio e mostrar como a Verto pode ajudar. Agende uma demonstraÃ§Ã£o sem compromisso e veja a plataforma em aÃ§Ã£o.
+                Nossa equipe está pronta para entender seu desafio e mostrar como a Verto pode ajudar. Agende uma demonstração sem compromisso e veja a plataforma em ação.
               </p>
               <a 
                 href="https://wa.me/5511959348563" 
@@ -1060,7 +1050,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 className="inline-flex items-center gap-3 bg-[#25D366] text-white px-10 py-5 rounded-3xl font-semibold text-lg shadow-2xl shadow-green-500/20 hover:scale-105 transition-all"
               >
                 <MessageCircle size={24} />
-                Agendar DemonstraÃ§Ã£o
+                Agendar Demonstração
               </a>
             </div>
           </div>
@@ -1075,15 +1065,15 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               <Shield size={32} />
             </div>
             <h2 className="text-xl font-bold text-gray-800 mb-2">Configurar 2FA</h2>
-            <p className="text-sm text-gray-500 mb-8">Escaneie o QR Code abaixo com seu app Google Authenticator para habilitar a proteÃ§Ã£o robusta.</p>
+            <p className="text-sm text-gray-500 mb-8">Escaneie o QR Code abaixo com seu app Google Authenticator para habilitar a proteção robusta.</p>
             
             <div className="bg-gray-50 p-4 rounded-2xl mb-8 inline-block">
-              <img src={qrCodeUrl} alt="2FA QR Code" className="w-48 h-48 mx-auto" />
+              <SecureImage src={qrCodeUrl} alt="2FA QR Code" className="w-48 h-48 mx-auto" />
             </div>
 
             <div className="space-y-4">
               <div className="space-y-2 text-left">
-                <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">CÃ³digo de VerificaÃ§Ã£o</label>
+                <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Código de Verificação</label>
                 <input 
                   type="text" 
                   required
@@ -1130,17 +1120,17 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                       {loginType === 'patient' ? 'Portal do Paciente' : 'Portal do Profissional'}
                     </h2>
                     <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider">
-                      {loginType === 'patient' ? 'Acompanhe sua evoluÃ§Ã£o' : 'Acesse sua conta Verto'}
+                      {loginType === 'patient' ? 'Acompanhe sua evolução' : 'Acesse sua conta Verto'}
                     </p>
                   </div>
                 </div>
 
                 <div className="bg-purple-50/50 border border-purple-100/50 rounded-2xl p-3 md:p-4 mb-6">
                   <p className="text-[9px] font-semibold text-[#7a32fc] uppercase tracking-wider mb-1 flex items-center gap-2">
-                    <ShieldCheck size={10} /> SeguranÃ§a & Privacidade
+                    <ShieldCheck size={10} /> Segurança & Privacidade
                   </p>
                   <p className="text-[10px] md:text-[11px] text-gray-500 font-normal leading-relaxed">
-                    Acesse sua conta com e-mail e senha cadastrados. Seus dados sÃ£o protegidos por criptografia.
+                    Acesse sua conta com e-mail e senha cadastrados. Seus dados são protegidos por criptografia.
                   </p>
                 </div>
 
@@ -1186,7 +1176,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                               autoComplete="current-password"
                               required
                               className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-3 pl-11 pr-11 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
-                              placeholder={email === 'appverto1@gmail.com' ? "Cadastre uma senha forte" : "â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"}
+                              placeholder={email === 'appverto1@gmail.com' ? "Cadastre uma senha forte" : "••••••••"}
                               value={password}
                               onChange={(e) => setPassword(e.target.value)}
                             />
@@ -1219,12 +1209,12 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                       <div className="p-4 bg-purple-50 rounded-2xl flex items-start gap-3">
                         <Shield className="text-[#7a32fc] mt-0.5" size={20} />
                         <div>
-                          <p className="text-sm font-bold text-gray-800">AutenticaÃ§Ã£o de 2 Fatores</p>
-                          <p className="text-xs text-gray-500">Insira o cÃ³digo gerado pelo seu app Google Authenticator.</p>
+                          <p className="text-sm font-bold text-gray-800">Autenticação de 2 Fatores</p>
+                          <p className="text-xs text-gray-500">Insira o código gerado pelo seu app Google Authenticator.</p>
                         </div>
                       </div>
                       <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">CÃ³digo de VerificaÃ§Ã£o</label>
+                        <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Código de Verificação</label>
                         <input 
                           type="text" 
                           required
@@ -1241,13 +1231,13 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                   {loginError && (
                     <div className="space-y-2">
                       <p className="text-red-500 text-[10px] font-normal text-center">{loginError}</p>
-                      {loginError.includes('nÃ£o foi confirmado') && (
+                      {loginError.includes('não foi confirmado') && (
                         <button 
                           type="button"
                           onClick={handleResendConfirmation}
                           className="w-full text-[#7a32fc] text-[10px] font-semibold hover:underline"
                         >
-                          Reenviar e-mail de confirmaÃ§Ã£o
+                          Reenviar e-mail de confirmação
                         </button>
                       )}
                     </div>
@@ -1282,14 +1272,14 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
                   {window.self !== window.top && (
                     <p className="mt-4 text-[9px] text-amber-600 font-medium text-center leading-tight bg-amber-50 p-2 rounded-xl border border-amber-100">
-                      Nota: Se o login do Google falhar, clique no Ã­cone no topo para abrir o app em uma nova aba.
+                      Nota: Se o login do Google falhar, clique no ícone no topo para abrir o app em uma nova aba.
                     </p>
                   )}
                 </form>
 
                 <div className="mt-6 pt-6 border-t border-gray-100 text-center">
                   <p className="text-xs text-gray-500 font-normal">
-                    NÃ£o tem uma conta?{" "}
+                    Não tem uma conta?{" "}
                     <button 
                       onClick={() => {
                         setShowLogin(false);
@@ -1325,7 +1315,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                     <div className="flex items-center gap-3 mb-6">
                       <LogoVerto size={32} />
                       <div>
-                        <h2 className="text-lg md:text-xl font-semibold tracking-tight">ComeÃ§ar</h2>
+                        <h2 className="text-lg md:text-xl font-semibold tracking-tight">Começar</h2>
                         <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider">Escolha como deseja usar a Verto</p>
                       </div>
                     </div>
@@ -1342,8 +1332,8 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                           <Building size={20} />
                         </div>
                         <div>
-                          <h3 className="font-semibold text-gray-800 text-xs md:text-sm">Coordenador ou ClÃ­nica</h3>
-                          <p className="text-[10px] md:text-xs text-gray-500 font-normal">GestÃ£o da equipe, clÃ­nica e faturamento.</p>
+                          <h3 className="font-semibold text-gray-800 text-xs md:text-sm">Coordenador ou Clínica</h3>
+                          <p className="text-[10px] md:text-xs text-gray-500 font-normal">Gestão da equipe, clínica e faturamento.</p>
                         </div>
                       </button>
 
@@ -1366,7 +1356,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
                     <div className="mt-6 pt-6 border-t border-gray-100 text-center">
                       <p className="text-xs text-gray-500 font-normal">
-                        JÃ¡ tem uma conta?{" "}
+                        Já tem uma conta?{" "}
                         <button 
                           onClick={() => {
                             setShowRegister(false);
@@ -1398,7 +1388,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                       <div>
                         <h2 className="text-base md:text-lg font-semibold tracking-tight">Cadastro</h2>
                         <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider">
-                          {registerType === 'professional' ? 'Coordenador / ClÃ­nica' : 'Paciente'}
+                          {registerType === 'professional' ? 'Coordenador / Clínica' : 'Paciente'}
                         </p>
                       </div>
                     </div>
@@ -1409,11 +1399,11 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                           <h3 className="text-sm font-bold text-pink-600">Plano Paciente</h3>
                           <div className="text-right">
                             <span className="text-xl font-bold text-pink-600">R$ 4,90</span>
-                            <span className="text-[10px] text-gray-400 font-bold uppercase ml-1">/mÃªs</span>
+                            <span className="text-[10px] text-gray-400 font-bold uppercase ml-1">/mês</span>
                           </div>
                         </div>
                         <p className="text-[10px] text-gray-500 font-medium leading-relaxed">
-                          Acompanhe sua evoluÃ§Ã£o, visualize metas e receba feedbacks em tempo real.
+                          Acompanhe sua evolução, visualize metas e receba feedbacks em tempo real.
                         </p>
                       </div>
                     )}
@@ -1463,7 +1453,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                           type="password" 
                           required
                           className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-2.5 md:py-3 px-4 md:px-5 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
-                          placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+                          placeholder="••••••••"
                           value={password}
                           onChange={(e) => setPassword(e.target.value)}
                         />
@@ -1509,7 +1499,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                     </div>
                     <h2 className="text-lg font-semibold tracking-tight mb-2">Verifique seu E-mail</h2>
                     <p className="text-gray-500 font-normal text-xs mb-6 leading-relaxed">
-                      Enviamos um link de confirmaÃ§Ã£o para <strong>{email}</strong>. 
+                      Enviamos um link de confirmação para <strong>{email}</strong>. 
                       Acesse seu e-mail para ativar sua conta.
                     </p>
                     <button 
@@ -1530,15 +1520,15 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                       <div className="w-10 h-10 md:w-12 md:h-12 bg-purple-100 text-[#7a32fc] rounded-xl flex items-center justify-center mx-auto mb-3">
                         <Rocket size={20} />
                       </div>
-                      <h2 className="text-base md:text-lg font-semibold tracking-tight">Quase lÃ¡, {name.split(' ')[0]}!</h2>
-                      <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider mt-1">Selecione o plano ideal para vocÃª</p>
+                      <h2 className="text-base md:text-lg font-semibold tracking-tight">Quase lá, {name.split(' ')[0]}!</h2>
+                      <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider mt-1">Selecione o plano ideal para você</p>
                     </div>
 
                     <div className="space-y-2 md:space-y-2.5">
                       {[
-                        { name: 'Essencial', price: '149,90', desc: 'AtÃ© 2 profissionais' },
+                        { name: 'Essencial', price: '149,90', desc: 'Até 2 profissionais' },
                         { name: 'Crescimento', price: '399,90', desc: '3 a 7 profissionais' },
-                        { name: 'AvanÃ§ado', price: '679,90', desc: '7 a 12 profissionais' }
+                        { name: 'Avançado', price: '679,90', desc: '7 a 12 profissionais' }
                       ].map((plan) => (
                         <button 
                           key={plan.name}
@@ -1551,7 +1541,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                           </div>
                           <div className="text-right">
                             <span className="text-xs md:text-sm font-semibold text-[#7a32fc]">R$ {plan.price}</span>
-                            <p className="text-[7px] md:text-[8px] text-gray-400 font-normal uppercase">/mÃªs</p>
+                            <p className="text-[7px] md:text-[8px] text-gray-400 font-normal uppercase">/mês</p>
                           </div>
                         </button>
                       ))}
@@ -1561,7 +1551,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                       >
                         <div>
                           <h3 className="font-semibold text-[11px] md:text-xs">Enterprise</h3>
-                          <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">ClÃ­nicas de grande porte</p>
+                          <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">Clínicas de grande porte</p>
                         </div>
                         <span className="text-[8px] md:text-[9px] font-semibold uppercase tracking-wider">Sob Consulta</span>
                       </button>
@@ -1582,7 +1572,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               <span className="text-2xl font-logo font-bold tracking-tighter text-[#7a32fc] lowercase">verto</span>
             </div>
             <p className="text-gray-500 font-normal max-w-sm leading-relaxed">
-              Transformando a jornada terapÃªutica atravÃ©s da tecnologia e do design centrado no ser humano.
+              Transformando a jornada terapêutica através da tecnologia e do design centrado no ser humano.
             </p>
           </div>
           <div>
@@ -1590,7 +1580,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
             <ul className="space-y-4 text-sm font-semibold text-gray-400">
               <li className="hover:text-[#7a32fc] cursor-pointer">Funcionalidades</li>
               <li className="hover:text-[#7a32fc] cursor-pointer">Protocolos</li>
-              <li className="hover:text-[#7a32fc] cursor-pointer">SeguranÃ§a</li>
+              <li className="hover:text-[#7a32fc] cursor-pointer">Segurança</li>
             </ul>
           </div>
           <div>
@@ -1603,11 +1593,9 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           </div>
         </div>
         <div className="max-w-7xl mx-auto px-6 mt-20 pt-8 border-t border-gray-50 text-center text-xs font-semibold text-gray-300 uppercase tracking-widest">
-          Â© 2026 Verto Health Technologies. Todos os direitos reservados.
+          © 2026 Verto Health Technologies. Todos os direitos reservados.
         </div>
       </footer>
     </div>
   );
 };
-
-

@@ -7,8 +7,9 @@ import { HistoryCard } from './History';
 import { SessionMode } from './SessionMode';
 import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
+import { SecureImage, SecureIframe } from './SecureMedia';
 
-export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate }: any) => { 
+export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate }: any) => { 
   const [activeTab, setActiveTab] = useState(initialTab); 
   const [newNote, setNewNote] = useState(""); 
   const [noteMode, setNoteMode] = useState('private'); 
@@ -21,7 +22,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
   const [reportPeriod, setReportPeriod] = useState('monthly');
   const [comparisonDate1, setComparisonDate1] = useState('');
   const [comparisonDate2, setComparisonDate2] = useState('');
-  const [selectedReportNotes, setSelectedReportNotes] = useState<string[]>([]);
+  const [selectedReportNotes, setSelectedReportNotes] = useState<number[]>([]);
   const [planType, setPlanType] = useState('task'); 
   const [isCreatingNewTask, setIsCreatingNewTask] = useState(false); 
   const [filterAge, setFilterAge] = useState(""); 
@@ -60,7 +61,6 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
   const [selectedPEISkillId, setSelectedPEISkillId] = useState("");
   const [isSessionModeOpen, setIsSessionModeOpen] = useState(false);
   const [isUnlinkingModalOpen, setIsUnlinkingModalOpen] = useState(false);
-  const [actionPopup, setActionPopup] = useState<{ title: string; message: string } | null>(null);
 
   useEffect(() => {
     if (initialTab) setActiveTab(initialTab);
@@ -79,41 +79,20 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
   };
 
-  const parseAnamnesisData = (raw: any) => {
-    if (!raw) return null;
-    if (typeof raw === "object") return raw;
-    if (typeof raw === "string") {
-      try {
-        const parsed = JSON.parse(raw);
-        return parsed && typeof parsed === "object" ? parsed : null;
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  };
-
   const normalizeFileRecord = (file: any) => {
     const safeName = String(file?.name || file?.fileName || 'arquivo');
     const safeType = String(file?.type || file?.mimeType || 'application/octet-stream');
     const safeContent = typeof file?.content === 'string' ? file.content : '';
     const safeUrl = typeof file?.url === 'string' ? file.url : (typeof file?.signedUrl === 'string' ? file.signedUrl : '');
-    let objectUrl: string | undefined = safeUrl || undefined;
-    if (!objectUrl && safeContent.startsWith('data:')) {
-      objectUrl = safeContent;
-    } else if (!objectUrl && safeType.includes('html') && safeContent.trim().startsWith('<')) {
-      objectUrl = URL.createObjectURL(new Blob([safeContent], { type: 'text/html;charset=utf-8' }));
-    }
+    const objectUrl = safeUrl || (safeContent ? safeContent : undefined);
     return {
       id: String(file?.id || Date.now()),
       name: safeName,
       size: String(file?.size || (file?.sizeBytes ? `${Math.max(1, Math.round(Number(file.sizeBytes) / 1024))} KB` : '')),
       date: String(file?.date || (file?.createdAt ? new Date(file.createdAt).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR'))),
       type: safeType,
-      source: file?.source || (safeName.toLowerCase().includes('ficha_anamnese') ? 'anamnesis' : 'upload'),
+      source: file?.source || 'upload',
       content: safeContent,
-      anamnesisData: parseAnamnesisData(file?.anamnesisData) || null,
-      referenceDate: file?.referenceDate || null,
       url: safeUrl || undefined,
       objectUrl
     };
@@ -124,33 +103,9 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
       if (!patient?.id) return;
       setIsLoadingFiles(true);
       try {
-        const anamnesisResult = await dataService.getPatientAnamnesisSubmissions(String(patient.id));
-        const anamnesisByFileId = new Map<string, any>();
-        if (anamnesisResult?.success && Array.isArray(anamnesisResult?.data)) {
-          anamnesisResult.data.forEach((row: any) => {
-            const fileId = String(row?.patient_file_id || '').trim();
-            if (fileId) {
-              anamnesisByFileId.set(fileId, {
-                anamnesisData: parseAnamnesisData(row?.anamnesis_data) || null,
-                referenceDate: row?.reference_date || null
-              });
-            }
-          });
-        }
-
         const result = await dataService.getPatientFiles(String(patient.id));
         if (result?.success && Array.isArray(result?.data)) {
-          setPatientFiles(
-            result.data.map((file: any) => {
-              const key = String(file?.id || '');
-              const linked = anamnesisByFileId.get(key);
-              return normalizeFileRecord({
-                ...file,
-                anamnesisData: linked?.anamnesisData || null,
-                referenceDate: linked?.referenceDate || null
-              });
-            })
-          );
+          setPatientFiles(result.data.map(normalizeFileRecord));
           return;
         }
         const fallbackRecord = await dataService.getPatientRecord(String(patient.id));
@@ -181,156 +136,13 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
   const [pendingTrial, setPendingTrial] = useState<any>(null);
   const [showTrialConfirmation, setShowTrialConfirmation] = useState(false);
   const [trialObservation, setTrialObservation] = useState("");
-  const [anamnesisPreviewUrl, setAnamnesisPreviewUrl] = useState<string | null>(null);
-  const [anamnesisRenewalMonths, setAnamnesisRenewalMonths] = useState("6");
-
-  const isAnamnesisFile = (file: any) =>
-    file?.source === "anamnesis" ||
-    String(file?.name || "").toLowerCase().includes("ficha_anamnese");
-
-  const normalizeAnamnesisRenewalMonths = (value: any) => {
-    const months = Number(value);
-    if ([2, 3, 6, 12].includes(months)) return String(months);
-    return "6";
-  };
-
-  const baseAnamnesisData = useMemo(() => {
-    const existing = (patient?.anamnesisData && typeof patient.anamnesisData === "object")
-      ? patient.anamnesisData
-      : {};
-    const addressObj = (patient?.address && typeof patient.address === "object")
-      ? patient.address
-      : {};
-    const birthDate = String(existing?.dataNascimento || patient?.birthDate || "").trim();
-    const computedAge = Number.isFinite(Number(existing?.idade))
-      ? Number(existing?.idade)
-      : (Number.isFinite(Number(patient?.age)) ? Number(patient.age) : undefined);
-    const normalizedGroup = String(existing?.grupo || patient?.group || "").trim().toLowerCase();
-    const isMinorByGroup = normalizedGroup === "infantil" || normalizedGroup === "adolescente";
-    const isMinorByAge = Number.isFinite(Number(computedAge)) ? Number(computedAge) < 18 : false;
-    const menorDeIdade = existing?.menorDeIdade !== undefined
-      ? Boolean(existing.menorDeIdade)
-      : Boolean(patient?.isMinor || isMinorByGroup || isMinorByAge);
-
-    return {
-      ...existing,
-      nome: existing?.nome || patient?.name || "",
-      nomeSocial: existing?.nomeSocial || patient?.socialName || "",
-      telefone: existing?.telefone || patient?.phone || "",
-      dataNascimento: birthDate,
-      idade: existing?.idade || (computedAge !== undefined ? String(computedAge) : ""),
-      genero: existing?.genero || patient?.gender || "",
-      convenioTipo: existing?.convenioTipo || patient?.insuranceType || "particular",
-      convenioNome: existing?.convenioNome || patient?.insuranceName || "",
-      convenioCarteirinha: existing?.convenioCarteirinha || patient?.cardNumber || "",
-      grupo: existing?.grupo || patient?.group || "",
-      comoConheceu: existing?.comoConheceu || patient?.source || "",
-      rg: existing?.rg || patient?.rg || "",
-      cpf: existing?.cpf || patient?.cpf || "",
-      cep: existing?.cep || patient?.cep || addressObj?.cep || "",
-      email: existing?.email || patient?.email || "",
-      logradouro: existing?.logradouro || addressObj?.logradouro || "",
-      numero: existing?.numero || addressObj?.numero || "",
-      complemento: existing?.complemento || addressObj?.complemento || "",
-      bairro: existing?.bairro || addressObj?.bairro || "",
-      cidade: existing?.cidade || addressObj?.cidade || "",
-      outrasInformacoes: existing?.outrasInformacoes || patient?.notes || "",
-      menorDeIdade,
-      responsavelNome: existing?.responsavelNome || patient?.guardian?.nome || "",
-      responsavelDataNascimento: existing?.responsavelDataNascimento || patient?.guardian?.dataNascimento || "",
-      responsavelCpf: existing?.responsavelCpf || patient?.guardian?.cpf || "",
-      responsavelTelefone: existing?.responsavelTelefone || patient?.guardian?.telefone || "",
-    };
-  }, [patient]);
-
-  const normalizePeiGoal = (goal: any, index: number) => {
-    const normalizedTerm = String(goal?.term || "short").toLowerCase();
-    const term = ["short", "medium", "long"].includes(normalizedTerm)
-      ? normalizedTerm
-      : "short";
-    const normalizedStatus = String(goal?.status || "not_started").toLowerCase();
-    const status = ["not_started", "in_progress", "completed"].includes(normalizedStatus)
-      ? normalizedStatus
-      : "not_started";
-    const progressValue = Number(goal?.progress);
-    const progress = Number.isFinite(progressValue)
-      ? Math.max(0, Math.min(100, Math.round(progressValue)))
-      : 0;
-    return {
-      ...goal,
-      id: goal?.id ?? `${Date.now()}-${index}`,
-      term,
-      status,
-      progress,
-      isPriority: Boolean(goal?.isPriority),
-    };
-  };
-
-  const peiGoals = useMemo(
-    () => (Array.isArray(patient?.pei) ? patient.pei : []).map(normalizePeiGoal),
-    [patient?.pei],
-  );
-
-  const savePeiGoals = (nextGoals: any[]) => {
-    onUpdatePatient?.({
-      ...patient,
-      pei: nextGoals.map(normalizePeiGoal),
-    });
-  };
-
-  useEffect(() => {
-    setAnamnesisRenewalMonths(
-      normalizeAnamnesisRenewalMonths(patient?.anamnesisRenewalMonths),
-    );
-  }, [patient?.id, patient?.anamnesisRenewalMonths]);
-
-  useEffect(() => {
-    if (!previewFile || !isAnamnesisFile(previewFile)) {
-      setAnamnesisPreviewUrl(null);
-      return;
-    }
-
-    try {
-      const previewDate = previewFile?.referenceDate || new Date().toISOString().slice(0, 10);
-      const previewHtml =
-        typeof previewFile?.content === "string" && previewFile.content.trim().toLowerCase().includes("<html")
-          ? previewFile.content
-          : buildAnamnesisDocumentHtml(
-              parseAnamnesisData(previewFile?.anamnesisData) || patient?.anamnesisData || {},
-              previewDate,
-            );
-      const blob = new Blob([previewHtml], { type: "text/html;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      setAnamnesisPreviewUrl(url);
-    } catch (error) {
-      console.error("Falha ao gerar preview da ficha de anamnese:", error);
-      setAnamnesisPreviewUrl(null);
-    }
-  }, [previewFile, patient?.anamnesisData, patient?.name]);
-
-  useEffect(() => {
-    return () => {
-      if (anamnesisPreviewUrl && anamnesisPreviewUrl.startsWith("blob:")) {
-        URL.revokeObjectURL(anamnesisPreviewUrl);
-      }
-    };
-  }, [anamnesisPreviewUrl]);
-
   const [isSavingObservation, setIsSavingObservation] = useState(false);
 
   const [reportStartDate, setReportStartDate] = useState("");
   const [reportEndDate, setReportEndDate] = useState("");
-  const [reportPreviewUrl, setReportPreviewUrl] = useState<string | null>(null);
-  const [isReportPreviewOpen, setIsReportPreviewOpen] = useState(false);
-
-  useEffect(() => {
-    return () => {
-      if (reportPreviewUrl) URL.revokeObjectURL(reportPreviewUrl);
-    };
-  }, [reportPreviewUrl]);
 
   const [selectedChartProtocolId, setSelectedChartProtocolId] = useState(() => {
-    const isKid = (patient?.age !== undefined && patient?.age <= 12) || patient?.anamnesisData?.formType === 'child';
+    const isKid = (patient.age !== undefined && patient.age <= 12) || patient.anamnesisData?.formType === 'child';
     if (isKid) {
       const vbmapp = protocols.find((p: any) => p.title.includes('VB-MAPP'));
       if (vbmapp) return vbmapp.id;
@@ -339,15 +151,14 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
   });
   const [selectedSnapshotDate, setSelectedSnapshotDate] = useState("all");
 
-  function escapeHtml(value: any) {
-    return String(value ?? "")
+  const escapeHtml = (value: any) =>
+    String(value ?? "")
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
-  }
 
-  function buildAnamnesisDocumentHtml(anamnesis: any, fichaDateIso: string) {
+  const buildAnamnesisDocumentHtml = (anamnesis: any, fichaDateIso: string) => {
     const c = clinicContext || {};
     const fieldLabelMap: Record<string, string> = {
       nome: "Nome completo",
@@ -396,12 +207,6 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     const normalizeValue = (key: string, value: any) => {
       if (value === null || value === undefined) return "";
       if (key === "menorDeIdade") return value ? "Sim" : "Não";
-      if (typeof value === "boolean") return value ? "Sim" : "Não";
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (normalized === "true") return "Sim";
-        if (normalized === "false") return "Não";
-      }
       if (key === "formType") {
         if (value === "adult") return "Adulto";
         if (value === "child") return "Criança";
@@ -467,51 +272,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
       if (!prioritySet.has(entry[0])) extraEntries.push(entry);
     });
 
-    const snapshotQuestions = Array.isArray(anamnesis?.template_snapshot?.questions)
-      ? anamnesis.template_snapshot.questions
-      : [];
-    const snapshotSections = Array.isArray(anamnesis?.template_snapshot?.sections)
-      ? anamnesis.template_snapshot.sections
-      : [];
-    const sectionTitleById = new Map(
-      snapshotSections.map((section: any) => [String(section?.id || ""), String(section?.title || "")]),
-    );
-    const questionById = new Map<string, any>(
-      snapshotQuestions.map((question: any) => [String(question?.id || ""), question]),
-    );
-    const isCustomQuestion = (key: string) => {
-      const question = questionById.get(key);
-      if (!question) return key.startsWith("q_");
-      const sectionId = String(question?.sectionId || "");
-      const sectionTitle = String(sectionTitleById.get(sectionId) || "");
-      return sectionId === "personalizadas" || sectionTitle.toLowerCase().includes("personaliz");
-    };
-
-    const templateOrderedExtras = snapshotQuestions
-      .filter((question: any) => question?.active !== false && !prioritySet.has(String(question?.id || "")))
-      .sort((a: any, b: any) => Number(a?.order || 0) - Number(b?.order || 0))
-      .map((question: any) => extraEntries.find(([key]) => key === String(question?.id || "")))
-      .filter(Boolean) as Array<[string, any]>;
-
-    const templateExtraSet = new Set(templateOrderedExtras.map(([key]) => key));
-    const remainderExtras = extraEntries.filter(([key]) => !templateExtraSet.has(key));
-    const clinicalExtras = templateOrderedExtras
-      .concat(remainderExtras)
-      .filter(([key]) => !isCustomQuestion(key));
-    const customExtras = templateOrderedExtras
-      .concat(remainderExtras)
-      .filter(([key]) => isCustomQuestion(key));
-
-    const uniqueByKey = (entries: Array<[string, any]>) => {
-      const seen = new Set<string>();
-      return entries.filter(([key]) => {
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-    };
-
-    const orderedEntries = uniqueByKey([...priorityEntries, ...clinicalExtras, ...customExtras]);
+    const orderedEntries = [...priorityEntries, ...extraEntries];
 
     const lines = orderedEntries
       .map(([key, value]) => {
@@ -584,310 +345,30 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
   </div>
 </body>
 </html>`;
-  }
+  };
 
-  function buildAnamnesisPdfLines(anamnesis: any, fichaDateIso: string) {
-    const c = clinicContext || {};
-    const questionLabels =
-      anamnesis && typeof anamnesis.questionLabels === "object" ? anamnesis.questionLabels : {};
-
-    const priorityFields = [
-      "nome","nomeSocial","dataNascimento","idade","genero","telefone","email","rg","cpf",
-      "convenioTipo","convenioNome","convenioCarteirinha","grupo","comoConheceu","cep","logradouro",
-      "numero","complemento","bairro","cidade","endereco","menorDeIdade","responsavelNome",
-      "responsavelDataNascimento","responsavelCpf","responsavelTelefone","profissional","crp","formType"
-    ];
-    const excludedKeys = new Set(["anamnesisTemplateVersion","template_version","template_snapshot","questionLabels"]);
-    const prioritySet = new Set(priorityFields);
-    const rawEntries = Object.entries(anamnesis || {}).filter(([key]) => !excludedKeys.has(key));
-
-    const snapshotQuestions = Array.isArray(anamnesis?.template_snapshot?.questions)
-      ? anamnesis.template_snapshot.questions
-      : [];
-    const snapshotSections = Array.isArray(anamnesis?.template_snapshot?.sections)
-      ? anamnesis.template_snapshot.sections
-      : [];
-    const sectionTitleById = new Map(
-      snapshotSections.map((section: any) => [String(section?.id || ""), String(section?.title || "")]),
-    );
-    const questionById = new Map<string, any>(
-      snapshotQuestions.map((question: any) => [String(question?.id || ""), question]),
-    );
-    const isCustomQuestion = (key: string) => {
-      const question = questionById.get(key);
-      if (!question) return key.startsWith("q_");
-      const sectionId = String(question?.sectionId || "");
-      const sectionTitle = String(sectionTitleById.get(sectionId) || "");
-      return sectionId === "personalizadas" || sectionTitle.toLowerCase().includes("personaliz");
+  const openPrintWindowForPdf = (htmlContent: string) => {
+    const htmlBlob = new Blob([htmlContent], { type: "text/html;charset=utf-8" });
+    const htmlUrl = URL.createObjectURL(htmlBlob);
+    const printWindow = window.open(htmlUrl, "_blank", "noopener,noreferrer,width=1100,height=900");
+    if (!printWindow) {
+      alert("Não foi possível abrir a janela de impressão. Verifique se o bloqueador de pop-up está ativo.");
+      URL.revokeObjectURL(htmlUrl);
+      return;
+    }
+    const cleanupUrl = () => {
+      try {
+        URL.revokeObjectURL(htmlUrl);
+      } catch {}
     };
-
-    const priorityEntries = priorityFields
-      .map((field) => rawEntries.find(([key]) => key === field))
-      .filter(Boolean) as Array<[string, any]>;
-    const extraEntries = rawEntries.filter(([key]) => !prioritySet.has(key));
-    const templateOrderedExtras = snapshotQuestions
-      .filter((question: any) => question?.active !== false && !prioritySet.has(String(question?.id || "")))
-      .sort((a: any, b: any) => Number(a?.order || 0) - Number(b?.order || 0))
-      .map((question: any) => extraEntries.find(([key]) => key === String(question?.id || "")))
-      .filter(Boolean) as Array<[string, any]>;
-    const templateExtraSet = new Set(templateOrderedExtras.map(([key]) => key));
-    const remainderExtras = extraEntries.filter(([key]) => !templateExtraSet.has(key));
-    const clinicalExtras = templateOrderedExtras.concat(remainderExtras).filter(([key]) => !isCustomQuestion(key));
-    const customExtras = templateOrderedExtras.concat(remainderExtras).filter(([key]) => isCustomQuestion(key));
-    const seen = new Set<string>();
-    const orderedEntries = [...priorityEntries, ...clinicalExtras, ...customExtras].filter(([key]) => {
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-
-    const normalizeValue = (key: string, value: any) => {
-      if (value === null || value === undefined) return "";
-      if (key === "menorDeIdade") return value ? "Sim" : "Não";
-      if (typeof value === "boolean") return value ? "Sim" : "Não";
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (normalized === "true") return "Sim";
-        if (normalized === "false") return "Não";
+    printWindow.onload = () => {
+      try {
+        printWindow.focus();
+        printWindow.print();
+      } finally {
+        setTimeout(cleanupUrl, 1200);
       }
-      if (key === "formType") {
-        if (value === "adult") return "Adulto";
-        if (value === "child") return "Criança";
-      }
-      if (Array.isArray(value)) return value.join(", ");
-      if (typeof value === "object") return "";
-      return String(value);
     };
-
-    const fallbackLabel = (key: string) =>
-      key
-        .replace(/([a-z])([A-Z])/g, "$1 $2")
-        .replaceAll("_", " ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .replace(/^./, (l) => l.toUpperCase());
-
-    const fichaDate = fichaDateIso
-      ? new Date(`${fichaDateIso}T00:00:00`).toLocaleDateString("pt-BR")
-      : new Date().toLocaleDateString("pt-BR");
-
-    const lines = [
-      `Ficha de Anamnese - ${patient?.name || "Paciente"}`,
-      `Clínica: ${c.clinicName || "Clínica Verto"}`,
-      `CNPJ: ${c.cnpj || "-"}`,
-      `Data da ficha: ${fichaDate}`,
-      " "
-    ];
-
-    orderedEntries.forEach(([key, value]) => {
-      const normalized = normalizeValue(key, value);
-      if (!String(normalized || "").trim()) return;
-      const label = questionLabels[key] || fallbackLabel(key);
-      lines.push(`${label}: ${normalized}`);
-    });
-
-    return lines;
-  }
-
-  const normalizeDateString = (dateStr: string) => {
-    if (!dateStr) return null;
-    const cleanedRaw = String(dateStr).trim().replace(",", "");
-    if (dateStr.includes("T")) {
-      const iso = new Date(cleanedRaw);
-      if (!Number.isNaN(iso.getTime())) return iso;
-    }
-    if (cleanedRaw.includes("/")) {
-      const parts = cleanedRaw.split(" ")[0].split("/");
-      if (parts.length === 3) {
-        const [dd, mm, yyyyRaw] = parts;
-        const yyyy = String(yyyyRaw || "").replace(/\D/g, "");
-        const parsed = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
-        if (!Number.isNaN(parsed.getTime())) return parsed;
-      }
-    }
-    const parsed = new Date(cleanedRaw);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
-  };
-
-  const createPdfFromHtml = async (html: string) => {
-    const { jsPDF } = await import("jspdf");
-    await import("html2canvas");
-
-    const container = document.createElement("div");
-    container.style.position = "fixed";
-    container.style.left = "-10000px";
-    container.style.top = "0";
-    container.style.width = "794px";
-    container.style.background = "#ffffff";
-    container.innerHTML = html;
-    document.body.appendChild(container);
-
-    try {
-      if (document.fonts?.ready) {
-        await document.fonts.ready;
-      }
-
-      const images = Array.from(container.querySelectorAll("img"));
-      await Promise.all(
-        images.map(
-          (img) =>
-            new Promise<void>((resolve) => {
-              if (img.complete) {
-                resolve();
-                return;
-              }
-              img.onload = () => resolve();
-              img.onerror = () => resolve();
-            }),
-        ),
-      );
-
-      const doc = new jsPDF({
-        orientation: "portrait",
-        unit: "pt",
-        format: "a4",
-      });
-
-      await doc.html(container, {
-        x: 12,
-        y: 12,
-        width: 571,
-        windowWidth: 794,
-        autoPaging: "text",
-        html2canvas: {
-          scale: 2,
-          useCORS: true,
-          backgroundColor: "#ffffff",
-        },
-      });
-
-      return doc.output("blob");
-    } finally {
-      document.body.removeChild(container);
-    }
-  };
-
-  const toLatin1 = (text: string) => {
-    const normalized = String(text || "");
-    const bytes: number[] = [];
-    for (let i = 0; i < normalized.length; i += 1) {
-      const code = normalized.charCodeAt(i);
-      bytes.push(code <= 255 ? code : 63);
-    }
-    return bytes;
-  };
-
-  const pdfEscape = (text: string) =>
-    String(text || "")
-      .replace(/\\/g, "\\\\")
-      .replace(/\(/g, "\\(")
-      .replace(/\)/g, "\\)");
-
-  const uint8ToBase64 = (bytes: Uint8Array) => {
-    let binary = "";
-    const chunkSize = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      const chunk = bytes.subarray(i, i + chunkSize);
-      binary += String.fromCharCode(...chunk);
-    }
-    return btoa(binary);
-  };
-
-  function createSimplePdf(title: string, lines: string[]) {
-    const pageHeight = 842;
-    const lineHeight = 14;
-    const marginTop = 60;
-    const marginLeft = 45;
-    const marginBottom = 50;
-    const usableHeight = pageHeight - marginTop - marginBottom;
-    const linesPerPage = Math.max(1, Math.floor(usableHeight / lineHeight));
-
-    const chunks: string[][] = [];
-    for (let i = 0; i < lines.length; i += linesPerPage) {
-      chunks.push(lines.slice(i, i + linesPerPage));
-    }
-    if (!chunks.length) chunks.push(["Sem conteúdo."]);
-
-    const objects = new Map<number, Uint8Array>();
-    const offsets: number[] = [0];
-    const encoder = new TextEncoder();
-    const addObject = (id: number, obj: string | Uint8Array) => {
-      const bytes = typeof obj === "string" ? encoder.encode(obj) : obj;
-      objects.set(id, bytes);
-    };
-
-    addObject(1, "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
-    addObject(2, `2 0 obj << /Type /Pages /Count ${chunks.length} /Kids [${chunks.map((_, idx) => `${4 + idx * 2} 0 R`).join(" ")}] >> endobj\n`);
-    addObject(3, "3 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n");
-
-    chunks.forEach((pageLines, idx) => {
-      const pageObj = 4 + idx * 2;
-      const contentObj = pageObj + 1;
-      addObject(
-        pageObj,
-        `${pageObj} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObj} 0 R >> endobj\n`,
-      );
-
-      const yStart = pageHeight - marginTop;
-      const streamLines = [
-        "BT",
-        "/F1 11 Tf",
-        `${marginLeft} ${yStart} Td`,
-        `(${pdfEscape(pageLines[0] || "")}) Tj`
-      ];
-      for (let i = 1; i < pageLines.length; i += 1) {
-        streamLines.push(`0 -${lineHeight} Td`);
-        streamLines.push(`(${pdfEscape(pageLines[i])}) Tj`);
-      }
-      streamLines.push("ET");
-      const streamContent = streamLines.join("\n");
-      const streamBytes = new Uint8Array(toLatin1(streamContent));
-      const header = encoder.encode(`${contentObj} 0 obj << /Length ${streamBytes.length} >> stream\n`);
-      const footer = encoder.encode("\nendstream endobj\n");
-      const joined = new Uint8Array(header.length + streamBytes.length + footer.length);
-      joined.set(header, 0);
-      joined.set(streamBytes, header.length);
-      joined.set(footer, header.length + streamBytes.length);
-      addObject(contentObj, joined);
-    });
-
-    const header = encoder.encode("%PDF-1.4\n");
-    let size = header.length;
-    const parts: Uint8Array[] = [header];
-
-    const objectCount = objects.size;
-    for (let objectId = 1; objectId <= objectCount; objectId += 1) {
-      const part = objects.get(objectId) || new Uint8Array();
-      offsets.push(size);
-      parts.push(part);
-      size += part.length;
-    }
-
-    const xrefStart = size;
-    let xref = `xref\n0 ${objectCount + 1}\n0000000000 65535 f \n`;
-    for (let i = 1; i < offsets.length; i += 1) {
-      xref += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
-    }
-    const trailer = `trailer << /Size ${objectCount + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
-    parts.push(encoder.encode(xref));
-    parts.push(encoder.encode(trailer));
-
-    const total = parts.reduce((sum, part) => sum + part.length, 0);
-    const out = new Uint8Array(total);
-    let cursor = 0;
-    parts.forEach((part) => {
-      out.set(part, cursor);
-      cursor += part.length;
-    });
-    return out;
-  }
-
-  const periodLabelMap: Record<string, string> = {
-    monthly: "Mensal",
-    bimonthly: "Bimestral",
-    quarterly: "Trimestral",
-    semiannual: "Semestral",
-    annual: "Anual"
   };
 
   const availableSnapshots = useMemo(() => {
@@ -949,14 +430,25 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
       const useMasteryLogic = selectedProto.title.includes('VB-MAPP');
       
       const skillLatestScoreMap: any = {};
+      const skillLatestIdMap: any = {};
       const skillScoresMap: any = {};
       
       latestHistory.forEach((evalItem: any) => {
         const title = evalItem.title.trim().toLowerCase();
         if (skillNames.includes(title)) {
           if (useMasteryLogic) {
-            if (!skillScoresMap[title]) skillScoresMap[title] = [];
-            skillScoresMap[title].push(evalItem);
+            // Logic for VB-MAPP: Latest score / Mastery
+            if (!skillLatestIdMap[title] || evalItem.id > skillLatestIdMap[title]) {
+              skillLatestIdMap[title] = evalItem.id;
+              
+              // Check if mastered in PEI first
+              const peiGoal = patient.pei?.find((g: any) => g.name.trim().toLowerCase() === title);
+              if (peiGoal?.status === 'completed') {
+                skillLatestScoreMap[title] = 1;
+              } else {
+                skillLatestScoreMap[title] = evalItem.score;
+              }
+            }
           } else {
             // Logic for AFLS and others: Averages
             if (!skillScoresMap[title]) skillScoresMap[title] = [];
@@ -966,39 +458,6 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
       });
 
       if (useMasteryLogic) {
-        Object.entries(skillScoresMap).forEach(([skillTitle, entries]: [string, any]) => {
-          const ordered = Array.isArray(entries)
-            ? [...entries].sort((a: any, b: any) => Number(b.id || 0) - Number(a.id || 0))
-            : [];
-          if (ordered.length === 0) return;
-
-          const peiGoal = peiGoals.find(
-            (g: any) => String(g?.name || '').trim().toLowerCase() === skillTitle,
-          );
-          const goalStartId = Number(peiGoal?.id || 0);
-          const scoped = ordered.filter((item: any) => Number(item?.id || 0) > goalStartId);
-          const source = scoped.length > 0 ? scoped : ordered;
-
-          let consecutiveOnes = 0;
-          for (const item of source) {
-            if (Number(item?.score) === 1) consecutiveOnes++;
-            else break;
-          }
-
-          if (peiGoal?.status === 'completed' || consecutiveOnes >= 5) {
-            skillLatestScoreMap[skillTitle] = 1;
-            return;
-          }
-
-          const fallback = source.find((item: any, idx: number) => idx >= consecutiveOnes && Number(item?.score) !== 1);
-          if (fallback) {
-            skillLatestScoreMap[skillTitle] = Number(fallback.score) || 0;
-            return;
-          }
-
-          const latest = source[0];
-          skillLatestScoreMap[skillTitle] = Number(latest?.score) === 1 ? 0 : (Number(latest?.score) || 0);
-        });
         const latestScores: any[] = Object.values(skillLatestScoreMap);
         return latestScores.length > 0 ? (latestScores.reduce((a: any, b: any) => a + b, 0) / latestScores.length) : 0;
       } else {
@@ -1200,10 +659,9 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     return data;
   }, [history, protocols, selectedChartProtocolId, patient.id, comparisonDate1, comparisonDate2]);
 
-  const toggleReportNote = (id: any) => {
-    const noteId = String(id);
+  const toggleReportNote = (id: number) => {
     setSelectedReportNotes(prev => 
-      prev.includes(noteId) ? prev.filter(nId => nId !== noteId) : [...prev, noteId]
+      prev.includes(id) ? prev.filter(nId => nId !== id) : [...prev, id]
     );
   };
   
@@ -1288,21 +746,32 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
   const handleUpdateAnamnesis = (updatedData: any) => {
     if (isPreparingAnamnesisSave || showAnamnesisFileModal) return;
     setIsPreparingAnamnesisSave(true);
+    if (onUpdatePatient) {
+      onUpdatePatient({
+        id: patient.id,
+        name: updatedData.nome,
+        phone: updatedData.telefone,
+        address: updatedData.endereco,
+        diagnosis: updatedData.motivoConsulta,
+        anamnesisData: updatedData,
+        peiGeneratedAt: new Date().toISOString()
+      });
+    }
 
-    const mergedAnamnesisData = {
-      ...baseAnamnesisData,
-      ...(updatedData && typeof updatedData === "object" ? updatedData : {})
-    };
-    const fichePayload = buildAnamnesisDocumentHtml(mergedAnamnesisData, anamnesisFileDate);
-    const safePatientName = String(patient?.name || "Paciente").replace(/\s+/g, "_");
-    const defaultName = `Ficha_Anamnese_${safePatientName}_${new Date().toISOString().slice(0, 10)}.pdf`;
+    const fichePayload = buildAnamnesisDocumentHtml(updatedData, anamnesisFileDate);
+    const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.pdf`;
     setPendingAnamnesisPayload(fichePayload);
-    setPendingAnamnesisData(mergedAnamnesisData);
+    setPendingAnamnesisData(updatedData);
     setAnamnesisFileName(defaultName);
     setAnamnesisFileDate(new Date().toISOString().slice(0, 10));
     setShowAnamnesis(false);
     setShowAnamnesisFileModal(true);
     setIsPreparingAnamnesisSave(false);
+    onAddActivityLog?.(
+      "Ficha de anamnese salva",
+      `A ficha de anamnese do paciente ${patient.name} foi registrada e anexada aos arquivos do prontuário.`,
+      "clinical",
+    );
   }; 
   
   const handleUnlinkPatient = () => {
@@ -1315,7 +784,6 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
         unlinkedAt: new Date().toISOString()
       });
       setIsUnlinkingModalOpen(false);
-      window.alert(`Paciente ${patient?.name || "selecionado"} desvinculado com sucesso.`);
       onBack(); // Go back to dashboard
     }
   };
@@ -1375,26 +843,10 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     setPendingTrial(null);
   };
 
-  const handleSaveTrialObservation = async () => {
+  const handleSaveTrialObservation = () => {
     if (pendingTrial) {
       setIsSavingObservation(true);
-      if (typeof onRecordTrial !== "function") {
-        console.error("onRecordTrial não está disponível no PatientDetailView.");
-        setIsSavingObservation(false);
-        setShowTrialConfirmation(false);
-        setLastRecordedGoalId(null);
-        setPendingTrial(null);
-        alert("Não foi possível registrar a sessão agora. Recarregue a página e tente novamente.");
-        return;
-      }
-      const newId = await Promise.resolve(
-        onRecordTrial(
-          pendingTrial.pid,
-          pendingTrial.title,
-          pendingTrial.score,
-          trialObservation,
-        ),
-      );
+      const newId = onRecordTrial(pendingTrial.pid, pendingTrial.title, pendingTrial.score, trialObservation);
       setLastRecordedTrialId(newId);
       
       setTimeout(() => {
@@ -1424,25 +876,22 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
   const handleConfirmAnamnesisFile = () => {
     if (!pendingAnamnesisPayload) return;
     const fileName = (anamnesisFileName || `Ficha_Anamnese_${patient.name}`).trim();
-    const normalizedName = fileName.toLowerCase().endsWith(".pdf")
+    const normalizedName = fileName.toLowerCase().endsWith(".html")
       ? fileName
-      : `${fileName}.pdf`;
+      : `${fileName.replace(/\.pdf$/i, "")}.html`;
+    const sizeKb = Math.max(1, Math.round(pendingAnamnesisPayload.length / 1024));
     const payloadDate = anamnesisFileDate
       ? new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString("pt-BR")
       : new Date().toLocaleDateString("pt-BR");
-    const anamnesisSource = pendingAnamnesisData || patient?.anamnesisData || {};
-    const pdfBytes = createSimplePdf(
-      `Ficha de Anamnese - ${patient?.name || "Paciente"}`,
-      buildAnamnesisPdfLines(anamnesisSource, anamnesisFileDate),
-    );
-    const base64Pdf = uint8ToBase64(pdfBytes);
 
-    (async () => {
+    const htmlBlob = new Blob([pendingAnamnesisPayload], { type: "text/html;charset=utf-8" });
+    const reader = new FileReader();
+    reader.onload = async () => {
       try {
         const uploadResult = await dataService.uploadPatientFile(String(patient.id), {
           fileName: normalizedName,
-          contentType: "application/pdf",
-          fileBase64: `data:application/pdf;base64,${base64Pdf}`,
+          contentType: "text/html",
+          fileBase64: reader.result,
           source: "anamnesis",
           metadata: { referenceDate: payloadDate, patientName: patient?.name || null }
         });
@@ -1452,45 +901,12 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
         await dataService.savePatientAnamnesisSubmission(String(patient.id), {
           title: normalizedName,
           referenceDate: anamnesisFileDate,
-          anamnesisData: anamnesisSource,
+          anamnesisData: pendingAnamnesisData || patient?.anamnesisData || {},
           templateVersion: Number(anamnesisTemplate?.version || 1),
           profileType: (pendingAnamnesisData?.formType || patient?.anamnesisData?.formType) === 'child' ? 'child' : 'adult',
           patientFileId: String(uploadResult.data.id || '')
         });
-        if (onUpdatePatient && pendingAnamnesisData) {
-          const renewalRaw = Number(patient?.anamnesisRenewalMonths ?? 6);
-          const renewalMonths = [2, 3, 6, 12].includes(renewalRaw)
-            ? renewalRaw
-            : 6;
-          const lastAnamnesisAt = anamnesisFileDate
-            ? new Date(`${anamnesisFileDate}T12:00:00`).toISOString()
-            : new Date().toISOString();
-          onUpdatePatient({
-            id: patient.id,
-            name: patient?.name,
-            phone: patient?.phone,
-            address: patient?.address,
-            diagnosis: pendingAnamnesisData?.motivoConsulta || patient?.diagnosis,
-            anamnesisData: pendingAnamnesisData,
-            anamnesisPending: false,
-            anamnesisRenewalMonths: renewalMonths,
-            lastAnamnesisAt,
-            peiGeneratedAt: new Date().toISOString()
-          });
-        }
-        onAddActivityLog?.(
-          "Ficha de anamnese salva",
-          `A ficha de anamnese do paciente ${patient.name} foi registrada e anexada aos arquivos do prontuário.`,
-          "clinical",
-        );
-        setPatientFiles((prev) => [
-          normalizeFileRecord({
-            ...uploadResult.data,
-            anamnesisData: anamnesisSource,
-            referenceDate: anamnesisFileDate || null
-          }),
-          ...prev
-        ]);
+        setPatientFiles((prev) => [normalizeFileRecord(uploadResult.data), ...prev]);
         setShowAnamnesisFileModal(false);
         setPendingAnamnesisPayload("");
         setPendingAnamnesisData(null);
@@ -1500,39 +916,16 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
         console.error('Falha ao persistir ficha de anamnese em arquivos:', error);
         alert('A ficha foi preenchida, mas houve falha ao salvar em Arquivos. Tente novamente.');
       }
-    })();
+    };
+    reader.onerror = () => {
+      alert('Falha ao processar o arquivo da ficha para upload seguro.');
+    };
+    reader.readAsDataURL(htmlBlob);
   };
 
-  const handleDownloadPatientFile = async (file: any) => {
-    if (isAnamnesisFile(file)) {
-      const anamnesisSource =
-        (file?.anamnesisData && typeof file.anamnesisData === "object")
-          ? file.anamnesisData
-          : patient?.anamnesisData || {};
-      const previewDate = file?.referenceDate || new Date().toISOString().slice(0, 10);
-      const html =
-        typeof file?.content === "string" && file.content.trim().toLowerCase().includes("<html")
-          ? file.content
-          : buildAnamnesisDocumentHtml(anamnesisSource, previewDate);
-      try {
-        const pdfBlob = await createPdfFromHtml(html);
-        const pdfUrl = URL.createObjectURL(pdfBlob);
-        const a = document.createElement("a");
-        a.href = pdfUrl;
-        a.download = (file?.name || `Ficha_Anamnese_${patient?.name || "paciente"}.pdf`).replace(/\.html$/i, ".pdf");
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(pdfUrl), 500);
-        onAddActivityLog?.(
-          "Download de ficha de anamnese",
-          `Arquivo PDF baixado do prontuário do paciente ${patient?.name || "-"}.`,
-          "clinical",
-        );
-      } catch (error) {
-        console.error("Falha ao gerar PDF da ficha de anamnese:", error);
-        alert("Não foi possível gerar o PDF da ficha agora. Tente novamente.");
-      }
+  const handleDownloadPatientFile = (file: any) => {
+    if (file?.source === "anamnesis" && file?.content) {
+      openPrintWindowForPdf(file.content);
       return;
     }
 
@@ -1561,17 +954,18 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     }
   };
 
-  const handleDownloadNotesCsv = () => {
+  const handleDownloadReport = () => {
     if (!reportStartDate || !reportEndDate) {
       alert("Selecione o período para gerar o relatório.");
       return;
     }
     const start = new Date(reportStartDate);
     const end = new Date(reportEndDate);
+    
     const reportData = notes.filter((n: any) => {
-      if (String(n.patientId) !== String(patient.id)) return false;
-      const noteDate = normalizeDateString(n?.date) || normalizeDateString(n?.created_at);
-      if (!noteDate) return false;
+      if (n.patientId !== patient.id) return false;
+      const parts = n.date.split(' ')[0].split('/');
+      const noteDate = new Date(parts[2], parts[1]-1, parts[0]);
       return noteDate >= start && noteDate <= end;
     });
 
@@ -1582,7 +976,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
 
     let csvContent = "Data,Tipo,Anotacao\n";
     reportData.forEach((n: any) => {
-      csvContent += `"${n.date}","${(n.visibility === 'patient' || n.type === 'shared') ? 'Paciente' : (n.visibility === 'professional' || n.type === 'professional') ? 'Profissional' : 'Privada'}","${String(n.text || '').replace(/"/g, '""')}"\n`;
+      csvContent += `"${n.date}","${(n.visibility === 'patient' || n.type === 'shared') ? 'Paciente' : (n.visibility === 'professional' || n.type === 'professional') ? 'Profissional' : 'Privada'}","${n.text.replace(/"/g, '""')}"\n`;
     });
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -1594,126 +988,11 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    setTimeout(() => URL.revokeObjectURL(url), 500);
-  };
-
-  const sortedComparisonDates = useMemo(() => {
-    if (!comparisonDate1 || !comparisonDate2) return null;
-    const d1 = normalizeDateString(comparisonDate1);
-    const d2 = normalizeDateString(comparisonDate2);
-    if (!d1 || !d2) return null;
-    return d1 <= d2 ? [d1, d2] : [d2, d1];
-  }, [comparisonDate1, comparisonDate2]);
-
-  const reportNotesInRange = useMemo(() => {
-    if (!sortedComparisonDates) return [];
-    const [start, end] = sortedComparisonDates;
-    return (notes || [])
-      .filter((n: any) => String(n.patientId) === String(patient.id))
-      .filter((n: any) => {
-        const noteDate = normalizeDateString(n?.date) || normalizeDateString(n?.created_at);
-        if (!noteDate) return false;
-        return noteDate >= start && noteDate <= end;
-      })
-      .sort((a: any, b: any) => {
-        const da = normalizeDateString(a?.date) || normalizeDateString(a?.created_at) || new Date(0);
-        const db = normalizeDateString(b?.date) || normalizeDateString(b?.created_at) || new Date(0);
-        return db.getTime() - da.getTime();
-      });
-  }, [notes, patient.id, sortedComparisonDates]);
-
-  useEffect(() => {
-    const validIds = new Set(reportNotesInRange.map((note: any) => String(note.id)));
-    setSelectedReportNotes((prev) => prev.filter((id) => validIds.has(String(id))));
-  }, [reportNotesInRange]);
-
-  const buildReportPdfLines = () => {
-    const periodLabel = periodLabelMap[reportPeriod] || "Período personalizado";
-    const selectedProtocol = protocols.find((p: any) => String(p.id) === String(selectedChartProtocolId));
-    const selectedNotes = reportNotesInRange.filter((n: any) => selectedReportNotes.includes(String(n.id)));
-    const lines: string[] = [
-      `Relatório de Evolução - ${patient?.name || "Paciente"}`,
-      `Período: ${periodLabel}`,
-      `Protocolo: ${selectedProtocol?.title || "Não selecionado"}`,
-      `Comparação: ${comparisonDate1 || "-"} x ${comparisonDate2 || "-"}`,
-      " ",
-      "Comparativo dos domínios:"
-    ];
-
-    if (comparisonChartData.length === 0) {
-      lines.push("Sem dados de comparação.");
-    } else {
-      comparisonChartData.forEach((row: any) => {
-        const keys = Object.keys(row).filter((k) => k !== "name");
-        const colA = keys[0] || "Período A";
-        const colB = keys[1] || "Período B";
-        lines.push(`- ${row.name}: ${colA}=${row[colA] ?? "-"} | ${colB}=${row[colB] ?? "-"}`);
-      });
-    }
-
-    lines.push(" ", "Anotações selecionadas:");
-    if (selectedNotes.length === 0) {
-      lines.push("Nenhuma anotação selecionada para este período.");
-    } else {
-      selectedNotes.forEach((note: any) => {
-        lines.push(`- ${note.date || "-"} | ${note.subject || "Sem assunto"}`);
-        lines.push(`  ${String(note.text || "").replace(/\s+/g, " ").trim()}`);
-      });
-    }
-    return lines;
-  };
-
-  const handlePreviewReport = () => {
-    if (!comparisonDate1 || !comparisonDate2) {
-      alert("Selecione as duas datas de comparação para visualizar o relatório.");
-      return;
-    }
-    const pdfBytes = createSimplePdf(
-      `Relatório de Evolução - ${patient?.name || "Paciente"}`,
-      buildReportPdfLines(),
-    );
-    const blob = new Blob([pdfBytes], { type: "application/pdf" });
-    const url = URL.createObjectURL(blob);
-    setReportPreviewUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return url;
-    });
-    setIsReportPreviewOpen(true);
-    onAddActivityLog?.(
-      "Visualização de relatório",
-      `Relatório de evolução visualizado para ${patient?.name || "-"}.`,
-      "clinical",
-    );
-  };
-
-  const handleDownloadReport = () => {
-    if (!comparisonDate1 || !comparisonDate2) {
-      alert("Selecione as duas datas de comparação para gerar o relatório.");
-      return;
-    }
-    const pdfBytes = createSimplePdf(
-      `Relatório de Evolução - ${patient?.name || "Paciente"}`,
-      buildReportPdfLines(),
-    );
-    const pdfBlob = new Blob([pdfBytes], { type: "application/pdf" });
-    const pdfUrl = URL.createObjectURL(pdfBlob);
-    const link = document.createElement("a");
-    link.href = pdfUrl;
-    link.download = `Relatorio_Evolucao_${patient?.name || "paciente"}_${new Date().toISOString().slice(0, 10)}.pdf`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setTimeout(() => URL.revokeObjectURL(pdfUrl), 500);
-    onAddActivityLog?.(
-      "Download de relatório",
-      `Relatório de evolução baixado para ${patient?.name || "-"}.`,
-      "clinical",
-    );
   };
 
   const getMasteryProgress = (skillName: string) => {
     if (patientCategory !== 'Criança') return null;
-    const goal = peiGoals.find((g: any) => g.name === skillName);
+    const goal = patient.pei?.find((g: any) => g.name === skillName);
     const skillHistory = history
       .filter((h: any) => h.patientId === patient.id && h.title === skillName && h.type === 'task' && (!goal || h.id > goal.id))
       .sort((a: any, b: any) => b.id - a.id);
@@ -1834,7 +1113,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
       <AnamnesisModal
         isOpen={showAnamnesis}
         onClose={() => setShowAnamnesis(false)}
-        initialData={baseAnamnesisData}
+        initialData={patient.anamnesisData || { nome: patient.name }}
         onSave={handleUpdateAnamnesis}
         mode="edit"
         template={anamnesisTemplate}
@@ -1906,36 +1185,6 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
             </button>
           </div>
         </div> 
-        <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-2">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-            Renovação da ficha anamnese
-          </span>
-          <select
-            value={anamnesisRenewalMonths}
-            onChange={(e) => {
-              const nextValue = normalizeAnamnesisRenewalMonths(e.target.value);
-              setAnamnesisRenewalMonths(nextValue);
-              onUpdatePatient?.({
-                id: patient.id,
-                anamnesisRenewalMonths: Number(nextValue),
-              });
-              onAddActivityLog?.(
-                "Configuração da anamnese atualizada",
-                `Periodicidade da ficha de ${patient?.name || "paciente"} definida para ${nextValue} meses.`,
-                "management",
-              );
-            }}
-            className="w-full sm:w-auto bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700"
-          >
-            <option value="2">A cada 2 meses</option>
-            <option value="3">A cada 3 meses</option>
-            <option value="6">A cada 6 meses</option>
-            <option value="12">A cada 12 meses</option>
-          </select>
-          <span className="text-[11px] text-slate-400">
-            O alerta de pendência só volta quando esse prazo vencer.
-          </span>
-        </div>
         <div id="tab-nav" className="flex gap-2 bg-gray-100 p-1 rounded-xl overflow-x-auto no-scrollbar"> 
           <button id="tab-history" onClick={() => setActiveTab('history')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'history' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Histórico</button> 
           <button id="tab-notes" onClick={() => setActiveTab('notes')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'notes' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Anotações</button> 
@@ -2010,7 +1259,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                       protocols={protocols} 
                       isKid={patientCategory === 'Criança'}
                       fullHistory={(history || []).filter((h: any) => h.patientId === patient.id)}
-                      peiGoals={peiGoals}
+                      peiGoals={patient.pei || []}
                     />
                   ))} 
                 </div> 
@@ -2038,7 +1287,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                 </div>
                 <button 
                   id="note-export-btn"
-                  onClick={handleDownloadNotesCsv}
+                  onClick={handleDownloadReport}
                   className="bg-[#7a32fc] text-white font-semibold px-6 py-2.5 rounded-xl shadow-md shadow-[#7a32fc]/20 hover:opacity-90 active:scale-95 transition-all flex items-center justify-center gap-2 text-xs whitespace-nowrap"
                 >
                   <Download size={16} /> Baixar .CSV
@@ -2199,7 +1448,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                     <FileText size={18} className="text-[#7a32fc]" /> Observações Selecionadas para o Relatório
                   </h4>
                   <div className="space-y-4">
-                    {reportNotesInRange.filter((n: any) => selectedReportNotes.includes(String(n.id))).map((note: any) => (
+                    {notes.filter((n: any) => selectedReportNotes.includes(n.id)).map((note: any) => (
                       <div key={note.id} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
                         <div className="flex justify-between items-center mb-3">
                           <span className="text-[10px] font-semibold text-gray-400 uppercase">{note.date}</span>
@@ -2220,15 +1469,15 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                   <span className="text-[10px] font-semibold text-gray-400 uppercase">{selectedReportNotes.length} selecionadas</span>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                  {reportNotesInRange.map((note: any) => (
+                  {notes.filter((n: any) => n.patientId === patient.id).map((note: any) => (
                     <div 
                       key={note.id} 
                       onClick={() => toggleReportNote(note.id)}
-                      className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedReportNotes.includes(String(note.id)) ? 'border-[#7a32fc] bg-blue-50/50 shadow-sm' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200'}`}
+                      className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedReportNotes.includes(note.id) ? 'border-[#7a32fc] bg-blue-50/50 shadow-sm' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200'}`}
                     >
                       <div className="flex justify-between items-start mb-2">
                         <span className="text-[9px] font-semibold text-gray-400 uppercase">{note.date}</span>
-                        {selectedReportNotes.includes(String(note.id)) && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
+                        {selectedReportNotes.includes(note.id) && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
                       </div>
                       <p className="text-xs text-gray-600 line-clamp-3">{note.text}</p>
                     </div>
@@ -2237,8 +1486,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
               </div>
 
               <div className="mt-8 flex justify-end gap-3">
-                <button onClick={handlePreviewReport} className="px-6 py-3 bg-gray-100 text-gray-600 font-semibold rounded-xl text-xs hover:bg-gray-200 transition-all">Visualizar PDF</button>
-                <button id="report-download-btn" onClick={handleDownloadReport} className="px-6 py-3 bg-[#7a32fc] text-white font-semibold rounded-xl text-xs shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 transition-all flex items-center gap-2">
+                <button className="px-6 py-3 bg-gray-100 text-gray-600 font-semibold rounded-xl text-xs hover:bg-gray-200 transition-all">Visualizar PDF</button>
+                <button id="report-download-btn" className="px-6 py-3 bg-[#7a32fc] text-white font-semibold rounded-xl text-xs shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 transition-all flex items-center gap-2">
                   <Download size={16} /> Gerar Relatório Final
                 </button>
               </div>
@@ -2255,7 +1504,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                     <p className="text-xs text-gray-500 font-semibold uppercase tracking-widest mt-1">Metas e Objetivos de Intervenção</p>
                   </div>
                   <div className="flex gap-2">
-                    {peiGoals.some((g: any) => g.isPriority || g.status === 'in_progress') && (
+                    {patient.pei?.some((g: any) => g.isPriority || g.status === 'in_progress') && (
                       <button 
                         onClick={() => setIsSessionModeOpen(true)}
                         className="bg-[#7a32fc] text-white font-semibold px-6 py-3 rounded-2xl shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 active:scale-95 transition-all flex items-center gap-2 text-sm"
@@ -2342,7 +1591,11 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                     protocolTitle: protocols.find((p: any) => String(p.id) === String(selectedPEIProtocolId))?.title,
                                     domainName: protocols.find((p: any) => String(p.id) === String(selectedPEIProtocolId))?.data.find((d: any) => String(d.id) === String(selectedPEIDomainId))?.name
                                   };
-                                  savePeiGoals([...peiGoals, peiGoal]);
+                                  const updatedPatient = {
+                                    ...patient,
+                                    pei: [...(patient.pei || []), peiGoal]
+                                  };
+                                  onUpdatePatient(updatedPatient);
                                   setIsAddingPEIGoal(false);
                                   setSelectedPEIProtocolId("");
                                   setSelectedPEIDomainId("");
@@ -2365,9 +1618,9 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                   )}
 
                   <div className="space-y-6">
-                    {peiGoals.length > 0 ? (
+                    {patient.pei && patient.pei.length > 0 ? (
                       ['short', 'medium', 'long'].map(term => {
-                        const termGoals = peiGoals.filter((g: any) => g.term === term);
+                        const termGoals = patient.pei.filter((g: any) => g.term === term);
                         if (termGoals.length === 0) return null;
                         
                         return (
@@ -2386,8 +1639,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                         className="text-[9px] font-semibold bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full uppercase outline-none"
                                         value={goal.term}
                                         onChange={(e) => {
-                                          const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? { ...g, term: e.target.value } : g);
-                                          savePeiGoals(updatedPEI);
+                                          const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, term: e.target.value } : g);
+                                          onUpdatePatient({ ...patient, pei: updatedPEI });
                                         }}
                                       >
                                         <option value="short">Curto Prazo</option>
@@ -2399,8 +1652,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                       {goal.name}
                                       <button 
                                         onClick={() => {
-                                          const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? { ...g, isPriority: !g.isPriority } : g);
-                                          savePeiGoals(updatedPEI);
+                                          const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, isPriority: !g.isPriority } : g);
+                                          onUpdatePatient({ ...patient, pei: updatedPEI });
                                         }}
                                         className={`p-1 rounded-md transition-all ${goal.isPriority ? 'text-orange-500 bg-orange-50' : 'text-gray-300 hover:text-orange-300'}`}
                                         title={goal.isPriority ? "Remover Prioridade" : "Marcar como Prioridade para Sessão"}
@@ -2424,8 +1677,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                         }`}
                                         value={goal.status}
                                         onChange={(e) => {
-                                          const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? { ...g, status: e.target.value } : g);
-                                          savePeiGoals(updatedPEI);
+                                          const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, status: e.target.value } : g);
+                                          onUpdatePatient({ ...patient, pei: updatedPEI });
                                         }}
                                       >
                                         <option value="not_started">Não Iniciado</option>
@@ -2436,8 +1689,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                         <button 
                                           onClick={() => {
                                             if (confirm("Deseja zerar o progresso de maestria desta meta? Isso reiniciará a contagem de acertos consecutivos.")) {
-                                              const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? { ...g, id: Date.now(), progress: 0, status: 'not_started' } : g);
-                                              savePeiGoals(updatedPEI);
+                                              const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, id: Date.now(), progress: 0, status: 'not_started' } : g);
+                                              onUpdatePatient({ ...patient, pei: updatedPEI });
                                             }
                                           }}
                                           className="p-2 text-gray-300 hover:text-orange-500 hover:bg-orange-50 rounded-xl transition-all"
@@ -2448,8 +1701,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                       )}
                                       <button 
                                         onClick={() => {
-                                          const updatedPEI = peiGoals.filter((g: any) => g.id !== goal.id);
-                                          savePeiGoals(updatedPEI);
+                                          const updatedPEI = patient.pei.filter((g: any) => g.id !== goal.id);
+                                          onUpdatePatient({ ...patient, pei: updatedPEI });
                                         }}
                                         className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
                                       >
@@ -2496,8 +1749,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                       className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                                       value={goal.progress}
                                       onChange={(e) => {
-                                        const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? { ...g, progress: parseInt(e.target.value) } : g);
-                                        savePeiGoals(updatedPEI);
+                                        const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, progress: parseInt(e.target.value) } : g);
+                                        onUpdatePatient({ ...patient, pei: updatedPEI });
                                       }}
                                     />
                                   </div>
@@ -2608,7 +1861,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                 onChange={e => { setSelectedProtocolId(e.target.value); setSelectedDomainId(''); setSelectedSkillId(''); }}
                               >
                                 <option value="">Selecione...</option>
-                                {planType === 'task' && peiGoals.length > 0 && (
+                                {planType === 'task' && patient.pei && patient.pei.length > 0 && (
                                   <optgroup label="Plano de Ensino (PEI)">
                                     <option value="pei-goals">Metas do PEI</option>
                                   </optgroup>
@@ -2625,7 +1878,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                   className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" 
                                   value={selectedSkillId} 
                                   onChange={e => {
-                                    const goal = peiGoals.find((g: any) => String(g.id) === e.target.value);
+                                    const goal = patient.pei.find((g: any) => String(g.id) === e.target.value);
                                     setSelectedSkillId(e.target.value);
                                     if (goal) {
                                       setFinalTaskTitle(goal.name);
@@ -2634,7 +1887,7 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                                   }}
                                 >
                                   <option value="">Selecione uma meta...</option>
-                                  {peiGoals.map((g: any) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                                  {patient.pei.map((g: any) => <option key={g.id} value={g.id}>{g.name}</option>)}
                                 </select>
                               </div>
                             ) : (
@@ -2796,8 +2049,8 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
               </div>
 
               <div className="space-y-6">
-                {peiGoals.filter((g: any) => g.isPriority || g.status === 'in_progress').length > 0 ? (
-                  peiGoals.filter((g: any) => g.isPriority || g.status === 'in_progress').map((goal: any) => (
+                {patient.pei?.filter((g: any) => g.isPriority || g.status === 'in_progress').length > 0 ? (
+                  patient.pei.filter((g: any) => g.isPriority || g.status === 'in_progress').map((goal: any) => (
                       <div key={goal.id} className="bg-gray-50 p-6 rounded-[32px] border border-gray-100 relative group">
                         {showTrialConfirmation && lastRecordedGoalId === goal.id && (
                           <div className="absolute inset-x-0 bottom-0 z-30 bg-white/95 backdrop-blur-sm border-t border-gray-100 p-4 animate-slide-up rounded-b-[32px]">
@@ -3057,16 +2310,27 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
               </button>
             </div>
 
-            {isAnamnesisFile(previewFile) && anamnesisPreviewUrl ? (
-              <iframe src={anamnesisPreviewUrl} title={previewFile.name} className="w-full h-[70vh] rounded-xl border border-slate-200 bg-white" />
-            ) : isAnamnesisFile(previewFile) && (previewFile.objectUrl || previewFile.url) ? (
-              <iframe src={previewFile.objectUrl || previewFile.url} title={previewFile.name} className="w-full h-[70vh] rounded-xl border border-slate-200 bg-white" />
-            ) : previewFile.type?.includes("image") && (previewFile.objectUrl || previewFile.url) ? (
-              <img src={previewFile.objectUrl || previewFile.url} alt={previewFile.name} className="w-full rounded-xl border border-slate-200" />
+            {previewFile.type?.includes("image") && (previewFile.objectUrl || previewFile.url) ? (
+              <SecureImage
+                src={previewFile.objectUrl || previewFile.url}
+                alt={previewFile.name}
+                className="w-full rounded-xl border border-slate-200"
+                fallback={<p className="text-sm text-red-500">Pré-visualização bloqueada por segurança de mídia.</p>}
+              />
             ) : previewFile.type?.includes("pdf") && (previewFile.objectUrl || previewFile.url) ? (
-              <iframe src={previewFile.objectUrl || previewFile.url} title={previewFile.name} className="w-full h-[65vh] rounded-xl border border-slate-200" />
+              <SecureIframe
+                src={previewFile.objectUrl || previewFile.url}
+                title={previewFile.name}
+                className="w-full h-[65vh] rounded-xl border border-slate-200"
+                fallback={<p className="text-sm text-red-500">Preview de PDF bloqueado por segurança de mídia.</p>}
+              />
             ) : previewFile.type?.includes("html") && (previewFile.objectUrl || previewFile.url) ? (
-              <iframe src={previewFile.objectUrl || previewFile.url} title={previewFile.name} className="w-full h-[70vh] rounded-xl border border-slate-200 bg-white" />
+              <SecureIframe
+                src={previewFile.objectUrl || previewFile.url}
+                title={previewFile.name}
+                className="w-full h-[70vh] rounded-xl border border-slate-200 bg-white"
+                fallback={<p className="text-sm text-red-500">Preview HTML bloqueado por segurança de mídia.</p>}
+              />
             ) : previewFile.content ? (
               <pre className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs overflow-auto whitespace-pre-wrap">
                 {previewFile.content}
@@ -3076,44 +2340,6 @@ export const PatientDetailView = ({ patient = {}, onBack, history, notes, onAddN
                 Pré-visualização indisponível para este arquivo. Use o botão de download.
               </p>
             )}
-          </div>
-        </div>
-      )}
-
-      {isReportPreviewOpen && reportPreviewUrl && (
-        <div className="fixed inset-0 z-[130] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-5xl max-h-[90vh] overflow-hidden rounded-3xl shadow-2xl">
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="text-lg font-bold text-slate-900">Pré-visualização do Relatório de Evolução</h3>
-              <button
-                onClick={() => {
-                  setIsReportPreviewOpen(false);
-                  if (reportPreviewUrl) URL.revokeObjectURL(reportPreviewUrl);
-                  setReportPreviewUrl(null);
-                }}
-                className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <iframe src={reportPreviewUrl} title="Prévia do relatório" className="w-full h-[76vh] bg-white" />
-          </div>
-        </div>
-      )}
-
-      {actionPopup && (
-        <div className="fixed inset-0 z-[180] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl border border-slate-100 p-6">
-            <h3 className="text-lg font-bold text-slate-900">{actionPopup.title}</h3>
-            <p className="text-sm text-slate-600 mt-2">{actionPopup.message}</p>
-            <div className="mt-6 flex justify-end">
-              <button
-                onClick={() => setActionPopup(null)}
-                className="px-4 py-2.5 rounded-xl bg-[#7a32fc] text-white font-semibold text-sm"
-              >
-                OK
-              </button>
-            </div>
           </div>
         </div>
       )}

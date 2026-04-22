@@ -20,21 +20,19 @@ export const ADULT_CONVENTIONAL_TAGS = [
 export const LogoVerto = ({ size = 64, className = "", showText = false }: { size?: number, className?: string, showText?: boolean }) => (
   <div className={`flex items-center gap-2 shrink-0 ${className}`}>
     <div style={{ width: size, height: size }} className="flex items-center justify-center">
-      <img 
-        src="https://lh3.googleusercontent.com/d/1XMJ_mW9MSwFFApVB6dxndkY_RLnDgoH-" 
-        alt="Verto Logo" 
-        className="w-full h-full object-contain"
-        referrerPolicy="no-referrer"
-        onError={(e) => {
-          const target = e.target as HTMLImageElement;
-          target.style.display = 'none';
-          const parent = target.parentElement;
-          if (parent) {
-            parent.className = `flex items-center justify-center bg-[#7a32fc] rounded-2xl shadow-lg shadow-blue-500/20`;
-            parent.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="${size * 0.6}" height="${size * 0.6}" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-activity"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>`;
-          }
-        }}
-      />
+      <svg viewBox="0 0 64 64" className="w-full h-full" aria-label="Verto Logo" role="img">
+        <defs>
+          <linearGradient id="vertoWing" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#C08CFF" />
+            <stop offset="100%" stopColor="#7A32FC" />
+          </linearGradient>
+        </defs>
+        <circle cx="14" cy="14" r="8" fill="#5D2A85" />
+        <circle cx="16" cy="30" r="10" fill="#6B2F9B" />
+        <circle cx="19" cy="47" r="11" fill="#7A32AC" />
+        <path d="M58 8C44 8 34 20 30 40c13-2 24-13 28-32z" fill="url(#vertoWing)" stroke="#4B236B" strokeWidth="2" />
+        <path d="M42 36c8 0 13 6 13 14-10 0-17-6-18-14h5z" fill="url(#vertoWing)" stroke="#4B236B" strokeWidth="2" />
+      </svg>
     </div>
     {showText && (
       <span className="text-2xl font-logo font-bold tracking-tighter text-[#7a32fc] lowercase" style={{ fontSize: size * 0.5 }}>verto</span>

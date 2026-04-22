@@ -1,5 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Clock, CheckSquare, X, ClipboardCheck, Info } from 'lucide-react';
+import { SecureImage } from './SecureMedia';
+import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 
 export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protocols = [], id, isKid, fullHistory = [], peiGoals = [] }: any) => { 
   const [isEvaluating, setIsEvaluating] = useState(false); 
@@ -102,10 +104,10 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
       {(item.note || item.image) && (
         <div className={`rounded-xl p-3 text-sm italic border mb-3 ${item.type === 'intervention' ? 'bg-green-50 text-green-800 border-green-100' : (item.type === 'family_note' || item.type === 'photo') ? 'bg-orange-50 text-orange-800 border-orange-100' : 'bg-[#F4F7FE] text-gray-600 border-blue-50'}`}>
           <p className="text-[10px] font-semibold uppercase mb-1 opacity-60">{(item.type === 'family_note' || item.type === 'photo') ? 'Registro da Família:' : 'Anotações do Paciente:'}</p>
-          {item.note && <p>"{item.note}"</p>}
+          {item.note && <p>"{sanitizeDescriptionForDisplay(item.note)}"</p>}
           {item.image && (
             <div className={`${item.note ? 'mt-3' : ''} rounded-lg overflow-hidden border border-orange-200`}>
-              <img src={item.image} alt="Registro da Família" className="w-full h-auto" referrerPolicy="no-referrer" />
+              <SecureImage src={item.image} alt="Registro da Família" className="w-full h-auto" />
             </div>
           )}
         </div>
@@ -114,7 +116,7 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
         <div className="mt-4 pt-3 border-t border-gray-100"> 
           {!isEvaluating ? ( 
             <div className="flex justify-between items-center"> 
-              {item.evalComment ? ( <p className="text-xs text-[#7551FF] italic">Anotações do Profissional: {item.evalComment}</p> ) : <span></span>} 
+              {item.evalComment ? ( <p className="text-xs text-[#7551FF] italic">Anotações do Profissional: {sanitizeDescriptionForDisplay(item.evalComment)}</p> ) : <span></span>} 
               <button onClick={() => setIsEvaluating(true)} className="text-[10px] font-semibold text-white bg-[#7551FF] px-4 py-2 rounded-xl shadow-md shadow-[#7551FF]/20 hover:opacity-90 transition-all flex items-center gap-2 uppercase tracking-widest"> 
                 <CheckSquare size={14}/> {item.score !== undefined ? 'Editar Avaliação' : 'Avaliar Tarefa'} 
               </button> 

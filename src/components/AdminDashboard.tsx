@@ -39,6 +39,7 @@ import {
   Area
 } from 'recharts';
 import { LogoVerto } from './Common';
+import { SecureImage } from './SecureMedia';
 import { getSupabase } from '../lib/supabase';
 
 // Mock Data for Admin Dashboard (Removed as we use real data now)
@@ -566,7 +567,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
                     <div className="p-6 bg-blue-50 rounded-3xl border border-blue-100 animate-fade-in">
                       <p className="text-[10px] font-bold text-[#7a32fc] uppercase tracking-widest mb-4">Configurar Google Authenticator</p>
                       <div className="flex flex-col items-center gap-4">
-                        <img src={qrCodeUrl} alt="QR Code" className="w-32 h-32 bg-white p-2 rounded-xl" />
+                        <SecureImage src={qrCodeUrl} alt="QR Code" className="w-32 h-32 bg-white p-2 rounded-xl" />
                         <div className="w-full space-y-2">
                           <input 
                             type="text" 
