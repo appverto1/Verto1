@@ -134,12 +134,13 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
   const handleResendConfirmation = async () => {
     try {
-      const supabase = await getSupabase();
-      const { error } = await supabase.auth.resend({
-        type: 'signup',
-        email: email,
+      const response = await fetch('/api/auth/resend-confirmation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
       });
-      if (error) throw error;
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Falha ao reenviar confirmação');
       setLoginError('E-mail de confirmação reenviado com sucesso! Verifique sua caixa de entrada.');
     } catch (err: any) {
       console.error('Resend error:', err);
@@ -273,8 +274,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
     try {
       setLoading(true);
-      // Use direct signup route to bypass email confirmation
-      const response = await fetch('/api/auth/signup-direct', {
+      const response = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -295,43 +295,11 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         throw new Error(data.error || 'Erro ao criar conta');
       }
 
-      if (data.user.subscriptionStatus === 'active' || registerType === 'professional') {
-        // Free access or professional (needs onboarding first)
-        if (email === 'appverto1@gmail.com') {
-          await start2FASetup();
-        }
-        setShowRegister(false);
-        setUser(data.user); // Log in directly
-        // Ensure we refresh the page or state to show the dashboard
-        window.location.reload();
-      } else if (registerType === 'professional' && !selectedPlan) {
-        setRegisterStep(3);
-      } else {
-        // Redirect to Stripe checkout
-        const supabase = await getSupabase();
-        const { data: { session } } = await supabase.auth.getSession();
-        const token = session?.access_token;
-
-        const checkoutRes = await fetch('/api/stripe/create-checkout', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': token ? `Bearer ${token}` : ''
-          },
-          credentials: 'include'
-        });
-        const checkoutData = await checkoutRes.json();
-        if (checkoutData.url) {
-          window.location.href = checkoutData.url;
-        } else {
-          // Fallback if Stripe fails
-          console.error('Stripe creation failed:', checkoutData);
-          alert(`Conta criada com sucesso! No entanto, houve um erro ao iniciar o pagamento: ${checkoutData.error || 'Erro desconhecido'}. Por favor, faça login para tentar novamente.`);
-          setShowRegister(false);
-          setLoginStep('email');
-          setShowLogin(true);
-        }
-      }
+      alert(data.message || 'Conta criada. Verifique seu e-mail para confirmar o cadastro.');
+      setShowRegister(false);
+      setLoginStep('email');
+      setShowLogin(true);
+      setLoginError('Cadastro iniciado. Confirme seu e-mail para concluir o acesso.');
     } catch (error: any) {
       console.error('Register error:', error);
       if (error.message.includes('already been registered') || error.message.includes('já está cadastrado')) {

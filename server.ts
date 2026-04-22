@@ -95,6 +95,7 @@ const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ENCRYPTION_ALGO = 'aes-256-gcm';
 const paymentStatuses = new Set(['paid', 'pending', 'canceled', 'refunded', 'delinquent']);
+const OTP_TTL_MS = 15 * 60 * 1000;
 
 function sanitizeString(value: unknown, maxLength = 5000): string {
   if (typeof value !== 'string') return '';
@@ -120,6 +121,188 @@ function sanitizeDate(value: unknown): string | null {
   const date = sanitizeString(value, 10);
   if (!DATE_ONLY_REGEX.test(date)) return null;
   return date;
+}
+
+function sanitizePhoneE164(value: unknown): string | null {
+  const raw = sanitizeString(value, 30);
+  if (!raw) return null;
+  const digits = raw.replace(/[^\d+]/g, '');
+  if (!digits.startsWith('+')) return null;
+  if (!/^\+\d{8,15}$/.test(digits)) return null;
+  return digits;
+}
+
+function maskEmail(email: string): string {
+  const [local, domain] = email.split('@');
+  if (!local || !domain) return '***';
+  const visible = local.slice(0, 2);
+  return `${visible}${'*'.repeat(Math.max(1, local.length - 2))}@${domain}`;
+}
+
+function maskPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length < 4) return '***';
+  return `***${digits.slice(-4)}`;
+}
+
+function hashIdentifier(value: string): string {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function generate6DigitOtp(): string {
+  return String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+}
+
+function getAuthRedirectUrl(): string {
+  const baseUrl = sanitizeString(
+    process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '',
+    500
+  );
+  if (!baseUrl) {
+    throw new Error('VERTO_APP_BASE_URL (ou APP_BASE_URL) deve estar definida para redirecionamentos de autenticação.');
+  }
+  return `${baseUrl.replace(/\/+$/, '')}/auth/callback`;
+}
+
+function getRecoveryRedirectUrl(): string {
+  const baseUrl = sanitizeString(
+    process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '',
+    500
+  );
+  if (!baseUrl) {
+    throw new Error('VERTO_APP_BASE_URL (ou APP_BASE_URL) deve estar definida para recuperação de senha.');
+  }
+  return `${baseUrl.replace(/\/+$/, '')}/reset-password`;
+}
+
+type RecoveryChannel = 'email' | 'sms';
+type OtpPurpose = 'password_recovery' | 'phone_verification';
+
+type OtpChallenge = {
+  key: string;
+  channel: RecoveryChannel;
+  purpose: OtpPurpose;
+  identifier: string;
+  userId: string | null;
+  codeHash: string;
+  expiresAt: number;
+  attempts: number;
+  consumed: boolean;
+  createdAt: number;
+};
+
+const otpStore = new Map<string, OtpChallenge>();
+
+function setOtpChallenge(challenge: OtpChallenge): void {
+  otpStore.set(challenge.key, challenge);
+}
+
+function getOtpChallenge(key: string): OtpChallenge | null {
+  const challenge = otpStore.get(key);
+  if (!challenge) return null;
+  if (Date.now() > challenge.expiresAt) {
+    otpStore.delete(key);
+    return null;
+  }
+  return challenge;
+}
+
+function consumeOtpChallenge(key: string): void {
+  otpStore.delete(key);
+}
+
+function makeOtpChallengeKey(channel: RecoveryChannel, purpose: OtpPurpose, identifier: string): string {
+  return hashIdentifier(`${channel}:${purpose}:${identifier.toLowerCase()}`);
+}
+
+function validateStrongPassword(password: unknown): string | null {
+  if (typeof password !== 'string') return null;
+  if (password.length < 12 || password.length > 128) return null;
+  const hasUpper = /[A-Z]/.test(password);
+  const hasLower = /[a-z]/.test(password);
+  const hasDigit = /\d/.test(password);
+  const hasSymbol = /[^A-Za-z0-9]/.test(password);
+  if (!hasUpper || !hasLower || !hasDigit || !hasSymbol) return null;
+  return password;
+}
+
+function isMissingColumnError(error: any, columnName?: string): boolean {
+  const code = sanitizeString(error?.code, 20);
+  const message = sanitizeString(error?.message, 500).toLowerCase();
+  if (code === '42703') return true;
+  if (!message) return false;
+  if (columnName) {
+    return message.includes(columnName.toLowerCase()) && message.includes('does not exist');
+  }
+  return message.includes('does not exist');
+}
+
+async function sendEmailViaResend({
+  to,
+  subject,
+  html
+}: {
+  to: string;
+  subject: string;
+  html: string;
+}): Promise<void> {
+  const apiKey = sanitizeString(process.env.RESEND_API_KEY || '', 500);
+  const from = sanitizeString(process.env.RESEND_FROM_EMAIL || '', 320);
+  if (!apiKey || !from) {
+    throw new Error('RESEND_API_KEY e RESEND_FROM_EMAIL são obrigatórios para envio de e-mails transacionais.');
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from,
+      to: [to],
+      subject,
+      html
+    })
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Falha no envio de e-mail via Resend: ${response.status} ${body}`);
+  }
+}
+
+async function sendSmsCode({
+  to,
+  message
+}: {
+  to: string;
+  message: string;
+}): Promise<void> {
+  const providerUrl = sanitizeString(process.env.SMS_PROVIDER_URL || '', 1000);
+  const apiKey = sanitizeString(process.env.SMS_PROVIDER_API_KEY || '', 1000);
+  const sender = sanitizeString(process.env.SMS_PROVIDER_SENDER || 'Verto', 40);
+  if (!providerUrl || !apiKey) {
+    throw new Error('SMS_PROVIDER_URL e SMS_PROVIDER_API_KEY são obrigatórios para envio de SMS.');
+  }
+
+  const response = await fetch(providerUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      to,
+      sender,
+      message
+    })
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Falha no envio de SMS: ${response.status} ${body}`);
+  }
 }
 
 const HTML_ESCAPE_MAP: Record<string, string> = {
@@ -847,6 +1030,26 @@ async function fetchUserWorkspaces(userId: string) {
   }).filter((w: any) => w.clinicId);
 }
 
+async function findAuthUserByEmail(email: string): Promise<any | null> {
+  if (!supabase) return null;
+  const target = sanitizeEmail(email);
+  if (!target) return null;
+
+  let page = 1;
+  const perPage = 200;
+  for (;;) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage });
+    if (error) return null;
+    const users = data?.users || [];
+    const found = users.find((u: any) => sanitizeEmail(u.email) === target);
+    if (found) return found;
+    if (users.length < perPage) break;
+    page += 1;
+    if (page > 20) break;
+  }
+  return null;
+}
+
 function compactClinicSettingsForSession(settings: any) {
   if (!settings || typeof settings !== 'object') return null;
   return cleanObject({
@@ -888,6 +1091,8 @@ function buildSessionUserPayload(input: any) {
     planName: sanitizeString(input?.planName, 80) || null,
     planPrice: asSafeNumber(input?.planPrice, 0, 100000) || null,
     clinicId: sanitizeString(input?.clinicId, 120) || null,
+    emailVerified: Boolean(input?.emailVerified),
+    phoneVerified: Boolean(input?.phoneVerified),
     firstLoginCompleted: Boolean(input?.firstLoginCompleted),
     clinicSettings: compactClinicSettingsForSession(input?.clinicSettings),
     workspaces: compactWorkspacesForSession(input?.workspaces || [])
@@ -1099,6 +1304,18 @@ async function startServer() {
     validate: false, // Disable all validation checks for proxy headers
   });
 
+  const recoveryLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 3,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    message: {
+      success: true,
+      message: 'Se este contato estiver cadastrado, você receberá instruções.'
+    }
+  });
+
   // Stripe Webhook (to handle successful payments) - MUST BE BEFORE express.json()
   app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     const sig = req.headers['stripe-signature'];
@@ -1214,9 +1431,36 @@ async function startServer() {
   }));
 
   // Auth Middleware
+  const emailVerificationExemptPaths = new Set([
+    '/auth/login',
+    '/auth/logout',
+    '/auth/me',
+    '/auth/resend-confirmation',
+    '/auth/password/recovery/email/request',
+    '/auth/password/recovery/sms/request',
+    '/auth/password/recovery/verify',
+    '/auth/phone/send-code',
+    '/auth/phone/verify',
+    '/auth/2fa/login',
+    '/auth/config'
+  ]);
+
+  const mustBlockUnverifiedEmail = (req: any, user: any): boolean => {
+    const path = sanitizeString(req.path, 240);
+    if (!path) return false;
+    if (emailVerificationExemptPaths.has(path)) return false;
+    return user?.emailVerified === false;
+  };
+
   const checkAuth = async (req: any, res: any, next: any) => {
     // 1. Check Session (Cookie-based)
     if (req.session && req.session.user) {
+      if (mustBlockUnverifiedEmail(req, req.session.user)) {
+        return res.status(403).json({
+          error: 'EMAIL_NOT_CONFIRMED',
+          message: 'Confirme seu e-mail para acessar funcionalidades sensíveis.'
+        });
+      }
       return next();
     }
 
@@ -1252,10 +1496,18 @@ async function startServer() {
               planName: profile.plan_name,
               planPrice: profile.plan_price,
               clinicId: selectedWorkspace?.clinicId || profile.clinic_id,
+              emailVerified: Boolean((user as any)?.email_confirmed_at || (user as any)?.confirmed_at),
+              phoneVerified: Boolean((profile as any)?.phone_verified_at),
               firstLoginCompleted: profile.first_login_completed || user.user_metadata?.first_login_completed,
               clinicSettings: user.user_metadata?.clinic_settings || null,
               workspaces
             });
+            if (mustBlockUnverifiedEmail(req, req.session.user)) {
+              return res.status(403).json({
+                error: 'EMAIL_NOT_CONFIRMED',
+                message: 'Confirme seu e-mail para acessar funcionalidades sensíveis.'
+              });
+            }
             return next();
           }
         }
@@ -1307,6 +1559,47 @@ async function startServer() {
     } catch (error) {
       console.warn('[ActivityLog] Failed to persist audit event:', String(error));
     }
+  };
+
+  const persistIdentityAuditLog = async ({
+    title,
+    content,
+    identifier,
+    channel,
+    userId,
+    request,
+    status
+  }: {
+    title: string;
+    content: string;
+    identifier?: string | null;
+    channel?: string | null;
+    userId?: string | null;
+    request?: any;
+    status?: string;
+  }) => {
+    const actorId = sanitizeString(userId || 'anonymous', 120) || 'anonymous';
+    const actorName = sanitizeString(channel || 'identity', 80) || 'identity';
+    const identifierHash = identifier ? hashIdentifier(identifier) : null;
+    const ipRaw = request?.headers?.['x-forwarded-for'] || request?.ip || '';
+    const ip = sanitizeString(Array.isArray(ipRaw) ? ipRaw[0] : String(ipRaw), 120) || 'unknown';
+    const userAgent = sanitizeString(request?.headers?.['user-agent'] || '', 280);
+
+    const detail = cleanObject({
+      identifier_hash: identifierHash,
+      status: sanitizeString(status, 40) || 'attempt',
+      ip,
+      user_agent: userAgent
+    });
+
+    await persistActivityLog({
+      userId: actorId,
+      clinicId: null,
+      actorName,
+      title: sanitizeString(title, 180),
+      content: `${sanitizeString(content, 1200)} | detail=${JSON.stringify(detail)}`,
+      type: 'security'
+    });
   };
 
   app.use('/api', (req: any, res: any, next: any) => {
@@ -1537,8 +1830,15 @@ async function startServer() {
     
     try {
       const { data: { users } } = await supabase.auth.admin.listUsers();
-      const user = users.find(u => u.email === email);
+      const user = users.find(u => sanitizeEmail(u.email) === sanitizeEmail(email));
       if (!user) return res.status(404).json({ error: "UsuÃ¡rio nÃ£o encontrado" });
+      const isEmailVerified = Boolean((user as any)?.email_confirmed_at || (user as any)?.confirmed_at);
+      if (!isEmailVerified) {
+        return res.status(403).json({
+          error: 'EMAIL_NOT_CONFIRMED',
+          message: 'Confirme seu e-mail antes de concluir o login.'
+        });
+      }
       
       const { data: profile } = await supabase.from('users').select('*').eq('id', user.id).single();
       if (!profile || !profile.two_factor_enabled || !profile.two_factor_secret) {
@@ -1564,6 +1864,8 @@ async function startServer() {
         planName: profile.plan_name,
         planPrice: profile.plan_price,
         clinicId: selectedWorkspace?.clinicId || profile.clinic_id,
+        emailVerified: isEmailVerified,
+        phoneVerified: Boolean(profile.phone_verified_at),
         workspaces
       };
       
@@ -1574,130 +1876,587 @@ async function startServer() {
     }
   });
 
-  // Direct Signup (Bypasses email confirmation using Admin API)
-  app.post('/api/auth/signup-direct', async (req, res) => {
-    const { email, password, name, role, intendedRole, planName, acquisitionChannel } = req.body;
-    if (!email || !password) return res.status(400).json({ error: "E-mail e senha sÃ£o obrigatÃ³rios" });
+  const registerUserWithEmailConfirmation = async (payload: any) => {
+    if (!supabaseAuthClient) {
+      return {
+        ok: false,
+        status: 500,
+        body: { error: 'AUTH_CONFIG_MISSING_PUBLIC_KEY' }
+      };
+    }
+    const safeEmail = sanitizeEmail(payload?.email);
+    const rawPassword = typeof payload?.password === 'string' ? payload.password : '';
+    const password = validateStrongPassword(rawPassword);
+    const name = sanitizeString(payload?.name, 180);
+    const role = sanitizeString(payload?.role, 40);
+    const intendedRole = sanitizeString(payload?.intendedRole, 40);
+    const planName = sanitizeString(payload?.planName, 80);
+    const phone = sanitizePhoneE164(payload?.phone);
+    const phoneMasked = phone ? maskPhone(phone) : null;
 
-    try {
-      const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true,
-        user_metadata: { full_name: name }
-      });
+    if (!safeEmail || !password) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: 'E-mail válido e senha forte são obrigatórios (mín. 12 chars com maiúscula, minúscula, número e símbolo).'
+        }
+      };
+    }
 
-      let userId = authUser?.user?.id;
-
-      if (authError) {
-        if (authError.message.includes('already been registered')) {
-          // User exists in Auth, let's check if they have a profile
-          const { data: { users }, error: listError } = await supabase.auth.admin.listUsers();
-          const existingUser = users.find(u => u.email === email);
-          
-          if (existingUser) {
-            userId = existingUser.id;
-            const { data: profile } = await supabase.from('users').select('*').eq('id', userId).single();
-            
-            if (profile) {
-              return res.status(400).json({ error: "Este e-mail jÃ¡ estÃ¡ cadastrado. Por favor, faÃ§a login." });
-            }
-            // If no profile, continue to create one below
-          } else {
-            throw authError;
-          }
-        } else {
-          throw authError;
+    const authRedirectTo = getAuthRedirectUrl();
+    const signupRes = await supabaseAuthClient.auth.signUp({
+      email: safeEmail,
+      password,
+      options: {
+        emailRedirectTo: authRedirectTo,
+        data: {
+          full_name: name || safeEmail.split('@')[0]
         }
       }
+    });
 
-      if (userId) {
-        // Create profile
-        let roleToUse: AppRole = normalizeRequestedRole(intendedRole || role);
-        
-        // If it's a professional signup and no intended role (like from an invitation), default to coordinator
-        if (sanitizeString(role, 40).toLowerCase() === 'professional' && !intendedRole) {
-          roleToUse = 'coordinator';
-        }
-        
-        const planPrices: Record<string, number> = {
-          'Essencial': 149.90,
-          'Crescimento': 399.90,
-          'AvanÃ§ado': 679.90,
-          'Paciente': 4.90
+    const signupError = signupRes.error;
+    const authUser = signupRes.data?.user;
+    if (signupError) {
+      if (String(signupError.message || '').toLowerCase().includes('already')) {
+        return {
+          ok: false,
+          status: 400,
+          body: { error: 'Este e-mail já está cadastrado. Por favor, faça login.' }
         };
+      }
+      throw signupError;
+    }
+    if (!authUser?.id) {
+      throw new Error('Falha ao criar usuário no Auth.');
+    }
 
-        const finalPlanName = roleToUse === 'patient' ? 'Paciente' : normalizeProfessionalPlan(planName);
-        const finalPlanPrice = finalPlanName ? (planPrices[finalPlanName] || null) : null;
+    let roleToUse: AppRole = normalizeRequestedRole(intendedRole || role);
+    if (sanitizeString(role, 40).toLowerCase() === 'professional' && !intendedRole) {
+      roleToUse = 'coordinator';
+    }
 
-        const newProfile = {
-          id: userId,
-          email: email,
-          name: name || email.split('@')[0],
+    const planPrices: Record<string, number> = {
+      'Essencial': 149.90,
+      'Crescimento': 399.90,
+      'Avançado': 679.90,
+      'AvanÃƒÂ§ado': 679.90,
+      'Paciente': 4.90
+    };
+
+    const normalizedPlanName = roleToUse === 'patient' ? 'Paciente' : normalizeProfessionalPlan(planName);
+    const finalPlanPrice = normalizedPlanName ? (planPrices[normalizedPlanName] || null) : null;
+
+    const newProfile = cleanObject({
+      id: authUser.id,
+      email: safeEmail,
+      name: name || safeEmail.split('@')[0],
+      role: roleToUse,
+      clinic_id: roleToUse === 'coordinator' ? authUser.id : null,
+      subscription_status: 'pending',
+      plan_name: normalizedPlanName,
+      plan_price: finalPlanPrice,
+      phone: phone || null,
+      phone_verified_at: null,
+      created_at: new Date().toISOString()
+    });
+
+    const { error: insertError } = await supabase.from('users').upsert([newProfile], { onConflict: 'id' });
+    if (insertError) {
+      if (isMissingColumnError(insertError, 'phone_verified_at') || isMissingColumnError(insertError, 'phone')) {
+        const fallbackProfile = cleanObject({
+          id: authUser.id,
+          email: safeEmail,
+          name: name || safeEmail.split('@')[0],
           role: roleToUse,
-          clinic_id: roleToUse === 'coordinator' ? userId : null, // Workspace ativo inicial
-          subscription_status: 'pending', // Default to pending until onboarding/payment
-          plan_name: finalPlanName,
+          clinic_id: roleToUse === 'coordinator' ? authUser.id : null,
+          subscription_status: 'pending',
+          plan_name: normalizedPlanName,
           plan_price: finalPlanPrice,
           created_at: new Date().toISOString()
-        };
-
-        const { error: insertError } = await supabase.from('users').insert([newProfile]);
-        
-        if (insertError) {
-            console.error("Profile creation error:", insertError);
-            // If it's a duplicate key error in 'users' table, it means profile already exists
-            if (insertError.code === '23505') {
-                return res.status(400).json({ error: "Este e-mail jÃ¡ estÃ¡ cadastrado. Por favor, faÃ§a login." });
-            }
-            throw insertError;
-        }
-
-        // Also update user metadata for onboarding tracking
-        await supabase.auth.admin.updateUserById(userId, {
-          user_metadata: { first_login_completed: false }
         });
-
-        if (roleToUse === 'coordinator') {
-          await ensureClinicAndMembershipForCoordinator(userId, name || null);
-        }
-
-        const workspaces = await fetchUserWorkspaces(userId);
-
-        // Set session
-        const userData = {
-          id: userId,
-          email: email,
-          role: roleToUse,
-          name: name || email.split('@')[0],
-          profilePicture: sanitizeUrl(newProfile.profile_picture) || null,
-          type: newProfile.type || null,
-          age: typeof newProfile.age === 'number' ? newProfile.age : null,
-          subscriptionStatus: 'pending',
-          planName: finalPlanName,
-          planPrice: finalPlanPrice,
-          clinicId: newProfile.clinic_id,
-          firstLoginCompleted: false,
-          workspaces
-        };
-
-        req.session.user = buildSessionUserPayload(userData);
-        req.session.isFirstLogin = true;
-        
-        req.session.save((err) => {
-          if (err) {
-            console.error("Session save error in signup-direct:", err);
-            if (!res.headersSent) {
-              return res.status(500).json({ error: "Erro ao salvar sessÃ£o" });
-            }
-            return;
-          }
-          res.json({ success: true, message: "Conta criada com sucesso!", user: userData, isFirstLogin: true });
-        });
+        const { error: fallbackInsertError } = await supabase.from('users').upsert([fallbackProfile], { onConflict: 'id' });
+        if (fallbackInsertError) throw fallbackInsertError;
+      } else {
+        throw insertError;
       }
+    }
+
+    if (roleToUse === 'coordinator') {
+      await ensureClinicAndMembershipForCoordinator(authUser.id, name || null);
+    }
+
+    if (phone) {
+      const code = generate6DigitOtp();
+      const challengeKey = makeOtpChallengeKey('sms', 'phone_verification', safeEmail);
+      setOtpChallenge({
+        key: challengeKey,
+        channel: 'sms',
+        purpose: 'phone_verification',
+        identifier: safeEmail,
+        userId: authUser.id,
+        codeHash: hashIdentifier(code),
+        expiresAt: Date.now() + OTP_TTL_MS,
+        attempts: 0,
+        consumed: false,
+        createdAt: Date.now()
+      });
+      try {
+        await sendSmsCode({
+          to: phone,
+          message: `Verto: seu código de verificação de telefone é ${code}. Expira em 15 minutos.`
+        });
+      } catch (smsError) {
+        console.warn('[Auth] Falha ao enviar SMS de confirmação de telefone:', smsError);
+      }
+    }
+
+    await persistIdentityAuditLog({
+      title: 'Cadastro iniciado com confirmação de e-mail',
+      content: `Cadastro de ${maskEmail(safeEmail)} iniciado. Confirmação de e-mail pendente.${phoneMasked ? ` Telefone para validação: ${phoneMasked}.` : ''}`,
+      identifier: safeEmail,
+      channel: 'email',
+      userId: authUser.id,
+      status: 'pending_confirmation'
+    });
+
+    return {
+      ok: true,
+      status: 200,
+      body: {
+        success: true,
+        pendingEmailVerification: true,
+        pendingPhoneVerification: Boolean(phone),
+        message: 'Conta criada. Enviamos um link de confirmação para seu e-mail. Confirme antes de acessar funcionalidades sensíveis.'
+      }
+    };
+  };
+
+  app.post('/api/auth/signup', async (req, res) => {
+    try {
+      const result = await registerUserWithEmailConfirmation(req.body || {});
+      return res.status(result.status).json(result.body);
     } catch (error: any) {
-      console.error("Signup bypass error:", error);
-      res.status(500).json({ error: error.message });
+      console.error('[Auth] Signup error:', error);
+      return res.status(500).json({ error: 'Não foi possível iniciar o cadastro.' });
+    }
+  });
+
+  // Backward compatibility endpoint (now secure and confirmation-based)
+  app.post('/api/auth/signup-direct', async (req, res) => {
+    try {
+      const result = await registerUserWithEmailConfirmation(req.body || {});
+      return res.status(result.status).json(result.body);
+    } catch (error: any) {
+      console.error('[Auth] signup-direct error:', error);
+      return res.status(500).json({ error: 'Não foi possível iniciar o cadastro.' });
+    }
+  });
+
+  app.get('/api/auth/config', (_req, res) => {
+    try {
+      res.json({
+        success: true,
+        authRedirectUrl: getAuthRedirectUrl(),
+        recoveryRedirectUrl: getRecoveryRedirectUrl(),
+        productionBaseUrl: sanitizeString(process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '', 500)
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message || 'Configuração de Auth indisponível.' });
+    }
+  });
+
+  app.post('/api/auth/resend-confirmation', async (req, res) => {
+    try {
+      if (!supabaseAuthClient) {
+        return res.status(500).json({ error: 'AUTH_CONFIG_MISSING_PUBLIC_KEY' });
+      }
+      const email = sanitizeEmail(req.body?.email);
+      if (!email) return res.status(400).json({ error: 'E-mail inválido.' });
+
+      const { error } = await supabaseAuthClient.auth.resend({
+        type: 'signup',
+        email,
+        options: { emailRedirectTo: getAuthRedirectUrl() }
+      });
+      if (error) {
+        console.warn('[Auth] resend-confirmation warning:', error.message);
+      }
+
+      await persistIdentityAuditLog({
+        title: 'Reenvio de confirmação de e-mail solicitado',
+        content: `Reenvio de confirmação para ${maskEmail(email)} solicitado.`,
+        identifier: email,
+        channel: 'email',
+        request: req,
+        status: error ? 'warning' : 'sent'
+      });
+
+      return res.json({
+        success: true,
+        message: 'Se este e-mail estiver cadastrado, você receberá instruções.'
+      });
+    } catch (error) {
+      return res.json({
+        success: true,
+        message: 'Se este e-mail estiver cadastrado, você receberá instruções.'
+      });
+    }
+  });
+
+  app.post('/api/auth/password/recovery/email/request', recoveryLimiter, async (req, res) => {
+    const email = sanitizeEmail(req.body?.email);
+    const genericResponse = {
+      success: true,
+      message: 'Se este e-mail estiver cadastrado, você receberá instruções.'
+    };
+
+    try {
+      if (!email) return res.json(genericResponse);
+      const authUser = await findAuthUserByEmail(email);
+      if (!authUser?.id) {
+        await persistIdentityAuditLog({
+          title: 'Recuperação por e-mail solicitada',
+          content: `Tentativa de recuperação por e-mail para identificador não encontrado (${maskEmail(email)}).`,
+          identifier: email,
+          channel: 'email',
+          request: req,
+          status: 'not_found'
+        });
+        return res.json(genericResponse);
+      }
+
+      const code = generate6DigitOtp();
+      const key = makeOtpChallengeKey('email', 'password_recovery', email);
+      setOtpChallenge({
+        key,
+        channel: 'email',
+        purpose: 'password_recovery',
+        identifier: email,
+        userId: authUser.id,
+        codeHash: hashIdentifier(code),
+        expiresAt: Date.now() + OTP_TTL_MS,
+        attempts: 0,
+        consumed: false,
+        createdAt: Date.now()
+      });
+
+      await sendEmailViaResend({
+        to: email,
+        subject: 'Verto - Código de recuperação de senha',
+        html: `<p>Seu código de recuperação é <strong>${code}</strong>.</p><p>Este código expira em 15 minutos.</p>`
+      });
+
+      await persistIdentityAuditLog({
+        title: 'Recuperação por e-mail solicitada',
+        content: `Código de recuperação enviado para ${maskEmail(email)}.`,
+        identifier: email,
+        channel: 'email',
+        userId: authUser.id,
+        request: req,
+        status: 'sent'
+      });
+      return res.json(genericResponse);
+    } catch (error: any) {
+      console.warn('[Auth] password recovery email request warning:', error.message);
+      return res.json(genericResponse);
+    }
+  });
+
+  app.post('/api/auth/password/recovery/sms/request', recoveryLimiter, async (req, res) => {
+    const phone = sanitizePhoneE164(req.body?.phone);
+    const genericResponse = {
+      success: true,
+      message: 'Se este telefone estiver cadastrado, você receberá instruções.'
+    };
+
+    try {
+      if (!phone) return res.json(genericResponse);
+      const { data: profile } = await supabase
+        .from('users')
+        .select('id, phone')
+        .eq('phone', phone)
+        .maybeSingle();
+
+      if (!profile?.id) {
+        await persistIdentityAuditLog({
+          title: 'Recuperação por SMS solicitada',
+          content: `Tentativa de recuperação por SMS para identificador não encontrado (${maskPhone(phone)}).`,
+          identifier: phone,
+          channel: 'sms',
+          request: req,
+          status: 'not_found'
+        });
+        return res.json(genericResponse);
+      }
+
+      const code = generate6DigitOtp();
+      const key = makeOtpChallengeKey('sms', 'password_recovery', phone);
+      setOtpChallenge({
+        key,
+        channel: 'sms',
+        purpose: 'password_recovery',
+        identifier: phone,
+        userId: sanitizeString(profile.id, 120),
+        codeHash: hashIdentifier(code),
+        expiresAt: Date.now() + OTP_TTL_MS,
+        attempts: 0,
+        consumed: false,
+        createdAt: Date.now()
+      });
+
+      await sendSmsCode({
+        to: phone,
+        message: `Verto: seu código de recuperação é ${code}. Expira em 15 minutos.`
+      });
+
+      await persistIdentityAuditLog({
+        title: 'Recuperação por SMS solicitada',
+        content: `Código de recuperação enviado para ${maskPhone(phone)}.`,
+        identifier: phone,
+        channel: 'sms',
+        userId: sanitizeString(profile.id, 120),
+        request: req,
+        status: 'sent'
+      });
+      return res.json(genericResponse);
+    } catch (error: any) {
+      console.warn('[Auth] password recovery sms request warning:', error.message);
+      return res.json(genericResponse);
+    }
+  });
+
+  app.post('/api/auth/password/recovery/verify', async (req, res) => {
+    const channel = sanitizeString(req.body?.channel, 20).toLowerCase() === 'sms' ? 'sms' : 'email';
+    const code = sanitizeString(req.body?.code, 12);
+    const newPassword = validateStrongPassword(req.body?.newPassword);
+    const mfaToken = sanitizeString(req.body?.mfaToken, 12);
+    const genericError = { error: 'Código inválido ou expirado.' };
+
+    const identifier = channel === 'sms'
+      ? sanitizePhoneE164(req.body?.phone)
+      : sanitizeEmail(req.body?.email);
+
+    if (!identifier || !code || !newPassword) {
+      return res.status(400).json({ error: 'Dados inválidos para recuperação.' });
+    }
+
+    try {
+      const key = makeOtpChallengeKey(channel, 'password_recovery', identifier);
+      const challenge = getOtpChallenge(key);
+      if (!challenge || challenge.consumed) {
+        await persistIdentityAuditLog({
+          title: 'Tentativa de verificação de recuperação inválida',
+          content: `Código de recuperação inválido/expirado via ${channel}.`,
+          identifier,
+          channel,
+          request: req,
+          status: 'invalid'
+        });
+        return res.status(400).json(genericError);
+      }
+
+      challenge.attempts += 1;
+      if (challenge.attempts > 5) {
+        consumeOtpChallenge(key);
+        await persistIdentityAuditLog({
+          title: 'Recuperação bloqueada por tentativas excedidas',
+          content: `Tentativas excedidas para recuperação por ${channel}.`,
+          identifier,
+          channel,
+          userId: challenge.userId,
+          request: req,
+          status: 'blocked'
+        });
+        return res.status(429).json({ error: 'Muitas tentativas. Solicite um novo código.' });
+      }
+
+      const hash = hashIdentifier(code);
+      if (hash !== challenge.codeHash || Date.now() > challenge.expiresAt) {
+        setOtpChallenge(challenge);
+        await persistIdentityAuditLog({
+          title: 'Tentativa de verificação de recuperação inválida',
+          content: `Código incorreto informado via ${channel}.`,
+          identifier,
+          channel,
+          userId: challenge.userId,
+          request: req,
+          status: 'invalid_code'
+        });
+        return res.status(400).json(genericError);
+      }
+
+      if (!challenge.userId) {
+        consumeOtpChallenge(key);
+        return res.status(400).json(genericError);
+      }
+
+      const { data: profile } = await supabase
+        .from('users')
+        .select('id, two_factor_enabled, two_factor_secret')
+        .eq('id', challenge.userId)
+        .maybeSingle();
+
+      if (profile?.two_factor_enabled) {
+        if (!mfaToken) {
+          await persistIdentityAuditLog({
+            title: 'Recuperação bloqueada por MFA ausente',
+            content: `Recuperação via ${channel} exigiu MFA e foi bloqueada.`,
+            identifier,
+            channel,
+            userId: challenge.userId,
+            request: req,
+            status: 'mfa_required'
+          });
+          return res.status(401).json({ error: 'MFA_REQUIRED', message: 'Validação MFA obrigatória para concluir a recuperação.' });
+        }
+        const mfaResult = verifySync({ token: mfaToken, secret: profile.two_factor_secret });
+        if (!mfaResult?.valid) {
+          await persistIdentityAuditLog({
+            title: 'Recuperação bloqueada por MFA inválido',
+            content: `Token MFA inválido em recuperação via ${channel}.`,
+            identifier,
+            channel,
+            userId: challenge.userId,
+            request: req,
+            status: 'mfa_invalid'
+          });
+          return res.status(401).json({ error: 'MFA_INVALID', message: 'Código MFA inválido.' });
+        }
+      }
+
+      const { error: updateError } = await supabase.auth.admin.updateUserById(challenge.userId, {
+        password: newPassword
+      });
+      if (updateError) throw updateError;
+
+      consumeOtpChallenge(key);
+      await persistIdentityAuditLog({
+        title: 'Senha redefinida por recuperação',
+        content: `Senha redefinida com sucesso via ${channel}.`,
+        identifier,
+        channel,
+        userId: challenge.userId,
+        request: req,
+        status: 'success'
+      });
+
+      return res.json({ success: true, message: 'Senha redefinida com sucesso.' });
+    } catch (error: any) {
+      console.error('[Auth] recovery verify error:', error.message);
+      return res.status(500).json({ error: 'Falha ao concluir recuperação.' });
+    }
+  });
+
+  app.post('/api/auth/phone/send-code', recoveryLimiter, async (req, res) => {
+    const email = sanitizeEmail(req.body?.email);
+    const phone = sanitizePhoneE164(req.body?.phone);
+    const genericResponse = {
+      success: true,
+      message: 'Se os dados estiverem cadastrados, você receberá um código de verificação.'
+    };
+
+    try {
+      if (!email || !phone) return res.json(genericResponse);
+      const authUser = await findAuthUserByEmail(email);
+      if (!authUser?.id) return res.json(genericResponse);
+
+      const code = generate6DigitOtp();
+      const key = makeOtpChallengeKey('sms', 'phone_verification', email);
+      setOtpChallenge({
+        key,
+        channel: 'sms',
+        purpose: 'phone_verification',
+        identifier: email,
+        userId: authUser.id,
+        codeHash: hashIdentifier(code),
+        expiresAt: Date.now() + OTP_TTL_MS,
+        attempts: 0,
+        consumed: false,
+        createdAt: Date.now()
+      });
+
+      await sendSmsCode({
+        to: phone,
+        message: `Verto: seu código de confirmação de telefone é ${code}. Expira em 15 minutos.`
+      });
+
+      const { error: phoneUpdateError } = await supabase
+        .from('users')
+        .update({ phone })
+        .eq('id', authUser.id);
+      if (phoneUpdateError && !isMissingColumnError(phoneUpdateError, 'phone')) {
+        throw phoneUpdateError;
+      }
+
+      await persistIdentityAuditLog({
+        title: 'Envio de código de confirmação de telefone',
+        content: `Código SMS enviado para confirmação de telefone (${maskPhone(phone)}).`,
+        identifier: email,
+        channel: 'sms',
+        userId: authUser.id,
+        request: req,
+        status: 'sent'
+      });
+
+      return res.json(genericResponse);
+    } catch (error: any) {
+      console.warn('[Auth] phone send-code warning:', error.message);
+      return res.json(genericResponse);
+    }
+  });
+
+  app.post('/api/auth/phone/verify', async (req, res) => {
+    const email = sanitizeEmail(req.body?.email);
+    const code = sanitizeString(req.body?.code, 12);
+    if (!email || !code) {
+      return res.status(400).json({ error: 'E-mail e código são obrigatórios.' });
+    }
+
+    try {
+      const key = makeOtpChallengeKey('sms', 'phone_verification', email);
+      const challenge = getOtpChallenge(key);
+      if (!challenge || challenge.consumed || challenge.purpose !== 'phone_verification') {
+        return res.status(400).json({ error: 'Código inválido ou expirado.' });
+      }
+
+      challenge.attempts += 1;
+      if (challenge.attempts > 5) {
+        consumeOtpChallenge(key);
+        return res.status(429).json({ error: 'Muitas tentativas. Solicite um novo código.' });
+      }
+
+      if (hashIdentifier(code) !== challenge.codeHash) {
+        setOtpChallenge(challenge);
+        return res.status(400).json({ error: 'Código inválido ou expirado.' });
+      }
+
+      if (!challenge.userId) {
+        consumeOtpChallenge(key);
+        return res.status(400).json({ error: 'Código inválido ou expirado.' });
+      }
+
+      const { error } = await supabase
+        .from('users')
+        .update({ phone_verified_at: new Date().toISOString() })
+        .eq('id', challenge.userId);
+      if (error && !isMissingColumnError(error, 'phone_verified_at')) throw error;
+
+      consumeOtpChallenge(key);
+      await persistIdentityAuditLog({
+        title: 'Telefone confirmado com sucesso',
+        content: `Telefone confirmado via SMS para ${maskEmail(email)}.`,
+        identifier: email,
+        channel: 'sms',
+        userId: challenge.userId,
+        request: req,
+        status: 'verified'
+      });
+
+      return res.json({ success: true, message: 'Telefone confirmado com sucesso.' });
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message || 'Falha ao confirmar telefone.' });
     }
   });
 
@@ -1792,6 +2551,22 @@ async function startServer() {
       }
 
       console.log('[Auth] User verified successfully:', user.id, user.email);
+      const isEmailVerified = Boolean((user as any)?.email_confirmed_at || (user as any)?.confirmed_at);
+      if (!isEmailVerified) {
+        await persistIdentityAuditLog({
+          title: 'Tentativa de login com e-mail não confirmado',
+          content: `Login bloqueado para ${maskEmail(sanitizeEmail(user.email) || '***')} por e-mail pendente de confirmação.`,
+          identifier: sanitizeEmail(user.email) || null,
+          channel: 'email',
+          userId: sanitizeString(user.id, 120),
+          request: req,
+          status: 'blocked'
+        });
+        return res.status(403).json({
+          error: 'EMAIL_NOT_CONFIRMED',
+          message: 'Confirme seu e-mail para continuar.'
+        });
+      }
 
       // Fetch user profile from 'users' table
       let { data: profile, error: profileError } = await supabase
@@ -1954,6 +2729,8 @@ async function startServer() {
         planName: profile.plan_name,
         planPrice: profile.plan_price,
         clinicId: clinicForSession,
+        emailVerified: isEmailVerified,
+        phoneVerified: Boolean(profile.phone_verified_at),
         firstLoginCompleted: profile.first_login_completed || user.user_metadata?.first_login_completed,
         clinicSettings: user.user_metadata?.clinic_settings || null,
         workspaces
