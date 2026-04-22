@@ -4,7 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/validate-required-env.mjs",
     "dev": "tsx server.ts",
+    "prestart": "node scripts/validate-required-env.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "start": "tsx server.ts",

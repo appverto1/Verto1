@@ -23,6 +23,42 @@ if (process.env.NODE_ENV !== 'production') {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function isValidDataEncryptionKey(raw: string): boolean {
+  if (/^[0-9a-fA-F]{64}$/.test(raw)) return true;
+  try {
+    return Buffer.from(raw, 'base64').length === 32;
+  } catch {
+    return false;
+  }
+}
+
+function validateRequiredEnvForDeploy(): void {
+  const isDeploy = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT;
+  if (!isDeploy) return;
+
+  const required = [
+    'SESSION_SECRET',
+    'SUPABASE_URL',
+    'SUPABASE_SERVICE_ROLE_KEY',
+    'DATA_ENCRYPTION_KEY',
+    'PSEUDONYMIZATION_KEY',
+    'STRIPE_SECRET_KEY',
+    'STRIPE_WEBHOOK_SECRET'
+  ] as const;
+
+  const missing = required.filter((key) => !String(process.env[key] || '').trim());
+  if (missing.length > 0) {
+    throw new Error(`Ambiente inseguro para deploy. Variaveis ausentes: ${missing.join(', ')}`);
+  }
+
+  const dataEncryptionKey = String(process.env.DATA_ENCRYPTION_KEY || '').trim();
+  if (!isValidDataEncryptionKey(dataEncryptionKey)) {
+    throw new Error('DATA_ENCRYPTION_KEY invalida. Use hex com 64 caracteres ou base64 com 32 bytes.');
+  }
+}
+
+validateRequiredEnvForDeploy();
+
 // Initialize Stripe lazily to prevent crash on startup if key is missing
 let stripeClient: Stripe | null = null;
 function getStripe() {
@@ -322,7 +358,10 @@ function decryptJsonPayload(payload: string | null | undefined): Record<string, 
 }
 
 function pseudonymizeValue(value: string): string {
-  const secret = (process.env.PSEUDONYMIZATION_KEY || process.env.SESSION_SECRET || 'verto-dev-key').trim();
+  const secret = (process.env.PSEUDONYMIZATION_KEY || process.env.SESSION_SECRET || '').trim();
+  if (!secret) {
+    throw new Error('PSEUDONYMIZATION_KEY (ou SESSION_SECRET em dev) deve estar definido.');
+  }
   return crypto.createHmac('sha256', secret).update(value).digest('hex').slice(0, 24);
 }
 
@@ -793,7 +832,7 @@ async function ensureClinicAndMembershipForCoordinator(userId: string, clinicNam
 }
 
 // Initialize Supabase Admin Client (using service role for backend access)
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+const supabaseUrl = process.env.SUPABASE_URL || "";
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
 const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || "";
@@ -856,7 +895,7 @@ if (!supabaseUrl || !supabaseServiceKey) {
   console.error("VariÃ¡veis de configuraÃ§Ã£o detectadas no sistema:", relevantKeys.length > 0 ? relevantKeys.join(', ') : "NENHUMA");
   
   console.error("Detalhes especÃ­ficos:");
-  console.error("- SUPABASE_URL:", (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL) ? "âœ…" : "âŒ");
+  console.error("- SUPABASE_URL:", process.env.SUPABASE_URL ? "âœ…" : "âŒ");
   console.error("- SUPABASE_SERVICE_ROLE_KEY:", process.env.SUPABASE_SERVICE_ROLE_KEY ? "âœ…" : "âŒ");
   console.error("-------------------------------------");
   
@@ -1268,7 +1307,7 @@ async function startServer() {
   };
 
   app.get('/api/config', (req, res) => {
-    let url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+    let url = process.env.SUPABASE_URL || "";
     if (url && !url.startsWith('http')) {
       url = `https://${url}`;
     }
