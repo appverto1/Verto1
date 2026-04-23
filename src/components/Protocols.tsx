@@ -159,7 +159,13 @@ export const ProtocolEditor = ({ protocol, onSave, onCancel }: any) => {
   ); 
 };
 
-export const ProtocolManagementSystem = ({ protocols, onSaveProtocol, onDeleteProtocol, onBack }: any) => { 
+export const ProtocolManagementSystem = ({
+  protocols,
+  onSaveProtocol,
+  onDeleteProtocol,
+  onBack,
+  canManageLibrary = true,
+}: any) => { 
   const [editingProtocol, setEditingProtocol] = useState<any>(null); 
   const [filterAge, setFilterAge] = useState(""); 
   const [filterType, setFilterType] = useState(""); 
@@ -173,15 +179,18 @@ export const ProtocolManagementSystem = ({ protocols, onSaveProtocol, onDeletePr
   const [pendingProtocolName, setPendingProtocolName] = useState("");
 
   const handleCreateNew = () => { 
+    if (!canManageLibrary) return;
     const newProto = { id: Date.now(), title: "Novo Protocolo Personalizado", data: [], ageGroup: 'all', type: 'conventional', domain: '', category: 'evaluation' }; 
     setEditingProtocol(newProto); 
   }; 
   
   const handleEdit = (proto: any) => { 
+    if (!canManageLibrary) return;
     setEditingProtocol(proto); 
   }; 
 
   const handleFileUpload = (e: any) => {
+    if (!canManageLibrary) return;
     const file = e.target.files?.[0];
     if (!file) return;
     setPendingImportFile(file);
@@ -255,7 +264,7 @@ export const ProtocolManagementSystem = ({ protocols, onSaveProtocol, onDeletePr
   } 
 
   const ProtocolCard = ({ proto }: any) => (
-    <div onClick={() => handleEdit(proto)} className="bg-white p-6 rounded-[32px] shadow-sm border border-gray-100 hover:shadow-xl hover:border-[#7a32fc]/20 transition-all cursor-pointer group relative overflow-hidden flex flex-col h-full active:scale-95">
+    <div onClick={() => handleEdit(proto)} className={`bg-white p-6 rounded-[32px] shadow-sm border border-gray-100 transition-all group relative overflow-hidden flex flex-col h-full ${canManageLibrary ? "hover:shadow-xl hover:border-[#7a32fc]/20 cursor-pointer active:scale-95" : ""}`}>
       <div className="absolute top-0 right-0 w-24 h-24 bg-gray-50 rounded-bl-full opacity-50 -z-0 group-hover:scale-125 transition-transform"></div>
       <div className="flex justify-between items-start mb-4 relative z-10">
         <div className={`p-3 rounded-2xl ${proto.type === 'neurodevelopment' ? 'bg-purple-100 text-purple-600' : proto.type === 'occupational' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'} shadow-sm group-hover:scale-110 transition-transform`}>
@@ -276,9 +285,11 @@ export const ProtocolManagementSystem = ({ protocols, onSaveProtocol, onDeletePr
             <span key={i} className="text-[8px] bg-gray-50 text-gray-500 px-2 py-0.5 rounded-md font-bold whitespace-nowrap">{d.trim()}</span>
           ))}
         </div>
-        <button onClick={(e) => { e.stopPropagation(); if(confirm("Remover este protocolo?")) onDeleteProtocol(proto.id); }} className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all opacity-0 group-hover:opacity-100">
-          <Trash2 size={16} />
-        </button>
+        {canManageLibrary && (
+          <button onClick={(e) => { e.stopPropagation(); if(confirm("Remover este protocolo?")) onDeleteProtocol(proto.id); }} className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all opacity-0 group-hover:opacity-100">
+            <Trash2 size={16} />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -374,9 +385,15 @@ export const ProtocolManagementSystem = ({ protocols, onSaveProtocol, onDeletePr
           <button onClick={onBack} className="p-2 -ml-2 text-gray-500 hover:bg-gray-100 rounded-full"><ChevronLeft size={24}/></button> 
           <h1 className="text-xl font-bold text-gray-800 tracking-tight">Biblioteca de Protocolos</h1> 
         </div>
-        <button onClick={handleCreateNew} className="bg-[#7a32fc] text-white px-5 py-2.5 rounded-2xl text-xs font-bold shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 active:scale-95 transition-all flex items-center gap-2">
-          <Plus size={18} /> Criar Novo
-        </button>
+        {canManageLibrary ? (
+          <button onClick={handleCreateNew} className="bg-[#7a32fc] text-white px-5 py-2.5 rounded-2xl text-xs font-bold shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 active:scale-95 transition-all flex items-center gap-2">
+            <Plus size={18} /> Criar Novo
+          </button>
+        ) : (
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+            Visualização de biblioteca
+          </span>
+        )}
       </div> 
 
       <div className="flex-1 overflow-y-auto no-scrollbar px-6 pt-6 pb-20"> 
@@ -462,35 +479,36 @@ export const ProtocolManagementSystem = ({ protocols, onSaveProtocol, onDeletePr
         </div>
       </div> 
       
-      {/* Floating Import Button */}
-      <div className="fixed bottom-8 right-8 z-[60] flex flex-col items-end gap-3">
-        {isImporting && (
-          <div className="bg-white p-4 rounded-2xl shadow-2xl border border-gray-100 mb-2 animate-slide-up w-64">
-            <div className="flex items-center gap-3 mb-2">
-              <Loader2 size={18} className="text-[#7a32fc] animate-spin" />
-              <span className="text-xs font-bold text-gray-700 uppercase tracking-tight">Importando Protocolo...</span>
+      {canManageLibrary && (
+        <div className="fixed bottom-8 right-8 z-[60] flex flex-col items-end gap-3">
+          {isImporting && (
+            <div className="bg-white p-4 rounded-2xl shadow-2xl border border-gray-100 mb-2 animate-slide-up w-64">
+              <div className="flex items-center gap-3 mb-2">
+                <Loader2 size={18} className="text-[#7a32fc] animate-spin" />
+                <span className="text-xs font-bold text-gray-700 uppercase tracking-tight">Importando Protocolo...</span>
+              </div>
+              <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
+                <div 
+                  className="bg-[#7a32fc] h-full transition-all duration-300" 
+                  style={{ width: `${importProgress}%` }}
+                ></div>
+              </div>
+              <p className="text-[9px] font-bold text-gray-400 mt-2 uppercase tracking-widest">Mapeando domínios e tarefas via IA...</p>
             </div>
-            <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
-              <div 
-                className="bg-[#7a32fc] h-full transition-all duration-300" 
-                style={{ width: `${importProgress}%` }}
-              ></div>
+          )}
+          
+          <label className={`flex items-center gap-3 bg-white text-[#7a32fc] px-6 py-4 rounded-full shadow-2xl border border-gray-100 cursor-pointer hover:scale-105 active:scale-95 transition-all group ${isImporting ? 'opacity-50 pointer-events-none' : ''}`}>
+            <input type="file" className="hidden" accept=".pdf,.xlsx,.xls,.csv" onChange={handleFileUpload} disabled={isImporting} />
+            <div className="p-2 bg-blue-50 rounded-xl group-hover:bg-[#7a32fc] group-hover:text-white transition-colors">
+              <FileUp size={20} />
             </div>
-            <p className="text-[9px] font-bold text-gray-400 mt-2 uppercase tracking-widest">Mapeando domínios e tarefas via IA...</p>
-          </div>
-        )}
-        
-        <label className={`flex items-center gap-3 bg-white text-[#7a32fc] px-6 py-4 rounded-full shadow-2xl border border-gray-100 cursor-pointer hover:scale-105 active:scale-95 transition-all group ${isImporting ? 'opacity-50 pointer-events-none' : ''}`}>
-          <input type="file" className="hidden" accept=".pdf,.xlsx,.xls,.csv" onChange={handleFileUpload} disabled={isImporting} />
-          <div className="p-2 bg-blue-50 rounded-xl group-hover:bg-[#7a32fc] group-hover:text-white transition-colors">
-            <FileUp size={20} />
-          </div>
-          <div className="flex flex-col text-left">
-            <span className="text-xs font-bold uppercase tracking-tight">Importar Protocolo</span>
-            <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">PDF ou Excel</span>
-          </div>
-        </label>
-      </div>
+            <div className="flex flex-col text-left">
+              <span className="text-xs font-bold uppercase tracking-tight">Importar Protocolo</span>
+              <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">PDF ou Excel</span>
+            </div>
+          </label>
+        </div>
+      )}
 
     </div> 
   ); 

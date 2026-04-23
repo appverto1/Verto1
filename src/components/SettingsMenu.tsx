@@ -46,9 +46,9 @@ export function SettingsMenu({
   }, []);
 
   const isCoordinator = user?.role === 'coordinator' || user?.role === 'admin';
-  const isReceptionist = user?.role === 'receptionist';
-  const canManageTeam = isCoordinator;
-  const canSeeBilling = isCoordinator || isReceptionist;
+  const isOwner = user?.role === 'owner';
+  const canManageTeam = isCoordinator || isOwner;
+  const canSeeBilling = isCoordinator || isOwner;
 
   return (
     <div className="relative" ref={menuRef} style={{ zIndex: 100 }}>

@@ -144,13 +144,21 @@ export function CoordinatorDashboard({
   allTasks = [],
 }: CoordinatorDashboardProps) {
   const role = String(user?.role || "coordinator");
+  const capabilityRole: "coordinator" | "receptionist" | "therapist" =
+    role === "therapist"
+      ? "therapist"
+      : role === "receptionist"
+        ? "receptionist"
+        : "coordinator";
+  const isTherapist = capabilityRole === "therapist";
+  const canCreatePatients = !isTherapist;
 
   const capabilityStatusForRole = (capabilityKey: string): "full" | "limited" | "none" => {
     const capability = ROLE_CAPABILITY_SECTIONS.flatMap((section) => section.items).find(
       (item) => item.key === capabilityKey,
     );
     if (!capability) return "none";
-    const status = (capability as any)?.[role];
+    const status = (capability as any)?.[capabilityRole];
     if (status === "full" || status === "limited" || status === "none") return status;
     return "none";
   };
@@ -163,9 +171,9 @@ export function CoordinatorDashboard({
     team: "team-compensation",
     settings: null,
     logs: null,
-    billing: null,
-    flow: null,
-    birthdays: null,
+    billing: "billing-management",
+    flow: "engagement-widgets",
+    birthdays: "engagement-widgets",
     agenda: "agenda-multi-view",
     rooms: "rooms",
   };
@@ -403,6 +411,20 @@ export function CoordinatorDashboard({
     return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
   };
   const coordinatorAvatarUrl = user?.profilePicture || user?.profile_picture || null;
+  const [therapistCrp, setTherapistCrp] = useState<string>(
+    String(user?.crp || ""),
+  );
+  const [therapistSignatureDataUrl, setTherapistSignatureDataUrl] = useState<
+    string | null
+  >(user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null);
+  const [therapistProfilePhotoUrl, setTherapistProfilePhotoUrl] = useState<
+    string | null
+  >(user?.profilePicture || user?.profile_picture || null);
+  const therapistCanRegisterClinicalData = !isTherapist || Boolean(therapistCrp.trim());
+  const canManageProtocolLibrary = capabilityStatusForRole("protocol-library") === "full";
+  const canManageClinicSettings = capabilityStatusForRole("clinic-settings") !== "none";
+  const canManageBilling = capabilityStatusForRole("billing-management") !== "none";
+  const canEditAnamnesisTemplate = canManageClinicSettings;
   const financialSurveyOptions = [
     "Controle de recebimentos por paciente",
     "Conciliação de PIX e cartão",
@@ -431,6 +453,31 @@ export function CoordinatorDashboard({
     type: "success" | "error" | "info" = "success",
   ) => {
     setToast({ type, message });
+  };
+
+  const ensureTherapistClinicalProfile = () => {
+    if (therapistCanRegisterClinicalData) return true;
+    const warning =
+      "Complete seu perfil com o CRP para habilitar registros clínicos";
+    alert(warning);
+    showToast(warning, "error");
+    setActiveTab("settings");
+    setTabHistory((prev) => (prev[prev.length - 1] === "settings" ? prev : [...prev, "settings"]));
+    return false;
+  };
+
+  const readImageAsDataUrl = (file: File, onDone: (result: string) => void) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const value = typeof reader.result === "string" ? reader.result : "";
+      if (!value) {
+        showToast("Não foi possível processar a imagem.", "error");
+        return;
+      }
+      onDone(value);
+    };
+    reader.onerror = () => showToast("Falha ao ler arquivo de imagem.", "error");
+    reader.readAsDataURL(file);
   };
 
   const showProcessing = (message = "Processando...") => {
@@ -523,6 +570,20 @@ export function CoordinatorDashboard({
       fetchPayments();
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    setTherapistCrp(String(user?.crp || ""));
+    setTherapistSignatureDataUrl(
+      user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null,
+    );
+    setTherapistProfilePhotoUrl(user?.profilePicture || user?.profile_picture || null);
+  }, [
+    user?.crp,
+    user?.signatureDataUrl,
+    user?.clinicSettings?.signatureDataUrl,
+    user?.profilePicture,
+    user?.profile_picture,
+  ]);
 
   useEffect(() => {
     if (view === "patient") {
@@ -750,6 +811,10 @@ export function CoordinatorDashboard({
   };
 
   const handleQuickRegister = async () => {
+    if (!canCreatePatients) {
+      showToast("A criação de pacientes é exclusiva da recepção e coordenação.", "error");
+      return;
+    }
     if (!quickPatientName) {
       showToast("Nome é obrigatório.", "error");
       return;
@@ -871,6 +936,10 @@ export function CoordinatorDashboard({
   };
 
   const handleCreatePatientFromFullForm = () => {
+    if (!canCreatePatients) {
+      showToast("A criação de pacientes é exclusiva da recepção e coordenação.", "error");
+      return;
+    }
     if (!newPatientForm.nome?.trim()) {
       showToast("O nome do paciente é obrigatório.", "error");
       return;
@@ -1478,6 +1547,39 @@ export function CoordinatorDashboard({
   };
 
   const handleSaveClinicSettings = () => {
+    if (isTherapist) {
+      const cleanCrp = therapistCrp.trim();
+      if (!cleanCrp) {
+        const warning =
+          "Complete seu perfil com o CRP para habilitar registros clínicos";
+        alert(warning);
+        showToast(warning, "error");
+        return;
+      }
+      showProcessing("Salvando perfil profissional...");
+      onUpdateProfile({
+        crp: cleanCrp,
+        profilePicture: therapistProfilePhotoUrl,
+        signatureDataUrl: therapistSignatureDataUrl,
+        clinicSettings: {
+          ...(user?.clinicSettings || {}),
+          signatureDataUrl: therapistSignatureDataUrl,
+        },
+      });
+      onAddActivityLog(
+        "Perfil profissional atualizado",
+        "O terapeuta atualizou CRP, assinatura digital e foto de perfil.",
+        "management",
+      );
+      hideProcessing();
+      showToast("Perfil atualizado com sucesso!");
+      return;
+    }
+    if (!canManageClinicSettings) {
+      showToast("Apenas a coordenação pode alterar as configurações da clínica.", "error");
+      return;
+    }
+
     showProcessing("Salvando configurações da clínica...");
     const clinicSettings = {
       ...(user?.clinicSettings || {}),
@@ -1520,6 +1622,10 @@ export function CoordinatorDashboard({
   };
 
   const handleSaveClinicAnamnesisTemplate = async (template: any) => {
+    if (!canEditAnamnesisTemplate) {
+      showToast("Apenas a coordenação pode alterar o template de anamnese.", "error");
+      throw new Error("Permissão insuficiente para editar template.");
+    }
     showProcessing("Salvando personalização da ficha...");
     const result = await dataService.saveClinicAnamnesisTemplate(template);
     if (!result?.success) {
@@ -1643,16 +1749,18 @@ export function CoordinatorDashboard({
               Visualização diária, semanal e mensal estilo calendário.
             </p>
           </div>
-          <button
-            onClick={() => {
-              resetPatientForm();
-              setIsPatientRegistrationModalOpen(true);
-            }}
-            className="flex items-center gap-2 px-4 py-2.5 bg-[#7a32fc] text-white rounded-2xl text-xs font-bold hover:opacity-90 transition-all shadow-lg shadow-[#7a32fc]/20"
-          >
-            <UserPlus size={16} />
-            Novo Paciente
-          </button>
+          {canCreatePatients && (
+            <button
+              onClick={() => {
+                resetPatientForm();
+                setIsPatientRegistrationModalOpen(true);
+              }}
+              className="flex items-center gap-2 px-4 py-2.5 bg-[#7a32fc] text-white rounded-2xl text-xs font-bold hover:opacity-90 transition-all shadow-lg shadow-[#7a32fc]/20"
+            >
+              <UserPlus size={16} />
+              Novo Paciente
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-3 w-full sm:w-auto overflow-x-auto no-scrollbar pb-1 sm:pb-0">
           <div className="bg-slate-100 p-1 rounded-xl flex gap-1 w-full sm:w-auto">
@@ -1977,32 +2085,33 @@ export function CoordinatorDashboard({
         {renderRoomsContent()}
       </section>
 
-      {/* Gestão de Equipe Section */}
-      <section className="space-y-4 sm:space-y-6">
-        <div className="bg-white p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100">
-          <div className="flex items-center gap-3 mb-8">
-            <div className="p-2 bg-purple-50 text-purple-600 rounded-xl">
-              <Users size={20} className="sm:w-6 sm:h-6" />
+      {capabilityStatusForRole("team-compensation") !== "none" && (
+        <section className="space-y-4 sm:space-y-6">
+          <div className="bg-white p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100">
+            <div className="flex items-center gap-3 mb-8">
+              <div className="p-2 bg-purple-50 text-purple-600 rounded-xl">
+                <Users size={20} className="sm:w-6 sm:h-6" />
+              </div>
+              <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+                Equipe
+              </h2>
             </div>
-            <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-              Equipe
-            </h2>
+            <TeamManagement
+              user={user}
+              onRequestUpgrade={() => navigateToTab("billing")}
+              memberSessionDurations={professionalSessionDurations}
+              onUpdateMemberSessionDuration={(member, duration) =>
+                setProfessionalSessionDurations((prev) => ({
+                  ...prev,
+                  [member.id]: duration,
+                  [member.email]: duration,
+                  [member.name]: duration,
+                }))
+              }
+            />
           </div>
-          <TeamManagement
-            user={user}
-            onRequestUpgrade={() => navigateToTab("billing")}
-            memberSessionDurations={professionalSessionDurations}
-            onUpdateMemberSessionDuration={(member, duration) =>
-              setProfessionalSessionDurations((prev) => ({
-                ...prev,
-                [member.id]: duration,
-                [member.email]: duration,
-                [member.name]: duration,
-              }))
-            }
-          />
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* Removed financial and performance charts as they belong to DRE */}
     </div>
@@ -2575,12 +2684,41 @@ export function CoordinatorDashboard({
               patientTasks={(allTasks || []).filter(
                 (t) => t.patientId === selectedPatientId,
               )}
-              onAddNote={onAddNote}
+              onAddNote={(
+                pid: any,
+                txt: string,
+                visibility: string,
+                subject?: string,
+              ) => {
+                if (!ensureTherapistClinicalProfile()) return;
+                onAddNote(pid, txt, visibility, subject);
+              }}
               onAddActivityLog={onAddActivityLog}
-              onUpdatePatient={onUpdatePatient}
-              onRecordTrial={onRecordTrial}
+              onUpdatePatient={
+                onUpdatePatient
+                  ? (updates: any) => {
+                      if (!ensureTherapistClinicalProfile()) return;
+                      onUpdatePatient(updates);
+                    }
+                  : undefined
+              }
+              onRecordTrial={
+                onRecordTrial
+                  ? (pid: any, title: string, score: number, evalComment?: string) => {
+                      if (!ensureTherapistClinicalProfile()) return null;
+                      return onRecordTrial(pid, title, score, evalComment);
+                    }
+                  : undefined
+              }
               onDeleteHistoryItem={onDeleteHistoryItem}
-              onEvaluateHistoryItem={onEvaluateHistoryItem}
+              onEvaluateHistoryItem={
+                onEvaluateHistoryItem
+                  ? (id: any, score: number, note: string) => {
+                      if (!ensureTherapistClinicalProfile()) return;
+                      onEvaluateHistoryItem(id, score, note);
+                    }
+                  : undefined
+              }
               protocols={protocols}
               userRole={user.role}
               anamnesisTemplate={anamnesisTemplate}
@@ -3453,15 +3591,17 @@ export function CoordinatorDashboard({
                   <h3 className="text-lg sm:text-xl font-bold text-slate-900">
                     Gestão de Pacientes
                   </h3>
-                  <button
-                    onClick={() => {
-                      resetPatientForm();
-                      setIsPatientRegistrationModalOpen(true);
-                    }}
-                    className="px-4 sm:px-6 py-2 sm:py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-xs sm:text-sm shadow-lg shadow-purple-500/20 hover:bg-blue-700 transition-all"
-                  >
-                    Novo Paciente
-                  </button>
+                  {canCreatePatients && (
+                    <button
+                      onClick={() => {
+                        resetPatientForm();
+                        setIsPatientRegistrationModalOpen(true);
+                      }}
+                      className="px-4 sm:px-6 py-2 sm:py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-xs sm:text-sm shadow-lg shadow-purple-500/20 hover:bg-blue-700 transition-all"
+                    >
+                      Novo Paciente
+                    </button>
+                  )}
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                   {allPatients.map((patient, i) => (
@@ -3924,9 +4064,16 @@ export function CoordinatorDashboard({
             )}
             {activeTab === "protocols" && (
               <div className="animate-fade-in">
+                {!canManageProtocolLibrary && (
+                  <div className="mb-4 bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl p-4 text-xs font-semibold">
+                    Modo terapeuta: execução permitida. A gestão da biblioteca de protocolos (criar, editar e excluir) está restrita à coordenação.
+                  </div>
+                )}
                 <ProtocolManagementSystem
                   protocols={protocols}
+                  canManageLibrary={canManageProtocolLibrary}
                   onSaveProtocol={(p: any) => {
+                    if (!canManageProtocolLibrary) return;
                     const exists = protocols.find(
                       (old: any) => old.id === p.id,
                     );
@@ -3940,9 +4087,10 @@ export function CoordinatorDashboard({
                       setProtocols([...protocols, p]);
                     }
                   }}
-                  onDeleteProtocol={(id: any) =>
-                    setProtocols(protocols.filter((p: any) => p.id !== id))
-                  }
+                  onDeleteProtocol={(id: any) => {
+                    if (!canManageProtocolLibrary) return;
+                    setProtocols(protocols.filter((p: any) => p.id !== id));
+                  }}
                   onBack={goBackTab}
                 />
               </div>
@@ -4025,98 +4173,195 @@ export function CoordinatorDashboard({
               >
                 <div className="flex items-center justify-between mb-8">
                   <h3 className="text-xl font-bold text-slate-900">
-                    Configurações da Clínica
+                    {isTherapist ? "Meu Perfil Profissional" : "Configurações da Clínica"}
                   </h3>
                   <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => setIsAnamnesisTemplateModalOpen(true)}
-                      disabled={loadingAnamnesisTemplate}
-                      className="px-5 py-3 bg-white border border-[#7a32fc]/25 text-[#7a32fc] rounded-2xl font-bold text-sm hover:bg-[#f6f0ff] transition-all"
-                    >
-                      {loadingAnamnesisTemplate
-                        ? "Carregando ficha..."
-                        : "Editar Ficha Anamnese"}
-                    </button>
+                    {canEditAnamnesisTemplate && (
+                      <button
+                        onClick={() => setIsAnamnesisTemplateModalOpen(true)}
+                        disabled={loadingAnamnesisTemplate}
+                        className="px-5 py-3 bg-white border border-[#7a32fc]/25 text-[#7a32fc] rounded-2xl font-bold text-sm hover:bg-[#f6f0ff] transition-all"
+                      >
+                        {loadingAnamnesisTemplate
+                          ? "Carregando ficha..."
+                          : "Editar Ficha Anamnese"}
+                      </button>
+                    )}
                     <button
                       onClick={handleSaveClinicSettings}
                       className="px-6 py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-sm shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all"
                     >
-                      Salvar Alterações
+                      {isTherapist ? "Salvar Perfil" : "Salvar Alterações"}
                     </button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <div className="space-y-6">
-                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">
-                      Horários da Clínica
-                    </h4>
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
+                {isTherapist ? (
+                  <div className="space-y-8">
+                    <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100">
+                      <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">
+                        Dados obrigatórios para registros clínicos
+                      </h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="md:col-span-2">
                           <label className="block text-xs font-bold text-slate-700 mb-2">
-                            Início do Expediente
+                            CRP <span className="text-red-500">*</span>
                           </label>
                           <input
-                            type="time"
-                            value={workStart}
-                            onChange={(e) => setWorkStart(e.target.value)}
-                            className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                            type="text"
+                            value={therapistCrp}
+                            onChange={(e) => setTherapistCrp(e.target.value)}
+                            placeholder="Ex: 06/123456"
+                            className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
                           />
+                          {!therapistCanRegisterClinicalData && (
+                            <p className="text-xs text-amber-700 font-semibold mt-2">
+                              Complete seu perfil com o CRP para habilitar registros clínicos
+                            </p>
+                          )}
                         </div>
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-2">
-                            Fim do Expediente
-                          </label>
-                          <input
-                            type="time"
-                            value={workEnd}
-                            onChange={(e) => setWorkEnd(e.target.value)}
-                            className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-2">
-                          CNPJ da Clínica
-                        </label>
-                        <input
-                          type="text"
-                          value={clinicCnpj}
-                          onChange={(e) => setClinicCnpj(e.target.value)}
-                          placeholder="00.000.000/0000-00"
-                          className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
-                        />
-                      </div>
-                    </div>
-                  </div>
 
-                  <div className="space-y-6">
-                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">
-                      Plano e Assinatura
-                    </h4>
-                    <div className="p-6 bg-blue-50 rounded-3xl border border-blue-100">
-                      <div className="flex items-center justify-between mb-4">
-                        <p className="text-sm font-bold text-blue-900">
-                          Plano {normalizedPlanName}
-                        </p>
-                        <span className="px-3 py-1 bg-blue-100 text-[#7a32fc] rounded-lg text-[10px] font-bold uppercase">
-                          Ativo
-                        </span>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-2">
+                            Assinatura Digital
+                          </label>
+                          <label className="w-full min-h-[150px] p-4 bg-white border border-dashed border-slate-300 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#7a32fc] transition-all">
+                            {therapistSignatureDataUrl ? (
+                              <img
+                                src={therapistSignatureDataUrl}
+                                alt="Assinatura digital"
+                                className="max-h-28 object-contain"
+                              />
+                            ) : (
+                              <span className="text-xs font-semibold text-slate-500">
+                                Clique para enviar assinatura
+                              </span>
+                            )}
+                            <input
+                              type="file"
+                              className="hidden"
+                              accept="image/*"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                readImageAsDataUrl(file, setTherapistSignatureDataUrl);
+                              }}
+                            />
+                          </label>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-2">
+                            Foto de Perfil
+                          </label>
+                          <label className="w-full min-h-[150px] p-4 bg-white border border-dashed border-slate-300 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#7a32fc] transition-all">
+                            {therapistProfilePhotoUrl ? (
+                              <img
+                                src={therapistProfilePhotoUrl}
+                                alt="Foto de perfil"
+                                className="w-24 h-24 rounded-2xl object-cover"
+                              />
+                            ) : (
+                              <span className="text-xs font-semibold text-slate-500">
+                                Clique para enviar foto
+                              </span>
+                            )}
+                            <input
+                              type="file"
+                              className="hidden"
+                              accept="image/*"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                readImageAsDataUrl(file, setTherapistProfilePhotoUrl);
+                              }}
+                            />
+                          </label>
+                        </div>
                       </div>
-                      <p className="text-xs text-blue-600 mb-6">
-                        Sua clínica possui acesso a todas as ferramentas de
-                        gestão e prontuário eletrônico.
-                      </p>
-                      <button
-                        onClick={() => navigateToTab("billing")}
-                        className="w-full py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-xs shadow-sm hover:opacity-90 transition-all"
-                      >
-                        Gerenciar Assinatura
-                      </button>
                     </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {canManageClinicSettings ? (
+                      <div className="space-y-6">
+                        <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">
+                          Horários da Clínica
+                        </h4>
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-xs font-bold text-slate-700 mb-2">
+                                Início do Expediente
+                              </label>
+                              <input
+                                type="time"
+                                value={workStart}
+                                onChange={(e) => setWorkStart(e.target.value)}
+                                className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-700 mb-2">
+                                Fim do Expediente
+                              </label>
+                              <input
+                                type="time"
+                                value={workEnd}
+                                onChange={(e) => setWorkEnd(e.target.value)}
+                                className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              CNPJ da Clínica
+                            </label>
+                            <input
+                              type="text"
+                              value={clinicCnpj}
+                              onChange={(e) => setClinicCnpj(e.target.value)}
+                              placeholder="00.000.000/0000-00"
+                              className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100 text-sm font-semibold text-slate-500">
+                        Configurações iniciais da clínica disponíveis apenas para coordenação.
+                      </div>
+                    )}
+
+                    {canManageBilling && (
+                      <div className="space-y-6">
+                        <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">
+                          Plano e Assinatura
+                        </h4>
+                        <div className="p-6 bg-blue-50 rounded-3xl border border-blue-100">
+                          <div className="flex items-center justify-between mb-4">
+                            <p className="text-sm font-bold text-blue-900">
+                              Plano {normalizedPlanName}
+                            </p>
+                            <span className="px-3 py-1 bg-blue-100 text-[#7a32fc] rounded-lg text-[10px] font-bold uppercase">
+                              Ativo
+                            </span>
+                          </div>
+                          <p className="text-xs text-blue-600 mb-6">
+                            Sua clínica possui acesso a todas as ferramentas de
+                            gestão e prontuário eletrônico.
+                          </p>
+                          <button
+                            onClick={() => navigateToTab("billing")}
+                            className="w-full py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-xs shadow-sm hover:opacity-90 transition-all"
+                          >
+                            Gerenciar Assinatura
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -4137,7 +4382,7 @@ export function CoordinatorDashboard({
         mode="edit"
         onSave={() => setIsAnamnesisTemplateModalOpen(false)}
         template={anamnesisTemplate}
-        canEditTemplate={true}
+        canEditTemplate={canEditAnamnesisTemplate}
         onTemplateSave={handleSaveClinicAnamnesisTemplate}
       />
 
