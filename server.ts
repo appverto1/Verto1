@@ -175,7 +175,7 @@ function getRecoveryRedirectUrl(): string {
   return `${baseUrl.replace(/\/+$/, '')}/reset-password`;
 }
 
-type RecoveryChannel = 'email' | 'sms';
+type RecoveryChannel = 'email';
 type OtpPurpose = 'password_recovery' | 'phone_verification';
 
 type OtpChallenge = {
@@ -269,39 +269,6 @@ async function sendEmailViaResend({
   if (!response.ok) {
     const body = await response.text();
     throw new Error(`Falha no envio de e-mail via Resend: ${response.status} ${body}`);
-  }
-}
-
-async function sendSmsCode({
-  to,
-  message
-}: {
-  to: string;
-  message: string;
-}): Promise<void> {
-  const providerUrl = sanitizeString(process.env.SMS_PROVIDER_URL || '', 1000);
-  const apiKey = sanitizeString(process.env.SMS_PROVIDER_API_KEY || '', 1000);
-  const sender = sanitizeString(process.env.SMS_PROVIDER_SENDER || 'Verto', 40);
-  if (!providerUrl || !apiKey) {
-    throw new Error('SMS_PROVIDER_URL e SMS_PROVIDER_API_KEY são obrigatórios para envio de SMS.');
-  }
-
-  const response = await fetch(providerUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      to,
-      sender,
-      message
-    })
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Falha no envio de SMS: ${response.status} ${body}`);
   }
 }
 
@@ -1437,10 +1404,7 @@ async function startServer() {
     '/auth/me',
     '/auth/resend-confirmation',
     '/auth/password/recovery/email/request',
-    '/auth/password/recovery/sms/request',
     '/auth/password/recovery/verify',
-    '/auth/phone/send-code',
-    '/auth/phone/verify',
     '/auth/2fa/login',
     '/auth/config'
   ]);
@@ -1987,31 +1951,6 @@ async function startServer() {
       await ensureClinicAndMembershipForCoordinator(authUser.id, name || null);
     }
 
-    if (phone) {
-      const code = generate6DigitOtp();
-      const challengeKey = makeOtpChallengeKey('sms', 'phone_verification', safeEmail);
-      setOtpChallenge({
-        key: challengeKey,
-        channel: 'sms',
-        purpose: 'phone_verification',
-        identifier: safeEmail,
-        userId: authUser.id,
-        codeHash: hashIdentifier(code),
-        expiresAt: Date.now() + OTP_TTL_MS,
-        attempts: 0,
-        consumed: false,
-        createdAt: Date.now()
-      });
-      try {
-        await sendSmsCode({
-          to: phone,
-          message: `Verto: seu código de verificação de telefone é ${code}. Expira em 15 minutos.`
-        });
-      } catch (smsError) {
-        console.warn('[Auth] Falha ao enviar SMS de confirmação de telefone:', smsError);
-      }
-    }
-
     await persistIdentityAuditLog({
       title: 'Cadastro iniciado com confirmação de e-mail',
       content: `Cadastro de ${maskEmail(safeEmail)} iniciado. Confirmação de e-mail pendente.${phoneMasked ? ` Telefone para validação: ${phoneMasked}.` : ''}`,
@@ -2027,7 +1966,7 @@ async function startServer() {
       body: {
         success: true,
         pendingEmailVerification: true,
-        pendingPhoneVerification: Boolean(phone),
+        pendingPhoneVerification: false,
         message: 'Conta criada. Enviamos um link de confirmação para seu e-mail. Confirme antes de acessar funcionalidades sensíveis.'
       }
     };
@@ -2164,79 +2103,13 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/password/recovery/sms/request', recoveryLimiter, async (req, res) => {
-    const phone = sanitizePhoneE164(req.body?.phone);
-    const genericResponse = {
-      success: true,
-      message: 'Se este telefone estiver cadastrado, você receberá instruções.'
-    };
-
-    try {
-      if (!phone) return res.json(genericResponse);
-      const { data: profile } = await supabase
-        .from('users')
-        .select('id, phone')
-        .eq('phone', phone)
-        .maybeSingle();
-
-      if (!profile?.id) {
-        await persistIdentityAuditLog({
-          title: 'Recuperação por SMS solicitada',
-          content: `Tentativa de recuperação por SMS para identificador não encontrado (${maskPhone(phone)}).`,
-          identifier: phone,
-          channel: 'sms',
-          request: req,
-          status: 'not_found'
-        });
-        return res.json(genericResponse);
-      }
-
-      const code = generate6DigitOtp();
-      const key = makeOtpChallengeKey('sms', 'password_recovery', phone);
-      setOtpChallenge({
-        key,
-        channel: 'sms',
-        purpose: 'password_recovery',
-        identifier: phone,
-        userId: sanitizeString(profile.id, 120),
-        codeHash: hashIdentifier(code),
-        expiresAt: Date.now() + OTP_TTL_MS,
-        attempts: 0,
-        consumed: false,
-        createdAt: Date.now()
-      });
-
-      await sendSmsCode({
-        to: phone,
-        message: `Verto: seu código de recuperação é ${code}. Expira em 15 minutos.`
-      });
-
-      await persistIdentityAuditLog({
-        title: 'Recuperação por SMS solicitada',
-        content: `Código de recuperação enviado para ${maskPhone(phone)}.`,
-        identifier: phone,
-        channel: 'sms',
-        userId: sanitizeString(profile.id, 120),
-        request: req,
-        status: 'sent'
-      });
-      return res.json(genericResponse);
-    } catch (error: any) {
-      console.warn('[Auth] password recovery sms request warning:', error.message);
-      return res.json(genericResponse);
-    }
-  });
-
   app.post('/api/auth/password/recovery/verify', async (req, res) => {
-    const channel = sanitizeString(req.body?.channel, 20).toLowerCase() === 'sms' ? 'sms' : 'email';
+    const channel: RecoveryChannel = 'email';
     const code = sanitizeString(req.body?.code, 12);
     const newPassword = validateStrongPassword(req.body?.newPassword);
     const mfaToken = sanitizeString(req.body?.mfaToken, 12);
     const genericError = { error: 'Código inválido ou expirado.' };
-
-    const identifier = channel === 'sms'
-      ? sanitizePhoneE164(req.body?.phone)
-      : sanitizeEmail(req.body?.email);
+    const identifier = sanitizeEmail(req.body?.email);
 
     if (!identifier || !code || !newPassword) {
       return res.status(400).json({ error: 'Dados inválidos para recuperação.' });
@@ -2346,117 +2219,6 @@ async function startServer() {
     } catch (error: any) {
       console.error('[Auth] recovery verify error:', error.message);
       return res.status(500).json({ error: 'Falha ao concluir recuperação.' });
-    }
-  });
-
-  app.post('/api/auth/phone/send-code', recoveryLimiter, async (req, res) => {
-    const email = sanitizeEmail(req.body?.email);
-    const phone = sanitizePhoneE164(req.body?.phone);
-    const genericResponse = {
-      success: true,
-      message: 'Se os dados estiverem cadastrados, você receberá um código de verificação.'
-    };
-
-    try {
-      if (!email || !phone) return res.json(genericResponse);
-      const authUser = await findAuthUserByEmail(email);
-      if (!authUser?.id) return res.json(genericResponse);
-
-      const code = generate6DigitOtp();
-      const key = makeOtpChallengeKey('sms', 'phone_verification', email);
-      setOtpChallenge({
-        key,
-        channel: 'sms',
-        purpose: 'phone_verification',
-        identifier: email,
-        userId: authUser.id,
-        codeHash: hashIdentifier(code),
-        expiresAt: Date.now() + OTP_TTL_MS,
-        attempts: 0,
-        consumed: false,
-        createdAt: Date.now()
-      });
-
-      await sendSmsCode({
-        to: phone,
-        message: `Verto: seu código de confirmação de telefone é ${code}. Expira em 15 minutos.`
-      });
-
-      const { error: phoneUpdateError } = await supabase
-        .from('users')
-        .update({ phone })
-        .eq('id', authUser.id);
-      if (phoneUpdateError && !isMissingColumnError(phoneUpdateError, 'phone')) {
-        throw phoneUpdateError;
-      }
-
-      await persistIdentityAuditLog({
-        title: 'Envio de código de confirmação de telefone',
-        content: `Código SMS enviado para confirmação de telefone (${maskPhone(phone)}).`,
-        identifier: email,
-        channel: 'sms',
-        userId: authUser.id,
-        request: req,
-        status: 'sent'
-      });
-
-      return res.json(genericResponse);
-    } catch (error: any) {
-      console.warn('[Auth] phone send-code warning:', error.message);
-      return res.json(genericResponse);
-    }
-  });
-
-  app.post('/api/auth/phone/verify', async (req, res) => {
-    const email = sanitizeEmail(req.body?.email);
-    const code = sanitizeString(req.body?.code, 12);
-    if (!email || !code) {
-      return res.status(400).json({ error: 'E-mail e código são obrigatórios.' });
-    }
-
-    try {
-      const key = makeOtpChallengeKey('sms', 'phone_verification', email);
-      const challenge = getOtpChallenge(key);
-      if (!challenge || challenge.consumed || challenge.purpose !== 'phone_verification') {
-        return res.status(400).json({ error: 'Código inválido ou expirado.' });
-      }
-
-      challenge.attempts += 1;
-      if (challenge.attempts > 5) {
-        consumeOtpChallenge(key);
-        return res.status(429).json({ error: 'Muitas tentativas. Solicite um novo código.' });
-      }
-
-      if (hashIdentifier(code) !== challenge.codeHash) {
-        setOtpChallenge(challenge);
-        return res.status(400).json({ error: 'Código inválido ou expirado.' });
-      }
-
-      if (!challenge.userId) {
-        consumeOtpChallenge(key);
-        return res.status(400).json({ error: 'Código inválido ou expirado.' });
-      }
-
-      const { error } = await supabase
-        .from('users')
-        .update({ phone_verified_at: new Date().toISOString() })
-        .eq('id', challenge.userId);
-      if (error && !isMissingColumnError(error, 'phone_verified_at')) throw error;
-
-      consumeOtpChallenge(key);
-      await persistIdentityAuditLog({
-        title: 'Telefone confirmado com sucesso',
-        content: `Telefone confirmado via SMS para ${maskEmail(email)}.`,
-        identifier: email,
-        channel: 'sms',
-        userId: challenge.userId,
-        request: req,
-        status: 'verified'
-      });
-
-      return res.json({ success: true, message: 'Telefone confirmado com sucesso.' });
-    } catch (error: any) {
-      return res.status(500).json({ error: error.message || 'Falha ao confirmar telefone.' });
     }
   });
 

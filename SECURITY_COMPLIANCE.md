@@ -20,8 +20,6 @@
 - `VERTO_APP_BASE_URL`: URL base de produção para redirects de autenticação.
 - `RESEND_API_KEY`
 - `RESEND_FROM_EMAIL`
-- `SMS_PROVIDER_URL`
-- `SMS_PROVIDER_API_KEY`
 
 ## SQL de seguranca adicional
 - Executar: `sql/patient_security_foundation.sql`
