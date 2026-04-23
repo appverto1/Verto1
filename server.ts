@@ -569,7 +569,8 @@ function decryptJsonPayload(payload: string | null | undefined): Record<string, 
     decipher.setAuthTag(tag);
     const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
     return JSON.parse(decrypted.toString('utf8'));
-  } catch {
+  } catch (error: any) {
+    console.error('[Encryption] Falha ao descriptografar payload clínico:', error?.message || String(error));
     return null;
   }
 }
@@ -3572,7 +3573,19 @@ async function startServer() {
         existingQuery = existingQuery.eq('clinic_id', clinicId);
       }
       const { data: existingRow } = await existingQuery.maybeSingle();
-      const existingPayload = decryptJsonPayload(existingRow?.payload_encrypted) || {};
+      const existingEncryptedPayload = String(existingRow?.payload_encrypted || '').trim();
+      const existingPayload = decryptJsonPayload(existingEncryptedPayload) || {};
+      if (existingEncryptedPayload && !existingPayload) {
+        console.error('[PatientRecords] Bloqueando overwrite: payload existente não pôde ser descriptografado.', {
+          patientId,
+          clinicId,
+          actorId: sanitizeString(req.session.user?.id, 120)
+        });
+        return res.status(409).json({
+          success: false,
+          error: 'Não foi possível descriptografar o prontuário existente com a chave atual. Nenhum dado foi sobrescrito.'
+        });
+      }
       const mergedPayload = sanitizeClinicalPayload(cleanObject({
         ...existingPayload,
         ...payload
@@ -3895,7 +3908,15 @@ async function startServer() {
         throw error;
       }
 
-      const decryptedPayload = decryptJsonPayload(data?.payload_encrypted);
+      const encryptedPayload = String(data?.payload_encrypted || '').trim();
+      const decryptedPayload = decryptJsonPayload(encryptedPayload);
+      if (encryptedPayload && !decryptedPayload) {
+        console.error('[PatientRecords] Falha de descriptografia ao consultar prontuário.', {
+          patientId,
+          clinicId,
+          actorId: sanitizeString(req.session.user?.id, 120)
+        });
+      }
       res.json({
         success: true,
         data: data
@@ -3904,7 +3925,8 @@ async function startServer() {
               pseudonymId: data.pseudonym_id,
               payload: decryptedPayload,
               payloadPreview: data.payload_preview,
-              updatedAt: data.updated_at
+              updatedAt: data.updated_at,
+              decryptionError: Boolean(encryptedPayload && !decryptedPayload)
             }
           : null
       });

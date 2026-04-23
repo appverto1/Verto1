@@ -131,14 +131,6 @@ export default function App() {
     return `id:${String(patient?.id || '')}`;
   };
 
-  const getPatientAliasKey = (patient: any) => {
-    const email = String(patient?.email || '').trim().toLowerCase();
-    if (email) return `email:${email}`;
-    const normalizedName = normalizeTextKey(patient?.name);
-    if (normalizedName) return `name:${normalizedName}`;
-    return '';
-  };
-
   const mergePatients = (current: any[], incoming: any[]) => {
     const merged = new Map<string, any>();
     const all = [...(current || []), ...(incoming || [])];
@@ -168,23 +160,6 @@ export default function App() {
     }
 
     return Array.from(merged.values());
-  };
-
-  const removeMockDuplicates = (patients: any[]) => {
-    const realAliases = new Set(
-      (patients || [])
-        .filter((p: any) => isUuidLike(p?.id))
-        .map((p: any) => getPatientAliasKey(p))
-        .filter(Boolean)
-    );
-
-    return (patients || []).filter((p: any) => {
-      const isMock = typeof p?.id === 'string' && p.id.startsWith('mock-');
-      if (!isMock) return true;
-      const alias = getPatientAliasKey(p);
-      if (alias && realAliases.has(alias)) return false;
-      return true;
-    });
   };
 
   const normalizeActivityLog = (raw: any) => {
@@ -482,61 +457,17 @@ export default function App() {
     }
   };
 
-  const initialHistory = [ 
-    { id: 106, patientId: 'mock-pedro-123', type: 'task', title: "Olha por onde anda", time: "08:30", energy: 85, note: "Ótima atenção hoje.", icon: "🚶", dateGroup: "Hoje", score: 2 },
-    { id: 105, patientId: 'mock-pedro-123', type: 'task', title: "Usa os utensílios da forma apropriada", time: "12:15", energy: 70, note: "Usou garfo e faca independentemente.", icon: "🍴", dateGroup: "Hoje", score: 4 },
-    { id: 104, patientId: 'mock-pedro-123', type: 'task', title: "Responde às saudações de forma apropriada", time: "14:00", energy: 90, note: "Contato visual mantido.", icon: "👋", dateGroup: "Hoje", score: 3 },
-    { id: 103, patientId: 'mock-pedro-123', type: 'task', title: "Muda de atividade quando o alarme tocar", time: "16:00", energy: 60, note: "Trocou sem frustração.", icon: "⏰", dateGroup: "Hoje", score: 2 },
-    { id: 102, patientId: 'mock-pedro-123', type: 'task', title: "Classifica o dinheiro", time: "10:00", energy: 50, note: "Acertou moedas e notas de 10.", icon: "💵", dateGroup: "Ontem", score: 2 },
-    { id: 101, patientId: 'mock-pedro-123', type: 'task', title: "Olha por onde anda", time: "09:00", energy: 40, note: "Esbarrou em dois móveis.", icon: "🚶", dateGroup: "Ontem", score: 1 },
-    { id: 100, patientId: 'mock-pedro-123', type: 'task', title: "Responde às saudações de forma apropriada", time: "15:00", energy: 30, note: "Respondeu mas olhou para o chão.", icon: "👋", dateGroup: "Ontem", score: 1 },
-    { id: 99, patientId: 'mock-pedro-123', type: 'task', title: "Classifica o dinheiro", time: "11:00", energy: 20, note: "Confundiu moedas.", icon: "💵", dateGroup: "25/01/2026", score: 1 },
-    { id: 98, patientId: 'mock-pedro-123', type: 'task', title: "Usa os utensílios da forma apropriada", time: "12:30", energy: 45, note: "Dificuldade em segurar o garfo.", icon: "🍴", dateGroup: "25/01/2026", score: 2 },
-    // Data for Alexandre (mock-alexandre-123) - VB-MAPP
-    { id: 210, patientId: 'mock-alexandre-123', type: 'task', title: "Emite 2 mandos sem ajuda", time: "09:00", energy: 90, note: "Pediu água e bola.", icon: "🗣️", dateGroup: "Hoje", score: 1 },
-    { id: 209, patientId: 'mock-alexandre-123', type: 'task', title: "Atende ao chamado do nome", time: "09:15", energy: 85, note: "Atendeu prontamente.", icon: "👂", dateGroup: "Hoje", score: 1 },
-    { id: 208, patientId: 'mock-alexandre-123', type: 'task', title: "Encaixa 2 peças de quebra-cabeça", time: "09:30", energy: 80, note: "Encaixou círculo e quadrado.", icon: "🧩", dateGroup: "Hoje", score: 0.5 },
-    { id: 207, patientId: 'mock-alexandre-123', type: 'task', title: "Imita 2 movimentos motoros grossos", time: "09:45", energy: 75, note: "Imitou bater palmas.", icon: "🙌", dateGroup: "Hoje", score: 1 },
-    { id: 206, patientId: 'mock-alexandre-123', type: 'task', title: "Olha por onde anda", time: "08:30", energy: 95, note: "Super herói atento!", icon: "🚶", dateGroup: "Hoje", score: 1 },
-    { id: 205, patientId: 'mock-alexandre-123', type: 'task', title: "Responde às saudações de forma apropriada", time: "10:00", energy: 80, note: "Cumprimentou todo mundo!", icon: "👋", dateGroup: "Hoje", score: 0.5 },
-    { id: 204, patientId: 'mock-alexandre-123', type: 'task', title: "Olha por onde anda", time: "09:00", energy: 60, note: "Um pouco distraído.", icon: "🚶", dateGroup: "Ontem", score: 0.5 },
-    { id: 203, patientId: 'mock-alexandre-123', type: 'task', title: "Responde às saudações de forma apropriada", time: "11:00", energy: 50, note: "Precisou de ajuda.", icon: "👋", dateGroup: "Ontem", score: 0 },
-    // Mock Photos for Mural
-    { id: 301, patientId: 'mock-alexandre-123', type: 'photo', title: "Desenho do Alexandre", time: "10:00", note: "Olha o que eu fiz hoje!", image: "https://picsum.photos/seed/drawing/400/400", dateGroup: "Hoje", date: new Date().toISOString(), icon: "🖼️" },
-    { id: 302, patientId: 'mock-alexandre-123', type: 'photo', title: "Atividade de hoje", time: "11:30", note: "Brincando com blocos", image: "https://picsum.photos/seed/activity/400/400", dateGroup: "Hoje", date: new Date().toISOString(), icon: "📸" }
-  ];
-  const initialTasks = [ { id: 1, patientId: 'mock-pedro-123', title: "Tomar Medicação", icon: "💊", color: "bg-blue-100 text-blue-600", completed: false, type: 'task', description: "Lembre-se de tomar com água." } ];
   const [therapistNotes, setTherapistNotes] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
-  const [tasks, setTasks] = useState<any[]>(initialTasks);
+  const [tasks, setTasks] = useState<any[]>([]);
   const [clinicalRecords, setClinicalRecords] = useState<any[]>([]);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
   const todayStr = new Date().toISOString().split('T')[0];
-  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toISOString().split('T')[0];
-  const nextWeek = new Date(); nextWeek.setDate(nextWeek.getDate() + 7);
-  const nextWeekStr = nextWeek.toISOString().split('T')[0];
 
-  const [rooms, setRooms] = useState<any[]>([
-    { id: 'room1', name: 'Sala 01 - Criança', specialties: ['ABA', 'TCC'] },
-    { id: 'room2', name: 'Sala 02 - Terapia Ocupacional', specialties: ['Integração Sensorial', 'TO'] },
-    { id: 'room3', name: 'Sala 03 - Avaliação', specialties: ['Neuropsicologia'] },
-    { id: 'room4', name: 'Sala 04 - TO', specialties: ['Integração Sensorial', 'TO'] },
-  ]);
-  const [therapistAgenda, setTherapistAgenda] = useState<any[]>([ 
-    { id: 101, name: 'Alexandre', date: todayStr, time: '09:00', status: 'confirmed', type: 'ABA', color: 'bg-blue-100 text-blue-600', room: 'room1', professional: 'Terapeuta Teste', professionalId: 'prof1' }, 
-    { id: 102, name: 'Júlia S.', date: todayStr, time: '10:30', status: 'pending', type: 'Neuropsicologia', color: 'bg-pink-100 text-pink-600', room: 'room3', professional: 'Terapeuta Teste', professionalId: 'prof1' },
-    { id: 103, name: 'Marcos P.', date: tomorrowStr, time: '14:00', status: 'confirmed', type: 'TCC', color: 'bg-green-100 text-green-600', room: 'room1', professional: 'Terapeuta Teste', professionalId: 'prof1' },
-    { id: 104, name: 'Ana Clara', date: nextWeekStr, time: '11:00', status: 'pending', type: 'Integração Sensorial', color: 'bg-orange-100 text-orange-600', room: 'room2', professional: 'Terapeuta Teste', professionalId: 'prof1' },
-    { id: 105, name: 'Pedro H.', date: todayStr, time: '16:00', status: 'canceled', type: 'TO', color: 'bg-red-100 text-red-600', room: 'room4', professional: 'Terapeuta Teste', professionalId: 'prof1' }
-  ]);
+  const [rooms, setRooms] = useState<any[]>([]);
+  const [therapistAgenda, setTherapistAgenda] = useState<any[]>([]);
 
-  const [specialtySettings, setSpecialtySettings] = useState<any>({
-    'ABA': 60,
-    'TCC': 50,
-    'TO': 45,
-    'Neuropsicologia': 90
-  });
+  const [specialtySettings, setSpecialtySettings] = useState<any>({});
 
   const calculateEndTime = (startTime: string, approach: string) => {
     const duration = specialtySettings[approach] || 60;
@@ -591,13 +522,6 @@ export default function App() {
     await dataService.saveActivityLog(newLog);
   };
   
-  const initialAFLSProtocol = [
-    { id: 'dom-mb', name: 'Mobilidade Básica', skills: [{ id: 'mb1', name: 'Olha por onde anda', objective: 'O aprendiz observa por onde anda e evita obstáculos', criteria: '2=Independente; 1=Com ajuda; 0=Não faz', example: 'Poças, lombadas, pessoas', maxScore: 2 }] },
-    { id: 'dom-ep', name: 'Comer em Público', skills: [{ id: 'ep1', name: 'Usa os utensílios da forma apropriada', objective: 'O aprendiz irá usar os utensílios da forma apropriada', criteria: '4=Corta carne com faca; 3=Usa faca para espalhar; 2=Usa garfo/colher bem; 1=Usa com ajuda; 0=Não usa', example: 'Garfo para espetar, faca para cortar', maxScore: 4 }] },
-    { id: 'dom-mo', name: 'Dinheiro', skills: [{ id: 'mo1', name: 'Classifica o dinheiro', objective: 'O aprendiz irá classificar vários tipos de cédulas e moedas em grupos', criteria: '2=Cédulas e moedas; 1=Apenas um tipo; 0=Não faz', example: 'Grupos de moedas e cédulas', maxScore: 2 }] },
-    { id: 'dom-ts', name: 'Horário', skills: [{ id: 'ts1', name: 'Muda de atividade quando o alarme tocar', objective: 'O aprendiz irá mudar de atividade quando o alarme tocar', criteria: '2=Independente; 1=Com ajuda; 0=Não faz', example: 'Desliga computador, sai da banheira', maxScore: 2 }] },
-    { id: 'dom-sa', name: 'Consciência Social e Modos', skills: [{ id: 'sa1', name: 'Responde às saudações de forma apropriada', objective: 'O aprendiz irá responder a todas as saudações com contato visual', criteria: '3=Independente com contato visual; 2=Responde sem contato visual; 1=Com ajuda; 0=Não faz', example: "Hey, Oi, Olá", maxScore: 3 }] }
-  ];
   
   const handleCheckout = async (planName?: string) => {
     try {
@@ -691,248 +615,113 @@ export default function App() {
     </div>
   );
 
-  const initialVBMAPPProtocol = [
-    { id: 'vbm-mand', name: 'Mando (Mand)', skills: [
-      { id: 'm1', name: 'Emite 2 mandos sem ajuda', objective: 'O aprendiz pede 2 itens desejados sem ajuda física ou verbal', criteria: '1=Sem ajuda; 0.5=Com ajuda parcial; 0=Não faz', example: 'Pede água, bolacha', maxScore: 1 },
-      { id: 'm2', name: 'Emite 5 mandos com ajuda ecoica', objective: 'O aprendiz pede 5 itens diferentes com ajuda ecoica', criteria: '1=Sem ajuda; 0.5=Com ajuda parcial; 0=Não faz', example: 'Diz "bola" após o terapeuta', maxScore: 1 }
-    ]},
-    { id: 'vbm-tact', name: 'Tato (Tact)', skills: [
-      { id: 't1', name: 'Tateia 2 itens familiares', objective: 'O aprendiz nomeia 2 itens comuns quando apresentados', criteria: '1=Sem ajuda; 0.5=Com ajuda parcial; 0=Não faz', example: 'Diz "carro" ao ver um brinquedo', maxScore: 1 }
-    ]},
-    { id: 'vbm-listener', name: 'Ouvinte (Listener)', skills: [
-      { id: 'l1', name: 'Atende ao chamado do nome', objective: 'O aprendiz olha para o interlocutor quando chamado pelo nome', criteria: '1=Sem ajuda; 0.5=Com ajuda parcial; 0=Não faz', example: 'Olha ao ouvir "Alexandre"', maxScore: 1 },
-      { id: 'l2', name: 'Segue 2 instruções de um passo', objective: 'O aprendiz segue 2 instruções motoras simples', criteria: '1=Sem ajuda; 0.5=Com ajuda parcial; 0=Não faz', example: 'Bata palmas, dê tchau', maxScore: 1 }
-    ]},
-    { id: 'vbm-visual', name: 'Percepção Visual (VP-MTS)', skills: [
-      { id: 'v1', name: 'Encaixa 2 peças de quebra-cabeça', objective: 'O aprendiz encaixa 2 peças em um tabuleiro', criteria: '1=Sem ajuda; 0.5=Com ajuda parcial; 0=Não faz', example: 'Quebra-cabeça de formas', maxScore: 1 }
-    ]},
-    { id: 'vbm-play', name: 'Brincar Independente (Play)', skills: [
-      { id: 'p1', name: 'Brinca com um brinquedo por 1 min', objective: 'O aprendiz manipula um brinquedo funcionalmente por 1 min', criteria: '1=Sem ajuda; 0.5=Com ajuda parcial; 0=Não faz', example: 'Empilha blocos, empurra carro', maxScore: 1 }
-    ]},
-    { id: 'vbm-imitation', name: 'Imitação Motora (Imitation)', skills: [
-      { id: 'i1', name: 'Imita 2 movimentos motores grossos', objective: 'O aprendiz imita movimentos como bater palmas ou levantar braços', criteria: '1=Sem ajuda; 0.5=Com ajuda parcial; 0=Não faz', example: 'Bater palmas, tocar cabeça', maxScore: 1 }
-    ]},
-    { id: 'vbm-echoic', name: 'Ecooico (Echoic)', skills: [
-      { id: 'e1', name: 'Ecoa 2 sons simples', objective: 'O aprendiz repete sons vocais simples', criteria: '1=Sem ajuda; 0.5=Com ajuda parcial; 0=Não faz', example: 'Diz "ah", "ba"', maxScore: 1 }
-    ]}
-  ];
-
-  const [protocols, setProtocols] = useState<any[]>([ 
-    { id: 1, title: 'AFLS - Protocolo de Vida Diária', data: initialAFLSProtocol, ageGroup: 'all', type: 'neurodevelopment', domain: 'Autonomia, Vida Diária', category: 'evaluation' },
-    { id: 2, title: 'VB-MAPP - Nível 1', data: initialVBMAPPProtocol, ageGroup: 'kid', type: 'neurodevelopment', domain: 'Linguagem, Comportamento', category: 'evaluation' },
-    { id: 3, title: 'Treino de Habilidades Sociais', data: [
-      { id: 'soc-1', name: 'Iniciação Social', skills: [
-        { id: 's1', name: 'Inicia conversa com pares', objective: 'O aprendiz inicia uma interação verbal com um colega', criteria: 'Independente; Com ajuda; Não realiza', example: 'Diz "Oi, quer brincar?"', maxScore: 1 }
-      ]}
-    ], ageGroup: 'child', type: 'neurodevelopment', domain: 'Socialização', category: 'intervention' }
-  ]);
-  const [allPatients, setAllPatients] = useState<any[]>([ 
-    { id: 'mock-alexandre-123', name: 'Alexandre', email: 'alexandre@verto.com', phone: '11999999999', age: 8, type: 'neurodevelopment', approach: 'ABA' }, 
-    { id: 'mock-pedro-123', name: 'Pedro H.', email: 'pedro@verto.com', phone: '11988888888', age: 35, type: 'conventional', approach: 'TCC' },
-    { id: 'mock-joao-123', name: 'João', email: 'joao@verto.com', phone: '11977777777', age: 28, type: 'neurodevelopment', approach: 'ABA' }
-  ]);
-
-  useEffect(() => {
-    // Initialize clinical records for mock patients
-    setClinicalRecords([
-      { 
-        patientId: 'mock-alexandre-123', 
-        diagnosis: "TEA", 
-        anamnesisData: { formType: 'child', motivoConsulta: "Dificuldade na socialização e fala." },
-        pei: [
-          { id: 1, name: "Emite 2 mandos sem ajuda", status: 'in-progress', category: 'Linguagem' },
-          { id: 2, name: "Atende ao chamado do nome", status: 'in-progress', category: 'Social' }
-        ],
-        evaluationLinks: {},
-        interventionTaskLinks: {}
-      },
-      { 
-        patientId: 'mock-pedro-123', 
-        diagnosis: "Ansiedade", 
-        anamnesisData: { formType: 'adult', motivoConsulta: "Ansiedade e dificuldade de sono." },
-        pei: [],
-        evaluationLinks: {},
-        interventionTaskLinks: {}
-      },
-      { 
-        patientId: 'mock-joao-123', 
-        diagnosis: "TEA", 
-        anamnesisData: { formType: 'adult', motivoConsulta: "Dificuldade na interação social." },
-        pei: [],
-        evaluationLinks: {},
-        interventionTaskLinks: {}
-      }
-    ]);
-  }, []);
+  const [protocols, setProtocols] = useState<any[]>([]);
+  const [allPatients, setAllPatients] = useState<any[]>([]);
   
-  // Fetch patients, notes, and history from Backend on load
+  const resetWorkspaceScopedState = () => {
+    setTherapistNotes([]);
+    setHistory([]);
+    setTasks([]);
+    setClinicalRecords([]);
+    setRooms([]);
+    setTherapistAgenda([]);
+    setProtocols([]);
+    setAllPatients([]);
+    setSpecialtySettings({});
+  };
+
+  const hydrateState = async (nextUser: any) => {
+    if (!nextUser) return;
+
+    if (
+      nextUser.role !== 'therapist' &&
+      nextUser.role !== 'coordinator' &&
+      nextUser.role !== 'receptionist'
+    ) {
+      setClinicStateHydrated(true);
+      return;
+    }
+
+    const workspaceId = String(nextUser?.activeWorkspaceId || nextUser?.clinicId || '').trim();
+    if (!workspaceId) {
+      setClinicStateHydrated(false);
+      return;
+    }
+
+    setClinicStateHydrated(false);
+    resetWorkspaceScopedState();
+    const result = await dataService.hydrateWorkspaceState(workspaceId);
+
+    if (!result?.success || !result?.data) {
+      setClinicStateHydrated(true);
+      return;
+    }
+
+    const hydrated = result.data;
+    setRooms(Array.isArray(hydrated.clinicState?.rooms) ? hydrated.clinicState.rooms : []);
+    setTherapistAgenda(
+      Array.isArray(hydrated.clinicState?.appointments) ? hydrated.clinicState.appointments : [],
+    );
+    setProtocols(Array.isArray(hydrated.clinicState?.protocols) ? hydrated.clinicState.protocols : []);
+    setSpecialtySettings(
+      hydrated.clinicState?.specialtySettings &&
+        typeof hydrated.clinicState.specialtySettings === 'object'
+        ? hydrated.clinicState.specialtySettings
+        : {},
+    );
+    setAllPatients(Array.isArray(hydrated.patients) ? hydrated.patients : []);
+    setTherapistNotes(Array.isArray(hydrated.notes) ? hydrated.notes : []);
+    setHistory(Array.isArray(hydrated.history) ? hydrated.history : []);
+    setTasks(Array.isArray(hydrated.tasks) ? hydrated.tasks : []);
+    setClinicalRecords(Array.isArray(hydrated.clinicalRecords) ? hydrated.clinicalRecords : []);
+    setClinicStateHydrated(true);
+  };
+
   useEffect(() => {
-    const fetchData = async () => {
-      if (user) {
-        const { dataService } = await import('./services/dataService');
-        
-        if (user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') {
-          const clinicStateRes = await dataService.getClinicState();
-          if (clinicStateRes?.success && clinicStateRes?.data) {
-            if (Array.isArray(clinicStateRes.data.rooms)) setRooms(clinicStateRes.data.rooms);
-            if (Array.isArray(clinicStateRes.data.appointments)) setTherapistAgenda(clinicStateRes.data.appointments);
-            if (Array.isArray(clinicStateRes.data.protocols) && clinicStateRes.data.protocols.length > 0) {
-              setProtocols(clinicStateRes.data.protocols);
-            }
-            if (clinicStateRes.data.specialtySettings && typeof clinicStateRes.data.specialtySettings === 'object') {
-              setSpecialtySettings(clinicStateRes.data.specialtySettings);
-            }
-          }
-          setClinicStateHydrated(true);
+    if (!user) {
+      setClinicStateHydrated(false);
+      return;
+    }
+    void hydrateState(user);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, user?.role, user?.activeWorkspaceId, user?.clinicId]);
 
-          // Load Patients
-          const patientsRes = await dataService.getPatients();
-          if (patientsRes.success && patientsRes.data) {
-            const mergedPatients = removeMockDuplicates(mergePatients(allPatients, patientsRes.data));
-            setAllPatients(mergedPatients);
+  useEffect(() => {
+    const fetchPatientScopedData = async () => {
+      if (!user || user.role !== 'patient' || !user.email) return;
+      const [historyRes, tasksRes] = await Promise.all([
+        dataService.getHistoryByEmail(user.email),
+        dataService.getTasksByEmail(user.email)
+      ]);
 
-            // Load Notes, History and Tasks for each patient
-            const allNotes: any[] = [];
-            const allHistory: any[] = [];
-            const allTasks: any[] = [];
-            const hydratedPatients: any[] = [];
-            const hydratedClinical: any[] = [];
-
-            // Only fetch for real patients (UUIDs from DB)
-            const realPatients = mergedPatients.filter((p: any) => isUuidLike(p?.id));
-
-            if (realPatients.length > 0) {
-              for (const patient of realPatients) {
-                const notesRes = await dataService.getNotes(String(patient.id));
-                if (notesRes.success && notesRes.data) {
-                  allNotes.push(...notesRes.data.map((n: any) => ({
-                    ...n,
-                    patientId: n.patient_id,
-                    date: new Date(n.created_at).toLocaleString()
-                  })));
-                }
-
-                const historyRes = await dataService.getHistory(String(patient.id));
-                if (historyRes.success && historyRes.data) {
-                  allHistory.push(...historyRes.data.map((h: any) => ({
-                    ...h,
-                    patientId: h.patient_id,
-                    time: new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    dateGroup: new Date(h.created_at).toDateString() === new Date().toDateString() ? "Hoje" : new Date(h.created_at).toLocaleDateString()
-                  })));
-                }
-
-                const tasksRes = await dataService.getTasks(String(patient.id));
-                if (tasksRes.success && tasksRes.data) {
-                  allTasks.push(...tasksRes.data.map((t: any) => ({
-                    ...t,
-                    patientId: t.patient_id
-                  })));
-                }
-
-                const patientRecordRes = await dataService.getPatientRecord(String(patient.id));
-                const payload = patientRecordRes?.success ? patientRecordRes?.data?.payload : null;
-                if (payload && typeof payload === 'object') {
-                  const renewalRaw = Number(payload.anamnesisRenewalMonths ?? patient.anamnesisRenewalMonths ?? 6);
-                  const renewalMonths = [2, 3, 6, 12].includes(renewalRaw) ? renewalRaw : 6;
-                  const anamnesisData =
-                    payload.anamnese && typeof payload.anamnese === 'object'
-                      ? payload.anamnese
-                      : patient.anamnesisData;
-
-                  hydratedPatients.push({
-                    id: patient.id,
-                    type: payload.patientProfileType ?? payload.type ?? patient.type ?? null,
-                    socialName: payload.nomeSocial ?? patient.socialName ?? null,
-                    gender: payload.genero ?? patient.gender ?? null,
-                    insuranceType: payload.convenioTipo ?? patient.insuranceType ?? null,
-                    insuranceName: payload.convenioNome ?? patient.insuranceName ?? null,
-                    cardNumber: payload.convenioCarteirinha ?? patient.cardNumber ?? null,
-                    group: payload.grupo ?? patient.group ?? null,
-                    source: payload.comoConheceu ?? patient.source ?? null,
-                    rg: payload.rg ?? patient.rg ?? null,
-                    cpf: payload.cpf ?? patient.cpf ?? null,
-                    cep: payload.cep ?? patient.cep ?? null,
-                    notes: payload.outrasInformacoes ?? patient.notes ?? null,
-                    isMinor:
-                      typeof payload.menorDeIdade === 'boolean'
-                        ? payload.menorDeIdade
-                        : Boolean(patient.isMinor),
-                    guardian: {
-                      nome: payload.responsavelNome ?? patient.guardian?.nome ?? null,
-                      dataNascimento:
-                        payload.responsavelDataNascimento ??
-                        patient.guardian?.dataNascimento ??
-                        null,
-                      cpf: payload.responsavelCpf ?? patient.guardian?.cpf ?? null,
-                      telefone:
-                        payload.responsavelTelefone ?? patient.guardian?.telefone ?? null,
-                    },
-                    address: {
-                      logradouro: payload.logradouro ?? patient.address?.logradouro ?? null,
-                      numero: payload.numero ?? patient.address?.numero ?? null,
-                      complemento: payload.complemento ?? patient.address?.complemento ?? null,
-                      bairro: payload.bairro ?? patient.address?.bairro ?? null,
-                      cidade: payload.cidade ?? patient.address?.cidade ?? null,
-                    },
-                    anamnesisData: anamnesisData || null,
-                    anamnesisRenewalMonths: renewalMonths,
-                    lastAnamnesisAt:
-                      payload.lastAnamnesisAt ?? patient.lastAnamnesisAt ?? null,
-                  });
-
-                  hydratedClinical.push({
-                    patientId: patient.id,
-                    diagnosis: payload.diagnosis ?? patient.diagnosis ?? null,
-                    anamnesisData: anamnesisData || null,
-                  });
-                }
-              }
-
-              if (allNotes.length > 0) setTherapistNotes(allNotes);
-              if (allHistory.length > 0) setHistory(allHistory);
-              if (allTasks.length > 0) setTasks(allTasks);
-              if (hydratedPatients.length > 0) {
-                setAllPatients((prev) => mergePatients(prev, hydratedPatients));
-              }
-              if (hydratedClinical.length > 0) {
-                setClinicalRecords((prev) => {
-                  const map = new Map<string, any>(
-                    prev.map((row: any) => [String(row.patientId), row]),
-                  );
-                  hydratedClinical.forEach((row: any) => {
-                    const key = String(row.patientId);
-                    const current = map.get(key) || { patientId: row.patientId };
-                    map.set(key, { ...current, ...row });
-                  });
-                  return Array.from(map.values());
-                });
-              }
-            }
-          }
-        } else if (user.role === 'patient') {
-          // Load Patient's own history and tasks by email
-          const historyRes = await dataService.getHistoryByEmail(user.email);
-          if (historyRes.success && historyRes.data) {
-            setHistory(historyRes.data.map((h: any) => ({
+      setHistory(
+        Array.isArray(historyRes?.data)
+          ? historyRes.data.map((h: any) => ({
               ...h,
               patientId: user.id,
-              time: new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              dateGroup: new Date(h.created_at).toDateString() === new Date().toDateString() ? "Hoje" : new Date(h.created_at).toLocaleDateString()
-            })));
-          }
-
-          const tasksRes = await dataService.getTasksByEmail(user.email);
-          if (tasksRes.success && tasksRes.data) {
-            setTasks(tasksRes.data.map((t: any) => ({
+              time: h?.created_at
+                ? new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : '',
+              dateGroup:
+                h?.created_at && new Date(h.created_at).toDateString() === new Date().toDateString()
+                  ? 'Hoje'
+                  : h?.created_at
+                    ? new Date(h.created_at).toLocaleDateString()
+                    : ''
+            }))
+          : []
+      );
+      setTasks(
+        Array.isArray(tasksRes?.data)
+          ? tasksRes.data.map((t: any) => ({
               ...t,
               patientId: user.id
-            })));
-          }
-        }
-      }
+            }))
+          : []
+      );
     };
-    fetchData();
+
+    void fetchPatientScopedData();
   }, [user]);
 
   useEffect(() => {
@@ -946,7 +735,9 @@ export default function App() {
 
     clinicStateSyncTimerRef.current = setTimeout(async () => {
       try {
+        const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || '').trim();
         await dataService.saveClinicState({
+          workspace_id: workspaceId || undefined,
           rooms,
           appointments: therapistAgenda,
           protocols,
@@ -1168,6 +959,7 @@ export default function App() {
     }
 
     await dataService.savePatientRecord(String(persistedPatientId), {
+      workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
       nome: data.name || data.anamnesisData?.nome || "",
       nomeSocial: data.anamnesisData?.nomeSocial || "",
       telefone: data.phone || data.anamnesisData?.telefone || "",
@@ -1266,6 +1058,7 @@ export default function App() {
         updatedData?.lastAnamnesisAt !== undefined
       ) {
         const recordPayload: any = {
+          workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
           anamnesisRenewalMonths: [2, 3, 6, 12].includes(
             Number(updatedData?.anamnesisRenewalMonths),
           )
@@ -1704,6 +1497,8 @@ export default function App() {
       console.error('Logout error:', error);
     }
     setLastActiveWorkspaceId(null);
+    resetWorkspaceScopedState();
+    setClinicStateHydrated(false);
     setUser(null);
     setShowWorkspacePicker(false);
   };
@@ -1754,6 +1549,8 @@ export default function App() {
     const result = await dataService.selectWorkspace(clinicId);
     if (result.success && result.user) {
       const alignedUser = alignWorkspaceFromStorage(result.user);
+      setClinicStateHydrated(false);
+      resetWorkspaceScopedState();
       setUser(alignedUser);
       setLastActiveWorkspaceId(alignedUser?.activeWorkspaceId || alignedUser?.clinicId || clinicId);
       setShowWorkspacePicker(computeWorkspacePickerVisibility(alignedUser));
@@ -1769,8 +1566,6 @@ export default function App() {
       </div>
     );
   }
-
-  const patientsForRender = removeMockDuplicates(allPatients);
 
   return (
     <React.Fragment>
@@ -1801,6 +1596,13 @@ export default function App() {
             </div>
           </div>
         </div>
+      ) : (user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && !clinicStateHydrated ? (
+        <div className="min-h-screen flex items-center justify-center bg-white">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#7a32fc] mx-auto"></div>
+            <p className="mt-4 text-sm text-slate-500">Carregando dados da clínica...</p>
+          </div>
+        </div>
       ) : ((user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && !user.firstLoginCompleted) || showOnboarding ? (
         <ProfessionalOnboarding 
           user={user} 
@@ -1829,7 +1631,7 @@ export default function App() {
         <CoordinatorDashboard 
           user={{ ...user, profilePicture, crp }}
           onLogout={handleLogout}
-          allPatients={patientsForRender} 
+          allPatients={allPatients} 
           therapistAgenda={therapistAgenda} 
           onOpenOnboarding={() => setShowOnboarding(true)}
           rooms={rooms}
@@ -1855,7 +1657,10 @@ export default function App() {
             if (data.crp !== undefined) setCrp(data.crp);
             const nextUser = { ...user, ...data };
             setUser(nextUser);
-            dataService.saveUserProfile(user.id, nextUser);
+            dataService.saveUserProfile(user.id, {
+              ...nextUser,
+              workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+            });
           }}
           onUpdatePatient={handleUpdatePatient}
           onRecordTrial={handleRecordTrial}

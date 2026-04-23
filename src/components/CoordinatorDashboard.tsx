@@ -295,19 +295,6 @@ export function CoordinatorDashboard({
     billing: "Assinatura e Cobrança",
   };
 
-  const mockMedicalRecord = {
-    firstInterview: {
-      date: "10/01/2024",
-      therapist: "Dra. Ana Silva",
-      mainComplaint: "Dificuldades na interação social e atraso na fala.",
-      history:
-        "Gestação sem intercorrências. Marcos do desenvolvimento motores dentro do esperado, porém sem balbucio aos 12 meses.",
-      observations:
-        "Paciente evita contato visual, apresenta estereotipias motoras (flapping).",
-      diagnosis: "TEA (Transtorno do Espectro Autista) - Nível 1 de suporte.",
-      recommendations: "Terapia ABA 20h semanais, Fonoaudiologia 2h semanais.",
-    },
-  };
   const [loading, setLoading] = useState(false);
   const [isEditingRooms, setIsEditingRooms] = useState(false);
   const [newRoom, setNewRoom] = useState({ name: "", specialties: "" });
@@ -1627,7 +1614,8 @@ export function CoordinatorDashboard({
       throw new Error("Permissão insuficiente para editar template.");
     }
     showProcessing("Salvando personalização da ficha...");
-    const result = await dataService.saveClinicAnamnesisTemplate(template);
+    const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || '').trim();
+    const result = await dataService.saveClinicAnamnesisTemplate(template, workspaceId || undefined);
     if (!result?.success) {
       hideProcessing();
       throw new Error(

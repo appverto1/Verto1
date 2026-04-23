@@ -394,7 +394,8 @@ export const ReceptionistDashboard = ({
   }, []);
 
   const handleTemplateSave = async (nextTemplate: any) => {
-    const result = await dataService.saveClinicAnamnesisTemplate(nextTemplate);
+    const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || '').trim();
+    const result = await dataService.saveClinicAnamnesisTemplate(nextTemplate, workspaceId || undefined);
     if (result?.success) {
       setAnamnesisTemplate(normalizeAnamnesisTemplate(result?.data || nextTemplate));
       return;

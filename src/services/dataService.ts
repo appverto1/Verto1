@@ -68,6 +68,22 @@ async function safeJson(response: Response) {
   }
 }
 
+function parseJsonObject(value: any) {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function ensureArray(value: any) {
+  return Array.isArray(value) ? value : [];
+}
+
 type OfflineType = 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment';
 
 async function buildConditionalHeaders(endpoint: string, type: OfflineType, includeBearer = false) {
@@ -193,11 +209,15 @@ export const dataService = {
 
   async savePatientRecord(patientId: string, payload: any) {
     try {
+      const workspaceId = String(payload?.workspace_id || '').trim();
       const response = await fetch(`/api/patient-records/${patientId}`, {
         method: 'POST',
         headers: await getAuthHeaders(),
         credentials: 'include',
-        body: JSON.stringify({ payload })
+        body: JSON.stringify({
+          workspace_id: workspaceId || undefined,
+          payload
+        })
       });
       return await response.json();
     } catch (error) {
@@ -212,7 +232,17 @@ export const dataService = {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
-      return await response.json();
+      const result = await response.json();
+      const parsedPayload = parseJsonObject(result?.data?.payload);
+      return {
+        ...result,
+        data: result?.data
+          ? {
+              ...result.data,
+              payload: parsedPayload || result.data.payload || null
+            }
+          : result?.data
+      };
     } catch (error) {
       console.error('Error fetching patient record:', error);
       return { success: false, error: String(error) };
@@ -503,7 +533,18 @@ export const dataService = {
 
   async saveUserProfile(userId: string, profile: any) {
     const data = { ...profile, updated_at: profile.updated_at || new Date().toISOString() };
-    return await saveOfflineFirst(userId, data, 'profile', `/api/profile/${userId}`);
+    try {
+      const response = await fetch(`/api/profile/${userId}`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(data)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error saving user profile:', error);
+      return { success: false, error: String(error) };
+    }
   },
 
   async getUserProfile(userId: string) {
@@ -596,13 +637,21 @@ export const dataService = {
     }
   },
 
-  async getClinicAnamnesisTemplate() {
+  async getClinicAnamnesisTemplate(workspaceId?: string) {
     try {
       const response = await fetch('/api/clinic/anamnesis-template', {
-        headers: await getAuthHeaders(),
+        headers: {
+          ...(await getAuthHeaders()),
+          ...(workspaceId ? { 'X-Workspace-Id': workspaceId } : {})
+        },
         credentials: 'include'
       });
-      return await safeJson(response);
+      const result = await safeJson(response);
+      const parsed = parseJsonObject(result?.data);
+      return {
+        ...result,
+        data: parsed || result?.data || {}
+      };
     } catch (error) {
       console.error('Error fetching anamnesis template:', error);
       return { success: false, error: String(error) };
@@ -622,13 +671,17 @@ export const dataService = {
     }
   },
 
-  async saveClinicAnamnesisTemplate(template: any) {
+  async saveClinicAnamnesisTemplate(template: any, workspaceId?: string) {
     try {
+      const safeTemplate = parseJsonObject(template) || {};
       const response = await fetch('/api/clinic/anamnesis-template', {
         method: 'POST',
-        headers: await getAuthHeaders(),
+        headers: {
+          ...(await getAuthHeaders()),
+          ...(workspaceId ? { 'X-Workspace-Id': workspaceId } : {})
+        },
         credentials: 'include',
-        body: JSON.stringify({ template })
+        body: JSON.stringify({ template: safeTemplate, workspace_id: workspaceId || undefined })
       });
       return await safeJson(response);
     } catch (error) {
@@ -757,13 +810,31 @@ export const dataService = {
     }
   },
 
-  async getClinicState() {
+  async getClinicState(workspaceId?: string) {
     try {
       const response = await fetch('/api/clinic/state', {
-        headers: await getAuthHeaders(),
+        headers: {
+          ...(await getAuthHeaders()),
+          ...(workspaceId ? { 'X-Workspace-Id': workspaceId } : {})
+        },
         credentials: 'include'
       });
-      return await safeJson(response);
+      const result = await safeJson(response);
+      const clinicData = result?.data || {};
+      return {
+        ...result,
+        data: {
+          clinicId: clinicData?.clinicId || workspaceId || null,
+          rooms: ensureArray(clinicData?.rooms),
+          appointments: ensureArray(clinicData?.appointments),
+          protocols: ensureArray(clinicData?.protocols),
+          specialtySettings:
+            clinicData?.specialtySettings && typeof clinicData.specialtySettings === 'object'
+              ? clinicData.specialtySettings
+              : {},
+          updatedAt: clinicData?.updatedAt || null
+        }
+      };
     } catch (error) {
       console.error('Error fetching clinic state:', error);
       return { success: false, error: String(error) };
@@ -771,6 +842,7 @@ export const dataService = {
   },
 
   async saveClinicState(payload: {
+    workspace_id?: string;
     rooms?: any[];
     appointments?: any[];
     protocols?: any[];
@@ -787,6 +859,7 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify({
           ...(payload || {}),
+          workspace_id: payload?.workspace_id || undefined,
           idempotencyKey
         })
       });
@@ -804,13 +877,18 @@ export const dataService = {
     templateVersion?: number | null;
     profileType?: 'adult' | 'child';
     patientFileId?: string | null;
+    workspace_id?: string | null;
   }) {
     try {
+      const safePayload = {
+        ...payload,
+        anamnesisData: parseJsonObject(payload?.anamnesisData) || payload?.anamnesisData || {},
+      };
       const response = await fetch(`/api/patient-anamnesis/${patientId}`, {
         method: 'POST',
         headers: await getAuthHeaders(),
         credentials: 'include',
-        body: JSON.stringify(payload)
+        body: JSON.stringify(safePayload)
       });
       return await safeJson(response);
     } catch (error) {
@@ -825,10 +903,139 @@ export const dataService = {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
-      return await safeJson(response);
+      const result = await safeJson(response);
+      return {
+        ...result,
+        data: ensureArray(result?.data).map((entry: any) => ({
+          ...entry,
+          anamnesis_data: parseJsonObject(entry?.anamnesis_data) || entry?.anamnesis_data || {}
+        }))
+      };
     } catch (error) {
       console.error('Error fetching patient anamnesis submissions:', error);
       return { success: false, error: String(error) };
     }
+  },
+
+  async hydrateWorkspaceState(workspaceId?: string) {
+    const baseHeaders = await getAuthHeaders();
+    const headersWithWorkspace = {
+      ...baseHeaders,
+      ...(workspaceId ? { 'X-Workspace-Id': workspaceId } : {})
+    };
+
+    const [clinicStateResponse, clinicTemplateResponse, patientsResponse] = await Promise.all([
+      fetch('/api/clinic/state', { headers: headersWithWorkspace, credentials: 'include' }),
+      fetch('/api/clinic/anamnesis-template', { headers: headersWithWorkspace, credentials: 'include' }),
+      fetch('/api/patients', { headers: headersWithWorkspace, credentials: 'include' })
+    ]);
+
+    const clinicStateRes = await safeJson(clinicStateResponse);
+    const clinicTemplateRes = await safeJson(clinicTemplateResponse);
+    const patientsRes = await safeJson(patientsResponse);
+
+    if (!patientsResponse.ok || !patientsRes?.success) {
+      return {
+        success: false,
+        error: patientsRes?.error || `Falha ao carregar pacientes do workspace (HTTP ${patientsResponse.status}).`
+      };
+    }
+
+    const patients = ensureArray(patientsRes?.data);
+    const notes: any[] = [];
+    const history: any[] = [];
+    const tasks: any[] = [];
+    const clinicalRecords: any[] = [];
+    const hydratedPatients: any[] = [];
+
+    for (const patient of patients) {
+      const patientId = String(patient?.id || '').trim();
+      if (!patientId) continue;
+
+      const [notesResponse, historyResponse, tasksResponse, recordResponse, submissionsResponse] = await Promise.all([
+        fetch(`/api/notes/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' }),
+        fetch(`/api/history/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' }),
+        fetch(`/api/tasks/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' }),
+        fetch(`/api/patient-records/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' }),
+        fetch(`/api/patient-anamnesis/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' })
+      ]);
+      const [notesRes, historyRes, tasksRes, patientRecordRes, submissionsRes] = await Promise.all([
+        safeJson(notesResponse),
+        safeJson(historyResponse),
+        safeJson(tasksResponse),
+        safeJson(recordResponse),
+        safeJson(submissionsResponse)
+      ]);
+
+      const patientNotes = ensureArray(notesRes?.data).map((n: any) => ({
+        ...n,
+        patientId: n?.patient_id || patientId,
+        date: n?.created_at ? new Date(n.created_at).toLocaleString() : new Date().toLocaleString()
+      }));
+      const patientHistory = ensureArray(historyRes?.data).map((h: any) => ({
+        ...h,
+        patientId: h?.patient_id || patientId,
+        time: h?.created_at
+          ? new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : '',
+        dateGroup:
+          h?.created_at && new Date(h.created_at).toDateString() === new Date().toDateString()
+            ? 'Hoje'
+            : h?.created_at
+              ? new Date(h.created_at).toLocaleDateString()
+              : ''
+      }));
+      const patientTasks = ensureArray(tasksRes?.data).map((t: any) => ({
+        ...t,
+        patientId: t?.patient_id || patientId
+      }));
+
+      notes.push(...patientNotes);
+      history.push(...patientHistory);
+      tasks.push(...patientTasks);
+
+      const recordPayload = parseJsonObject(patientRecordRes?.data?.payload) || {};
+      const anamnesisData = parseJsonObject(recordPayload?.anamnese) || null;
+      const submissions = ensureArray(submissionsRes?.data);
+
+      hydratedPatients.push({
+        ...patient,
+        anamnesisData,
+        anamnesisSubmissions: submissions,
+        anamnesisTemplate: clinicTemplateRes?.data || {},
+        anamnesisRenewalMonths: [2, 3, 6, 12].includes(Number(recordPayload?.anamnesisRenewalMonths))
+          ? Number(recordPayload.anamnesisRenewalMonths)
+          : Number(patient?.anamnesisRenewalMonths || 6),
+        lastAnamnesisAt: recordPayload?.lastAnamnesisAt || patient?.lastAnamnesisAt || null,
+      });
+
+      clinicalRecords.push({
+        patientId,
+        diagnosis: recordPayload?.diagnosis || patient?.diagnosis || null,
+        anamnesisData,
+        anamneseJsonb: anamnesisData,
+        anamnesisSubmissions: submissions
+      });
+    }
+
+    return {
+      success: true,
+      data: {
+        clinicState: clinicStateRes?.data || {
+          clinicId: workspaceId || null,
+          rooms: [],
+          appointments: [],
+          protocols: [],
+          specialtySettings: {},
+          updatedAt: null
+        },
+        clinicAnamnesisTemplate: clinicTemplateRes?.data || {},
+        patients: hydratedPatients,
+        notes,
+        history,
+        tasks,
+        clinicalRecords
+      }
+    };
   }
 };
