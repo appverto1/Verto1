@@ -2,12 +2,10 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS } from './components/Common';
 import { LandingPage } from './components/LandingPage';
 import { PatientDashboard } from './components/PatientDashboard';
-import { TherapistDashboard } from './components/TherapistDashboard';
-import { CoordinatorDashboard } from './components/CoordinatorDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
 import { SuperAdminDashboard } from './components/SuperAdminDashboard';
-import { ReceptionistDashboard } from './components/ReceptionistDashboard';
 import { ProfessionalOnboarding } from './components/ProfessionalOnboarding';
+import { MainAppLayout } from './components/MainAppLayout';
 import { testSupabaseConnection, getSupabase } from './lib/supabase';
 import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard, Users } from 'lucide-react';
 import { syncOfflineData } from './services/localDb';
@@ -399,7 +397,6 @@ export default function App() {
   const [tasks, setTasks] = useState<any[]>(initialTasks);
   const [clinicalRecords, setClinicalRecords] = useState<any[]>([]);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
-  const [view, setView] = useState<'dashboard' | 'team'>('dashboard');
   const todayStr = new Date().toISOString().split('T')[0];
   const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowStr = tomorrow.toISOString().split('T')[0];
@@ -1666,31 +1663,33 @@ export default function App() {
           protocols={protocols} 
           onAddFamilyNote={handleAddFamilyNote} 
         />
-      ) : user.role === 'coordinator' ? (
-        <CoordinatorDashboard 
-          user={user} 
-          onLogout={handleLogout} 
-          allPatients={patientsForRender} 
-          therapistAgenda={therapistAgenda} 
-          onOpenOnboarding={() => setShowOnboarding(true)}
-          rooms={rooms}
-          setRooms={setRooms}
-          roomReservations={roomReservations}
-          onDeleteRoomReservation={(id) => {
-            const agendaId = id.replace('res-', '');
-            handleUpdateAgendaStatus(Number(agendaId), 'canceled');
-          }}
-          protocols={protocols}
-          setProtocols={setProtocols}
-          activityLogs={activityLogs}
-          onAddActivityLog={onAddActivityLog}
-          onScheduleSession={handleScheduleSession}
-          onUpdateAppointment={handleUpdateAppointment}
-          onUpdateAgendaStatus={handleUpdateAgendaStatus}
-          onAddPatient={handleAddPatient}
+      ) : user.role === 'coordinator' || user.role === 'receptionist' || user.role === 'therapist' ? (
+        <MainAppLayout
+          user={{ ...user, profilePicture, crp }}
+          onLogout={handleLogout}
+          allPatients={patientsForRender}
+          therapistAgenda={therapistAgenda}
           patientsHistory={history}
           therapistNotes={therapistNotes}
+          protocols={protocols}
+          setProtocols={setProtocols}
+          allTasks={tasks}
+          clinicalRecords={clinicalRecords}
+          rooms={rooms}
+          roomReservations={roomReservations}
+          onDeleteRoomReservation={(id) => {
+            const agendaId = String(id).replace('res-', '');
+            handleUpdateAgendaStatus(Number(agendaId), 'canceled');
+          }}
           onAddNote={handleAddNote}
+          onAddActivityLog={onAddActivityLog}
+          onAddTask={handleAddTask}
+          onUpdateTask={handleUpdateTask}
+          onUpdateHistoryItem={handleUpdateHistoryItem}
+          onUpdatePatient={handleUpdatePatient}
+          onRecordTrial={handleRecordTrial}
+          onDeleteHistoryItem={handleDeleteHistoryItem}
+          onEvaluateHistoryItem={handleUpdateHistoryItem}
           onUpdateProfile={(data: any) => {
             if (data.profilePicture !== undefined) setProfilePicture(data.profilePicture);
             if (data.crp !== undefined) setCrp(data.crp);
@@ -1698,92 +1697,13 @@ export default function App() {
             setUser(nextUser);
             dataService.saveUserProfile(user.id, nextUser);
           }}
-          onUpdatePatient={handleUpdatePatient}
-          onRecordTrial={handleRecordTrial}
-          onDeleteHistoryItem={handleDeleteHistoryItem}
-          onEvaluateHistoryItem={handleUpdateHistoryItem}
-          allTasks={tasks}
-        />
-      ) : user.role === 'receptionist' ? (
-        <ReceptionistDashboard 
-          user={{...user, profilePicture, crp}} 
-          onLogout={handleLogout} 
-          onViewTeam={() => setView('team')}
-          therapistAgenda={therapistAgenda} 
-          patientsHistory={history} 
-          therapistNotes={therapistNotes} 
-          onAddNote={handleAddNote} 
-          protocols={protocols} 
-          setProtocols={setProtocols} 
-          allTasks={tasks} 
-          onAddTask={handleAddTask} 
-          onUpdateHistoryItem={handleUpdateHistoryItem}
-          onAddPatient={handleAddPatient}
-          onUpdateTask={handleUpdateTask}
-          allPatients={patientsForRender}
-          clinicalRecords={clinicalRecords}
-          onScheduleSession={handleScheduleSession}
-          onUpdatePatient={handleUpdatePatient}
-          onRecordTrial={handleRecordTrial}
-          onDeleteHistoryItem={handleDeleteHistoryItem}
-          activityLogs={activityLogs}
-          onAddActivityLog={onAddActivityLog}
-          onUpdateAgendaStatus={handleUpdateAgendaStatus}
-          onUpdateAppointment={handleUpdateAppointment}
-          rooms={rooms}
-          setRooms={setRooms}
-          roomReservations={roomReservations}
-          specialtySettings={specialtySettings}
-          setSpecialtySettings={setSpecialtySettings}
-          onUpdateProfile={(data: any) => {
-            if (data.profilePicture !== undefined) setProfilePicture(data.profilePicture);
-            if (data.crp !== undefined) setCrp(data.crp);
-            setUser({ ...user, ...data });
-          }}
-          onOpenOnboarding={() => setShowOnboarding(true)}
         />
       ) : user.role === 'owner' ? (
         <SuperAdminDashboard onLogout={handleLogout} />
       ) : user.role === 'admin' ? (
         <AdminDashboard onLogout={handleLogout} />
       ) : (
-        <TherapistDashboard 
-          user={{...user, profilePicture, crp}} 
-          onLogout={handleLogout} 
-          onViewTeam={() => setView('team')}
-          therapistAgenda={therapistAgenda} 
-          patientsHistory={history} 
-          therapistNotes={therapistNotes} 
-          onAddNote={handleAddNote} 
-          protocols={protocols} 
-          setProtocols={setProtocols} 
-          allTasks={tasks} 
-          onAddTask={handleAddTask} 
-          onUpdateHistoryItem={handleUpdateHistoryItem} 
-          onAddPatient={handleAddPatient} 
-          onUpdateTask={handleUpdateTask} 
-          allPatients={patientsForRender} 
-          clinicalRecords={clinicalRecords}
-          onScheduleSession={handleScheduleSession} 
-          onOpenOnboarding={() => setShowOnboarding(true)}
-          onUpdatePatient={handleUpdatePatient} 
-          onRecordTrial={handleRecordTrial} 
-          onDeleteHistoryItem={handleDeleteHistoryItem} 
-          onUpdateAgendaStatus={handleUpdateAgendaStatus}
-          onUpdateAppointment={handleUpdateAppointment}
-          activityLogs={activityLogs} 
-          onAddActivityLog={onAddActivityLog} 
-          rooms={rooms}
-          setRooms={setRooms}
-          roomReservations={roomReservations}
-          specialtySettings={specialtySettings}
-          setSpecialtySettings={setSpecialtySettings}
-          onUpdateProfile={(data: any) => {
-            if (data.profilePicture !== undefined) setProfilePicture(data.profilePicture);
-            if (data.crp !== undefined) setCrp(data.crp);
-            setUser({ ...user, ...data });
-          }}
-        />
+        <AdminDashboard onLogout={handleLogout} />
       )}
 
     </React.Fragment>
