@@ -50,16 +50,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const readOnlyNotice = "Você não possui um tratamento ativo no momento. Entre em contato com sua clínica para retomar o acompanhamento.";
 
   const conventionalMoodTags = [
-    { id: 'family', label: 'FamÃ­lia', icon: 'ðŸ‘¨â€ðŸ‘©â€ðŸ‘§â€ðŸ‘¦', color: 'bg-blue-100 text-blue-600' },
-    { id: 'work', label: 'Trabalho', icon: 'ðŸ’¼', color: 'bg-orange-100 text-orange-600' },
-    { id: 'relationships', label: 'Relacionamentos', icon: 'â¤ï¸', color: 'bg-pink-100 text-pink-600' },
-    { id: 'money', label: 'Dinheiro', icon: 'ðŸ’°', color: 'bg-green-100 text-green-600' },
-    { id: 'thoughts', label: 'Pensamentos', icon: 'ðŸ§ ', color: 'bg-purple-100 text-purple-600' },
-    { id: 'others', label: 'Outros', icon: 'ðŸ§©', color: 'bg-gray-100 text-gray-600' }
+    { id: 'family', label: 'Família', icon: '👨‍👩‍👧‍👦', color: 'bg-blue-100 text-blue-600' },
+    { id: 'work', label: 'Trabalho', icon: '💼', color: 'bg-orange-100 text-orange-600' },
+    { id: 'relationships', label: 'Relacionamentos', icon: '❤️', color: 'bg-pink-100 text-pink-600' },
+    { id: 'money', label: 'Dinheiro', icon: '💰', color: 'bg-green-100 text-green-600' },
+    { id: 'thoughts', label: 'Pensamentos', icon: '🧠', color: 'bg-purple-100 text-purple-600' },
+    { id: 'others', label: 'Outros', icon: '🧩', color: 'bg-gray-100 text-gray-600' }
   ];
   const moodInfluenceTags = isConventionalAdult ? conventionalMoodTags : (energyTags || []);
 
-  const moodOptions = [ { value: 10, emoji: "ðŸ˜«", label: "Esgotado", color: "bg-red-100 border-red-200 hover:bg-red-200" }, { value: 30, emoji: "ðŸ˜•", label: "Baixo", color: "bg-orange-100 border-orange-200 hover:bg-orange-200" }, { value: 50, emoji: "ðŸ˜", label: "Normal", color: "bg-yellow-100 border-yellow-200 hover:bg-yellow-200" }, { value: 70, emoji: "ðŸ™‚", label: "Bem", color: "bg-blue-100 border-blue-200 hover:bg-blue-200" }, { value: 90, emoji: "ðŸ¤©", label: "Ã“timo!", color: "bg-green-100 border-green-200 hover:bg-green-200" } ];
+  const moodOptions = [ { value: 10, emoji: "😫", label: "Esgotado", color: "bg-red-100 border-red-200 hover:bg-red-200" }, { value: 30, emoji: "😕", label: "Baixo", color: "bg-orange-100 border-orange-200 hover:bg-orange-200" }, { value: 50, emoji: "😐", label: "Normal", color: "bg-yellow-100 border-yellow-200 hover:bg-yellow-200" }, { value: 70, emoji: "🙂", label: "Bem", color: "bg-blue-100 border-blue-200 hover:bg-blue-200" }, { value: 90, emoji: "🤩", label: "Ótimo!", color: "bg-green-100 border-green-200 hover:bg-green-200" } ];
 
   const availableSnapshots = useMemo(() => {
     const dates = history.filter((h: any) => h.dateGroup).map((h: any) => h.dateGroup);
@@ -67,7 +67,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   }, [history]);
 
   const kidChartData = useMemo(() => {
-    // Prioritize VB-MAPP for crianÃ§as, otherwise use first protocol
+    // Prioritize VB-MAPP for crianças, otherwise use first protocol
     const vbmapp = protocols?.find((p: any) => p.title.includes('VB-MAPP'));
     const selectedProto = vbmapp || protocols?.[0] || { data: [] };
     const labels = selectedProto.data.map((d: any) => d.name);
@@ -328,7 +328,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             <div className="w-full max-w-md relative z-10 flex flex-col h-full">
                 <div className="flex justify-between items-center mb-6 sm:mb-8">
                     <div className="flex items-center gap-3">
-                         <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white rounded-full flex items-center justify-center shadow-md text-xl sm:text-2xl">ðŸš€</div>
+                         <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white rounded-full flex items-center justify-center shadow-md text-xl sm:text-2xl">🚀</div>
                          <div>
                              <h1 className="text-xl sm:text-2xl font-semibold text-[#7a32fc]">Oi, {user.name}!</h1>
                              <p className="text-[10px] sm:text-sm text-gray-400 font-medium">Vamos ver seus poderes?</p>
@@ -356,7 +356,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                                 onClick={() => { setIsFamilyLogOpen(true); setIsMenuOpen(false); }}
                                 className="w-full flex items-center gap-3 p-3 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-xl transition-colors"
                               >
-                                <BookOpen size={18} /> DiÃ¡rio da FamÃ­lia
+                                <BookOpen size={18} /> Diário da Família
                               </button>
                             )}
                             <button 
@@ -385,15 +385,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                       </div>
                       <div className="bg-yellow-50 border border-yellow-100 rounded-2xl p-3 text-center">
                         <p className="text-[10px] uppercase text-yellow-600 font-bold tracking-widest">Estrelas</p>
-                        <p className="text-base sm:text-lg">{'â­'.repeat(kidsGamification.stars)}</p>
+                        <p className="text-base sm:text-lg">{'⭐'.repeat(kidsGamification.stars)}</p>
                       </div>
                       <div className="bg-green-50 border border-green-100 rounded-2xl p-3 text-center">
-                        <p className="text-[10px] uppercase text-green-600 font-bold tracking-widest">MissÃµes</p>
+                        <p className="text-[10px] uppercase text-green-600 font-bold tracking-widest">Missões</p>
                         <p className="text-lg font-extrabold text-green-700">{kidsGamification.totalTasksDone}</p>
                       </div>
                     </div>
                     <div className="flex items-center justify-between mb-4 sm:mb-6 px-1 sm:px-2">
-                        <h2 className="text-lg sm:text-xl font-semibold text-gray-700 flex items-center gap-2"><Trophy className="text-yellow-500" size={20}/> NÃ­vel de HerÃ³i</h2>
+                        <h2 className="text-lg sm:text-xl font-semibold text-gray-700 flex items-center gap-2"><Trophy className="text-yellow-500" size={20}/> Nível de Herói</h2>
                         <div className="relative w-28 sm:w-32">
                             <select 
                                 className="w-full bg-blue-50 border border-blue-100 text-[9px] sm:text-[10px] font-semibold text-[#7a32fc] px-2 sm:px-3 py-1.5 sm:py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
@@ -431,12 +431,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     <div className="w-full min-h-[300px] sm:min-h-[350px]">
                         <EvolutionBarChart chartData={kidChartViewData} />
                     </div>
-                    <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-widest text-center mt-2">Arraste lateralmente para melhor visualizaÃ§Ã£o</p>
+                    <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-widest text-center mt-2">Arraste lateralmente para melhor visualização</p>
                 </div>
 
                 <div className="bg-white p-4 sm:p-6 rounded-[28px] shadow-lg border border-blue-100 mb-6">
                   <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-sm sm:text-base font-semibold text-blue-700 tracking-tight">Ãšltimos Registros do DiÃ¡rio da FamÃ­lia</h2>
+                    <h2 className="text-sm sm:text-base font-semibold text-blue-700 tracking-tight">Últimos Registros do Diário da Família</h2>
                     <span className="text-[10px] font-bold uppercase tracking-widest text-blue-500 bg-blue-50 px-2 py-1 rounded-full">
                       {familyDiaryHistory.length} itens
                     </span>
@@ -447,7 +447,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                         <div key={`family-${entry.id}`} className="rounded-2xl border border-blue-50 bg-blue-50/30 p-3">
                           <div className="flex items-center justify-between gap-3 mb-2">
                             <span className="text-[10px] font-semibold uppercase tracking-widest text-blue-500">
-                              {entry.type === 'photo' ? 'Foto enviada' : 'Registro da famÃ­lia'}
+                              {entry.type === 'photo' ? 'Foto enviada' : 'Registro da família'}
                             </span>
                             <span className="text-[10px] text-gray-500 font-medium">
                               {formatDiaryTimestamp(entry.date || entry.created_at)}
@@ -457,7 +457,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                           {(entry.image || entry.imageUrl || entry.photoUrl || entry.image_url || entry.url) && (
                             <img
                               src={entry.image || entry.imageUrl || entry.photoUrl || entry.image_url || entry.url}
-                              alt="Registro do diÃ¡rio"
+                              alt="Registro do diário"
                               className="w-full max-h-40 object-cover rounded-xl border border-blue-100"
                             />
                           )}
@@ -466,15 +466,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     </div>
                   ) : (
                     <div className="rounded-2xl border border-dashed border-blue-200 bg-blue-50/40 p-5 text-center">
-                      <p className="text-sm font-semibold text-blue-700 mb-1">Vamos comeÃ§ar o DiÃ¡rio da FamÃ­lia?</p>
-                      <p className="text-xs text-blue-500">Registre texto, fotos e rabiscos para acompanhar a evoluÃ§Ã£o da crianÃ§a dia a dia.</p>
+                      <p className="text-sm font-semibold text-blue-700 mb-1">Vamos começar o Diário da Família?</p>
+                      <p className="text-xs text-blue-500">Registre texto, fotos e rabiscos para acompanhar a evolução da criança dia a dia.</p>
                     </div>
                   )}
                 </div>
 
                 <div className="mt-4 mb-10"> 
                   <div className="flex items-center justify-between mb-4">
-                     <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-widest flex items-center gap-2"> <Trophy size={16} /> HistÃ³rico </h2>
+                     <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-widest flex items-center gap-2"> <Trophy size={16} /> Histórico </h2>
                   </div>
                   <div className="border-l-2 border-gray-100 ml-3 pb-4 pl-6 space-y-8"> 
                     {sortedKidsDateKeys.length > 0 ? sortedKidsDateKeys.map(dateKey => ( 
@@ -496,7 +496,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                           ))} 
                         </div> 
                       </div> 
-                    )) : ( <p className="text-center text-gray-400 text-xs py-4 italic">Nenhuma atividade clÃ­nica registrada.</p> )} 
+                    )) : ( <p className="text-center text-gray-400 text-xs py-4 italic">Nenhuma atividade clínica registrada.</p> )} 
                   </div> 
                 </div> 
             </div>
@@ -506,14 +506,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-pop relative"> 
                   <button onClick={() => setIsFamilyLogOpen(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button> 
                   <div className="text-center mb-6"> 
-                    <div className="w-16 h-16 mx-auto bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center text-3xl mb-3"> ðŸ  </div> 
-                    <h3 className="text-xl font-bold text-gray-800 tracking-tight">DiÃ¡rio da FamÃ­lia</h3> 
-                    <p className="text-gray-500 text-sm mt-1">Como foi o dia do pequeno herÃ³i?</p> 
+                    <div className="w-16 h-16 mx-auto bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center text-3xl mb-3"> 🏠 </div> 
+                    <h3 className="text-xl font-bold text-gray-800 tracking-tight">Diário da Família</h3> 
+                    <p className="text-gray-500 text-sm mt-1">Como foi o dia do pequeno herói?</p> 
                   </div> 
                   <div className="mb-4">
                     <textarea 
                       className="w-full h-32 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-blue-500/50 transition-all resize-none font-medium mb-3" 
-                      placeholder="Conte-nos como foi o dia, comportamentos, alimentaÃ§Ã£o ou qualquer observaÃ§Ã£o importante..." 
+                      placeholder="Conte-nos como foi o dia, comportamentos, alimentação ou qualquer observação importante..." 
                       value={familyNote} 
                       onChange={(e) => setFamilyNote(e.target.value)} 
                       autoFocus 
@@ -546,7 +546,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     disabled={showFamilySuccess || (!familyNote.trim() && !familyImage)} 
                     className={`w-full font-bold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showFamilySuccess ? 'bg-green-500 text-white' : 'bg-blue-600 text-white shadow-blue-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'}`}
                   > 
-                    {showFamilySuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Registrar no HistÃ³rico</React.Fragment>} 
+                    {showFamilySuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Registrar no Histórico</React.Fragment>} 
                   </button> 
                 </div> 
               </div>
@@ -596,7 +596,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       setShowTaskSuccess(true); 
       const interventionDetails = [
         interventionResponse?.trim() ? `Resposta:\n${interventionResponse.trim()}` : '',
-        taskNote?.trim() ? `ObservaÃ§Ã£o:\n${taskNote.trim()}` : '',
+        taskNote?.trim() ? `Observação:\n${taskNote.trim()}` : '',
         interventionImages.length > 0 ? `Anexos:\n${interventionImages.join('\n')}` : ''
       ].filter(Boolean).join('\n\n');
       const finalNote = selectedTask.type === 'intervention'
@@ -648,8 +648,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           <LogoVerto size={50} showText={true} className="drop-shadow-sm shrink-0" />
           <div className="w-px h-8 bg-gray-200 mx-2 hidden sm:block"></div>
           <div>
-            <h1 className="text-2xl font-semibold text-gray-800 tracking-tight leading-none"> OlÃ¡, <span className="text-[#7a32fc]">{user.name}</span>! </h1> 
-            <p className="text-gray-400 font-medium mt-1 text-xs"> Vamos cuidar de vocÃª hoje? </p> 
+            <h1 className="text-2xl font-semibold text-gray-800 tracking-tight leading-none"> Olá, <span className="text-[#7a32fc]">{user.name}</span>! </h1> 
+            <p className="text-gray-400 font-medium mt-1 text-xs"> Vamos cuidar de você hoje? </p> 
           </div>
         </div> 
         
@@ -703,7 +703,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       )}
       {!dailyCheckinDone ? ( 
         <div className="mb-8 animate-slide-up"> 
-          <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2 px-1"> {user.type === 'conventional' ? <Smile size={16} /> : <BatteryCharging size={16} />} {user.type === 'conventional' ? 'Como vocÃª se sente?' : 'Como se sente agora?'} </h2> 
+          <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2 px-1"> {user.type === 'conventional' ? <Smile size={16} /> : <BatteryCharging size={16} />} {user.type === 'conventional' ? 'Como você se sente?' : 'Como se sente agora?'} </h2> 
           <div className="flex overflow-x-auto pb-8 pt-4 -mx-6 px-6 gap-4 snap-x snap-mandatory no-scrollbar items-center"> 
             {moodOptions.map((mood) => { 
               const isHovered = hoveredMood === mood.value; 
@@ -738,7 +738,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               {tasks.map((task: any) => ( 
                 <div key={task.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between group hover:shadow-md transition-all"> 
                   <div className="flex items-center gap-4"> 
-                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl ${task.color || 'bg-blue-100 text-blue-600'}`}> {task.icon || 'ðŸ“‹'} </div> 
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl ${task.color || 'bg-blue-100 text-blue-600'}`}> {task.icon || '📋'} </div> 
                     <div> <h3 className="font-semibold text-gray-800 tracking-tight">{task.title}</h3> {task.description && <p className="text-xs text-gray-400 line-clamp-1">{task.description}</p>} </div> 
                   </div> 
                   <button disabled={isReadOnlyMode} onClick={() => openTaskModal(task)} className="p-3 bg-gray-50 text-gray-400 rounded-xl hover:bg-green-500 hover:text-white transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed" > <Check size={20} /> </button> 
@@ -752,15 +752,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
         {dailyReviewTasks.length > 0 && (
           <div className="mb-8 animate-fade-in">
-            <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2"> <BookOpen size={16} /> RevisÃ£o DiÃ¡ria </h2>
+            <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2"> <BookOpen size={16} /> Revisão Diária </h2>
             <div className="grid gap-3">
               {dailyReviewTasks.map((review: any) => (
                 <div key={review.id} className="bg-green-50/50 p-5 rounded-[32px] border border-green-100 shadow-sm">
                   <div className="flex items-center gap-3 mb-3">
-                    <span className="text-2xl">âœï¸</span>
+                    <span className="text-2xl">✍️</span>
                     <div>
                       <h3 className="font-semibold text-gray-800 tracking-tight">{review.title}</h3>
-                      <p className="text-[10px] text-green-600 font-semibold uppercase">Lembrete de RevisÃ£o</p>
+                      <p className="text-[10px] text-green-600 font-semibold uppercase">Lembrete de Revisão</p>
                     </div>
                   </div>
                   <div className="bg-white/80 p-4 rounded-2xl border border-green-50 mb-3">
@@ -768,7 +768,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     <p className="text-sm text-gray-600 leading-relaxed italic">"{review.note}"</p>
                   </div>
                   <div className="flex items-center justify-between text-[10px] text-gray-400 font-semibold uppercase">
-                    <span>ConcluÃ­do em {review.dateGroup}</span>
+                    <span>Concluído em {review.dateGroup}</span>
                     <span className="flex items-center gap-1 text-green-600"><CheckCircle size={12}/> Revisado</span>
                   </div>
                 </div>
@@ -778,7 +778,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         )}
         <div className="mt-8 mb-6"> 
           <div className="flex items-center justify-between mb-4">
-             <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest flex items-center gap-2"> <Trophy size={16} /> HistÃ³rico </h2>
+             <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest flex items-center gap-2"> <Trophy size={16} /> Histórico </h2>
              <div className="relative w-48">
                 <select 
                   className="w-full bg-white border border-gray-200 text-[10px] font-semibold text-gray-500 px-3 py-2 rounded-xl outline-none focus:border-[#4318FF] transition-all appearance-none uppercase tracking-widest"
@@ -813,7 +813,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                   ))} 
                 </div> 
               </div> 
-            )) : ( <p className="text-center text-gray-400 text-xs py-4 italic">Nenhuma atividade registrada para esta seleÃ§Ã£o.</p> )} 
+            )) : ( <p className="text-center text-gray-400 text-xs py-4 italic">Nenhuma atividade registrada para esta seleção.</p> )} 
           </div> 
         </div> 
       </div> 
@@ -845,13 +845,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-pop relative"> 
             <button onClick={closeTaskModal} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button> 
             <div className="text-center mb-6"> 
-              <div className={`w-16 h-16 mx-auto rounded-2xl flex items-center justify-center text-3xl mb-3 ${selectedTask.color || 'bg-blue-100 text-blue-600'}`}> {selectedTask.icon || 'ðŸ“‹'} </div> 
+              <div className={`w-16 h-16 mx-auto rounded-2xl flex items-center justify-center text-3xl mb-3 ${selectedTask.color || 'bg-blue-100 text-blue-600'}`}> {selectedTask.icon || '📋'} </div> 
               <h3 className="text-xl font-semibold text-gray-800 tracking-tight">{selectedTask.title}</h3> 
               <p className="text-gray-500 text-sm mt-1">
                 {selectedTask.type === 'intervention'
-                  ? 'InstruÃ§Ãµes da tarefa de intervenÃ§Ã£o'
+                  ? 'Instruções da tarefa de intervenção'
                   : isConventionalAdult
-                    ? 'Como foi realizar esta atividade em nÃ­vel de esforÃ§o?'
+                    ? 'Como foi realizar esta atividade em nível de esforço?'
                     : 'Como foi realizar esta atividade?'}
               </p> 
             </div> 
@@ -860,7 +860,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 {isConventionalAdult && taskStep === 0 && (
                   <div className="space-y-4">
                     <div className="bg-green-50 p-4 rounded-2xl border border-green-100">
-                      <p className="text-[10px] text-green-700 uppercase tracking-widest font-semibold mb-2">InstruÃ§Ãµes do profissional</p>
+                      <p className="text-[10px] text-green-700 uppercase tracking-widest font-semibold mb-2">Instruções do profissional</p>
                       <p className="text-sm text-gray-600 font-medium leading-relaxed italic">"{selectedTask.description}"</p>
                     </div>
                     <button
@@ -924,7 +924,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                         disabled={!interventionResponse.trim()}
                         className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        Concluir escrita e informar esforÃ§o
+                        Concluir escrita e informar esforço
                       </button>
                     ) : (
                       <button 
@@ -942,9 +942,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                   <div className="space-y-4">
                     <div>
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">NÃ­vel de esforÃ§o</span>
+                        <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Nível de esforço</span>
                         <div className="flex items-center gap-2 text-sm font-semibold text-[#7a32fc]">
-                          <span>{taskEnergy < 50 ? 'ðŸ˜Ÿ' : 'ðŸ™‚'}</span>
+                          <span>{taskEnergy < 50 ? '😟' : '🙂'}</span>
                           <span>{taskEnergy}%</span>
                         </div>
                       </div>
@@ -952,8 +952,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                         <div className="h-3 rounded-full bg-gradient-to-r from-[#EE5D50] via-[#FFB547] to-[#05CD99]" style={{ width: `${taskEnergy}%` }}></div>
                       </div>
                       <div className="flex justify-between text-[10px] text-gray-400 font-semibold mt-1">
-                        <span>Mais difÃ­cil ðŸ˜Ÿ</span>
-                        <span>Mais fÃ¡cil ðŸ™‚</span>
+                        <span>Mais difícil 😟</span>
+                        <span>Mais fácil 🙂</span>
                       </div>
                     </div>
                     <input
@@ -966,7 +966,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     />
                     <textarea
                       className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none font-medium"
-                      placeholder="ObservaÃ§Ã£o opcional sobre o esforÃ§o nesta tarefa..."
+                      placeholder="Observação opcional sobre o esforço nesta tarefa..."
                       value={taskNote}
                       onChange={(e) => setTaskNote(e.target.value)}
                     ></textarea>
@@ -984,7 +984,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <div className="animate-slide-up"> 
                 {isKidsProfile ? (
                   <div className="space-y-6">
-                    <p className="text-center text-sm font-semibold text-gray-600 mb-4">Como vocÃª se saiu nessa missÃ£o?</p>
+                    <p className="text-center text-sm font-semibold text-gray-600 mb-4">Como você se saiu nessa missão?</p>
                     <div className={`grid gap-4 ${selectedTask.maxScore > 1 ? 'grid-cols-3' : 'grid-cols-3'}`}>
                       {selectedTask.maxScore === 1 ? (
                         <>
@@ -995,8 +995,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                               1: 'bg-[#05CD99] shadow-green-500/20'
                             };
                             const labels: any = {
-                              0: "NÃ£o fiz",
-                              0.5: "Quase lÃ¡",
+                              0: "Não fiz",
+                              0.5: "Quase lá",
                               1: "Consegui!"
                             };
                             return (
@@ -1020,7 +1020,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             'bg-[#7a32fc] shadow-blue-500/20',    // 3
                             'bg-[#7551FF] shadow-indigo-500/20'   // 4
                           ];
-                          const labels = ["NÃ£o fiz", "Quase lÃ¡", "Consegui!", "IncrÃ­vel!", "Mestre!"];
+                          const labels = ["Não fiz", "Quase lá", "Consegui!", "Incrível!", "Mestre!"];
                           const colorClass = colors[score] || 'bg-gray-500';
                           
                           return (
@@ -1030,7 +1030,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                               className={`${colorClass} text-white h-20 rounded-2xl flex flex-col items-center justify-center shadow-lg hover:scale-[1.02] active:scale-95 transition-all`}
                             >
                               <span className="text-2xl font-semibold">{score}</span>
-                              <span className="text-[8px] font-semibold uppercase">{labels[score] || "PontuaÃ§Ã£o"}</span>
+                              <span className="text-[8px] font-semibold uppercase">{labels[score] || "Pontuação"}</span>
                             </button>
                           );
                         })
@@ -1042,9 +1042,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     {isConventionalAdult ? (
                       <div className="space-y-4">
                         <div className="flex items-center justify-between">
-                          <span className="font-semibold text-gray-700">EsforÃ§o</span>
+                          <span className="font-semibold text-gray-700">Esforço</span>
                           <div className="flex items-center gap-2 bg-white px-3 py-1 rounded-full shadow-sm">
-                            <span className="text-xl">{taskEnergy < 50 ? 'ðŸ˜Ÿ' : 'ðŸ™‚'}</span>
+                            <span className="text-xl">{taskEnergy < 50 ? '😟' : '🙂'}</span>
                             <span className="text-lg font-semibold text-[#7a32fc]">{taskEnergy}%</span>
                           </div>
                         </div>
@@ -1062,8 +1062,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                           className="w-full"
                         />
                         <div className="flex justify-between text-[10px] text-gray-400 font-semibold">
-                          <span>Mais difÃ­cil ðŸ˜Ÿ</span>
-                          <span>Mais fÃ¡cil ðŸ™‚</span>
+                          <span>Mais difícil 😟</span>
+                          <span>Mais fácil 🙂</span>
                         </div>
                       </div>
                     ) : (
@@ -1079,7 +1079,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <div className="animate-slide-up"> 
                 <div className="mb-4"> 
                   <div className="flex items-center justify-between mb-2"> 
-                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">{isKidsProfile ? 'Sua PontuaÃ§Ã£o' : isConventionalAdult ? 'EsforÃ§o' : 'Energia'}</span> 
+                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">{isKidsProfile ? 'Sua Pontuação' : isConventionalAdult ? 'Esforço' : 'Energia'}</span> 
                     <span className="text-sm font-semibold text-[#7a32fc]">{isKidsProfile ? taskEnergy : `${taskEnergy}%`}</span> 
                   </div> 
                   <div className="w-full bg-gray-100 rounded-full h-2"> 
@@ -1087,12 +1087,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                   </div> 
                   {isConventionalAdult && (
                     <div className="flex justify-between text-[10px] text-gray-400 font-semibold mt-1">
-                      <span>Mais difÃ­cil ðŸ˜Ÿ</span>
-                      <span>Mais fÃ¡cil ðŸ™‚</span>
+                      <span>Mais difícil 😟</span>
+                      <span>Mais fácil 🙂</span>
                     </div>
                   )}
                 </div> 
-                <textarea className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none mb-4 font-medium" placeholder={isKidsProfile ? "Quer contar como foi?" : isConventionalAdult ? "ObservaÃ§Ã£o opcional sobre o esforÃ§o..." : "Quer adicionar alguma observaÃ§Ã£o?"} value={taskNote} onChange={(e) => setTaskNote(e.target.value)} autoFocus ></textarea> 
+                <textarea className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none mb-4 font-medium" placeholder={isKidsProfile ? "Quer contar como foi?" : isConventionalAdult ? "Observação opcional sobre o esforço..." : "Quer adicionar alguma observação?"} value={taskNote} onChange={(e) => setTaskNote(e.target.value)} autoFocus ></textarea> 
                 <button onClick={handleConfirmTask} disabled={showTaskSuccess} className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-500 text-white shadow-green-500/30 hover:opacity-90" > {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir</React.Fragment>} </button> 
               </div> 
             )} 

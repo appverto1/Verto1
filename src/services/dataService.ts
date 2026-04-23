@@ -51,7 +51,8 @@ async function getAuthHeaders(includeBearer = false) {
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token;
   const headers: any = {
-    'Content-Type': 'application/json'
+    'Content-Type': 'application/json; charset=utf-8',
+    'Accept': 'application/json; charset=utf-8'
   };
   if (includeBearer && token) {
     headers['Authorization'] = `Bearer ${token}`;

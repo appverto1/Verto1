@@ -743,38 +743,10 @@ export function CoordinatorDashboard({
     localStorage.setItem("verto_theme", theme);
   }, [theme]);
 
-  const repairMojibake = (value: any) => {
-    const text = String(value || "");
-    if (!text) return "";
-    try {
-      if (text.includes("Ã") || text.includes("â")) {
-        const bytes = Uint8Array.from([...text].map((c) => c.charCodeAt(0)));
-        const fixed = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-        if (fixed && !fixed.includes("�")) return fixed;
-      }
-    } catch (_e) {
-      // fallback below
-    }
-    return text
-      .replaceAll("Ã¡", "á")
-      .replaceAll("Ãà", "à")
-      .replaceAll("Ã¢", "â")
-      .replaceAll("Ãã", "ã")
-      .replaceAll("Ã©", "é")
-      .replaceAll("Ãª", "ê")
-      .replaceAll("Ã­", "í")
-      .replaceAll("Ã³", "ó")
-      .replaceAll("Ã´", "ô")
-      .replaceAll("Ãµ", "õ")
-      .replaceAll("Ãº", "ú")
-      .replaceAll("Ã§", "ç")
-      .replaceAll("Â·", "•")
-      .replaceAll("â€¢", "•")
-      .replaceAll("Â", "");
-  };
+  const normalizeUtf8Text = (value: any) => String(value ?? "").normalize("NFC");
 
   const normalizedPlanName = (() => {
-    const raw = repairMojibake(user?.planName || "").trim();
+    const raw = normalizeUtf8Text(user?.planName || "").trim();
     if (!raw || raw === "Verto Pro" || raw === "Plano Pro" || raw === "Pro") {
       return "Essencial";
     }
@@ -1149,7 +1121,7 @@ export function CoordinatorDashboard({
 
   const handleDeletePatient = (patient: any) => {
     if (!patient?.id) return;
-    const patientName = repairMojibake(patient?.name || "Paciente");
+    const patientName = normalizeUtf8Text(patient?.name || "Paciente");
     const shouldDelete = window.confirm(
       `Deseja excluir o paciente ${patientName}? Esta ação removerá o paciente da clínica.`,
     );
@@ -1198,7 +1170,7 @@ export function CoordinatorDashboard({
     },
     fallbackPatientName?: string,
   ) => {
-    const normalizedFallback = repairMojibake(
+    const normalizedFallback = normalizeUtf8Text(
       String(fallbackPatientName || ""),
     )
       .trim()
@@ -1214,13 +1186,13 @@ export function CoordinatorDashboard({
       allPatients.find(
         (p) =>
           normalizedFallback.length > 0 &&
-          repairMojibake(String(p?.name || ""))
+          normalizeUtf8Text(String(p?.name || ""))
             .trim()
             .toLowerCase() === normalizedFallback,
       );
 
     if (!resolvedPatient?.id) {
-      const fallbackName = repairMojibake(String(fallbackPatientName || "Paciente")).trim();
+      const fallbackName = normalizeUtf8Text(String(fallbackPatientName || "Paciente")).trim();
       setQuickPatientName(fallbackName || "Paciente");
       setQuickPatientAge("");
       setQuickPatientEmail("");
@@ -1261,7 +1233,7 @@ export function CoordinatorDashboard({
   const normalizedAgenda = useMemo(
     () =>
       (therapistAgenda || []).map((item: any) => {
-        const agendaPatientName = repairMojibake(
+        const agendaPatientName = normalizeUtf8Text(
           item.patientName || item.name || "Paciente",
         );
         const normalizedAgendaPatientName = agendaPatientName
@@ -1276,7 +1248,7 @@ export function CoordinatorDashboard({
           ) ||
           allPatients.find(
             (p: any) =>
-              repairMojibake(String(p?.name || ""))
+              normalizeUtf8Text(String(p?.name || ""))
                 .trim()
                 .toLowerCase() === normalizedAgendaPatientName,
           );
@@ -1284,10 +1256,10 @@ export function CoordinatorDashboard({
         return {
           ...item,
           patientName: agendaPatientName,
-          therapistName: repairMojibake(
+          therapistName: normalizeUtf8Text(
             item.therapistName || item.professional || "Profissional",
           ),
-          type: repairMojibake(item.type || item.approach || "Sessão"),
+          type: normalizeUtf8Text(item.type || item.approach || "Sessão"),
           anamnesisPending: isPatientPendingAnamnesis(resolvedPatient),
         };
       }),
@@ -2573,7 +2545,7 @@ export function CoordinatorDashboard({
                 {patientSidebarExpanded && (
                   <div className="overflow-hidden">
                     <p className="text-sm font-bold text-slate-900 truncate">
-                      {repairMojibake(user.name)}
+                      {normalizeUtf8Text(user.name)}
                     </p>
                     <p className="text-xs font-medium text-slate-400 truncate">
                       {user.email}
@@ -2933,7 +2905,7 @@ export function CoordinatorDashboard({
                   </div>
                 <div className="overflow-hidden">
                   <p className="text-[11px] font-bold text-slate-900 truncate">
-                    {repairMojibake(user.name)}
+                    {normalizeUtf8Text(user.name)}
                   </p>
                 </div>
               </div>
@@ -3729,7 +3701,7 @@ export function CoordinatorDashboard({
                         </div>
                         <div className="flex-1 min-w-0">
                           <h4 className="font-medium text-slate-900 truncate flex items-center gap-2">
-                            {repairMojibake(patient.name)}
+                            {normalizeUtf8Text(patient.name)}
                             {isPatientPendingAnamnesis(patient) && (
                               <span
                                 title="Novo paciente pendente de ficha anamnese"
@@ -4988,6 +4960,7 @@ export function CoordinatorDashboard({
     </div>
   );
 }
+
 
 
 

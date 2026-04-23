@@ -72,7 +72,7 @@ function getStripe() {
   return stripeClient;
 }
 
-function normalizeProfessionalPlan(input?: string | null): 'Essencial' | 'Crescimento' | 'AvanÃƒÂ§ado' | null {
+function normalizeProfessionalPlan(input?: string | null): 'Essencial' | 'Crescimento' | 'Avançado' | null {
   if (!input) return null;
   const normalized = input
     .trim()
@@ -82,7 +82,7 @@ function normalizeProfessionalPlan(input?: string | null): 'Essencial' | 'Cresci
 
   if (normalized === 'essencial') return 'Essencial';
   if (normalized === 'crescimento') return 'Crescimento';
-  if (normalized === 'avancado') return 'AvanÃƒÂ§ado';
+  if (normalized === 'avancado') return 'Avançado';
   return null;
 }
 
@@ -99,8 +99,14 @@ const OTP_TTL_MS = 15 * 60 * 1000;
 
 function sanitizeString(value: unknown, maxLength = 5000): string {
   if (typeof value !== 'string') return '';
-  return value
-    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+  const withoutScriptTags = value.replace(/<\s*script\b[^>]*>[\s\S]*?<\s*\/\s*script\s*>/gi, ' ');
+  const withoutDangerousProtocols = withoutScriptTags
+    .replace(/javascript\s*:/gi, '')
+    .replace(/vbscript\s*:/gi, '')
+    .replace(/data\s*:\s*text\/html/gi, '');
+  return withoutDangerousProtocols
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, ' ')
+    .normalize('NFC')
     .trim()
     .slice(0, maxLength);
 }
@@ -1229,11 +1235,11 @@ function tokenMatchesCurrentProject(token: string): { ok: boolean; reason?: stri
 }
 
 if (!supabaseUrl || !supabaseServiceKey) {
-  console.error("--- ERRO DE CONFIGURAÃ‡ÃƒO CRÃTICO ---");
+  console.error("--- ERRO DE CONFIGURAÇÃO CRÍTICO ---");
   console.error("Data/Hora:", new Date().toISOString());
   console.error("NODE_ENV:", process.env.NODE_ENV);
   
-  // Lista TODAS as chaves que comeÃ§am com SUPABASE, VITE_ ou STRIPE (sem mostrar os valores)
+  // Lista TODAS as chaves que começam com SUPABASE, VITE_ ou STRIPE (sem mostrar os valores)
   const relevantKeys = Object.keys(process.env).filter(k => 
     k.startsWith('SUPABASE') || 
     k.startsWith('VITE_') || 
@@ -1241,15 +1247,15 @@ if (!supabaseUrl || !supabaseServiceKey) {
     k.startsWith('SESSION')
   );
   
-  console.error("VariÃ¡veis de configuraÃ§Ã£o detectadas no sistema:", relevantKeys.length > 0 ? relevantKeys.join(', ') : "NENHUMA");
+  console.error("Variáveis de configuração detectadas no sistema:", relevantKeys.length > 0 ? relevantKeys.join(', ') : "NENHUMA");
   
-  console.error("Detalhes especÃ­ficos:");
-  console.error("- SUPABASE_URL:", process.env.SUPABASE_URL ? "âœ…" : "âŒ");
-  console.error("- SUPABASE_SERVICE_ROLE_KEY:", process.env.SUPABASE_SERVICE_ROLE_KEY ? "âœ…" : "âŒ");
+  console.error("Detalhes específicos:");
+  console.error("- SUPABASE_URL:", process.env.SUPABASE_URL ? "✅" : "❌");
+  console.error("- SUPABASE_SERVICE_ROLE_KEY:", process.env.SUPABASE_SERVICE_ROLE_KEY ? "✅" : "❌");
   console.error("-------------------------------------");
   
   if (process.env.NODE_ENV === 'production') {
-    console.error("O servidor nÃ£o pode iniciar sem as credenciais do Supabase.");
+    console.error("O servidor não pode iniciar sem as credenciais do Supabase.");
     process.exit(1);
   }
 }
@@ -1308,10 +1314,10 @@ async function getUserFromAccessToken(accessToken: string) {
 }
 
 if (!process.env.STRIPE_SECRET_KEY) {
-  console.warn("AVISO: STRIPE_SECRET_KEY nÃ£o configurada. Pagamentos nÃ£o funcionarÃ£o.");
+  console.warn("AVISO: STRIPE_SECRET_KEY não configurada. Pagamentos não funcionarão.");
 }
 if (!encryptionKey) {
-  console.warn("AVISO: DATA_ENCRYPTION_KEY ausente/invÃ¡lida. O endpoint de prontuÃ¡rio criptografado ficarÃ¡ desabilitado.");
+  console.warn("AVISO: DATA_ENCRYPTION_KEY ausente/inválida. O endpoint de prontuário criptografado ficará desabilitado.");
 }
 
 async function startServer() {
@@ -1356,7 +1362,7 @@ async function startServer() {
   const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 1000, // Increased from 100 to 1000 to be more generous for complex SPAs
-    message: { error: 'Muitas requisiÃ§Ãµes. Tente novamente mais tarde.' },
+    message: { error: 'Muitas requisições. Tente novamente mais tarde.' },
     standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
     legacyHeaders: false, // Disable the `X-RateLimit-*` headers
     validate: false, // Disable all validation checks for proxy headers
@@ -1414,8 +1420,32 @@ async function startServer() {
     res.json({ received: true });
   });
 
-  app.use(express.json({ limit: '10mb' }));
-  app.use(express.urlencoded({ limit: '10mb', extended: true }));
+  app.use((req, res, next) => {
+    const contentType = String(req.headers['content-type'] || '').toLowerCase();
+    const expectsUtf8Body =
+      contentType.includes('application/json') ||
+      contentType.includes('application/x-www-form-urlencoded');
+    if (!expectsUtf8Body) return next();
+
+    const hasExplicitCharset = contentType.includes('charset=');
+    if (hasExplicitCharset && !contentType.includes('charset=utf-8')) {
+      return res.status(415).json({
+        success: false,
+        error: 'Charset inválido. Use UTF-8.'
+      });
+    }
+    return next();
+  });
+
+  app.use(express.json({
+    limit: '10mb',
+    type: ['application/json', 'application/*+json']
+  }));
+  app.use(express.urlencoded({
+    limit: '10mb',
+    extended: true,
+    type: 'application/x-www-form-urlencoded'
+  }));
   app.use(cookieParser());
 
   // Database Session Store
@@ -1469,7 +1499,7 @@ async function startServer() {
       sessionStore = undefined; // Ensure fallback to MemoryStore
     }
   } else {
-    console.log('Usando armazenamento de sessÃ£o em memÃ³ria (MemoryStore).');
+    console.log('Usando armazenamento de sessão em memória (MemoryStore).');
   }
 
   app.use(session({
@@ -1734,7 +1764,7 @@ async function startServer() {
         .single();
 
       if (error || !patient) {
-        return res.status(404).json({ error: 'Paciente nÃ£o encontrado' });
+        return res.status(404).json({ error: 'Paciente não encontrado' });
       }
 
       if (patient.therapist_id === user.id) {
@@ -1746,9 +1776,9 @@ async function startServer() {
         return next();
       }
 
-      return res.status(403).json({ error: 'Acesso negado a este prontuÃ¡rio' });
+      return res.status(403).json({ error: 'Acesso negado a este prontuário' });
     } catch (err) {
-      return res.status(500).json({ error: 'Erro ao verificar permissÃµes' });
+      return res.status(500).json({ error: 'Erro ao verificar permissões' });
     }
   };
 
@@ -1767,7 +1797,7 @@ async function startServer() {
     if (!url || !publicKey) {
       return res.status(500).json({
         error: 'CONFIG_MISSING',
-        message: 'ConfiguraÃ§Ã£o de autenticaÃ§Ã£o incompleta no servidor.'
+        message: 'Configuração de autenticação incompleta no servidor.'
       });
     }
     
@@ -1800,7 +1830,7 @@ async function startServer() {
 
     const expected = `${req.protocol}://${req.get('host')}`;
     if (origin !== expected) {
-      return res.status(403).json({ error: 'Origem invÃ¡lida para operaÃ§Ã£o sensÃ­vel.' });
+      return res.status(403).json({ error: 'Origem inválida para operação sensível.' });
     }
     return next();
   });
@@ -1840,7 +1870,7 @@ async function startServer() {
   
   // 2FA Setup - Generate Secret and QR Code
   app.post('/api/auth/2fa/setup', async (req, res) => {
-    if (!req.session.user) return res.status(401).json({ error: "NÃ£o autenticado" });
+    if (!req.session.user) return res.status(401).json({ error: "Não autenticado" });
     
     const userEmail = req.session.user.email;
     const secret = generateSecret();
@@ -1861,14 +1891,14 @@ async function startServer() {
   // 2FA Verify - Enable 2FA after first verification
   app.post('/api/auth/2fa/verify', async (req, res) => {
     if (!req.session.user || !req.session.temp2faSecret) {
-      return res.status(401).json({ error: "SessÃ£o invÃ¡lida para setup de 2FA" });
+      return res.status(401).json({ error: "Sessão inválida para setup de 2FA" });
     }
     
     const { token } = req.body;
     const result = verifySync({ token, secret: req.session.temp2faSecret });
     
     if (!result.valid) {
-      return res.status(400).json({ error: "CÃ³digo invÃ¡lido" });
+      return res.status(400).json({ error: "Código inválido" });
     }
     
     try {
@@ -1893,12 +1923,12 @@ async function startServer() {
   // 2FA Login Verification
   app.post('/api/auth/2fa/login', async (req, res) => {
     const { email, token } = req.body;
-    if (!email || !token) return res.status(400).json({ error: "E-mail e cÃ³digo sÃ£o obrigatÃ³rios" });
+    if (!email || !token) return res.status(400).json({ error: "E-mail e código são obrigatórios" });
     
     try {
       const { data: { users } } = await supabase.auth.admin.listUsers();
       const user = users.find(u => sanitizeEmail(u.email) === sanitizeEmail(email));
-      if (!user) return res.status(404).json({ error: "UsuÃ¡rio nÃ£o encontrado" });
+      if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
       const isEmailVerified = Boolean((user as any)?.email_confirmed_at || (user as any)?.confirmed_at);
       if (!isEmailVerified) {
         return res.status(403).json({
@@ -1909,7 +1939,7 @@ async function startServer() {
       
       const { data: profile } = await supabase.from('users').select('*').eq('id', user.id).single();
       if (!profile || !profile.two_factor_enabled || !profile.two_factor_secret) {
-        return res.status(400).json({ error: "2FA nÃ£o habilitado para este usuÃ¡rio" });
+        return res.status(400).json({ error: "2FA não habilitado para este usuário" });
       }
       
       const result = verifySync({ token, secret: profile.two_factor_secret });
@@ -2035,7 +2065,6 @@ async function startServer() {
       'Essencial': 149.90,
       'Crescimento': 399.90,
       'Avançado': 679.90,
-      'AvanÃƒÂ§ado': 679.90,
       'Paciente': 4.90
     };
 
@@ -2367,7 +2396,7 @@ async function startServer() {
         if (!supabaseAuthClient) {
           return res.status(500).json({
             error: "AUTH_CONFIG_MISSING_PUBLIC_KEY",
-            message: "ConfiguraÃ§Ã£o de autenticaÃ§Ã£o pÃºblica ausente no servidor."
+            message: "Configuração de autenticação pública ausente no servidor."
           });
         }
 
@@ -2379,7 +2408,7 @@ async function startServer() {
         if (credError || !credData?.session?.access_token) {
           return res.status(401).json({
             error: "INVALID_CREDENTIALS",
-            message: "E-mail ou senha invÃ¡lidos."
+            message: "E-mail ou senha inválidos."
           });
         }
 
@@ -2393,13 +2422,13 @@ async function startServer() {
         console.error('[Auth] Project mismatch in /api/auth/login:', tokenMatch.reason);
         return res.status(401).json({
           error: "AUTH_PROJECT_MISMATCH",
-          message: "Token de autenticaÃ§Ã£o nÃ£o pertence a este ambiente."
+          message: "Token de autenticação não pertence a este ambiente."
         });
       }
 
       if (!supabase) {
         console.error('[Auth] Supabase client is missing. Cannot continue login.');
-        return res.status(500).json({ error: "Erro de configuraÃ§Ã£o no servidor (Supabase client not initialized)" });
+        return res.status(500).json({ error: "Erro de configuração no servidor (Supabase client not initialized)" });
       }
 
       // 1) Primary verification path (service-side).
@@ -2421,7 +2450,7 @@ async function startServer() {
         if (!supabaseAuthClient) {
           return res.status(500).json({
             error: "AUTH_CONFIG_MISSING_PUBLIC_KEY",
-            message: "ConfiguraÃ§Ã£o de autenticaÃ§Ã£o pÃºblica ausente no servidor."
+            message: "Configuração de autenticação pública ausente no servidor."
           });
         }
 
@@ -2439,7 +2468,7 @@ async function startServer() {
 
       if (error || !user) {
         console.error('[Auth] Supabase auth error during token verification:', error || 'No user found');
-        return res.status(401).json({ error: "SessÃ£o expirada ou invÃ¡lida. Por favor, faÃ§a login novamente." });
+        return res.status(401).json({ error: "Sessão expirada ou inválida. Por favor, faça login novamente." });
       }
 
       console.log('[Auth] User verified successfully:', user.id, user.email);
@@ -2469,7 +2498,7 @@ async function startServer() {
 
       if (profileError && profileError.code !== 'PGRST116') {
         console.error('Profile fetch error:', profileError);
-        return res.status(500).json({ error: "Erro ao buscar perfil do usuÃ¡rio", details: profileError.message });
+        return res.status(500).json({ error: "Erro ao buscar perfil do usuário", details: profileError.message });
       }
 
       // Check for 2FA
@@ -2666,7 +2695,7 @@ async function startServer() {
         if (err) {
           console.error("Session save error in login:", err);
           if (!res.headersSent) {
-            return res.status(500).json({ error: "Erro ao salvar sessÃ£o" });
+            return res.status(500).json({ error: "Erro ao salvar sessão" });
           }
           return;
         }
@@ -2843,7 +2872,7 @@ async function startServer() {
         .maybeSingle();
 
       if (existing) {
-        return res.status(400).json({ error: 'JÃ¡ existe um convite pendente para este e-mail' });
+        return res.status(400).json({ error: 'Já existe um convite pendente para este e-mail' });
       }
 
       const { data, error } = await supabase
@@ -2911,11 +2940,11 @@ async function startServer() {
         .single();
 
       if (fetchError || !invitation) {
-        return res.status(404).json({ error: 'Convite nÃ£o encontrado' });
+        return res.status(404).json({ error: 'Convite não encontrado' });
       }
 
       if (invitation.email !== user.email) {
-        return res.status(403).json({ error: 'Este convite nÃ£o Ã© para vocÃª' });
+        return res.status(403).json({ error: 'Este convite não é para você' });
       }
 
       await supabase
@@ -3470,10 +3499,10 @@ async function startServer() {
       const dataUrl = sanitizeString(req.body?.fileBase64, 8_000_000);
 
       if (bucketName !== 'patient-photos') {
-        return res.status(400).json({ success: false, error: 'Bucket invÃ¡lido para upload.' });
+        return res.status(400).json({ success: false, error: 'Bucket inválido para upload.' });
       }
       if (!objectPath || objectPath.includes('..')) {
-        return res.status(400).json({ success: false, error: 'Path invÃ¡lido.' });
+        return res.status(400).json({ success: false, error: 'Path inválido.' });
       }
       if (!dataUrl) {
         return res.status(400).json({ success: false, error: 'Arquivo ausente.' });
@@ -3485,7 +3514,7 @@ async function startServer() {
       const fileBuffer = Buffer.from(base64Payload, 'base64');
 
       if (!fileBuffer.length || fileBuffer.length > 5 * 1024 * 1024) {
-        return res.status(400).json({ success: false, error: 'Arquivo invÃ¡lido ou acima de 5MB.' });
+        return res.status(400).json({ success: false, error: 'Arquivo inválido ou acima de 5MB.' });
       }
 
       const validation = validateBinaryUpload(fileBuffer, mimeFromDataUrl, 'image-only');
@@ -3579,7 +3608,7 @@ async function startServer() {
       });
 
       if (!safeBody.name) {
-        return res.status(400).json({ error: 'Nome do paciente Ã© obrigatÃ³rio.' });
+        return res.status(400).json({ error: 'Nome do paciente é obrigatório.' });
       }
 
       let { data, error } = await supabase
@@ -3668,7 +3697,7 @@ async function startServer() {
         createIfMissing: true,
         fallbackName: sanitizeString(req.body?.payload?.nome, 160) || sanitizeString(req.body?.payload?.name, 160)
       });
-      if (!patientId) return res.status(400).json({ error: 'patientId invÃ¡lido' });
+      if (!patientId) return res.status(400).json({ error: 'patientId inválido' });
 
       const payloadRaw = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
       const payload = sanitizeClinicalPayload(payloadRaw);
@@ -3728,7 +3757,7 @@ async function startServer() {
         if (String(error?.message || '').toLowerCase().includes('patient_records')) {
           return res.status(200).json({
             success: false,
-            warning: 'Tabela patient_records ainda nÃ£o existe. Execute o SQL de seguranÃ§a para persistÃªncia criptografada.'
+            warning: 'Tabela patient_records ainda não existe. Execute o SQL de segurança para persistência criptografada.'
           });
         }
         throw error;
@@ -3993,7 +4022,7 @@ async function startServer() {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
       const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
-      if (!patientId) return res.status(400).json({ error: 'patientId invÃ¡lido' });
+      if (!patientId) return res.status(400).json({ error: 'patientId inválido' });
       if (!isUuid(patientId)) return res.json({ success: true, data: null });
       if (!clinicId && !hasGlobalClinicAccess(req.session.user)) {
         return res.status(400).json({ error: 'clinicId inválido' });
@@ -4010,7 +4039,7 @@ async function startServer() {
 
       if (error) {
         if (String(error?.message || '').toLowerCase().includes('patient_records')) {
-          return res.status(200).json({ success: true, data: null, warning: 'Tabela patient_records nÃ£o encontrada.' });
+          return res.status(200).json({ success: true, data: null, warning: 'Tabela patient_records não encontrada.' });
         }
         throw error;
       }
@@ -4117,7 +4146,7 @@ async function startServer() {
       });
 
       if (!payload.patient_id || !payload.text) {
-        return res.status(400).json({ error: 'patient_id e texto sÃ£o obrigatÃ³rios.' });
+        return res.status(400).json({ error: 'patient_id e texto são obrigatórios.' });
       }
 
       const { data, error } = await supabase
@@ -4258,7 +4287,7 @@ async function startServer() {
       });
 
       if (!docData.patient_id || !docData.title) {
-        return res.status(400).json({ error: 'patient_id e tÃ­tulo sÃ£o obrigatÃ³rios.' });
+        return res.status(400).json({ error: 'patient_id e título são obrigatórios.' });
       }
 
       const { data, error } = await supabase
@@ -4650,7 +4679,7 @@ async function startServer() {
       });
 
       if (!payload.patient_id || !payload.title) {
-        return res.status(400).json({ error: 'patient_id e tÃ­tulo sÃ£o obrigatÃ³rios.' });
+        return res.status(400).json({ error: 'patient_id e título são obrigatórios.' });
       }
 
       const { data, error } = await supabase
@@ -4708,7 +4737,7 @@ async function startServer() {
       });
 
       if (!payload.patient_id || payload.amount === null) {
-        return res.status(400).json({ error: 'patient_id e amount sÃ£o obrigatÃ³rios.' });
+        return res.status(400).json({ error: 'patient_id e amount são obrigatórios.' });
       }
 
       const { data, error } = await supabase
@@ -4758,7 +4787,7 @@ async function startServer() {
     try {
       const user = req.session.user;
       const clinicId = currentClinicId(user);
-      if (!clinicId) return res.status(400).json({ success: false, error: 'ClÃ­nica nÃ£o identificada.' });
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
 
       const selectedFeaturesRaw = Array.isArray(req.body?.selectedFeatures) ? req.body.selectedFeatures : [];
       const selectedFeatures = selectedFeaturesRaw
@@ -5212,7 +5241,7 @@ async function startServer() {
         expenses: 4500.00,
         profit: 8650.00,
         byProfessional: {
-          'Dra. RaÃ­sa': 8500.00,
+          'Dra. Raísa': 8500.00,
           'Dr. Marcos': 7200.00,
           'Dra. Ana': 6800.00,
           'Outros': 2950.00
@@ -5276,7 +5305,7 @@ async function startServer() {
     const { userId } = req.body;
     try {
       // Logic to trigger a manual charge or retry via Stripe
-      res.json({ success: true, message: 'CobranÃ§a iniciada com sucesso (Simulado)' });
+      res.json({ success: true, message: 'Cobrança iniciada com sucesso (Simulado)' });
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }
@@ -5302,7 +5331,7 @@ async function startServer() {
         const planPrices: Record<string, number> = {
           'Essencial': 14990,
           'Crescimento': 39990,
-          'AvanÃ§ado': 67990
+          'Avançado': 67990
         };
         
         let planName = normalizeProfessionalPlan(requestedPlan) || requestedPlan;
@@ -5360,7 +5389,7 @@ async function startServer() {
       } catch (stripeInitError: any) {
         console.error('Stripe initialization failed:', stripeInitError.message);
         return res.status(500).json({ 
-          error: 'O Stripe nÃ£o estÃ¡ configurado corretamente no servidor.',
+          error: 'O Stripe não está configurado corretamente no servidor.',
           details: stripeInitError.message 
         });
       }
@@ -5398,7 +5427,7 @@ async function startServer() {
     } catch (error: any) {
       console.error('Stripe checkout error:', error);
       res.status(500).json({ 
-        error: error.message || 'Erro ao criar sessÃ£o de pagamento',
+        error: error.message || 'Erro ao criar sessão de pagamento',
         details: process.env.NODE_ENV === 'production' ? undefined : error.stack
       });
     }
@@ -5424,7 +5453,7 @@ async function startServer() {
       if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);
       } else {
-        res.status(404).send('Frontend nÃ£o encontrado. Certifique-se de que o build foi executado corretamente.');
+        res.status(404).send('Frontend não encontrado. Certifique-se de que o build foi executado corretamente.');
       }
     });
   }
