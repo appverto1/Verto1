@@ -223,7 +223,11 @@ export function MainAppLayout({
   onUpdateProfile,
 }: MainAppLayoutProps) {
   const role = (user?.role || 'therapist') as ClinicalRole;
-  const allowedRoutes = useMemo(() => getAllowedRoutesByRole(role), [role]);
+  const allowedRoutes = useMemo(() => {
+    const base = getAllowedRoutesByRole(role);
+    if (role !== 'receptionist') return base;
+    return base.filter((route) => !['medical-records', 'anamnesis', 'protocol-library'].includes(route));
+  }, [role]);
   const [activeRoute, setActiveRoute] = useState<string>(allowedRoutes[0] || 'home');
   const [selectedPatientId, setSelectedPatientId] = useState<any>(null);
 
@@ -245,12 +249,34 @@ export function MainAppLayout({
     });
   }, [role, therapistAgenda, user?.id, user?.email, user?.name]);
 
+  const therapistPatientIdSet = useMemo(() => {
+    if (role !== 'therapist') return new Set<string>();
+    const ids = new Set<string>();
+    filteredAgenda.forEach((item: any) => {
+      if (item?.patientId !== undefined && item?.patientId !== null) {
+        ids.add(String(item.patientId));
+      }
+    });
+    allPatients.forEach((patient: any) => {
+      const therapistId = String(patient?.therapistId || patient?.therapist_id || '');
+      if (therapistId && therapistId === String(user?.id || '')) {
+        ids.add(String(patient.id));
+      }
+    });
+    return ids;
+  }, [role, filteredAgenda, allPatients, user?.id]);
+
+  const scopedPatients = useMemo(() => {
+    if (role !== 'therapist') return allPatients;
+    return allPatients.filter((patient: any) => therapistPatientIdSet.has(String(patient.id)));
+  }, [role, allPatients, therapistPatientIdSet]);
+
   const selectedPatient = useMemo(() => {
-    const basePatient = allPatients.find((p: any) => String(p.id) === String(selectedPatientId));
+    const basePatient = scopedPatients.find((p: any) => String(p.id) === String(selectedPatientId));
     const clinicalRecord = clinicalRecords.find((record: any) => String(record.patientId) === String(selectedPatientId));
     if (!basePatient) return null;
     return { ...basePatient, ...clinicalRecord };
-  }, [allPatients, clinicalRecords, selectedPatientId]);
+  }, [scopedPatients, clinicalRecords, selectedPatientId]);
 
   const mfaEnabled = isClinicalMfaEnabled(user);
   const canSeeMedicalRecords = hasCapability(role, 'medical-records');
@@ -280,7 +306,7 @@ export function MainAppLayout({
       return (
         <PatientIntakeView
           user={user}
-          allPatients={allPatients}
+          allPatients={scopedPatients}
           clinicalRecords={clinicalRecords}
           onSelectPatient={safeSelectPatient}
         />
@@ -407,23 +433,20 @@ export function MainAppLayout({
   return (
     <div className="min-h-screen bg-slate-50">
       <div className="max-w-[1600px] mx-auto p-4 sm:p-6">
-        <header className="rounded-3xl bg-white border border-slate-100 shadow-sm px-4 py-4 sm:px-6 flex items-center justify-between mb-4">
+        <header className="rounded-[32px] bg-white border border-slate-100 shadow-sm px-5 py-4 sm:px-7 sm:py-5 flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
             <LogoVerto />
             <div>
-              <p className="text-xs uppercase tracking-widest font-bold text-slate-400">MainAppLayout</p>
-              <h1 className="text-base sm:text-lg font-bold text-slate-900">Verto • {role}</h1>
+              <p className="text-xs uppercase tracking-widest font-bold text-slate-400">Verto</p>
+              <h1 className="text-base sm:text-lg font-bold text-slate-900 capitalize">{role}</h1>
             </div>
           </div>
-          <button
-            onClick={onLogout}
-            className="rounded-xl bg-slate-900 text-white px-4 py-2 text-xs font-bold uppercase tracking-widest"
-          >
-            Sair
-          </button>
+          <div className="rounded-full bg-violet-50 text-violet-700 px-3 py-1.5 text-[10px] font-black uppercase tracking-widest">
+            Layout Unificado
+          </div>
         </header>
-        <div className="grid grid-cols-1 lg:grid-cols-[288px_minmax(0,1fr)] gap-4">
-          <RoleBasedSidebar role={role} activeRoute={activeRoute} onNavigate={navigate} />
+        <div className="grid grid-cols-1 lg:grid-cols-[min-content_minmax(0,1fr)] gap-4">
+          <RoleBasedSidebar role={role} activeRoute={activeRoute} onNavigate={navigate} onLogout={onLogout} />
           <main>{renderContent()}</main>
         </div>
       </div>
