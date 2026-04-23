@@ -409,20 +409,18 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
             </div>
           </div>
 
-          <div className="relative">
+          <div className="relative lg:w-[50%] lg:justify-self-end">
             <div className="absolute -top-20 -right-20 w-64 h-64 bg-purple-100 rounded-full blur-3xl opacity-50 animate-pulse"></div>
             <div className="absolute -bottom-20 -left-20 w-64 h-64 bg-purple-100 rounded-full blur-3xl opacity-50 animate-pulse delay-700"></div>
             
             <div className="relative bg-white rounded-[40px] shadow-2xl border border-gray-100 p-4 overflow-hidden group">
+              <div className="w-full aspect-[16/10] rounded-[32px] overflow-hidden">
               <img 
-                src="https://images.unsplash.com/photo-1460925895917-afdab827c52f?q=80&w=2015&auto=format&fit=crop" 
-                alt="Verto Financial Dashboard" 
-                className="rounded-[32px] w-full h-auto transform group-hover:scale-[1.02] transition-transform duration-700"
-                referrerPolicy="no-referrer"
-                onError={(e: any) => {
-                  e.target.src = 'https://placehold.co/1200x800/7a32fc/white?text=Verto+Financial+Dashboard';
-                }}
+                src="/Gemini_Generated_Image_m804z0m804z0m804.jpg" 
+                alt="Uma mão humana segurando uma caneta sobre um caderno aberto com a letra 'V' estilizada nas cores da Verto, simbolizando a personalização e a conexão humana na terapia."
+                className="rounded-[32px] w-full h-full object-cover transform group-hover:scale-[1.02] transition-transform duration-700"
               />
+              </div>
               
               {/* Professional Insight Card - Replaces the "balloon" */}
               <div className="absolute bottom-10 left-10 right-10 md:right-auto md:w-80 bg-white/90 backdrop-blur-md p-6 rounded-[32px] shadow-2xl border border-white/20 animate-slide-up">
