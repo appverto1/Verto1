@@ -15,6 +15,19 @@ export default function App() {
   const [user, setUser] = useState<any>(null); 
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const LAST_ACTIVE_WORKSPACE_KEY = 'last_active_workspace_id';
+
+  const getLastActiveWorkspaceId = () =>
+    String(localStorage.getItem(LAST_ACTIVE_WORKSPACE_KEY) || '').trim();
+
+  const setLastActiveWorkspaceId = (workspaceId?: string | null) => {
+    const safeId = String(workspaceId || '').trim();
+    if (!safeId) {
+      localStorage.removeItem(LAST_ACTIVE_WORKSPACE_KEY);
+      return;
+    }
+    localStorage.setItem(LAST_ACTIVE_WORKSPACE_KEY, safeId);
+  };
 
   const shouldPromptWorkspaceSelection = (candidateUser: any) => {
     const workspaces = Array.isArray(candidateUser?.workspaces) ? candidateUser.workspaces : [];
@@ -27,6 +40,71 @@ export default function App() {
     ).trim();
     if (!activeWorkspaceId) return true;
     return !workspaces.some((workspace: any) => workspace?.clinicId === activeWorkspaceId);
+  };
+
+  const hasValidWorkspaceContext = (candidateUser: any) => {
+    const workspaces = Array.isArray(candidateUser?.workspaces) ? candidateUser.workspaces : [];
+    if (workspaces.length <= 1) return true;
+    const activeWorkspaceId = String(
+      candidateUser?.activeWorkspaceId || candidateUser?.clinicId || ''
+    ).trim();
+    if (!activeWorkspaceId) return false;
+    return workspaces.some((workspace: any) => workspace?.clinicId === activeWorkspaceId);
+  };
+
+  const alignWorkspaceFromStorage = (candidateUser: any) => {
+    if (!candidateUser) return candidateUser;
+    const workspaces = Array.isArray(candidateUser?.workspaces) ? candidateUser.workspaces : [];
+    const currentActiveWorkspaceId = String(
+      candidateUser?.activeWorkspaceId || candidateUser?.clinicId || ''
+    ).trim();
+    const storedWorkspaceId = getLastActiveWorkspaceId();
+    const preferredWorkspaceId = currentActiveWorkspaceId || storedWorkspaceId;
+    const preferredWorkspace = workspaces.find((workspace: any) => workspace?.clinicId === preferredWorkspaceId);
+
+    if (!preferredWorkspace) return candidateUser;
+    return {
+      ...candidateUser,
+      activeWorkspaceId: preferredWorkspace.clinicId,
+      clinicId: preferredWorkspace.clinicId,
+      role: preferredWorkspace.role || candidateUser?.role,
+    };
+  };
+
+  const computeWorkspacePickerVisibility = (candidateUser: any) => {
+    if (!candidateUser) return false;
+    const inWorkspaceRoute = window.location.pathname.startsWith('/workspaces');
+    const hasContext = hasValidWorkspaceContext(candidateUser);
+
+    if (hasContext && inWorkspaceRoute) {
+      window.history.replaceState({}, document.title, '/');
+    }
+
+    if (hasContext) return false;
+    return shouldPromptWorkspaceSelection(candidateUser);
+  };
+
+  const restoreWorkspaceContextIfNeeded = async (candidateUser: any) => {
+    if (!candidateUser) return candidateUser;
+    if (hasValidWorkspaceContext(candidateUser)) return candidateUser;
+
+    const storedWorkspaceId = getLastActiveWorkspaceId();
+    if (!storedWorkspaceId) return candidateUser;
+
+    const available = Array.isArray(candidateUser?.workspaces) ? candidateUser.workspaces : [];
+    const hasStoredWorkspace = available.some((workspace: any) => workspace?.clinicId === storedWorkspaceId);
+    if (!hasStoredWorkspace) return candidateUser;
+
+    try {
+      const result = await dataService.selectWorkspace(storedWorkspaceId);
+      if (result?.success && result?.user) {
+        return result.user;
+      }
+    } catch (error) {
+      console.warn('Workspace restore from localStorage failed:', error);
+    }
+
+    return candidateUser;
   };
 
   const isUuidLike = (value: unknown) =>
@@ -216,9 +294,14 @@ export default function App() {
 
         const data = await response.json();
         if (data.user) {
-          setUser(data.user);
-          setProfilePicture(data.user?.profilePicture || data.user?.profile_picture || null);
-          setShowWorkspacePicker(shouldPromptWorkspaceSelection(data.user));
+          const alignedUser = alignWorkspaceFromStorage(data.user);
+          const resolvedUser = await restoreWorkspaceContextIfNeeded(alignedUser);
+          setUser(resolvedUser);
+          setProfilePicture(resolvedUser?.profilePicture || resolvedUser?.profile_picture || null);
+          if (hasValidWorkspaceContext(resolvedUser)) {
+            setLastActiveWorkspaceId(resolvedUser?.activeWorkspaceId || resolvedUser?.clinicId);
+          }
+          setShowWorkspacePicker(computeWorkspacePickerVisibility(resolvedUser));
         } else {
           setUser(null);
           setProfilePicture(null);
@@ -270,7 +353,13 @@ export default function App() {
           const data = await response.json();
           if (data.user) {
             if (data.user.subscriptionStatus === 'active' || attempts >= maxAttempts) {
-              setUser(data.user);
+              const alignedUser = alignWorkspaceFromStorage(data.user);
+              const resolvedUser = await restoreWorkspaceContextIfNeeded(alignedUser);
+              setUser(resolvedUser);
+              if (hasValidWorkspaceContext(resolvedUser)) {
+                setLastActiveWorkspaceId(resolvedUser?.activeWorkspaceId || resolvedUser?.clinicId);
+              }
+              setShowWorkspacePicker(computeWorkspacePickerVisibility(resolvedUser));
               // Clear URL params
               window.history.replaceState({}, document.title, "/");
             } else {
@@ -323,10 +412,15 @@ export default function App() {
 
         const data = await response.json();
         if (data.user) {
-          setUser(data.user);
-          setProfilePicture(data.user?.profilePicture || data.user?.profile_picture || null);
-          setShowWorkspacePicker(shouldPromptWorkspaceSelection(data.user));
-          return data;
+          const alignedUser = alignWorkspaceFromStorage(data.user);
+          const resolvedUser = await restoreWorkspaceContextIfNeeded(alignedUser);
+          setUser(resolvedUser);
+          setProfilePicture(resolvedUser?.profilePicture || resolvedUser?.profile_picture || null);
+          if (hasValidWorkspaceContext(resolvedUser)) {
+            setLastActiveWorkspaceId(resolvedUser?.activeWorkspaceId || resolvedUser?.clinicId);
+          }
+          setShowWorkspacePicker(computeWorkspacePickerVisibility(resolvedUser));
+          return { success: true, user: resolvedUser };
         }
         return { success: false, error: 'No session' };
       }
@@ -366,10 +460,15 @@ export default function App() {
         if (data.twoFactorRequired) {
           return { success: true, twoFactorRequired: true, email: data.email };
         }
-        setUser(data.user);
-        setProfilePicture(data.user?.profilePicture || data.user?.profile_picture || null);
-        setShowWorkspacePicker(shouldPromptWorkspaceSelection(data.user));
-        return { success: true, user: data.user };
+        const alignedUser = alignWorkspaceFromStorage(data.user);
+        const resolvedUser = await restoreWorkspaceContextIfNeeded(alignedUser);
+        setUser(resolvedUser);
+        setProfilePicture(resolvedUser?.profilePicture || resolvedUser?.profile_picture || null);
+        if (hasValidWorkspaceContext(resolvedUser)) {
+          setLastActiveWorkspaceId(resolvedUser?.activeWorkspaceId || resolvedUser?.clinicId);
+        }
+        setShowWorkspacePicker(computeWorkspacePickerVisibility(resolvedUser));
+        return { success: true, user: resolvedUser };
       } else {
         console.error('Login failed on server:', data.error);
         // If server-side login fails, sign out of Supabase to clear local state
@@ -470,6 +569,9 @@ export default function App() {
   const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
   const [clinicStateHydrated, setClinicStateHydrated] = useState(false);
   const clinicStateSyncTimerRef = useRef<any>(null);
+  const inactivityTimerRef = useRef<any>(null);
+  const autoLogoutInProgressRef = useRef(false);
+  const AUTO_LOGOUT_IDLE_MS = 15 * 60 * 1000;
 
   const onAddActivityLog = async (action: string, details: string, category: 'clinical' | 'management' | 'system' = 'clinical') => {
     const newLog = normalizeActivityLog({
@@ -1601,15 +1703,60 @@ export default function App() {
     } catch (error) {
       console.error('Logout error:', error);
     }
+    setLastActiveWorkspaceId(null);
     setUser(null);
     setShowWorkspacePicker(false);
   };
 
+  useEffect(() => {
+    if (!user) {
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+        inactivityTimerRef.current = null;
+      }
+      autoLogoutInProgressRef.current = false;
+      return;
+    }
+
+    const resetInactivityTimer = () => {
+      if (autoLogoutInProgressRef.current) return;
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+      }
+      inactivityTimerRef.current = setTimeout(async () => {
+        if (autoLogoutInProgressRef.current) return;
+        autoLogoutInProgressRef.current = true;
+        await handleLogout();
+        setShowWorkspacePicker(false);
+      }, AUTO_LOGOUT_IDLE_MS);
+    };
+
+    const interactionEvents: Array<keyof WindowEventMap> = ['mousemove', 'keydown', 'click'];
+    interactionEvents.forEach((eventName) => {
+      window.addEventListener(eventName, resetInactivityTimer, { passive: true });
+    });
+
+    resetInactivityTimer();
+
+    return () => {
+      interactionEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, resetInactivityTimer);
+      });
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+        inactivityTimerRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
   const handleWorkspaceSelect = async (clinicId: string) => {
     const result = await dataService.selectWorkspace(clinicId);
     if (result.success && result.user) {
-      setUser(result.user);
-      setShowWorkspacePicker(shouldPromptWorkspaceSelection(result.user));
+      const alignedUser = alignWorkspaceFromStorage(result.user);
+      setUser(alignedUser);
+      setLastActiveWorkspaceId(alignedUser?.activeWorkspaceId || alignedUser?.clinicId || clinicId);
+      setShowWorkspacePicker(computeWorkspacePickerVisibility(alignedUser));
       return;
     }
     alert(result.error || 'Nao foi possivel selecionar este workspace.');
