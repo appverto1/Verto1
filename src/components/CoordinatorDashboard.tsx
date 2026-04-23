@@ -70,6 +70,7 @@ import {
   Pie,
 } from "recharts";
 import { dataService } from "../services/dataService";
+import { ROLE_CAPABILITY_SECTIONS } from "../constants/roleCapabilities";
 import {
   getDefaultAnamnesisTemplate,
   normalizeAnamnesisTemplate,
@@ -142,6 +143,50 @@ export function CoordinatorDashboard({
   onEvaluateHistoryItem,
   allTasks = [],
 }: CoordinatorDashboardProps) {
+  const role = String(user?.role || "coordinator");
+
+  const capabilityStatusForRole = (capabilityKey: string): "full" | "limited" | "none" => {
+    const capability = ROLE_CAPABILITY_SECTIONS.flatMap((section) => section.items).find(
+      (item) => item.key === capabilityKey,
+    );
+    if (!capability) return "none";
+    const status = (capability as any)?.[role];
+    if (status === "full" || status === "limited" || status === "none") return status;
+    return "none";
+  };
+
+  const tabCapabilityMap: Record<string, string | null> = {
+    dashboard: null,
+    patients: "patient-intake",
+    protocols: "protocol-library",
+    financial: "patient-financial",
+    team: "team-compensation",
+    settings: null,
+    logs: null,
+    billing: null,
+    flow: null,
+    birthdays: null,
+    agenda: "agenda-multi-view",
+    rooms: "rooms",
+  };
+
+  const canAccessTab = (tabId: string) => {
+    const capability = tabCapabilityMap[tabId];
+    if (!capability) return true;
+    const status = capabilityStatusForRole(capability);
+    if (status === "none") return false;
+    return true;
+  };
+
+  const filterTabsByRole = <T extends { id: string }>(items: T[]) =>
+    items.filter((item) => {
+      const capability = tabCapabilityMap[item.id];
+      if (!capability) return true;
+      const capabilityStatus = capabilityStatusForRole(capability);
+      if (capabilityStatus === "none") return false;
+      return true;
+    });
+
   const [activeTab, setActiveTab] = useState<
     | "dashboard"
     | "team"
@@ -173,12 +218,24 @@ export function CoordinatorDashboard({
       | "logs"
       | "billing",
   ) => {
+    if (!canAccessTab(tab)) {
+      setActiveTab("dashboard");
+      return;
+    }
     setActiveTab(tab);
     setTabHistory((prev) => {
       if (prev[prev.length - 1] === tab) return prev;
       return [...prev, tab];
     });
   };
+
+  useEffect(() => {
+    if (!canAccessTab(activeTab)) {
+      setActiveTab("dashboard");
+      setTabHistory(["dashboard"]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role, activeTab]);
 
   const goBackTab = () => {
     setTabHistory((prev) => {
@@ -2222,7 +2279,7 @@ export function CoordinatorDashboard({
           </div>
 
           <nav className="space-y-1 flex-1 overflow-y-auto no-scrollbar pr-1">
-            {[
+            {filterTabsByRole([
               {
                 id: "dashboard",
                 label: "Painel",
@@ -2259,7 +2316,7 @@ export function CoordinatorDashboard({
                 label: "Aniversariantes",
                 icon: Heart,
               },
-            ].map((item) => (
+            ]).map((item) => (
               <button
                 key={item.id}
                 onClick={() => {
@@ -2408,7 +2465,7 @@ export function CoordinatorDashboard({
                   </div>
 
                   <nav className="space-y-1 flex-1 overflow-y-auto no-scrollbar">
-                    {[
+                    {filterTabsByRole([
                       {
                         id: "dashboard",
                         label: "Painel",
@@ -2448,7 +2505,7 @@ export function CoordinatorDashboard({
                         icon: Heart,
                         badge: "EM BREVE",
                       },
-                    ].map((item) => (
+                    ]).map((item) => (
                       <button
                         key={item.id}
                         onClick={() => {
@@ -2557,7 +2614,7 @@ export function CoordinatorDashboard({
         </div>
 
         <nav className="space-y-2 flex-1 overflow-y-auto no-scrollbar pr-2">
-            {[
+            {filterTabsByRole([
               { id: "dashboard", label: "Painel", icon: LayoutDashboard },
               { id: "patients", label: "Pacientes", icon: ClipboardList },
               { id: "protocols", label: "Protocolos", icon: ClipboardCheck },
@@ -2576,7 +2633,7 @@ export function CoordinatorDashboard({
               icon: Heart,
               badge: "EM BREVE",
             },
-          ].map((item) => (
+          ]).map((item) => (
             <button
               key={item.id}
               onClick={() => navigateToTab(item.id as any)}
@@ -2746,7 +2803,7 @@ export function CoordinatorDashboard({
                 </div>
 
                 <nav className="space-y-1 flex-1 overflow-y-auto no-scrollbar">
-                  {[
+                  {filterTabsByRole([
                     { id: "dashboard", label: "Painel", icon: LayoutDashboard },
                     { id: "patients", label: "Pacientes", icon: ClipboardList },
                     {
@@ -2778,7 +2835,7 @@ export function CoordinatorDashboard({
                       icon: Heart,
                       badge: "EM BREVE",
                     },
-                  ].map((item) => (
+                  ]).map((item) => (
                     <button
                       key={item.id}
                       onClick={() => {
