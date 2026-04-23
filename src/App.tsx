@@ -15,6 +15,7 @@ export default function App() {
   const [user, setUser] = useState<any>(null); 
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [pendingClinicRelease, setPendingClinicRelease] = useState(false);
   const LAST_ACTIVE_WORKSPACE_KEY = 'last_active_workspace_id';
 
   const getLastActiveWorkspaceId = () =>
@@ -190,6 +191,53 @@ export default function App() {
       time: raw?.time || (hasValidDate ? parsedDate.toLocaleString('pt-BR') : 'Agora')
     };
   };
+
+  const enrichUserFromSessionMetadata = (candidateUser: any, supabaseSession?: any) => {
+    const metadata = supabaseSession?.user?.user_metadata || {};
+    const fullName = String(metadata?.full_name || '').trim();
+    const avatarUrl = String(metadata?.avatar_url || '').trim();
+
+    return {
+      ...candidateUser,
+      name: candidateUser?.name || fullName || candidateUser?.email?.split('@')?.[0] || candidateUser?.name,
+      profilePicture:
+        candidateUser?.profilePicture ||
+        candidateUser?.profile_picture ||
+        avatarUrl ||
+        null,
+      profile_picture:
+        candidateUser?.profile_picture ||
+        candidateUser?.profilePicture ||
+        avatarUrl ||
+        null,
+      oauthProvider:
+        candidateUser?.oauthProvider ||
+        supabaseSession?.user?.app_metadata?.provider ||
+        null,
+    };
+  };
+
+  const applyResolvedUserState = async (candidateUser: any, supabaseSession?: any) => {
+    const enrichedUser = enrichUserFromSessionMetadata(candidateUser, supabaseSession);
+    const alignedUser = alignWorkspaceFromStorage(enrichedUser);
+    const resolvedUser = await restoreWorkspaceContextIfNeeded(alignedUser);
+
+    setUser(resolvedUser);
+    setProfilePicture(resolvedUser?.profilePicture || resolvedUser?.profile_picture || null);
+    if (hasValidWorkspaceContext(resolvedUser)) {
+      setLastActiveWorkspaceId(resolvedUser?.activeWorkspaceId || resolvedUser?.clinicId);
+    }
+
+    const role = String(resolvedUser?.role || '').trim().toLowerCase();
+    const workspaceCount = Array.isArray(resolvedUser?.workspaces) ? resolvedUser.workspaces.length : 0;
+    const hasWorkspaceBinding = Boolean(String(resolvedUser?.clinicId || resolvedUser?.activeWorkspaceId || '').trim()) || workspaceCount > 0;
+    const isPendingPatientRelease = role === 'patient' && !hasWorkspaceBinding;
+
+    setPendingClinicRelease(isPendingPatientRelease);
+    setShowWorkspacePicker(isPendingPatientRelease ? false : computeWorkspacePickerVisibility(resolvedUser));
+
+    return resolvedUser;
+  };
   
   useEffect(() => {
     const handleOnline = () => {
@@ -226,7 +274,9 @@ export default function App() {
         if (event === 'SIGNED_IN' && session) {
           const intendedRole = localStorage.getItem('verto_intended_role') || 'therapist';
           localStorage.removeItem('verto_intended_role');
-          await handleLoginSuccess(session, intendedRole);
+          await handleLoginSuccess(session, intendedRole, undefined, {
+            provider: session?.user?.app_metadata?.provider || null
+          });
         } else if (event === 'SIGNED_OUT') {
           // Don't blindly clear user on SIGNED_OUT, let handleLogout or checkSession handle it
           // to avoid race conditions with mock/session-based login
@@ -269,22 +319,17 @@ export default function App() {
 
         const data = await response.json();
         if (data.user) {
-          const alignedUser = alignWorkspaceFromStorage(data.user);
-          const resolvedUser = await restoreWorkspaceContextIfNeeded(alignedUser);
-          setUser(resolvedUser);
-          setProfilePicture(resolvedUser?.profilePicture || resolvedUser?.profile_picture || null);
-          if (hasValidWorkspaceContext(resolvedUser)) {
-            setLastActiveWorkspaceId(resolvedUser?.activeWorkspaceId || resolvedUser?.clinicId);
-          }
-          setShowWorkspacePicker(computeWorkspacePickerVisibility(resolvedUser));
+          await applyResolvedUserState(data.user, session);
         } else {
           setUser(null);
+          setPendingClinicRelease(false);
           setProfilePicture(null);
           setShowWorkspacePicker(false);
         }
       } catch (error) {
         console.error('Session check error:', error);
         setUser(null);
+        setPendingClinicRelease(false);
       } finally {
         setLoading(false);
       }
@@ -328,13 +373,7 @@ export default function App() {
           const data = await response.json();
           if (data.user) {
             if (data.user.subscriptionStatus === 'active' || attempts >= maxAttempts) {
-              const alignedUser = alignWorkspaceFromStorage(data.user);
-              const resolvedUser = await restoreWorkspaceContextIfNeeded(alignedUser);
-              setUser(resolvedUser);
-              if (hasValidWorkspaceContext(resolvedUser)) {
-                setLastActiveWorkspaceId(resolvedUser?.activeWorkspaceId || resolvedUser?.clinicId);
-              }
-              setShowWorkspacePicker(computeWorkspacePickerVisibility(resolvedUser));
+              await applyResolvedUserState(data.user, session);
               // Clear URL params
               window.history.replaceState({}, document.title, "/");
             } else {
@@ -357,6 +396,7 @@ export default function App() {
     supabaseSession: any,
     intendedRole?: string,
     credentials?: { email?: string; password?: string },
+    authContext?: { provider?: string | null },
   ) => {
     try {
       if (!supabaseSession) {
@@ -387,19 +427,13 @@ export default function App() {
 
         const data = await response.json();
         if (data.user) {
-          const alignedUser = alignWorkspaceFromStorage(data.user);
-          const resolvedUser = await restoreWorkspaceContextIfNeeded(alignedUser);
-          setUser(resolvedUser);
-          setProfilePicture(resolvedUser?.profilePicture || resolvedUser?.profile_picture || null);
-          if (hasValidWorkspaceContext(resolvedUser)) {
-            setLastActiveWorkspaceId(resolvedUser?.activeWorkspaceId || resolvedUser?.clinicId);
-          }
-          setShowWorkspacePicker(computeWorkspacePickerVisibility(resolvedUser));
+          const resolvedUser = await applyResolvedUserState(data.user, session);
           return { success: true, user: resolvedUser };
         }
         return { success: false, error: 'No session' };
       }
 
+      const provider = authContext?.provider || supabaseSession?.user?.app_metadata?.provider || null;
       const accessToken = supabaseSession.access_token;
       const response = await fetch('/api/auth/login', {
         method: 'POST',
@@ -408,6 +442,7 @@ export default function App() {
         body: JSON.stringify({
           accessToken,
           intendedRole,
+          provider,
           email: credentials?.email || null,
           password: credentials?.password || null,
         })
@@ -435,14 +470,7 @@ export default function App() {
         if (data.twoFactorRequired) {
           return { success: true, twoFactorRequired: true, email: data.email };
         }
-        const alignedUser = alignWorkspaceFromStorage(data.user);
-        const resolvedUser = await restoreWorkspaceContextIfNeeded(alignedUser);
-        setUser(resolvedUser);
-        setProfilePicture(resolvedUser?.profilePicture || resolvedUser?.profile_picture || null);
-        if (hasValidWorkspaceContext(resolvedUser)) {
-          setLastActiveWorkspaceId(resolvedUser?.activeWorkspaceId || resolvedUser?.clinicId);
-        }
-        setShowWorkspacePicker(computeWorkspacePickerVisibility(resolvedUser));
+        const resolvedUser = await applyResolvedUserState(data.user, supabaseSession);
         return { success: true, user: resolvedUser };
       } else {
         console.error('Login failed on server:', data.error);
@@ -1499,6 +1527,7 @@ export default function App() {
     setLastActiveWorkspaceId(null);
     resetWorkspaceScopedState();
     setClinicStateHydrated(false);
+    setPendingClinicRelease(false);
     setUser(null);
     setShowWorkspacePicker(false);
   };
@@ -1551,6 +1580,7 @@ export default function App() {
       const alignedUser = alignWorkspaceFromStorage(result.user);
       setClinicStateHydrated(false);
       resetWorkspaceScopedState();
+      setPendingClinicRelease(false);
       setUser(alignedUser);
       setLastActiveWorkspaceId(alignedUser?.activeWorkspaceId || alignedUser?.clinicId || clinicId);
       setShowWorkspacePicker(computeWorkspacePickerVisibility(alignedUser));
@@ -1573,6 +1603,25 @@ export default function App() {
       
       {!user ? (
         <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />
+      ) : pendingClinicRelease && user.role === 'patient' ? (
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
+          <div className="bg-white w-full max-w-lg rounded-[32px] shadow-2xl shadow-blue-500/5 p-10 text-center border border-slate-100 animate-pop">
+            <div className="w-20 h-20 bg-blue-50 text-[#7a32fc] rounded-3xl flex items-center justify-center mx-auto mb-8 shadow-inner">
+              <Users size={36} />
+            </div>
+            <h2 className="text-2xl font-bold text-slate-900 mb-3 tracking-tight">Aguardando liberação da clínica</h2>
+            <p className="text-slate-500 font-normal leading-relaxed">
+              Seu login foi confirmado, mas ainda não existe vínculo ativo com uma clínica.
+              Assim que a clínica liberar seu acesso, você poderá entrar no painel do paciente.
+            </p>
+            <button
+              onClick={handleLogout}
+              className="mt-8 w-full bg-slate-900 text-white py-3 rounded-2xl font-semibold text-sm hover:opacity-90 transition"
+            >
+              Sair
+            </button>
+          </div>
+        </div>
       ) : showWorkspacePicker && Array.isArray(user.workspaces) && user.workspaces.length > 1 ? (
         <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
           <div className="w-full max-w-2xl bg-white rounded-3xl border border-slate-100 shadow-sm p-6">
@@ -1612,7 +1661,7 @@ export default function App() {
           }} 
           onClose={() => setShowOnboarding(false)}
         />
-      ) : user.role !== 'patient' && user.subscriptionStatus === 'pending' ? (
+      ) : (user.role === 'therapist' || user.role === 'coordinator') && user.subscriptionStatus === 'pending' ? (
         <SubscriptionRequired user={user} onLogout={handleLogout} />
       ) : user.role === 'patient' ? (
         <PatientDashboard 

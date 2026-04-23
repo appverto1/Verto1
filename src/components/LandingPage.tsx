@@ -152,14 +152,20 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     try {
       // Store intended role in localStorage to retrieve after redirect
       // Use registerType if in register modal, otherwise loginType
-      const roleToStore = showRegister ? registerType : loginType;
+      const rawRole = showRegister ? registerType : loginType;
+      const roleToStore =
+        rawRole === 'patient'
+          ? 'patient'
+          : rawRole === 'coordinator'
+            ? 'coordinator'
+            : 'coordinator';
       localStorage.setItem('verto_intended_role', roleToStore);
       
       const supabase = await getSupabase();
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin + '/',
+          redirectTo: window.location.origin,
         }
       });
       if (error) throw error;

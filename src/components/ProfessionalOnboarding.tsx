@@ -110,7 +110,9 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   const [sessionDurationMinutes, setSessionDurationMinutes] = useState('50');
   const [countryCode, setCountryCode] = useState('+55');
   const [phone, setPhone] = useState('');
-  const [profilePicture, setProfilePicture] = useState<string | null>(null);
+  const [profilePicture, setProfilePicture] = useState<string | null>(
+    user?.profilePicture || user?.profile_picture || null,
+  );
 
   const [clinicName, setClinicName] = useState('');
   const [clinicLogoUrl, setClinicLogoUrl] = useState<string | null>(null);
