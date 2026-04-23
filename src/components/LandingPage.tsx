@@ -421,10 +421,15 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         })
       });
 
-      const data = await response.json();
+      let data: any = null;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
 
       if (!response.ok) {
-        throw new Error(data.error || 'Erro ao criar conta');
+        throw new Error(data?.error || `Erro ao criar conta (HTTP ${response.status})`);
       }
 
       alert(data.message || 'Conta criada. Verifique seu e-mail para confirmar o cadastro.');

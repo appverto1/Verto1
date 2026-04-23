@@ -1344,11 +1344,11 @@ async function startServer() {
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", "data:", "blob:", "https://*.supabase.co"],
-        fontSrc: ["'self'", "data:"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        imgSrc: ["'self'", "data:", "blob:", "https://*.supabase.co", "https://*.googleusercontent.com", "https://www.gstatic.com"],
+        fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
         connectSrc,
-        frameSrc: ["'self'", "blob:", "data:", "https://*.supabase.co"],
+        frameSrc: ["'self'", "blob:", "data:", "https://*.supabase.co", "https://accounts.google.com", "https://*.google.com"],
         objectSrc: ["'none'"],
         baseUri: ["'self'"],
         frameAncestors: ["'none'"]
@@ -2008,6 +2008,13 @@ async function startServer() {
         body: { error: 'AUTH_CONFIG_MISSING_PUBLIC_KEY' }
       };
     }
+    if (!supabase) {
+      return {
+        ok: false,
+        status: 500,
+        body: { error: 'AUTH_CONFIG_MISSING_SERVICE_ROLE' }
+      };
+    }
     const safeEmail = sanitizeEmail(payload?.email);
     const rawPassword = typeof payload?.password === 'string' ? payload.password : '';
     const password = validateStrongPassword(rawPassword);
@@ -2136,8 +2143,32 @@ async function startServer() {
       const result = await registerUserWithEmailConfirmation(req.body || {});
       return res.status(result.status).json(result.body);
     } catch (error: any) {
-      console.error('[Auth] Signup error:', error);
-      return res.status(500).json({ error: 'Não foi possível iniciar o cadastro.' });
+      const payload = req.body || {};
+      const safeEmail = sanitizeEmail(payload?.email);
+      const safeRole = sanitizeString(payload?.role, 40);
+      console.error('[Auth] Signup error (detailed):', {
+        message: error?.message || String(error),
+        code: error?.code || null,
+        details: error?.details || null,
+        hint: error?.hint || null,
+        stack: error?.stack || null,
+        env: {
+          hasSupabaseUrl: !!process.env.SUPABASE_URL,
+          hasSupabaseServiceRoleKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+          hasSupabaseAnonOrPublishable:
+            !!process.env.SUPABASE_PUBLISHABLE_KEY ||
+            !!process.env.SUPABASE_ANON_KEY ||
+            !!process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+            !!process.env.VITE_SUPABASE_ANON_KEY
+        },
+        request: {
+          email: safeEmail || null,
+          role: safeRole || null
+        }
+      });
+      return res.status(500).json({
+        error: error?.message || 'Não foi possível iniciar o cadastro.'
+      });
     }
   });
 
