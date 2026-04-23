@@ -151,6 +151,7 @@ export function CoordinatorDashboard({
         ? "receptionist"
         : "coordinator";
   const isTherapist = capabilityRole === "therapist";
+  const isReceptionist = capabilityRole === "receptionist";
   const canCreatePatients = !isTherapist;
 
   const capabilityStatusForRole = (capabilityKey: string): "full" | "limited" | "none" => {
@@ -401,6 +402,24 @@ export function CoordinatorDashboard({
   const [therapistCrp, setTherapistCrp] = useState<string>(
     String(user?.crp || ""),
   );
+  const [therapistFullName, setTherapistFullName] = useState<string>(
+    String(user?.name || ""),
+  );
+  const [therapistSpecialties, setTherapistSpecialties] = useState<string>(
+    String(
+      user?.specialties ||
+        user?.clinicSettings?.therapistSpecialties ||
+        user?.clinicSettings?.specialty ||
+        "",
+    ),
+  );
+  const [therapistMiniCurriculum, setTherapistMiniCurriculum] = useState<string>(
+    String(
+      user?.miniCurriculum ||
+        user?.clinicSettings?.therapistMiniCurriculum ||
+        "",
+    ),
+  );
   const [therapistSignatureDataUrl, setTherapistSignatureDataUrl] = useState<
     string | null
   >(user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null);
@@ -412,6 +431,11 @@ export function CoordinatorDashboard({
   const canManageClinicSettings = capabilityStatusForRole("clinic-settings") !== "none";
   const canManageBilling = capabilityStatusForRole("billing-management") !== "none";
   const canEditAnamnesisTemplate = canManageClinicSettings;
+  const DAY_GRID_SLOT_HEIGHT_PX = 66;
+  const DAY_GRID_START_HOUR = 7;
+  const DAY_GRID_END_HOUR = 20;
+  const [currentTimelineOffsetPx, setCurrentTimelineOffsetPx] = useState<number | null>(null);
+  const [currentTimelineLabel, setCurrentTimelineLabel] = useState<string>("");
   const financialSurveyOptions = [
     "Controle de recebimentos por paciente",
     "Conciliação de PIX e cartão",
@@ -560,17 +584,61 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     setTherapistCrp(String(user?.crp || ""));
+    setTherapistFullName(String(user?.name || ""));
+    setTherapistSpecialties(
+      String(
+        user?.specialties ||
+          user?.clinicSettings?.therapistSpecialties ||
+          user?.clinicSettings?.specialty ||
+          "",
+      ),
+    );
+    setTherapistMiniCurriculum(
+      String(
+        user?.miniCurriculum ||
+          user?.clinicSettings?.therapistMiniCurriculum ||
+          "",
+      ),
+    );
     setTherapistSignatureDataUrl(
       user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null,
     );
     setTherapistProfilePhotoUrl(user?.profilePicture || user?.profile_picture || null);
   }, [
     user?.crp,
+    user?.name,
+    user?.specialties,
+    user?.miniCurriculum,
+    user?.clinicSettings?.therapistSpecialties,
+    user?.clinicSettings?.therapistMiniCurriculum,
+    user?.clinicSettings?.specialty,
     user?.signatureDataUrl,
     user?.clinicSettings?.signatureDataUrl,
     user?.profilePicture,
     user?.profile_picture,
   ]);
+
+  useEffect(() => {
+    const updateTimeline = () => {
+      const now = new Date();
+      const hours = now.getHours();
+      const minutes = now.getMinutes();
+      if (hours < DAY_GRID_START_HOUR || hours > DAY_GRID_END_HOUR) {
+        setCurrentTimelineOffsetPx(null);
+        setCurrentTimelineLabel("");
+        return;
+      }
+      const relativeHour = hours + minutes / 60 - DAY_GRID_START_HOUR;
+      setCurrentTimelineOffsetPx(Math.max(0, relativeHour * DAY_GRID_SLOT_HEIGHT_PX));
+      setCurrentTimelineLabel(
+        now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
+      );
+    };
+
+    updateTimeline();
+    const timer = setInterval(updateTimeline, 60 * 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (view === "patient") {
@@ -1152,15 +1220,36 @@ export function CoordinatorDashboard({
       );
 
     if (!resolvedPatient?.id) {
-      alert(
-        "Este agendamento ainda não está vinculado a um paciente cadastrado. Vincule o paciente no cadastro para abrir o prontuário.",
-      );
+      const fallbackName = repairMojibake(String(fallbackPatientName || "Paciente")).trim();
+      setQuickPatientName(fallbackName || "Paciente");
+      setQuickPatientAge("");
+      setQuickPatientEmail("");
+      setQuickPatientPhone("");
+      setIsQuickRegisterModalOpen(true);
+      setActionPopup({
+        title: "Paciente não localizado",
+        message:
+          "Abrimos o Cadastro Rápido já preenchido com o nome do agendamento para você vincular o atendimento sem retrabalho.",
+      });
       return;
     }
 
+    const roleDefault = isTherapist
+      ? { tab: "history" as const, openAnamnesis: false }
+      : isReceptionist
+        ? { tab: "files" as const, openAnamnesis: true }
+        : { tab: "history" as const, openAnamnesis: false };
+
+    const nextOptions = isReceptionist
+      ? roleDefault
+      : {
+          ...roleDefault,
+          ...(options || {}),
+        };
+
     setSelectedPatientId(resolvedPatient.id);
-    setPatientOpenTab(options?.tab || "history");
-    setOpenAnamnesisOnPatientOpen(Boolean(options?.openAnamnesis));
+    setPatientOpenTab(nextOptions.tab || "history");
+    setOpenAnamnesisOnPatientOpen(Boolean(nextOptions.openAnamnesis));
     setView("patient");
   };
 
@@ -1328,59 +1417,75 @@ export function CoordinatorDashboard({
           </div>
         </div>
 
-        {hourSlots.map((slot) => {
-          const [hour] = slot.split(":");
-          const slotItems = currentViewAgenda.filter(
-            (item: any) =>
-              item.date === todayKey &&
-              String(item.time || "").startsWith(`${hour}:`),
-          );
-
-          return (
+        <div className="relative">
+          {currentTimelineOffsetPx !== null && (
             <div
-              key={slot}
-              className="grid grid-cols-[96px_1fr] border-b border-slate-50 min-h-[66px]"
+              className="absolute left-[96px] right-0 z-10 pointer-events-none"
+              style={{ top: `${currentTimelineOffsetPx}px` }}
             >
-              <div className="px-4 py-3 text-xs font-semibold text-slate-500 bg-white">
-                {slot}
-              </div>
-              <div className="px-3 py-2 bg-white">
-                <div className="flex flex-wrap gap-2">
-                  {slotItems.length > 0 ? (
-                    slotItems.map((item: any) => (
-                      <button
-                        key={item.id}
-                        onClick={() =>
-                          onPatientClick(item.patientId, undefined, item.patientName)
-                        }
-                        className="text-left min-w-[220px] rounded-xl border border-[#7a32fc]/20 bg-[#7a32fc]/5 px-3 py-2 hover:bg-[#7a32fc]/10 transition-all"
-                      >
-                        <p className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                          {item.time} • {item.patientName}
-                          {item.anamnesisPending && (
-                            <span
-                              title="Paciente pendente de ficha anamnese"
-                              className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-100 text-amber-700 text-[10px] font-black"
-                            >
-                              !
-                            </span>
-                          )}
-                        </p>
-                        <p className="text-[10px] text-slate-500">
-                          {item.therapistName} • Sala {item.room || "--"}
-                        </p>
-                      </button>
-                    ))
-                  ) : (
-                    <span className="text-[11px] text-slate-300">
-                      Sem agendamento
-                    </span>
-                  )}
-                </div>
+              <div className="relative">
+                <div className="h-[2px] bg-[#ff4d6d] shadow-[0_0_0_1px_rgba(255,77,109,0.18)]" />
+                <span className="absolute -top-3.5 right-3 rounded-full bg-[#ff4d6d] text-white text-[9px] font-black tracking-wider px-2 py-0.5 shadow-sm">
+                  {currentTimelineLabel}
+                </span>
               </div>
             </div>
-          );
-        })}
+          )}
+
+          {hourSlots.map((slot) => {
+            const [hour] = slot.split(":");
+            const slotItems = currentViewAgenda.filter(
+              (item: any) =>
+                item.date === todayKey &&
+                String(item.time || "").startsWith(`${hour}:`),
+            );
+
+            return (
+              <div
+                key={slot}
+                className="grid grid-cols-[96px_1fr] border-b border-slate-50 min-h-[66px]"
+              >
+                <div className="px-4 py-3 text-xs font-semibold text-slate-500 bg-white">
+                  {slot}
+                </div>
+                <div className="px-3 py-2 bg-white">
+                  <div className="flex flex-wrap gap-2">
+                    {slotItems.length > 0 ? (
+                      slotItems.map((item: any) => (
+                        <button
+                          key={item.id}
+                          onClick={() =>
+                            onPatientClick(item.patientId, undefined, item.patientName)
+                          }
+                          className="text-left min-w-[220px] rounded-xl border border-[#7a32fc]/20 bg-[#7a32fc]/5 px-3 py-2 hover:bg-[#7a32fc]/10 transition-all"
+                        >
+                          <p className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                            {item.time} • {item.patientName}
+                            {item.anamnesisPending && (
+                              <span
+                                title="Paciente pendente de ficha anamnese"
+                                className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-100 text-amber-700 text-[10px] font-black"
+                              >
+                                !
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-[10px] text-slate-500">
+                            {item.therapistName} • Sala {item.room || "--"}
+                          </p>
+                        </button>
+                      ))
+                    ) : (
+                      <span className="text-[11px] text-slate-300">
+                        Sem agendamento
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     );
   };
@@ -1535,7 +1640,18 @@ export function CoordinatorDashboard({
 
   const handleSaveClinicSettings = () => {
     if (isTherapist) {
+      const cleanFullName = therapistFullName.trim();
       const cleanCrp = therapistCrp.trim();
+      const cleanSpecialties = therapistSpecialties.trim();
+      const cleanMiniCurriculum = therapistMiniCurriculum.trim();
+      const isCrpValid =
+        /^[A-Za-z]{2,4}\s?\/?\s?\d{3,10}$/i.test(cleanCrp) ||
+        /^\d{2}\s?\/?\s?\d{4,8}$/i.test(cleanCrp);
+
+      if (!cleanFullName || cleanFullName.length < 3) {
+        showToast("Informe o nome completo para salvar o perfil.", "error");
+        return;
+      }
       if (!cleanCrp) {
         const warning =
           "Complete seu perfil com o CRP para habilitar registros clínicos";
@@ -1543,19 +1659,28 @@ export function CoordinatorDashboard({
         showToast(warning, "error");
         return;
       }
+      if (!isCrpValid) {
+        showToast("CRP inválido. Use um formato como CRP 06/123456.", "error");
+        return;
+      }
       showProcessing("Salvando perfil profissional...");
       onUpdateProfile({
+        name: cleanFullName,
         crp: cleanCrp,
+        specialties: cleanSpecialties,
+        miniCurriculum: cleanMiniCurriculum,
         profilePicture: therapistProfilePhotoUrl,
         signatureDataUrl: therapistSignatureDataUrl,
         clinicSettings: {
           ...(user?.clinicSettings || {}),
+          therapistSpecialties: cleanSpecialties,
+          therapistMiniCurriculum: cleanMiniCurriculum,
           signatureDataUrl: therapistSignatureDataUrl,
         },
       });
       onAddActivityLog(
         "Perfil profissional atualizado",
-        "O terapeuta atualizou CRP, assinatura digital e foto de perfil.",
+        "O terapeuta atualizou nome, CRP, especialidades, mini currículo, assinatura digital e foto de perfil.",
         "management",
       );
       hideProcessing();
@@ -2709,6 +2834,7 @@ export function CoordinatorDashboard({
               }
               protocols={protocols}
               userRole={user.role}
+              allowedTabs={isReceptionist ? ["files"] : undefined}
               anamnesisTemplate={anamnesisTemplate}
             />
           </main>
@@ -4193,6 +4319,19 @@ export function CoordinatorDashboard({
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="md:col-span-2">
                           <label className="block text-xs font-bold text-slate-700 mb-2">
+                            Nome Completo <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={therapistFullName}
+                            onChange={(e) => setTherapistFullName(e.target.value)}
+                            placeholder="Nome completo do profissional"
+                            className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                          />
+                        </div>
+
+                        <div className="md:col-span-2">
+                          <label className="block text-xs font-bold text-slate-700 mb-2">
                             CRP <span className="text-red-500">*</span>
                           </label>
                           <input
@@ -4207,6 +4346,32 @@ export function CoordinatorDashboard({
                               Complete seu perfil com o CRP para habilitar registros clínicos
                             </p>
                           )}
+                        </div>
+
+                        <div className="md:col-span-2">
+                          <label className="block text-xs font-bold text-slate-700 mb-2">
+                            Especialidades
+                          </label>
+                          <input
+                            type="text"
+                            value={therapistSpecialties}
+                            onChange={(e) => setTherapistSpecialties(e.target.value)}
+                            placeholder="Ex: ABA, TCC, Integração Sensorial"
+                            className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                          />
+                        </div>
+
+                        <div className="md:col-span-2">
+                          <label className="block text-xs font-bold text-slate-700 mb-2">
+                            Mini Currículo
+                          </label>
+                          <textarea
+                            rows={4}
+                            value={therapistMiniCurriculum}
+                            onChange={(e) => setTherapistMiniCurriculum(e.target.value)}
+                            placeholder="Resumo profissional para relatórios e identificação clínica."
+                            className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-medium outline-none focus:ring-2 focus:ring-blue-500/20 transition-all resize-none"
+                          />
                         </div>
 
                         <div>
@@ -4228,7 +4393,7 @@ export function CoordinatorDashboard({
                             <input
                               type="file"
                               className="hidden"
-                              accept="image/*"
+                              accept="image/png,image/webp,image/svg+xml"
                               onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (!file) return;
@@ -4236,6 +4401,9 @@ export function CoordinatorDashboard({
                               }}
                             />
                           </label>
+                          <p className="text-[11px] text-slate-400 mt-2">
+                            Recomendação: PNG com fundo transparente para relatórios.
+                          </p>
                         </div>
 
                         <div>

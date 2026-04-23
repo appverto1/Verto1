@@ -1,5 +1,6 @@
 ﻿import React from 'react';
 import { BatteryCharging, BatteryFull, Ear, Users, Brain, Check, CheckCircle, Activity, DollarSign, Briefcase, Heart, Plus } from 'lucide-react';
+import logoVerto from '../assets/Logoverto.png';
 
 export const ENERGY_TAGS = [
   { id: 'sensory', label: 'Sensorial', icon: <Ear size={18} />, color: 'bg-purple-100 text-purple-600 border-purple-200' },
@@ -20,19 +21,7 @@ export const ADULT_CONVENTIONAL_TAGS = [
 export const LogoVerto = ({ size = 64, className = "", showText = false }: { size?: number, className?: string, showText?: boolean }) => (
   <div className={`flex items-center gap-2 shrink-0 ${className}`}>
     <div style={{ width: size, height: size }} className="flex items-center justify-center">
-      <svg viewBox="0 0 64 64" className="w-full h-full" aria-label="Verto Logo" role="img">
-        <defs>
-          <linearGradient id="vertoWing" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#C08CFF" />
-            <stop offset="100%" stopColor="#7A32FC" />
-          </linearGradient>
-        </defs>
-        <circle cx="14" cy="14" r="8" fill="#5D2A85" />
-        <circle cx="16" cy="30" r="10" fill="#6B2F9B" />
-        <circle cx="19" cy="47" r="11" fill="#7A32AC" />
-        <path d="M58 8C44 8 34 20 30 40c13-2 24-13 28-32z" fill="url(#vertoWing)" stroke="#4B236B" strokeWidth="2" />
-        <path d="M42 36c8 0 13 6 13 14-10 0-17-6-18-14h5z" fill="url(#vertoWing)" stroke="#4B236B" strokeWidth="2" />
-      </svg>
+      <img src={logoVerto} alt="Verto Logo" className="w-full h-full object-contain" />
     </div>
     {showText && (
       <span className="text-2xl font-logo font-bold tracking-tighter text-[#7a32fc] lowercase" style={{ fontSize: size * 0.5 }}>verto</span>
@@ -151,4 +140,5 @@ export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true }:
     </div> 
   ); 
 };
+
 

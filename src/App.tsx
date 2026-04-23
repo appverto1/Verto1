@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS } from './components/Common';
 import { LandingPage } from './components/LandingPage';
 import { PatientDashboard } from './components/PatientDashboard';
@@ -7,7 +7,7 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { SuperAdminDashboard } from './components/SuperAdminDashboard';
 import { ProfessionalOnboarding } from './components/ProfessionalOnboarding';
 import { testSupabaseConnection, getSupabase } from './lib/supabase';
-import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard, Users } from 'lucide-react';
+import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard } from 'lucide-react';
 import { syncOfflineData } from './services/localDb';
 import { dataService } from './services/dataService';
 
@@ -15,7 +15,6 @@ export default function App() {
   const [user, setUser] = useState<any>(null); 
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [pendingClinicRelease, setPendingClinicRelease] = useState(false);
   const LAST_ACTIVE_WORKSPACE_KEY = 'last_active_workspace_id';
 
   const getLastActiveWorkspaceId = () =>
@@ -170,7 +169,7 @@ export default function App() {
       raw?.details ||
       raw?.description ||
       raw?.message ||
-      'Ação registrada no sistema.';
+      'AÃ§Ã£o registrada no sistema.';
     const type = raw?.type || raw?.category || 'system';
     const isoDate = raw?.timestamp || raw?.created_at || raw?.date || null;
     const parsedDate = isoDate ? new Date(isoDate) : null;
@@ -227,14 +226,7 @@ export default function App() {
     if (hasValidWorkspaceContext(resolvedUser)) {
       setLastActiveWorkspaceId(resolvedUser?.activeWorkspaceId || resolvedUser?.clinicId);
     }
-
-    const role = String(resolvedUser?.role || '').trim().toLowerCase();
-    const workspaceCount = Array.isArray(resolvedUser?.workspaces) ? resolvedUser.workspaces.length : 0;
-    const hasWorkspaceBinding = Boolean(String(resolvedUser?.clinicId || resolvedUser?.activeWorkspaceId || '').trim()) || workspaceCount > 0;
-    const isPendingPatientRelease = role === 'patient' && !hasWorkspaceBinding;
-
-    setPendingClinicRelease(isPendingPatientRelease);
-    setShowWorkspacePicker(isPendingPatientRelease ? false : computeWorkspacePickerVisibility(resolvedUser));
+    setShowWorkspacePicker(computeWorkspacePickerVisibility(resolvedUser));
 
     return resolvedUser;
   };
@@ -322,14 +314,12 @@ export default function App() {
           await applyResolvedUserState(data.user, session);
         } else {
           setUser(null);
-          setPendingClinicRelease(false);
           setProfilePicture(null);
           setShowWorkspacePicker(false);
         }
       } catch (error) {
         console.error('Session check error:', error);
         setUser(null);
-        setPendingClinicRelease(false);
       } finally {
         setLoading(false);
       }
@@ -387,7 +377,7 @@ export default function App() {
       };
       checkSession();
     } else if (urlParams.get('payment') === 'cancel') {
-      alert('O pagamento foi cancelado. Você pode tentar novamente quando quiser.');
+      alert('O pagamento foi cancelado. VocÃª pode tentar novamente quando quiser.');
       window.history.replaceState({}, document.title, "/");
     }
   }, []);
@@ -416,13 +406,13 @@ export default function App() {
         if (!response.ok) {
           const text = await response.text();
           console.error('Login auth check failed:', response.status, text);
-          return { success: false, error: 'Erro na comunicação com o servidor' };
+          return { success: false, error: 'Erro na comunicaÃ§Ã£o com o servidor' };
         }
         
         const contentType = response.headers.get('content-type');
         if (!contentType || !contentType.includes('application/json')) {
           console.error('Login auth check returned non-JSON:', contentType);
-          return { success: false, error: 'Resposta inválida do servidor' };
+          return { success: false, error: 'Resposta invÃ¡lida do servidor' };
         }
 
         const data = await response.json();
@@ -455,14 +445,14 @@ export default function App() {
           const errData = JSON.parse(text);
           return { success: false, error: errData.error || 'Erro no login' };
         } catch (e) {
-          return { success: false, error: 'Erro na comunicação com o servidor' };
+          return { success: false, error: 'Erro na comunicaÃ§Ã£o com o servidor' };
         }
       }
 
       const contentType = response.headers.get('content-type');
       if (!contentType || !contentType.includes('application/json')) {
         console.error('Login returned non-JSON:', contentType);
-        return { success: false, error: 'Resposta inválida do servidor' };
+        return { success: false, error: 'Resposta invÃ¡lida do servidor' };
       }
 
       const data = await response.json();
@@ -477,11 +467,11 @@ export default function App() {
         // If server-side login fails, sign out of Supabase to clear local state
         const supabase = await getSupabase();
         await supabase.auth.signOut();
-        return { success: false, error: data.error || 'Erro ao sincronizar sessão com o servidor' };
+        return { success: false, error: data.error || 'Erro ao sincronizar sessÃ£o com o servidor' };
       }
     } catch (error: any) {
       console.error('Login error:', error);
-      return { success: false, error: error.message || 'Erro de conexão' };
+      return { success: false, error: error.message || 'Erro de conexÃ£o' };
     }
   };
 
@@ -566,12 +556,12 @@ export default function App() {
       }
     } catch (error: any) {
       console.error('Checkout error:', error);
-      alert('Erro de conexão: ' + error.message);
+      alert('Erro de conexÃ£o: ' + error.message);
     }
   };
 
   const handleEnterpriseContact = (currentUser: any) => {
-    const message = `Olá! Tenho interesse no plano Enterprise da Verto.\n\nNome: ${currentUser?.name || ''}\nEmail: ${currentUser?.email || ''}`;
+    const message = `OlÃ¡! Tenho interesse no plano Enterprise da Verto.\n\nNome: ${currentUser?.name || ''}\nEmail: ${currentUser?.email || ''}`;
     window.open(`https://wa.me/5511959348563?text=${encodeURIComponent(message)}`, '_blank');
   };
 
@@ -583,9 +573,9 @@ export default function App() {
         </div>
         <h2 className="text-3xl font-bold text-slate-900 mb-4 tracking-tight">Ative sua conta</h2>
         <p className="text-slate-500 font-normal mb-8 leading-relaxed">
-          Para acessar a plataforma Verto, é necessário ativar sua assinatura. 
+          Para acessar a plataforma Verto, Ã© necessÃ¡rio ativar sua assinatura. 
           {user.role === 'patient' ? (
-            <span> O valor para pacientes é de apenas <strong>R$ 4,90/mês</strong>.</span>
+            <span> O valor para pacientes Ã© de apenas <strong>R$ 4,90/mÃªs</strong>.</span>
           ) : (
             <span> Escolha um plano para concluir sua assinatura.</span>
           )}
@@ -614,10 +604,10 @@ export default function App() {
                 Assinar Crescimento (R$ 399,90)
               </button>
               <button 
-                onClick={() => handleCheckout('Avançado')}
+                onClick={() => handleCheckout('AvanÃ§ado')}
                 className="w-full bg-[#FFB547] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-amber-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
               >
-                Assinar Avançado (R$ 679,90)
+                Assinar AvanÃ§ado (R$ 679,90)
               </button>
               <button
                 onClick={() => handleEnterpriseContact(user)}
@@ -637,7 +627,7 @@ export default function App() {
         </div>
         
         <p className="mt-8 text-[10px] text-slate-400 font-medium uppercase tracking-widest">
-          Pagamento processado com segurança pelo Stripe
+          Pagamento processado com seguranÃ§a pelo Stripe
         </p>
       </div>
     </div>
@@ -718,15 +708,15 @@ export default function App() {
     const fetchPatientScopedData = async () => {
       if (!user || user.role !== 'patient' || !user.email) return;
       const [historyRes, tasksRes] = await Promise.all([
-        dataService.getHistoryByEmail(user.email),
-        dataService.getTasksByEmail(user.email)
+        dataService.getPatientSelfHistory(),
+        dataService.getPatientSelfTasks()
       ]);
 
       setHistory(
         Array.isArray(historyRes?.data)
           ? historyRes.data.map((h: any) => ({
               ...h,
-              patientId: user.id,
+              patientId: h?.patient_id || h?.patientId || user.id,
               time: h?.created_at
                 ? new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                 : '',
@@ -743,7 +733,7 @@ export default function App() {
         Array.isArray(tasksRes?.data)
           ? tasksRes.data.map((t: any) => ({
               ...t,
-              patientId: user.id
+              patientId: t?.patient_id || t?.patientId || user.id
             }))
           : []
       );
@@ -772,7 +762,7 @@ export default function App() {
           specialtySettings
         });
       } catch (error) {
-        console.error('Erro ao sincronizar estado clínico no Supabase:', error);
+        console.error('Erro ao sincronizar estado clÃ­nico no Supabase:', error);
       }
     }, 800);
 
@@ -799,7 +789,7 @@ export default function App() {
 
   const handleAddTask = async (t: any) => {
     setTasks(prev => [...prev, t]);
-    onAddActivityLog("Criação de Tarefa", `Tarefa "${t.title}" criada para o paciente ID ${t.patientId}.`);
+    onAddActivityLog("CriaÃ§Ã£o de Tarefa", `Tarefa "${t.title}" criada para o paciente ID ${t.patientId}.`);
 
     // Sync to Backend
     const patient = allPatients.find(p => p.id === t.patientId);
@@ -812,7 +802,7 @@ export default function App() {
   };
   const handleUpdateTask = async (id: any, fields: any) => {
     setTasks(prev => prev.map(t => t.id === id ? { ...t, ...fields } : t));
-    onAddActivityLog("Atualização de Tarefa", `Tarefa ID ${id} atualizada.`);
+    onAddActivityLog("AtualizaÃ§Ã£o de Tarefa", `Tarefa ID ${id} atualizada.`);
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -832,7 +822,7 @@ export default function App() {
       subject: subject || "Geral" 
     };
     setTherapistNotes(prev => [newNote, ...prev]);
-    onAddActivityLog("Registro de Evolução", `Nova nota (${visibility}) adicionada ao prontuário do paciente ID ${pid}.`);
+    onAddActivityLog("Registro de EvoluÃ§Ã£o", `Nova nota (${visibility}) adicionada ao prontuÃ¡rio do paciente ID ${pid}.`);
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -852,10 +842,10 @@ export default function App() {
     const item = history.find(i => i.id === id);
     if (item) {
       const updatedItem = { ...item, ...updates };
-      const noteText = `📝 ATUALIZAÇÃO DE REGISTRO\nAtividade: ${updatedItem.title}\nPontuação: ${updatedItem.score}\nObs: ${updatedItem.evalComment || "Nenhuma observação."}`;
-      handleAddNote(item.patientId, noteText, 'private', 'Sessão');
+      const noteText = `ðŸ“ ATUALIZAÃ‡ÃƒO DE REGISTRO\nAtividade: ${updatedItem.title}\nPontuaÃ§Ã£o: ${updatedItem.score}\nObs: ${updatedItem.evalComment || "Nenhuma observaÃ§Ã£o."}`;
+      handleAddNote(item.patientId, noteText, 'private', 'SessÃ£o');
       setHistory(prev => prev.map(i => i.id === id ? updatedItem : i));
-      onAddActivityLog("Edição de Histórico", `Registro de atividade "${item.title}" (ID ${id}) editado.`);
+      onAddActivityLog("EdiÃ§Ã£o de HistÃ³rico", `Registro de atividade "${item.title}" (ID ${id}) editado.`);
     }
   };
   const handleUpdateAgendaStatus = (id: any, status: string) => {
@@ -864,7 +854,7 @@ export default function App() {
 
   const handleUpdateAppointment = (id: any, updates: any) => {
     setTherapistAgenda(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
-    onAddActivityLog("Edição de Agendamento", `Agendamento ID ${id} atualizado: ${JSON.stringify(updates)}`, 'management');
+    onAddActivityLog("EdiÃ§Ã£o de Agendamento", `Agendamento ID ${id} atualizado: ${JSON.stringify(updates)}`, 'management');
   };
 
   const handleAddPatient = async (data: any) => { 
@@ -930,15 +920,15 @@ export default function App() {
               await navigator.clipboard.writeText(safePassword);
             }
           } catch (error) {
-            console.warn('Não foi possível copiar a senha temporária automaticamente:', error);
+            console.warn('NÃ£o foi possÃ­vel copiar a senha temporÃ¡ria automaticamente:', error);
           }
           window.prompt(
-            `Conta criada para o paciente ${data.email}. Copie a senha temporária abaixo e compartilhe com segurança:`,
+            `Conta criada para o paciente ${data.email}. Copie a senha temporÃ¡ria abaixo e compartilhe com seguranÃ§a:`,
             safePassword
           );
         } else if (userResult.message === 'User already exists') {
           // If user already exists, we should inform that history will be linked
-          alert(`O paciente com o email ${data.email} já possui uma conta no sistema. Todo o histórico clínico anterior será vinculado a este novo prontuário.`);
+          alert(`O paciente com o email ${data.email} jÃ¡ possui uma conta no sistema. Todo o histÃ³rico clÃ­nico anterior serÃ¡ vinculado a este novo prontuÃ¡rio.`);
           
           // Fetch existing history and notes by email
           const historyRes = await dataService.getHistoryByEmail(data.email);
@@ -1030,7 +1020,7 @@ export default function App() {
       setAllPatients(prev => prev.filter(p => p.id !== updatedData.id));
       setClinicalRecords(prev => prev.filter(r => r.patientId !== updatedData.id));
       setTherapistAgenda(prev => prev.filter(a => a.id !== updatedData.id));
-      onAddActivityLog("Desvinculação de Paciente", `Paciente ID ${updatedData.id} foi desvinculado.`, 'management');
+      onAddActivityLog("DesvinculaÃ§Ã£o de Paciente", `Paciente ID ${updatedData.id} foi desvinculado.`, 'management');
     } else {
       if (Object.keys(identityData).length > 1) { // More than just 'id'
         setAllPatients(prev => prev.map(p => p.id === updatedData.id ? { ...p, ...identityData } : p)); 
@@ -1058,7 +1048,7 @@ export default function App() {
       }
 
       setTherapistAgenda(prev => prev.map(a => a.id === updatedData.id ? { ...a, name: updatedData.name || a.name } : a)); 
-      onAddActivityLog("Atualização de Cadastro", `Dados do paciente ID ${updatedData.id} atualizados.`, 'management');
+      onAddActivityLog("AtualizaÃ§Ã£o de Cadastro", `Dados do paciente ID ${updatedData.id} atualizados.`, 'management');
     }
 
     // Sync to Backend
@@ -1159,7 +1149,7 @@ export default function App() {
            (startTime <= r.startTime && endTime >= r.endTime))
         );
         if (roomConflict) {
-          conflicts.push(`Conflito de Sala: ${sess.room} já está reservada em ${dateStr} às ${startTime}`);
+          conflicts.push(`Conflito de Sala: ${sess.room} jÃ¡ estÃ¡ reservada em ${dateStr} Ã s ${startTime}`);
         }
       }
 
@@ -1171,7 +1161,7 @@ export default function App() {
         a.status !== 'canceled'
       );
       if (profConflict) {
-        conflicts.push(`Conflito de Profissional: ${sess.professional} já tem agenda em ${dateStr} às ${startTime}`);
+        conflicts.push(`Conflito de Profissional: ${sess.professional} jÃ¡ tem agenda em ${dateStr} Ã s ${startTime}`);
       }
 
       // 3. Patient Conflict Check
@@ -1182,7 +1172,7 @@ export default function App() {
         a.status !== 'canceled'
       );
       if (patientConflict) {
-        conflicts.push(`Conflito de Paciente: ${sess.patientName} já tem sessão em ${dateStr} às ${startTime}`);
+        conflicts.push(`Conflito de Paciente: ${sess.patientName} jÃ¡ tem sessÃ£o em ${dateStr} Ã s ${startTime}`);
       }
 
       if (conflicts.length === 0) {
@@ -1210,17 +1200,17 @@ export default function App() {
       return a.time.localeCompare(b.time);
     })); 
 
-    onAddActivityLog("Agendamento de Sessão", `${numSessions} sessões agendadas para "${sess.patientName}" começando em ${sess.date}.`, 'management');
+    onAddActivityLog("Agendamento de SessÃ£o", `${numSessions} sessÃµes agendadas para "${sess.patientName}" comeÃ§ando em ${sess.date}.`, 'management');
     return { success: true };
   };
 
-  const handleMoodCheckin = (l: number, n: string, i: string, t: any) => setHistory(prev => [{ id: Date.now(), patientId: user.id, type: 'checkin', title: "Check-in", time: new Date().toLocaleTimeString(), energy: l, note: n, icon: i, dateGroup: "Hoje", tag: t }, ...prev]);
+  const handleMoodCheckin = (l: number, n: string, i: string, t: any) => setHistory(prev => [{ id: Date.now(), patientId: h?.patient_id || h?.patientId || user.id, type: 'checkin', title: "Check-in", time: new Date().toLocaleTimeString(), energy: l, note: n, icon: i, dateGroup: "Hoje", tag: t }, ...prev]);
   const handleCompleteTask = async (t: any, e: number, n: string) => { 
     const time = new Date().toLocaleTimeString();
     const isKid = user.age <= 12;
     const newHistoryItem = { 
       id: Date.now(), 
-      patientId: user.id, 
+      patientId: h?.patient_id || h?.patientId || user.id, 
       type: t.type || 'task', 
       title: t.title, 
       time, 
@@ -1236,8 +1226,8 @@ export default function App() {
     setTasks(prev => prev.filter(x => x.id !== t.id)); 
     
     // Add a note about the patient completing the task
-    const noteText = `✅ TAREFA CONCLUÍDA PELO PACIENTE\nAtividade: ${t.title}\n${isKid ? `Pontuação: ${e}\n` : ''}Anotações do Paciente: ${n || "Nenhuma observação."}`;
-    handleAddNote(user.id, noteText, 'private', 'Evolução');
+    const noteText = `âœ… TAREFA CONCLUÃDA PELO PACIENTE\nAtividade: ${t.title}\n${isKid ? `PontuaÃ§Ã£o: ${e}\n` : ''}AnotaÃ§Ãµes do Paciente: ${n || "Nenhuma observaÃ§Ã£o."}`;
+    handleAddNote(user.id, noteText, 'private', 'EvoluÃ§Ã£o');
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -1266,7 +1256,7 @@ export default function App() {
       });
     });
 
-    // Normalize score for crianças if it's not already 0, 0.5 or 1
+    // Normalize score for crianÃ§as if it's not already 0, 0.5 or 1
     let finalScore = score;
     if (isKid && skillMaxScore === 1 && ![0, 0.5, 1].includes(score)) {
       if (score >= 3) finalScore = 1;
@@ -1284,14 +1274,14 @@ export default function App() {
       score: finalScore,
       evalComment: evalComment || "",
       dateGroup: "Hoje",
-      icon: "🎯"
+      icon: "ðŸŽ¯"
     };
     
     // Add a note about the trial
-    const noteText = `🎯 NOVO REGISTRO\nAtividade: ${title}\nPontuação: ${finalScore}${evalComment ? `\nAnotações do Profissional: ${evalComment}` : ""}`;
-    handleAddNote(pid, noteText, 'private', 'Sessão');
+    const noteText = `ðŸŽ¯ NOVO REGISTRO\nAtividade: ${title}\nPontuaÃ§Ã£o: ${finalScore}${evalComment ? `\nAnotaÃ§Ãµes do Profissional: ${evalComment}` : ""}`;
+    handleAddNote(pid, noteText, 'private', 'SessÃ£o');
 
-    onAddActivityLog("Registro de Avaliação", `Avaliação da habilidade "${title}" registrada para o paciente ID ${pid}. Pontuação: ${score}.`);
+    onAddActivityLog("Registro de AvaliaÃ§Ã£o", `AvaliaÃ§Ã£o da habilidade "${title}" registrada para o paciente ID ${pid}. PontuaÃ§Ã£o: ${score}.`);
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -1302,13 +1292,13 @@ export default function App() {
       title: title,
       score: finalScore,
       note: evalComment || "",
-      icon: "🎯"
+      icon: "ðŸŽ¯"
     });
 
     setHistory(prev => {
       const updatedHistory = [newHistoryItem, ...prev];
       
-      // Regra de Maestria para Criança: 5 vezes consecutivas nota 1.0
+      // Regra de Maestria para CrianÃ§a: 5 vezes consecutivas nota 1.0
       const targetPatient = allPatients.find(p => p.id === pid);
       const clinicalRecord = clinicalRecords.find(r => r.patientId === pid);
       const isKid = (targetPatient?.age !== undefined && targetPatient.age <= 12) || clinicalRecord?.anamnesisData?.formType === 'child';
@@ -1316,8 +1306,8 @@ export default function App() {
       if (isKid) {
         const peiGoal = clinicalRecord?.pei?.find((g: any) => g.name === title);
         
-        // Filtra o histórico deste paciente para esta habilidade específica
-        // Considera apenas registros feitos APÓS a criação da meta no PEI
+        // Filtra o histÃ³rico deste paciente para esta habilidade especÃ­fica
+        // Considera apenas registros feitos APÃ“S a criaÃ§Ã£o da meta no PEI
         const skillHistory = updatedHistory
           .filter(h => h.patientId === pid && h.title === title && h.type === 'task' && (!peiGoal || h.id > peiGoal.id))
           .sort((a, b) => b.id - a.id);
@@ -1350,8 +1340,8 @@ export default function App() {
         }));
 
         if (isMastered && peiGoal?.status !== 'completed') {
-          // Adiciona uma nota automática sobre a conquista
-          handleAddNote(pid, `🏆 CRITÉRIO DE MAESTRIA ATINGIDO!\nA habilidade "${title}" foi realizada de forma independente por 5 vezes consecutivas. Status atualizado para Adquirida.`, 'private', 'Maestria');
+          // Adiciona uma nota automÃ¡tica sobre a conquista
+          handleAddNote(pid, `ðŸ† CRITÃ‰RIO DE MAESTRIA ATINGIDO!\nA habilidade "${title}" foi realizada de forma independente por 5 vezes consecutivas. Status atualizado para Adquirida.`, 'private', 'Maestria');
         }
       } else {
         // Para pacientes adultos, se registrar um treino, marca como em progresso
@@ -1378,7 +1368,7 @@ export default function App() {
   const handleDeleteHistoryItem = (id: any) => {
     const item = history.find(h => h.id === id);
     setHistory(prev => prev.filter(h => h.id !== id));
-    onAddActivityLog("Exclusão de Registro", `Registro de atividade "${item?.title}" (ID ${id}) excluído do histórico.`, 'system');
+    onAddActivityLog("ExclusÃ£o de Registro", `Registro de atividade "${item?.title}" (ID ${id}) excluÃ­do do histÃ³rico.`, 'system');
   };
   
   useEffect(() => { 
@@ -1393,8 +1383,8 @@ export default function App() {
         // If trying to remove a copy
         if ((note.visibility === targetVisibility || note.type === targetVisibility) && note.originalId) {
           onAddActivityLog(
-            "Remoção de compartilhamento de anotação",
-            `Cópia de anotação removida da visibilidade ${targetLabel} no prontuário de ${originalPatientName}.`,
+            "RemoÃ§Ã£o de compartilhamento de anotaÃ§Ã£o",
+            `CÃ³pia de anotaÃ§Ã£o removida da visibilidade ${targetLabel} no prontuÃ¡rio de ${originalPatientName}.`,
             "clinical"
           );
           (async () => {
@@ -1419,8 +1409,8 @@ export default function App() {
           let newNotes = prev;
           if (copy) {
             onAddActivityLog(
-              "Remoção de compartilhamento de anotação",
-              `Cópia de anotação removida da visibilidade ${targetLabel} no prontuário de ${originalPatientName}.`,
+              "RemoÃ§Ã£o de compartilhamento de anotaÃ§Ã£o",
+              `CÃ³pia de anotaÃ§Ã£o removida da visibilidade ${targetLabel} no prontuÃ¡rio de ${originalPatientName}.`,
               "clinical"
             );
             (async () => {
@@ -1456,14 +1446,14 @@ export default function App() {
             original_id: String(id)
           });
           await dataService.saveActivityLog({
-            title: "Compartilhamento de anotação",
-            details: `Anotação compartilhada com ${targetLabel} no prontuário de ${patient?.name || `ID ${note.patientId}`}.`,
+            title: "Compartilhamento de anotaÃ§Ã£o",
+            details: `AnotaÃ§Ã£o compartilhada com ${targetLabel} no prontuÃ¡rio de ${patient?.name || `ID ${note.patientId}`}.`,
             category: "clinical"
           });
         })();
         onAddActivityLog(
-          "Compartilhamento de anotação",
-          `Anotação compartilhada com ${targetLabel} no prontuário de ${originalPatientName}.`,
+          "Compartilhamento de anotaÃ§Ã£o",
+          `AnotaÃ§Ã£o compartilhada com ${targetLabel} no prontuÃ¡rio de ${originalPatientName}.`,
           "clinical"
         );
 
@@ -1473,18 +1463,18 @@ export default function App() {
   }, [allPatients]);
 
   const handleAddFamilyNote = async (pid: any, txt: string, image?: string) => {
-    const noteText = `🏠 REGISTRO DA FAMÍLIA\n${txt}`;
-    handleAddNote(pid, noteText, 'family', 'Família');
+    const noteText = `ðŸ  REGISTRO DA FAMÃLIA\n${txt}`;
+    handleAddNote(pid, noteText, 'family', 'FamÃ­lia');
     
     const newHistoryItem = {
       id: Date.now(),
       patientId: pid,
       type: image ? 'photo' : 'family_note',
-      title: image ? "Foto enviada" : "Registro da Família",
+      title: image ? "Foto enviada" : "Registro da FamÃ­lia",
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       note: txt,
       image: image,
-      icon: image ? "📸" : "🏠",
+      icon: image ? "ðŸ“¸" : "ðŸ ",
       dateGroup: "Hoje",
       date: new Date().toISOString()
     };
@@ -1492,22 +1482,22 @@ export default function App() {
     // Also add to history timeline
     setHistory(prev => [newHistoryItem, ...prev]);
 
-    onAddActivityLog("Registro da Família", `Nova anotação da família adicionada para o paciente ID ${pid}.`);
+    onAddActivityLog("Registro da FamÃ­lia", `Nova anotaÃ§Ã£o da famÃ­lia adicionada para o paciente ID ${pid}.`);
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
     await dataService.addHistoryItem({
       patient_id: String(pid),
       type: image ? 'photo' : 'family_note',
-      title: image ? "Foto enviada" : "Registro da Família",
+      title: image ? "Foto enviada" : "Registro da FamÃ­lia",
       note: txt,
       image: image,
-      icon: image ? "📸" : "🏠"
+      icon: image ? "ðŸ“¸" : "ðŸ "
     });
   };
 
   const handleLogout = async () => {
-    onAddActivityLog("Logout do Sistema", "O profissional encerrou a sessão com segurança.", "system");
+    onAddActivityLog("Logout do Sistema", "O profissional encerrou a sessÃ£o com seguranÃ§a.", "system");
     try {
       const supabase = await getSupabase();
       const { data: { session } } = await supabase.auth.getSession();
@@ -1527,7 +1517,6 @@ export default function App() {
     setLastActiveWorkspaceId(null);
     resetWorkspaceScopedState();
     setClinicStateHydrated(false);
-    setPendingClinicRelease(false);
     setUser(null);
     setShowWorkspacePicker(false);
   };
@@ -1580,7 +1569,6 @@ export default function App() {
       const alignedUser = alignWorkspaceFromStorage(result.user);
       setClinicStateHydrated(false);
       resetWorkspaceScopedState();
-      setPendingClinicRelease(false);
       setUser(alignedUser);
       setLastActiveWorkspaceId(alignedUser?.activeWorkspaceId || alignedUser?.clinicId || clinicId);
       setShowWorkspacePicker(computeWorkspacePickerVisibility(alignedUser));
@@ -1603,31 +1591,12 @@ export default function App() {
       
       {!user ? (
         <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />
-      ) : pendingClinicRelease && user.role === 'patient' ? (
-        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
-          <div className="bg-white w-full max-w-lg rounded-[32px] shadow-2xl shadow-blue-500/5 p-10 text-center border border-slate-100 animate-pop">
-            <div className="w-20 h-20 bg-blue-50 text-[#7a32fc] rounded-3xl flex items-center justify-center mx-auto mb-8 shadow-inner">
-              <Users size={36} />
-            </div>
-            <h2 className="text-2xl font-bold text-slate-900 mb-3 tracking-tight">Aguardando liberação da clínica</h2>
-            <p className="text-slate-500 font-normal leading-relaxed">
-              Seu login foi confirmado, mas ainda não existe vínculo ativo com uma clínica.
-              Assim que a clínica liberar seu acesso, você poderá entrar no painel do paciente.
-            </p>
-            <button
-              onClick={handleLogout}
-              className="mt-8 w-full bg-slate-900 text-white py-3 rounded-2xl font-semibold text-sm hover:opacity-90 transition"
-            >
-              Sair
-            </button>
-          </div>
-        </div>
       ) : showWorkspacePicker && Array.isArray(user.workspaces) && user.workspaces.length > 1 ? (
         <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
           <div className="w-full max-w-2xl bg-white rounded-3xl border border-slate-100 shadow-sm p-6">
             <h2 className="text-xl font-bold text-slate-900">Escolha o Workspace</h2>
             <p className="text-sm text-slate-500 mt-1">
-              Seu usuário participa de mais de uma clínica. Selecione onde deseja trabalhar agora.
+              Seu usuÃ¡rio participa de mais de uma clÃ­nica. Selecione onde deseja trabalhar agora.
             </p>
             <div className="mt-6 space-y-3">
               {user.workspaces.map((workspace: any) => (
@@ -1649,7 +1618,7 @@ export default function App() {
         <div className="min-h-screen flex items-center justify-center bg-white">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#7a32fc] mx-auto"></div>
-            <p className="mt-4 text-sm text-slate-500">Carregando dados da clínica...</p>
+            <p className="mt-4 text-sm text-slate-500">Carregando dados da clÃ­nica...</p>
           </div>
         </div>
       ) : ((user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && !user.firstLoginCompleted) || showOnboarding ? (
@@ -1668,14 +1637,15 @@ export default function App() {
           user={user} 
           onLogout={handleLogout} 
           onMoodCheckin={handleMoodCheckin} 
-          tasks={tasks.filter(t => t.patientId === user.id)} 
+          tasks={tasks} 
           onCompleteTask={handleCompleteTask} 
-          history={history.filter(h => h.patientId === user.id)} 
+          history={history} 
           energyTags={(user.type === 'conventional' || user.type === 'adult_conventional') ? ADULT_CONVENTIONAL_TAGS : ENERGY_TAGS} 
-          sharedNotes={therapistNotes.filter(n => n.patientId === user.id && n.type === 'shared')} 
+          sharedNotes={therapistNotes.filter(n => (n.patientId === user.id || n?.patient_email === user.email) && n.type === 'shared')} 
           protocols={protocols} 
-          onAddFamilyNote={handleAddFamilyNote} 
-        />
+          onAddFamilyNote={handleAddFamilyNote}
+          isReadOnlyMode={(String(user?.treatmentStatus || '').trim().toLowerCase() && String(user?.treatmentStatus || '').trim().toLowerCase() !== 'active') || !String(user?.clinicId || user?.activeWorkspaceId || '').trim()} 
+          />
       ) : user.role === 'coordinator' || user.role === 'receptionist' || user.role === 'therapist' ? (
         <CoordinatorDashboard 
           user={{ ...user, profilePicture, crp }}
@@ -1728,3 +1698,4 @@ export default function App() {
     </React.Fragment>
   );
 }
+

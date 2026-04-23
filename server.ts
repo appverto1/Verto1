@@ -890,6 +890,20 @@ async function getClinicPatientIdsByEmail(clinicId: string, patientEmail: string
     .filter((id: string) => isUuid(id));
 }
 
+async function getPatientIdsByEmailAcrossClinics(patientEmail: string): Promise<string[]> {
+  const safeEmail = sanitizeEmail(patientEmail);
+  if (!safeEmail) return [];
+  const { data, error } = await supabase
+    .from('patients')
+    .select('id')
+    .eq('email', safeEmail)
+    .limit(1000);
+  if (error) return [];
+  return (data || [])
+    .map((row: any) => sanitizeString(row?.id, 120))
+    .filter((id: string) => isUuid(id));
+}
+
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function isUuid(value: string | null | undefined): boolean {
   if (!value) return false;
@@ -1033,6 +1047,8 @@ function compactClinicSettingsForSession(settings: any) {
     clinicAddress: sanitizeString(settings.clinicAddress, 240) || null,
     clinicLogoUrl: sanitizeSessionUrl(settings.clinicLogoUrl),
     signatureDataUrl: sanitizeSessionUrl(settings.signatureDataUrl),
+    therapistSpecialties: sanitizeString(settings.therapistSpecialties, 240) || null,
+    therapistMiniCurriculum: sanitizeString(settings.therapistMiniCurriculum, 3000) || null,
     defaultSessionDuration: asSafeNumber(settings.defaultSessionDuration, 20, 240) || 50,
     workStart: sanitizeString(settings.workStart, 5) || '08:00',
     workEnd: sanitizeString(settings.workEnd, 5) || '18:00'
@@ -1092,15 +1108,53 @@ function buildSessionUserPayload(input: any) {
     subscriptionStatus: sanitizeString(input?.subscriptionStatus, 40) || null,
     planName: sanitizeString(input?.planName, 80) || null,
     planPrice: asSafeNumber(input?.planPrice, 0, 100000) || null,
+    treatmentStatus: sanitizeString(input?.treatmentStatus, 40) || null,
     clinicId: selectedWorkspace?.clinicId || sanitizeString(input?.clinicId, 120) || null,
     activeWorkspaceId,
     mustSelectWorkspace,
     emailVerified: Boolean(input?.emailVerified),
     phoneVerified: Boolean(input?.phoneVerified),
     firstLoginCompleted: Boolean(input?.firstLoginCompleted),
+    crp: sanitizeString(input?.crp || input?.clinicSettings?.councilNumber, 80) || null,
+    signatureDataUrl:
+      sanitizeSessionUrl(input?.signatureDataUrl) ||
+      sanitizeSessionUrl(input?.clinicSettings?.signatureDataUrl) ||
+      null,
+    specialties:
+      sanitizeString(input?.specialties || input?.clinicSettings?.therapistSpecialties || input?.clinicSettings?.specialty, 240) ||
+      null,
+    miniCurriculum:
+      sanitizeString(input?.miniCurriculum || input?.clinicSettings?.therapistMiniCurriculum, 3000) ||
+      null,
     clinicSettings: compactClinicSettingsForSession(input?.clinicSettings),
     workspaces
   };
+}
+
+function derivePatientTreatmentStatus(user: any): 'active' | 'inactive' | 'waiting_treatment' {
+  const role = sanitizeString(user?.role, 40).toLowerCase();
+  if (role !== 'patient') return 'active';
+  const hasWorkspace = Array.isArray(user?.workspaces) && user.workspaces.length > 0;
+  const hasClinic = Boolean(sanitizeString(user?.clinicId || user?.activeWorkspaceId, 120));
+  if (hasWorkspace) return 'active';
+  if (hasClinic) return 'inactive';
+  return 'waiting_treatment';
+}
+
+async function updatePatientStatusIfNeeded(user: any): Promise<'active' | 'inactive' | 'waiting_treatment'> {
+  const status = derivePatientTreatmentStatus(user);
+  if (sanitizeString(user?.role, 40).toLowerCase() !== 'patient' || !sanitizeString(user?.id, 120)) {
+    return status;
+  }
+  try {
+    await supabase
+      .from('users')
+      .update({ status })
+      .eq('id', sanitizeString(user.id, 120));
+  } catch (error) {
+    console.warn('[Auth] Não foi possível atualizar status clínico do paciente:', (error as any)?.message || error);
+  }
+  return status;
 }
 
 async function ensureClinicAndMembershipForCoordinator(userId: string, clinicName?: string | null) {
@@ -1508,6 +1562,10 @@ async function startServer() {
               emailVerified: Boolean((user as any)?.email_confirmed_at || (user as any)?.confirmed_at),
               phoneVerified: Boolean((profile as any)?.phone_verified_at),
               firstLoginCompleted: profile.first_login_completed || user.user_metadata?.first_login_completed,
+              crp: (profile as any)?.crp || null,
+              signatureDataUrl: (profile as any)?.signatureDataUrl || (profile as any)?.signature_data_url || null,
+              specialties: (profile as any)?.specialties || null,
+              miniCurriculum: (profile as any)?.miniCurriculum || (profile as any)?.mini_curriculum || null,
               clinicSettings: user.user_metadata?.clinic_settings || null,
               workspaces
             });
@@ -1859,12 +1917,21 @@ async function startServer() {
 
       const workspaces = await fetchUserWorkspaces(user.id);
       const selectedWorkspace = workspaces.find((w: any) => w.clinicId === profile.clinic_id) || workspaces[0] || null;
+      const roleForSession = selectedWorkspace?.role || profile.role;
+      const clinicForSession = selectedWorkspace?.clinicId || profile.clinic_id;
+      const treatmentStatus = await updatePatientStatusIfNeeded({
+        id: user.id,
+        role: roleForSession,
+        clinicId: clinicForSession,
+        activeWorkspaceId: clinicForSession,
+        workspaces
+      });
 
       // Complete login
       const userData = {
         id: user.id,
         email: user.email,
-        role: selectedWorkspace?.role || profile.role,
+        role: roleForSession,
         name: profile.name,
         profilePicture: sanitizeUrl(profile.profile_picture) || null,
         type: profile.type || user.user_metadata?.type || null,
@@ -1872,12 +1939,29 @@ async function startServer() {
         subscriptionStatus: profile.subscription_status,
         planName: profile.plan_name,
         planPrice: profile.plan_price,
-        clinicId: selectedWorkspace?.clinicId || profile.clinic_id,
-        activeWorkspaceId: selectedWorkspace?.clinicId || profile.clinic_id,
+        treatmentStatus,
+        clinicId: clinicForSession,
+        activeWorkspaceId: clinicForSession,
         emailVerified: isEmailVerified,
         phoneVerified: Boolean(profile.phone_verified_at),
+        crp: (profile as any)?.crp || null,
+        signatureDataUrl: (profile as any)?.signatureDataUrl || (profile as any)?.signature_data_url || null,
+        specialties: (profile as any)?.specialties || null,
+        miniCurriculum: (profile as any)?.miniCurriculum || (profile as any)?.mini_curriculum || null,
+        clinicSettings: user.user_metadata?.clinic_settings || null,
         workspaces
       };
+
+      if (roleForSession === 'patient') {
+        void persistActivityLog({
+          userId: sanitizeString(user.id, 120),
+          clinicId: sanitizeString(clinicForSession || user.id, 120),
+          actorName: sanitizeString(profile.name || user.email || 'Paciente', 180),
+          title: 'Login de paciente (MFA)',
+          content: `Acesso do paciente via MFA registrado com status ${treatmentStatus}.`,
+          type: 'security'
+        });
+      }
       
       req.session.user = buildSessionUserPayload(userData);
       res.json({ success: true, user: userData });
@@ -2532,6 +2616,13 @@ async function startServer() {
         null;
       const roleForSession = selectedWorkspace?.role || profile.role;
       const clinicForSession = selectedWorkspace?.clinicId || profile.clinic_id;
+      const treatmentStatus = await updatePatientStatusIfNeeded({
+        id: user.id,
+        role: roleForSession,
+        clinicId: clinicForSession,
+        activeWorkspaceId: clinicForSession,
+        workspaces
+      });
 
       const userData = {
         id: user.id,
@@ -2544,14 +2635,30 @@ async function startServer() {
         subscriptionStatus: profile.subscription_status,
         planName: profile.plan_name,
         planPrice: profile.plan_price,
+        treatmentStatus,
         clinicId: clinicForSession,
         activeWorkspaceId: clinicForSession,
         emailVerified: isEmailVerified,
         phoneVerified: Boolean(profile.phone_verified_at),
         firstLoginCompleted: profile.first_login_completed || user.user_metadata?.first_login_completed,
+        crp: (profile as any)?.crp || null,
+        signatureDataUrl: (profile as any)?.signatureDataUrl || (profile as any)?.signature_data_url || null,
+        specialties: (profile as any)?.specialties || null,
+        miniCurriculum: (profile as any)?.miniCurriculum || (profile as any)?.mini_curriculum || null,
         clinicSettings: user.user_metadata?.clinic_settings || null,
         workspaces
       };
+
+      if (roleForSession === 'patient') {
+        void persistActivityLog({
+          userId: sanitizeString(user.id, 120),
+          clinicId: sanitizeString(clinicForSession || user.id, 120),
+          actorName: sanitizeString(profile.name || user.email || 'Paciente', 180),
+          title: 'Login de paciente',
+          content: `Acesso do paciente registrado com status ${treatmentStatus}.`,
+          type: 'security'
+        });
+      }
 
       req.session.user = buildSessionUserPayload(userData);
       console.log(`[Auth] Saving session for ${user.email}. Session ID: ${req.sessionID}`);
@@ -4087,6 +4194,45 @@ async function startServer() {
     }
   });
 
+  app.get('/api/patient/self/history', checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const patientEmail = sanitizeEmail(req.session.user?.email);
+      if (!patientEmail) {
+        return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
+      }
+
+      const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail);
+      let query = supabase
+        .from('history')
+        .select('*')
+        .eq('patient_email', patientEmail);
+
+      if (patientIds.length > 0) {
+        query = query.in('patient_id', patientIds);
+      }
+
+      const { data, error } = await query.order('created_at', { ascending: false });
+      if (error) throw error;
+
+      const treatmentStatus = await updatePatientStatusIfNeeded(req.session.user);
+      req.session.user.treatmentStatus = treatmentStatus;
+      req.session.user = buildSessionUserPayload(req.session.user);
+      void req.session.save(() => {});
+
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Paciente', 180),
+        title: 'Leitura de histórico sem tratamento ativo',
+        content: `Paciente acessou o histórico consolidado com status ${treatmentStatus}.`,
+        type: 'security'
+      });
+
+      res.json({ success: true, data: data || [], treatmentStatus });
+    } catch (error) {
+      res.status(500).json({ success: false, error: String(error) });
+    }
+  });
   app.post('/api/history', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload de relatório/evolução')) return;
@@ -4456,6 +4602,30 @@ async function startServer() {
     }
   });
 
+  app.get('/api/patient/self/tasks', checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const patientEmail = sanitizeEmail(req.session.user?.email);
+      if (!patientEmail) {
+        return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
+      }
+
+      const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail);
+      let query = supabase
+        .from('tasks')
+        .select('*')
+        .eq('patient_email', patientEmail);
+
+      if (patientIds.length > 0) {
+        query = query.in('patient_id', patientIds);
+      }
+
+      const { data, error } = await query.order('created_at', { ascending: false });
+      if (error) throw error;
+      res.json({ success: true, data: data || [] });
+    } catch (error) {
+      res.status(500).json({ success: false, error: String(error) });
+    }
+  });
   app.post('/api/tasks', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const resolvedPatientId = await resolvePatientIdForRequest(
@@ -5282,5 +5452,6 @@ startServer().catch(err => {
   console.error('FATAL ERROR STARTING SERVER:', err);
   process.exit(1);
 });
+
 
 

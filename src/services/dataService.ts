@@ -461,6 +461,30 @@ export const dataService = {
     return { success: true, data: local.filter(r => r.data.patient_email === email).map(r => r.data) };
   },
 
+  async getPatientSelfHistory() {
+    try {
+      const response = await fetch('/api/patient/self/history', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      if (response.ok) {
+        const result = await response.json();
+        return result;
+      }
+    } catch (error) {
+      console.log('Fetching patient self history from local storage...');
+    }
+    const local = await getRecordsByType('history');
+    const profileResponse = await this.getCurrentUserProfile();
+    const selfEmail = String(profileResponse?.data?.email || '').trim().toLowerCase();
+    return {
+      success: true,
+      data: local
+        .filter(r => String(r?.data?.patient_email || '').trim().toLowerCase() === selfEmail)
+        .map(r => r.data)
+    };
+  },
+
   async addHistoryItem(item: any) {
     const id = item.id || generateId();
     const data = { ...item, id, created_at: item.created_at || new Date().toISOString() };
@@ -502,6 +526,30 @@ export const dataService = {
     }
     const local = await getRecordsByType('task');
     return { success: true, data: local.filter(r => r.data.patient_email === email).map(r => r.data) };
+  },
+
+  async getPatientSelfTasks() {
+    try {
+      const response = await fetch('/api/patient/self/tasks', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      if (response.ok) {
+        const result = await response.json();
+        return result;
+      }
+    } catch (error) {
+      console.log('Fetching patient self tasks from local storage...');
+    }
+    const local = await getRecordsByType('task');
+    const profileResponse = await this.getCurrentUserProfile();
+    const selfEmail = String(profileResponse?.data?.email || '').trim().toLowerCase();
+    return {
+      success: true,
+      data: local
+        .filter(r => String(r?.data?.patient_email || '').trim().toLowerCase() === selfEmail)
+        .map(r => r.data)
+    };
   },
 
   async addTask(task: any) {

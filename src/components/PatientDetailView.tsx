@@ -9,7 +9,7 @@ import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
 
-export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate }: any) => { 
+export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs }: any) => { 
   const [activeTab, setActiveTab] = useState(initialTab); 
   const [newNote, setNewNote] = useState(""); 
   const [noteMode, setNoteMode] = useState('private'); 
@@ -62,9 +62,35 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [isSessionModeOpen, setIsSessionModeOpen] = useState(false);
   const [isUnlinkingModalOpen, setIsUnlinkingModalOpen] = useState(false);
 
+  const allTabs: Array<'history' | 'notes' | 'report' | 'plan' | 'session' | 'files'> = [
+    'history',
+    'notes',
+    'report',
+    'plan',
+    'session',
+    'files',
+  ];
+  const allowedTabsSet = useMemo(() => {
+    if (!Array.isArray(allowedTabs) || allowedTabs.length === 0) {
+      return new Set(allTabs);
+    }
+    return new Set(
+      allowedTabs.filter((tab: string) =>
+        allTabs.includes(tab as 'history' | 'notes' | 'report' | 'plan' | 'session' | 'files'),
+      ),
+    );
+  }, [allowedTabs]);
+  const canAccessTab = (tab: 'history' | 'notes' | 'report' | 'plan' | 'session' | 'files') =>
+    allowedTabsSet.has(tab);
+
   useEffect(() => {
-    if (initialTab) setActiveTab(initialTab);
-  }, [initialTab, patient?.id]);
+    if (initialTab && canAccessTab(initialTab)) {
+      setActiveTab(initialTab);
+      return;
+    }
+    const firstAllowed = allTabs.find((tab) => canAccessTab(tab)) || 'files';
+    setActiveTab(firstAllowed);
+  }, [initialTab, patient?.id, allowedTabsSet]);
 
   useEffect(() => {
     if (openAnamnesisOnLoad) {
@@ -1186,14 +1212,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           </div>
         </div> 
         <div id="tab-nav" className="flex gap-2 bg-gray-100 p-1 rounded-xl overflow-x-auto no-scrollbar"> 
-          <button id="tab-history" onClick={() => setActiveTab('history')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'history' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Histórico</button> 
-          <button id="tab-notes" onClick={() => setActiveTab('notes')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'notes' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Anotações</button> 
-          <button id="tab-report" onClick={() => setActiveTab('report')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'report' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Relatório</button>
-          <button id="tab-plan" onClick={() => setActiveTab('plan')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'plan' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Plano</button> 
-          {patient.age <= 12 && (
+          {canAccessTab('history') && <button id="tab-history" onClick={() => setActiveTab('history')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'history' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Histórico</button>}
+          {canAccessTab('notes') && <button id="tab-notes" onClick={() => setActiveTab('notes')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'notes' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Anotações</button>}
+          {canAccessTab('report') && <button id="tab-report" onClick={() => setActiveTab('report')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'report' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Relatório</button>}
+          {canAccessTab('plan') && <button id="tab-plan" onClick={() => setActiveTab('plan')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'plan' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Plano</button>}
+          {canAccessTab('session') && patient.age <= 12 && (
             <button id="tab-session" onClick={() => setActiveTab('session')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'session' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Sessão</button>
           )}
-          <button id="tab-files" onClick={() => setActiveTab('files')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'files' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Arquivos</button> 
+          {canAccessTab('files') && <button id="tab-files" onClick={() => setActiveTab('files')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'files' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Arquivos</button>}
         </div> 
       </div> 
       <div className="p-6"> 

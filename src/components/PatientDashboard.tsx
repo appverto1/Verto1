@@ -8,7 +8,7 @@ import { DrawingCanvas } from './DrawingCanvas';
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
 
-export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote }: any) => { 
+export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false }: any) => { 
   const [selectedSnapshotDate, setSelectedSnapshotDate] = useState("all");
   const [kidComparisonMode, setKidComparisonMode] = useState<'all' | 'improved' | 'declined'>('all');
   const [selectedTask, setSelectedTask] = useState<any>(null); 
@@ -47,6 +47,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     userType === 'kids_tea' ||
     (!hasExplicitPatientType && ((userAge !== null && userAge <= 12) || user.anamnesisData?.formType === 'child'));
   const isConventionalAdult = userType === 'conventional' && !isKidsProfile;
+  const readOnlyNotice = "Você não possui um tratamento ativo no momento. Entre em contato com sua clínica para retomar o acompanhamento.";
 
   const conventionalMoodTags = [
     { id: 'family', label: 'FamÃ­lia', icon: 'ðŸ‘¨â€ðŸ‘©â€ðŸ‘§â€ðŸ‘¦', color: 'bg-blue-100 text-blue-600' },
@@ -205,6 +206,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   }, [familyDiaryHistory, history]);
 
   const handleConfirmFamilyNote = () => {
+    if (isReadOnlyMode) return;
     if (familyNote.trim() || familyImage) {
       setShowFamilySuccess(true);
       setTimeout(() => {
@@ -231,6 +233,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isReadOnlyMode) return;
     const file = e.target.files?.[0];
     if (file) {
       setIsUploading(true);
@@ -253,6 +256,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
 
   const handleInterventionImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isReadOnlyMode) return;
     const file = e.target.files?.[0];
     if (!file) return;
     setIsInterventionUploading(true);
@@ -339,7 +343,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                         <Menu size={20} />
                       </button>
 
-                      <AnimatePresence>
+                    <AnimatePresence>
                         {isMenuOpen && (
                           <motion.div 
                             initial={{ opacity: 0, scale: 0.95, y: -10 }}
@@ -347,12 +351,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             exit={{ opacity: 0, scale: 0.95, y: -10 }}
                             className="absolute right-0 mt-2 w-48 bg-white rounded-[24px] shadow-xl border border-blue-50 z-[60] overflow-hidden p-2"
                           >
-                            <button 
-                              onClick={() => { setIsFamilyLogOpen(true); setIsMenuOpen(false); }}
-                              className="w-full flex items-center gap-3 p-3 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-xl transition-colors"
-                            >
-                              <BookOpen size={18} /> DiÃ¡rio da FamÃ­lia
-                            </button>
+                            {!isReadOnlyMode && (
+                              <button 
+                                onClick={() => { setIsFamilyLogOpen(true); setIsMenuOpen(false); }}
+                                className="w-full flex items-center gap-3 p-3 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-xl transition-colors"
+                              >
+                                <BookOpen size={18} /> DiÃ¡rio da FamÃ­lia
+                              </button>
+                            )}
                             <button 
                               onClick={() => { onLogout(); setIsMenuOpen(false); }}
                               className="w-full flex items-center gap-3 p-3 text-sm font-medium text-red-500 hover:bg-red-50 rounded-xl transition-colors"
@@ -361,9 +367,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             </button>
                           </motion.div>
                         )}
-                      </AnimatePresence>
-                    </div>
+                    </AnimatePresence>
+                  </div>
                 </div>
+                {isReadOnlyMode && (
+                  <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs sm:text-sm text-amber-800">
+                    {readOnlyNotice}
+                  </div>
+                )}
 
                 <div className="bg-white p-4 sm:p-6 rounded-[32px] sm:rounded-[40px] shadow-xl border border-blue-50 flex flex-col justify-center mb-6 relative overflow-hidden">
                     <div className="absolute top-0 right-0 w-24 sm:w-32 h-24 sm:h-32 bg-yellow-100 rounded-bl-full opacity-50 -z-0"></div>
@@ -551,14 +562,22 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     );
   }
 
-  const handleEmojiClick = (mood: any) => { setSelectedMood(mood); setSelectedTag(null); setMoodNote(""); setIsMoodModalOpen(true); }; 
+  const handleEmojiClick = (mood: any) => {
+    if (isReadOnlyMode) return;
+    setSelectedMood(mood);
+    setSelectedTag(null);
+    setMoodNote("");
+    setIsMoodModalOpen(true);
+  }; 
   const handleConfirmMood = () => { 
+    if (isReadOnlyMode) return;
     if (selectedMood) { 
       setShowMoodSuccess(true); 
       setTimeout(() => { onMoodCheckin(selectedMood.value, moodNote, selectedMood.emoji, selectedTag); setIsMoodModalOpen(false); setShowMoodSuccess(false); setMoodNote(""); setSelectedMood(null); setSelectedTag(null); setDailyCheckinDone(true); }, 2000); 
     } 
   }; 
   const openTaskModal = (task: any) => {
+    if (isReadOnlyMode) return;
     setSelectedTask(task);
     setTaskEnergy(50);
     setTaskNote("");
@@ -572,6 +591,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
   const handleEnergyCommit = () => { setTaskStep(2); }; 
   const handleConfirmTask = () => { 
+    if (isReadOnlyMode) return;
     if (selectedTask) { 
       setShowTaskSuccess(true); 
       const interventionDetails = [
@@ -650,19 +670,21 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 exit={{ opacity: 0, scale: 0.95, y: -10 }}
                 className="absolute right-0 mt-2 w-56 bg-white rounded-[24px] shadow-xl border border-blue-50 z-[60] overflow-hidden p-2"
               >
-                <button 
-                  onClick={() => { setIsMessagesOpen(true); setIsMenuOpen(false); }}
-                  className="w-full flex items-center justify-between p-3 text-sm font-medium text-[#7a32fc] hover:bg-blue-50 rounded-xl transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <MessageCircle size={18} /> Mensagens
-                  </div>
-                  {sharedNotes.length > 0 && (
-                    <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">
-                      {sharedNotes.length}
-                    </span>
-                  )}
-                </button>
+                {!isReadOnlyMode && (
+                  <button 
+                    onClick={() => { setIsMessagesOpen(true); setIsMenuOpen(false); }}
+                    className="w-full flex items-center justify-between p-3 text-sm font-medium text-[#7a32fc] hover:bg-blue-50 rounded-xl transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <MessageCircle size={18} /> Mensagens
+                    </div>
+                    {sharedNotes.length > 0 && (
+                      <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">
+                        {sharedNotes.length}
+                      </span>
+                    )}
+                  </button>
+                )}
                 <button 
                   onClick={() => { onLogout(); setIsMenuOpen(false); }}
                   className="w-full flex items-center gap-3 p-3 text-sm font-medium text-red-500 hover:bg-red-50 rounded-xl transition-colors"
@@ -674,6 +696,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           </AnimatePresence>
         </div> 
       </div> 
+      {isReadOnlyMode && (
+        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          {readOnlyNotice}
+        </div>
+      )}
       {!dailyCheckinDone ? ( 
         <div className="mb-8 animate-slide-up"> 
           <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2 px-1"> {user.type === 'conventional' ? <Smile size={16} /> : <BatteryCharging size={16} />} {user.type === 'conventional' ? 'Como vocÃª se sente?' : 'Como se sente agora?'} </h2> 
@@ -682,7 +709,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               const isHovered = hoveredMood === mood.value; 
               const isDimmed = hoveredMood !== null && !isHovered; 
               return ( 
-                <button key={mood.value} onClick={() => handleEmojiClick(mood)} onMouseEnter={() => setHoveredMood(mood.value)} onMouseLeave={() => setHoveredMood(null)} className={` snap-center shrink-0 w-40 h-56 sm:w-48 sm:h-64 rounded-[32px] flex flex-col items-center p-6 transition-all duration-500 border-4 shadow-lg ${mood.color} ${isHovered ? 'scale-110 -translate-y-4 shadow-2xl z-10 rotate-1' : 'scale-100'} ${isDimmed ? 'opacity-50 scale-95 blur-[1px]' : 'opacity-100'} group relative overflow-hidden `} > 
+                <button key={mood.value} disabled={isReadOnlyMode} onClick={() => handleEmojiClick(mood)} onMouseEnter={() => setHoveredMood(mood.value)} onMouseLeave={() => setHoveredMood(null)} className={` snap-center shrink-0 w-40 h-56 sm:w-48 sm:h-64 rounded-[32px] flex flex-col items-center p-6 transition-all duration-500 border-4 shadow-lg ${mood.color} ${isHovered ? 'scale-110 -translate-y-4 shadow-2xl z-10 rotate-1' : 'scale-100'} ${isDimmed ? 'opacity-50 scale-95 blur-[1px]' : 'opacity-100'} group relative overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed`} > 
                   <div className="absolute top-[-20%] right-[-20%] w-24 h-24 rounded-full bg-white/20 blur-xl"></div> 
                   <div className="absolute bottom-[-10%] left-[-10%] w-20 h-20 rounded-full bg-white/30 blur-lg"></div> 
                   <div className="w-full flex justify-between items-center opacity-60 group-hover:opacity-100 transition-opacity z-10"> {user.type !== 'conventional' && <React.Fragment><BatteryFull size={20} className="text-gray-700" /> <span className="text-xs font-semibold text-gray-700">{mood.value}%</span></React.Fragment>} </div> 
@@ -700,7 +727,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center text-green-600"> <Check size={24} /> </div> 
             <div> <h3 className="font-semibold text-gray-800 tracking-tight">{user.type === 'conventional' ? 'Sentimento Registrado!' : 'Energia Registrada!'}</h3> <p className="text-xs text-gray-400">Obrigado por compartilhar.</p> </div> 
           </div> 
-          <button onClick={() => setDailyCheckinDone(false)} className="text-[10px] font-semibold text-[#7a32fc] bg-[#7a32fc]/10 px-4 py-2 rounded-xl hover:bg-[#7a32fc]/20 transition-colors flex items-center gap-2 uppercase tracking-widest" > <RefreshCcw size={14} /> Ajustar </button> 
+          <button disabled={isReadOnlyMode} onClick={() => setDailyCheckinDone(false)} className="text-[10px] font-semibold text-[#7a32fc] bg-[#7a32fc]/10 px-4 py-2 rounded-xl hover:bg-[#7a32fc]/20 transition-colors flex items-center gap-2 uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed" > <RefreshCcw size={14} /> Ajustar </button> 
         </div> 
       )} 
       <div className="flex-1 overflow-y-auto no-scrollbar"> 
@@ -714,7 +741,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl ${task.color || 'bg-blue-100 text-blue-600'}`}> {task.icon || 'ðŸ“‹'} </div> 
                     <div> <h3 className="font-semibold text-gray-800 tracking-tight">{task.title}</h3> {task.description && <p className="text-xs text-gray-400 line-clamp-1">{task.description}</p>} </div> 
                   </div> 
-                  <button onClick={() => openTaskModal(task)} className="p-3 bg-gray-50 text-gray-400 rounded-xl hover:bg-green-500 hover:text-white transition-all active:scale-95" > <Check size={20} /> </button> 
+                  <button disabled={isReadOnlyMode} onClick={() => openTaskModal(task)} className="p-3 bg-gray-50 text-gray-400 rounded-xl hover:bg-green-500 hover:text-white transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed" > <Check size={20} /> </button> 
                 </div> 
               ))} 
             </div> 
