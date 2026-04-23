@@ -16,6 +16,19 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
+  const shouldPromptWorkspaceSelection = (candidateUser: any) => {
+    const workspaces = Array.isArray(candidateUser?.workspaces) ? candidateUser.workspaces : [];
+    if (workspaces.length <= 1) return false;
+    if (typeof candidateUser?.mustSelectWorkspace === 'boolean') {
+      return candidateUser.mustSelectWorkspace;
+    }
+    const activeWorkspaceId = String(
+      candidateUser?.activeWorkspaceId || candidateUser?.clinicId || ''
+    ).trim();
+    if (!activeWorkspaceId) return true;
+    return !workspaces.some((workspace: any) => workspace?.clinicId === activeWorkspaceId);
+  };
+
   const isUuidLike = (value: unknown) =>
     typeof value === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -205,9 +218,11 @@ export default function App() {
         if (data.user) {
           setUser(data.user);
           setProfilePicture(data.user?.profilePicture || data.user?.profile_picture || null);
+          setShowWorkspacePicker(shouldPromptWorkspaceSelection(data.user));
         } else {
           setUser(null);
           setProfilePicture(null);
+          setShowWorkspacePicker(false);
         }
       } catch (error) {
         console.error('Session check error:', error);
@@ -310,7 +325,7 @@ export default function App() {
         if (data.user) {
           setUser(data.user);
           setProfilePicture(data.user?.profilePicture || data.user?.profile_picture || null);
-          setShowWorkspacePicker(Array.isArray(data.user.workspaces) && data.user.workspaces.length > 1);
+          setShowWorkspacePicker(shouldPromptWorkspaceSelection(data.user));
           return data;
         }
         return { success: false, error: 'No session' };
@@ -353,7 +368,7 @@ export default function App() {
         }
         setUser(data.user);
         setProfilePicture(data.user?.profilePicture || data.user?.profile_picture || null);
-        setShowWorkspacePicker(Array.isArray(data.user.workspaces) && data.user.workspaces.length > 1);
+        setShowWorkspacePicker(shouldPromptWorkspaceSelection(data.user));
         return { success: true, user: data.user };
       } else {
         console.error('Login failed on server:', data.error);
@@ -1594,7 +1609,7 @@ export default function App() {
     const result = await dataService.selectWorkspace(clinicId);
     if (result.success && result.user) {
       setUser(result.user);
-      setShowWorkspacePicker(false);
+      setShowWorkspacePicker(shouldPromptWorkspaceSelection(result.user));
       return;
     }
     alert(result.error || 'Nao foi possivel selecionar este workspace.');

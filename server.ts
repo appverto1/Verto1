@@ -863,7 +863,10 @@ function listAnamnesisTemplateChanges(previousTemplate: any, nextTemplate: any):
 }
 
 function currentClinicId(user: any): string | null {
-  const id = sanitizeString(user?.clinicId || user?.clinic_id || user?.id, 120);
+  const id = sanitizeString(
+    user?.activeWorkspaceId || user?.clinicId || user?.clinic_id || user?.id,
+    120
+  );
   return id || null;
 }
 
@@ -1045,11 +1048,42 @@ function compactWorkspacesForSession(workspaces: any[]) {
   })).filter((w: any) => w.clinicId);
 }
 
+function resolveActiveWorkspaceId(
+  workspaces: any[],
+  preferredWorkspaceId?: string | null,
+  fallbackClinicId?: string | null
+): string | null {
+  const compacted = compactWorkspacesForSession(workspaces);
+  const preferred = sanitizeString(preferredWorkspaceId, 120);
+  const fallback = sanitizeString(fallbackClinicId, 120);
+
+  if (preferred && compacted.some((w: any) => w.clinicId === preferred)) {
+    return preferred;
+  }
+  if (fallback && compacted.some((w: any) => w.clinicId === fallback)) {
+    return fallback;
+  }
+  if (compacted.length === 1) return compacted[0].clinicId;
+  return null;
+}
+
 function buildSessionUserPayload(input: any) {
+  const workspaces = compactWorkspacesForSession(input?.workspaces || []);
+  const activeWorkspaceId = resolveActiveWorkspaceId(
+    workspaces,
+    input?.activeWorkspaceId,
+    input?.clinicId || input?.clinic_id
+  );
+  const selectedWorkspace = activeWorkspaceId
+    ? workspaces.find((w: any) => w.clinicId === activeWorkspaceId) || null
+    : null;
+  const resolvedRole = selectedWorkspace?.role || input?.role;
+  const mustSelectWorkspace = workspaces.length > 1 && !activeWorkspaceId;
+
   return {
     id: sanitizeString(input?.id, 120),
     email: sanitizeEmail(input?.email) || sanitizeString(input?.email, 320),
-    role: ensureRole(input?.role) ? input.role : 'therapist',
+    role: ensureRole(resolvedRole) ? resolvedRole : 'therapist',
     name: sanitizeString(input?.name, 180),
     profilePicture: sanitizeSessionUrl(input?.profilePicture),
     type: sanitizeString(input?.type, 80) || null,
@@ -1057,12 +1091,14 @@ function buildSessionUserPayload(input: any) {
     subscriptionStatus: sanitizeString(input?.subscriptionStatus, 40) || null,
     planName: sanitizeString(input?.planName, 80) || null,
     planPrice: asSafeNumber(input?.planPrice, 0, 100000) || null,
-    clinicId: sanitizeString(input?.clinicId, 120) || null,
+    clinicId: selectedWorkspace?.clinicId || sanitizeString(input?.clinicId, 120) || null,
+    activeWorkspaceId,
+    mustSelectWorkspace,
     emailVerified: Boolean(input?.emailVerified),
     phoneVerified: Boolean(input?.phoneVerified),
     firstLoginCompleted: Boolean(input?.firstLoginCompleted),
     clinicSettings: compactClinicSettingsForSession(input?.clinicSettings),
-    workspaces: compactWorkspacesForSession(input?.workspaces || [])
+    workspaces
   };
 }
 
@@ -1393,7 +1429,7 @@ async function startServer() {
       secure: isProd,
       httpOnly: true,
       maxAge: 30 * 24 * 60 * 60 * 1000, 
-      sameSite: isProd ? 'none' : 'lax'
+      sameSite: 'lax'
     }
   }));
 
@@ -1416,9 +1452,16 @@ async function startServer() {
     return user?.emailVerified === false;
   };
 
+  const syncWorkspaceContextInSession = (req: any, _res: any, next: any) => {
+    if (!req.session?.user) return next();
+    req.session.user = buildSessionUserPayload(req.session.user);
+    return next();
+  };
+
   const checkAuth = async (req: any, res: any, next: any) => {
     // 1. Check Session (Cookie-based)
     if (req.session && req.session.user) {
+      syncWorkspaceContextInSession(req, res, () => {});
       if (mustBlockUnverifiedEmail(req, req.session.user)) {
         return res.status(403).json({
           error: 'EMAIL_NOT_CONFIRMED',
@@ -1460,6 +1503,7 @@ async function startServer() {
               planName: profile.plan_name,
               planPrice: profile.plan_price,
               clinicId: selectedWorkspace?.clinicId || profile.clinic_id,
+              activeWorkspaceId: selectedWorkspace?.clinicId || profile.clinic_id,
               emailVerified: Boolean((user as any)?.email_confirmed_at || (user as any)?.confirmed_at),
               phoneVerified: Boolean((profile as any)?.phone_verified_at),
               firstLoginCompleted: profile.first_login_completed || user.user_metadata?.first_login_completed,
@@ -1828,6 +1872,7 @@ async function startServer() {
         planName: profile.plan_name,
         planPrice: profile.plan_price,
         clinicId: selectedWorkspace?.clinicId || profile.clinic_id,
+        activeWorkspaceId: selectedWorkspace?.clinicId || profile.clinic_id,
         emailVerified: isEmailVerified,
         phoneVerified: Boolean(profile.phone_verified_at),
         workspaces
@@ -2475,7 +2520,15 @@ async function startServer() {
           workspaces = await fetchUserWorkspaces(user.id);
         }
       }
-      const selectedWorkspace = workspaces.find((w: any) => w.clinicId === profile.clinic_id) || workspaces[0] || null;
+      const preferredWorkspaceId = sanitizeString(
+        req.session?.user?.activeWorkspaceId || req.session?.user?.clinicId,
+        120
+      );
+      const selectedWorkspace =
+        workspaces.find((w: any) => w.clinicId === preferredWorkspaceId) ||
+        workspaces.find((w: any) => w.clinicId === profile.clinic_id) ||
+        workspaces[0] ||
+        null;
       const roleForSession = selectedWorkspace?.role || profile.role;
       const clinicForSession = selectedWorkspace?.clinicId || profile.clinic_id;
 
@@ -2491,6 +2544,7 @@ async function startServer() {
         planName: profile.plan_name,
         planPrice: profile.plan_price,
         clinicId: clinicForSession,
+        activeWorkspaceId: clinicForSession,
         emailVerified: isEmailVerified,
         phoneVerified: Boolean(profile.phone_verified_at),
         firstLoginCompleted: profile.first_login_completed || user.user_metadata?.first_login_completed,
@@ -2525,19 +2579,44 @@ async function startServer() {
     });
   });
 
-  app.get('/api/auth/me', (req, res) => {
+  app.get('/api/auth/me', syncWorkspaceContextInSession, async (req: any, res: any) => {
     if (req.session.user) {
-      res.json({ user: req.session.user });
-    } else {
-      res.json({ user: null });
+      return res.json({ user: req.session.user });
     }
+
+    const authHeader = sanitizeString(req.headers?.authorization, 9000);
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      let didRespond = false;
+      await checkAuth(req, {
+        status: (code: number) => ({
+          json: (payload: any) => {
+            didRespond = true;
+            if (code === 401) {
+              return res.json({ user: null });
+            }
+            return res.status(code).json(payload);
+          }
+        })
+      }, () => {});
+
+      if (didRespond) return;
+      if (req.session?.user) {
+        req.session.user = buildSessionUserPayload(req.session.user);
+        return res.json({ user: req.session.user });
+      }
+    }
+
+    return res.json({ user: null });
   });
 
   app.get('/api/workspaces', checkAuth, async (req: any, res) => {
     try {
       const workspaces = await fetchUserWorkspaces(req.session.user.id);
-      req.session.user.workspaces = compactWorkspacesForSession(workspaces);
-      res.json({ success: true, data: workspaces });
+      req.session.user = buildSessionUserPayload({
+        ...req.session.user,
+        workspaces,
+      });
+      res.json({ success: true, data: workspaces, user: req.session.user });
     } catch (error) {
       res.status(500).json({ success: false, error: String(error) });
     }
@@ -2565,8 +2644,10 @@ async function startServer() {
         .eq('id', req.session.user.id);
 
       req.session.user.clinicId = clinicId;
+      req.session.user.activeWorkspaceId = clinicId;
       req.session.user.role = selected.role;
       req.session.user.workspaces = compactWorkspacesForSession(workspaces);
+      req.session.user = buildSessionUserPayload(req.session.user);
 
       req.session.save((err: any) => {
         if (err) {
@@ -2756,8 +2837,10 @@ async function startServer() {
         .eq('id', invitationId);
 
       req.session.user.clinicId = invitation.clinic_id;
+      req.session.user.activeWorkspaceId = invitation.clinic_id;
       req.session.user.role = invitation.role;
       req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(user.id));
+      req.session.user = buildSessionUserPayload(req.session.user);
 
       res.json({ success: true });
     } catch (error) {
