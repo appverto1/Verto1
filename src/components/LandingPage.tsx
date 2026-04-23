@@ -32,6 +32,7 @@ import { getSupabase } from '../lib/supabase';
 import { dataService } from '../services/dataService';
 
 export const LandingPage = ({ onLogin, setUser }: any) => {
+  const registerPasswordInputRef = React.useRef<HTMLInputElement | null>(null);
   const [showLogin, setShowLogin] = useState(false);
   const [showRegister, setShowRegister] = useState(false);
   const [loginType, setLoginType] = useState<'professional' | 'patient' | 'coordinator' | null>(null);
@@ -57,6 +58,28 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   const [loginStep, setLoginStep] = useState<'email' | 'password'>('email');
   const [qrCodeUrl, setQrCodeUrl] = useState('');
   const [tempSecret, setTempSecret] = useState('');
+  const [showPasswordRecovery, setShowPasswordRecovery] = useState(false);
+  const [recoveryStep, setRecoveryStep] = useState<'request' | 'verify'>('request');
+  const [recoveryEmail, setRecoveryEmail] = useState('');
+  const [recoveryCode, setRecoveryCode] = useState('');
+  const [recoveryNewPassword, setRecoveryNewPassword] = useState('');
+  const [recoveryMfaToken, setRecoveryMfaToken] = useState('');
+  const [recoveryMfaRequired, setRecoveryMfaRequired] = useState(false);
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const [recoveryMessage, setRecoveryMessage] = useState('');
+  const [recoveryError, setRecoveryError] = useState('');
+
+  const resetPasswordRecoveryState = () => {
+    setShowPasswordRecovery(false);
+    setRecoveryStep('request');
+    setRecoveryCode('');
+    setRecoveryNewPassword('');
+    setRecoveryMfaToken('');
+    setRecoveryMfaRequired(false);
+    setRecoveryLoading(false);
+    setRecoveryMessage('');
+    setRecoveryError('');
+  };
 
   React.useEffect(() => {
     const savedEmail = localStorage.getItem('verto_email');
@@ -145,6 +168,92 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     } catch (err: any) {
       console.error('Resend error:', err);
       setLoginError('Erro ao reenviar confirmação: ' + err.message);
+    }
+  };
+
+  const openPasswordRecovery = () => {
+    setLoginError('');
+    setTwoFactorRequired(false);
+    setRecoveryError('');
+    setRecoveryMessage('');
+    setRecoveryMfaRequired(false);
+    setRecoveryStep('request');
+    setRecoveryCode('');
+    setRecoveryNewPassword('');
+    setRecoveryMfaToken('');
+    setRecoveryEmail(email);
+    setShowPasswordRecovery(true);
+  };
+
+  const handleRecoveryRequest = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setRecoveryError('');
+    setRecoveryMessage('');
+    setRecoveryLoading(true);
+    try {
+      const response = await fetch('/api/auth/password/recovery/email/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email: recoveryEmail })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || 'Falha ao iniciar recuperação.');
+      }
+      setRecoveryMessage(data?.message || 'Se este e-mail estiver cadastrado, você receberá instruções.');
+      setRecoveryStep('verify');
+    } catch (err: any) {
+      setRecoveryError(err?.message || 'Não foi possível iniciar a recuperação de senha.');
+    } finally {
+      setRecoveryLoading(false);
+    }
+  };
+
+  const handleRecoveryVerify = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setRecoveryError('');
+    setRecoveryMessage('');
+    setRecoveryLoading(true);
+    try {
+      const payload: Record<string, string> = {
+        email: recoveryEmail,
+        code: recoveryCode,
+        newPassword: recoveryNewPassword
+      };
+      if (recoveryMfaToken.trim()) {
+        payload.mfaToken = recoveryMfaToken.trim();
+      }
+
+      const response = await fetch('/api/auth/password/recovery/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        if (response.status === 401 && data?.error === 'MFA_REQUIRED') {
+          setRecoveryMfaRequired(true);
+          setRecoveryError(data?.message || 'Validação MFA obrigatória para concluir a recuperação.');
+          return;
+        }
+        throw new Error(data?.error || 'Falha ao redefinir senha.');
+      }
+
+      setPassword('');
+      setRecoveryCode('');
+      setRecoveryNewPassword('');
+      setRecoveryMfaToken('');
+      setRecoveryMfaRequired(false);
+      setRecoveryMessage('Senha redefinida com sucesso. Faça login com a nova senha.');
+      setShowPasswordRecovery(false);
+      setLoginStep('email');
+    } catch (err: any) {
+      setRecoveryError(err?.message || 'Não foi possível concluir a recuperação de senha.');
+    } finally {
+      setRecoveryLoading(false);
     }
   };
 
@@ -269,16 +378,33 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     }
   };
 
+  const validateStrongPassword = (value: string): string | null => {
+    const normalized = String(value || '');
+    if (normalized.length < 12) return 'A senha deve ter no mínimo 12 caracteres.';
+    if (!/[A-Z]/.test(normalized)) return 'A senha deve incluir ao menos uma letra maiúscula.';
+    if (!/[a-z]/.test(normalized)) return 'A senha deve incluir ao menos uma letra minúscula.';
+    if (!/\d/.test(normalized)) return 'A senha deve incluir ao menos um número.';
+    if (!/[^A-Za-z0-9]/.test(normalized)) return 'A senha deve incluir ao menos um caractere especial.';
+    return null;
+  };
+
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegisterError('');
-    
-    if ((registerType === 'professional' || registerType === 'coordinator') && !crp) {
-      setRegisterError('CRP é obrigatório para profissionais.');
-      return;
-    }
 
     try {
+      if ((registerType === 'professional' || registerType === 'coordinator') && !crp.trim()) {
+        setRegisterError('CRP é obrigatório para profissionais.');
+        return;
+      }
+
+      const passwordValidationError = validateStrongPassword(password);
+      if (passwordValidationError) {
+        setRegisterError(passwordValidationError);
+        requestAnimationFrame(() => registerPasswordInputRef.current?.focus());
+        return;
+      }
+
       setLoading(true);
       const response = await fetch('/api/auth/signup', {
         method: 'POST',
@@ -288,7 +414,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           email,
           password,
           name,
-          role: registerType === 'professional' ? 'coordinator' : 'patient', // Professionals sign up as coordinators
+          role: registerType === 'professional' ? 'coordinator' : 'patient',
           crp: registerType === 'professional' ? crp : undefined,
           planName: registerType === 'patient' ? 'Paciente' : selectedPlan,
           acquisitionChannel
@@ -313,10 +439,12 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       } else {
         setRegisterError(error.message || 'Erro ao cadastrar. Tente novamente.');
       }
+    } finally {
+      setLoading(false);
     }
-  };
+	  };
 
-  const handleSelectPlan = async (planName: string) => {
+	  const handleSelectPlan = async (planName: string) => {
     try {
       setLoading(true);
       
@@ -415,11 +543,15 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
             
             <div className="relative bg-white rounded-[40px] shadow-2xl border border-gray-100 p-4 overflow-hidden group">
               <div className="w-full aspect-[16/10] rounded-[32px] overflow-hidden">
-              <img 
-                src="/Gemini_Generated_Image_m804z0m804z0m804.jpg" 
-                alt="Uma mão humana segurando uma caneta sobre um caderno aberto com a letra 'V' estilizada nas cores da Verto, simbolizando a personalização e a conexão humana na terapia."
-                className="rounded-[32px] w-full h-full object-cover transform group-hover:scale-[1.02] transition-transform duration-700"
-              />
+                  <img
+                    src="/Design_sem_nome_(1).jpg"
+                    onError={(e) => {
+                      e.currentTarget.onerror = null;
+                      e.currentTarget.src = '/Gemini_Generated_Image_m804z0m804z0m804.jpg';
+                    }}
+                    alt="Uma mão humana segurando uma caneta sobre um caderno aberto com a letra 'V' estilizada nas cores da Verto, simbolizando a personalização e a conexão humana na terapia."
+                    className="rounded-[32px] w-full h-full object-cover transform group-hover:scale-[1.02] transition-transform duration-700"
+                  />
               </div>
               
               {/* Professional Insight Card - Replaces the "balloon" */}
@@ -1078,7 +1210,10 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           <div className="fixed inset-0 z-[100] bg-black/40 backdrop-blur-md flex items-center justify-center p-4 md:p-6 animate-fade-in">
             <div className="bg-white w-full max-w-md max-h-[95vh] rounded-3xl shadow-xl overflow-hidden relative animate-pop flex flex-col">
               <button 
-                onClick={() => setShowLogin(false)}
+                onClick={() => {
+                  setShowLogin(false);
+                  resetPasswordRecoveryState();
+                }}
                 className="absolute top-4 right-4 md:top-6 md:right-6 p-2 hover:bg-gray-100 rounded-full transition-all text-gray-400 z-10"
               >
                 <X size={20} />
@@ -1106,8 +1241,112 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                   </p>
                 </div>
 
-                <form onSubmit={twoFactorRequired ? handle2FALogin : handleLogin} className="space-y-3 md:space-y-4">
-                  {!twoFactorRequired ? (
+                <form
+                  onSubmit={
+                    showPasswordRecovery
+                      ? (recoveryStep === 'request' ? handleRecoveryRequest : handleRecoveryVerify)
+                      : (twoFactorRequired ? handle2FALogin : handleLogin)
+                  }
+                  className="space-y-3 md:space-y-4"
+                >
+                  {showPasswordRecovery ? (
+                    <div className="space-y-4 animate-fade-in">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          resetPasswordRecoveryState();
+                          setLoginStep('email');
+                        }}
+                        className="inline-flex items-center gap-2 text-[11px] font-semibold text-[#7a32fc] hover:underline"
+                      >
+                        <ArrowLeft size={14} />
+                        Voltar para login
+                      </button>
+
+                      <div className="p-4 bg-purple-50 rounded-2xl flex items-start gap-3">
+                        <Shield className="text-[#7a32fc] mt-0.5" size={20} />
+                        <div>
+                          <p className="text-sm font-bold text-gray-800">Recuperar senha</p>
+                          <p className="text-xs text-gray-500">
+                            {recoveryStep === 'request'
+                              ? 'Informe seu e-mail para receber um código de recuperação.'
+                              : 'Digite o código recebido e defina sua nova senha.'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1.5 ml-1">E-mail</label>
+                        <div className="relative">
+                          <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
+                          <input
+                            type="email"
+                            required
+                            className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-3 pl-11 pr-6 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
+                            placeholder="seu@email.com"
+                            value={recoveryEmail}
+                            onChange={(e) => setRecoveryEmail(e.target.value)}
+                          />
+                        </div>
+                      </div>
+
+                      {recoveryStep === 'verify' && (
+                        <>
+                          <div>
+                            <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1.5 ml-1">Código de recuperação</label>
+                            <input
+                              type="text"
+                              required
+                              inputMode="numeric"
+                              maxLength={6}
+                              className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-3 px-4 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all tracking-[0.25em] text-center"
+                              placeholder="000000"
+                              value={recoveryCode}
+                              onChange={(e) => setRecoveryCode(e.target.value)}
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1.5 ml-1">Nova senha</label>
+                            <div className="relative">
+                              <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
+                              <input
+                                type={showPassword ? "text" : "password"}
+                                required
+                                className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-3 pl-11 pr-11 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
+                                placeholder="Mínimo de 12 caracteres"
+                                value={recoveryNewPassword}
+                                onChange={(e) => setRecoveryNewPassword(e.target.value)}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowPassword(!showPassword)}
+                                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500"
+                              >
+                                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                              </button>
+                            </div>
+                          </div>
+
+                          {recoveryMfaRequired && (
+                            <div>
+                              <label className="block text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1.5 ml-1">Código MFA</label>
+                              <input
+                                type="text"
+                                required
+                                inputMode="numeric"
+                                maxLength={6}
+                                className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-3 px-4 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all tracking-[0.25em] text-center"
+                                placeholder="000000"
+                                value={recoveryMfaToken}
+                                onChange={(e) => setRecoveryMfaToken(e.target.value)}
+                              />
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  ) : !twoFactorRequired ? (
                     <>
                       {loginStep === 'email' ? (
                         <div>
@@ -1164,15 +1403,24 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                       )}
 
                       {loginStep === 'password' && (
-                        <div className="flex items-center gap-2 ml-1">
-                          <button 
+                        <div className="flex items-center justify-between gap-2 ml-1">
+                          <div className="flex items-center gap-2">
+                            <button 
+                              type="button"
+                              onClick={() => setRememberMe(!rememberMe)}
+                              className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${rememberMe ? 'bg-[#7a32fc] border-[#7a32fc]' : 'bg-white border-gray-200'}`}
+                            >
+                              {rememberMe && <Check size={10} className="text-white" />}
+                            </button>
+                            <span className="text-[11px] font-normal text-gray-500 cursor-pointer select-none" onClick={() => setRememberMe(!rememberMe)}>Manter conectado</span>
+                          </div>
+                          <button
                             type="button"
-                            onClick={() => setRememberMe(!rememberMe)}
-                            className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${rememberMe ? 'bg-[#7a32fc] border-[#7a32fc]' : 'bg-white border-gray-200'}`}
+                            onClick={openPasswordRecovery}
+                            className="text-[11px] font-semibold text-[#7a32fc] hover:underline"
                           >
-                            {rememberMe && <Check size={10} className="text-white" />}
+                            Esqueci minha senha
                           </button>
-                          <span className="text-[11px] font-normal text-gray-500 cursor-pointer select-none" onClick={() => setRememberMe(!rememberMe)}>Manter conectado</span>
                         </div>
                       )}
                     </>
@@ -1200,7 +1448,15 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                     </div>
                   )}
 
-                  {loginError && (
+                  {showPasswordRecovery && recoveryMessage && (
+                    <p className="text-emerald-600 text-[10px] font-normal text-center">{recoveryMessage}</p>
+                  )}
+
+                  {showPasswordRecovery && recoveryError && (
+                    <p className="text-red-500 text-[10px] font-normal text-center">{recoveryError}</p>
+                  )}
+
+                  {!showPasswordRecovery && loginError && (
                     <div className="space-y-2">
                       <p className="text-red-500 text-[10px] font-normal text-center">{loginError}</p>
                       {loginError.includes('não foi confirmado') && (
@@ -1217,54 +1473,75 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
                   <button 
                     type="submit"
-                    disabled={loading}
+                    disabled={showPasswordRecovery ? recoveryLoading : loading}
                     className="w-full bg-[#7a32fc] text-white py-3.5 rounded-2xl font-semibold text-sm shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
                   >
-                    {loading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : null}
-                    {loginStep === 'email' ? 'Continuar' : 'Entrar na Verto'}
+                    {(showPasswordRecovery ? recoveryLoading : loading) ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : null}
+                    {showPasswordRecovery
+                      ? (recoveryStep === 'request' ? 'Enviar código' : 'Redefinir senha')
+                      : (loginStep === 'email' ? 'Continuar' : 'Entrar na Verto')}
                   </button>
 
-                  <div className="relative my-6">
-                    <div className="absolute inset-0 flex items-center">
-                      <div className="w-full border-t border-gray-100"></div>
-                    </div>
-                    <div className="relative flex justify-center text-[10px] uppercase">
-                      <span className="bg-white px-4 text-gray-400 font-medium tracking-widest">ou entrar com</span>
-                    </div>
-                  </div>
+                  {!showPasswordRecovery && (
+                    <>
+                      <div className="relative my-6">
+                        <div className="absolute inset-0 flex items-center">
+                          <div className="w-full border-t border-gray-100"></div>
+                        </div>
+                        <div className="relative flex justify-center text-[10px] uppercase">
+                          <span className="bg-white px-4 text-gray-400 font-medium tracking-widest">ou entrar com</span>
+                        </div>
+                      </div>
 
-                  <button 
-                    type="button"
-                    onClick={handleGoogleLogin}
-                    className="w-full bg-white border border-gray-200 text-gray-700 py-3.5 rounded-2xl font-bold text-sm shadow-sm hover:bg-gray-50 transition-all active:scale-[0.98] flex items-center justify-center gap-3"
-                  >
-                    <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" alt="Google" className="w-5 h-5" />
-                    Entrar com Google
-                  </button>
+                      <button 
+                        type="button"
+                        onClick={handleGoogleLogin}
+                        className="w-full bg-white border border-gray-200 text-gray-700 py-3.5 rounded-2xl font-bold text-sm shadow-sm hover:bg-gray-50 transition-all active:scale-[0.98] flex items-center justify-center gap-3"
+                      >
+                        <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" alt="Google" className="w-5 h-5" />
+                        Entrar com Google
+                      </button>
 
-                  {window.self !== window.top && (
-                    <p className="mt-4 text-[9px] text-amber-600 font-medium text-center leading-tight bg-amber-50 p-2 rounded-xl border border-amber-100">
-                      Nota: Se o login do Google falhar, clique no ícone no topo para abrir o app em uma nova aba.
-                    </p>
+                      {window.self !== window.top && (
+                        <p className="mt-4 text-[9px] text-amber-600 font-medium text-center leading-tight bg-amber-50 p-2 rounded-xl border border-amber-100">
+                          Nota: Se o login do Google falhar, clique no ícone no topo para abrir o app em uma nova aba.
+                        </p>
+                      )}
+                    </>
                   )}
                 </form>
 
-                <div className="mt-6 pt-6 border-t border-gray-100 text-center">
-                  <p className="text-xs text-gray-500 font-normal">
-                    Não tem uma conta?{" "}
-                    <button 
-                      onClick={() => {
-                        setShowLogin(false);
-                        setShowRegister(true);
-                        setRegisterStep(2);
-                        setRegisterType(loginType === 'patient' ? 'patient' : 'professional');
-                      }}
-                      className="text-[#7a32fc] font-medium hover:underline"
+                {!showPasswordRecovery && (
+                  <div className="mt-6 pt-6 border-t border-gray-100 text-center">
+                    <p className="text-xs text-gray-500 font-normal">
+                      Não tem uma conta?{" "}
+                      <button 
+                        onClick={() => {
+                          setShowLogin(false);
+                          resetPasswordRecoveryState();
+                          setShowRegister(true);
+                          setRegisterStep(2);
+                          setRegisterType(loginType === 'patient' ? 'patient' : 'professional');
+                        }}
+                        className="text-[#7a32fc] font-medium hover:underline"
+                      >
+                        Cadastre-se agora
+                      </button>
+                    </p>
+                  </div>
+                )}
+
+                {showPasswordRecovery && recoveryStep === 'verify' && (
+                  <div className="mt-4 text-center">
+                    <button
+                      type="button"
+                      onClick={() => setRecoveryStep('request')}
+                      className="text-[11px] font-semibold text-[#7a32fc] hover:underline"
                     >
-                      Cadastre-se agora
+                      Reenviar código
                     </button>
-                  </p>
-                </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1389,7 +1666,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                           className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-2.5 md:py-3 px-4 md:px-5 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
                           placeholder="Seu nome"
                           value={name}
-                          onChange={(e) => setName(e.target.value)}
+                          onChange={(e) => { setName(e.target.value); if (registerError) setRegisterError(''); }}
                         />
                       </div>
 
@@ -1402,7 +1679,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                             className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-2.5 md:py-3 px-4 md:px-5 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
                             placeholder="Ex: 06/123456"
                             value={crp}
-                            onChange={(e) => setCrp(e.target.value)}
+                            onChange={(e) => { setCrp(e.target.value); if (registerError) setRegisterError(''); }}
                           />
                         </div>
                       )}
@@ -1415,19 +1692,20 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                           className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-2.5 md:py-3 px-4 md:px-5 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
                           placeholder="seu@email.com"
                           value={email}
-                          onChange={(e) => setEmail(e.target.value)}
+                          onChange={(e) => { setEmail(e.target.value); if (registerError) setRegisterError(''); }}
                         />
                       </div>
 
                       <div>
                         <label className="block text-[9px] md:text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1 ml-1">Senha</label>
                         <input 
+                          ref={registerPasswordInputRef}
                           type="password" 
                           required
                           className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-2.5 md:py-3 px-4 md:px-5 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
                           placeholder="••••••••"
                           value={password}
-                          onChange={(e) => setPassword(e.target.value)}
+                          onChange={(e) => { setPassword(e.target.value); if (registerError) setRegisterError(''); }}
                         />
                       </div>
 
