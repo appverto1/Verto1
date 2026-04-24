@@ -654,6 +654,7 @@ export const dataService = {
   async reviewAssignedTask(taskId: string, payload: {
     pro_score: number;
     pro_review_note?: string;
+    max_score?: number;
   }) {
     try {
       const response = await fetch(`/api/assigned-tasks/${taskId}/review`, {

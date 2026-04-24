@@ -804,7 +804,8 @@ export default function App() {
             icon: t.icon || '',
             color: t.color || '',
             linkedTask: t.linkedTask || '',
-            linkedProtocolId: t.linkedProtocolId || ''
+            linkedProtocolId: t.linkedProtocolId || '',
+            maxScore: Number.isFinite(Number(t.maxScore)) ? Number(t.maxScore) : 4
           },
           scheduled_at: t.scheduledAt || new Date().toISOString(),
           status: 'pending'

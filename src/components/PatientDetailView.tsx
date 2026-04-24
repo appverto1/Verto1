@@ -33,6 +33,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [comparisonDate1, setComparisonDate1] = useState('');
   const [comparisonDate2, setComparisonDate2] = useState('');
   const [selectedReportNotes, setSelectedReportNotes] = useState<number[]>([]);
+  const [selectedAdultEvolutionIds, setSelectedAdultEvolutionIds] = useState<string[]>([]);
+  const [reportAdditionalNote, setReportAdditionalNote] = useState('');
+  const [isGeneratingAdultReport, setIsGeneratingAdultReport] = useState(false);
   const [planType, setPlanType] = useState('task'); 
   const [isCreatingNewTask, setIsCreatingNewTask] = useState(false); 
   const [filterAge, setFilterAge] = useState(""); 
@@ -809,6 +812,105 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       prev.includes(id) ? prev.filter(nId => nId !== id) : [...prev, id]
     );
   };
+
+  const resolvePeriodStart = (period: string): Date => {
+    const now = new Date();
+    const start = new Date(now);
+    if (period === 'monthly') start.setMonth(start.getMonth() - 1);
+    else if (period === 'bimonthly') start.setMonth(start.getMonth() - 2);
+    else if (period === 'quarterly') start.setMonth(start.getMonth() - 3);
+    else if (period === 'semiannual') start.setMonth(start.getMonth() - 6);
+    else start.setFullYear(start.getFullYear() - 1);
+    return start;
+  };
+  const periodLabelByValue: Record<string, string> = {
+    monthly: 'Mensal',
+    bimonthly: 'Bimestral',
+    quarterly: 'Trimestral',
+    semiannual: 'Semestral',
+    annual: 'Anual'
+  };
+
+  const adultCompletedTasks = useMemo(() => {
+    return (assignedTasks || [])
+      .filter((task: any) => String(task?.status || '').toLowerCase() === 'completed')
+      .map((task: any) => {
+        const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
+        const eventDateRaw = task?.completed_at || task?.reviewed_at || task?.scheduled_at || task?.created_at;
+        const eventDate = eventDateRaw ? new Date(eventDateRaw) : new Date();
+        const safeMaxScore = Math.max(
+          1,
+          Number(taskData?.maxScore ?? taskData?.max_score ?? task?.max_score ?? 4) || 4
+        );
+        return {
+          ...task,
+          taskData,
+          eventDate,
+          eventDateRaw,
+          taskTitle: String(taskData?.title || task?.title || 'Tarefa'),
+          taskType: String(task?.task_type || task?.type || 'task'),
+          maxScore: safeMaxScore,
+          patientEffort: Number(task?.patient_effort ?? 0) || 0,
+          patientComment: String(task?.patient_comment || ''),
+          professionalScore: task?.pro_score === null || task?.pro_score === undefined ? null : Number(task.pro_score),
+          evolutionNote: String(task?.pro_review_note || '')
+        };
+      })
+      .sort((a: any, b: any) => b.eventDate.getTime() - a.eventDate.getTime());
+  }, [assignedTasks]);
+
+  const adultPeriodStart = useMemo(() => resolvePeriodStart(reportPeriod), [reportPeriod]);
+  const adultTasksInPeriod = useMemo(() => {
+    if (isKidsProfile) return [];
+    return adultCompletedTasks.filter((task: any) => task.eventDate >= adultPeriodStart);
+  }, [adultCompletedTasks, adultPeriodStart, isKidsProfile]);
+
+  useEffect(() => {
+    if (isKidsProfile) return;
+    setSelectedAdultEvolutionIds(adultTasksInPeriod.map((task: any) => String(task.id)));
+  }, [adultTasksInPeriod, isKidsProfile, patient?.id]);
+
+  const toggleAdultEvolutionSelection = (taskId: string) => {
+    setSelectedAdultEvolutionIds((prev) =>
+      prev.includes(taskId) ? prev.filter((id) => id !== taskId) : [...prev, taskId]
+    );
+  };
+
+  const adultEvolutionSelectedTasks = useMemo(() => {
+    const selectedIds = new Set(selectedAdultEvolutionIds.map(String));
+    return adultTasksInPeriod.filter((task: any) => selectedIds.has(String(task.id)));
+  }, [adultTasksInPeriod, selectedAdultEvolutionIds]);
+
+  const adultComparisonChartData = useMemo(() => {
+    if (isKidsProfile) return [];
+    const grouped = new Map<string, any[]>();
+    adultTasksInPeriod.forEach((task: any) => {
+      const key = String(task.taskTitle || 'Habilidade');
+      const list = grouped.get(key) || [];
+      list.push(task);
+      grouped.set(key, list);
+    });
+
+    return Array.from(grouped.entries()).map(([name, entries]) => {
+      const ordered = [...entries].sort((a: any, b: any) => a.eventDate.getTime() - b.eventDate.getTime());
+      const evaluations = ordered.filter((item: any) => item.taskType === 'task' || item.taskType === 'evaluation');
+      const interventions = ordered.filter((item: any) => item.taskType === 'intervention');
+      const initialRef = evaluations[0] || ordered[0];
+      const currentRef = interventions[interventions.length - 1] || ordered[ordered.length - 1];
+      const maxScore = Math.max(...ordered.map((item: any) => Number(item.maxScore || 1)), 1);
+      return {
+        name,
+        'Avaliação Inicial': Number(initialRef?.professionalScore ?? 0),
+        'Intervenção Atual': Number(currentRef?.professionalScore ?? 0),
+        maxScore
+      };
+    });
+  }, [adultTasksInPeriod, isKidsProfile]);
+
+  const adultComparisonMaxScore = useMemo(() => {
+    if (!adultComparisonChartData.length) return 4;
+    return Math.max(...adultComparisonChartData.map((item: any) => Number(item?.maxScore || 1)), 1);
+  }, [adultComparisonChartData]);
   
   const handleSchedule = () => { 
     if (!scheduleDate || !scheduleTime) { alert("Selecione data e hora."); return; } 
@@ -821,6 +923,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           return;
         }
       }
+      const selectedSkillMaxScore = Number(
+        selectedDomain?.skills?.find((s: any) => String(s.id) === String(selectedSkillId))?.maxScore ?? 4
+      );
+      const resolvedTaskMaxScore = isCreatingNewTask
+        ? Math.max(1, Number(isKidsProfile ? newTaskMaxScore : 4) || 4)
+        : Math.max(1, Number(selectedSkillMaxScore) || 4);
       const taskPayload = { 
         id: Date.now() + (isCreatingNewTask ? 1 : 0), 
         patientId: patient.id, 
@@ -831,6 +939,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         type: planType, 
         scheduledAt: scheduledAt, 
         description: finalTaskSubtitle,
+        maxScore: resolvedTaskMaxScore,
         noRealtimeScoring: !isKidsProfile,
         isDailyReminder: planType === 'intervention' ? isDailyReminder : false,
         linkedTask: planType === 'intervention' ? linkedTask : undefined,
@@ -953,15 +1062,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const taskId = String(task?.id || '');
     if (!taskId) return;
     const draft = assignedReviewDrafts[taskId] || { score: '', note: '' };
+    const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
+    const dynamicMaxScore = Math.max(1, Number(taskData?.maxScore ?? taskData?.max_score ?? 4) || 4);
     const numericScore = Number(draft.score);
-    if (!Number.isFinite(numericScore) || numericScore < 0 || numericScore > 4) {
-      alert('A pontuação profissional deve estar entre 0 e 4.');
+    if (!Number.isFinite(numericScore) || numericScore < 0 || numericScore > dynamicMaxScore) {
+      alert(`A pontuação profissional deve estar entre 0 e ${dynamicMaxScore}.`);
       return;
     }
 
     const result = await dataService.reviewAssignedTask(taskId, {
       pro_score: numericScore,
-      pro_review_note: draft.note || ''
+      pro_review_note: draft.note || '',
+      max_score: dynamicMaxScore
     });
     if (!result?.success || !result?.data) {
       alert(result?.error || 'Não foi possível registrar a revisão profissional.');
@@ -1282,6 +1394,72 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     document.body.removeChild(link);
   };
 
+  const handleGenerateAdultEvolutionReport = async () => {
+    if (isKidsProfile) return;
+    if (!adultComparisonChartData.length) {
+      alert('Não há dados suficientes no período para gerar o relatório adulto.');
+      return;
+    }
+    setIsGeneratingAdultReport(true);
+    try {
+      const periodStart = adultPeriodStart.toLocaleDateString('pt-BR');
+      const periodEnd = new Date().toLocaleDateString('pt-BR');
+      const selectedNotes = adultEvolutionSelectedTasks;
+      const plainTextLines = [
+        `Relatório de Evolução Adulto - ${patient?.name || 'Paciente'}`,
+        `Período: ${periodStart} até ${periodEnd}`,
+        '',
+        'Comparativo por habilidade (Avaliação Inicial x Intervenção Atual):',
+        ...adultComparisonChartData.map((item: any) =>
+          `${item.name}: Inicial ${item['Avaliação Inicial']} | Atual ${item['Intervenção Atual']} (máx ${item.maxScore})`
+        ),
+        '',
+        'Anotações de evolução selecionadas:',
+        ...(selectedNotes.length
+          ? selectedNotes.map((task: any) =>
+              `- ${task.taskTitle} | ${task.eventDate.toLocaleDateString('pt-BR')} | esforço ${task.patientEffort}% | nota ${task.professionalScore ?? '-'} | ${task.evolutionNote || 'Sem anotação'}`
+            )
+          : ['- Nenhuma anotação selecionada']),
+        '',
+        `Anotação adicional do relatório: ${reportAdditionalNote || 'Sem observação adicional.'}`
+      ];
+
+      const { jsPDF } = await import('jspdf');
+      const pdfDoc = new jsPDF({ unit: 'pt', format: 'a4' });
+      const lines = pdfDoc.splitTextToSize(plainTextLines.join('\n'), 520);
+      pdfDoc.text(lines, 36, 48);
+      const pdfBlob = new Blob([pdfDoc.output('arraybuffer')], { type: 'application/pdf' });
+      const fileName = `Relatorio_Evolucao_Adulto_${String(patient?.name || 'paciente').replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`;
+
+      const uploadResult = await dataService.uploadPatientFile(String(patient.id), {
+        fileName,
+        contentType: 'application/pdf',
+        fileBlob: pdfBlob,
+        source: 'report',
+        metadata: {
+          reportType: 'adult-evolution',
+          period: reportPeriod
+        }
+      });
+      if (!uploadResult?.success || !uploadResult?.data) {
+        throw new Error(uploadResult?.error || uploadResult?.warning || 'Falha ao salvar PDF do relatório.');
+      }
+
+      setPatientFiles((prev) => [normalizeFileRecord(uploadResult.data), ...prev]);
+      onAddActivityLog?.(
+        'Relatório adulto gerado',
+        `Relatório de evolução adulto de ${patient?.name || 'paciente'} gerado e salvo em Arquivos.`,
+        'clinical'
+      );
+      alert('Relatório de evolução adulto gerado e salvo em Arquivos.');
+    } catch (error: any) {
+      console.error('Falha ao gerar relatório adulto:', error);
+      alert('Não foi possível gerar o relatório adulto agora.');
+    } finally {
+      setIsGeneratingAdultReport(false);
+    }
+  };
+
   const getMasteryProgress = (skillName: string) => {
     if (patientCategory !== 'Criança') return null;
     const goal = patient.pei?.find((g: any) => g.name === skillName);
@@ -1528,6 +1706,46 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 )}
               </div>
             )}
+            {!isKidsProfile && (
+              <div className="bg-white border border-gray-100 p-5 rounded-3xl shadow-sm">
+                <h3 className="text-sm font-semibold text-gray-800 tracking-tight mb-4">Histórico Adulto (Auditoria Clínica)</h3>
+                {adultCompletedTasks.length === 0 ? (
+                  <p className="text-sm text-gray-400 italic">Sem eventos concluídos para exibir no histórico adulto.</p>
+                ) : (
+                  <div className="relative pl-6 border-l-2 border-gray-200 ml-2 space-y-4">
+                    {adultCompletedTasks.map((event: any) => (
+                      <div key={`adult-history-${event.id}`} className="relative">
+                        <div className="absolute -left-[33px] top-4 w-4 h-4 rounded-full bg-[#7551FF] border-4 border-white ring-1 ring-gray-100"></div>
+                        <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-sm font-semibold text-gray-800">{event.taskTitle}</p>
+                            <span className="text-[10px] font-semibold bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-full uppercase">
+                              {event.taskType === 'intervention' ? 'Intervenção' : event.taskType === 'reinforcement' ? 'Reforço' : 'Avaliação'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-500">
+                            Execução: {event.eventDate.toLocaleDateString('pt-BR')} às {event.eventDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                          </p>
+                          <p className="text-xs text-gray-600">
+                            Esforço percebido: <span className="font-semibold">{event.patientEffort}%</span>
+                          </p>
+                          <p className="text-xs text-gray-600">
+                            Comentário do paciente: {event.patientComment || 'Sem comentário.'}
+                          </p>
+                          <p className="text-xs text-gray-600">
+                            Nota final do profissional: <span className="font-semibold">{event.professionalScore ?? '-'} / {event.maxScore}</span>
+                          </p>
+                          <div className="bg-white border border-gray-100 rounded-xl p-3">
+                            <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1">Anotação de Evolução</p>
+                            <p className="text-xs text-gray-700 whitespace-pre-wrap">{event.evolutionNote || 'Sem anotação técnica registrada.'}</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {isKidsProfile ? (
               <React.Fragment>
                 <div id="history-filters" className="bg-white/80 border border-gray-100 p-4 rounded-3xl shadow-sm mb-6 animate-fade-in">
@@ -1583,7 +1801,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 </p>
               </div>
             )}
-            {(sortedDateKeys?.length || 0) > 0 ? sortedDateKeys.map((dateKey, gIdx) => ( 
+            {isKidsProfile && ((sortedDateKeys?.length || 0) > 0 ? sortedDateKeys.map((dateKey, gIdx) => ( 
               <div key={dateKey} className="relative pl-6 border-l-2 border-gray-200 ml-2"> 
                 <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-[#7551FF] border-4 border-white ring-1 ring-gray-100"></div> 
                 <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">{dateKey}</h3> 
@@ -1604,7 +1822,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   ))} 
                 </div> 
               </div> 
-            )) : <p className="text-center text-gray-400 mt-10">Nenhum histórico disponível.</p>} 
+            )) : <p className="text-center text-gray-400 mt-10">Nenhum histórico disponível.</p>)} 
           </div> 
         ) : activeTab === 'notes' ? ( 
           <div className="space-y-4 animate-fade-in"> 
@@ -1783,12 +2001,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   maxScore={selectedProtocolMaxScore}
                 />
               ) : (
-                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-5 text-sm text-gray-600">
-                  Relatórios gráficos de PEI/Sessão são exclusivos do modo infantil. No modo adulto, acompanhe tarefas concluídas, esforço e pontuação profissional.
-                </div>
+                <ComparisonBarChart
+                  data={adultComparisonChartData}
+                  title={`Comparativo Adulto (${periodLabelByValue[reportPeriod as keyof typeof periodLabelByValue] || 'Período'}) - Avaliação Inicial x Intervenção Atual`}
+                  maxScore={adultComparisonMaxScore}
+                />
               )}
 
-              {selectedReportNotes.length > 0 && (
+              {isKidsProfile && selectedReportNotes.length > 0 && (
                 <div className="mt-8 p-8 bg-gray-50 rounded-[32px] border border-gray-100 animate-fade-in">
                   <h4 className="text-sm font-semibold text-gray-800 uppercase tracking-tight mb-6 flex items-center gap-2">
                     <FileText size={18} className="text-[#7a32fc]" /> Observações Selecionadas para o Relatório
@@ -1806,35 +2026,108 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   </div>
                 </div>
               )}
+              {!isKidsProfile && adultEvolutionSelectedTasks.length > 0 && (
+                <div className="mt-8 p-8 bg-gray-50 rounded-[32px] border border-gray-100 animate-fade-in">
+                  <h4 className="text-sm font-semibold text-gray-800 uppercase tracking-tight mb-6 flex items-center gap-2">
+                    <FileText size={18} className="text-[#7a32fc]" /> Anotações de Evolução Selecionadas
+                  </h4>
+                  <div className="space-y-4">
+                    {adultEvolutionSelectedTasks.map((task: any) => (
+                      <div key={`selected-adult-note-${task.id}`} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-[10px] font-semibold text-gray-400 uppercase">
+                            {task.eventDate.toLocaleDateString('pt-BR')}
+                          </span>
+                          <span className="text-[10px] font-semibold text-indigo-600 uppercase tracking-widest">
+                            Nota {task.professionalScore ?? '-'} / {task.maxScore}
+                          </span>
+                        </div>
+                        <p className="text-sm font-semibold text-gray-800">{task.taskTitle}</p>
+                        <p className="text-xs text-gray-600 mt-1">Esforço: {task.patientEffort}%</p>
+                        <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap mt-2">
+                          {task.evolutionNote || 'Sem anotação técnica registrada.'}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="mt-8">
                 <div className="flex items-center justify-between mb-4">
                   <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-tight flex items-center gap-2">
-                    <FileText size={16} className="text-[#7a32fc]" /> Incluir Observações Clínicas
+                    <FileText size={16} className="text-[#7a32fc]" /> {isKidsProfile ? 'Incluir Observações Clínicas' : 'Incluir Anotações de Evolução'}
                   </h4>
-                  <span className="text-[10px] font-semibold text-gray-400 uppercase">{selectedReportNotes.length} selecionadas</span>
+                  <span className="text-[10px] font-semibold text-gray-400 uppercase">
+                    {isKidsProfile ? `${selectedReportNotes.length} selecionadas` : `${selectedAdultEvolutionIds.length} selecionadas`}
+                  </span>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                  {notes.filter((n: any) => n.patientId === patient.id).map((note: any) => (
-                    <div 
-                      key={note.id} 
-                      onClick={() => toggleReportNote(note.id)}
-                      className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedReportNotes.includes(note.id) ? 'border-[#7a32fc] bg-blue-50/50 shadow-sm' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200'}`}
-                    >
-                      <div className="flex justify-between items-start mb-2">
-                        <span className="text-[9px] font-semibold text-gray-400 uppercase">{note.date}</span>
-                        {selectedReportNotes.includes(note.id) && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
-                      </div>
-                      <p className="text-xs text-gray-600 line-clamp-3">{note.text}</p>
-                    </div>
-                  ))}
+                  {isKidsProfile
+                    ? notes.filter((n: any) => n.patientId === patient.id).map((note: any) => (
+                        <div
+                          key={note.id}
+                          onClick={() => toggleReportNote(note.id)}
+                          className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedReportNotes.includes(note.id) ? 'border-[#7a32fc] bg-blue-50/50 shadow-sm' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200'}`}
+                        >
+                          <div className="flex justify-between items-start mb-2">
+                            <span className="text-[9px] font-semibold text-gray-400 uppercase">{note.date}</span>
+                            {selectedReportNotes.includes(note.id) && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
+                          </div>
+                          <p className="text-xs text-gray-600 line-clamp-3">{note.text}</p>
+                        </div>
+                      ))
+                    : adultTasksInPeriod.map((task: any) => {
+                        const selected = selectedAdultEvolutionIds.includes(String(task.id));
+                        return (
+                          <div
+                            key={`adult-evo-select-${task.id}`}
+                            onClick={() => toggleAdultEvolutionSelection(String(task.id))}
+                            className={`p-4 rounded-2xl border cursor-pointer transition-all ${selected ? 'border-[#7a32fc] bg-blue-50/50 shadow-sm' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200'}`}
+                          >
+                            <div className="flex justify-between items-start mb-2">
+                              <span className="text-[9px] font-semibold text-gray-400 uppercase">
+                                {task.eventDate.toLocaleDateString('pt-BR')}
+                              </span>
+                              {selected && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
+                            </div>
+                            <p className="text-xs font-semibold text-gray-700">{task.taskTitle}</p>
+                            <p className="text-[11px] text-gray-500 mt-1">Esforço {task.patientEffort}% • Nota {task.professionalScore ?? '-'} / {task.maxScore}</p>
+                            <p className="text-xs text-gray-600 line-clamp-2 mt-1">{task.evolutionNote || 'Sem anotação técnica.'}</p>
+                          </div>
+                        );
+                      })}
                 </div>
               </div>
+              {!isKidsProfile && (
+                <div className="mt-6">
+                  <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">
+                    Anotação adicional do relatório
+                  </label>
+                  <textarea
+                    className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm outline-none resize-none"
+                    rows={3}
+                    placeholder="Resumo clínico adicional para o PDF final."
+                    value={reportAdditionalNote}
+                    onChange={(e) => setReportAdditionalNote(e.target.value)}
+                  />
+                </div>
+              )}
 
               <div className="mt-8 flex justify-end gap-3">
-                <button className="px-6 py-3 bg-gray-100 text-gray-600 font-semibold rounded-xl text-xs hover:bg-gray-200 transition-all">Visualizar PDF</button>
-                <button id="report-download-btn" className="px-6 py-3 bg-[#7a32fc] text-white font-semibold rounded-xl text-xs shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 transition-all flex items-center gap-2">
-                  <Download size={16} /> Gerar Relatório Final
+                <button
+                  className="px-6 py-3 bg-gray-100 text-gray-600 font-semibold rounded-xl text-xs hover:bg-gray-200 transition-all"
+                  onClick={isKidsProfile ? undefined : () => setActiveTab('history')}
+                >
+                  {isKidsProfile ? 'Visualizar PDF' : 'Ver Histórico'}
+                </button>
+                <button
+                  id="report-download-btn"
+                  onClick={isKidsProfile ? undefined : () => void handleGenerateAdultEvolutionReport()}
+                  disabled={!isKidsProfile && isGeneratingAdultReport}
+                  className="px-6 py-3 bg-[#7a32fc] text-white font-semibold rounded-xl text-xs shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <Download size={16} /> {isKidsProfile ? 'Gerar Relatório Final' : (isGeneratingAdultReport ? 'Gerando...' : 'Gerar PDF Adulto')}
                 </button>
               </div>
             </div>
@@ -2393,6 +2686,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                         const reviewKey = String(task.id);
                         const draft = assignedReviewDrafts[reviewKey] || { score: '', note: '' };
                         const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
+                        const dynamicMaxScore = Math.max(1, Number(taskData?.maxScore ?? taskData?.max_score ?? 4) || 4);
                         const displayedTitle = taskData?.title || task?.title || 'Tarefa';
                         return (
                           <div key={reviewKey} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
@@ -2413,22 +2707,24 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               </p>
                             )}
                             <div className="grid grid-cols-1 md:grid-cols-[140px_1fr] gap-2">
-                              <input
-                                type="number"
-                                min={0}
-                                max={4}
-                                step={1}
+                              <select
                                 value={draft.score}
                                 onChange={(e) => handleAssignedReviewChange(reviewKey, { score: e.target.value })}
                                 className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none"
-                                placeholder="Nota 0-4"
-                              />
-                              <input
-                                type="text"
+                              >
+                                <option value="">Nota 0-{dynamicMaxScore}</option>
+                                {Array.from({ length: dynamicMaxScore + 1 }, (_, i) => i).map((score) => (
+                                  <option key={`score-${reviewKey}-${score}`} value={String(score)}>
+                                    {score}
+                                  </option>
+                                ))}
+                              </select>
+                              <textarea
                                 value={draft.note}
                                 onChange={(e) => handleAssignedReviewChange(reviewKey, { note: e.target.value })}
-                                className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none"
-                                placeholder="Observação da revisão (opcional)"
+                                className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none resize-none"
+                                rows={2}
+                                placeholder="Anotação de evolução (análise técnica qualitativa)"
                               />
                             </div>
                             <button

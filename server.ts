@@ -5480,9 +5480,18 @@ async function startServer() {
       if (fetchError) throw fetchError;
       if (!existing) return res.status(404).json({ success: false, error: 'Tarefa não encontrada.' });
 
-      const proScore = asSafeNumber(req.body?.pro_score, 0, 4);
+      const existingTaskData = existing.task_data && typeof existing.task_data === 'object' ? existing.task_data : {};
+      const maxScoreFromTask =
+        asSafeNumber(
+          existingTaskData?.maxScore ??
+            existingTaskData?.max_score ??
+            req.body?.max_score,
+          1,
+          10
+        ) || 4;
+      const proScore = asSafeNumber(req.body?.pro_score, 0, maxScoreFromTask);
       if (proScore === null) {
-        return res.status(400).json({ success: false, error: 'pro_score deve estar entre 0 e 4.' });
+        return res.status(400).json({ success: false, error: `pro_score deve estar entre 0 e ${maxScoreFromTask}.` });
       }
 
       const reviewNote = sanitizeTextField(req.body?.pro_review_note, 4000);
@@ -5491,6 +5500,10 @@ async function startServer() {
         .update({
           pro_score: proScore,
           pro_review_note: reviewNote,
+          task_data: {
+            ...existingTaskData,
+            maxScore: maxScoreFromTask
+          },
           reviewed_at: new Date().toISOString()
         })
         .eq('id', taskId)
@@ -5508,7 +5521,6 @@ async function startServer() {
           .maybeSingle();
 
         if (!existingSuggestion?.data) {
-          const existingTaskData = existing.task_data && typeof existing.task_data === 'object' ? existing.task_data : {};
           const linkedProtocolId = sanitizeString(
             existingTaskData?.linkedProtocolId || existingTaskData?.linkedInterventionProtocolId,
             120
