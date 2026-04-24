@@ -73,12 +73,28 @@ export const DomainEditor = ({ domain, onUpdate, onDelete, category }: any) => {
 };
 
 export const ProtocolEditor = ({ protocol, onSave, onCancel }: any) => { 
+  const mapAgeGroupToRange = (ageGroup?: string) => {
+    const group = String(ageGroup || '').toLowerCase();
+    if (group === 'child') return { min: 0, max: 12 };
+    if (group === 'teen') return { min: 13, max: 18 };
+    if (group === 'adult') return { min: 19, max: 59 };
+    if (group === 'senior') return { min: 60, max: null };
+    return { min: 0, max: null };
+  };
+
+  const inferredRange = mapAgeGroupToRange(protocol?.ageGroup);
   const [localProtocol, setLocalProtocol] = useState({ 
     ...protocol, 
     ageGroup: protocol.ageGroup || 'all', 
     type: protocol.type || 'conventional', 
     domain: protocol.domain || '',
-    category: protocol.category || 'evaluation' 
+    category: protocol.category || 'evaluation',
+    age_minima: Number.isFinite(Number(protocol?.age_minima ?? protocol?.idade_minima ?? protocol?.min_age))
+      ? Number(protocol?.age_minima ?? protocol?.idade_minima ?? protocol?.min_age)
+      : inferredRange.min,
+    age_maxima: Number.isFinite(Number(protocol?.age_maxima ?? protocol?.idade_maxima ?? protocol?.max_age))
+      ? Number(protocol?.age_maxima ?? protocol?.idade_maxima ?? protocol?.max_age)
+      : inferredRange.max
   }); 
   const [showSuccess, setShowSuccess] = useState(false); 
   const updateDomain = (domainId: any, updatedData: any) => { 
@@ -127,7 +143,18 @@ export const ProtocolEditor = ({ protocol, onSave, onCancel }: any) => {
           </div>
           <div> 
             <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Faixa Etária</label> 
-            <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7551FF]" value={localProtocol.ageGroup} onChange={(e) => setLocalProtocol({ ...localProtocol, ageGroup: e.target.value })}> 
+            <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7551FF]" value={localProtocol.ageGroup} onChange={(e) => {
+              const nextGroup = e.target.value;
+              const nextRange = mapAgeGroupToRange(nextGroup);
+              setLocalProtocol({
+                ...localProtocol,
+                ageGroup: nextGroup,
+                age_minima: nextRange.min,
+                age_maxima: nextRange.max,
+                min_age: nextRange.min,
+                max_age: nextRange.max
+              });
+            }}> 
               <option value="all">Todas as Idades</option> 
               <option value="child">0 a 12 anos</option> 
               <option value="teen">13 a 18 anos</option> 
@@ -135,6 +162,34 @@ export const ProtocolEditor = ({ protocol, onSave, onCancel }: any) => {
               <option value="senior">60 anos ou mais</option> 
             </select> 
           </div> 
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Idade mínima</label>
+            <input
+              type="number"
+              min={0}
+              className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7551FF]"
+              value={localProtocol.age_minima ?? 0}
+              onChange={(e) => {
+                const value = Math.max(0, Number(e.target.value || 0));
+                setLocalProtocol({ ...localProtocol, age_minima: value, min_age: value });
+              }}
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Idade máxima</label>
+            <input
+              type="number"
+              min={0}
+              className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7551FF]"
+              value={localProtocol.age_maxima ?? ''}
+              placeholder="Sem limite"
+              onChange={(e) => {
+                const value = e.target.value;
+                const next = value === '' ? null : Math.max(0, Number(value));
+                setLocalProtocol({ ...localProtocol, age_maxima: next, max_age: next });
+              }}
+            />
+          </div>
           <div> 
             <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Tipo de Terapia</label> 
             <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7551FF]" value={localProtocol.type} onChange={(e) => setLocalProtocol({ ...localProtocol, type: e.target.value })}> 
@@ -180,7 +235,7 @@ export const ProtocolManagementSystem = ({
 
   const handleCreateNew = () => { 
     if (!canManageLibrary) return;
-    const newProto = { id: Date.now(), title: "Novo Protocolo Personalizado", data: [], ageGroup: 'all', type: 'conventional', domain: '', category: 'evaluation' }; 
+    const newProto = { id: Date.now(), title: "Novo Protocolo Personalizado", data: [], ageGroup: 'all', age_minima: 0, age_maxima: null, min_age: 0, max_age: null, type: 'conventional', domain: '', category: 'evaluation' }; 
     setEditingProtocol(newProto); 
   }; 
   
@@ -222,6 +277,10 @@ export const ProtocolManagementSystem = ({
               title: protocolTitle,
               category: 'evaluation',
               ageGroup: 'all',
+              age_minima: 0,
+              age_maxima: null,
+              min_age: 0,
+              max_age: null,
               type: 'conventional',
               domain: 'Importado, IA',
               data: [

@@ -2354,8 +2354,8 @@ export function CoordinatorDashboard({
             Composição de Custos
           </h3>
           <div className="overflow-x-auto no-scrollbar -mx-6 sm:mx-0 px-6 sm:px-0">
-            <div className="h-[250px] sm:h-[300px] min-w-[600px] sm:min-w-0">
-              <ResponsiveContainer width="100%" height="100%">
+            <div className="h-[250px] sm:h-[300px] min-h-[300px] min-w-[600px] sm:min-w-0">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                 <BarChart
                   data={[
                     { name: "Repasses", value: 18100 },
@@ -2405,8 +2405,8 @@ export function CoordinatorDashboard({
             Distribuição
           </h3>
           <div className="overflow-x-auto no-scrollbar -mx-6 sm:mx-0 px-6 sm:px-0">
-            <div className="h-[250px] sm:h-[300px] min-w-[300px] sm:min-w-0">
-              <ResponsiveContainer width="100%" height="100%">
+            <div className="h-[250px] sm:h-[300px] min-h-[300px] min-w-[300px] sm:min-w-0">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                 <RePieChart>
                   <Pie
                     data={[
@@ -3573,8 +3573,8 @@ export function CoordinatorDashboard({
                       <h4 className="font-bold text-slate-900 mb-6">
                         Recebimentos e Margem Prevista
                       </h4>
-                      <div className="h-64">
-                        <ResponsiveContainer width="100%" height="100%">
+                      <div className="h-64 min-h-[300px]">
+                        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                           <BarChart data={revenueHistory}>
                             <CartesianGrid
                               strokeDasharray="3 3"

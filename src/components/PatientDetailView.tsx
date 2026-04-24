@@ -83,7 +83,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
     const filteredByProfile = isKidsProfile
       ? tabsFromProps
-      : tabsFromProps.filter((tab: string) => tab !== 'plan' && tab !== 'session');
+      : tabsFromProps.filter((tab: string) => tab !== 'session');
 
     return new Set(filteredByProfile as Array<'history' | 'notes' | 'report' | 'plan' | 'session' | 'files'>);
   }, [allowedTabs, isKidsProfile]);
@@ -183,6 +183,71 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     return protocols[0]?.id || '';
   });
   const [selectedSnapshotDate, setSelectedSnapshotDate] = useState("all");
+
+  const parseBirthDateToAge = (rawDate?: any): number | null => {
+    if (!rawDate) return null;
+    const parsed = new Date(String(rawDate));
+    if (Number.isNaN(parsed.getTime())) return null;
+    const today = new Date();
+    let age = today.getFullYear() - parsed.getFullYear();
+    const monthDiff = today.getMonth() - parsed.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < parsed.getDate())) {
+      age -= 1;
+    }
+    if (!Number.isFinite(age) || age < 0) return null;
+    return age;
+  };
+
+  const patientAgeYears = useMemo(() => {
+    const fromBirthDate =
+      parseBirthDateToAge(patient?.birth_date) ||
+      parseBirthDateToAge(patient?.dataNascimento) ||
+      parseBirthDateToAge(patient?.anamnesisData?.dataNascimento);
+    if (fromBirthDate !== null) return fromBirthDate;
+    const numericAge = Number(patient?.age);
+    if (Number.isFinite(numericAge) && numericAge >= 0) return numericAge;
+    return null;
+  }, [patient?.birth_date, patient?.dataNascimento, patient?.anamnesisData?.dataNascimento, patient?.age]);
+
+  const mapAgeGroupToRange = (ageGroup?: string): { min: number; max: number | null } => {
+    const group = String(ageGroup || '').toLowerCase();
+    if (group === 'child') return { min: 0, max: 12 };
+    if (group === 'teen') return { min: 13, max: 18 };
+    if (group === 'adult') return { min: 19, max: 59 };
+    if (group === 'senior') return { min: 60, max: null };
+    return { min: 0, max: null };
+  };
+
+  const resolveProtocolAgeRange = (protocol: any): { min: number; max: number | null } => {
+    const explicitMin = Number(
+      protocol?.min_age ??
+      protocol?.age_minima ??
+      protocol?.idade_minima
+    );
+    const explicitMax = Number(
+      protocol?.max_age ??
+      protocol?.age_maxima ??
+      protocol?.idade_maxima
+    );
+    const hasExplicitMin = Number.isFinite(explicitMin) && explicitMin >= 0;
+    const hasExplicitMax = Number.isFinite(explicitMax) && explicitMax >= 0;
+    if (hasExplicitMin || hasExplicitMax) {
+      return {
+        min: hasExplicitMin ? explicitMin : 0,
+        max: hasExplicitMax ? explicitMax : null
+      };
+    }
+    return mapAgeGroupToRange(protocol?.ageGroup);
+  };
+
+  const isProtocolCompatibleWithPatient = (protocol: any): boolean => {
+    if (!protocol) return false;
+    if (patientAgeYears === null) return true;
+    const range = resolveProtocolAgeRange(protocol);
+    if (patientAgeYears < range.min) return false;
+    if (range.max !== null && patientAgeYears > range.max) return false;
+    return true;
+  };
 
   const escapeHtml = (value: any) =>
     String(value ?? "")
@@ -576,19 +641,35 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   }, [history, protocols, patient.id, selectedChartProtocolId, selectedSnapshotDate]);
 
   const safeProtocols = protocols || []; 
+  const ageCompatibleProtocols = useMemo(() => {
+    return safeProtocols.filter((p: any) => isProtocolCompatibleWithPatient(p));
+  }, [safeProtocols, patientAgeYears]);
+
   const filteredProtocols = useMemo(() => { 
-    return safeProtocols.filter((p: any) => { 
+    return ageCompatibleProtocols.filter((p: any) => { 
       const matchAge = filterAge ? (p.ageGroup === filterAge || p.ageGroup === 'all') : true; 
       const matchType = filterType ? p.type === filterType : true; 
       const matchDomain = filterDomain ? (p.domain && p.domain.toLowerCase().includes(filterDomain.toLowerCase())) : true; 
       return matchAge && matchType && matchDomain; 
     }); 
-  }, [safeProtocols, filterAge, filterType, filterDomain]); 
+  }, [ageCompatibleProtocols, filterAge, filterType, filterDomain]); 
 
   const selectedProtocol = safeProtocols.find((p: any) => String(p.id) === String(selectedProtocolId)); 
   const selectedDomain = selectedProtocol?.data.find((d: any) => String(d.id) === String(selectedDomainId)); 
   const targetProtocol = safeProtocols.find((p: any) => String(p.id) === String(targetProtocolId)); 
   const targetDomain = targetProtocol?.data.find((d: any) => String(d.id) === String(targetDomainId)); 
+
+  useEffect(() => {
+    if (!selectedProtocolId || selectedProtocolId === 'pei-goals') return;
+    const selected = safeProtocols.find((p: any) => String(p.id) === String(selectedProtocolId));
+    if (!selected) return;
+    if (!isProtocolCompatibleWithPatient(selected)) {
+      alert('Este protocolo não é recomendado para a faixa etária do paciente');
+      setSelectedProtocolId('');
+      setSelectedDomainId('');
+      setSelectedSkillId('');
+    }
+  }, [selectedProtocolId, safeProtocols, patientAgeYears]);
 
   useEffect(() => { 
     if (!isCreatingNewTask && selectedSkillId && selectedDomain) { 
@@ -702,6 +783,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     if (!scheduleDate || !scheduleTime) { alert("Selecione data e hora."); return; } 
     let scheduledAt; try { scheduledAt = new Date(`${scheduleDate}T${scheduleTime}`).toISOString(); } catch (e) { alert("Data inválida"); return; } 
     if (planType === 'task' || planType === 'intervention') { 
+      if (selectedProtocolId && selectedProtocolId !== 'pei-goals') {
+        const selected = safeProtocols.find((p: any) => String(p.id) === String(selectedProtocolId));
+        if (selected && !isProtocolCompatibleWithPatient(selected)) {
+          alert('Este protocolo não é recomendado para a faixa etária do paciente');
+          return;
+        }
+      }
       const taskPayload = { 
         id: Date.now() + (isCreatingNewTask ? 1 : 0), 
         patientId: patient.id, 
@@ -712,6 +800,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         type: planType, 
         scheduledAt: scheduledAt, 
         description: finalTaskSubtitle,
+        noRealtimeScoring: !isKidsProfile,
         isDailyReminder: planType === 'intervention' ? isDailyReminder : false,
         linkedTask: planType === 'intervention' ? linkedTask : undefined,
         linkedProtocolId: planType === 'task' ? linkedInterventionProtocolId : undefined
@@ -738,7 +827,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       }
       if (isCreatingNewTask) { 
         if (!newTaskName) { alert("Digite o nome da tarefa."); return; } 
-        let finalSkill = { id: Date.now(), name: newTaskName, code: newTaskCode, maxScore: parseInt(newTaskMaxScore as any), objective: newTaskObjective, example: newTaskExample, criteria: newTaskCriteria, comment: newTaskComment }; 
+        let finalSkill = {
+          id: Date.now(),
+          name: newTaskName,
+          code: newTaskCode,
+          maxScore: isKidsProfile ? parseInt(newTaskMaxScore as any) : undefined,
+          objective: newTaskObjective,
+          example: newTaskExample,
+          criteria: isKidsProfile ? newTaskCriteria : '',
+          comment: newTaskComment
+        }; 
         if (addToProtocolMode === 'existing') { 
           if (!targetProtocolId || !targetDomainId) { alert("Selecione onde salvar a tarefa."); return; } 
           const updatedProtocols = protocols.map((p: any) => { 
@@ -756,7 +854,28 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           setProtocols(updatedProtocols); 
         } else { 
           if (!newProtocolName || !newDomainName) { alert("Preencha os dados do novo protocolo."); return; } 
-          const newProtocol = { id: Date.now(), title: newProtocolName, data: [{ id: `dom-${Date.now()}`, name: newDomainName, skills: [finalSkill] }] }; 
+          const inferredAgeGroup =
+            patientAgeYears === null
+              ? 'all'
+              : patientAgeYears <= 12
+                ? 'child'
+                : patientAgeYears <= 18
+                  ? 'teen'
+                  : patientAgeYears <= 59
+                    ? 'adult'
+                    : 'senior';
+          const minAge = patientAgeYears === null ? 0 : patientAgeYears;
+          const maxAge = patientAgeYears === null ? null : patientAgeYears;
+          const newProtocol = {
+            id: Date.now(),
+            title: newProtocolName,
+            data: [{ id: `dom-${Date.now()}`, name: newDomainName, skills: [finalSkill] }],
+            ageGroup: inferredAgeGroup,
+            age_minima: minAge,
+            age_maxima: maxAge,
+            min_age: minAge,
+            max_age: maxAge
+          }; 
           setProtocols([...protocols, newProtocol]); 
         } 
       } else { if (!selectedSkillId) { alert("Selecione uma tarefa."); return; } } 
@@ -909,24 +1028,25 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const handleConfirmAnamnesisFile = () => {
     if (!pendingAnamnesisPayload) return;
     const fileName = (anamnesisFileName || `Ficha_Anamnese_${patient.name}`).trim();
-    const normalizedName = fileName.toLowerCase().endsWith(".html")
+    const normalizedName = fileName.toLowerCase().endsWith(".pdf")
       ? fileName
-      : `${fileName.replace(/\.pdf$/i, "")}.html`;
+      : `${fileName.replace(/\.html?$/i, "")}.pdf`;
     const sizeKb = Math.max(1, Math.round(pendingAnamnesisPayload.length / 1024));
     const payloadDate = anamnesisFileDate
       ? new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString("pt-BR")
       : new Date().toLocaleDateString("pt-BR");
 
-    const htmlBlob = new Blob([pendingAnamnesisPayload], { type: "text/html;charset=utf-8" });
+    const htmlBlob = new Blob([pendingAnamnesisPayload], { type: "application/pdf" });
     const reader = new FileReader();
     reader.onload = async () => {
       let uploadResult: any = null;
       let uploadErrorMessage = '';
+      const base64Payload = typeof reader.result === 'string' ? reader.result : '';
       try {
         uploadResult = await dataService.uploadPatientFile(String(patient.id), {
           fileName: normalizedName,
-          contentType: "text/html;charset=utf-8",
-          fileBase64: reader.result,
+          contentType: "application/pdf",
+          fileBase64: base64Payload,
           source: "anamnesis",
           metadata: { referenceDate: payloadDate, patientName: patient?.name || null }
         });
@@ -1234,7 +1354,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           {canAccessTab('history') && <button id="tab-history" onClick={() => setActiveTab('history')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'history' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Histórico</button>}
           {canAccessTab('notes') && <button id="tab-notes" onClick={() => setActiveTab('notes')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'notes' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Anotações</button>}
           {canAccessTab('report') && <button id="tab-report" onClick={() => setActiveTab('report')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'report' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Relatório</button>}
-          {canAccessTab('plan') && <button id="tab-plan" onClick={() => setActiveTab('plan')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'plan' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Plano</button>}
+          {canAccessTab('plan') && (
+            <button
+              id="tab-plan"
+              onClick={() => setActiveTab('plan')}
+              className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'plan' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}
+            >
+              {isKidsProfile ? 'Plano' : 'Plano Adulto'}
+            </button>
+          )}
           {canAccessTab('session') && isKidsProfile && (
             <button id="tab-session" onClick={() => setActiveTab('session')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'session' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Sessão</button>
           )}
@@ -1855,7 +1983,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             {patient.age > 12 && (
               <React.Fragment>
                 <div id="new-schedule-card" className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100"> 
-                  <h3 className="font-semibold text-gray-800 text-lg mb-4 tracking-tight">Novo Agendamento</h3> 
+                  <h3 className="font-semibold text-gray-800 text-lg mb-2 tracking-tight">Plano Semanal Adulto</h3> 
+                  <p className="text-xs text-gray-500 font-medium mb-4">
+                    Tarefas para execução fora do consultório, sem pontuação em tempo real.
+                  </p>
                   <div className="flex bg-gray-100 p-1 rounded-xl mb-6"> 
                     <button onClick={() => { setPlanType('task'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'task' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>{patient.age > 12 ? 'Avaliação' : 'Tarefa'}</button> 
                     <button onClick={() => { setPlanType('intervention'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'intervention' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Intervenção</button> 
@@ -1872,16 +2003,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                           <div className={`animate-fade-in space-y-4 p-4 rounded-2xl border ${planType === 'intervention' ? 'bg-green-50/30 border-green-100' : 'bg-[#F4F7FE] border-blue-100'}`}> 
                             <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Nome da Nova {planType === 'intervention' ? 'Intervenção' : (patient.age > 12 ? 'Avaliação' : 'Tarefa')}</label><input type="text" className="w-full bg-white rounded-xl p-3 text-sm outline-none border border-transparent focus:border-[#7551FF]" placeholder={planType === 'intervention' ? "Ex: Autoestima" : (patient.age > 12 ? "Ex: Avaliação de Autonomia" : "Ex: Arrumar a cama")} value={newTaskName} onChange={e => setNewTaskName(e.target.value)} /></div> 
                             {planType === 'task' && (
-                              <div className="grid grid-cols-2 gap-3 opacity-80 hover:opacity-100 transition-opacity"> 
-                                <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Código</label><input type="text" className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-transparent focus:border-[#7551FF]" placeholder="Ex: A-1" value={newTaskCode} onChange={e => setNewTaskCode(e.target.value)} /></div> 
-                                <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Pontuação Máx.</label><select className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-transparent focus:border-[#7551FF]" value={newTaskMaxScore} onChange={e => setNewTaskMaxScore(parseFloat(e.target.value))}><option value="1">0-1 (VB-MAPP)</option><option value="2">0-2</option><option value="3">0-3</option><option value="4">0-4</option></select></div> 
+                              <div className="grid grid-cols-1 gap-3 opacity-80 hover:opacity-100 transition-opacity"> 
+                                <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Código/Tag da atividade (opcional)</label><input type="text" className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-transparent focus:border-[#7551FF]" placeholder="Ex: ADL-SEMANA-01" value={newTaskCode} onChange={e => setNewTaskCode(e.target.value)} /></div> 
                               </div> 
                             )}
                             <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">{planType === 'intervention' ? 'Objetivo / Instruções de Escrita' : 'Objetivo (Base para descrição)'}</label><textarea className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-transparent resize-none" rows={planType === 'intervention' ? 4 : 2} placeholder={planType === 'intervention' ? "Ex: Liste 20 qualidades que você tem..." : "Objetivo da tarefa..."} value={newTaskObjective} onChange={e => setNewTaskObjective(e.target.value)}></textarea></div> 
                             {planType === 'task' && (
                               <>
                                 <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Exemplos</label><textarea className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-transparent resize-none" rows={2} placeholder="Ex: Passo a passo..." value={newTaskExample} onChange={e => setNewTaskExample(e.target.value)}></textarea></div> 
-                                <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Critérios</label><textarea className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-transparent resize-none" rows={2} placeholder="Critérios para pontuação..." value={newTaskCriteria} onChange={e => setNewTaskCriteria(e.target.value)}></textarea></div> 
+                                <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Orientação de execução</label><textarea className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-transparent resize-none" rows={2} placeholder="Como o paciente/família deve executar durante a semana..." value={newTaskCriteria} onChange={e => setNewTaskCriteria(e.target.value)}></textarea></div> 
                               </>
                             )}
                             <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Anotações do Profissional</label><textarea className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-transparent resize-none" rows={2} value={newTaskComment || ''} onChange={(e) => setNewTaskComment(e.target.value)} placeholder="Anotações do profissional..."></textarea></div> 
@@ -1893,7 +2023,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               </div> 
                               {addToProtocolMode === 'existing' ? ( 
                                 <div className="space-y-2"> 
-                                  <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-xs outline-none" value={targetProtocolId} onChange={e => setTargetProtocolId(e.target.value)}><option value="">Selecione Protocolo...</option>{protocols.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).map((p: any) => <option key={p.id} value={p.id}>{p.title}</option>)}</select> 
+                                  <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-xs outline-none" value={targetProtocolId} onChange={e => setTargetProtocolId(e.target.value)}><option value="">Selecione Protocolo...</option>{ageCompatibleProtocols.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).map((p: any) => <option key={p.id} value={p.id}>{p.title}</option>)}</select> 
                                   {targetProtocol && (<select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-xs outline-none" value={targetDomainId} onChange={e => setTargetDomainId(e.target.value)}><option value="">Selecione Domínio...</option>{targetProtocol.data.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>)} 
                                 </div> 
                               ) : ( 
@@ -1929,6 +2059,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               )}
                             </div> 
                             <div><label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Protocolo ({filteredProtocols.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).length})</label>
+                              {patientAgeYears !== null && (
+                                <p className="text-[10px] text-amber-600 font-semibold mb-2">
+                                  Faixa etária do paciente: {patientAgeYears} anos. Somente protocolos compatíveis são exibidos.
+                                </p>
+                              )}
                               <select 
                                 className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" 
                                 value={selectedProtocolId} 
@@ -2011,7 +2146,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                 onChange={(e) => setLinkedInterventionProtocolId(e.target.value)}
                               >
                                 <option value="">Nenhum protocolo vinculado</option>
-                                {protocols.filter((p: any) => p.category === 'intervention').map((p: any) => (
+                                {ageCompatibleProtocols.filter((p: any) => p.category === 'intervention').map((p: any) => (
                                   <option key={p.id} value={p.id}>{p.title}</option>
                                 ))}
                               </select>
