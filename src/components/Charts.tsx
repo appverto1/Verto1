@@ -4,51 +4,6 @@ import { BarChart2, Info } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell, LineChart, Line } from 'recharts';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 
-const CustomXAxisTick = (props: any) => {
-  const { x, y, payload } = props;
-  const words = payload.value.split(' ');
-  
-  if (words.length <= 2) {
-    return (
-      <g transform={`translate(${x},${y})`}>
-        <text
-          x={0}
-          y={0}
-          dy={16}
-          textAnchor="end"
-          fill="#A3AED0"
-          fontSize={10}
-          fontWeight="bold"
-          transform="rotate(-45)"
-        >
-          {payload.value}
-        </text>
-      </g>
-    );
-  }
-
-  const line1 = words.slice(0, 2).join(' ');
-  const line2 = words.slice(2).join(' ');
-
-  return (
-    <g transform={`translate(${x},${y})`}>
-      <text
-        x={0}
-        y={0}
-        dy={16}
-        textAnchor="end"
-        fill="#A3AED0"
-        fontSize={10}
-        fontWeight="bold"
-        transform="rotate(-45)"
-      >
-        <tspan x={0} dy="0">{line1}</tspan>
-        <tspan x={0} dy="1.2em">{line2}</tspan>
-      </text>
-    </g>
-  );
-};
-
 export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => setIsMounted(true), []);
@@ -63,12 +18,15 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
     );
   }
 
+  const firstRow = safeData[0] || {};
+  const periodKeys = Object.keys(firstRow).filter((key) => key !== 'name');
   const yTicks = Array.from({ length: Math.floor(maxScore) + 1 }, (_, i) => i);
   
   // Calculate dynamic width based on number of labels to prevent crowding
-  const minWidth = Math.max(600, safeData.length * 120);
-  const firstRow = safeData[0] || {};
-  const periodKeys = Object.keys(firstRow).filter((key) => key !== 'name');
+  const minWidth = Math.max(980, safeData.length * Math.max(180, periodKeys.length * 90));
+  const periodColors = periodKeys.length === 2
+    ? ['#EE5D50', '#05CD99']
+    : ['#7a32fc', '#05CD99', '#FFB547', '#7551FF', '#EE5D50', '#00C2FF'];
 
   return (
     <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 animate-fade-in overflow-hidden">
@@ -80,13 +38,13 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
           <Info size={12} /> {Number(maxScore) === 100 ? 'Eixo Y: Proficiência (%) • Eixo X: Domínios' : `Eixo Y: Pontuação (Máx: ${maxScore}) • Eixo X: Domínios`}
         </div>
       </div>
-      <div className="overflow-x-auto pb-4 no-scrollbar">
-        <div style={{ minWidth: `${minWidth}px`, height: '500px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
+      <div className="overflow-x-auto pb-3 no-scrollbar">
+        <div style={{ minWidth: `${minWidth}px`, height: '430px', minHeight: '380px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
           <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
             <BarChart
               data={safeData}
-              margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
+              margin={{ top: 16, right: 28, left: 4, bottom: 80 }}
               barGap={12}
               barCategoryGap="30%"
             >
@@ -96,7 +54,11 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
                 axisLine={false} 
                 tickLine={false} 
                 interval={0}
-                tick={<CustomXAxisTick />}
+                angle={-30}
+                textAnchor="end"
+                height={84}
+                tickMargin={10}
+                tick={{ fill: '#A3AED0', fontSize: 10, fontWeight: 'bold' }}
                 padding={{ left: 30, right: 30 }}
               />
               <YAxis 
@@ -117,26 +79,12 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
                 fontWeight: 'bold'
               }}
             />
-            <Legend 
-              verticalAlign="bottom" 
-              align="center"
-              iconType="circle"
-              wrapperStyle={{ 
-                paddingTop: '80px', 
-                fontSize: '10px', 
-                fontWeight: 'bold', 
-                color: '#4A5568',
-                width: '100%'
-              }}
-            />
             {periodKeys.map((period, index, array) => {
               // If we have exactly 2 periods, use Red for the first (oldest) and Green for the second (newest)
               // Otherwise use the standard palette
-              const colors = array.length === 2 
-                ? ['#EE5D50', '#05CD99'] 
-                : ['#7a32fc', '#05CD99', '#FFB547', '#7551FF', '#EE5D50', '#00C2FF'];
-              
-              const fillColor = array.length === 2 ? colors[index] : colors[index % colors.length];
+              const fillColor = array.length === 2
+                ? periodColors[index]
+                : periodColors[index % periodColors.length];
               
               return (
                 <Bar 
@@ -155,8 +103,16 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
             <div className="h-full w-full rounded-2xl bg-slate-50 animate-pulse" />
           )}
       </div>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-center gap-4 px-2">
+        {periodKeys.map((period, index) => (
+          <div key={`legend-${period}`} className="flex items-center gap-2 text-[11px] font-semibold text-gray-600">
+            <span className="h-3 w-3 rounded-full" style={{ backgroundColor: periodColors[index % periodColors.length] }} />
+            <span>{period}</span>
+          </div>
+        ))}
+      </div>
     </div>
-  </div>
   );
 };
 
@@ -190,19 +146,19 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
   const yTicks = Array.from({ length: Math.floor(maxScore) + 1 }, (_, i) => i);
   
   // Calculate dynamic width based on number of labels to prevent crowding
-  const minWidth = Math.max(600, data.length * 120);
+  const minWidth = Math.max(980, data.length * 180);
 
   return (
     <div className="bg-white/70 backdrop-blur-md p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-white/50 mb-8 animate-fade-in relative overflow-hidden chart-glow">
       <div className="absolute top-0 right-0 w-32 sm:w-48 h-32 sm:h-48 bg-indigo-50/50 rounded-bl-full -z-0"></div>
       
-      <div className="overflow-x-auto pb-4 no-scrollbar cursor-grab active:cursor-grabbing">
-        <div style={{ minWidth: `${minWidth}px`, height: '500px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
+      <div className="overflow-x-auto pb-3 no-scrollbar cursor-grab active:cursor-grabbing">
+        <div style={{ minWidth: `${minWidth}px`, height: '430px', minHeight: '380px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
           <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
             <BarChart
               data={data}
-              margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
+              margin={{ top: 16, right: 28, left: 4, bottom: 80 }}
               barGap={12}
               barCategoryGap="35%"
             >
@@ -212,7 +168,11 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
                 axisLine={false} 
                 tickLine={false} 
                 interval={0}
-                tick={<CustomXAxisTick />}
+                angle={-30}
+                textAnchor="end"
+                height={84}
+                tickMargin={10}
+                tick={{ fill: '#A3AED0', fontSize: 10, fontWeight: 'bold' }}
                 padding={{ left: 30, right: 30 }}
               />
               <YAxis 
@@ -231,18 +191,6 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
                   boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
                   fontSize: '11px',
                   fontWeight: 'bold'
-                }}
-              />
-              <Legend 
-                verticalAlign="bottom" 
-                align="center"
-                iconType="circle"
-                wrapperStyle={{ 
-                  paddingTop: '80px', 
-                  fontSize: '10px', 
-                  fontWeight: 'bold', 
-                  color: '#4A5568',
-                  width: '100%'
                 }}
               />
               {datasets.map((ds: any, index: number) => {
@@ -265,6 +213,18 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
             <div className="h-full w-full rounded-2xl bg-slate-50 animate-pulse" />
           )}
         </div>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-center gap-4 px-2">
+        {datasets.map((ds: any, index: number) => {
+          const colors = ['#7a32fc', '#05CD99', '#FFB547', '#7551FF', '#EE5D50', '#00C2FF'];
+          const legendColor = ds.borderColor || colors[index % colors.length];
+          return (
+            <div key={`legend-bar-${ds.label}-${index}`} className="flex items-center gap-2 text-[11px] font-semibold text-gray-600">
+              <span className="h-3 w-3 rounded-full" style={{ backgroundColor: legendColor }} />
+              <span>{ds.label}</span>
+            </div>
+          );
+        })}
       </div>
       
       {data.length > 5 && (
@@ -309,18 +269,18 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
   const yTicks = Array.from({ length: Math.floor(maxScore) + 1 }, (_, i) => i);
 
   // Calculate dynamic width based on number of labels to prevent crowding
-  const minWidth = Math.max(600, data.length * 120);
+  const minWidth = Math.max(980, data.length * 180);
 
   return (
     <div className="bg-white/70 backdrop-blur-md p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-white/50 mb-8 animate-fade-in relative overflow-hidden chart-glow">
       <div className="absolute top-0 right-0 w-32 sm:w-48 h-32 sm:h-48 bg-indigo-50/50 rounded-bl-full -z-0"></div>
-      <div className="overflow-x-auto pb-4 no-scrollbar">
-        <div style={{ minWidth: `${minWidth}px`, height: '500px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
+      <div className="overflow-x-auto pb-3 no-scrollbar">
+        <div style={{ minWidth: `${minWidth}px`, height: '430px', minHeight: '380px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
           <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
             <LineChart
               data={data}
-              margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
+              margin={{ top: 16, right: 28, left: 4, bottom: 80 }}
             >
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
               <XAxis 
@@ -328,7 +288,11 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
                 axisLine={false} 
                 tickLine={false} 
                 interval={0}
-                tick={<CustomXAxisTick />}
+                angle={-30}
+                textAnchor="end"
+                height={84}
+                tickMargin={10}
+                tick={{ fill: '#A3AED0', fontSize: 10, fontWeight: 'bold' }}
                 padding={{ left: 30, right: 30 }}
               />
               <YAxis 
@@ -346,18 +310,6 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
                 boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
                 fontSize: '11px',
                 fontWeight: 'bold'
-              }}
-            />
-            <Legend 
-              verticalAlign="bottom" 
-              align="center"
-              iconType="circle"
-              wrapperStyle={{ 
-                paddingTop: '80px', 
-                fontSize: '10px', 
-                fontWeight: 'bold', 
-                color: '#4A5568',
-                width: '100%'
               }}
             />
             {datasets.map((ds: any, index: number) => (
@@ -378,8 +330,19 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
             <div className="h-full w-full rounded-2xl bg-slate-50 animate-pulse" />
           )}
       </div>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-center gap-4 px-2">
+        {datasets.map((ds: any, index: number) => {
+          const legendColor = ds.borderColor || '#7a32fc';
+          return (
+            <div key={`legend-line-${ds.label}-${index}`} className="flex items-center gap-2 text-[11px] font-semibold text-gray-600">
+              <span className="h-3 w-3 rounded-full" style={{ backgroundColor: legendColor }} />
+              <span>{ds.label}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
-  </div>
   );
 };
 

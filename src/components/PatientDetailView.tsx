@@ -1875,11 +1875,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 </div>
               </React.Fragment>
             ) : (
-              <div className="bg-white border border-gray-100 rounded-3xl p-5 shadow-sm mb-6">
-                <p className="text-sm font-semibold text-gray-700">Histórico Adulto</p>
-                <p className="text-xs text-gray-500 mt-1">
-                  Para pacientes adultos, a evolução é acompanhada por tarefas semanais e revisão profissional.
-                </p>
+              <div className="space-y-4 mb-6">
+                <div className="bg-white border border-gray-100 rounded-3xl p-5 shadow-sm">
+                  <p className="text-sm font-semibold text-gray-700">Histórico Adulto</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    A linha de proficiência foi movida para esta aba para acompanhamento cronológico direto.
+                  </p>
+                </div>
+                <div className="min-h-[360px] min-w-0">
+                  <EvolutionLineChart chartData={adultTrendChartData} maxScore={100} />
+                </div>
               </div>
             )}
             {isKidsProfile && ((sortedDateKeys?.length || 0) > 0 ? sortedDateKeys.map((dateKey, gIdx) => ( 
