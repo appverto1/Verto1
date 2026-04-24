@@ -864,6 +864,93 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       .sort((a: any, b: any) => b.eventDate.getTime() - a.eventDate.getTime());
   }, [assignedTasks]);
 
+  const selectedChartProtocol = useMemo(
+    () => protocols.find((p: any) => String(p.id) === String(selectedChartProtocolId)),
+    [protocols, selectedChartProtocolId]
+  );
+
+  const resolveTaskProtocol = (task: any) => {
+    const taskData = task?.taskData && typeof task.taskData === 'object' ? task.taskData : {};
+    const explicitProtocolId = String(
+      taskData?.protocolId ||
+      taskData?.protocol_id ||
+      task?.protocol_id ||
+      ''
+    ).trim();
+    if (explicitProtocolId) {
+      const byId = (protocols || []).find((p: any) => String(p?.id) === explicitProtocolId);
+      if (byId) return byId;
+    }
+
+    const explicitProtocolName = String(
+      taskData?.protocolTitle ||
+      taskData?.protocol_name ||
+      task?.protocol_name ||
+      ''
+    ).trim().toLowerCase();
+    if (explicitProtocolName) {
+      const byTitle = (protocols || []).find(
+        (p: any) => String(p?.title || '').trim().toLowerCase() === explicitProtocolName
+      );
+      if (byTitle) return byTitle;
+    }
+
+    const normalizedTitle = String(task?.taskTitle || '').trim().toLowerCase();
+    if (!normalizedTitle) return null;
+    for (const protocol of protocols || []) {
+      for (const domain of protocol?.data || []) {
+        const found = (domain?.skills || []).find(
+          (skill: any) => String(skill?.name || '').trim().toLowerCase() === normalizedTitle
+        );
+        if (found) return protocol;
+      }
+    }
+    return null;
+  };
+
+  const adultProtocolTasks = useMemo(() => {
+    if (isKidsProfile || !selectedChartProtocol) return [];
+    return adultCompletedTasks.filter((task: any) => {
+      const protocol = resolveTaskProtocol(task);
+      return protocol && String(protocol.id) === String(selectedChartProtocol.id);
+    });
+  }, [adultCompletedTasks, selectedChartProtocol, isKidsProfile, protocols]);
+
+  const toDateKey = (value: any) => {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toISOString().slice(0, 10);
+  };
+
+  const adultProtocolSnapshotDates = useMemo(() => {
+    if (isKidsProfile) return [];
+    const unique = Array.from(
+      new Set(
+        adultProtocolTasks
+          .map((task: any) => toDateKey(task?.eventDateRaw || task?.eventDate))
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+
+    return unique.map((key) => {
+      const [y, m, d] = key.split('-');
+      return { key, label: `${d}/${m}/${y}` };
+    });
+  }, [adultProtocolTasks, isKidsProfile]);
+
+  useEffect(() => {
+    if (isKidsProfile) return;
+    if (!adultProtocolSnapshotDates.length) {
+      setComparisonDate1('');
+      setComparisonDate2('');
+      return;
+    }
+    const baseKey = adultProtocolSnapshotDates[0]?.key || '';
+    const compareKey = adultProtocolSnapshotDates[adultProtocolSnapshotDates.length - 1]?.key || baseKey;
+    setComparisonDate1((prev) => (prev && adultProtocolSnapshotDates.some((d) => d.key === prev) ? prev : baseKey));
+    setComparisonDate2((prev) => (prev && adultProtocolSnapshotDates.some((d) => d.key === prev) ? prev : compareKey));
+  }, [adultProtocolSnapshotDates, isKidsProfile, selectedChartProtocolId]);
+
   const adultPeriodStart = useMemo(() => resolvePeriodStart(reportPeriod), [reportPeriod]);
   const adultTasksInPeriod = useMemo(() => {
     if (isKidsProfile) return [];
@@ -886,126 +973,65 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     return adultTasksInPeriod.filter((task: any) => selectedIds.has(String(task.id)));
   }, [adultTasksInPeriod, selectedAdultEvolutionIds]);
 
-  const normalizeScoreToPercent = (score: unknown, maxScore: unknown) => {
-    const safeMax = Math.max(1, Number(maxScore) || 1);
-    const safeScore = Math.max(0, Math.min(safeMax, Number(score) || 0));
-    return (safeScore / safeMax) * 100;
-  };
+  const adultDomainComparisonData = useMemo(() => {
+    if (isKidsProfile || !selectedChartProtocol) return [];
+    if (!comparisonDate1 || !comparisonDate2) return [];
 
-  const resolveTaskDomain = (task: any) => {
-    const taskData = task?.taskData && typeof task.taskData === 'object' ? task.taskData : {};
-    const explicitDomain = String(
-      taskData?.domainName ||
-      taskData?.domain ||
-      task?.domain_name ||
-      ''
-    ).trim();
-    if (explicitDomain) return explicitDomain;
-
-    const normalizedTitle = String(task?.taskTitle || '').trim().toLowerCase();
-    if (!normalizedTitle) return 'Sem domínio';
-    for (const protocol of protocols || []) {
-      for (const domain of protocol?.data || []) {
-        const found = (domain?.skills || []).find(
-          (skill: any) => String(skill?.name || '').trim().toLowerCase() === normalizedTitle
-        );
-        if (found) return String(domain?.name || 'Sem domínio');
-      }
-    }
-    return 'Sem domínio';
-  };
-
-  const aggregateEntriesToPercent = (entries: any[]) => {
-    let obtained = 0;
-    let possible = 0;
-    (entries || []).forEach((entry: any) => {
-      const maxScore = Math.max(1, Number(entry?.maxScore || 1) || 1);
-      const score = entry?.professionalScore === null || entry?.professionalScore === undefined
-        ? 0
-        : Math.max(0, Math.min(maxScore, Number(entry.professionalScore) || 0));
-      obtained += score;
-      possible += maxScore;
-    });
-    if (possible <= 0) return 0;
-    return Number(((obtained / possible) * 100).toFixed(2));
-  };
-
-  const adultComparisonChartData = useMemo(() => {
-    if (isKidsProfile) return [];
-    const grouped = new Map<string, any[]>();
-    adultTasksInPeriod.forEach((task: any) => {
-      const key = resolveTaskDomain(task);
-      const list = grouped.get(key) || [];
-      list.push(task);
-      grouped.set(key, list);
-    });
-
-    return Array.from(grouped.entries()).map(([name, entries]) => {
-      const ordered = [...entries].sort((a: any, b: any) => a.eventDate.getTime() - b.eventDate.getTime());
-      const evaluations = ordered.filter((item: any) => item.taskType === 'task' || item.taskType === 'evaluation');
-      const interventions = ordered.filter((item: any) => item.taskType === 'intervention');
-      const initialPercent = aggregateEntriesToPercent(evaluations.length ? evaluations : ordered.slice(0, 1));
-      const currentPercent = aggregateEntriesToPercent(interventions.length ? interventions : ordered);
-      return {
-        name,
-        'Avaliação Inicial': initialPercent,
-        'Intervenção Atual': currentPercent,
-        maxScore: 100
-      };
-    });
-  }, [adultTasksInPeriod, isKidsProfile, protocols]);
-
-  const adultComparisonMaxScore = useMemo(() => {
-    return 100;
-  }, [adultComparisonChartData]);
-
-  const adultTrendChartData = useMemo(() => {
-    if (isKidsProfile) return { labels: [], datasets: [] };
-    if (!adultTasksInPeriod.length) return { labels: [], datasets: [] };
-
-    const now = new Date();
-    const bucketCount = reportPeriod === 'monthly' ? 4 : reportPeriod === 'bimonthly' ? 4 : reportPeriod === 'quarterly' ? 3 : reportPeriod === 'semiannual' ? 6 : 12;
-    const bucketSpanDays = reportPeriod === 'monthly'
-      ? 7
-      : reportPeriod === 'bimonthly'
-        ? 15
-        : reportPeriod === 'quarterly'
-          ? 30
-          : reportPeriod === 'semiannual'
-            ? 30
-            : 30;
-
-    const buckets = Array.from({ length: bucketCount }, (_, idx) => {
-      const end = new Date(now);
-      end.setDate(end.getDate() - (bucketCount - 1 - idx) * bucketSpanDays);
-      const start = new Date(end);
-      start.setDate(start.getDate() - bucketSpanDays);
-      return {
-        start,
-        end,
-        label: `${start.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`
-      };
-    });
-
-    const values = buckets.map((bucket) => {
-      const inBucket = adultTasksInPeriod.filter((task: any) => {
-        const ts = task?.eventDate instanceof Date ? task.eventDate.getTime() : new Date(task?.eventDateRaw || 0).getTime();
-        return Number.isFinite(ts) && ts >= bucket.start.getTime() && ts <= bucket.end.getTime();
+    const normalizeSkillName = (value: any) => String(value || '').trim().toLowerCase();
+    const buildScoreByDomainForDate = (dateKey: string) => {
+      const latestBySkill = new Map<string, any>();
+      adultProtocolTasks.forEach((task: any) => {
+        const taskDateKey = toDateKey(task?.eventDateRaw || task?.eventDate);
+        if (taskDateKey !== dateKey) return;
+        const skillKey = normalizeSkillName(task?.taskTitle);
+        if (!skillKey) return;
+        const prev = latestBySkill.get(skillKey);
+        const currentTime = new Date(task?.eventDateRaw || task?.eventDate || 0).getTime();
+        const prevTime = prev ? new Date(prev?.eventDateRaw || prev?.eventDate || 0).getTime() : -1;
+        if (!prev || currentTime >= prevTime) latestBySkill.set(skillKey, task);
       });
-      return Number(aggregateEntriesToPercent(inBucket).toFixed(2));
-    });
 
-    return {
-      labels: buckets.map((b) => b.label),
-      datasets: [
-        {
-          label: 'Proficiência (%)',
-          data: values,
-          borderColor: '#7551FF'
-        }
-      ]
+      const scoreMap = new Map<string, { obtained: number; possible: number }>();
+      (selectedChartProtocol.data || []).forEach((domain: any) => {
+        const domainName = String(domain?.name || 'Sem domínio');
+        let obtained = 0;
+        let possible = 0;
+        (domain?.skills || []).forEach((skill: any) => {
+          const key = normalizeSkillName(skill?.name);
+          const entry = latestBySkill.get(key);
+          if (!entry) return;
+          const taskData = entry?.taskData && typeof entry.taskData === 'object' ? entry.taskData : {};
+          const maxScore = Math.max(
+            1,
+            Number(taskData?.maxScore ?? taskData?.max_score ?? entry?.maxScore ?? skill?.maxScore ?? 4) || 4
+          );
+          const score = entry?.professionalScore === null || entry?.professionalScore === undefined
+            ? 0
+            : Math.max(0, Math.min(maxScore, Number(entry.professionalScore) || 0));
+          obtained += score;
+          possible += maxScore;
+        });
+        scoreMap.set(domainName, { obtained, possible });
+      });
+      return scoreMap;
     };
-  }, [adultTasksInPeriod, isKidsProfile, reportPeriod]);
+
+    const date1Map = buildScoreByDomainForDate(comparisonDate1);
+    const date2Map = buildScoreByDomainForDate(comparisonDate2);
+
+    return (selectedChartProtocol.data || []).map((domain: any) => {
+      const domainName = String(domain?.name || 'Sem domínio');
+      const d1 = date1Map.get(domainName) || { obtained: 0, possible: 0 };
+      const d2 = date2Map.get(domainName) || { obtained: 0, possible: 0 };
+      const d1Percent = d1.possible > 0 ? Number(((d1.obtained / d1.possible) * 100).toFixed(2)) : 0;
+      const d2Percent = d2.possible > 0 ? Number(((d2.obtained / d2.possible) * 100).toFixed(2)) : 0;
+      return {
+        name: domainName,
+        [comparisonDate1]: d1Percent,
+        [comparisonDate2]: d2Percent
+      };
+    });
+  }, [isKidsProfile, selectedChartProtocol, comparisonDate1, comparisonDate2, adultProtocolTasks]);
   
   const handleSchedule = () => { 
     if (!scheduleDate || !scheduleTime) { alert("Selecione data e hora."); return; } 
@@ -1879,11 +1905,57 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 <div className="bg-white border border-gray-100 rounded-3xl p-5 shadow-sm">
                   <p className="text-sm font-semibold text-gray-700">Histórico Adulto</p>
                   <p className="text-xs text-gray-500 mt-1">
-                    A linha de proficiência foi movida para esta aba para acompanhamento cronológico direto.
+                    Comparativo por domínio do protocolo, entre duas datas selecionadas.
                   </p>
                 </div>
-                <div className="min-h-[360px] min-w-0">
-                  <EvolutionLineChart chartData={adultTrendChartData} maxScore={100} />
+                <div className="bg-white border border-gray-100 rounded-3xl p-4 sm:p-5 shadow-sm space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Protocolo</label>
+                      <select
+                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
+                        value={selectedChartProtocolId}
+                        onChange={(e) => setSelectedChartProtocolId(e.target.value)}
+                      >
+                        {ageCompatibleProtocols.map((protocol: any) => (
+                          <option key={protocol.id} value={protocol.id}>{protocol.title}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Data Base</label>
+                      <select
+                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
+                        value={comparisonDate1}
+                        onChange={(e) => setComparisonDate1(e.target.value)}
+                      >
+                        <option value="">Selecione...</option>
+                        {adultProtocolSnapshotDates.map((date: any) => (
+                          <option key={`adult-date-base-${date.key}`} value={date.key}>{date.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Data Comparação</label>
+                      <select
+                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
+                        value={comparisonDate2}
+                        onChange={(e) => setComparisonDate2(e.target.value)}
+                      >
+                        <option value="">Selecione...</option>
+                        {adultProtocolSnapshotDates.map((date: any) => (
+                          <option key={`adult-date-comp-${date.key}`} value={date.key}>{date.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="min-h-[360px] min-w-0">
+                    <ComparisonBarChart
+                      data={adultDomainComparisonData}
+                      title={`Comparativo por Domínio (${selectedChartProtocol?.title || 'Protocolo'})`}
+                      maxScore={100}
+                    />
+                  </div>
                 </div>
               </div>
             )}
@@ -2034,7 +2106,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <div className={`grid grid-cols-1 ${isKidsProfile ? 'md:grid-cols-3' : 'md:grid-cols-1'} gap-4 mb-6`}>
                 <div>
                   <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Período de Análise</label>
                   <select 
@@ -2050,34 +2122,38 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                     <option value="annual">Anual</option>
                   </select>
                 </div>
-                <div>
-                  <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Data de Início (Base)</label>
-                  <select 
-                    id="report-date-1"
-                    className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
-                    value={comparisonDate1}
-                    onChange={(e) => setComparisonDate1(e.target.value)}
-                  >
-                    <option value="">Selecione...</option>
-                    {availableSnapshots.map((date: any) => (
-                      <option key={date} value={date}>{date}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Data de Comparação (Final)</label>
-                  <select 
-                    id="report-date-2"
-                    className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
-                    value={comparisonDate2}
-                    onChange={(e) => setComparisonDate2(e.target.value)}
-                  >
-                    <option value="">Selecione...</option>
-                    {availableSnapshots.map((date: any) => (
-                      <option key={date} value={date}>{date}</option>
-                    ))}
-                  </select>
-                </div>
+                {isKidsProfile && (
+                  <React.Fragment>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Data de Início (Base)</label>
+                      <select 
+                        id="report-date-1"
+                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
+                        value={comparisonDate1}
+                        onChange={(e) => setComparisonDate1(e.target.value)}
+                      >
+                        <option value="">Selecione...</option>
+                        {availableSnapshots.map((date: any) => (
+                          <option key={date} value={date}>{date}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Data de Comparação (Final)</label>
+                      <select 
+                        id="report-date-2"
+                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
+                        value={comparisonDate2}
+                        onChange={(e) => setComparisonDate2(e.target.value)}
+                      >
+                        <option value="">Selecione...</option>
+                        {availableSnapshots.map((date: any) => (
+                          <option key={date} value={date}>{date}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </React.Fragment>
+                )}
               </div>
 
               {isKidsProfile ? (
@@ -2087,16 +2163,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   maxScore={100}
                 />
               ) : (
-                <div className="space-y-6">
-                  <ComparisonBarChart
-                    data={adultComparisonChartData}
-                    title={`Comparativo Adulto (${periodLabelByValue[reportPeriod as keyof typeof periodLabelByValue] || 'Período'}) - Avaliação Inicial x Intervenção Atual (%)`}
-                    maxScore={adultComparisonMaxScore}
-                  />
-                  <EvolutionLineChart
-                    chartData={adultTrendChartData}
-                    maxScore={100}
-                  />
+                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4">
+                  <p className="text-sm font-semibold text-gray-700">Gráfico movido para o Histórico</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    O comparativo por domínio (mesmo protocolo e duas datas) está no topo da aba Histórico.
+                  </p>
                 </div>
               )}
 
