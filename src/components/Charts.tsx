@@ -79,7 +79,7 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
       <div className="overflow-x-auto pb-4 no-scrollbar">
         <div style={{ minWidth: `${minWidth}px`, height: '500px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
-          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
             <BarChart
               data={data}
               margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
@@ -190,7 +190,7 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
       <div className="overflow-x-auto pb-4 no-scrollbar cursor-grab active:cursor-grabbing">
         <div style={{ minWidth: `${minWidth}px`, height: '500px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
-          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
             <BarChart
               data={data}
               margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
@@ -303,7 +303,7 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
       <div className="overflow-x-auto pb-4 no-scrollbar">
         <div style={{ minWidth: `${minWidth}px`, height: '500px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
-          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
             <LineChart
               data={data}
               margin={{ top: 10, right: 30, left: 0, bottom: 150 }}

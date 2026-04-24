@@ -366,7 +366,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
                 </div>
                 <div className="overflow-x-auto no-scrollbar -mx-8 px-8">
                   <div className="h-80 min-h-[300px] min-w-[600px]">
-                    <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
                       <AreaChart data={DRE_DATA_MOCK} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
                         <defs>
                           <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">

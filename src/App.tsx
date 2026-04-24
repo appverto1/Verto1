@@ -736,14 +736,34 @@ export default function App() {
             }))
           : []
       );
-      setTasks(
-        Array.isArray(safeTasksRes?.data)
+      setTasks((() => {
+        const baseTasks = Array.isArray(safeTasksRes?.data)
           ? safeTasksRes.data.map((t: any) => ({
               ...t,
               patientId: t?.patient_id || t?.patientId || user.id
             }))
-          : []
-      );
+          : [];
+        const assignedPending = Array.isArray(safeAssignedTasksRes?.data)
+          ? safeAssignedTasksRes.data
+              .filter((t: any) => String(t?.status || '').toLowerCase() !== 'completed')
+              .map((t: any) => {
+                const taskData = t?.task_data && typeof t.task_data === 'object' ? t.task_data : {};
+                return {
+                  id: `assigned-${t.id}`,
+                  assignedTaskId: t.id,
+                  patientId: t?.patient_id || user.id,
+                  title: taskData.title || 'Tarefa agendada',
+                  description: taskData.description || '',
+                  icon: taskData.icon || '📌',
+                  color: taskData.color || 'bg-blue-100 text-blue-600',
+                  type: t?.task_type || 'task',
+                  maxScore: Number(taskData?.maxScore || taskData?.max_score || 4),
+                  scheduledAt: t?.scheduled_at || null
+                };
+              })
+          : [];
+        return [...baseTasks, ...assignedPending];
+      })());
 
       const assignedCount = Array.isArray(safeAssignedTasksRes?.data) ? safeAssignedTasksRes.data.length : 0;
       setPatientAssignedTaskCount(assignedCount);
@@ -825,7 +845,7 @@ export default function App() {
   const handleAddTask = async (t: any) => {
     const patient = allPatients.find(p => p.id === t.patientId);
     const isAdultTask = Number(patient?.age || 0) > 12;
-    let taskToPersist = { ...t };
+    let taskToPersist = { ...t, id: (isUuidLike(String(t?.id || '')) ? String(t.id) : crypto.randomUUID()) };
 
     if (isAdultTask) {
       try {
@@ -861,27 +881,47 @@ export default function App() {
     onAddActivityLog("Criação de Tarefa", `Tarefa "${taskToPersist.title}" criada para o paciente ID ${taskToPersist.patientId}.`);
 
     // Sync to Backend
-    await dataService.addTask({
+    const persisted = await dataService.addTask({
       ...taskToPersist,
       patient_id: String(taskToPersist.patientId),
       patient_email: patient?.email || null
     });
+    if (persisted?.success && persisted?.data?.id) {
+      setTasks(prev => prev.map(task => (task.id === taskToPersist.id ? { ...task, id: persisted.data.id } : task)));
+    }
   };
   const handleUpdateTask = async (id: any, fields: any) => {
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, ...fields } : t));
+    let mergedTask: any = null;
+    setTasks(prev => prev.map(t => {
+      if (t.id !== id) return t;
+      mergedTask = { ...t, ...fields };
+      return mergedTask;
+    }));
     onAddActivityLog("Atualização de Tarefa", `Tarefa ID ${id} atualizada.`);
 
     // Sync to Backend
-    const { dataService } = await import('./services/dataService');
-    await dataService.addTask({
-      id: String(id),
-      ...fields
-    });
+    if (mergedTask) {
+      const patient = allPatients.find(p => p.id === mergedTask.patientId);
+      await dataService.updateTask(String(id), {
+        id: String(id),
+        patient_id: String(mergedTask.patientId),
+        patient_email: patient?.email || mergedTask.patient_email || null,
+        title: mergedTask.title,
+        description: mergedTask.description || '',
+        type: mergedTask.type || 'task',
+        icon: mergedTask.icon || '',
+        color: mergedTask.color || '',
+        completed: Boolean(mergedTask.completed),
+        is_daily_reminder: Boolean(mergedTask.isDailyReminder || mergedTask.is_daily_reminder),
+        linked_task: mergedTask.linkedTask || mergedTask.linked_task || null
+      });
+    }
   };
   const handleAddNote = async (pid: any, txt: string, visibility: string, subject?: string) => {
     const patient = allPatients.find(p => p.id === pid);
+    const tempId = crypto.randomUUID();
     const newNote = { 
-      id: Date.now(), 
+      id: tempId, 
       patientId: pid, 
       text: txt, 
       date: new Date().toLocaleString(), 
@@ -894,25 +934,40 @@ export default function App() {
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
     try {
-      await dataService.addNote({
+      const result = await dataService.addNote({
+        id: tempId,
         patient_id: String(pid),
         patient_email: patient?.email || null,
         text: txt,
         visibility,
         subject: subject || "Geral"
       });
+      if (result?.success && result?.data?.id) {
+        setTherapistNotes(prev => prev.map((n: any) => (n.id === tempId ? { ...n, id: result.data.id } : n)));
+      }
     } catch (error) {
       console.error("Falha ao sincronizar nota no servidor:", error);
     }
   };
-  const handleUpdateHistoryItem = (id: any, updates: any) => { 
+  const handleUpdateHistoryItem = async (id: any, score: number, evalComment: string) => { 
     const item = history.find(i => i.id === id);
     if (item) {
-      const updatedItem = { ...item, ...updates };
+      const updatedItem = { ...item, score, evalComment: evalComment || '' };
       const noteText = `📝 ATUALIZAÇÃO DE REGISTRO\nAtividade: ${updatedItem.title}\nPontuação: ${updatedItem.score}\nObs: ${updatedItem.evalComment || "Nenhuma observação."}`;
       handleAddNote(item.patientId, noteText, 'private', 'Sessão');
       setHistory(prev => prev.map(i => i.id === id ? updatedItem : i));
       onAddActivityLog("Edição de Histórico", `Registro de atividade "${item.title}" (ID ${id}) editado.`);
+      try {
+        await dataService.updateHistoryItem(String(id), {
+          score,
+          note: evalComment || '',
+          title: updatedItem.title,
+          patient_id: String(item.patientId),
+          patient_email: allPatients.find(p => p.id === item.patientId)?.email || null
+        });
+      } catch (error) {
+        console.error('Falha ao persistir edição de histórico:', error);
+      }
     }
   };
   const handleUpdateAgendaStatus = (id: any, status: string) => {
@@ -1271,7 +1326,34 @@ export default function App() {
     return { success: true };
   };
 
-  const handleMoodCheckin = (l: number, n: string, i: string, t: any) => setHistory(prev => [{ id: Date.now(), patientId: user.id, type: 'checkin', title: "Check-in", time: new Date().toLocaleTimeString(), energy: l, note: n, icon: i, dateGroup: "Hoje", tag: t }, ...prev]);
+  const handleMoodCheckin = async (l: number, n: string, i: string, t: any) => {
+    const item = {
+      id: Date.now(),
+      patientId: user.id,
+      type: 'checkin',
+      title: "Check-in",
+      time: new Date().toLocaleTimeString(),
+      energy: l,
+      note: n,
+      icon: i,
+      dateGroup: "Hoje",
+      tag: t
+    };
+    setHistory(prev => [item, ...prev]);
+    try {
+      await dataService.addHistoryItem({
+        patient_id: String(user.id),
+        patient_email: user.email || null,
+        type: 'checkin',
+        title: 'Check-in',
+        energy: l,
+        note: n,
+        icon: i
+      });
+    } catch (error) {
+      console.error('Falha ao persistir check-in do paciente:', error);
+    }
+  };
   const handleCompleteTask = async (t: any, e: number, n: string) => { 
     const time = new Date().toLocaleTimeString();
     const isKid = user.age <= 12;
@@ -1446,10 +1528,15 @@ export default function App() {
     return newId;
   };
 
-  const handleDeleteHistoryItem = (id: any) => {
+  const handleDeleteHistoryItem = async (id: any) => {
     const item = history.find(h => h.id === id);
     setHistory(prev => prev.filter(h => h.id !== id));
     onAddActivityLog("Exclusão de Registro", `Registro de atividade "${item?.title}" (ID ${id}) excluído do histórico.`, 'system');
+    try {
+      await dataService.deleteHistoryItem(String(id));
+    } catch (error) {
+      console.error('Falha ao excluir histórico no servidor:', error);
+    }
   };
   
   useEffect(() => { 
@@ -1722,7 +1809,11 @@ export default function App() {
           onCompleteTask={handleCompleteTask} 
           history={history} 
           energyTags={(user.type === 'conventional' || user.type === 'adult_conventional') ? ADULT_CONVENTIONAL_TAGS : ENERGY_TAGS} 
-          sharedNotes={therapistNotes.filter(n => (n.patientId === user.id || n?.patient_email === user.email) && n.type === 'shared')} 
+          sharedNotes={therapistNotes.filter(n => {
+            const noteVisibility = String(n?.visibility || n?.type || '').toLowerCase();
+            const isPatientNote = noteVisibility === 'shared' || noteVisibility === 'patient' || noteVisibility === 'family';
+            return (n.patientId === user.id || n?.patient_email === user.email) && isPatientNote;
+          })} 
           protocols={protocols} 
           onAddFamilyNote={handleAddFamilyNote}
           isReadOnlyMode={patientIsReadOnlyMode}

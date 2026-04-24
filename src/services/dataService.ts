@@ -267,11 +267,30 @@ export const dataService = {
     try {
       if (payload?.fileBlob instanceof Blob) {
         const formData = new FormData();
-        const safeFileName = String(payload?.fileName || 'arquivo.pdf').trim() || 'arquivo.pdf';
-        const safeMime = String(payload?.contentType || payload?.fileBlob?.type || 'application/octet-stream').trim();
-        const file = new File([payload.fileBlob], safeFileName, { type: safeMime });
-        formData.append('file', file, safeFileName);
-        formData.append('fileName', safeFileName);
+        const requestedFileName = String(payload?.fileName || 'arquivo.pdf').trim() || 'arquivo.pdf';
+        const requestedMime = String(payload?.contentType || payload?.fileBlob?.type || 'application/octet-stream').trim().toLowerCase();
+        const safeMime =
+          requestedMime === 'application/pdf' ||
+          requestedMime === 'application/json' ||
+          requestedMime.startsWith('image/')
+            ? requestedMime
+            : 'application/pdf';
+        const extensionByMime: Record<string, string> = {
+          'application/pdf': '.pdf',
+          'application/json': '.json',
+          'image/png': '.png',
+          'image/jpeg': '.jpg',
+          'image/jpg': '.jpg',
+          'image/webp': '.webp'
+        };
+        const requiredExtension = extensionByMime[safeMime] || '';
+        const normalizedFileName =
+          requiredExtension && !requestedFileName.toLowerCase().endsWith(requiredExtension)
+            ? `${requestedFileName}${requiredExtension}`
+            : requestedFileName;
+        const file = new File([payload.fileBlob], normalizedFileName, { type: safeMime });
+        formData.append('file', file, normalizedFileName);
+        formData.append('fileName', normalizedFileName);
         formData.append('contentType', safeMime);
         formData.append('source', String(payload?.source || 'upload'));
         if (payload?.metadata && typeof payload.metadata === 'object') {
@@ -293,7 +312,10 @@ export const dataService = {
         method: 'POST',
         headers: await getAuthHeaders(),
         credentials: 'include',
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          ...payload,
+          contentType: String(payload?.contentType || 'application/json').trim() || 'application/json'
+        })
       });
       return await safeJson(response);
     } catch (error) {
@@ -449,6 +471,21 @@ export const dataService = {
     }
   },
 
+  async updateNote(noteId: string, updates: any) {
+    try {
+      const response = await fetch(`/api/notes/${noteId}`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(updates || {})
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error updating note:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
   async getHistory(patientId: string) {
     try {
       const response = await fetch(`/api/history/${patientId}`, {
@@ -516,6 +553,35 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'history', '/api/history');
   },
 
+  async updateHistoryItem(historyId: string, updates: any) {
+    try {
+      const response = await fetch(`/api/history/${historyId}`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(updates || {})
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error updating history item:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async deleteHistoryItem(historyId: string) {
+    try {
+      const response = await fetch(`/api/history/${historyId}`, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error deleting history item:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
   async getTasks(patientId: string) {
     try {
       const response = await fetch(`/api/tasks/${patientId}`, {
@@ -581,6 +647,35 @@ export const dataService = {
     const id = task.id || generateId();
     const data = { ...task, id, created_at: task.created_at || new Date().toISOString() };
     return await saveOfflineFirst(id, data, 'task', '/api/tasks');
+  },
+
+  async updateTask(taskId: string, updates: any) {
+    try {
+      const response = await fetch(`/api/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(updates || {})
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error updating task:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async deleteTask(taskId: string) {
+    try {
+      const response = await fetch(`/api/tasks/${taskId}`, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error deleting task:', error);
+      return { success: false, error: String(error) };
+    }
   },
 
   async getAssignedTasks(patientId: string) {
