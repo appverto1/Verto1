@@ -10,6 +10,9 @@ import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
 
 export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs }: any) => { 
+  const isKidsProfile =
+    patient?.anamnesisData?.formType === 'child' ||
+    (patient?.anamnesisData?.formType !== 'adult' && patient?.age !== undefined && patient.age <= 12);
   const [activeTab, setActiveTab] = useState(initialTab); 
   const [newNote, setNewNote] = useState(""); 
   const [noteMode, setNoteMode] = useState('private'); 
@@ -71,15 +74,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     'files',
   ];
   const allowedTabsSet = useMemo(() => {
-    if (!Array.isArray(allowedTabs) || allowedTabs.length === 0) {
-      return new Set(allTabs);
-    }
-    return new Set(
-      allowedTabs.filter((tab: string) =>
-        allTabs.includes(tab as 'history' | 'notes' | 'report' | 'plan' | 'session' | 'files'),
-      ),
-    );
-  }, [allowedTabs]);
+    const tabsFromProps =
+      !Array.isArray(allowedTabs) || allowedTabs.length === 0
+        ? allTabs
+        : allowedTabs.filter((tab: string) =>
+            allTabs.includes(tab as 'history' | 'notes' | 'report' | 'plan' | 'session' | 'files'),
+          );
+
+    const filteredByProfile = isKidsProfile
+      ? tabsFromProps
+      : tabsFromProps.filter((tab: string) => tab !== 'plan' && tab !== 'session');
+
+    return new Set(filteredByProfile as Array<'history' | 'notes' | 'report' | 'plan' | 'session' | 'files'>);
+  }, [allowedTabs, isKidsProfile]);
   const canAccessTab = (tab: 'history' | 'notes' | 'report' | 'plan' | 'session' | 'files') =>
     allowedTabsSet.has(tab);
 
@@ -913,34 +920,46 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const htmlBlob = new Blob([pendingAnamnesisPayload], { type: "text/html;charset=utf-8" });
     const reader = new FileReader();
     reader.onload = async () => {
+      let uploadResult: any = null;
+      let uploadErrorMessage = '';
       try {
-        const uploadResult = await dataService.uploadPatientFile(String(patient.id), {
+        uploadResult = await dataService.uploadPatientFile(String(patient.id), {
           fileName: normalizedName,
-          contentType: "text/html",
+          contentType: "text/html;charset=utf-8",
           fileBase64: reader.result,
           source: "anamnesis",
           metadata: { referenceDate: payloadDate, patientName: patient?.name || null }
         });
         if (!uploadResult?.success || !uploadResult?.data) {
-          throw new Error(uploadResult?.warning || uploadResult?.error || 'Falha ao salvar a ficha.');
+          uploadErrorMessage = uploadResult?.warning || uploadResult?.error || 'Falha ao salvar a ficha em Arquivos.';
         }
+      } catch (uploadError: any) {
+        uploadErrorMessage = uploadError?.message || String(uploadError);
+      }
+
+      try {
         await dataService.savePatientAnamnesisSubmission(String(patient.id), {
           title: normalizedName,
           referenceDate: anamnesisFileDate,
           anamnesisData: pendingAnamnesisData || patient?.anamnesisData || {},
           templateVersion: Number(anamnesisTemplate?.version || 1),
           profileType: (pendingAnamnesisData?.formType || patient?.anamnesisData?.formType) === 'child' ? 'child' : 'adult',
-          patientFileId: String(uploadResult.data.id || '')
+          patientFileId: String(uploadResult?.data?.id || '')
         });
-        setPatientFiles((prev) => [normalizeFileRecord(uploadResult.data), ...prev]);
+        if (uploadResult?.success && uploadResult?.data) {
+          setPatientFiles((prev) => [normalizeFileRecord(uploadResult.data), ...prev]);
+        }
         setShowAnamnesisFileModal(false);
         setPendingAnamnesisPayload("");
         setPendingAnamnesisData(null);
         setIsPreparingAnamnesisSave(false);
-        setActiveTab("files");
+        setActiveTab(uploadResult?.success ? "files" : "history");
+        if (uploadErrorMessage) {
+          alert('Anamnese salva no banco de dados. Falha apenas no arquivo em Arquivos; você pode tentar novamente depois.');
+        }
       } catch (error) {
         console.error('Falha ao persistir ficha de anamnese em arquivos:', error);
-        alert('A ficha foi preenchida, mas houve falha ao salvar em Arquivos. Tente novamente.');
+        alert('A ficha não foi perdida: os dados principais da anamnese foram mantidos. Tente salvar o arquivo novamente.');
       }
     };
     reader.onerror = () => {
@@ -1054,21 +1073,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
   useEffect(() => {
     if (isTutorialActive) {
-      if (tutorialStep >= 6) setActiveTab('plan');
+      if (tutorialStep >= 6 && isKidsProfile && canAccessTab('plan')) setActiveTab('plan');
       else if (tutorialStep >= 0) setActiveTab('history');
     }
-  }, [isTutorialActive, tutorialStep]);
+  }, [isTutorialActive, tutorialStep, isKidsProfile, allowedTabsSet]);
 
   useEffect(() => {
     if (isTutorialActive) {
       if (tutorialStep >= 19) setActiveTab('files');
-      else if (tutorialStep >= 17) setActiveTab('session');
-      else if (tutorialStep >= 14) setActiveTab('plan');
+      else if (tutorialStep >= 17 && isKidsProfile && canAccessTab('session')) setActiveTab('session');
+      else if (tutorialStep >= 14 && isKidsProfile && canAccessTab('plan')) setActiveTab('plan');
       else if (tutorialStep >= 11) setActiveTab('report');
       else if (tutorialStep >= 7) setActiveTab('notes');
       else if (tutorialStep >= 0) setActiveTab('history');
     }
-  }, [isTutorialActive, tutorialStep]);
+  }, [isTutorialActive, tutorialStep, isKidsProfile, allowedTabsSet]);
 
   return ( 
     <div className="min-h-screen bg-gray-50 flex flex-col animate-slide-up relative overflow-y-auto"> 
@@ -1216,7 +1235,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           {canAccessTab('notes') && <button id="tab-notes" onClick={() => setActiveTab('notes')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'notes' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Anotações</button>}
           {canAccessTab('report') && <button id="tab-report" onClick={() => setActiveTab('report')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'report' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Relatório</button>}
           {canAccessTab('plan') && <button id="tab-plan" onClick={() => setActiveTab('plan')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'plan' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Plano</button>}
-          {canAccessTab('session') && patient.age <= 12 && (
+          {canAccessTab('session') && isKidsProfile && (
             <button id="tab-session" onClick={() => setActiveTab('session')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'session' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Sessão</button>
           )}
           {canAccessTab('files') && <button id="tab-files" onClick={() => setActiveTab('files')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'files' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Arquivos</button>}
@@ -1225,6 +1244,35 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       <div className="p-6"> 
         {activeTab === 'history' ? ( 
           <div className="space-y-6"> 
+            {!isKidsProfile && (
+              <div className="bg-white border border-gray-100 p-5 rounded-3xl shadow-sm">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-gray-800 tracking-tight">Atividades para realizar fora do consultório</h3>
+                  <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 border border-amber-100 px-2.5 py-1 rounded-full uppercase tracking-wide">
+                    Sem pontuação em tempo real
+                  </span>
+                </div>
+                {(patientTasks?.length || 0) > 0 ? (
+                  <div className="space-y-2">
+                    {(patientTasks || []).map((task: any) => (
+                      <div key={`adult-home-${task.id}`} className="bg-gray-50 border border-gray-100 rounded-2xl px-4 py-3">
+                        <p className="text-sm font-semibold text-gray-800">{task.title}</p>
+                        {task.description ? (
+                          <p className="text-xs text-gray-500 mt-0.5">{task.description}</p>
+                        ) : null}
+                        {task.scheduledAt ? (
+                          <p className="text-[11px] text-gray-400 mt-1">
+                            Programada para {new Date(task.scheduledAt).toLocaleDateString('pt-BR')} às {new Date(task.scheduledAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                          </p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400 italic">Nenhuma atividade de casa cadastrada no momento.</p>
+                )}
+              </div>
+            )}
             <div id="history-filters" className="bg-white/80 border border-gray-100 p-4 rounded-3xl shadow-sm mb-6 animate-fade-in">
               <div className="flex flex-col sm:flex-row items-center gap-4">
                 <div className="flex-1 w-full">

@@ -589,11 +589,17 @@ function sanitizeSessionUrl(value: unknown): string | null {
   return sanitizeString(url, 1500);
 }
 
-type DetectedUploadMime = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' | 'application/pdf';
-type UploadContext = 'image-only' | 'image-or-pdf';
+type DetectedUploadMime =
+  | 'image/png'
+  | 'image/jpeg'
+  | 'image/gif'
+  | 'image/webp'
+  | 'application/pdf'
+  | 'text/html';
+type UploadContext = 'image-only' | 'image-or-pdf' | 'anamnesis-document';
 
 function normalizeMime(input?: string | null): string {
-  const lower = sanitizeString(input, 120).toLowerCase();
+  const lower = sanitizeString(input, 120).toLowerCase().split(';')[0].trim();
   if (!lower) return '';
   if (lower === 'image/jpg') return 'image/jpeg';
   return lower;
@@ -634,12 +640,22 @@ function detectMimeByMagicBytes(buffer: Buffer): DetectedUploadMime | null {
     if (pdf === '%PDF-') return 'application/pdf';
   }
 
+  // Suporte para ficha de anamnese em HTML (gerada no frontend e enviada em base64)
+  // Apenas quando o conteúdo realmente parece um documento HTML válido.
+  const textProbe = buffer.subarray(0, Math.min(buffer.length, 2048)).toString('utf8').trim().toLowerCase();
+  if (textProbe.startsWith('<!doctype html') || textProbe.startsWith('<html') || textProbe.includes('<body')) {
+    return 'text/html';
+  }
+
   return null;
 }
 
 function isAllowedDetectedMime(mime: DetectedUploadMime, context: UploadContext): boolean {
   if (context === 'image-only') {
     return mime.startsWith('image/');
+  }
+  if (context === 'anamnesis-document') {
+    return mime === 'application/pdf' || mime === 'text/html' || mime.startsWith('image/');
   }
   return mime.startsWith('image/') || mime === 'application/pdf';
 }
@@ -4275,7 +4291,8 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'Arquivo inválido ou acima de 10MB.' });
       }
 
-      const validation = validateBinaryUpload(fileBuffer, mimeFromDataUrl, 'image-or-pdf');
+      const uploadContext: UploadContext = source === 'anamnesis' ? 'anamnesis-document' : 'image-or-pdf';
+      const validation = validateBinaryUpload(fileBuffer, mimeFromDataUrl, uploadContext);
       if (!validation.ok) {
         return res.status(415).json({ success: false, error: validation.error });
       }
@@ -4335,14 +4352,18 @@ async function startServer() {
         .createSignedUrl(storagePath, 60 * 10);
       if (signedError) throw signedError;
 
-      void persistActivityLog({
-        userId: uploadedBy,
-        clinicId,
-        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
-        title: 'Arquivo salvo no prontuário',
-        content: `${safeName} foi salvo na pasta segura do paciente ${patientId}.`,
-        type: 'clinical'
-      });
+      try {
+        void persistActivityLog({
+          userId: uploadedBy,
+          clinicId,
+          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+          title: 'Arquivo salvo no prontuário',
+          content: `${safeName} foi salvo na pasta segura do paciente ${patientId}.`,
+          type: 'clinical'
+        });
+      } catch (logError: any) {
+        console.warn('[PatientFiles] Falha ao registrar log de auditoria (não bloqueante):', logError?.message || String(logError));
+      }
 
       return res.json({
         success: true,
@@ -4724,16 +4745,28 @@ async function startServer() {
         query = query.eq('user_id', req.session.user.id);
       }
 
-      let { data, error } = await query;
+      let data: any = [];
+      let error: any = null;
+      try {
+        const result = await query;
+        data = result.data;
+        error = result.error;
+      } catch (queryError: any) {
+        error = queryError;
+      }
       if (error && /clinic_id/i.test(String(error?.message || ''))) {
-        const fallback = await supabase
-          .from('activity_logs')
-          .select('*')
-          .eq('user_id', req.session.user.id)
-          .order('timestamp', { ascending: false })
-          .limit(500);
-        data = fallback.data;
-        error = fallback.error;
+        try {
+          const fallback = await supabase
+            .from('activity_logs')
+            .select('*')
+            .eq('user_id', req.session.user.id)
+            .order('timestamp', { ascending: false })
+            .limit(500);
+          data = fallback.data;
+          error = fallback.error;
+        } catch (fallbackError: any) {
+          error = fallbackError;
+        }
       }
       
       if (error) {
@@ -4750,30 +4783,42 @@ async function startServer() {
   app.post('/api/logs', checkAuth, async (req: any, res) => {
     try {
       const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
-      let { data, error } = await supabase
-        .from('activity_logs')
-        .upsert([{
-          ...req.body,
-          user_id: req.session.user.id,
-          actor_name: actorName,
-          clinic_id: currentClinicId(req.session.user),
-          timestamp: req.body?.timestamp || new Date().toISOString()
-        }], { onConflict: 'id' })
-        .select()
-        .single();
-      
-      if (error && /actor_name|clinic_id/i.test(String(error?.message || ''))) {
-        const fallback = await supabase
+      let data: any = null;
+      let error: any = null;
+      try {
+        const result = await supabase
           .from('activity_logs')
           .upsert([{
             ...req.body,
             user_id: req.session.user.id,
+            actor_name: actorName,
+            clinic_id: currentClinicId(req.session.user),
             timestamp: req.body?.timestamp || new Date().toISOString()
           }], { onConflict: 'id' })
           .select()
           .single();
-        data = fallback.data;
-        error = fallback.error;
+        data = result.data;
+        error = result.error;
+      } catch (upsertError: any) {
+        error = upsertError;
+      }
+      
+      if (error && /actor_name|clinic_id/i.test(String(error?.message || ''))) {
+        try {
+          const fallback = await supabase
+            .from('activity_logs')
+            .upsert([{
+              ...req.body,
+              user_id: req.session.user.id,
+              timestamp: req.body?.timestamp || new Date().toISOString()
+            }], { onConflict: 'id' })
+            .select()
+            .single();
+          data = fallback.data;
+          error = fallback.error;
+        } catch (fallbackError: any) {
+          error = fallbackError;
+        }
       }
 
       if (error) throw error;
