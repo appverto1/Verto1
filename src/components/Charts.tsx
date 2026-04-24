@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Chart from 'chart.js/auto';
 import { BarChart2, Info } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell, LineChart, Line } from 'recharts';
@@ -49,6 +49,9 @@ const CustomXAxisTick = (props: any) => {
 };
 
 export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
+  const [isMounted, setIsMounted] = useState(false);
+  useEffect(() => setIsMounted(true), []);
+
   if (!data || data.length === 0) {
     return (
       <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 flex flex-col items-center justify-center py-10 opacity-50 italic text-gray-400">
@@ -74,8 +77,9 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
         </div>
       </div>
       <div className="overflow-x-auto pb-4 no-scrollbar">
-        <div style={{ minWidth: `${minWidth}px`, height: '500px' }} className="relative z-10">
-          <ResponsiveContainer width="100%" height="100%">
+        <div style={{ minWidth: `${minWidth}px`, height: '500px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
+          {isMounted ? (
+          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
             <BarChart
               data={data}
               margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
@@ -142,7 +146,10 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
               );
             })}
           </BarChart>
-        </ResponsiveContainer>
+          </ResponsiveContainer>
+          ) : (
+            <div className="h-full w-full rounded-2xl bg-slate-50 animate-pulse" />
+          )}
       </div>
     </div>
   </div>
@@ -150,6 +157,9 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
 };
 
 export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
+  const [isMounted, setIsMounted] = useState(false);
+  useEffect(() => setIsMounted(true), []);
+
   if (!chartData || !chartData.labels || chartData.labels.length === 0) {
     return (
       <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 flex flex-col items-center justify-center py-10 opacity-50 italic text-gray-400">
@@ -178,8 +188,9 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
       <div className="absolute top-0 right-0 w-32 sm:w-48 h-32 sm:h-48 bg-indigo-50/50 rounded-bl-full -z-0"></div>
       
       <div className="overflow-x-auto pb-4 no-scrollbar cursor-grab active:cursor-grabbing">
-        <div style={{ minWidth: `${minWidth}px`, height: '500px' }} className="relative z-10">
-          <ResponsiveContainer width="100%" height="100%">
+        <div style={{ minWidth: `${minWidth}px`, height: '500px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
+          {isMounted ? (
+          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
             <BarChart
               data={data}
               margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
@@ -241,6 +252,9 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
               })}
             </BarChart>
           </ResponsiveContainer>
+          ) : (
+            <div className="h-full w-full rounded-2xl bg-slate-50 animate-pulse" />
+          )}
         </div>
       </div>
       
@@ -257,6 +271,9 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
 };
 
 export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
+  const [isMounted, setIsMounted] = useState(false);
+  useEffect(() => setIsMounted(true), []);
+
   if (!chartData || !chartData.labels || chartData.labels.length === 0) {
     return (
       <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 flex flex-col items-center justify-center py-10 opacity-50 italic text-gray-400">
@@ -284,8 +301,9 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
     <div className="bg-white/70 backdrop-blur-md p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-white/50 mb-8 animate-fade-in relative overflow-hidden chart-glow">
       <div className="absolute top-0 right-0 w-32 sm:w-48 h-32 sm:h-48 bg-indigo-50/50 rounded-bl-full -z-0"></div>
       <div className="overflow-x-auto pb-4 no-scrollbar">
-        <div style={{ minWidth: `${minWidth}px`, height: '500px' }} className="relative z-10">
-          <ResponsiveContainer width="100%" height="100%">
+        <div style={{ minWidth: `${minWidth}px`, height: '500px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
+          {isMounted ? (
+          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
             <LineChart
               data={data}
               margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
@@ -341,7 +359,10 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
               />
             ))}
           </LineChart>
-        </ResponsiveContainer>
+          </ResponsiveContainer>
+          ) : (
+            <div className="h-full w-full rounded-2xl bg-slate-50 animate-pulse" />
+          )}
       </div>
     </div>
   </div>

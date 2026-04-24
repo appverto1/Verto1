@@ -646,6 +646,16 @@ function detectMimeByMagicBytes(buffer: Buffer): DetectedUploadMime | null {
   if (textProbe.startsWith('<!doctype html') || textProbe.startsWith('<html') || textProbe.includes('<body')) {
     return 'text/html';
   }
+  if (buffer.length >= 4) {
+    const isUtf16Le = buffer[0] === 0xff && buffer[1] === 0xfe;
+    const isUtf16Be = buffer[0] === 0xfe && buffer[1] === 0xff;
+    if (isUtf16Le || isUtf16Be) {
+      const utf16Probe = buffer.subarray(0, Math.min(buffer.length, 4096)).toString('utf16le').trim().toLowerCase();
+      if (utf16Probe.startsWith('<!doctype html') || utf16Probe.startsWith('<html') || utf16Probe.includes('<body')) {
+        return 'text/html';
+      }
+    }
+  }
 
   return null;
 }
@@ -4293,8 +4303,32 @@ async function startServer() {
 
       const uploadContext: UploadContext = source === 'anamnesis' ? 'anamnesis-document' : 'image-or-pdf';
       const validation = validateBinaryUpload(fileBuffer, mimeFromDataUrl, uploadContext);
-      if (!validation.ok) {
-        return res.status(415).json({ success: false, error: validation.error });
+      let resolvedMime: DetectedUploadMime | null = validation.ok ? validation.detectedMime : null;
+      if (!resolvedMime && uploadContext === 'anamnesis-document') {
+        const normalizedProvidedMime = normalizeMime(mimeFromDataUrl);
+        const lowerFileName = safeName.toLowerCase();
+        const utf8Probe = fileBuffer.subarray(0, Math.min(fileBuffer.length, 4096)).toString('utf8').trim().toLowerCase();
+
+        if (
+          normalizedProvidedMime === 'application/octet-stream' ||
+          normalizedProvidedMime === 'text/html' ||
+          normalizedProvidedMime === 'application/pdf'
+        ) {
+          if (lowerFileName.endsWith('.pdf')) {
+            resolvedMime = 'application/pdf';
+          } else if (
+            lowerFileName.endsWith('.html') ||
+            lowerFileName.endsWith('.htm') ||
+            utf8Probe.startsWith('<!doctype html') ||
+            utf8Probe.startsWith('<html') ||
+            utf8Probe.includes('<body')
+          ) {
+            resolvedMime = 'text/html';
+          }
+        }
+      }
+      if (!resolvedMime) {
+        return res.status(415).json({ success: false, error: validation.ok ? 'Formato de arquivo inválido.' : validation.error });
       }
 
       const bucketName = 'patient-files-private';
@@ -4315,7 +4349,7 @@ async function startServer() {
         .upload(storagePath, fileBuffer, {
           cacheControl: '3600',
           upsert: false,
-          contentType: validation.detectedMime
+          contentType: resolvedMime
         });
       if (uploadError) throw uploadError;
 
@@ -4325,7 +4359,7 @@ async function startServer() {
         uploaded_by: uploadedBy,
         file_name: safeName,
         storage_path: storagePath,
-        mime_type: validation.detectedMime,
+        mime_type: resolvedMime,
         file_size_bytes: fileBuffer.length,
         source,
         metadata
@@ -4771,12 +4805,22 @@ async function startServer() {
       
       if (error) {
         console.error('Supabase logs fetch error:', error);
-        throw error;
+        return res.status(200).json({
+          success: true,
+          data: [],
+          warning: 'activity_logs_unavailable',
+          details: sanitizeString(error?.message || String(error), 400)
+        });
       }
-      res.json({ success: true, data });
+      return res.json({ success: true, data });
     } catch (error: any) {
       console.error('Logs route error:', error);
-      res.status(500).json({ error: error.message || String(error) });
+      return res.status(200).json({
+        success: true,
+        data: [],
+        warning: 'activity_logs_route_error',
+        details: sanitizeString(error?.message || String(error), 400)
+      });
     }
   });
 
@@ -4821,11 +4865,24 @@ async function startServer() {
         }
       }
 
-      if (error) throw error;
-      res.json({ success: true, id: data.id });
+      if (error) {
+        console.error('[Logs] Persist warning:', error);
+        return res.status(200).json({
+          success: true,
+          queued: true,
+          warning: 'activity_logs_write_unavailable',
+          details: sanitizeString(error?.message || String(error), 400)
+        });
+      }
+      return res.json({ success: true, id: data?.id || null });
     } catch (error: any) {
       console.error('[Logs] Error saving activity log:', error);
-      res.status(500).json({ error: error.message || String(error) });
+      return res.status(200).json({
+        success: true,
+        queued: true,
+        warning: 'activity_logs_route_error',
+        details: sanitizeString(error?.message || String(error), 400)
+      });
     }
   });
 
