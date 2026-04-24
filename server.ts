@@ -1419,26 +1419,70 @@ function buildSessionUserPayload(input: any) {
   };
 }
 
-function derivePatientTreatmentStatus(user: any): 'active' | 'inactive' | 'waiting_treatment' {
+async function derivePatientTreatmentStatus(user: any): Promise<'active' | 'inactive' | 'waiting_treatment'> {
   const role = sanitizeString(user?.role, 40).toLowerCase();
   if (role !== 'patient') return 'active';
+
+  const safeEmail = sanitizeEmail(user?.email);
+  const fallbackHasClinic = Boolean(sanitizeString(user?.clinicId || user?.activeWorkspaceId, 120));
   const hasWorkspace = Array.isArray(user?.workspaces) && user.workspaces.length > 0;
-  const hasClinic = Boolean(sanitizeString(user?.clinicId || user?.activeWorkspaceId, 120));
   if (hasWorkspace) return 'active';
-  if (hasClinic) return 'inactive';
+
+  let patientRows: any[] = [];
+  if (safeEmail) {
+    const { data } = await supabase
+      .from('patients')
+      .select('id, clinic_id, status')
+      .eq('email', safeEmail)
+      .limit(1000);
+    patientRows = Array.isArray(data) ? data : [];
+  }
+
+  const hasLinkedClinic = patientRows.some((row: any) => Boolean(sanitizeString(row?.clinic_id, 120))) || fallbackHasClinic;
+  const hasActivePatientStatus = patientRows.some((row: any) => sanitizeString(row?.status, 40).toLowerCase() === 'active');
+  const patientIds = patientRows
+    .map((row: any) => sanitizeString(row?.id, 120))
+    .filter((id: string) => isUuid(id));
+
+  let hasAssignedTasks = false;
+  if (patientIds.length > 0) {
+    const { count } = await supabase
+      .from('assigned_tasks')
+      .select('id', { count: 'exact', head: true })
+      .in('patient_id', patientIds);
+    hasAssignedTasks = Number(count || 0) > 0;
+  }
+  if (!hasAssignedTasks && safeEmail) {
+    const { count } = await supabase
+      .from('assigned_tasks')
+      .select('id', { count: 'exact', head: true })
+      .eq('patient_email', safeEmail);
+    hasAssignedTasks = Number(count || 0) > 0;
+  }
+
+  if (hasActivePatientStatus || (hasLinkedClinic && hasAssignedTasks) || hasAssignedTasks) return 'active';
+  if (hasLinkedClinic) return 'inactive';
   return 'waiting_treatment';
 }
 
 async function updatePatientStatusIfNeeded(user: any): Promise<'active' | 'inactive' | 'waiting_treatment'> {
-  const status = derivePatientTreatmentStatus(user);
+  const status = await derivePatientTreatmentStatus(user);
   if (sanitizeString(user?.role, 40).toLowerCase() !== 'patient' || !sanitizeString(user?.id, 120)) {
     return status;
   }
   try {
+    const safeEmail = sanitizeEmail(user?.email);
     await supabase
       .from('users')
       .update({ status })
       .eq('id', sanitizeString(user.id, 120));
+    if (status === 'active' && safeEmail) {
+      await supabase
+        .from('patients')
+        .update({ status: 'active' })
+        .eq('email', safeEmail)
+        .in('status', ['pending', 'waiting_treatment', 'inactive']);
+    }
   } catch (error) {
     console.warn('[Auth] Não foi possível atualizar status clínico do paciente:', (error as any)?.message || error);
   }
@@ -3870,16 +3914,64 @@ async function startServer() {
     if (!email) return res.status(400).json({ error: 'Email is required' });
 
     try {
+      const safeEmail = sanitizeEmail(email);
+      const safeName = sanitizeString(name, 160) || String(safeEmail || email).split('@')[0];
+      const safeClinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120);
+      const safeProfessionalId = sanitizeString(req.session.user?.id, 120);
+
+      const ensurePatientLink = async (authUserId: string) => {
+        const patientPayload = cleanObject({
+          name: safeName,
+          email: safeEmail,
+          status: 'active',
+          clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
+          therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined,
+          created_at: new Date().toISOString()
+        });
+        if (!patientPayload.email) return;
+
+        let existingPatientQuery = supabase
+          .from('patients')
+          .select('id')
+          .eq('email', patientPayload.email);
+        if (patientPayload.clinic_id) {
+          existingPatientQuery = existingPatientQuery.eq('clinic_id', patientPayload.clinic_id);
+        }
+        const { data: existingPatient } = await existingPatientQuery.limit(1).maybeSingle();
+
+        if (existingPatient?.id) {
+          await supabase
+            .from('patients')
+            .update({
+              status: 'active',
+              therapist_id: patientPayload.therapist_id || null
+            })
+            .eq('id', existingPatient.id);
+        } else {
+          await supabase.from('patients').insert([patientPayload]);
+        }
+
+        await supabase
+          .from('users')
+          .update({
+            role: 'patient',
+            clinic_id: isUuid(safeClinicId) ? safeClinicId : null,
+            status: 'active'
+          })
+          .eq('id', authUserId);
+      };
+
       // 1. Check if user already exists in 'users' table
       const { data: existingUser, error: checkError } = await supabase
         .from('users')
         .select('id')
-        .eq('email', email)
+        .eq('email', safeEmail || email)
         .maybeSingle();
 
       if (checkError) throw checkError;
 
       if (existingUser) {
+        await ensurePatientLink(existingUser.id);
         return res.json({ success: true, message: 'User already exists', userId: existingUser.id });
       }
 
@@ -3888,10 +3980,10 @@ async function startServer() {
       const tempPassword = Math.random().toString(36).slice(-10) + 'Verto123!';
       
       const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
-        email,
+        email: safeEmail || email,
         password: tempPassword,
         email_confirm: true,
-        user_metadata: { full_name: name }
+        user_metadata: { full_name: safeName }
       });
 
       if (authError) {
@@ -3902,16 +3994,19 @@ async function startServer() {
           const foundUser = listUsers?.users.find(u => u.email === email);
           if (foundUser) {
             // Create the profile in 'users' table
-            const newProfile = {
+            const newProfile = cleanObject({
               id: foundUser.id,
-              email: email,
-              name: name || email.split('@')[0],
+              email: safeEmail || email,
+              name: safeName,
               role: 'patient',
               subscription_status: 'pending',
               plan_price: 4.90,
+              clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
+              status: 'active',
               created_at: new Date().toISOString()
-            };
-            await supabase.from('users').insert([newProfile]);
+            });
+            await supabase.from('users').upsert([newProfile], { onConflict: 'id' });
+            await ensurePatientLink(foundUser.id);
             return res.json({ success: true, userId: foundUser.id });
           }
         }
@@ -3920,21 +4015,24 @@ async function startServer() {
 
       if (authUser?.user) {
         // 3. Create profile in 'users' table
-        const newProfile = {
+        const newProfile = cleanObject({
           id: authUser.user.id,
-          email: email,
-          name: name || email.split('@')[0],
+          email: safeEmail || email,
+          name: safeName,
           role: 'patient',
           subscription_status: 'pending',
           plan_price: 4.90,
+          clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
+          status: 'active',
           created_at: new Date().toISOString()
-        };
+        });
 
         const { error: profileError } = await supabase
           .from('users')
-          .insert([newProfile]);
+          .upsert([newProfile], { onConflict: 'id' });
 
         if (profileError) throw profileError;
+        await ensurePatientLink(authUser.user.id);
 
         return res.json({ success: true, userId: authUser.user.id, tempPassword });
       }

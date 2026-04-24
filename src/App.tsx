@@ -478,6 +478,8 @@ export default function App() {
   const [therapistNotes, setTherapistNotes] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
+  const [patientAssignedTaskCount, setPatientAssignedTaskCount] = useState(0);
+  const [patientAssignedTasksLoadError, setPatientAssignedTasksLoadError] = useState(false);
   const [clinicalRecords, setClinicalRecords] = useState<any[]>([]);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
   const todayStr = new Date().toISOString().split('T')[0];
@@ -707,14 +709,19 @@ export default function App() {
   useEffect(() => {
     const fetchPatientScopedData = async () => {
       if (!user || user.role !== 'patient' || !user.email) return;
-      const [historyRes, tasksRes] = await Promise.all([
+      const [historyRes, tasksRes, assignedTasksRes] = await Promise.allSettled([
         dataService.getPatientSelfHistory(),
-        dataService.getPatientSelfTasks()
+        dataService.getPatientSelfTasks(),
+        dataService.getPatientSelfAssignedTasks()
       ]);
 
+      const safeHistoryRes = historyRes.status === 'fulfilled' ? historyRes.value : null;
+      const safeTasksRes = tasksRes.status === 'fulfilled' ? tasksRes.value : null;
+      const safeAssignedTasksRes = assignedTasksRes.status === 'fulfilled' ? assignedTasksRes.value : null;
+
       setHistory(
-        Array.isArray(historyRes?.data)
-          ? historyRes.data.map((h: any) => ({
+        Array.isArray(safeHistoryRes?.data)
+          ? safeHistoryRes.data.map((h: any) => ({
               ...h,
               patientId: h?.patient_id || h?.patientId || user.id,
               time: h?.created_at
@@ -730,17 +737,45 @@ export default function App() {
           : []
       );
       setTasks(
-        Array.isArray(tasksRes?.data)
-          ? tasksRes.data.map((t: any) => ({
+        Array.isArray(safeTasksRes?.data)
+          ? safeTasksRes.data.map((t: any) => ({
               ...t,
               patientId: t?.patient_id || t?.patientId || user.id
             }))
           : []
       );
+
+      const assignedCount = Array.isArray(safeAssignedTasksRes?.data) ? safeAssignedTasksRes.data.length : 0;
+      setPatientAssignedTaskCount(assignedCount);
+      setPatientAssignedTasksLoadError(
+        assignedTasksRes.status === 'rejected' ||
+          (safeAssignedTasksRes?.success === false && assignedCount === 0)
+      );
+
+      const fetchedTreatmentStatus = String(safeHistoryRes?.treatmentStatus || '').trim().toLowerCase();
+      if (fetchedTreatmentStatus && fetchedTreatmentStatus !== String(user?.treatmentStatus || '').trim().toLowerCase()) {
+        setUser((prev: any) => {
+          if (!prev || prev.id !== user.id) return prev;
+          return { ...prev, treatmentStatus: fetchedTreatmentStatus };
+        });
+      }
     };
 
     void fetchPatientScopedData();
   }, [user]);
+
+  const patientIsReadOnlyMode = useMemo(() => {
+    if (!user || user.role !== 'patient') return false;
+    const normalizedStatus = String(user?.treatmentStatus || '').trim().toLowerCase();
+    const hasClinicContext = Boolean(String(user?.clinicId || user?.activeWorkspaceId || '').trim());
+    const hasActiveStatus = normalizedStatus === 'active';
+    const hasAssignedTasks = hasClinicContext && patientAssignedTaskCount > 0;
+
+    if (hasActiveStatus || hasAssignedTasks) return false;
+    if (patientAssignedTasksLoadError) return false;
+    if (!normalizedStatus) return false;
+    return true;
+  }, [user, patientAssignedTaskCount, patientAssignedTasksLoadError]);
 
   useEffect(() => {
     if (!user) return;
@@ -1690,7 +1725,7 @@ export default function App() {
           sharedNotes={therapistNotes.filter(n => (n.patientId === user.id || n?.patient_email === user.email) && n.type === 'shared')} 
           protocols={protocols} 
           onAddFamilyNote={handleAddFamilyNote}
-          isReadOnlyMode={(String(user?.treatmentStatus || '').trim().toLowerCase() && String(user?.treatmentStatus || '').trim().toLowerCase() !== 'active') || !String(user?.clinicId || user?.activeWorkspaceId || '').trim()} 
+          isReadOnlyMode={patientIsReadOnlyMode}
           />
       ) : user.role === 'coordinator' || user.role === 'receptionist' || user.role === 'therapist' ? (
         <CoordinatorDashboard 

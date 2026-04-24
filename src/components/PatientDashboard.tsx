@@ -746,7 +746,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               ))} 
             </div> 
           ) : ( 
-            <div className="flex flex-col items-center justify-center py-10 text-gray-400 bg-white/50 rounded-3xl border-2 border-dashed border-gray-200"> <Smile size={48} className="mb-2 opacity-50"/> <p className="font-medium">Tudo feito por hoje!</p> </div> 
+            <div className="flex flex-col items-center justify-center py-10 text-gray-400 bg-white/50 rounded-3xl border-2 border-dashed border-gray-200"> <Smile size={48} className="mb-2 opacity-50"/> <p className="font-medium">Nenhuma tarefa para agora.</p> </div> 
           )} 
         </div> 
 
