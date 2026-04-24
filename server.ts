@@ -15,6 +15,10 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { generateSecret, verifySync, generateURI } from 'otplib';
 import QRCode from 'qrcode';
+import {
+  buildActivationEmailTemplate,
+  buildPasswordRecoveryEmailTemplate
+} from './src/services/emailTemplates';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
@@ -181,6 +185,72 @@ function getRecoveryRedirectUrl(): string {
   return `${baseUrl.replace(/\/+$/, '')}/reset-password`;
 }
 
+const OFFICIAL_FROM_CONTACT = 'Verto <contato@appverto.com.br>';
+const OFFICIAL_FROM_NOREPLY = 'Verto <naoresponda@appverto.com.br>';
+const OFFICIAL_TRANSACTIONAL_REPLY_TO = 'contato@appverto.com.br';
+
+function resolveTemplateProfileByRole(role: unknown): 'professional' | 'patient' {
+  const normalized = sanitizeString(role, 40).toLowerCase();
+  return normalized === 'patient' ? 'patient' : 'professional';
+}
+
+async function generateSupabaseActionLink(params: {
+  type: 'signup' | 'recovery';
+  email: string;
+  redirectTo: string;
+}): Promise<string | null> {
+  try {
+    const admin = (supabase as any)?.auth?.admin;
+    if (!admin?.generateLink) return null;
+    const { data, error } = await admin.generateLink({
+      type: params.type,
+      email: params.email,
+      options: { redirectTo: params.redirectTo }
+    });
+    if (error) throw error;
+    const actionLink = sanitizeString(
+      data?.properties?.action_link || data?.action_link || '',
+      2000
+    );
+    return actionLink || null;
+  } catch (error: any) {
+    console.warn('[Auth] generate action link warning:', {
+      type: params.type,
+      email: maskEmail(params.email),
+      message: error?.message || String(error)
+    });
+    return null;
+  }
+}
+
+async function sendTransactionalEmailSafe(params: {
+  to: string;
+  subject: string;
+  html: string;
+  context: string;
+  from?: string;
+  replyTo?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<boolean> {
+  try {
+    await sendEmailViaResend({
+      to: params.to,
+      subject: params.subject,
+      html: params.html,
+      from: params.from || OFFICIAL_FROM_NOREPLY,
+      replyTo: params.replyTo || OFFICIAL_TRANSACTIONAL_REPLY_TO
+    });
+    return true;
+  } catch (error: any) {
+    console.error('[Email] transactional send failed:', {
+      context: params.context,
+      message: error?.message || String(error),
+      metadata: params.metadata || null
+    });
+    return false;
+  }
+}
+
 type RecoveryChannel = 'email';
 type OtpPurpose = 'password_recovery' | 'phone_verification';
 
@@ -246,17 +316,31 @@ function isMissingColumnError(error: any, columnName?: string): boolean {
 async function sendEmailViaResend({
   to,
   subject,
-  html
+  html,
+  from,
+  replyTo
 }: {
   to: string;
   subject: string;
   html: string;
+  from?: string;
+  replyTo?: string;
 }): Promise<void> {
   const apiKey = sanitizeString(process.env.RESEND_API_KEY || '', 500);
-  const from = sanitizeString(process.env.RESEND_FROM_EMAIL || '', 320);
-  if (!apiKey || !from) {
+  const defaultFrom = sanitizeString(process.env.RESEND_FROM_EMAIL || '', 320);
+  const effectiveFrom = sanitizeString(from || defaultFrom, 320);
+  const effectiveReplyTo = sanitizeString(replyTo || '', 320);
+  if (!apiKey || !effectiveFrom) {
     throw new Error('RESEND_API_KEY e RESEND_FROM_EMAIL são obrigatórios para envio de e-mails transacionais.');
   }
+
+  const payload = {
+    from: effectiveFrom,
+    to: [to],
+    subject,
+    html,
+    ...(effectiveReplyTo ? { reply_to: [effectiveReplyTo] } : {})
+  };
 
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -264,12 +348,7 @@ async function sendEmailViaResend({
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      from,
-      to: [to],
-      subject,
-      html
-    })
+    body: JSON.stringify(payload)
   });
 
   if (!response.ok) {
@@ -2117,13 +2196,37 @@ async function startServer() {
       await ensureClinicAndMembershipForCoordinator(authUser.id, name || null);
     }
 
+    const activationLink =
+      (await generateSupabaseActionLink({
+        type: 'signup',
+        email: safeEmail,
+        redirectTo: authRedirectTo
+      })) || authRedirectTo;
+    const activationEmail = buildActivationEmailTemplate({
+      nome: name || safeEmail.split('@')[0],
+      link_ativacao: activationLink,
+      perfil: resolveTemplateProfileByRole(roleToUse)
+    });
+    const activationEmailSent = await sendTransactionalEmailSafe({
+      to: safeEmail,
+      subject: activationEmail.subject,
+      html: activationEmail.html,
+      context: 'signup_activation',
+      from: roleToUse === 'patient' ? OFFICIAL_FROM_NOREPLY : OFFICIAL_FROM_CONTACT,
+      replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+      metadata: {
+        email: maskEmail(safeEmail),
+        role: roleToUse
+      }
+    });
+
     await persistIdentityAuditLog({
       title: 'Cadastro iniciado com confirmação de e-mail',
-      content: `Cadastro de ${maskEmail(safeEmail)} iniciado. Confirmação de e-mail pendente.${phoneMasked ? ` Telefone para validação: ${phoneMasked}.` : ''}`,
+      content: `Cadastro de ${maskEmail(safeEmail)} iniciado. Confirmação de e-mail pendente.${phoneMasked ? ` Telefone para validação: ${phoneMasked}.` : ''} E-mail oficial de ativação ${activationEmailSent ? 'enviado' : 'com falha de envio'}.`,
       identifier: safeEmail,
       channel: 'email',
       userId: authUser.id,
-      status: 'pending_confirmation'
+      status: activationEmailSent ? 'pending_confirmation' : 'warning'
     });
 
     return {
@@ -2271,20 +2374,44 @@ async function startServer() {
         createdAt: Date.now()
       });
 
-      await sendEmailViaResend({
+      const { data: profile } = await supabase
+        .from('users')
+        .select('name, role')
+        .eq('id', authUser.id)
+        .maybeSingle();
+      const recoveryLink = await generateSupabaseActionLink({
+        type: 'recovery',
+        email,
+        redirectTo: getRecoveryRedirectUrl()
+      });
+      const recoveryEmail = buildPasswordRecoveryEmailTemplate({
+        nome: sanitizeString(profile?.name || authUser.user_metadata?.full_name || email.split('@')[0], 180),
+        codigo: code,
+        link_recuperacao: recoveryLink,
+        expira_em_minutos: 15,
+        perfil: resolveTemplateProfileByRole(profile?.role)
+      });
+      const recoveryEmailSent = await sendTransactionalEmailSafe({
         to: email,
-        subject: 'Verto - Código de recuperação de senha',
-        html: `<p>Seu código de recuperação é <strong>${code}</strong>.</p><p>Este código expira em 15 minutos.</p>`
+        subject: recoveryEmail.subject,
+        html: recoveryEmail.html,
+        context: 'password_recovery_request',
+        from: OFFICIAL_FROM_NOREPLY,
+        replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+        metadata: {
+          email: maskEmail(email),
+          userId: authUser.id
+        }
       });
 
       await persistIdentityAuditLog({
         title: 'Recuperação por e-mail solicitada',
-        content: `Código de recuperação enviado para ${maskEmail(email)}.`,
+        content: `Código de recuperação gerado para ${maskEmail(email)}. E-mail oficial ${recoveryEmailSent ? 'enviado' : 'com falha de envio'}.`,
         identifier: email,
         channel: 'email',
         userId: authUser.id,
         request: req,
-        status: 'sent'
+        status: recoveryEmailSent ? 'sent' : 'warning'
       });
       return res.json(genericResponse);
     } catch (error: any) {

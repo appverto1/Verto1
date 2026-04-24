@@ -1,0 +1,219 @@
+﻿export type EmailTemplateProfile = 'professional' | 'patient';
+
+type ActivationTemplateInput = {
+  nome: string;
+  link_ativacao: string;
+  perfil: EmailTemplateProfile;
+};
+
+type WelcomeTemplateInput = {
+  nome: string;
+  perfil: EmailTemplateProfile;
+};
+
+type PasswordRecoveryTemplateInput = {
+  nome: string;
+  codigo: string;
+  link_recuperacao?: string | null;
+  expira_em_minutos: number;
+  perfil: EmailTemplateProfile;
+};
+
+const toSafeName = (value: string): string => {
+  const normalized = String(value || '').trim();
+  return normalized.length > 0 ? normalized : 'Usuário';
+};
+
+const escapeHtml = (value: string): string =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const PROFESSIONAL_WELCOME_HTML = `
+  <div style="margin:0;padding:0;background:#f5f3ff;font-family:Arial,Helvetica,sans-serif;color:#2e1065;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td align="center" style="padding:40px 16px;">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;">
+            <tr>
+              <td style="padding:34px 36px 12px;text-align:center;">
+                <img src="https://resend-attachments.s3.amazonaws.com/7b85198f-15af-45f6-9ba3-86895bb5c74f" alt="Logo Verto" width="85" height="85" style="display:block;margin:0 auto 12px;outline:none;border:none;text-decoration:none;" />
+                <h1 style="margin:0;color:#3b0764;font-size:44px;line-height:1.05;font-weight:700;">Verto</h1>
+                <p style="margin:12px 0 0;color:#8b5cf6;font-size:14px;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;">SUA CLÍNICA NO PRÓXIMO NÍVEL</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:8px 36px 0;">
+                <h2 style="margin:0 0 12px;color:#2e1065;font-size:44px;line-height:1.12;font-weight:700;">{{saudacao}}</h2>
+                <p style="margin:0 0 8px;color:#5b21b6;font-size:36px;line-height:1.35;">Sua jornada para uma gestão mais inteligente e humana começou.</p>
+                <p style="margin:0 0 24px;color:#5b21b6;font-size:36px;line-height:1.35;">Estamos muito felizes em ter você na nossa comunidade.</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 36px;">
+                <div style="background:#faf5ff;border:1px dashed #c4b5fd;border-radius:12px;padding:28px 18px;text-align:center;">
+                  <p style="margin:0 0 18px;color:#4c1d95;font-size:22px;line-height:1.4;font-weight:600;">Clique no botão abaixo para ativar sua conta e começar:</p>
+                  <a href="{{link_ativacao}}" style="display:inline-block;background:#8b5cf6;color:#ffffff;text-decoration:none;padding:18px 34px;border-radius:999px;font-size:31px;line-height:1.1;font-weight:700;">Confirmar E-mail agora</a>
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:22px 36px 0;">
+                <hr style="border:none;border-top:1px solid #ddd6fe;margin:0 0 22px;" />
+                <p style="margin:0 0 10px;color:#6d28d9;font-size:15px;font-weight:700;">O que vem a seguir?</p>
+                <p style="margin:0;color:#5b21b6;font-size:32px;line-height:1.34;">✅ Configure seus horários de atendimento</p>
+                <p style="margin:0;color:#5b21b6;font-size:32px;line-height:1.34;">👥 Adicione sua primeira equipe</p>
+                <p style="margin:0;color:#5b21b6;font-size:32px;line-height:1.34;">📑 Importe seus prontuários</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:24px 36px 26px;text-align:center;">
+                <p style="margin:0 0 14px;color:#a78bfa;font-size:20px;">© 2026 Verto Software Ltda.</p>
+                <p style="margin:0;color:#6d28d9;font-size:18px;line-height:1.4;">Se o botão não funcionar, copie e cole este link no navegador:</p>
+                <p style="margin:8px 0 0;word-break:break-all;color:#6d28d9;font-size:16px;line-height:1.4;">{{link_ativacao}}</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </div>
+`;
+
+const PATIENT_WELCOME_HTML = `
+  <div style="font-family:Arial,Helvetica,sans-serif;background:#f5f3ff;margin:0;padding:0;color:#2e1065;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;padding:28px 28px 24px;">
+            <tr>
+              <td style="text-align:center;padding-bottom:8px;">
+                <img src="https://resend-attachments.s3.amazonaws.com/7b85198f-15af-45f6-9ba3-86895bb5c74f" alt="Logo Verto" width="72" height="72" style="display:block;margin:0 auto 12px;border:0;outline:none;" />
+                <h1 style="margin:0;padding:0;font-size:1.5rem;line-height:1.333;color:rgb(46,16,101);font-weight:700;margin-bottom:1rem;">Olá, {{nome}}! 🎉</h1>
+                <p style="margin:0;padding:0;font-size:1.125rem;line-height:1.75rem;color:rgb(91,33,182);margin-bottom:1.5rem;margin-top:16px;">Seu caminho para um acompanhamento mais próximo e humano começou. Estamos muito felizes em participar da sua jornada.</p>
+                <p style="margin:0 0 20px;">
+                  <a href="{{link_ativacao}}" style="display:inline-block;background-color:rgb(139,92,246);color:#fff;text-decoration:none;padding:14px 24px;border-radius:999px;font-size:18px;font-weight:700;">Confirmar meu acesso agora</a>
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding-top:6px;">
+                <p style="margin:0 0 10px;color:rgb(109,40,217);font-weight:700;">O que você pode fazer agora?</p>
+                <p style="margin:0 0 4px;">✅ Visualize seus progressos</p>
+                <p style="margin:0 0 4px;">✅ Consulte sua agenda de sessões</p>
+                <p style="margin:0;">✅ Acesse materiais compartilhados</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </div>
+`;
+
+const PROFESSIONAL_RECOVERY_HTML = `
+  <div style="font-family:Arial,Helvetica,sans-serif;background:#f5f3ff;margin:0;padding:0;color:#2e1065;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;padding:28px;">
+            <tr><td>
+              <h1 style="margin:0;padding:0;font-size:1.5rem;line-height:1.333;color:rgb(46,16,101);font-weight:700;margin-bottom:1rem;">Recuperação de Senha 🔐</h1>
+              <p style="margin:0;padding:0;font-size:1.125rem;line-height:1.75rem;color:rgb(91,33,182);margin-bottom:1.5rem;margin-top:16px;">Recebemos uma solicitação para redefinir a senha da sua conta Verto. Clique no botão abaixo para escolher uma nova senha:</p>
+              <p style="margin:0 0 16px;">
+                <a href="{{link_recuperacao}}" style="display:inline-block;background-color:rgb(139,92,246);color:#fff;text-decoration:none;padding:14px 24px;border-radius:999px;font-size:18px;font-weight:700;">Redefinir minha senha</a>
+              </p>
+              <p style="font-size:0.875rem;color:rgb(139,92,246);margin-top:20px;">Se você não solicitou essa alteração, por favor, ignore este e-mail. Sua senha atual permanecerá segura.</p>
+            </td></tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </div>
+`;
+
+const PATIENT_RECOVERY_HTML = `
+  <div style="font-family:Arial,Helvetica,sans-serif;background:#f5f3ff;margin:0;padding:0;color:#2e1065;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;padding:28px;">
+            <tr><td>
+              <h1 style="margin:0;padding:0;font-size:1.5rem;line-height:1.333;color:rgb(46,16,101);font-weight:700;margin-bottom:1rem;">Esqueceu sua senha?</h1>
+              <p style="margin:0;padding:0;font-size:1.125rem;line-height:1.75rem;color:rgb(91,33,182);margin-bottom:1.5rem;margin-top:16px;">Não se preocupe, {{nome}}! Acontece com os melhores. Clique no botão abaixo para criar uma nova senha e voltar para o seu painel:</p>
+              <p style="margin:0 0 16px;">
+                <a href="{{link_recuperacao}}" style="display:inline-block;background-color:rgb(139,92,246);color:#fff;text-decoration:none;padding:14px 24px;border-radius:999px;font-size:18px;font-weight:700;">Criar nova senha</a>
+              </p>
+            </td></tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </div>
+`;
+
+export const buildActivationEmailTemplate = (
+  input: ActivationTemplateInput
+): { subject: string; html: string } => {
+  const nome = escapeHtml(toSafeName(input.nome));
+  const activationLink = String(input.link_ativacao || '').trim();
+
+  if (input.perfil === 'professional') {
+    const subject = 'Bem-vindo à revolução na gestão da sua clínica';
+    const html = PROFESSIONAL_WELCOME_HTML
+      .replace(/\{\{saudacao\}\}/g, `Olá, ${nome}! 🎉`)
+      .replace(/\{\{link_ativacao\}\}/g, activationLink);
+    return { subject, html };
+  }
+
+  const subject = 'Bem-vindo à Verto! Vamos juntos?';
+  const html = PATIENT_WELCOME_HTML
+    .replace(/\{\{nome\}\}/g, nome)
+    .replace(/\{\{link_ativacao\}\}/g, activationLink);
+  return { subject, html };
+};
+
+export const buildWelcomeEmailTemplate = (
+  input: WelcomeTemplateInput
+): { subject: string; html: string } => {
+  const nome = escapeHtml(toSafeName(input.nome));
+  if (input.perfil === 'professional') {
+    return {
+      subject: 'Bem-vindo à revolução na gestão da sua clínica',
+      html: PROFESSIONAL_WELCOME_HTML
+        .replace(/\{\{saudacao\}\}/g, `Olá, ${nome}! 🎉`)
+        .replace(/\{\{link_ativacao\}\}/g, '#')
+    };
+  }
+  return {
+    subject: 'Bem-vindo à Verto! Vamos juntos?',
+    html: PATIENT_WELCOME_HTML
+      .replace(/\{\{nome\}\}/g, nome)
+      .replace(/\{\{link_ativacao\}\}/g, '#')
+  };
+};
+
+export const buildPasswordRecoveryEmailTemplate = (
+  input: PasswordRecoveryTemplateInput
+): { subject: string; html: string } => {
+  const nome = escapeHtml(toSafeName(input.nome));
+  const recoveryLink = String(input.link_recuperacao || '').trim();
+  const linkForTemplate = recoveryLink || '#';
+
+  if (input.perfil === 'professional') {
+    return {
+      subject: 'Recuperação de Senha - Verto',
+      html: PROFESSIONAL_RECOVERY_HTML.replace(/\{\{link_recuperacao\}\}/g, linkForTemplate)
+    };
+  }
+
+  return {
+    subject: 'Recuperação de Senha - Verto',
+    html: PATIENT_RECOVERY_HTML
+      .replace(/\{\{nome\}\}/g, nome)
+      .replace(/\{\{link_recuperacao\}\}/g, linkForTemplate)
+  };
+};
