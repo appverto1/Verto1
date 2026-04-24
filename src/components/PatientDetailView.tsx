@@ -164,6 +164,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [previewFile, setPreviewFile] = useState<any>(null);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [assignedTasks, setAssignedTasks] = useState<any[]>([]);
+  const [isLoadingAssignedTasks, setIsLoadingAssignedTasks] = useState(false);
+  const [assignedReviewDrafts, setAssignedReviewDrafts] = useState<Record<string, { score: string; note: string }>>({});
   const [lastRecordedTrialId, setLastRecordedTrialId] = useState<any>(null);
   const [lastRecordedGoalId, setLastRecordedGoalId] = useState<any>(null);
   const [pendingTrial, setPendingTrial] = useState<any>(null);
@@ -183,6 +186,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     return protocols[0]?.id || '';
   });
   const [selectedSnapshotDate, setSelectedSnapshotDate] = useState("all");
+  const isUuidLike = (value: unknown) =>
+    typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 
   const parseBirthDateToAge = (rawDate?: any): number | null => {
     if (!rawDate) return null;
@@ -217,6 +223,30 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     if (group === 'senior') return { min: 60, max: null };
     return { min: 0, max: null };
   };
+
+  useEffect(() => {
+    const loadAssignedTasks = async () => {
+      if (!patient?.id || patientAgeYears === null || patientAgeYears <= 12) {
+        setAssignedTasks([]);
+        return;
+      }
+      setIsLoadingAssignedTasks(true);
+      try {
+        const result = await dataService.getAssignedTasks(String(patient.id));
+        if (result?.success && Array.isArray(result?.data)) {
+          setAssignedTasks(result.data);
+        } else {
+          setAssignedTasks([]);
+        }
+      } catch (error) {
+        console.error('Erro ao carregar tarefas atribuídas:', error);
+        setAssignedTasks([]);
+      } finally {
+        setIsLoadingAssignedTasks(false);
+      }
+    };
+    loadAssignedTasks();
+  }, [patient?.id, patientAgeYears]);
 
   const resolveProtocolAgeRange = (protocol: any): { min: number; max: number | null } => {
     const explicitMin = Number(
@@ -887,6 +917,84 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     setShowConfirmation(true); setMessage(''); setNewTaskName(''); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setNewProtocolName(''); setNewDomainName(''); setNewTaskCode(''); setNewTaskObjective(''); setNewTaskExample(''); setNewTaskCriteria(''); setNewTaskComment(''); setSelectedProtocolId(''); setSelectedDomainId(''); setSelectedSkillId(''); setLinkedTask(''); setLinkedInterventionProtocolId('');
   }; 
 
+  const pendingAssignedReviews = useMemo(
+    () =>
+      (assignedTasks || []).filter(
+        (task: any) =>
+          String(task?.status || '').toLowerCase() === 'completed' &&
+          (task?.pro_score === null || task?.pro_score === undefined)
+      ),
+    [assignedTasks]
+  );
+
+  const reviewedAssignedTasks = useMemo(
+    () =>
+      (assignedTasks || []).filter(
+        (task: any) =>
+          String(task?.status || '').toLowerCase() === 'completed' &&
+          task?.pro_score !== null &&
+          task?.pro_score !== undefined
+      ),
+    [assignedTasks]
+  );
+
+  const handleAssignedReviewChange = (taskId: string, next: Partial<{ score: string; note: string }>) => {
+    setAssignedReviewDrafts((prev) => ({
+      ...prev,
+      [taskId]: {
+        score: next.score ?? prev[taskId]?.score ?? '',
+        note: next.note ?? prev[taskId]?.note ?? ''
+      }
+    }));
+  };
+
+  const handleSubmitAssignedReview = async (task: any) => {
+    const taskId = String(task?.id || '');
+    if (!taskId) return;
+    const draft = assignedReviewDrafts[taskId] || { score: '', note: '' };
+    const numericScore = Number(draft.score);
+    if (!Number.isFinite(numericScore) || numericScore < 0 || numericScore > 4) {
+      alert('A pontuação profissional deve estar entre 0 e 4.');
+      return;
+    }
+
+    const result = await dataService.reviewAssignedTask(taskId, {
+      pro_score: numericScore,
+      pro_review_note: draft.note || ''
+    });
+    if (!result?.success || !result?.data) {
+      alert(result?.error || 'Não foi possível registrar a revisão profissional.');
+      return;
+    }
+
+    setAssignedTasks((prev) => prev.map((item: any) => (String(item.id) === taskId ? result.data : item)));
+    setAssignedReviewDrafts((prev) => {
+      const next = { ...prev };
+      delete next[taskId];
+      return next;
+    });
+
+    const suggestedTask = result?.suggestedTask;
+    if (suggestedTask && onAddTask) {
+      const taskData = suggestedTask?.task_data && typeof suggestedTask.task_data === 'object'
+        ? suggestedTask.task_data
+        : {};
+      onAddTask({
+        id: suggestedTask.id,
+        patientId: patient.id,
+        title: taskData?.title || 'Intervenção sugerida',
+        description: taskData?.description || 'Intervenção sugerida automaticamente após revisão profissional.',
+        icon: '✍️',
+        color: 'bg-green-100 text-green-600',
+        completed: false,
+        type: 'intervention',
+        scheduledAt: suggestedTask?.scheduled_at || new Date().toISOString(),
+        linkedTask: taskData?.sourceAssignedTaskId || task?.id
+      });
+      alert('Intervenção sugerida automaticamente e adicionada à agenda do paciente.');
+    }
+  };
+
   const isFormValid = () => { 
     if (planType === 'task' || planType === 'intervention') { 
       if (isCreatingNewTask) return newTaskName && scheduleDate && scheduleTime; 
@@ -1036,18 +1144,28 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       ? new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString("pt-BR")
       : new Date().toLocaleDateString("pt-BR");
 
-    const htmlBlob = new Blob([pendingAnamnesisPayload], { type: "application/pdf" });
-    const reader = new FileReader();
-    reader.onload = async () => {
+    const persist = async () => {
       let uploadResult: any = null;
       let uploadErrorMessage = '';
-      const base64Payload = typeof reader.result === 'string' ? reader.result : '';
       try {
+        const { jsPDF } = await import('jspdf');
+        const pdfDoc = new jsPDF({ unit: 'pt', format: 'a4' });
+        const textContent = pendingAnamnesisPayload
+          .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+          .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        const renderedText = textContent || 'Ficha de anamnese registrada na Verto.';
+        const lines = pdfDoc.splitTextToSize(renderedText, 520);
+        pdfDoc.text(lines, 36, 48);
+        const pdfBlob = new Blob([pdfDoc.output('arraybuffer')], { type: 'application/pdf' });
+
         uploadResult = await dataService.uploadPatientFile(String(patient.id), {
           fileName: normalizedName,
-          contentType: "application/pdf",
-          fileBase64: base64Payload,
-          source: "anamnesis",
+          contentType: 'application/pdf',
+          fileBlob: pdfBlob,
+          source: 'anamnesis',
           metadata: { referenceDate: payloadDate, patientName: patient?.name || null }
         });
         if (!uploadResult?.success || !uploadResult?.data) {
@@ -1082,10 +1200,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         alert('A ficha não foi perdida: os dados principais da anamnese foram mantidos. Tente salvar o arquivo novamente.');
       }
     };
-    reader.onerror = () => {
-      alert('Falha ao processar o arquivo da ficha para upload seguro.');
-    };
-    reader.readAsDataURL(htmlBlob);
+
+    void persist();
   };
 
   const handleDownloadPatientFile = (file: any) => {
@@ -1442,7 +1558,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 </div>
               </div>
             </div>
-            <div id="evolution-chart-container">
+            <div id="evolution-chart-container" className="min-h-[320px] min-w-0">
               <EvolutionLineChart chartData={radarChartData} maxScore={selectedProtocolMaxScore} />
             </div>
             {(sortedDateKeys?.length || 0) > 0 ? sortedDateKeys.map((dateKey, gIdx) => ( 
@@ -2235,6 +2351,75 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                     </div> 
                   )) : <p className="text-center text-gray-400 text-sm py-4 italic">Nada agendado ainda.</p>} 
                 </div>
+                {patientAgeYears !== null && patientAgeYears > 12 && (
+                  <div className="space-y-3 mt-4">
+                    <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider ml-2 tracking-widest">
+                      Revisão Profissional (Tarefas Adulto)
+                    </h3>
+                    {isLoadingAssignedTasks ? (
+                      <p className="text-sm text-gray-400 italic py-3">Carregando tarefas concluídas...</p>
+                    ) : pendingAssignedReviews.length === 0 ? (
+                      <p className="text-sm text-gray-400 italic py-3">Sem tarefas pendentes de pontuação profissional.</p>
+                    ) : (
+                      pendingAssignedReviews.map((task: any) => {
+                        const reviewKey = String(task.id);
+                        const draft = assignedReviewDrafts[reviewKey] || { score: '', note: '' };
+                        const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
+                        const displayedTitle = taskData?.title || task?.title || 'Tarefa';
+                        return (
+                          <div key={reviewKey} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="font-semibold text-gray-800 text-sm tracking-tight">{displayedTitle}</p>
+                                <p className="text-xs text-gray-500">
+                                  Esforço informado: {Number(task?.patient_effort ?? 0)}%
+                                </p>
+                              </div>
+                              <span className="text-[10px] font-semibold px-2 py-1 rounded-full uppercase bg-orange-100 text-orange-600">
+                                Aguardando nota
+                              </span>
+                            </div>
+                            {task?.patient_comment && (
+                              <p className="text-xs text-gray-600 bg-gray-50 border border-gray-100 rounded-xl p-3 whitespace-pre-wrap">
+                                {task.patient_comment}
+                              </p>
+                            )}
+                            <div className="grid grid-cols-1 md:grid-cols-[140px_1fr] gap-2">
+                              <input
+                                type="number"
+                                min={0}
+                                max={4}
+                                step={1}
+                                value={draft.score}
+                                onChange={(e) => handleAssignedReviewChange(reviewKey, { score: e.target.value })}
+                                className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none"
+                                placeholder="Nota 0-4"
+                              />
+                              <input
+                                type="text"
+                                value={draft.note}
+                                onChange={(e) => handleAssignedReviewChange(reviewKey, { note: e.target.value })}
+                                className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none"
+                                placeholder="Observação da revisão (opcional)"
+                              />
+                            </div>
+                            <button
+                              onClick={() => void handleSubmitAssignedReview(task)}
+                              className="w-full font-semibold py-2.5 rounded-xl shadow-sm transition-opacity bg-[#7551FF] text-white hover:opacity-90"
+                            >
+                              Salvar Nota Profissional
+                            </button>
+                          </div>
+                        );
+                      })
+                    )}
+                    {reviewedAssignedTasks.length > 0 && (
+                      <div className="text-[11px] text-gray-500 bg-gray-50 border border-gray-100 rounded-xl p-3">
+                        {reviewedAssignedTasks.length} tarefa(s) adulta(s) já revisada(s) com nota profissional.
+                      </div>
+                    )}
+                  </div>
+                )}
               </React.Fragment>
             )}
  

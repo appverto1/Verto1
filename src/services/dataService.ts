@@ -265,6 +265,30 @@ export const dataService = {
 
   async uploadPatientFile(patientId: string, payload: any) {
     try {
+      if (payload?.fileBlob instanceof Blob) {
+        const formData = new FormData();
+        const safeFileName = String(payload?.fileName || 'arquivo.pdf').trim() || 'arquivo.pdf';
+        const safeMime = String(payload?.contentType || payload?.fileBlob?.type || 'application/octet-stream').trim();
+        const file = new File([payload.fileBlob], safeFileName, { type: safeMime });
+        formData.append('file', file, safeFileName);
+        formData.append('fileName', safeFileName);
+        formData.append('contentType', safeMime);
+        formData.append('source', String(payload?.source || 'upload'));
+        if (payload?.metadata && typeof payload.metadata === 'object') {
+          formData.append('metadata', JSON.stringify(payload.metadata));
+        }
+
+        const authHeaders = await getAuthHeaders();
+        const { ['Content-Type']: _, ['content-type']: __, ...headersWithoutContentType } = authHeaders as any;
+        const response = await fetch(`/api/patient-files/${patientId}`, {
+          method: 'POST',
+          headers: headersWithoutContentType,
+          credentials: 'include',
+          body: formData
+        });
+        return await safeJson(response);
+      }
+
       const response = await fetch(`/api/patient-files/${patientId}`, {
         method: 'POST',
         headers: await getAuthHeaders(),
@@ -557,6 +581,92 @@ export const dataService = {
     const id = task.id || generateId();
     const data = { ...task, id, created_at: task.created_at || new Date().toISOString() };
     return await saveOfflineFirst(id, data, 'task', '/api/tasks');
+  },
+
+  async getAssignedTasks(patientId: string) {
+    try {
+      const response = await fetch(`/api/assigned-tasks/${patientId}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching assigned tasks:', error);
+      return { success: false, error: String(error), data: [] };
+    }
+  },
+
+  async getPatientSelfAssignedTasks() {
+    try {
+      const response = await fetch('/api/patient/self/assigned-tasks', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching self assigned tasks:', error);
+      return { success: false, error: String(error), data: [] };
+    }
+  },
+
+  async addAssignedTask(payload: {
+    id?: string;
+    patient_id: string;
+    patient_email?: string | null;
+    task_type?: string;
+    task_data?: Record<string, any>;
+    scheduled_at?: string;
+    status?: 'pending' | 'completed';
+    parent_assigned_task_id?: string;
+  }) {
+    try {
+      const response = await fetch('/api/assigned-tasks', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error creating assigned task:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async completeAssignedTask(taskId: string, payload: {
+    patient_effort?: number;
+    patient_comment?: string;
+  }) {
+    try {
+      const response = await fetch(`/api/assigned-tasks/${taskId}/complete`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error completing assigned task:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async reviewAssignedTask(taskId: string, payload: {
+    pro_score: number;
+    pro_review_note?: string;
+  }) {
+    try {
+      const response = await fetch(`/api/assigned-tasks/${taskId}/review`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error reviewing assigned task:', error);
+      return { success: false, error: String(error) };
+    }
   },
 
   async getPayments() {

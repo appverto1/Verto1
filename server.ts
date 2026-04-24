@@ -692,6 +692,84 @@ function validateBinaryUpload(
   return { ok: true, detectedMime };
 }
 
+async function parseMultipartFormData(req: any): Promise<{
+  fields: Record<string, string>;
+  file: { fileName: string; contentType: string; buffer: Buffer } | null;
+}> {
+  const contentType = String(req.headers?.['content-type'] || '');
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  const boundary = boundaryMatch?.[1] || boundaryMatch?.[2];
+  if (!boundary) {
+    throw new Error('Boundary multipart ausente.');
+  }
+
+  const chunks: Buffer[] = [];
+  let total = 0;
+  await new Promise<void>((resolve, reject) => {
+    req.on('data', (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > 12 * 1024 * 1024) {
+        reject(new Error('Payload multipart excede 12MB.'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve());
+    req.on('error', (error: any) => reject(error));
+  });
+
+  const raw = Buffer.concat(chunks).toString('latin1');
+  const boundaryToken = `--${boundary}`;
+  const fields: Record<string, string> = {};
+  let file: { fileName: string; contentType: string; buffer: Buffer } | null = null;
+
+  for (const rawPart of raw.split(boundaryToken)) {
+    const part = rawPart.trim();
+    if (!part || part === '--') continue;
+
+    const headerEndIndex = part.indexOf('\r\n\r\n');
+    if (headerEndIndex <= 0) continue;
+
+    const headersRaw = part.slice(0, headerEndIndex);
+    let bodyRaw = part.slice(headerEndIndex + 4);
+    bodyRaw = bodyRaw.replace(/\r\n$/, '');
+    bodyRaw = bodyRaw.replace(/--$/, '');
+
+    const contentDispositionLine =
+      headersRaw
+        .split('\r\n')
+        .find((line) => line.toLowerCase().startsWith('content-disposition:')) || '';
+    const contentTypeLine =
+      headersRaw
+        .split('\r\n')
+        .find((line) => line.toLowerCase().startsWith('content-type:')) || '';
+
+    const nameMatch = contentDispositionLine.match(/name="([^"]+)"/i);
+    const fileNameMatch = contentDispositionLine.match(/filename="([^"]*)"/i);
+    const fieldName = sanitizeString(nameMatch?.[1] || '', 120);
+    if (!fieldName) continue;
+
+    const bodyBuffer = Buffer.from(bodyRaw, 'latin1');
+    if (fileNameMatch && bodyBuffer.length) {
+      const uploadedName = sanitizeString(fileNameMatch[1] || 'arquivo.bin', 220) || 'arquivo.bin';
+      const uploadedType = sanitizeString(
+        contentTypeLine.replace(/^content-type:\s*/i, ''),
+        120
+      ) || 'application/octet-stream';
+      file = {
+        fileName: uploadedName,
+        contentType: uploadedType,
+        buffer: bodyBuffer
+      };
+      continue;
+    }
+
+    fields[fieldName] = Buffer.from(bodyRaw, 'latin1').toString('utf8');
+  }
+
+  return { fields, file };
+}
+
 function asSafeNumber(value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): number | null {
   if (typeof value !== 'number' && typeof value !== 'string') return null;
   const num = Number(value);
@@ -4271,15 +4349,38 @@ async function startServer() {
 
   app.post('/api/patient-files/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
-      const rawPatientId = sanitizeString(req.params.patientId, 100);
+      const isMultipart = String(req.headers?.['content-type'] || '').toLowerCase().includes('multipart/form-data');
+      const multipart = isMultipart ? await parseMultipartFormData(req) : null;
+      const multipartFields = multipart?.fields || {};
+      const multipartFile = multipart?.file;
+
+      const rawPatientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
       const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
       const uploadedBy = sanitizeString(req.session.user?.id, 120);
-      const rawName = sanitizeString(req.body?.fileName, 220) || `arquivo_${Date.now()}`;
+      const rawName =
+        sanitizeString(multipartFile?.fileName || multipartFields.fileName || req.body?.fileName, 220) ||
+        `arquivo_${Date.now()}`;
       const safeName = rawName.replace(/[^\w.\-() ]+/g, '_').slice(0, 220);
-      const source = sanitizeString(req.body?.source, 40) || 'upload';
-      const contentType = sanitizeString(req.body?.contentType, 120) || 'application/octet-stream';
+      const source = sanitizeString(multipartFields.source || req.body?.source, 40) || 'upload';
+      const contentType = sanitizeString(
+        multipartFile?.contentType || multipartFields.contentType || req.body?.contentType,
+        120
+      ) || 'application/octet-stream';
       const dataUrl = sanitizeString(req.body?.fileBase64, 20_000_000);
-      const metadata = req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {};
+      const metadataRaw = multipartFields.metadata || req.body?.metadata;
+      const metadata =
+        typeof metadataRaw === 'string'
+          ? (() => {
+              try {
+                const parsed = JSON.parse(metadataRaw);
+                return parsed && typeof parsed === 'object' ? parsed : {};
+              } catch {
+                return {};
+              }
+            })()
+          : metadataRaw && typeof metadataRaw === 'object'
+            ? metadataRaw
+            : {};
 
       const patientId = await resolvePatientIdForRequest(rawPatientId, req.session.user, {
         createIfMissing: true,
@@ -4289,14 +4390,17 @@ async function startServer() {
       if (!patientId || !clinicId || !uploadedBy) {
         return res.status(400).json({ success: false, error: 'Dados obrigatórios ausentes.' });
       }
-      if (!dataUrl) {
+      if (!dataUrl && !multipartFile?.buffer?.length) {
         return res.status(400).json({ success: false, error: 'Arquivo ausente.' });
       }
 
-      const matches = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+      const matches = dataUrl ? dataUrl.match(/^data:([^;]+);base64,(.+)$/) : null;
       const base64Payload = matches?.[2] || dataUrl;
       const mimeFromDataUrl = matches?.[1] || contentType;
-      const fileBuffer = Buffer.from(base64Payload, 'base64');
+      const fileBuffer =
+        multipartFile?.buffer?.length
+          ? multipartFile.buffer
+          : Buffer.from(String(base64Payload || ''), 'base64');
       if (!fileBuffer.length || fileBuffer.length > 10 * 1024 * 1024) {
         return res.status(400).json({ success: false, error: 'Arquivo inválido ou acima de 10MB.' });
       }
@@ -5198,6 +5302,262 @@ async function startServer() {
       res.json({ success: true, data });
     } catch (error) {
       res.status(500).json({ error: String(error) });
+    }
+  });
+
+  // Assigned Tasks (adult homework workflow)
+  app.get('/api/assigned-tasks/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      if (!isUuid(patientId)) return res.json({ success: true, data: [] });
+
+      const clinicId = currentClinicId(req.session.user);
+      let query = supabase
+        .from('assigned_tasks')
+        .select('*')
+        .eq('patient_id', patientId)
+        .order('scheduled_at', { ascending: false });
+
+      if (clinicId && !hasGlobalClinicAccess(req.session.user)) {
+        query = query.eq('clinic_id', clinicId);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        if (/assigned_tasks/i.test(String(error?.message || ''))) {
+          return res.status(200).json({ success: true, data: [], warning: 'Tabela assigned_tasks não criada.' });
+        }
+        throw error;
+      }
+
+      return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || String(error) });
+    }
+  });
+
+  app.get('/api/patient/self/assigned-tasks', checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const patientEmail = sanitizeEmail(req.session.user?.email);
+      if (!patientEmail) {
+        return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
+      }
+
+      const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail);
+      let query = supabase
+        .from('assigned_tasks')
+        .select('*')
+        .eq('patient_email', patientEmail);
+
+      if (patientIds.length > 0) {
+        query = query.in('patient_id', patientIds);
+      }
+
+      const { data, error } = await query.order('scheduled_at', { ascending: false });
+      if (error) {
+        if (/assigned_tasks/i.test(String(error?.message || ''))) {
+          return res.status(200).json({ success: true, data: [], warning: 'Tabela assigned_tasks não criada.' });
+        }
+        throw error;
+      }
+
+      return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || String(error) });
+    }
+  });
+
+  app.post('/api/assigned-tasks', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const resolvedPatientId = await resolvePatientIdForRequest(
+        sanitizeString(req.body?.patient_id, 120),
+        req.session.user,
+        { createIfMissing: true, fallbackName: sanitizeString(req.body?.patient_name, 160) }
+      );
+      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120);
+      const professionalId = sanitizeString(req.session.user?.id, 120);
+      const taskType = sanitizeString(req.body?.task_type || req.body?.type, 60) || 'task';
+      const status = sanitizeString(req.body?.status, 40).toLowerCase();
+      const safeStatus = status === 'completed' ? 'completed' : 'pending';
+      const safeTaskData =
+        req.body?.task_data && typeof req.body.task_data === 'object'
+          ? req.body.task_data
+          : req.body?.taskData && typeof req.body.taskData === 'object'
+            ? req.body.taskData
+            : {};
+
+      const payload = cleanObject({
+        id: sanitizeString(req.body?.id, 120) || undefined,
+        clinic_id: clinicId || undefined,
+        patient_id: resolvedPatientId,
+        patient_email: sanitizeEmail(req.body?.patient_email),
+        professional_id: professionalId || undefined,
+        task_type: taskType,
+        task_data: safeTaskData,
+        scheduled_at: sanitizeString(req.body?.scheduled_at, 40) || new Date().toISOString(),
+        status: safeStatus,
+        parent_assigned_task_id: sanitizeString(req.body?.parent_assigned_task_id, 120) || undefined
+      });
+
+      if (!payload.patient_id || !payload.professional_id) {
+        return res.status(400).json({ success: false, error: 'patient_id e professional_id são obrigatórios.' });
+      }
+
+      const { data, error } = await supabase
+        .from('assigned_tasks')
+        .upsert([payload], { onConflict: 'id' })
+        .select('*')
+        .single();
+
+      if (error) {
+        if (/assigned_tasks/i.test(String(error?.message || ''))) {
+          return res.status(200).json({
+            success: false,
+            warning: 'Tabela assigned_tasks não existe. Execute o SQL de migração.'
+          });
+        }
+        throw error;
+      }
+
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || String(error) });
+    }
+  });
+
+  app.post('/api/assigned-tasks/:taskId/complete', checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const taskId = sanitizeString(req.params.taskId, 120);
+      if (!taskId) return res.status(400).json({ success: false, error: 'taskId inválido.' });
+
+      const { data: existing, error: fetchError } = await supabase
+        .from('assigned_tasks')
+        .select('*')
+        .eq('id', taskId)
+        .maybeSingle();
+      if (fetchError) throw fetchError;
+      if (!existing) return res.status(404).json({ success: false, error: 'Tarefa não encontrada.' });
+
+      const sessionEmail = sanitizeEmail(req.session.user?.email);
+      const linkedPatientIds = sessionEmail ? await getPatientIdsByEmailAcrossClinics(sessionEmail) : [];
+      const canAccessByEmail = sessionEmail && sessionEmail === sanitizeEmail(existing.patient_email);
+      const canAccessByPatientId = linkedPatientIds.includes(String(existing.patient_id));
+      if (!canAccessByEmail && !canAccessByPatientId) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+
+      const updatePayload = cleanObject({
+        patient_effort: asSafeNumber(req.body?.patient_effort, 0, 100),
+        patient_comment: sanitizeTextField(req.body?.patient_comment, 4000),
+        status: 'completed',
+        completed_at: new Date().toISOString()
+      });
+
+      const { data, error } = await supabase
+        .from('assigned_tasks')
+        .update(updatePayload)
+        .eq('id', taskId)
+        .select('*')
+        .single();
+      if (error) throw error;
+
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || String(error) });
+    }
+  });
+
+  app.post('/api/assigned-tasks/:taskId/review', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const taskId = sanitizeString(req.params.taskId, 120);
+      if (!taskId) return res.status(400).json({ success: false, error: 'taskId inválido.' });
+
+      const { data: existing, error: fetchError } = await supabase
+        .from('assigned_tasks')
+        .select('*')
+        .eq('id', taskId)
+        .maybeSingle();
+      if (fetchError) throw fetchError;
+      if (!existing) return res.status(404).json({ success: false, error: 'Tarefa não encontrada.' });
+
+      const proScore = asSafeNumber(req.body?.pro_score, 0, 4);
+      if (proScore === null) {
+        return res.status(400).json({ success: false, error: 'pro_score deve estar entre 0 e 4.' });
+      }
+
+      const reviewNote = sanitizeTextField(req.body?.pro_review_note, 4000);
+      const { data, error } = await supabase
+        .from('assigned_tasks')
+        .update({
+          pro_score: proScore,
+          pro_review_note: reviewNote,
+          reviewed_at: new Date().toISOString()
+        })
+        .eq('id', taskId)
+        .select('*')
+        .single();
+      if (error) throw error;
+
+      let suggestedTask: any = null;
+      if (proScore <= 2) {
+        const existingSuggestion = await supabase
+          .from('assigned_tasks')
+          .select('id')
+          .eq('parent_assigned_task_id', taskId)
+          .limit(1)
+          .maybeSingle();
+
+        if (!existingSuggestion?.data) {
+          const existingTaskData = existing.task_data && typeof existing.task_data === 'object' ? existing.task_data : {};
+          const linkedProtocolId = sanitizeString(
+            existingTaskData?.linkedProtocolId || existingTaskData?.linkedInterventionProtocolId,
+            120
+          );
+          const originalTitle = sanitizeString(existingTaskData?.title || existing.title || 'Habilidade', 180);
+          const suggestionTitle = sanitizeString(
+            existingTaskData?.linkedInterventionTitle ||
+              `Intervenção sugerida: ${originalTitle}`,
+            180
+          );
+          const suggestionDescription = sanitizeTextField(
+            existingTaskData?.linkedInterventionDescription ||
+              `Pontuação profissional ≤ 2 para "${originalTitle}". Aplicar intervenção guiada antes da próxima revisão.`,
+            4000
+          );
+
+          const suggestionPayload = {
+            clinic_id: sanitizeString(existing.clinic_id, 120) || sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
+            patient_id: sanitizeString(existing.patient_id, 120),
+            patient_email: sanitizeEmail(existing.patient_email),
+            professional_id: sanitizeString(req.session.user?.id, 120),
+            task_type: 'intervention',
+            task_data: {
+              title: suggestionTitle,
+              description: suggestionDescription,
+              linkedProtocolId: linkedProtocolId || undefined,
+              autoSuggested: true,
+              sourceAssignedTaskId: taskId
+            },
+            scheduled_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+            status: 'pending',
+            parent_assigned_task_id: taskId
+          };
+
+          const suggestionInsert = await supabase
+            .from('assigned_tasks')
+            .insert([suggestionPayload])
+            .select('*')
+            .single();
+
+          if (!suggestionInsert.error) {
+            suggestedTask = suggestionInsert.data;
+          }
+        }
+      }
+
+      return res.json({ success: true, data, suggestedTask });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || String(error) });
     }
   });
 

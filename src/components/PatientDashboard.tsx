@@ -966,7 +966,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     />
                     <textarea
                       className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none font-medium"
-                      placeholder="Observação opcional sobre o esforço nesta tarefa..."
+                      placeholder="Quer falar mais sobre isso?"
                       value={taskNote}
                       onChange={(e) => setTaskNote(e.target.value)}
                     ></textarea>

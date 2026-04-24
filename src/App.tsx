@@ -788,15 +788,46 @@ export default function App() {
   }, [user]);
 
   const handleAddTask = async (t: any) => {
-    setTasks(prev => [...prev, t]);
-    onAddActivityLog("Criação de Tarefa", `Tarefa "${t.title}" criada para o paciente ID ${t.patientId}.`);
+    const patient = allPatients.find(p => p.id === t.patientId);
+    const isAdultTask = Number(patient?.age || 0) > 12;
+    let taskToPersist = { ...t };
+
+    if (isAdultTask) {
+      try {
+        const assignedResult = await dataService.addAssignedTask({
+          patient_id: String(t.patientId),
+          patient_email: patient?.email || null,
+          task_type: String(t.type || 'task'),
+          task_data: {
+            title: t.title,
+            description: t.description || '',
+            icon: t.icon || '',
+            color: t.color || '',
+            linkedTask: t.linkedTask || '',
+            linkedProtocolId: t.linkedProtocolId || ''
+          },
+          scheduled_at: t.scheduledAt || new Date().toISOString(),
+          status: 'pending'
+        });
+        if (assignedResult?.success && assignedResult?.data?.id) {
+          taskToPersist = {
+            ...taskToPersist,
+            id: assignedResult.data.id,
+            assignedTaskId: assignedResult.data.id
+          };
+        }
+      } catch (error) {
+        console.error('Falha ao criar assigned task (não bloqueante):', error);
+      }
+    }
+
+    setTasks(prev => [...prev, taskToPersist]);
+    onAddActivityLog("Criação de Tarefa", `Tarefa "${taskToPersist.title}" criada para o paciente ID ${taskToPersist.patientId}.`);
 
     // Sync to Backend
-    const patient = allPatients.find(p => p.id === t.patientId);
-    const { dataService } = await import('./services/dataService');
     await dataService.addTask({
-      ...t,
-      patient_id: String(t.patientId),
+      ...taskToPersist,
+      patient_id: String(taskToPersist.patientId),
       patient_email: patient?.email || null
     });
   };
@@ -1204,13 +1235,13 @@ export default function App() {
     return { success: true };
   };
 
-  const handleMoodCheckin = (l: number, n: string, i: string, t: any) => setHistory(prev => [{ id: Date.now(), patientId: h?.patient_id || h?.patientId || user.id, type: 'checkin', title: "Check-in", time: new Date().toLocaleTimeString(), energy: l, note: n, icon: i, dateGroup: "Hoje", tag: t }, ...prev]);
+  const handleMoodCheckin = (l: number, n: string, i: string, t: any) => setHistory(prev => [{ id: Date.now(), patientId: user.id, type: 'checkin', title: "Check-in", time: new Date().toLocaleTimeString(), energy: l, note: n, icon: i, dateGroup: "Hoje", tag: t }, ...prev]);
   const handleCompleteTask = async (t: any, e: number, n: string) => { 
     const time = new Date().toLocaleTimeString();
     const isKid = user.age <= 12;
     const newHistoryItem = { 
       id: Date.now(), 
-      patientId: h?.patient_id || h?.patientId || user.id, 
+      patientId: user.id, 
       type: t.type || 'task', 
       title: t.title, 
       time, 
@@ -1241,6 +1272,20 @@ export default function App() {
       note: n,
       icon: t.icon
     });
+
+    const assignedTaskId = String(t?.assignedTaskId || '');
+    const isTaskIdUuid = isUuidLike(String(t?.id || ''));
+    const completionTargetId = assignedTaskId || (isTaskIdUuid ? String(t.id) : '');
+    if (completionTargetId) {
+      try {
+        await dataService.completeAssignedTask(completionTargetId, {
+          patient_effort: Math.max(0, Math.min(100, Number(e) || 0)),
+          patient_comment: n || ''
+        });
+      } catch (error) {
+        console.error('Falha ao concluir assigned task (não bloqueante):', error);
+      }
+    }
   };
   const handleRecordTrial = async (pid: any, title: string, score: number, evalComment?: string) => {
     const targetPatient = allPatients.find(p => p.id === pid);
@@ -1685,6 +1730,8 @@ export default function App() {
           onRecordTrial={handleRecordTrial}
           onDeleteHistoryItem={handleDeleteHistoryItem}
           onEvaluateHistoryItem={handleUpdateHistoryItem}
+          onAddTask={handleAddTask}
+          onUpdateTask={handleUpdateTask}
           allTasks={tasks}
         />
       ) : user.role === 'owner' ? (

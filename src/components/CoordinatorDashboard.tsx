@@ -113,6 +113,8 @@ interface CoordinatorDashboardProps {
   onDeleteHistoryItem?: (id: any) => void;
   onEvaluateHistoryItem?: (id: any, score: number, note: string) => void;
   allTasks?: any[];
+  onAddTask?: (task: any) => void;
+  onUpdateTask?: (taskId: any, updates: any) => void;
 }
 
 export function CoordinatorDashboard({
@@ -142,6 +144,8 @@ export function CoordinatorDashboard({
   onDeleteHistoryItem,
   onEvaluateHistoryItem,
   allTasks = [],
+  onAddTask,
+  onUpdateTask,
 }: CoordinatorDashboardProps) {
   type ClinicBillingSummary = {
     activePatients: number;
@@ -2842,6 +2846,8 @@ export function CoordinatorDashboard({
                     }
                   : undefined
               }
+              onAddTask={onAddTask}
+              onUpdateTask={onUpdateTask}
               protocols={protocols}
               userRole={user.role}
               allowedTabs={isReceptionist ? ["files"] : undefined}
