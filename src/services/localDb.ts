@@ -1,5 +1,5 @@
 import Dexie, { Table } from 'dexie';
-import { getSupabase } from '../lib/supabase';
+import { ensureFreshSession } from '../lib/supabase';
 
 export interface OfflineRecord {
   id: string;
@@ -285,8 +285,7 @@ export const syncOfflineData = async () => {
 
       while (retries >= 0 && !success) {
         try {
-          const supabase = await getSupabase();
-          const { data: { session } } = await supabase.auth.getSession();
+          const session = await ensureFreshSession();
           const token = session?.access_token;
 
           const response = await fetch(record.endpoint, {
@@ -333,8 +332,8 @@ export const syncOfflineData = async () => {
             continue;
           }
           console.error(`Failed to sync ${record.type}:`, error);
-          isSyncing = false;
-          return;
+          // Keep as pending for future retries; continue processing next records.
+          success = true;
         } finally {
           // reduce decrypted payload lifetime in memory
           (record as any).data = null;

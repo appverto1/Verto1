@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+﻿import React, { useMemo, useState } from 'react';
 import {
   AlertCircle,
   BarChart3,
@@ -16,11 +16,11 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis
 } from 'recharts';
+import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { LogoVerto } from './Common';
 import { getSupabase } from '../lib/supabase';
 
@@ -226,8 +226,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               <div className="xl:col-span-2 bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
                 <h3 className="text-lg font-black mb-4">Evolucao de Receita e EBITDA</h3>
                 <div className="h-80 min-h-[300px]">
-                <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
-                    <AreaChart data={monthlyData}>
+                <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>`r`n                    <AreaChart data={monthlyData}>
                       <defs>
                         <linearGradient id="ownerRevenue" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor="#0EA5E9" stopOpacity={0.25} />
@@ -245,7 +244,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       <Area type="monotone" dataKey="revenueNet" stroke="#0EA5E9" strokeWidth={3} fill="url(#ownerRevenue)" />
                       <Area type="monotone" dataKey="ebitda" stroke="#10B981" strokeWidth={3} fill="url(#ownerEbitda)" />
                     </AreaChart>
-                  </ResponsiveContainer>
+                  </SafeResponsiveContainer>
                 </div>
               </div>
 
@@ -279,8 +278,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
                 <h3 className="text-lg font-black mb-4">Composicao do DRE Mensal</h3>
                 <div className="h-80 min-h-[300px]">
-                  <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
-                    <BarChart data={monthlyData}>
+                  <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>`r`n                    <BarChart data={monthlyData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
                       <XAxis dataKey="monthLabel" tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
@@ -289,15 +287,14 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       <Bar dataKey="variableCosts" fill="#F59E0B" radius={[8, 8, 0, 0]} />
                       <Bar dataKey="fixedCosts" fill="#6366F1" radius={[8, 8, 0, 0]} />
                     </BarChart>
-                  </ResponsiveContainer>
+                  </SafeResponsiveContainer>
                 </div>
               </div>
 
               <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
                 <h3 className="text-lg font-black mb-4">Inadimplencia por Mes</h3>
                 <div className="h-80 min-h-[300px]">
-                  <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
-                    <BarChart data={monthlyData}>
+                  <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>`r`n                    <BarChart data={monthlyData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
                       <XAxis dataKey="monthLabel" tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
@@ -308,7 +305,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         ))}
                       </Bar>
                     </BarChart>
-                  </ResponsiveContainer>
+                  </SafeResponsiveContainer>
                 </div>
               </div>
             </div>
@@ -420,9 +417,9 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
             </div>
 
             <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
-              <h3 className="text-lg font-black mb-4">Pesquisa do Módulo Financeiro</h3>
+              <h3 className="text-lg font-black mb-4">Pesquisa do MÃ³dulo Financeiro</h3>
               {financialFeatureSurveys.length === 0 ? (
-                <p className="text-sm text-slate-500">Ainda não há respostas.</p>
+                <p className="text-sm text-slate-500">Ainda nÃ£o hÃ¡ respostas.</p>
               ) : (
                 <div className="space-y-3 max-h-[340px] overflow-y-auto pr-1">
                   {financialFeatureSurveys.map((item: any, idx: number) => (
@@ -431,9 +428,9 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       className="p-4 rounded-2xl border border-slate-100 bg-slate-50"
                     >
                       <p className="text-sm font-bold text-slate-800">
-                        {item.user_email || "Usuário sem e-mail"}
+                        {item.user_email || "UsuÃ¡rio sem e-mail"}
                       </p>
-                      <p className="text-[11px] text-slate-500 mb-2">Clínica: {item.clinic_id}</p>
+                      <p className="text-[11px] text-slate-500 mb-2">ClÃ­nica: {item.clinic_id}</p>
                       <div className="flex flex-wrap gap-1.5">
                         {(item.selected_features || []).map((feature: string) => (
                           <span
@@ -479,3 +476,7 @@ const SidebarItem = ({ icon, label, active, onClick }: any) => (
     {icon} <span className="text-sm">{label}</span>
   </button>
 );
+
+
+
+

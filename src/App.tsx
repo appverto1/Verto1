@@ -6,7 +6,7 @@ import { CoordinatorDashboard } from './components/CoordinatorDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
 import { SuperAdminDashboard } from './components/SuperAdminDashboard';
 import { ProfessionalOnboarding } from './components/ProfessionalOnboarding';
-import { testSupabaseConnection, getSupabase } from './lib/supabase';
+import { testSupabaseConnection, getSupabase, ensureFreshSession } from './lib/supabase';
 import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard } from 'lucide-react';
 import { syncOfflineData } from './services/localDb';
 import { dataService } from './services/dataService';
@@ -270,9 +270,19 @@ export default function App() {
             provider: session?.user?.app_metadata?.provider || null
           });
         } else if (event === 'SIGNED_OUT') {
-          // Don't blindly clear user on SIGNED_OUT, let handleLogout or checkSession handle it
-          // to avoid race conditions with mock/session-based login
           console.log('Supabase SIGNED_OUT event received');
+          try {
+            const response = await fetch('/api/auth/me', { credentials: 'include' });
+            if (response.ok) {
+              const data = await response.json();
+              if (data?.user) {
+                await applyResolvedUserState(data.user);
+                return;
+              }
+            }
+          } catch (error) {
+            console.warn('SIGNED_OUT recovery via /api/auth/me failed:', error);
+          }
         }
       });
 
@@ -284,8 +294,7 @@ export default function App() {
   useEffect(() => {
     const checkSession = async () => {
       try {
-        const supabase = await getSupabase();
-        const { data: { session } } = await supabase.auth.getSession();
+        const session = await ensureFreshSession();
         const token = session?.access_token;
 
         const response = await fetch('/api/auth/me', { 
@@ -337,8 +346,7 @@ export default function App() {
       
       const checkSession = async () => {
         try {
-          const supabase = await getSupabase();
-          const { data: { session } } = await supabase.auth.getSession();
+          const session = await ensureFreshSession();
           const token = session?.access_token;
 
           const response = await fetch('/api/auth/me', { 

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+﻿import React, { useState, useMemo } from 'react';
 import { 
   BarChart3, 
   Users, 
@@ -31,13 +31,13 @@ import {
   YAxis, 
   CartesianGrid, 
   Tooltip, 
-  ResponsiveContainer, 
   Cell,
   LineChart,
   Line,
   AreaChart,
   Area
 } from 'recharts';
+import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { LogoVerto } from './Common';
 import { SecureImage } from './SecureMedia';
 import { getSupabase } from '../lib/supabase';
@@ -55,15 +55,15 @@ const DRE_DATA_MOCK = [
 const CLIENT_PLANS = [
   { name: 'Profissional', count: 145, price: 79, color: '#7a32fc' },
   { name: 'Equipe', count: 82, price: 69, color: '#05CD99' },
-  { name: 'Clínico', count: 34, price: 59, color: '#FFB547' },
+  { name: 'ClÃ­nico', count: 34, price: 59, color: '#FFB547' },
   { name: 'Enterprise', count: 12, price: 450, color: '#7000FF' },
 ];
 
 const RECENT_CLIENTS = [
-  { id: 1, name: 'Clínica NeuroViver', email: 'contato@neuroviver.com.br', plan: 'Equipe', value: 828, status: 'active', date: '2026-03-20' },
+  { id: 1, name: 'ClÃ­nica NeuroViver', email: 'contato@neuroviver.com.br', plan: 'Equipe', value: 828, status: 'active', date: '2026-03-20' },
   { id: 2, name: 'Dr. Marcos Silva', email: 'marcos.silva@gmail.com', plan: 'Profissional', value: 79, status: 'active', date: '2026-03-18' },
-  { id: 3, name: 'Espaço Evoluir', email: 'financeiro@evoluir.com', plan: 'Clínico', value: 1475, status: 'delinquent', date: '2026-03-15' },
-  { id: 4, name: 'Centro ABA Criança', email: 'adm@abacrianca.com', plan: 'Enterprise', value: 2500, status: 'active', date: '2026-03-10' },
+  { id: 3, name: 'EspaÃ§o Evoluir', email: 'financeiro@evoluir.com', plan: 'ClÃ­nico', value: 1475, status: 'delinquent', date: '2026-03-15' },
+  { id: 4, name: 'Centro ABA CrianÃ§a', email: 'adm@abacrianca.com', plan: 'Enterprise', value: 2500, status: 'active', date: '2026-03-10' },
   { id: 5, name: 'Dra. Ana Paula', email: 'ana.paula@to.com.br', plan: 'Profissional', value: 79, status: 'active', date: '2026-03-05' },
 ];
 
@@ -99,7 +99,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
         
         // Check if all responses are OK
         if (!statsRes.ok || !clientsRes.ok || !dreRes.ok) {
-          throw new Error('Erro ao carregar dados administrativos. Verifique suas permissões.');
+          throw new Error('Erro ao carregar dados administrativos. Verifique suas permissÃµes.');
         }
 
         const statsData = await statsRes.json();
@@ -165,7 +165,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
         setIs2FAEnabled(true);
         alert('2FA habilitado com sucesso!');
       } else {
-        alert('Código inválido.');
+        alert('CÃ³digo invÃ¡lido.');
       }
     } catch (err) {
       console.error('2FA verify error:', err);
@@ -197,7 +197,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
       const data = await res.json();
       if (data.success) alert(data.message);
     } catch (err) {
-      alert('Erro ao processar cobrança');
+      alert('Erro ao processar cobranÃ§a');
     }
   };
 
@@ -254,14 +254,14 @@ export const AdminDashboard = ({ onLogout }: any) => {
           />
           <SidebarItem 
             icon={<CreditCard size={20} />} 
-            label={isSidebarExpanded ? "Planos & Preços" : ""} 
+            label={isSidebarExpanded ? "Planos & PreÃ§os" : ""} 
             active={activeTab === 'plans'} 
             onClick={() => setActiveTab('plans')} 
             isExpanded={isSidebarExpanded}
           />
           <SidebarItem 
             icon={<Settings size={20} />} 
-            label={isSidebarExpanded ? "Configurações" : ""} 
+            label={isSidebarExpanded ? "ConfiguraÃ§Ãµes" : ""} 
             active={activeTab === 'settings'} 
             onClick={() => setActiveTab('settings')} 
             isExpanded={isSidebarExpanded}
@@ -286,10 +286,10 @@ export const AdminDashboard = ({ onLogout }: any) => {
           <div>
             <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Painel Administrativo</p>
             <h1 className="text-3xl font-bold text-gray-800 tracking-tight">
-              {activeTab === 'dashboard' ? 'Visão Geral' : 
-               activeTab === 'clients' ? 'Gestão de Clientes' : 
+              {activeTab === 'dashboard' ? 'VisÃ£o Geral' : 
+               activeTab === 'clients' ? 'GestÃ£o de Clientes' : 
                activeTab === 'financial' ? 'Demonstrativo de Resultados (DRE)' : 
-               'Configurações'}
+               'ConfiguraÃ§Ãµes'}
             </h1>
           </div>
 
@@ -298,7 +298,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={18} />
               <input 
                 type="text" 
-                placeholder="Buscar cliente ou transação..."
+                placeholder="Buscar cliente ou transaÃ§Ã£o..."
                 className="bg-white border-none rounded-2xl py-3 pl-12 pr-6 text-sm font-bold shadow-sm w-64 focus:ring-2 focus:ring-[#7a32fc]/20 transition-all"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -331,7 +331,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
                 color="bg-[#05CD99]"
               />
               <KpiCard 
-                title="Total de Usuários" 
+                title="Total de UsuÃ¡rios" 
                 value={stats?.totalUsers?.toString() || '0'} 
                 trend="+15" 
                 isPositive={true} 
@@ -352,7 +352,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="lg:col-span-2 bg-white p-8 rounded-[32px] shadow-sm border border-gray-50">
                 <div className="flex justify-between items-center mb-8">
-                  <h3 className="text-xl font-bold text-gray-800 tracking-tight">Evolução Financeira</h3>
+                  <h3 className="text-xl font-bold text-gray-800 tracking-tight">EvoluÃ§Ã£o Financeira</h3>
                   <div className="flex gap-2">
                     <div className="flex items-center gap-2">
                       <div className="w-3 h-3 rounded-full bg-[#7a32fc]"></div>
@@ -366,8 +366,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
                 </div>
                 <div className="overflow-x-auto no-scrollbar -mx-8 px-8">
                   <div className="h-80 min-h-[300px] min-w-[600px]">
-              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
-                      <AreaChart data={DRE_DATA_MOCK} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+              <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>`r`n                      <AreaChart data={DRE_DATA_MOCK} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
                         <defs>
                           <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor="#7a32fc" stopOpacity={0.1}/>
@@ -398,7 +397,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
                         <Area type="monotone" dataKey="revenue" stroke="#7a32fc" strokeWidth={3} fillOpacity={1} fill="url(#colorRev)" />
                         <Area type="monotone" dataKey="profit" stroke="#05CD99" strokeWidth={3} fillOpacity={1} fill="url(#colorProfit)" />
                       </AreaChart>
-                    </ResponsiveContainer>
+                    </SafeResponsiveContainer>
                   </div>
                 </div>
               </div>
@@ -449,9 +448,9 @@ export const AdminDashboard = ({ onLogout }: any) => {
                       <th className="px-8 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cliente</th>
                       <th className="px-8 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Plano</th>
                       <th className="px-8 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Valor Mensal</th>
-                      <th className="px-8 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Data Adesão</th>
+                      <th className="px-8 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Data AdesÃ£o</th>
                       <th className="px-8 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Status</th>
-                      <th className="px-8 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest text-right">Ações</th>
+                      <th className="px-8 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest text-right">AÃ§Ãµes</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -519,8 +518,8 @@ export const AdminDashboard = ({ onLogout }: any) => {
             <div className="w-20 h-20 bg-blue-50 text-[#7a32fc] rounded-3xl flex items-center justify-center mb-6">
               <DollarSign size={40} />
             </div>
-            <h3 className="text-2xl font-bold text-gray-800 tracking-tight mb-2">DRE e Gestão Financeira</h3>
-            <p className="text-gray-500 font-medium mb-8">Esta funcionalidade está sendo preparada para você.</p>
+            <h3 className="text-2xl font-bold text-gray-800 tracking-tight mb-2">DRE e GestÃ£o Financeira</h3>
+            <p className="text-gray-500 font-medium mb-8">Esta funcionalidade estÃ¡ sendo preparada para vocÃª.</p>
             <span className="px-6 py-2 bg-[#7a32fc] text-white rounded-full text-xs font-bold uppercase tracking-widest shadow-lg shadow-purple-200">Em Breve</span>
           </div>
         )}
@@ -534,14 +533,14 @@ export const AdminDashboard = ({ onLogout }: any) => {
                 </div>
                 <div>
                   <h3 className="text-xl font-bold text-gray-800 tracking-tight">Infraestrutura Firebase</h3>
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Banco de Dados & Autenticação</p>
+                  <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Banco de Dados & AutenticaÃ§Ã£o</p>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <div className="space-y-6">
                   <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Segurança Robusta (2FA)</p>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">SeguranÃ§a Robusta (2FA)</p>
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <div className={`w-3 h-3 rounded-full ${is2FAEnabled ? 'bg-green-500' : 'bg-red-500'}`}></div>
@@ -559,7 +558,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
                       )}
                     </div>
                     <p className="text-xs text-gray-500 mt-4 leading-relaxed">
-                      A autenticação de dois fatores adiciona uma camada extra de segurança à sua conta de administrador.
+                      A autenticaÃ§Ã£o de dois fatores adiciona uma camada extra de seguranÃ§a Ã  sua conta de administrador.
                     </p>
                   </div>
 
@@ -571,7 +570,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
                         <div className="w-full space-y-2">
                           <input 
                             type="text" 
-                            placeholder="Código de 6 dígitos"
+                            placeholder="CÃ³digo de 6 dÃ­gitos"
                             value={twoFactorToken}
                             onChange={(e) => setTwoFactorToken(e.target.value)}
                             className="w-full bg-white border border-blue-100 rounded-xl py-3 px-4 text-center font-bold tracking-widest focus:outline-none focus:ring-2 focus:ring-blue-500/20"
@@ -581,7 +580,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
                             onClick={verifyAndEnable2FA}
                             className="w-full bg-[#7a32fc] text-white py-3 rounded-xl font-bold text-xs uppercase tracking-widest shadow-lg shadow-purple-500/20"
                           >
-                            Ativar Proteção
+                            Ativar ProteÃ§Ã£o
                           </button>
                         </div>
                       </div>
@@ -589,24 +588,24 @@ export const AdminDashboard = ({ onLogout }: any) => {
                   )}
 
                   <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Status da Conexão</p>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Status da ConexÃ£o</p>
                     <div className="flex items-center gap-3">
                       <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse"></div>
                       <span className="text-sm font-bold text-gray-800">Firebase Conectado</span>
                     </div>
                     <p className="text-xs text-gray-500 mt-4 leading-relaxed">
-                      Sua plataforma está integrada ao Firebase (Firestore & Auth). Logs de atividade, dados clínicos e perfis de usuário estão sendo sincronizados em tempo real.
+                      Sua plataforma estÃ¡ integrada ao Firebase (Firestore & Auth). Logs de atividade, dados clÃ­nicos e perfis de usuÃ¡rio estÃ£o sendo sincronizados em tempo real.
                     </p>
                   </div>
 
                   <div className="p-6 bg-white border border-gray-100 rounded-3xl">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Estrutura de Coleções</p>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Estrutura de ColeÃ§Ãµes</p>
                     <p className="text-xs text-gray-600 mb-4">
-                      As seguintes coleções estão ativas no Firestore:
+                      As seguintes coleÃ§Ãµes estÃ£o ativas no Firestore:
                     </p>
                     <ul className="space-y-2">
                       <li className="flex items-center gap-2 text-xs font-bold text-gray-700">
-                        <CheckCircle2 size={14} className="text-green-500" /> users (Perfis e Papéis)
+                        <CheckCircle2 size={14} className="text-green-500" /> users (Perfis e PapÃ©is)
                       </li>
                       <li className="flex items-center gap-2 text-xs font-bold text-gray-700">
                         <CheckCircle2 size={14} className="text-green-500" /> activity_logs
@@ -626,22 +625,22 @@ export const AdminDashboard = ({ onLogout }: any) => {
 
                 <div className="space-y-6">
                   <div className="p-6 bg-[#7a32fc]/5 rounded-3xl border border-[#7a32fc]/10">
-                    <p className="text-[10px] font-bold text-[#7a32fc] uppercase tracking-widest mb-4">Segurança (Rules)</p>
+                    <p className="text-[10px] font-bold text-[#7a32fc] uppercase tracking-widest mb-4">SeguranÃ§a (Rules)</p>
                     <p className="text-xs text-gray-600 mb-6 leading-relaxed">
-                      As regras de segurança do Firestore (Security Rules) estão configuradas para proteger os dados sensíveis dos pacientes e garantir que cada usuário acesse apenas o que lhe é permitido.
+                      As regras de seguranÃ§a do Firestore (Security Rules) estÃ£o configuradas para proteger os dados sensÃ­veis dos pacientes e garantir que cada usuÃ¡rio acesse apenas o que lhe Ã© permitido.
                     </p>
                     <button className="w-full bg-[#7a32fc] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all flex items-center justify-center gap-2">
-                      Ver Regras de Segurança <ExternalLink size={16} />
+                      Ver Regras de SeguranÃ§a <ExternalLink size={16} />
                     </button>
                   </div>
 
                   <div className="p-6 bg-orange-50 rounded-3xl border border-orange-100">
                     <div className="flex items-center gap-2 text-orange-600 mb-2">
                       <AlertCircle size={16} />
-                      <p className="text-[10px] font-bold uppercase tracking-widest">Atenção</p>
+                      <p className="text-[10px] font-bold uppercase tracking-widest">AtenÃ§Ã£o</p>
                     </div>
                     <p className="text-xs text-orange-800 font-medium leading-relaxed">
-                      A migração do Supabase para o Firebase está em fase final. Alguns dados legados ainda podem estar sendo sincronizados em ambos os bancos.
+                      A migraÃ§Ã£o do Supabase para o Firebase estÃ¡ em fase final. Alguns dados legados ainda podem estar sendo sincronizados em ambos os bancos.
                     </p>
                   </div>
                 </div>
@@ -702,3 +701,7 @@ const DreRow = ({ label, data, isHeader, isSubtotal, isTotal }: any) => (
     ))}
   </tr>
 );
+
+
+
+

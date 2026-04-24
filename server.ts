@@ -284,6 +284,36 @@ function getRecoveryRedirectUrl(): string {
   return `${baseUrl.replace(/\/+$/, '')}/reset-password`;
 }
 
+function extractSupabaseErrorMessage(error: any): string {
+  return sanitizeString(
+    error?.message ||
+      error?.details ||
+      error?.hint ||
+      (typeof error === 'string' ? error : JSON.stringify(error || {})),
+    1000
+  );
+}
+
+function isMissingRelationError(error: any): boolean {
+  const message = extractSupabaseErrorMessage(error).toLowerCase();
+  return (
+    message.includes('does not exist') ||
+    message.includes('relation') ||
+    message.includes('schema cache') ||
+    message.includes('42p01')
+  );
+}
+
+function logRouteDbError(route: string, error: any, context: Record<string, any> = {}) {
+  console.error(`[DB:${route}]`, {
+    message: extractSupabaseErrorMessage(error),
+    code: sanitizeString(error?.code, 40) || null,
+    details: sanitizeString(error?.details, 300) || null,
+    hint: sanitizeString(error?.hint, 300) || null,
+    context
+  });
+}
+
 const OFFICIAL_FROM_CONTACT = 'Verto <contato@appverto.com.br>';
 const OFFICIAL_FROM_NOREPLY = 'Verto <naoresponda@appverto.com.br>';
 const OFFICIAL_TRANSACTIONAL_REPLY_TO = 'contato@appverto.com.br';
@@ -1676,8 +1706,32 @@ async function startServer() {
   const PORT = 3000;
   const isProd = process.env.NODE_ENV === 'production';
 
+  const validateCoreDataTables = async () => {
+    const tablesToProbe: Array<{ name: string; columns: string[] }> = [
+      { name: 'tasks', columns: ['id', 'patient_id', 'therapist_id', 'created_at'] },
+      { name: 'notes', columns: ['id', 'patient_id', 'therapist_id', 'created_at'] },
+      { name: 'assigned_tasks', columns: ['id', 'patient_id', 'professional_id', 'status'] },
+      { name: 'activity_logs', columns: ['id', 'user_id', 'timestamp'] }
+    ];
+
+    for (const table of tablesToProbe) {
+      try {
+        const { error } = await supabase
+          .from(table.name)
+          .select(table.columns.join(','))
+          .limit(1);
+        if (error) {
+          logRouteDbError('startup/schema-check', error, { table: table.name, columns: table.columns });
+        }
+      } catch (error) {
+        logRouteDbError('startup/schema-check', error, { table: table.name, columns: table.columns });
+      }
+    }
+  };
+
   // Trust proxy is required for rate limiting and secure cookies behind Railway's load balancer
   app.set('trust proxy', true);
+  void validateCoreDataTables();
   app.disable('x-powered-by');
   
   console.log('[Config] SESSION_SECRET defined:', !!process.env.SESSION_SECRET);
@@ -2139,6 +2193,8 @@ async function startServer() {
     const path = String(req.path || '');
     const isExcludedPath =
       path.startsWith('/logs') ||
+      path.startsWith('/tasks') ||
+      path.startsWith('/notes') ||
       path.startsWith('/stripe/webhook') ||
       path.startsWith('/health');
     if (!shouldAuditMethod || isExcludedPath) return next();
@@ -3463,8 +3519,9 @@ async function startServer() {
         created_at: m.created_at
       }));
       res.json({ success: true, data: members });
-    } catch (error) {
-      res.status(500).json({ error: String(error) });
+    } catch (error: any) {
+      logRouteDbError('/api/notes/:patientId [GET]', error, { patientId: sanitizeString(req.params.patientId, 120) });
+      res.status(500).json({ error: extractSupabaseErrorMessage(error) });
     }
   });
 
@@ -3536,8 +3593,9 @@ async function startServer() {
         console.warn('Nao foi possivel enviar e-mail de convite automatico:', inviteMailError);
       }
       res.json({ success: true, data });
-    } catch (error) {
-      res.status(500).json({ error: String(error) });
+    } catch (error: any) {
+      logRouteDbError('/api/tasks/:patientId [GET]', error, { patientId: sanitizeString(req.params.patientId, 120) });
+      res.status(500).json({ error: extractSupabaseErrorMessage(error) });
     }
   });
 
@@ -4911,6 +4969,9 @@ async function startServer() {
       if (!payload.patient_id || !payload.text) {
         return res.status(400).json({ error: 'patient_id e texto são obrigatórios.' });
       }
+      if (!isUuid(payload.patient_id)) {
+        return res.status(400).json({ error: 'patient_id inválido para salvar anotações.' });
+      }
 
       const { data, error } = await supabase
         .from('notes')
@@ -4919,17 +4980,31 @@ async function startServer() {
         .single();
       
       if (error) throw error;
-      void persistActivityLog({
-        userId: sanitizeString(req.session.user?.id, 120),
-        clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
-        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
-        title: 'Nota registrada no prontuário',
-        content: `Nota salva para paciente ${payload.patient_id}. Visibilidade: ${payload.visibility || 'privada'}.`,
-        type: 'clinical'
-      });
+      try {
+        await persistActivityLog({
+          userId: sanitizeString(req.session.user?.id, 120),
+          clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
+          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+          title: 'Nota registrada no prontuário',
+          content: `Nota salva para paciente ${payload.patient_id}. Visibilidade: ${payload.visibility || 'privada'}.`,
+          type: 'clinical'
+        });
+      } catch (logError) {
+        logRouteDbError('/api/notes', logError, { phase: 'persistActivityLog' });
+      }
       res.json({ success: true, data });
-    } catch (error) {
-      res.status(500).json({ error: String(error) });
+    } catch (error: any) {
+      logRouteDbError('/api/notes', error, {
+        patient_id: sanitizeString(req.body?.patient_id, 120),
+        has_text: Boolean(sanitizeTextField(req.body?.text, 12000))
+      });
+      if (isMissingRelationError(error)) {
+        return res.status(503).json({
+          error: 'Estrutura de banco para notes indisponível. Verifique migrações em produção.',
+          details: extractSupabaseErrorMessage(error)
+        });
+      }
+      res.status(500).json({ error: extractSupabaseErrorMessage(error) });
     }
   });
 
@@ -5168,9 +5243,42 @@ async function startServer() {
     }
   });
 
-  app.post('/api/logs', checkAuth, async (req: any, res) => {
+  app.post('/api/logs', async (req: any, res) => {
     try {
-      const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
+      let currentUser = req.session?.user || null;
+      if (!currentUser) {
+        const authHeader = sanitizeString(req.headers?.authorization, 9000);
+        if (authHeader.startsWith('Bearer ')) {
+          const token = authHeader.slice(7).trim();
+          const tokenMatch = tokenMatchesCurrentProject(token);
+          if (tokenMatch.ok) {
+            const { user, error } = await getUserFromAccessToken(token);
+            if (!error && user?.id) {
+              const { data: profile } = await supabase.from('users').select('*').eq('id', user.id).maybeSingle();
+              if (profile) {
+                currentUser = buildSessionUserPayload({
+                  id: user.id,
+                  email: user.email,
+                  role: profile.role,
+                  name: profile.name,
+                  clinicId: profile.clinic_id,
+                  activeWorkspaceId: profile.clinic_id
+                });
+              }
+            }
+          }
+        }
+      }
+
+      if (!currentUser?.id) {
+        return res.status(200).json({
+          success: true,
+          queued: true,
+          warning: 'activity_logs_missing_auth'
+        });
+      }
+
+      const actorName = sanitizeString(currentUser?.name || currentUser?.email || 'Usuário', 180);
       let data: any = null;
       let error: any = null;
       try {
@@ -5178,9 +5286,9 @@ async function startServer() {
           .from('activity_logs')
           .upsert([{
             ...req.body,
-            user_id: req.session.user.id,
+            user_id: currentUser.id,
             actor_name: actorName,
-            clinic_id: currentClinicId(req.session.user),
+            clinic_id: currentClinicId(currentUser),
             timestamp: req.body?.timestamp || new Date().toISOString()
           }], { onConflict: 'id' })
           .select()
@@ -5197,7 +5305,7 @@ async function startServer() {
             .from('activity_logs')
             .upsert([{
               ...req.body,
-              user_id: req.session.user.id,
+              user_id: currentUser.id,
               timestamp: req.body?.timestamp || new Date().toISOString()
             }], { onConflict: 'id' })
             .select()
@@ -5210,7 +5318,7 @@ async function startServer() {
       }
 
       if (error) {
-        console.error('[Logs] Persist warning:', error);
+        logRouteDbError('/api/logs', error, { userId: currentUser.id });
         return res.status(200).json({
           success: true,
           queued: true,
@@ -5220,7 +5328,7 @@ async function startServer() {
       }
       return res.json({ success: true, id: data?.id || null });
     } catch (error: any) {
-      console.error('[Logs] Error saving activity log:', error);
+      logRouteDbError('/api/logs', error, { route: 'post' });
       return res.status(200).json({
         success: true,
         queued: true,
@@ -5523,6 +5631,9 @@ async function startServer() {
       if (!payload.patient_id || !payload.title) {
         return res.status(400).json({ error: 'patient_id e título são obrigatórios.' });
       }
+      if (!isUuid(payload.patient_id)) {
+        return res.status(400).json({ error: 'patient_id inválido para salvar tarefas.' });
+      }
 
       const { data, error } = await supabase
         .from('tasks')
@@ -5531,17 +5642,213 @@ async function startServer() {
         .single();
       
       if (error) throw error;
-      void persistActivityLog({
-        userId: sanitizeString(req.session.user?.id, 120),
-        clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
-        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
-        title: 'Tarefa/PEI salva',
-        content: `Tarefa "${payload.title}" registrada para paciente ${payload.patient_id}.`,
-        type: 'clinical'
-      });
+      try {
+        await persistActivityLog({
+          userId: sanitizeString(req.session.user?.id, 120),
+          clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
+          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+          title: 'Tarefa/PEI salva',
+          content: `Tarefa "${payload.title}" registrada para paciente ${payload.patient_id}.`,
+          type: 'clinical'
+        });
+      } catch (logError) {
+        logRouteDbError('/api/tasks', logError, { phase: 'persistActivityLog' });
+      }
       res.json({ success: true, data });
+    } catch (error: any) {
+      logRouteDbError('/api/tasks', error, {
+        patient_id: sanitizeString(req.body?.patient_id, 120),
+        therapist_id: sanitizeString(req.session?.user?.id, 120),
+        title: sanitizeString(req.body?.title, 180)
+      });
+      if (isMissingRelationError(error)) {
+        return res.status(503).json({
+          error: 'Estrutura de banco para tasks indisponível. Verifique migrações em produção.',
+          details: extractSupabaseErrorMessage(error)
+        });
+      }
+      res.status(500).json({ error: extractSupabaseErrorMessage(error) });
+    }
+  });
+
+  app.patch('/api/tasks/:taskId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const taskId = sanitizeString(req.params.taskId, 120);
+      if (!taskId) return res.status(400).json({ success: false, error: 'taskId inválido.' });
+      const { data: existing, error: existingError } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('id', taskId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) return res.status(404).json({ success: false, error: 'Tarefa não encontrada.' });
+      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+      const updates = cleanObject({
+        title: req.body?.title !== undefined ? sanitizeString(req.body?.title, 180) : undefined,
+        description: req.body?.description !== undefined ? sanitizeTextField(req.body?.description, 4000) : undefined,
+        type: req.body?.type !== undefined ? sanitizeString(req.body?.type, 80) : undefined,
+        icon: req.body?.icon !== undefined ? sanitizeString(req.body?.icon, 40) : undefined,
+        color: req.body?.color !== undefined ? sanitizeString(req.body?.color, 80) : undefined,
+        completed: req.body?.completed !== undefined ? Boolean(req.body?.completed) : undefined,
+        is_daily_reminder: req.body?.is_daily_reminder !== undefined ? Boolean(req.body?.is_daily_reminder) : undefined,
+        linked_task: req.body?.linked_task !== undefined ? sanitizeString(req.body?.linked_task, 120) : undefined,
+        updated_at: new Date().toISOString()
+      });
+      const { data, error } = await supabase
+        .from('tasks')
+        .update(updates)
+        .eq('id', taskId)
+        .select('*')
+        .single();
+      if (error) throw error;
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      logRouteDbError('/api/tasks/:taskId [PATCH]', error, { taskId: sanitizeString(req.params.taskId, 120) });
+      return res.status(500).json({ success: false, error: extractSupabaseErrorMessage(error) });
+    }
+  });
+
+  app.delete('/api/tasks/:taskId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const taskId = sanitizeString(req.params.taskId, 120);
+      if (!taskId) return res.status(400).json({ success: false, error: 'taskId inválido.' });
+      const { data: existing, error: existingError } = await supabase
+        .from('tasks')
+        .select('id, patient_id')
+        .eq('id', taskId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) return res.status(404).json({ success: false, error: 'Tarefa não encontrada.' });
+      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+      const { error } = await supabase.from('tasks').delete().eq('id', taskId);
+      if (error) throw error;
+      return res.json({ success: true });
+    } catch (error: any) {
+      logRouteDbError('/api/tasks/:taskId [DELETE]', error, { taskId: sanitizeString(req.params.taskId, 120) });
+      return res.status(500).json({ success: false, error: extractSupabaseErrorMessage(error) });
+    }
+  });
+
+  app.patch('/api/history/:historyId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const historyId = sanitizeString(req.params.historyId, 120);
+      if (!historyId) return res.status(400).json({ success: false, error: 'historyId inválido.' });
+      const { data: existing, error: existingError } = await supabase
+        .from('history')
+        .select('*')
+        .eq('id', historyId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) return res.status(404).json({ success: false, error: 'Registro não encontrado.' });
+      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+      const updates = cleanObject({
+        title: req.body?.title !== undefined ? sanitizeTextField(req.body?.title, 180) : undefined,
+        score: req.body?.score !== undefined ? asSafeNumber(req.body?.score, 0, 100) : undefined,
+        energy: req.body?.energy !== undefined ? asSafeNumber(req.body?.energy, 0, 100) : undefined,
+        note: req.body?.note !== undefined ? sanitizeTextField(req.body?.note, 12000) : undefined,
+        icon: req.body?.icon !== undefined ? sanitizeString(req.body?.icon, 40) : undefined,
+        updated_at: new Date().toISOString()
+      });
+      const { data, error } = await supabase
+        .from('history')
+        .update(updates)
+        .eq('id', historyId)
+        .select('*')
+        .single();
+      if (error) throw error;
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      logRouteDbError('/api/notes/:noteId [PATCH]', error, { noteId: sanitizeString(req.params.noteId, 120) });
+      return res.status(500).json({ success: false, error: extractSupabaseErrorMessage(error) });
+    }
+  });
+
+  app.delete('/api/history/:historyId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const historyId = sanitizeString(req.params.historyId, 120);
+      if (!historyId) return res.status(400).json({ success: false, error: 'historyId inválido.' });
+      const { data: existing, error: existingError } = await supabase
+        .from('history')
+        .select('id, patient_id')
+        .eq('id', historyId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) return res.status(404).json({ success: false, error: 'Registro não encontrado.' });
+      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+      const { error } = await supabase.from('history').delete().eq('id', historyId);
+      if (error) throw error;
+      return res.json({ success: true });
+    } catch (error: any) {
+      logRouteDbError('/api/notes/:noteId [DELETE]', error, { noteId: sanitizeString(req.params.noteId, 120) });
+      return res.status(500).json({ success: false, error: extractSupabaseErrorMessage(error) });
+    }
+  });
+
+  app.patch('/api/notes/:noteId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const noteId = sanitizeString(req.params.noteId, 120);
+      if (!noteId) return res.status(400).json({ success: false, error: 'noteId inválido.' });
+      const { data: existing, error: existingError } = await supabase
+        .from('notes')
+        .select('*')
+        .eq('id', noteId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) return res.status(404).json({ success: false, error: 'Nota não encontrada.' });
+      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+
+      const safeVisibility = new Set(['private', 'shared', 'family', 'professional', 'patient']);
+      const updates = cleanObject({
+        text: req.body?.text !== undefined ? sanitizeTextField(req.body?.text, 12000) : undefined,
+        visibility:
+          req.body?.visibility !== undefined
+            ? (safeVisibility.has(String(req.body?.visibility)) ? String(req.body?.visibility) : undefined)
+            : undefined,
+        subject: req.body?.subject !== undefined ? (sanitizeTextField(req.body?.subject, 100) || 'Geral') : undefined,
+        updated_at: new Date().toISOString()
+      });
+      const { data, error } = await supabase
+        .from('notes')
+        .update(updates)
+        .eq('id', noteId)
+        .select('*')
+        .single();
+      if (error) throw error;
+      return res.json({ success: true, data });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      return res.status(500).json({ success: false, error: String(error) });
+    }
+  });
+
+  app.delete('/api/notes/:noteId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const noteId = sanitizeString(req.params.noteId, 120);
+      if (!noteId) return res.status(400).json({ success: false, error: 'noteId inválido.' });
+      const { data: existing, error: existingError } = await supabase
+        .from('notes')
+        .select('id, patient_id')
+        .eq('id', noteId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) return res.status(404).json({ success: false, error: 'Nota não encontrada.' });
+      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+      const { error } = await supabase.from('notes').delete().eq('id', noteId);
+      if (error) throw error;
+      return res.json({ success: true });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: String(error) });
     }
   });
 
@@ -6856,6 +7163,7 @@ startServer().catch(err => {
   console.error('FATAL ERROR STARTING SERVER:', err);
   process.exit(1);
 });
+
 
 
 

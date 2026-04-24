@@ -1,4 +1,4 @@
-import { getSupabase } from '../lib/supabase';
+import { ensureFreshSession, getSupabase } from '../lib/supabase';
 import {
   generateId,
   getEndpointCacheMeta,
@@ -46,9 +46,8 @@ async function handleDataError(error: unknown, operationType: OperationType, pat
   throw new Error(JSON.stringify(errInfo));
 }
 
-async function getAuthHeaders(includeBearer = false) {
-  const supabase = await getSupabase();
-  const { data: { session } } = await supabase.auth.getSession();
+async function getAuthHeaders(includeBearer = true) {
+  const session = await ensureFreshSession();
   const token = session?.access_token;
   const headers: any = {
     'Content-Type': 'application/json; charset=utf-8',

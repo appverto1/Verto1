@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
+﻿import React, { useEffect, useRef, useState } from 'react';
 import Chart from 'chart.js/auto';
 import { BarChart2, Info } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell, LineChart, Line } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell, LineChart, Line } from 'recharts';
+import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 
 const CustomXAxisTick = (props: any) => {
   const { x, y, payload } = props;
@@ -56,7 +57,7 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
     return (
       <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 flex flex-col items-center justify-center py-10 opacity-50 italic text-gray-400">
         <BarChart2 size={32} className="mb-2" />
-        <p className="text-xs text-center leading-relaxed">Selecione períodos para comparar o progresso.</p>
+        <p className="text-xs text-center leading-relaxed">Selecione perÃ­odos para comparar o progresso.</p>
       </div>
     );
   }
@@ -73,14 +74,13 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
           <BarChart2 size={18} className="text-[#7a32fc]" /> {title || "Comparativo de Desempenho"}
         </h3>
         <div className="flex items-center gap-1 text-[10px] text-gray-400 font-bold uppercase">
-          <Info size={12} /> Eixo Y: Pontuação (Máx: {maxScore}) • Eixo X: Domínios
+          <Info size={12} /> Eixo Y: PontuaÃ§Ã£o (MÃ¡x: {maxScore}) â€¢ Eixo X: DomÃ­nios
         </div>
       </div>
       <div className="overflow-x-auto pb-4 no-scrollbar">
         <div style={{ minWidth: `${minWidth}px`, height: '500px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
-          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
-            <BarChart
+          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>`r`n            <BarChart
               data={data}
               margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
               barGap={12}
@@ -146,7 +146,7 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
               );
             })}
           </BarChart>
-          </ResponsiveContainer>
+          </SafeResponsiveContainer>
           ) : (
             <div className="h-full w-full rounded-2xl bg-slate-50 animate-pulse" />
           )}
@@ -164,7 +164,7 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
     return (
       <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 flex flex-col items-center justify-center py-10 opacity-50 italic text-gray-400">
         <BarChart2 size={32} className="mb-2" />
-        <p className="text-xs text-center leading-relaxed">Nenhum dado avaliado para comparação histórica neste protocolo.</p>
+        <p className="text-xs text-center leading-relaxed">Nenhum dado avaliado para comparaÃ§Ã£o histÃ³rica neste protocolo.</p>
       </div>
     );
   }
@@ -190,8 +190,7 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
       <div className="overflow-x-auto pb-4 no-scrollbar cursor-grab active:cursor-grabbing">
         <div style={{ minWidth: `${minWidth}px`, height: '500px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
-          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
-            <BarChart
+          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>`r`n            <BarChart
               data={data}
               margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
               barGap={12}
@@ -251,7 +250,7 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
                 );
               })}
             </BarChart>
-          </ResponsiveContainer>
+          </SafeResponsiveContainer>
           ) : (
             <div className="h-full w-full rounded-2xl bg-slate-50 animate-pulse" />
           )}
@@ -278,7 +277,7 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
     return (
       <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 flex flex-col items-center justify-center py-10 opacity-50 italic text-gray-400">
         <BarChart2 size={32} className="mb-2" />
-        <p className="text-xs text-center leading-relaxed">Nenhum dado avaliado para comparação histórica neste protocolo.</p>
+        <p className="text-xs text-center leading-relaxed">Nenhum dado avaliado para comparaÃ§Ã£o histÃ³rica neste protocolo.</p>
       </div>
     );
   }
@@ -303,8 +302,7 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
       <div className="overflow-x-auto pb-4 no-scrollbar">
         <div style={{ minWidth: `${minWidth}px`, height: '500px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
-          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
-            <LineChart
+          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>`r`n            <LineChart
               data={data}
               margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
             >
@@ -359,7 +357,7 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
               />
             ))}
           </LineChart>
-          </ResponsiveContainer>
+          </SafeResponsiveContainer>
           ) : (
             <div className="h-full w-full rounded-2xl bg-slate-50 animate-pulse" />
           )}
@@ -368,3 +366,7 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
   </div>
   );
 };
+
+
+
+

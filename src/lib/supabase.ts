@@ -34,6 +34,37 @@ const fetchConfig = async (retries = 3, delay = 1000) => {
 let supabaseClient: any = null;
 let initPromise: Promise<any> | null = null;
 
+export const ensureFreshSession = async () => {
+  const client = await getSupabase();
+  if (!client) return null;
+
+  try {
+    const { data, error } = await client.auth.getSession();
+    if (error) {
+      console.warn('Supabase getSession warning:', error.message);
+      return null;
+    }
+
+    const session = data?.session || null;
+    if (!session?.refresh_token) return session;
+
+    const expiresAt = Number(session.expires_at || 0);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const shouldRefresh = expiresAt > 0 && expiresAt - nowSeconds <= 60;
+    if (!shouldRefresh) return session;
+
+    const refreshed = await client.auth.refreshSession({ refresh_token: session.refresh_token });
+    if (refreshed.error) {
+      console.warn('Supabase refreshSession warning:', refreshed.error.message);
+      return session;
+    }
+    return refreshed.data?.session || session;
+  } catch (error: any) {
+    console.warn('ensureFreshSession failed:', error?.message || String(error));
+    return null;
+  }
+};
+
 export const getSupabase = async () => {
   if (supabaseClient) return supabaseClient;
   
@@ -55,14 +86,6 @@ export const getSupabase = async () => {
           autoRefreshToken: true,
           persistSession: true,
           detectSessionInUrl: true
-        }
-      });
-      
-      // Check if session is valid
-      supabaseClient.auth.getSession().then(({ data: { session }, error }: any) => {
-        if (error && error.message.includes('Refresh Token Not Found')) {
-          console.warn('Stale session detected, clearing Supabase storage...');
-          supabaseClient.auth.signOut();
         }
       });
       
