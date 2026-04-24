@@ -16,6 +16,11 @@ import rateLimit from 'express-rate-limit';
 import { generateSecret, verifySync, generateURI } from 'otplib';
 import QRCode from 'qrcode';
 import {
+  getClinicBillingSummary,
+  syncAllClinicsActivePatientAddonQuantity,
+  syncClinicActivePatientAddonQuantity
+} from './services/stripeService';
+import {
   buildActivationEmailTemplate,
   buildPasswordRecoveryEmailTemplate
 } from './src/services/emailTemplates';
@@ -74,6 +79,100 @@ function getStripe() {
     stripeClient = new Stripe(key);
   }
   return stripeClient;
+}
+
+function normalizeSubscriptionStatusFromStripe(status: string): 'active' | 'pending' | 'delinquent' | 'canceled' {
+  const normalized = sanitizeString(status, 50).toLowerCase();
+  if (normalized === 'active' || normalized === 'trialing') return 'active';
+  if (normalized === 'past_due' || normalized === 'unpaid') return 'delinquent';
+  if (normalized === 'canceled' || normalized === 'incomplete_expired') return 'canceled';
+  return 'pending';
+}
+
+async function updateClinicSubscriptionStatus(params: {
+  clinicId?: string | null;
+  userId?: string | null;
+  email?: string | null;
+  status: 'active' | 'pending' | 'delinquent' | 'canceled';
+}) {
+  const safeClinicId = sanitizeString(params.clinicId, 120);
+  const safeUserId = sanitizeString(params.userId, 120);
+  const safeEmail = sanitizeEmail(params.email);
+
+  if (safeClinicId) {
+    const { error } = await supabase
+      .from('users')
+      .update({ subscription_status: params.status })
+      .eq('clinic_id', safeClinicId)
+      .in('role', ['coordinator', 'therapist', 'receptionist']);
+    if (error) {
+      console.error('[Stripe Webhook] Falha ao atualizar status por clínica:', {
+        clinicId: safeClinicId,
+        status: params.status,
+        message: error.message
+      });
+    }
+  }
+
+  if (safeUserId) {
+    const { error } = await supabase
+      .from('users')
+      .update({ subscription_status: params.status })
+      .eq('id', safeUserId);
+    if (error) {
+      console.error('[Stripe Webhook] Falha ao atualizar status por userId:', {
+        userId: safeUserId,
+        status: params.status,
+        message: error.message
+      });
+    }
+  } else if (!safeClinicId && safeEmail) {
+    const { error } = await supabase
+      .from('users')
+      .update({ subscription_status: params.status })
+      .eq('email', safeEmail);
+    if (error) {
+      console.error('[Stripe Webhook] Falha ao atualizar status por email:', {
+        email: safeEmail,
+        status: params.status,
+        message: error.message
+      });
+    }
+  }
+}
+
+function resolveActivePatientPriceId(): string {
+  return sanitizeString(process.env.STRIPE_ACTIVE_PATIENT_PRICE_ID || '', 120);
+}
+
+function queueActivePatientSync(clinicId: string | null | undefined, trigger: string) {
+  const safeClinicId = sanitizeString(clinicId, 120);
+  const activePatientPriceId = resolveActivePatientPriceId();
+  if (!safeClinicId || !activePatientPriceId) return;
+
+  try {
+    const stripe = getStripe();
+    void syncClinicActivePatientAddonQuantity({
+      supabase,
+      stripe,
+      clinicId: safeClinicId,
+      trigger,
+      activePatientPriceId,
+      logger: console
+    }).catch((error: any) => {
+      console.error('[CRITICAL] Falha ao sincronizar adicional de pacientes ativos (não bloqueante).', {
+        clinicId: safeClinicId,
+        trigger,
+        message: error?.message || String(error)
+      });
+    });
+  } catch (error: any) {
+    console.error('[CRITICAL] Stripe indisponível para sincronização de pacientes ativos.', {
+      clinicId: safeClinicId,
+      trigger,
+      message: error?.message || String(error)
+    });
+  }
 }
 
 function normalizeProfessionalPlan(input?: string | null): 'Essencial' | 'Crescimento' | 'Avançado' | null {
@@ -1459,7 +1558,7 @@ async function startServer() {
     }
   });
 
-  // Stripe Webhook (to handle successful payments) - MUST BE BEFORE express.json()
+  // Stripe Webhook - MUST BE BEFORE express.json()
   app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     const sig = req.headers['stripe-signature'];
     let event;
@@ -1479,21 +1578,105 @@ async function startServer() {
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    if (event.type === 'checkout.session.completed') {
-      const session = event.data.object as any;
-      const userId = session.metadata.userId;
+    try {
+      const stripe = getStripe();
+      switch (event.type) {
+        case 'checkout.session.completed': {
+          const session = event.data.object as Stripe.Checkout.Session;
+          const userId = sanitizeString((session.metadata as any)?.userId, 120);
+          const clinicId = sanitizeString((session.metadata as any)?.clinicId, 120);
+          const customerEmail = sanitizeEmail(session.customer_details?.email || session.customer_email);
 
-      console.log(`Payment successful for user: ${userId}`);
+          await updateClinicSubscriptionStatus({
+            clinicId,
+            userId,
+            email: customerEmail,
+            status: 'active'
+          });
 
-      // Update user subscription status in Supabase
-      const { error } = await supabase
-        .from('users')
-        .update({ subscription_status: 'active' })
-        .eq('id', userId);
-        
-      if (error) {
-        console.error('Error updating subscription status:', error);
+          const activePatientPriceId = resolveActivePatientPriceId();
+          if (clinicId && activePatientPriceId) {
+            queueActivePatientSync(clinicId, 'checkout.session.completed');
+          }
+
+          if (session.subscription) {
+            try {
+              const subscriptionId = sanitizeString(String(session.subscription), 120);
+              if (subscriptionId) {
+                await stripe.subscriptions.update(subscriptionId, {
+                  metadata: {
+                    ...(userId ? { userId } : {}),
+                    ...(clinicId ? { clinicId } : {})
+                  }
+                });
+              }
+            } catch (metadataError: any) {
+              console.error('[Stripe Webhook] Falha ao atualizar metadata da subscription:', {
+                message: metadataError?.message || String(metadataError)
+              });
+            }
+          }
+          break;
+        }
+        case 'invoice.payment_failed': {
+          const invoice = event.data.object as Stripe.Invoice;
+          const subscriptionId = sanitizeString(String(invoice.subscription || ''), 120);
+          const customerEmail = sanitizeEmail(invoice.customer_email);
+          let clinicId = '';
+          let userId = '';
+          if (subscriptionId) {
+            const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+            clinicId = sanitizeString((subscription.metadata as any)?.clinicId, 120);
+            userId = sanitizeString((subscription.metadata as any)?.userId, 120);
+          }
+          await updateClinicSubscriptionStatus({
+            clinicId,
+            userId,
+            email: customerEmail,
+            status: 'delinquent'
+          });
+          break;
+        }
+        case 'invoice.paid': {
+          const invoice = event.data.object as Stripe.Invoice;
+          const subscriptionId = sanitizeString(String(invoice.subscription || ''), 120);
+          const customerEmail = sanitizeEmail(invoice.customer_email);
+          let clinicId = '';
+          let userId = '';
+          if (subscriptionId) {
+            const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+            clinicId = sanitizeString((subscription.metadata as any)?.clinicId, 120);
+            userId = sanitizeString((subscription.metadata as any)?.userId, 120);
+          }
+          await updateClinicSubscriptionStatus({
+            clinicId,
+            userId,
+            email: customerEmail,
+            status: 'active'
+          });
+          break;
+        }
+        case 'customer.subscription.updated':
+        case 'customer.subscription.deleted': {
+          const subscription = event.data.object as Stripe.Subscription;
+          const clinicId = sanitizeString((subscription.metadata as any)?.clinicId, 120);
+          const userId = sanitizeString((subscription.metadata as any)?.userId, 120);
+          const mappedStatus = normalizeSubscriptionStatusFromStripe(subscription.status);
+          await updateClinicSubscriptionStatus({
+            clinicId,
+            userId,
+            status: mappedStatus
+          });
+          break;
+        }
+        default:
+          break;
       }
+    } catch (webhookProcessingError: any) {
+      console.error('[Stripe Webhook] Erro ao processar evento:', {
+        type: event?.type,
+        message: webhookProcessingError?.message || String(webhookProcessingError)
+      });
     }
 
     res.json({ received: true });
@@ -2115,29 +2298,35 @@ async function startServer() {
     }
 
     const authRedirectTo = getAuthRedirectUrl();
-    const signupRes = await supabaseAuthClient.auth.signUp({
+    const existingAuthUser = await findAuthUserByEmail(safeEmail);
+    if (existingAuthUser?.id) {
+      return {
+        ok: false,
+        status: 400,
+        body: { error: 'Este e-mail já está cadastrado. Por favor, faça login.' }
+      };
+    }
+
+    const createUserRes = await supabase.auth.admin.createUser({
       email: safeEmail,
       password,
-      options: {
-        emailRedirectTo: authRedirectTo,
-        data: {
-          full_name: name || safeEmail.split('@')[0]
-        }
+      email_confirm: false,
+      user_metadata: {
+        full_name: name || safeEmail.split('@')[0]
       }
     });
-
-    const signupError = signupRes.error;
-    const authUser = signupRes.data?.user;
-    if (signupError) {
-      if (String(signupError.message || '').toLowerCase().includes('already')) {
+    if (createUserRes.error) {
+      const normalizedCreateError = String(createUserRes.error.message || '').toLowerCase();
+      if (normalizedCreateError.includes('already')) {
         return {
           ok: false,
           status: 400,
           body: { error: 'Este e-mail já está cadastrado. Por favor, faça login.' }
         };
       }
-      throw signupError;
+      throw createUserRes.error;
     }
+    let authUser = createUserRes.data?.user || null;
     if (!authUser?.id) {
       throw new Error('Falha ao criar usuário no Auth.');
     }
@@ -2301,34 +2490,67 @@ async function startServer() {
 
   app.post('/api/auth/resend-confirmation', async (req, res) => {
     try {
-      if (!supabaseAuthClient) {
-        return res.status(500).json({ error: 'AUTH_CONFIG_MISSING_PUBLIC_KEY' });
-      }
       const email = sanitizeEmail(req.body?.email);
       if (!email) return res.status(400).json({ error: 'E-mail inválido.' });
+      const genericResponse = {
+        success: true,
+        message: 'Se este e-mail estiver cadastrado, você receberá instruções.'
+      };
 
-      const { error } = await supabaseAuthClient.auth.resend({
-        type: 'signup',
-        email,
-        options: { emailRedirectTo: getAuthRedirectUrl() }
-      });
-      if (error) {
-        console.warn('[Auth] resend-confirmation warning:', error.message);
+      const authUser = await findAuthUserByEmail(email);
+      if (!authUser?.id) {
+        await persistIdentityAuditLog({
+          title: 'Reenvio de confirmação de e-mail solicitado',
+          content: `Reenvio de confirmação solicitado para identificador não encontrado (${maskEmail(email)}).`,
+          identifier: email,
+          channel: 'email',
+          request: req,
+          status: 'not_found'
+        });
+        return res.json(genericResponse);
       }
+
+      const { data: profile } = await supabase
+        .from('users')
+        .select('name, role')
+        .eq('id', authUser.id)
+        .maybeSingle();
+
+      const activationLink =
+        (await generateSupabaseActionLink({
+          type: 'signup',
+          email,
+          redirectTo: getAuthRedirectUrl()
+        })) || getAuthRedirectUrl();
+      const activationEmail = buildActivationEmailTemplate({
+        nome: sanitizeString(profile?.name || authUser.user_metadata?.full_name || email.split('@')[0], 180),
+        link_ativacao: activationLink,
+        perfil: resolveTemplateProfileByRole(profile?.role)
+      });
+      const emailSent = await sendTransactionalEmailSafe({
+        to: email,
+        subject: activationEmail.subject,
+        html: activationEmail.html,
+        context: 'resend_confirmation',
+        from: resolveTemplateProfileByRole(profile?.role) === 'patient' ? OFFICIAL_FROM_NOREPLY : OFFICIAL_FROM_CONTACT,
+        replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+        metadata: {
+          email: maskEmail(email),
+          userId: authUser.id
+        }
+      });
 
       await persistIdentityAuditLog({
         title: 'Reenvio de confirmação de e-mail solicitado',
-        content: `Reenvio de confirmação para ${maskEmail(email)} solicitado.`,
+        content: `Reenvio de confirmação para ${maskEmail(email)} solicitado. E-mail oficial ${emailSent ? 'enviado' : 'com falha de envio'}.`,
         identifier: email,
         channel: 'email',
+        userId: authUser.id,
         request: req,
-        status: error ? 'warning' : 'sent'
+        status: emailSent ? 'sent' : 'warning'
       });
 
-      return res.json({
-        success: true,
-        message: 'Se este e-mail estiver cadastrado, você receberá instruções.'
-      });
+      return res.json(genericResponse);
     } catch (error) {
       return res.json({
         success: true,
@@ -3797,6 +4019,13 @@ async function startServer() {
       }
       
       if (error) throw error;
+      const clinicForSync = sanitizeString(
+        (data as any)?.clinic_id || safeBody.clinic_id || currentClinicId(req.session.user),
+        120
+      );
+      if (isUuid(clinicForSync)) {
+        queueActivePatientSync(clinicForSync, 'patient_upsert');
+      }
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
@@ -3824,12 +4053,21 @@ async function startServer() {
         status: req.body?.status !== undefined ? sanitizeString(req.body?.status, 40) : undefined
       });
 
-      const { error } = await supabase
+      const { data: updatedPatient, error } = await supabase
         .from('patients')
         .update(updates)
-        .eq('id', req.params.id);
+        .eq('id', req.params.id)
+        .select('id, clinic_id, status')
+        .maybeSingle();
       
       if (error) throw error;
+      const clinicForSync = sanitizeString(
+        updates?.clinic_id || updatedPatient?.clinic_id || currentClinicId(req.session.user),
+        120
+      );
+      if (isUuid(clinicForSync)) {
+        queueActivePatientSync(clinicForSync, 'patient_patch');
+      }
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
@@ -5554,6 +5792,11 @@ async function startServer() {
 
       const origin = req.headers.origin || `${req.protocol}://${req.get('host')}`;
       
+      const clinicId = sanitizeString(
+        user.activeWorkspaceId || user.clinicId || user.id,
+        120
+      );
+
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         line_items: [
@@ -5576,7 +5819,14 @@ async function startServer() {
         cancel_url: `${origin}/?payment=cancel`,
         customer_email: user.email,
         metadata: {
-          userId: user.id
+          userId: user.id,
+          clinicId
+        },
+        subscription_data: {
+          metadata: {
+            userId: user.id,
+            clinicId
+          }
         }
       });
 
@@ -5587,6 +5837,31 @@ async function startServer() {
       res.status(500).json({ 
         error: error.message || 'Erro ao criar sessão de pagamento',
         details: process.env.NODE_ENV === 'production' ? undefined : error.stack
+      });
+    }
+  });
+
+  app.get('/api/stripe/clinic-billing-summary', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = currentClinicId(req.session.user);
+      if (!clinicId || !isUuid(clinicId)) {
+        return res.status(400).json({ error: 'Workspace da clínica não identificado.' });
+      }
+
+      const summary = await getClinicBillingSummary({
+        supabase,
+        clinicId
+      });
+
+      res.json({
+        success: true,
+        data: summary
+      });
+    } catch (error: any) {
+      console.error('[Billing Summary] Erro ao gerar resumo da clínica:', error);
+      res.status(500).json({
+        success: false,
+        error: error?.message || 'Falha ao carregar resumo de cobrança.'
       });
     }
   });
@@ -5629,6 +5904,36 @@ async function startServer() {
       details: err.stack
     });
   });
+
+  const activePatientPriceId = resolveActivePatientPriceId();
+  if (activePatientPriceId) {
+    const runDailyBillingSync = async (trigger: string) => {
+      try {
+        await syncAllClinicsActivePatientAddonQuantity({
+          supabase,
+          stripe: getStripe(),
+          activePatientPriceId,
+          logger: console
+        });
+        console.log('[Stripe Sync] Lote diário concluído.', { trigger });
+      } catch (error: any) {
+        console.error('[CRITICAL] Falha no lote diário de sync Stripe (não bloqueante).', {
+          trigger,
+          message: error?.message || String(error)
+        });
+      }
+    };
+
+    setTimeout(() => {
+      void runDailyBillingSync('startup_warmup');
+    }, 90 * 1000);
+
+    setInterval(() => {
+      void runDailyBillingSync('daily_interval');
+    }, 24 * 60 * 60 * 1000);
+  } else {
+    console.warn('[Stripe Sync] STRIPE_ACTIVE_PATIENT_PRICE_ID não configurado. Sync de pacientes ativos desabilitado.');
+  }
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);

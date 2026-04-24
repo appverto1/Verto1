@@ -143,6 +143,12 @@ export function CoordinatorDashboard({
   onEvaluateHistoryItem,
   allTasks = [],
 }: CoordinatorDashboardProps) {
+  type ClinicBillingSummary = {
+    activePatients: number;
+    unitPrice: number;
+    additionalCost: number;
+  };
+
   const role = String(user?.role || "coordinator");
   const capabilityRole: "coordinator" | "receptionist" | "therapist" =
     role === "therapist"
@@ -430,6 +436,8 @@ export function CoordinatorDashboard({
   const canManageProtocolLibrary = capabilityStatusForRole("protocol-library") === "full";
   const canManageClinicSettings = capabilityStatusForRole("clinic-settings") !== "none";
   const canManageBilling = capabilityStatusForRole("billing-management") !== "none";
+  const [billingSummary, setBillingSummary] = useState<ClinicBillingSummary | null>(null);
+  const [billingSummaryLoading, setBillingSummaryLoading] = useState<boolean>(false);
   const canEditAnamnesisTemplate = canManageClinicSettings;
   const DAY_GRID_SLOT_HEIGHT_PX = 66;
   const DAY_GRID_START_HOUR = 7;
@@ -504,6 +512,36 @@ export function CoordinatorDashboard({
     const timeout = setTimeout(() => setToast(null), 3200);
     return () => clearTimeout(timeout);
   }, [toast]);
+
+  useEffect(() => {
+    if (!canManageBilling) return;
+    let cancelled = false;
+    const loadBillingSummary = async () => {
+      setBillingSummaryLoading(true);
+      try {
+        const response = await fetch("/api/stripe/clinic-billing-summary", {
+          credentials: "include",
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!cancelled && response.ok && data?.success && data?.data) {
+          setBillingSummary({
+            activePatients: Number(data.data.activePatients || 0),
+            unitPrice: Number(data.data.unitPrice || 0),
+            additionalCost: Number(data.data.additionalCost || 0),
+          });
+        }
+      } catch (error) {
+        console.error("Erro ao carregar resumo de cobrança:", error);
+      } finally {
+        if (!cancelled) setBillingSummaryLoading(false);
+      }
+    };
+    void loadBillingSummary();
+    return () => {
+      cancelled = true;
+    };
+  }, [canManageBilling, allPatients.length]);
+
   const [newPatientForm, setNewPatientForm] = useState<any>({
     nome: "",
     nomeSocial: "",
@@ -3857,6 +3895,20 @@ export function CoordinatorDashboard({
                         Gerencie seu plano e faturamento.
                       </p>
                     </div>
+                  </div>
+
+                  <div className="mb-8 p-5 rounded-[24px] border border-violet-100 bg-violet-50/60 text-slate-700">
+                    <p className="text-[10px] font-bold text-violet-500 uppercase tracking-widest mb-1">
+                      Cobrança Variável
+                    </p>
+                    <p className="text-sm font-semibold text-slate-800">
+                      {billingSummaryLoading
+                        ? "Calculando pacientes ativos..."
+                        : `Pacientes Ativos: ${billingSummary?.activePatients ?? 0} | Custo Adicional: R$ ${(billingSummary?.additionalCost ?? 0).toFixed(2).replace(".", ",")}`}
+                    </p>
+                    <p className="text-xs text-violet-500 mt-1">
+                      Valor unitário por paciente ativo: R$ {(billingSummary?.unitPrice ?? 4.9).toFixed(2).replace(".", ",")}
+                    </p>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
