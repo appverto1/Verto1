@@ -753,7 +753,14 @@ export default function App() {
           : [];
         const assignedPending = Array.isArray(safeAssignedTasksRes?.data)
           ? safeAssignedTasksRes.data
-              .filter((t: any) => String(t?.status || '').toLowerCase() !== 'completed')
+              .filter((t: any) => {
+                if (String(t?.status || '').toLowerCase() === 'completed') return false;
+                const scheduledAt = String(t?.scheduled_at || '').trim();
+                if (!scheduledAt) return true;
+                const scheduledMs = new Date(scheduledAt).getTime();
+                if (!Number.isFinite(scheduledMs)) return true;
+                return scheduledMs <= Date.now();
+              })
               .map((t: any) => {
                 const taskData = t?.task_data && typeof t.task_data === 'object' ? t.task_data : {};
                 return {

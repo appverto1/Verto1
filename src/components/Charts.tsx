@@ -52,8 +52,9 @@ const CustomXAxisTick = (props: any) => {
 export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => setIsMounted(true), []);
+  const safeData = Array.isArray(data) ? data.filter((row) => row && typeof row === 'object') : [];
 
-  if (!data || data.length === 0) {
+  if (safeData.length === 0) {
     return (
       <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 flex flex-col items-center justify-center py-10 opacity-50 italic text-gray-400">
         <BarChart2 size={32} className="mb-2" />
@@ -65,7 +66,9 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
   const yTicks = Array.from({ length: Math.floor(maxScore) + 1 }, (_, i) => i);
   
   // Calculate dynamic width based on number of labels to prevent crowding
-  const minWidth = Math.max(600, data.length * 120);
+  const minWidth = Math.max(600, safeData.length * 120);
+  const firstRow = safeData[0] || {};
+  const periodKeys = Object.keys(firstRow).filter((key) => key !== 'name');
 
   return (
     <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 animate-fade-in overflow-hidden">
@@ -80,8 +83,9 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
       <div className="overflow-x-auto pb-4 no-scrollbar">
         <div style={{ minWidth: `${minWidth}px`, height: '500px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
-          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>`r`n            <BarChart
-              data={data}
+          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
+            <BarChart
+              data={safeData}
               margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
               barGap={12}
               barCategoryGap="30%"
@@ -125,7 +129,7 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
                 width: '100%'
               }}
             />
-            {Object.keys(data[0]).filter(key => key !== 'name').map((period, index, array) => {
+            {periodKeys.map((period, index, array) => {
               // If we have exactly 2 periods, use Red for the first (oldest) and Green for the second (newest)
               // Otherwise use the standard palette
               const colors = array.length === 2 
@@ -159,8 +163,10 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
 export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => setIsMounted(true), []);
+  const labels = Array.isArray(chartData?.labels) ? chartData.labels : [];
+  const datasets = Array.isArray(chartData?.datasets) ? chartData.datasets : [];
 
-  if (!chartData || !chartData.labels || chartData.labels.length === 0) {
+  if (labels.length === 0 || datasets.length === 0) {
     return (
       <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 flex flex-col items-center justify-center py-10 opacity-50 italic text-gray-400">
         <BarChart2 size={32} className="mb-2" />
@@ -170,10 +176,13 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
   }
 
   // Transform data for Recharts
-  const data = chartData.labels.map((label: string, index: number) => {
+  const data = labels.map((label: string, index: number) => {
     const entry: any = { name: label };
-    chartData.datasets.forEach((ds: any) => {
-      entry[ds.label] = ds.data[index];
+    datasets.forEach((ds: any) => {
+      const dsLabel = String(ds?.label || '').trim();
+      if (!dsLabel) return;
+      const dsValues = Array.isArray(ds?.data) ? ds.data : [];
+      entry[dsLabel] = dsValues[index] ?? 0;
     });
     return entry;
   });
@@ -190,7 +199,8 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
       <div className="overflow-x-auto pb-4 no-scrollbar cursor-grab active:cursor-grabbing">
         <div style={{ minWidth: `${minWidth}px`, height: '500px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
-          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>`r`n            <BarChart
+          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
+            <BarChart
               data={data}
               margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
               barGap={12}
@@ -235,7 +245,7 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
                   width: '100%'
                 }}
               />
-              {chartData.datasets.map((ds: any, index: number) => {
+              {datasets.map((ds: any, index: number) => {
                 const colors = ['#7a32fc', '#05CD99', '#FFB547', '#7551FF', '#EE5D50', '#00C2FF'];
                 return (
                   <Bar 
@@ -272,8 +282,10 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
 export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => setIsMounted(true), []);
+  const labels = Array.isArray(chartData?.labels) ? chartData.labels : [];
+  const datasets = Array.isArray(chartData?.datasets) ? chartData.datasets : [];
 
-  if (!chartData || !chartData.labels || chartData.labels.length === 0) {
+  if (labels.length === 0 || datasets.length === 0) {
     return (
       <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 flex flex-col items-center justify-center py-10 opacity-50 italic text-gray-400">
         <BarChart2 size={32} className="mb-2" />
@@ -283,10 +295,13 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
   }
 
   // Transform data for Recharts
-  const data = chartData.labels.map((label: string, index: number) => {
+  const data = labels.map((label: string, index: number) => {
     const entry: any = { name: label };
-    chartData.datasets.forEach((ds: any) => {
-      entry[ds.label] = ds.data[index];
+    datasets.forEach((ds: any) => {
+      const dsLabel = String(ds?.label || '').trim();
+      if (!dsLabel) return;
+      const dsValues = Array.isArray(ds?.data) ? ds.data : [];
+      entry[dsLabel] = dsValues[index] ?? 0;
     });
     return entry;
   });
@@ -302,7 +317,8 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
       <div className="overflow-x-auto pb-4 no-scrollbar">
         <div style={{ minWidth: `${minWidth}px`, height: '500px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
-          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>`r`n            <LineChart
+          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
+            <LineChart
               data={data}
               margin={{ top: 10, right: 30, left: 0, bottom: 150 }}
             >
@@ -344,7 +360,7 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
                 width: '100%'
               }}
             />
-            {chartData.datasets.map((ds: any, index: number) => (
+            {datasets.map((ds: any, index: number) => (
               <Line
                 key={ds.label}
                 type="monotone"
@@ -366,6 +382,7 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
   </div>
   );
 };
+
 
 
 

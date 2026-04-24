@@ -226,7 +226,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               <div className="xl:col-span-2 bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
                 <h3 className="text-lg font-black mb-4">Evolucao de Receita e EBITDA</h3>
                 <div className="h-80 min-h-[300px]">
-                <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>`r`n                    <AreaChart data={monthlyData}>
+                <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
+                    <AreaChart data={monthlyData}>
                       <defs>
                         <linearGradient id="ownerRevenue" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor="#0EA5E9" stopOpacity={0.25} />
@@ -278,7 +279,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
                 <h3 className="text-lg font-black mb-4">Composicao do DRE Mensal</h3>
                 <div className="h-80 min-h-[300px]">
-                  <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>`r`n                    <BarChart data={monthlyData}>
+                  <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
+                    <BarChart data={monthlyData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
                       <XAxis dataKey="monthLabel" tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
@@ -294,7 +296,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
                 <h3 className="text-lg font-black mb-4">Inadimplencia por Mes</h3>
                 <div className="h-80 min-h-[300px]">
-                  <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>`r`n                    <BarChart data={monthlyData}>
+                  <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
+                    <BarChart data={monthlyData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
                       <XAxis dataKey="monthLabel" tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
@@ -476,6 +479,7 @@ const SidebarItem = ({ icon, label, active, onClick }: any) => (
     {icon} <span className="text-sm">{label}</span>
   </button>
 );
+
 
 
 

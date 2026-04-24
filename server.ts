@@ -5182,10 +5182,39 @@ async function startServer() {
   });
 
   // Activity Logs
-  app.get('/api/logs', checkAuth, async (req: any, res) => {
+  app.get('/api/logs', async (req: any, res) => {
     try {
-      const role = req.session.user.role as AppRole;
-      const clinicId = currentClinicId(req.session.user);
+      let currentUser = req.session?.user || null;
+      if (!currentUser) {
+        const authHeader = sanitizeString(req.headers?.authorization, 9000);
+        if (authHeader.startsWith('Bearer ')) {
+          const token = authHeader.slice(7).trim();
+          const tokenMatch = tokenMatchesCurrentProject(token);
+          if (tokenMatch.ok) {
+            const { user, error } = await getUserFromAccessToken(token);
+            if (!error && user?.id) {
+              const { data: profile } = await supabase.from('users').select('*').eq('id', user.id).maybeSingle();
+              if (profile) {
+                currentUser = buildSessionUserPayload({
+                  id: user.id,
+                  email: user.email,
+                  role: profile.role,
+                  name: profile.name,
+                  clinicId: profile.clinic_id,
+                  activeWorkspaceId: profile.clinic_id
+                });
+              }
+            }
+          }
+        }
+      }
+
+      if (!currentUser?.id) {
+        return res.status(200).json({ success: true, data: [], warning: 'activity_logs_missing_auth' });
+      }
+
+      const role = currentUser.role as AppRole;
+      const clinicId = currentClinicId(currentUser);
       let query = supabase
         .from('activity_logs')
         .select('*')
@@ -5195,7 +5224,7 @@ async function startServer() {
       if ((role === 'coordinator' || role === 'admin' || role === 'owner') && clinicId) {
         query = query.eq('clinic_id', clinicId);
       } else {
-        query = query.eq('user_id', req.session.user.id);
+        query = query.eq('user_id', currentUser.id);
       }
 
       let data: any = [];
@@ -5212,7 +5241,7 @@ async function startServer() {
           const fallback = await supabase
             .from('activity_logs')
             .select('*')
-            .eq('user_id', req.session.user.id)
+            .eq('user_id', currentUser.id)
             .order('timestamp', { ascending: false })
             .limit(500);
           data = fallback.data;
@@ -5764,7 +5793,7 @@ async function startServer() {
       if (error) throw error;
       return res.json({ success: true, data });
     } catch (error: any) {
-      logRouteDbError('/api/notes/:noteId [PATCH]', error, { noteId: sanitizeString(req.params.noteId, 120) });
+      logRouteDbError('/api/history/:historyId [PATCH]', error, { historyId: sanitizeString(req.params.historyId, 120) });
       return res.status(500).json({ success: false, error: extractSupabaseErrorMessage(error) });
     }
   });
@@ -5787,185 +5816,8 @@ async function startServer() {
       if (error) throw error;
       return res.json({ success: true });
     } catch (error: any) {
-      logRouteDbError('/api/notes/:noteId [DELETE]', error, { noteId: sanitizeString(req.params.noteId, 120) });
+      logRouteDbError('/api/history/:historyId [DELETE]', error, { historyId: sanitizeString(req.params.historyId, 120) });
       return res.status(500).json({ success: false, error: extractSupabaseErrorMessage(error) });
-    }
-  });
-
-  app.patch('/api/notes/:noteId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
-    try {
-      const noteId = sanitizeString(req.params.noteId, 120);
-      if (!noteId) return res.status(400).json({ success: false, error: 'noteId inválido.' });
-      const { data: existing, error: existingError } = await supabase
-        .from('notes')
-        .select('*')
-        .eq('id', noteId)
-        .maybeSingle();
-      if (existingError) throw existingError;
-      if (!existing) return res.status(404).json({ success: false, error: 'Nota não encontrada.' });
-      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
-        return res.status(403).json({ success: false, error: 'Acesso negado.' });
-      }
-
-      const safeVisibility = new Set(['private', 'shared', 'family', 'professional', 'patient']);
-      const updates = cleanObject({
-        text: req.body?.text !== undefined ? sanitizeTextField(req.body?.text, 12000) : undefined,
-        visibility:
-          req.body?.visibility !== undefined
-            ? (safeVisibility.has(String(req.body?.visibility)) ? String(req.body?.visibility) : undefined)
-            : undefined,
-        subject: req.body?.subject !== undefined ? (sanitizeTextField(req.body?.subject, 100) || 'Geral') : undefined,
-        updated_at: new Date().toISOString()
-      });
-      const { data, error } = await supabase
-        .from('notes')
-        .update(updates)
-        .eq('id', noteId)
-        .select('*')
-        .single();
-      if (error) throw error;
-      return res.json({ success: true, data });
-    } catch (error) {
-      return res.status(500).json({ success: false, error: String(error) });
-    }
-  });
-
-  app.delete('/api/notes/:noteId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
-    try {
-      const noteId = sanitizeString(req.params.noteId, 120);
-      if (!noteId) return res.status(400).json({ success: false, error: 'noteId inválido.' });
-      const { data: existing, error: existingError } = await supabase
-        .from('notes')
-        .select('id, patient_id')
-        .eq('id', noteId)
-        .maybeSingle();
-      if (existingError) throw existingError;
-      if (!existing) return res.status(404).json({ success: false, error: 'Nota não encontrada.' });
-      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
-        return res.status(403).json({ success: false, error: 'Acesso negado.' });
-      }
-      const { error } = await supabase.from('notes').delete().eq('id', noteId);
-      if (error) throw error;
-      return res.json({ success: true });
-    } catch (error) {
-      return res.status(500).json({ success: false, error: String(error) });
-    }
-  });
-
-  app.patch('/api/tasks/:taskId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
-    try {
-      const taskId = sanitizeString(req.params.taskId, 120);
-      if (!taskId) return res.status(400).json({ success: false, error: 'taskId inválido.' });
-      const { data: existing, error: existingError } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('id', taskId)
-        .maybeSingle();
-      if (existingError) throw existingError;
-      if (!existing) return res.status(404).json({ success: false, error: 'Tarefa não encontrada.' });
-      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
-        return res.status(403).json({ success: false, error: 'Acesso negado.' });
-      }
-      const updates = cleanObject({
-        title: req.body?.title !== undefined ? sanitizeString(req.body?.title, 180) : undefined,
-        description: req.body?.description !== undefined ? sanitizeTextField(req.body?.description, 4000) : undefined,
-        type: req.body?.type !== undefined ? sanitizeString(req.body?.type, 80) : undefined,
-        icon: req.body?.icon !== undefined ? sanitizeString(req.body?.icon, 40) : undefined,
-        color: req.body?.color !== undefined ? sanitizeString(req.body?.color, 80) : undefined,
-        completed: req.body?.completed !== undefined ? Boolean(req.body?.completed) : undefined,
-        is_daily_reminder: req.body?.is_daily_reminder !== undefined ? Boolean(req.body?.is_daily_reminder) : undefined,
-        linked_task: req.body?.linked_task !== undefined ? sanitizeString(req.body?.linked_task, 120) : undefined,
-        updated_at: new Date().toISOString()
-      });
-      const { data, error } = await supabase
-        .from('tasks')
-        .update(updates)
-        .eq('id', taskId)
-        .select('*')
-        .single();
-      if (error) throw error;
-      return res.json({ success: true, data });
-    } catch (error) {
-      return res.status(500).json({ success: false, error: String(error) });
-    }
-  });
-
-  app.delete('/api/tasks/:taskId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
-    try {
-      const taskId = sanitizeString(req.params.taskId, 120);
-      if (!taskId) return res.status(400).json({ success: false, error: 'taskId inválido.' });
-      const { data: existing, error: existingError } = await supabase
-        .from('tasks')
-        .select('id, patient_id')
-        .eq('id', taskId)
-        .maybeSingle();
-      if (existingError) throw existingError;
-      if (!existing) return res.status(404).json({ success: false, error: 'Tarefa não encontrada.' });
-      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
-        return res.status(403).json({ success: false, error: 'Acesso negado.' });
-      }
-      const { error } = await supabase.from('tasks').delete().eq('id', taskId);
-      if (error) throw error;
-      return res.json({ success: true });
-    } catch (error) {
-      return res.status(500).json({ success: false, error: String(error) });
-    }
-  });
-
-  app.patch('/api/history/:historyId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
-    try {
-      const historyId = sanitizeString(req.params.historyId, 120);
-      if (!historyId) return res.status(400).json({ success: false, error: 'historyId inválido.' });
-      const { data: existing, error: existingError } = await supabase
-        .from('history')
-        .select('*')
-        .eq('id', historyId)
-        .maybeSingle();
-      if (existingError) throw existingError;
-      if (!existing) return res.status(404).json({ success: false, error: 'Registro não encontrado.' });
-      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
-        return res.status(403).json({ success: false, error: 'Acesso negado.' });
-      }
-      const updates = cleanObject({
-        title: req.body?.title !== undefined ? sanitizeTextField(req.body?.title, 180) : undefined,
-        score: req.body?.score !== undefined ? asSafeNumber(req.body?.score, 0, 100) : undefined,
-        energy: req.body?.energy !== undefined ? asSafeNumber(req.body?.energy, 0, 100) : undefined,
-        note: req.body?.note !== undefined ? sanitizeTextField(req.body?.note, 12000) : undefined,
-        icon: req.body?.icon !== undefined ? sanitizeString(req.body?.icon, 40) : undefined,
-        updated_at: new Date().toISOString()
-      });
-      const { data, error } = await supabase
-        .from('history')
-        .update(updates)
-        .eq('id', historyId)
-        .select('*')
-        .single();
-      if (error) throw error;
-      return res.json({ success: true, data });
-    } catch (error) {
-      return res.status(500).json({ success: false, error: String(error) });
-    }
-  });
-
-  app.delete('/api/history/:historyId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
-    try {
-      const historyId = sanitizeString(req.params.historyId, 120);
-      if (!historyId) return res.status(400).json({ success: false, error: 'historyId inválido.' });
-      const { data: existing, error: existingError } = await supabase
-        .from('history')
-        .select('id, patient_id')
-        .eq('id', historyId)
-        .maybeSingle();
-      if (existingError) throw existingError;
-      if (!existing) return res.status(404).json({ success: false, error: 'Registro não encontrado.' });
-      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
-        return res.status(403).json({ success: false, error: 'Acesso negado.' });
-      }
-      const { error } = await supabase.from('history').delete().eq('id', historyId);
-      if (error) throw error;
-      return res.json({ success: true });
-    } catch (error) {
-      return res.status(500).json({ success: false, error: String(error) });
     }
   });
 
@@ -6077,6 +5929,7 @@ async function startServer() {
         query = query.in('patient_id', patientIds);
       }
 
+      const nowIso = new Date().toISOString();
       const { data, error } = await query.order('scheduled_at', { ascending: false });
       if (error) {
         if (/assigned_tasks/i.test(String(error?.message || ''))) {
@@ -6085,7 +5938,13 @@ async function startServer() {
         throw error;
       }
 
-      return res.json({ success: true, data: data || [] });
+      const visibleTasks = (data || []).filter((task: any) => {
+        const scheduledAt = sanitizeString(task?.scheduled_at, 60);
+        if (!scheduledAt) return true;
+        return scheduledAt <= nowIso;
+      });
+
+      return res.json({ success: true, data: visibleTasks });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || String(error) });
     }
@@ -6258,58 +6117,39 @@ async function startServer() {
 
       let suggestedTask: any = null;
       if (proScore <= 2) {
-        const existingSuggestion = await supabase
-          .from('assigned_tasks')
-          .select('id')
-          .eq('parent_assigned_task_id', taskId)
-          .limit(1)
-          .maybeSingle();
+        const linkedProtocolId = sanitizeString(
+          existingTaskData?.linkedProtocolId || existingTaskData?.linkedInterventionProtocolId,
+          120
+        );
+        const originalTitle = sanitizeString(existingTaskData?.title || existing.title || 'Habilidade', 180);
+        const suggestionTitle = sanitizeString(
+          existingTaskData?.linkedInterventionTitle ||
+            `Intervenção sugerida: ${originalTitle}`,
+          180
+        );
+        const suggestionDescription = sanitizeTextField(
+          existingTaskData?.linkedInterventionDescription ||
+            `Pontuação profissional ≤ 2 para "${originalTitle}". Considere agendar intervenção guiada.`,
+          4000
+        );
 
-        if (!existingSuggestion?.data) {
-          const linkedProtocolId = sanitizeString(
-            existingTaskData?.linkedProtocolId || existingTaskData?.linkedInterventionProtocolId,
-            120
-          );
-          const originalTitle = sanitizeString(existingTaskData?.title || existing.title || 'Habilidade', 180);
-          const suggestionTitle = sanitizeString(
-            existingTaskData?.linkedInterventionTitle ||
-              `Intervenção sugerida: ${originalTitle}`,
-            180
-          );
-          const suggestionDescription = sanitizeTextField(
-            existingTaskData?.linkedInterventionDescription ||
-              `Pontuação profissional ≤ 2 para "${originalTitle}". Aplicar intervenção guiada antes da próxima revisão.`,
-            4000
-          );
-
-          const suggestionPayload = {
-            clinic_id: sanitizeString(existing.clinic_id, 120) || sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
-            patient_id: sanitizeString(existing.patient_id, 120),
-            patient_email: sanitizeEmail(existing.patient_email),
-            professional_id: sanitizeString(req.session.user?.id, 120),
-            task_type: 'intervention',
-            task_data: {
-              title: suggestionTitle,
-              description: suggestionDescription,
-              linkedProtocolId: linkedProtocolId || undefined,
-              autoSuggested: true,
-              sourceAssignedTaskId: taskId
-            },
-            scheduled_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-            status: 'pending',
-            parent_assigned_task_id: taskId
-          };
-
-          const suggestionInsert = await supabase
-            .from('assigned_tasks')
-            .insert([suggestionPayload])
-            .select('*')
-            .single();
-
-          if (!suggestionInsert.error) {
-            suggestedTask = suggestionInsert.data;
-          }
-        }
+        suggestedTask = {
+          clinic_id: sanitizeString(existing.clinic_id, 120) || sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
+          patient_id: sanitizeString(existing.patient_id, 120),
+          patient_email: sanitizeEmail(existing.patient_email),
+          professional_id: sanitizeString(req.session.user?.id, 120),
+          task_type: 'intervention',
+          task_data: {
+            title: suggestionTitle,
+            description: suggestionDescription,
+            linkedProtocolId: linkedProtocolId || undefined,
+            autoSuggested: true,
+            sourceAssignedTaskId: taskId
+          },
+          scheduled_at: null,
+          status: 'pending',
+          parent_assigned_task_id: taskId
+        };
       }
 
       return res.json({ success: true, data, suggestedTask });
@@ -7163,6 +7003,7 @@ startServer().catch(err => {
   console.error('FATAL ERROR STARTING SERVER:', err);
   process.exit(1);
 });
+
 
 
 

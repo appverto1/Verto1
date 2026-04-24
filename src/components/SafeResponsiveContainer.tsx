@@ -8,6 +8,7 @@ type SafeResponsiveContainerProps = {
   minWidth?: number;
   width?: string | number;
   height?: string | number;
+  skeletonClassName?: string;
 };
 
 export function SafeResponsiveContainer({
@@ -16,7 +17,8 @@ export function SafeResponsiveContainer({
   minHeight = 300,
   minWidth = 0,
   width = '100%',
-  height = '100%'
+  height = '100%',
+  skeletonClassName = 'h-full w-full rounded-2xl bg-slate-50 animate-pulse'
 }: SafeResponsiveContainerProps) {
   const wrapperRef = React.useRef<HTMLDivElement | null>(null);
   const [ready, setReady] = React.useState(false);
@@ -31,12 +33,13 @@ export function SafeResponsiveContainer({
       setReady(w > 0 && h > 0);
     };
 
-    check();
+    const rafId = window.requestAnimationFrame(check);
     const observer = new ResizeObserver(check);
     observer.observe(node);
     window.addEventListener('resize', check);
 
     return () => {
+      window.cancelAnimationFrame(rafId);
       observer.disconnect();
       window.removeEventListener('resize', check);
     };
@@ -49,7 +52,7 @@ export function SafeResponsiveContainer({
           {children}
         </ResponsiveContainer>
       ) : (
-        <div style={{ minHeight, minWidth }} />
+        <div className={skeletonClassName} style={{ minHeight, minWidth }} />
       )}
     </div>
   );

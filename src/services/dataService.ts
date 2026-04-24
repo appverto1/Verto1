@@ -59,6 +59,18 @@ async function getAuthHeaders(includeBearer = true) {
   return headers;
 }
 
+async function fetchWithAuthRetry(url: string, init: RequestInit) {
+  let response = await fetch(url, init);
+  if (response.status !== 401) return response;
+
+  const retryHeaders = {
+    ...(init.headers as Record<string, string>),
+    ...(await getAuthHeaders(true))
+  };
+  response = await fetch(url, { ...init, headers: retryHeaders });
+  return response;
+}
+
 async function safeJson(response: Response) {
   const text = await response.text();
   try {
@@ -133,7 +145,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
 
   // 2. Try to sync with server
   try {
-    const response = await fetch(endpoint, {
+    const response = await fetchWithAuthRetry(endpoint, {
       method,
       headers: {
         ...(await getAuthHeaders()),
