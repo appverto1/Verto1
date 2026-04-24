@@ -484,7 +484,7 @@ export const dataService = {
 
   async updateNote(noteId: string, updates: any) {
     try {
-      const response = await fetch(`/api/notes/${noteId}`, {
+      const response = await fetchWithAuthRetry(`/api/notes/${noteId}`, {
         method: 'PATCH',
         headers: await getAuthHeaders(),
         credentials: 'include',
@@ -656,13 +656,21 @@ export const dataService = {
 
   async addTask(task: any) {
     const id = task.id || generateId();
-    const data = { ...task, id, created_at: task.created_at || new Date().toISOString() };
+    const maxScore = Number(task?.max_score ?? task?.maxScore);
+    const normalizedMaxScore = Number.isFinite(maxScore) ? Math.max(1, Math.min(100, maxScore)) : undefined;
+    const data = {
+      ...task,
+      id,
+      max_score: normalizedMaxScore ?? task?.max_score,
+      maxScore: normalizedMaxScore ?? task?.maxScore,
+      created_at: task.created_at || new Date().toISOString()
+    };
     return await saveOfflineFirst(id, data, 'task', '/api/tasks');
   },
 
   async updateTask(taskId: string, updates: any) {
     try {
-      const response = await fetch(`/api/tasks/${taskId}`, {
+      const response = await fetchWithAuthRetry(`/api/tasks/${taskId}`, {
         method: 'PATCH',
         headers: await getAuthHeaders(),
         credentials: 'include',
@@ -726,7 +734,7 @@ export const dataService = {
     parent_assigned_task_id?: string;
   }) {
     try {
-      const response = await fetch('/api/assigned-tasks', {
+      const response = await fetchWithAuthRetry('/api/assigned-tasks', {
         method: 'POST',
         headers: await getAuthHeaders(),
         credentials: 'include',
@@ -744,7 +752,7 @@ export const dataService = {
     patient_comment?: string;
   }) {
     try {
-      const response = await fetch(`/api/assigned-tasks/${taskId}/complete`, {
+      const response = await fetchWithAuthRetry(`/api/assigned-tasks/${taskId}/complete`, {
         method: 'POST',
         headers: await getAuthHeaders(),
         credentials: 'include',
@@ -763,7 +771,7 @@ export const dataService = {
     max_score?: number;
   }) {
     try {
-      const response = await fetch(`/api/assigned-tasks/${taskId}/review`, {
+      const response = await fetchWithAuthRetry(`/api/assigned-tasks/${taskId}/review`, {
         method: 'POST',
         headers: await getAuthHeaders(),
         credentials: 'include',

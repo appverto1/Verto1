@@ -77,7 +77,7 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
           <BarChart2 size={18} className="text-[#7a32fc]" /> {title || "Comparativo de Desempenho"}
         </h3>
         <div className="flex items-center gap-1 text-[10px] text-gray-400 font-bold uppercase">
-          <Info size={12} /> Eixo Y: PontuaÃ§Ã£o (MÃ¡x: {maxScore}) â€¢ Eixo X: DomÃ­nios
+          <Info size={12} /> {Number(maxScore) === 100 ? 'Eixo Y: Proficiência (%) • Eixo X: Domínios' : `Eixo Y: Pontuação (Máx: ${maxScore}) • Eixo X: Domínios`}
         </div>
       </div>
       <div className="overflow-x-auto pb-4 no-scrollbar">

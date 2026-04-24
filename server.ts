@@ -5648,6 +5648,12 @@ async function startServer() {
         title: sanitizeString(req.body?.title, 180),
         description: sanitizeString(req.body?.description, 4000),
         type: sanitizeString(req.body?.type, 80) || 'task',
+        pro_score: req.body?.pro_score !== undefined ? asSafeNumber(req.body?.pro_score, 0, 100) : undefined,
+        max_score: req.body?.max_score !== undefined
+          ? asSafeNumber(req.body?.max_score, 1, 100)
+          : req.body?.maxScore !== undefined
+            ? asSafeNumber(req.body?.maxScore, 1, 100)
+            : undefined,
         icon: sanitizeString(req.body?.icon, 40),
         color: sanitizeString(req.body?.color, 80),
         completed: Boolean(req.body?.completed),
@@ -5718,6 +5724,13 @@ async function startServer() {
         title: req.body?.title !== undefined ? sanitizeString(req.body?.title, 180) : undefined,
         description: req.body?.description !== undefined ? sanitizeTextField(req.body?.description, 4000) : undefined,
         type: req.body?.type !== undefined ? sanitizeString(req.body?.type, 80) : undefined,
+        pro_score: req.body?.pro_score !== undefined ? asSafeNumber(req.body?.pro_score, 0, 100) : undefined,
+        max_score:
+          req.body?.max_score !== undefined
+            ? asSafeNumber(req.body?.max_score, 1, 100)
+            : req.body?.maxScore !== undefined
+              ? asSafeNumber(req.body?.maxScore, 1, 100)
+              : undefined,
         icon: req.body?.icon !== undefined ? sanitizeString(req.body?.icon, 40) : undefined,
         color: req.body?.color !== undefined ? sanitizeString(req.body?.color, 80) : undefined,
         completed: req.body?.completed !== undefined ? Boolean(req.body?.completed) : undefined,

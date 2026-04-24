@@ -756,44 +756,49 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const selectedProto = protocols.find((p: any) => String(p.id) === String(selectedChartProtocolId));
     if (!selectedProto) return [];
 
-    if (!comparisonDate1 || !comparisonDate2) {
-      // Return stable mock data if dates are not selected
-      return selectedProto.data.map((domain: any, idx: number) => ({
-        name: domain.name,
-        "Período A": idx % 2 === 0 ? 1 : 0,
-        "Período B": idx % 2 === 0 ? 2 : 1
-      }));
-    }
+    const uniqueDates = Array.from(new Set((history || [])
+      .filter((h: any) => h.patientId === patient.id && h.score !== undefined)
+      .map((h: any) => h.dateGroup || h.date)
+      .filter(Boolean)));
+    const fallbackDates = uniqueDates.slice(0, 2);
+    const d1 = comparisonDate1 || fallbackDates[0] || '';
+    const d2 = comparisonDate2 || fallbackDates[1] || fallbackDates[0] || '';
+    if (!d1 || !d2) return [];
+
+    const normalizePercent = (score: number, maxScore: number) => {
+      const safeMax = Math.max(1, Number(maxScore) || 1);
+      const safeScore = Math.max(0, Math.min(safeMax, Number(score) || 0));
+      return (safeScore / safeMax) * 100;
+    };
 
     const getDomainScoresForDate = (date: string) => {
       const dateHistory = history.filter((h: any) => (h.dateGroup === date || h.date === date) && h.patientId === patient.id && h.score !== undefined);
-      
+
       return selectedProto.data.map((domain: any) => {
-        const skillLatestScoreMap: any = {};
-        const domainSkillNames = domain.skills.map((s: any) => s.name.trim().toLowerCase());
-        
+        const latestBySkill = new Map<string, number>();
+        const maxBySkill = new Map<string, number>();
+        const domainSkills = domain.skills || [];
+
         dateHistory.forEach((h: any) => {
-          const hTitle = h.title.trim().toLowerCase();
-          if (domainSkillNames.includes(hTitle)) {
-            // Find the original skill name to use as key
-            const skill = domain.skills.find((s: any) => s.name.trim().toLowerCase() === hTitle);
-            if (skill) {
-              skillLatestScoreMap[skill.name] = h.score;
-            }
-          }
+          const hTitle = String(h?.title || '').trim().toLowerCase();
+          const skill = domainSkills.find((s: any) => String(s?.name || '').trim().toLowerCase() === hTitle);
+          if (!skill) return;
+          const key = String(skill.name);
+          latestBySkill.set(key, Number(h?.score ?? 0) || 0);
+          maxBySkill.set(key, Math.max(1, Number(skill?.maxScore ?? 1) || 1));
         });
 
-        const scores = Object.values(skillLatestScoreMap) as number[];
-        if (scores.length === 0) return 0;
-        const sum = scores.reduce((a, b) => a + b, 0);
-        return parseFloat((sum / scores.length).toFixed(2));
+        let obtained = 0;
+        let possible = 0;
+        latestBySkill.forEach((score, key) => {
+          const skillMax = maxBySkill.get(key) || 1;
+          obtained += Math.max(0, Math.min(skillMax, score));
+          possible += skillMax;
+        });
+        if (possible <= 0) return 0;
+        return Number(normalizePercent(obtained, possible).toFixed(2));
       });
     };
-
-    // Sort dates to ensure older is comparisonDate1 (left) and newer is comparisonDate2 (right)
-    const dates = [comparisonDate1, comparisonDate2].sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
-    const d1 = dates[0];
-    const d2 = dates[1];
 
     const scores1 = getDomainScoresForDate(d1);
     const scores2 = getDomainScoresForDate(d2);
@@ -881,11 +886,55 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     return adultTasksInPeriod.filter((task: any) => selectedIds.has(String(task.id)));
   }, [adultTasksInPeriod, selectedAdultEvolutionIds]);
 
+  const normalizeScoreToPercent = (score: unknown, maxScore: unknown) => {
+    const safeMax = Math.max(1, Number(maxScore) || 1);
+    const safeScore = Math.max(0, Math.min(safeMax, Number(score) || 0));
+    return (safeScore / safeMax) * 100;
+  };
+
+  const resolveTaskDomain = (task: any) => {
+    const taskData = task?.taskData && typeof task.taskData === 'object' ? task.taskData : {};
+    const explicitDomain = String(
+      taskData?.domainName ||
+      taskData?.domain ||
+      task?.domain_name ||
+      ''
+    ).trim();
+    if (explicitDomain) return explicitDomain;
+
+    const normalizedTitle = String(task?.taskTitle || '').trim().toLowerCase();
+    if (!normalizedTitle) return 'Sem domínio';
+    for (const protocol of protocols || []) {
+      for (const domain of protocol?.data || []) {
+        const found = (domain?.skills || []).find(
+          (skill: any) => String(skill?.name || '').trim().toLowerCase() === normalizedTitle
+        );
+        if (found) return String(domain?.name || 'Sem domínio');
+      }
+    }
+    return 'Sem domínio';
+  };
+
+  const aggregateEntriesToPercent = (entries: any[]) => {
+    let obtained = 0;
+    let possible = 0;
+    (entries || []).forEach((entry: any) => {
+      const maxScore = Math.max(1, Number(entry?.maxScore || 1) || 1);
+      const score = entry?.professionalScore === null || entry?.professionalScore === undefined
+        ? 0
+        : Math.max(0, Math.min(maxScore, Number(entry.professionalScore) || 0));
+      obtained += score;
+      possible += maxScore;
+    });
+    if (possible <= 0) return 0;
+    return Number(((obtained / possible) * 100).toFixed(2));
+  };
+
   const adultComparisonChartData = useMemo(() => {
     if (isKidsProfile) return [];
     const grouped = new Map<string, any[]>();
     adultTasksInPeriod.forEach((task: any) => {
-      const key = String(task.taskTitle || 'Habilidade');
+      const key = resolveTaskDomain(task);
       const list = grouped.get(key) || [];
       list.push(task);
       grouped.set(key, list);
@@ -895,22 +944,68 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       const ordered = [...entries].sort((a: any, b: any) => a.eventDate.getTime() - b.eventDate.getTime());
       const evaluations = ordered.filter((item: any) => item.taskType === 'task' || item.taskType === 'evaluation');
       const interventions = ordered.filter((item: any) => item.taskType === 'intervention');
-      const initialRef = evaluations[0] || ordered[0];
-      const currentRef = interventions[interventions.length - 1] || ordered[ordered.length - 1];
-      const maxScore = Math.max(...ordered.map((item: any) => Number(item.maxScore || 1)), 1);
+      const initialPercent = aggregateEntriesToPercent(evaluations.length ? evaluations : ordered.slice(0, 1));
+      const currentPercent = aggregateEntriesToPercent(interventions.length ? interventions : ordered);
       return {
         name,
-        'Avaliação Inicial': Number(initialRef?.professionalScore ?? 0),
-        'Intervenção Atual': Number(currentRef?.professionalScore ?? 0),
-        maxScore
+        'Avaliação Inicial': initialPercent,
+        'Intervenção Atual': currentPercent,
+        maxScore: 100
       };
     });
-  }, [adultTasksInPeriod, isKidsProfile]);
+  }, [adultTasksInPeriod, isKidsProfile, protocols]);
 
   const adultComparisonMaxScore = useMemo(() => {
-    if (!adultComparisonChartData.length) return 4;
-    return Math.max(...adultComparisonChartData.map((item: any) => Number(item?.maxScore || 1)), 1);
+    return 100;
   }, [adultComparisonChartData]);
+
+  const adultTrendChartData = useMemo(() => {
+    if (isKidsProfile) return { labels: [], datasets: [] };
+    if (!adultTasksInPeriod.length) return { labels: [], datasets: [] };
+
+    const now = new Date();
+    const bucketCount = reportPeriod === 'monthly' ? 4 : reportPeriod === 'bimonthly' ? 4 : reportPeriod === 'quarterly' ? 3 : reportPeriod === 'semiannual' ? 6 : 12;
+    const bucketSpanDays = reportPeriod === 'monthly'
+      ? 7
+      : reportPeriod === 'bimonthly'
+        ? 15
+        : reportPeriod === 'quarterly'
+          ? 30
+          : reportPeriod === 'semiannual'
+            ? 30
+            : 30;
+
+    const buckets = Array.from({ length: bucketCount }, (_, idx) => {
+      const end = new Date(now);
+      end.setDate(end.getDate() - (bucketCount - 1 - idx) * bucketSpanDays);
+      const start = new Date(end);
+      start.setDate(start.getDate() - bucketSpanDays);
+      return {
+        start,
+        end,
+        label: `${start.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`
+      };
+    });
+
+    const values = buckets.map((bucket) => {
+      const inBucket = adultTasksInPeriod.filter((task: any) => {
+        const ts = task?.eventDate instanceof Date ? task.eventDate.getTime() : new Date(task?.eventDateRaw || 0).getTime();
+        return Number.isFinite(ts) && ts >= bucket.start.getTime() && ts <= bucket.end.getTime();
+      });
+      return Number(aggregateEntriesToPercent(inBucket).toFixed(2));
+    });
+
+    return {
+      labels: buckets.map((b) => b.label),
+      datasets: [
+        {
+          label: 'Proficiência (%)',
+          data: values,
+          borderColor: '#7551FF'
+        }
+      ]
+    };
+  }, [adultTasksInPeriod, isKidsProfile, reportPeriod]);
   
   const handleSchedule = () => { 
     if (!scheduleDate || !scheduleTime) { alert("Selecione data e hora."); return; } 
@@ -1088,23 +1183,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     });
 
     const suggestedTask = result?.suggestedTask;
-    if (suggestedTask && onAddTask) {
-      const taskData = suggestedTask?.task_data && typeof suggestedTask.task_data === 'object'
-        ? suggestedTask.task_data
-        : {};
-      onAddTask({
-        id: suggestedTask.id,
-        patientId: patient.id,
-        title: taskData?.title || 'Intervenção sugerida',
-        description: taskData?.description || 'Intervenção sugerida automaticamente após revisão profissional.',
-        icon: '✍️',
-        color: 'bg-green-100 text-green-600',
-        completed: false,
-        type: 'intervention',
-        scheduledAt: suggestedTask?.scheduled_at || new Date().toISOString(),
-        linkedTask: taskData?.sourceAssignedTaskId || task?.id
-      });
-      alert('Intervenção sugerida automaticamente e adicionada à agenda do paciente.');
+    if (suggestedTask) {
+      const suggestedTitle = String(suggestedTask?.task_data?.title || 'Intervenção sugerida');
+      alert(`Sugestão clínica gerada: "${suggestedTitle}". Use "Plano Adulto" para Atribuir/Agendar manualmente ao paciente.`);
     }
   };
 
@@ -1409,15 +1490,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         `Relatório de Evolução Adulto - ${patient?.name || 'Paciente'}`,
         `Período: ${periodStart} até ${periodEnd}`,
         '',
-        'Comparativo por habilidade (Avaliação Inicial x Intervenção Atual):',
+        'Comparativo por domínio (% Proficiência - Avaliação Inicial x Intervenção Atual):',
         ...adultComparisonChartData.map((item: any) =>
-          `${item.name}: Inicial ${item['Avaliação Inicial']} | Atual ${item['Intervenção Atual']} (máx ${item.maxScore})`
+          `${item.name}: Inicial ${item['Avaliação Inicial']}% | Atual ${item['Intervenção Atual']}%`
         ),
         '',
         'Anotações de evolução selecionadas:',
         ...(selectedNotes.length
           ? selectedNotes.map((task: any) =>
-              `- ${task.taskTitle} | ${task.eventDate.toLocaleDateString('pt-BR')} | esforço ${task.patientEffort}% | nota ${task.professionalScore ?? '-'} | ${task.evolutionNote || 'Sem anotação'}`
+              `- ${task.taskTitle} | ${task.eventDate.toLocaleDateString('pt-BR')} | esforço ${task.patientEffort}% | nota ${task.professionalScore ?? '-'} / ${task.maxScore} (${normalizeScoreToPercent(task.professionalScore ?? 0, task.maxScore).toFixed(1)}%) | ${task.evolutionNote || 'Sem anotação'}`
             )
           : ['- Nenhuma anotação selecionada']),
         '',
@@ -1997,15 +2078,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               {isKidsProfile ? (
                 <ComparisonBarChart 
                   data={comparisonChartData} 
-                  title={(!comparisonDate1 || !comparisonDate2) ? "Exemplo de Comparativo de Domínios (Dados Fictícios)" : `Comparativo de Domínios: ${comparisonDate1} vs ${comparisonDate2}`} 
-                  maxScore={selectedProtocolMaxScore}
+                  title={`Comparativo de Domínios (%): ${comparisonDate1 || 'Base'} vs ${comparisonDate2 || 'Atual'}`} 
+                  maxScore={100}
                 />
               ) : (
-                <ComparisonBarChart
-                  data={adultComparisonChartData}
-                  title={`Comparativo Adulto (${periodLabelByValue[reportPeriod as keyof typeof periodLabelByValue] || 'Período'}) - Avaliação Inicial x Intervenção Atual`}
-                  maxScore={adultComparisonMaxScore}
-                />
+                <div className="space-y-6">
+                  <ComparisonBarChart
+                    data={adultComparisonChartData}
+                    title={`Comparativo Adulto (${periodLabelByValue[reportPeriod as keyof typeof periodLabelByValue] || 'Período'}) - Avaliação Inicial x Intervenção Atual (%)`}
+                    maxScore={adultComparisonMaxScore}
+                  />
+                  <EvolutionLineChart
+                    chartData={adultTrendChartData}
+                    maxScore={100}
+                  />
+                </div>
               )}
 
               {isKidsProfile && selectedReportNotes.length > 0 && (

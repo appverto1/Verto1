@@ -924,6 +924,10 @@ export default function App() {
         title: mergedTask.title,
         description: mergedTask.description || '',
         type: mergedTask.type || 'task',
+        max_score:
+          Number.isFinite(Number(mergedTask.maxScore))
+            ? Math.max(1, Math.min(100, Number(mergedTask.maxScore)))
+            : undefined,
         icon: mergedTask.icon || '',
         color: mergedTask.color || '',
         completed: Boolean(mergedTask.completed),
