@@ -10,9 +10,16 @@ import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
 
 export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs }: any) => { 
+  const rawPatientAge = patient?.age;
+  const hasExplicitAge =
+    rawPatientAge !== null &&
+    rawPatientAge !== undefined &&
+    String(rawPatientAge).trim() !== '';
+  const normalizedPatientAge = hasExplicitAge ? Number(rawPatientAge) : Number.NaN;
+  const hasNumericAge = Number.isFinite(normalizedPatientAge) && normalizedPatientAge >= 0;
   const isKidsProfile =
     patient?.anamnesisData?.formType === 'child' ||
-    (patient?.anamnesisData?.formType !== 'adult' && patient?.age !== undefined && patient.age <= 12);
+    (patient?.anamnesisData?.formType !== 'adult' && hasNumericAge && normalizedPatientAge <= 12);
   const [activeTab, setActiveTab] = useState(initialTab); 
   const [newNote, setNewNote] = useState(""); 
   const [noteMode, setNoteMode] = useState('private'); 
@@ -178,8 +185,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [reportEndDate, setReportEndDate] = useState("");
 
   const [selectedChartProtocolId, setSelectedChartProtocolId] = useState(() => {
-    const isKid = (patient.age !== undefined && patient.age <= 12) || patient.anamnesisData?.formType === 'child';
-    if (isKid) {
+    if (isKidsProfile) {
       const vbmapp = protocols.find((p: any) => p.title.includes('VB-MAPP'));
       if (vbmapp) return vbmapp.id;
     }
@@ -506,12 +512,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     return Array.from(new Set(dates));
   }, [history, patient.id]);
 
-  const patientCategory = useMemo(() => {
-    if (patient.anamnesisData?.formType) {
-      return patient.anamnesisData.formType === 'child' ? 'Criança' : 'Adulto';
-    }
-    return (patient.age !== undefined && patient.age <= 12) ? 'Criança' : 'Adulto';
-  }, [patient]);
+  const patientCategory = useMemo(() => (isKidsProfile ? 'Criança' : 'Adulto'), [isKidsProfile]);
 
   const evaluationSkills = useMemo(() => {
     const skills: any[] = [];
@@ -1055,18 +1056,28 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     setUploadProgress(0);
     setUploadProgress(25);
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(file);
-      });
+      const mimeType = String(file.type || 'application/octet-stream').trim() || 'application/octet-stream';
+      const extensionByMime: Record<string, string> = {
+        'application/pdf': '.pdf',
+        'image/png': '.png',
+        'image/jpeg': '.jpg',
+        'image/jpg': '.jpg',
+        'image/webp': '.webp',
+        'text/plain': '.txt'
+      };
+      const hasExtension = /\.[a-z0-9]+$/i.test(file.name || '');
+      const fallbackExtension = extensionByMime[mimeType] || '';
+      const normalizedName = hasExtension
+        ? String(file.name)
+        : `${String(file.name || `arquivo_${Date.now()}`).replace(/\.+$/g, '')}${fallbackExtension}`;
+      const fileBuffer = await file.arrayBuffer();
+      const fileBlob = new Blob([fileBuffer], { type: mimeType });
       setUploadProgress(80);
 
       const uploadResult = await dataService.uploadPatientFile(String(patient.id), {
-        fileName: file.name,
-        contentType: file.type,
-        fileBase64: dataUrl,
+        fileName: normalizedName,
+        contentType: mimeType,
+        fileBlob,
         source: 'upload',
         metadata: {
           patientName: patient?.name || null
@@ -1517,50 +1528,61 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 )}
               </div>
             )}
-            <div id="history-filters" className="bg-white/80 border border-gray-100 p-4 rounded-3xl shadow-sm mb-6 animate-fade-in">
-              <div className="flex flex-col sm:flex-row items-center gap-4">
-                <div className="flex-1 w-full">
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-2 ml-1">
-                    <SlidersHorizontal size={12} className="text-[#7a32fc]"/> Protocolo Ativo
-                  </label>
-                  <div className="relative">
-                    <select 
-                      id="protocol-selector"
-                      className="w-full bg-gray-50 border border-gray-100 text-sm font-semibold text-gray-700 px-4 py-3 rounded-2xl outline-none focus:border-[#7a32fc]/30 transition-all appearance-none"
-                      value={selectedChartProtocolId}
-                      onChange={(e) => setSelectedChartProtocolId(e.target.value)}
-                    >
-                      {protocols.map((p: any) => (
-                        <option key={p.id} value={p.id}>{p.title}</option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={16} />
+            {isKidsProfile ? (
+              <React.Fragment>
+                <div id="history-filters" className="bg-white/80 border border-gray-100 p-4 rounded-3xl shadow-sm mb-6 animate-fade-in">
+                  <div className="flex flex-col sm:flex-row items-center gap-4">
+                    <div className="flex-1 w-full">
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-2 ml-1">
+                        <SlidersHorizontal size={12} className="text-[#7a32fc]"/> Protocolo Ativo
+                      </label>
+                      <div className="relative">
+                        <select 
+                          id="protocol-selector"
+                          className="w-full bg-gray-50 border border-gray-100 text-sm font-semibold text-gray-700 px-4 py-3 rounded-2xl outline-none focus:border-[#7a32fc]/30 transition-all appearance-none"
+                          value={selectedChartProtocolId}
+                          onChange={(e) => setSelectedChartProtocolId(e.target.value)}
+                        >
+                          {protocols.map((p: any) => (
+                            <option key={p.id} value={p.id}>{p.title}</option>
+                          ))}
+                        </select>
+                        <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={16} />
+                      </div>
+                    </div>
+                    <div className="flex-1 w-full">
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-2 ml-1">
+                        <Calendar size={12} className="text-[#05CD99]"/> Ponto no Tempo
+                      </label>
+                      <div className="relative">
+                        <select 
+                          id="snapshot-selector"
+                          className="w-full bg-gray-50 border border-gray-100 text-sm font-semibold text-gray-700 px-4 py-3 rounded-2xl outline-none focus:border-[#05CD99]/30 transition-all appearance-none"
+                          value={selectedSnapshotDate}
+                          onChange={(e) => setSelectedSnapshotDate(e.target.value)}
+                        >
+                          <option value="all">Visão Geral (Últimas Notas)</option>
+                          {availableSnapshots.map((date: any) => (
+                            <option key={date} value={date}>Avaliação de {date}</option>
+                          ))}
+                        </select>
+                        <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={16} />
+                      </div>
+                    </div>
                   </div>
                 </div>
-                <div className="flex-1 w-full">
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-2 ml-1">
-                    <Calendar size={12} className="text-[#05CD99]"/> Ponto no Tempo
-                  </label>
-                  <div className="relative">
-                    <select 
-                      id="snapshot-selector"
-                      className="w-full bg-gray-50 border border-gray-100 text-sm font-semibold text-gray-700 px-4 py-3 rounded-2xl outline-none focus:border-[#05CD99]/30 transition-all appearance-none"
-                      value={selectedSnapshotDate}
-                      onChange={(e) => setSelectedSnapshotDate(e.target.value)}
-                    >
-                      <option value="all">Visão Geral (Últimas Notas)</option>
-                      {availableSnapshots.map((date: any) => (
-                        <option key={date} value={date}>Avaliação de {date}</option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={16} />
-                  </div>
+                <div id="evolution-chart-container" className="min-h-[320px] min-w-0">
+                  <EvolutionLineChart chartData={radarChartData} maxScore={selectedProtocolMaxScore} />
                 </div>
+              </React.Fragment>
+            ) : (
+              <div className="bg-white border border-gray-100 rounded-3xl p-5 shadow-sm mb-6">
+                <p className="text-sm font-semibold text-gray-700">Histórico Adulto</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Para pacientes adultos, a evolução é acompanhada por tarefas semanais e revisão profissional.
+                </p>
               </div>
-            </div>
-            <div id="evolution-chart-container" className="min-h-[320px] min-w-0">
-              <EvolutionLineChart chartData={radarChartData} maxScore={selectedProtocolMaxScore} />
-            </div>
+            )}
             {(sortedDateKeys?.length || 0) > 0 ? sortedDateKeys.map((dateKey, gIdx) => ( 
               <div key={dateKey} className="relative pl-6 border-l-2 border-gray-200 ml-2"> 
                 <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-[#7551FF] border-4 border-white ring-1 ring-gray-100"></div> 
@@ -1754,11 +1776,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 </div>
               </div>
 
-              <ComparisonBarChart 
-                data={comparisonChartData} 
-                title={(!comparisonDate1 || !comparisonDate2) ? "Exemplo de Comparativo de Domínios (Dados Fictícios)" : `Comparativo de Domínios: ${comparisonDate1} vs ${comparisonDate2}`} 
-                maxScore={selectedProtocolMaxScore}
-              />
+              {isKidsProfile ? (
+                <ComparisonBarChart 
+                  data={comparisonChartData} 
+                  title={(!comparisonDate1 || !comparisonDate2) ? "Exemplo de Comparativo de Domínios (Dados Fictícios)" : `Comparativo de Domínios: ${comparisonDate1} vs ${comparisonDate2}`} 
+                  maxScore={selectedProtocolMaxScore}
+                />
+              ) : (
+                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-5 text-sm text-gray-600">
+                  Relatórios gráficos de PEI/Sessão são exclusivos do modo infantil. No modo adulto, acompanhe tarefas concluídas, esforço e pontuação profissional.
+                </div>
+              )}
 
               {selectedReportNotes.length > 0 && (
                 <div className="mt-8 p-8 bg-gray-50 rounded-[32px] border border-gray-100 animate-fade-in">
@@ -1813,7 +1841,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           </div>
         ) : activeTab === 'plan' ? ( 
           <div className="space-y-6 animate-fade-in"> 
-            {patient.age <= 12 && (
+            {isKidsProfile && (
               <div className="bg-white p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-[#05CD99]/5 rounded-bl-full -z-0"></div>
                 <div className="flex items-center justify-between mb-6 relative z-10">
@@ -2096,7 +2124,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </div>
             )}
 
-            {patient.age > 12 && (
+            {!isKidsProfile && (
               <React.Fragment>
                 <div id="new-schedule-card" className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100"> 
                   <h3 className="font-semibold text-gray-800 text-lg mb-2 tracking-tight">Plano Semanal Adulto</h3> 
@@ -2104,7 +2132,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                     Tarefas para execução fora do consultório, sem pontuação em tempo real.
                   </p>
                   <div className="flex bg-gray-100 p-1 rounded-xl mb-6"> 
-                    <button onClick={() => { setPlanType('task'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'task' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>{patient.age > 12 ? 'Avaliação' : 'Tarefa'}</button> 
+                    <button onClick={() => { setPlanType('task'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'task' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>{!isKidsProfile ? 'Avaliação' : 'Tarefa'}</button> 
                     <button onClick={() => { setPlanType('intervention'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'intervention' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Intervenção</button> 
                     <button onClick={() => { setPlanType('reinforcement'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'reinforcement' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Reforço</button> 
                   </div> 
@@ -2117,7 +2145,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                         </div> 
                         {isCreatingNewTask ? ( 
                           <div className={`animate-fade-in space-y-4 p-4 rounded-2xl border ${planType === 'intervention' ? 'bg-green-50/30 border-green-100' : 'bg-[#F4F7FE] border-blue-100'}`}> 
-                            <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Nome da Nova {planType === 'intervention' ? 'Intervenção' : (patient.age > 12 ? 'Avaliação' : 'Tarefa')}</label><input type="text" className="w-full bg-white rounded-xl p-3 text-sm outline-none border border-transparent focus:border-[#7551FF]" placeholder={planType === 'intervention' ? "Ex: Autoestima" : (patient.age > 12 ? "Ex: Avaliação de Autonomia" : "Ex: Arrumar a cama")} value={newTaskName} onChange={e => setNewTaskName(e.target.value)} /></div> 
+                            <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Nome da Nova {planType === 'intervention' ? 'Intervenção' : (!isKidsProfile ? 'Avaliação' : 'Tarefa')}</label><input type="text" className="w-full bg-white rounded-xl p-3 text-sm outline-none border border-transparent focus:border-[#7551FF]" placeholder={planType === 'intervention' ? "Ex: Autoestima" : (!isKidsProfile ? "Ex: Avaliação de Autonomia" : "Ex: Arrumar a cama")} value={newTaskName} onChange={e => setNewTaskName(e.target.value)} /></div> 
                             {planType === 'task' && (
                               <div className="grid grid-cols-1 gap-3 opacity-80 hover:opacity-100 transition-opacity"> 
                                 <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Código/Tag da atividade (opcional)</label><input type="text" className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-transparent focus:border-[#7551FF]" placeholder="Ex: ADL-SEMANA-01" value={newTaskCode} onChange={e => setNewTaskCode(e.target.value)} /></div> 
@@ -2252,7 +2280,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                             </div> 
                           )} 
                         </div> 
-                        {planType === 'task' && patient.age > 12 && (
+                        {planType === 'task' && !isKidsProfile && (
                           <div className="mt-4 space-y-4">
                             <div>
                               <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Vincular Protocolo de Intervenção</label>
@@ -2345,7 +2373,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                         <div><p className="font-semibold text-gray-800 text-sm tracking-tight">{task.title}</p><p className="text-xs text-gray-500">{new Date(task.scheduledAt).toLocaleDateString('pt-BR')} â€¢ {new Date(task.scheduledAt).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</p></div> 
                       </div> 
                       <div className="flex items-center gap-2"> 
-                        <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase ${task.type === 'reinforcement' ? 'bg-yellow-100 text-yellow-600' : task.type === 'intervention' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>{task.type === 'reinforcement' ? 'Reforço' : task.type === 'intervention' ? 'Intervenção' : (patient.age > 12 ? 'Avaliação' : 'Tarefa')}</span> 
+                        <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase ${task.type === 'reinforcement' ? 'bg-yellow-100 text-yellow-600' : task.type === 'intervention' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>{task.type === 'reinforcement' ? 'Reforço' : task.type === 'intervention' ? 'Intervenção' : (!isKidsProfile ? 'Avaliação' : 'Tarefa')}</span> 
                         <button onClick={() => setEditingTask(task)} className="p-2 text-gray-400 hover:text-[#7551FF] hover:bg-gray-100 rounded-lg transition-colors"> <Edit size={16} /> </button> 
                       </div> 
                     </div> 
@@ -2424,7 +2452,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             )}
  
           </div> 
-        ) : activeTab === 'session' ? (
+        ) : activeTab === 'session' && isKidsProfile ? (
           <div className="space-y-6 animate-fade-in">
             <div className="bg-white p-8 rounded-[40px] shadow-sm border border-gray-100 relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-[#7a32fc]/5 rounded-bl-full -z-0"></div>
