@@ -44,13 +44,13 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
           <Info size={12} /> {Number(maxScore) === 100 ? 'Eixo Y: Proficiência (%) • Eixo X: Domínios' : `Eixo Y: Pontuação (Máx: ${maxScore}) • Eixo X: Domínios`}
         </div>
       </div>
-      <div className="overflow-x-auto pb-3 no-scrollbar">
-        <div style={{ minWidth: `${minWidth}px`, height: '560px', minHeight: '520px' }} className="relative z-10 min-w-0 min-h-0">
+      <div className="overflow-x-auto pb-2 no-scrollbar">
+        <div style={{ minWidth: `${minWidth}px`, height: '460px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
-          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={420}>
+          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={360}>
             <BarChart
               data={safeData}
-              margin={{ top: 24, right: 28, left: 8, bottom: 120 }}
+              margin={{ top: 20, right: 24, left: 6, bottom: 86 }}
               barGap={12}
               barCategoryGap="30%"
             >
@@ -62,9 +62,9 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
                 interval={0}
                 angle={-30}
                 textAnchor="end"
-                height={84}
-                tickMargin={10}
-                tick={{ fill: '#A3AED0', fontSize: 10, fontWeight: 'bold' }}
+                height={78}
+                tickMargin={8}
+                tick={{ fill: '#8ba0c5', fontSize: 11, fontWeight: 'bold' }}
                 padding={{ left: 30, right: 30 }}
               />
               <YAxis 
@@ -111,7 +111,7 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
           )}
       </div>
       </div>
-      <div className="mt-2 flex flex-wrap items-center justify-center gap-4 px-2">
+      <div className="mt-1 flex flex-wrap items-center justify-center gap-4 px-2">
         {periodKeys.map((period, index) => (
           <div key={`legend-${period}`} className="flex items-center gap-2 text-[11px] font-semibold text-gray-600">
             <span className="h-3 w-3 rounded-full" style={{ backgroundColor: periodColors[index % periodColors.length] }} />

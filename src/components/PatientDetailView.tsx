@@ -866,6 +866,48 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       .sort((a: any, b: any) => b.eventDate.getTime() - a.eventDate.getTime());
   }, [assignedTasks]);
 
+  const adultScheduledTasks = useMemo(() => {
+    if (isKidsProfile) return [];
+
+    const fromPatientTasks = (patientTasks || []).map((task: any) => {
+      const scheduledAt = task?.scheduledAt || task?.scheduled_at || task?.created_at || new Date().toISOString();
+      const date = new Date(scheduledAt);
+      return {
+        id: String(task?.id || `local-${scheduledAt}-${task?.title || ''}`),
+        title: String(task?.title || 'Tarefa'),
+        description: String(task?.description || ''),
+        type: String(task?.type || task?.task_type || 'task'),
+        scheduledAt,
+        eventDate: Number.isNaN(date.getTime()) ? new Date() : date,
+        source: 'local'
+      };
+    });
+
+    const fromAssigned = (assignedTasks || [])
+      .filter((task: any) => String(task?.status || 'pending').toLowerCase() !== 'completed')
+      .map((task: any) => {
+        const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
+        const scheduledAt = task?.scheduled_at || task?.created_at || new Date().toISOString();
+        const date = new Date(scheduledAt);
+        return {
+          id: String(task?.id || `assigned-${scheduledAt}`),
+          title: String(taskData?.title || task?.title || 'Tarefa'),
+          description: String(taskData?.description || task?.description || ''),
+          type: String(task?.task_type || task?.type || 'task'),
+          scheduledAt,
+          eventDate: Number.isNaN(date.getTime()) ? new Date() : date,
+          source: 'server'
+        };
+      });
+
+    const mergedMap = new Map<string, any>();
+    [...fromPatientTasks, ...fromAssigned].forEach((task) => {
+      mergedMap.set(String(task.id), task);
+    });
+
+    return Array.from(mergedMap.values()).sort((a: any, b: any) => a.eventDate.getTime() - b.eventDate.getTime());
+  }, [patientTasks, assignedTasks, isKidsProfile]);
+
   const selectedChartProtocol = useMemo(
     () => protocols.find((p: any) => String(p.id) === String(selectedChartProtocolId)),
     [protocols, selectedChartProtocolId]
@@ -1935,25 +1977,28 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             )}
             {!isKidsProfile && (
               <div className="bg-white border border-gray-100 p-5 rounded-3xl shadow-sm">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-gray-800 tracking-tight">Atividades para realizar fora do consultório</h3>
-                  <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 border border-amber-100 px-2.5 py-1 rounded-full uppercase tracking-wide">
-                    Sem pontuação em tempo real
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-semibold text-gray-800 tracking-tight">Próximas Atividades Agendadas</h3>
+                  <span className="text-[10px] font-semibold text-[#7a32fc] bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-full uppercase tracking-wide">
+                    Painel Profissional
                   </span>
                 </div>
-                {(patientTasks?.length || 0) > 0 ? (
-                  <div className="space-y-2">
-                    {(patientTasks || []).map((task: any) => (
-                      <div key={`adult-home-${task.id}`} className="bg-gray-50 border border-gray-100 rounded-2xl px-4 py-3">
-                        <p className="text-sm font-semibold text-gray-800">{task.title}</p>
-                        {task.description ? (
-                          <p className="text-xs text-gray-500 mt-0.5">{task.description}</p>
-                        ) : null}
-                        {task.scheduledAt ? (
-                          <p className="text-[11px] text-gray-400 mt-1">
-                            Programada para {new Date(task.scheduledAt).toLocaleDateString('pt-BR')} às {new Date(task.scheduledAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                          </p>
-                        ) : null}
+                {adultScheduledTasks.length > 0 ? (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    {adultScheduledTasks.map((task: any) => (
+                      <div key={`adult-home-${task.id}`} className="rounded-2xl border border-gray-100 bg-gradient-to-br from-white to-slate-50 px-4 py-3 shadow-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-gray-800">{task.title}</p>
+                            {task.description ? <p className="text-xs text-gray-500 mt-1 line-clamp-2">{task.description}</p> : null}
+                          </div>
+                          <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase ${task.type === 'reinforcement' ? 'bg-yellow-100 text-yellow-700' : task.type === 'intervention' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+                            {task.type === 'reinforcement' ? 'Reforço' : task.type === 'intervention' ? 'Intervenção' : 'Avaliação'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-gray-500 mt-2">
+                          {task.eventDate.toLocaleDateString('pt-BR')} às {task.eventDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                        </p>
                       </div>
                     ))}
                   </div>
@@ -1968,32 +2013,32 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 {adultCompletedTasks.length === 0 ? (
                   <p className="text-sm text-gray-400 italic">Sem eventos concluídos para exibir no histórico adulto.</p>
                 ) : (
-                  <div className="relative pl-6 border-l-2 border-gray-200 ml-2 space-y-4">
+                  <div className="relative pl-8 border-l-2 border-indigo-100 ml-2 space-y-4">
                     {adultCompletedTasks.map((event: any) => (
                       <div key={`adult-history-${event.id}`} className="relative">
-                        <div className="absolute -left-[33px] top-4 w-4 h-4 rounded-full bg-[#7551FF] border-4 border-white ring-1 ring-gray-100"></div>
-                        <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 space-y-2">
+                        <div className="absolute -left-[39px] top-5 w-5 h-5 rounded-full bg-[#7551FF] border-4 border-white ring-2 ring-indigo-100"></div>
+                        <div className="bg-gradient-to-br from-white to-slate-50 border border-gray-100 rounded-2xl p-5 space-y-2 shadow-sm">
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="text-sm font-semibold text-gray-800">{event.taskTitle}</p>
-                            <span className="text-[10px] font-semibold bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-full uppercase">
+                            <p className="text-lg font-semibold text-gray-800 tracking-tight">{event.taskTitle}</p>
+                            <span className="text-[10px] font-semibold bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-full uppercase tracking-wide">
                               {event.taskType === 'intervention' ? 'Intervenção' : event.taskType === 'reinforcement' ? 'Reforço' : 'Avaliação'}
                             </span>
                           </div>
-                          <p className="text-xs text-gray-500">
+                          <p className="text-sm text-gray-500">
                             Execução: {event.eventDate.toLocaleDateString('pt-BR')} às {event.eventDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                           </p>
-                          <p className="text-xs text-gray-600">
-                            Esforço percebido: <span className="font-semibold">{event.patientEffort}%</span>
+                          <p className="text-sm text-gray-600">
+                            Esforço percebido: <span className="font-semibold text-gray-800">{event.patientEffort}%</span>
                           </p>
-                          <p className="text-xs text-gray-600">
+                          <p className="text-sm text-gray-600">
                             Comentário do paciente: {event.patientComment || 'Sem comentário.'}
                           </p>
-                          <p className="text-xs text-gray-600">
-                            Nota final do profissional: <span className="font-semibold">{event.professionalScore ?? '-'} / {event.maxScore}</span>
+                          <p className="text-sm text-gray-600">
+                            Nota final do profissional: <span className="font-semibold text-gray-800">{event.professionalScore ?? '-'} / {event.maxScore}</span>
                           </p>
-                          <div className="bg-white border border-gray-100 rounded-xl p-3">
+                          <div className="bg-white border border-gray-100 rounded-xl p-3 mt-3">
                             <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1">Anotação de Evolução</p>
-                            <p className="text-xs text-gray-700 whitespace-pre-wrap">{event.evolutionNote || 'Sem anotação técnica registrada.'}</p>
+                            <p className="text-sm text-gray-700 whitespace-pre-wrap">{event.evolutionNote || 'Sem anotação técnica registrada.'}</p>
                           </div>
                         </div>
                       </div>
@@ -2954,7 +2999,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 </div> 
                 <div className="space-y-3"> 
                   <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider ml-2 tracking-widest">Agendados</h3> 
-                  {(patientTasks?.length || 0) > 0 ? (patientTasks || []).map((task: any) => ( 
+                  {((isKidsProfile ? (patientTasks || []) : adultScheduledTasks).length || 0) > 0 ? ((isKidsProfile ? (patientTasks || []) : adultScheduledTasks).map((task: any) => ( 
                     <div key={task.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between"> 
                       <div className="flex items-center gap-3"> 
                         <span className="text-xl">{task.type === 'reinforcement' ? 'ðŸŒŸ' : task.type === 'intervention' ? 'âœï¸' : 'ðŸ“‹'}</span> 
@@ -2962,10 +3007,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       </div> 
                       <div className="flex items-center gap-2"> 
                         <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase ${task.type === 'reinforcement' ? 'bg-yellow-100 text-yellow-600' : task.type === 'intervention' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>{task.type === 'reinforcement' ? 'Reforço' : task.type === 'intervention' ? 'Intervenção' : (!isKidsProfile ? 'Avaliação' : 'Tarefa')}</span> 
-                        <button onClick={() => setEditingTask(task)} className="p-2 text-gray-400 hover:text-[#7551FF] hover:bg-gray-100 rounded-lg transition-colors"> <Edit size={16} /> </button> 
+                        {task.source !== 'server' && (
+                          <button onClick={() => setEditingTask(task)} className="p-2 text-gray-400 hover:text-[#7551FF] hover:bg-gray-100 rounded-lg transition-colors"> <Edit size={16} /> </button>
+                        )}
                       </div> 
                     </div> 
-                  )) : <p className="text-center text-gray-400 text-sm py-4 italic">Nada agendado ainda.</p>} 
+                  ))) : <p className="text-center text-gray-400 text-sm py-4 italic">Nada agendado ainda.</p>} 
                 </div>
                 {patientAgeYears !== null && patientAgeYears > 12 && (
                   <div className="space-y-3 mt-4">
