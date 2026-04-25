@@ -963,9 +963,15 @@ export default function App() {
       });
       if (result?.success && result?.data?.id) {
         setTherapistNotes(prev => prev.map((n: any) => (n.id === tempId ? { ...n, id: result.data.id } : n)));
+      } else if (result?.success === false) {
+        setTherapistNotes(prev => prev.filter((n: any) => n.id !== tempId));
+        const errMsg = String(result?.error || 'Não foi possível persistir a anotação no servidor.');
+        alert(errMsg);
       }
     } catch (error) {
       console.error("Falha ao sincronizar nota no servidor:", error);
+      setTherapistNotes(prev => prev.filter((n: any) => n.id !== tempId));
+      alert('Falha ao salvar anotação. Tente novamente.');
     }
   };
   const handleUpdateHistoryItem = async (id: any, score: number, evalComment: string) => { 

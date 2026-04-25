@@ -160,17 +160,27 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
     });
 
     if (response.ok) {
-      const result = await response.json();
+      const result = await safeJson(response);
       // 3. Mark as synced if successful
       await markRecordSyncStatus(id, 'synced');
       return result;
     }
+    const errorPayload = await safeJson(response);
+    return {
+      success: false,
+      offline: true,
+      pending: true,
+      status: response.status,
+      error:
+        errorPayload?.error ||
+        errorPayload?.message ||
+        `Falha ao persistir (${response.status})`,
+      data: payloadWithIdempotency
+    };
   } catch (error) {
     console.log(`Working offline: ${type} saved locally.`);
+    return { success: true, data: payloadWithIdempotency, offline: true, pending: true };
   }
-
-  // 4. Return local data if offline or error
-  return { success: true, data: payloadWithIdempotency, offline: true };
 }
 
 export const dataService = {

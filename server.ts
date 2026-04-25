@@ -317,6 +317,24 @@ function logRouteDbError(route: string, error: any, context: Record<string, any>
 const OFFICIAL_FROM_CONTACT = 'Verto <contato@appverto.com.br>';
 const OFFICIAL_FROM_NOREPLY = 'Verto <naoresponda@appverto.com.br>';
 const OFFICIAL_TRANSACTIONAL_REPLY_TO = 'contato@appverto.com.br';
+type ResendTemplateKind =
+  | 'welcome_professional'
+  | 'welcome_patient'
+  | 'recovery_professional'
+  | 'recovery_patient';
+
+function resolveResendTemplateId(kind?: ResendTemplateKind): string | null {
+  if (!kind) return null;
+  const keyByKind: Record<ResendTemplateKind, string> = {
+    welcome_professional: 'RESEND_TEMPLATE_WELCOME_PROFESSIONAL_ID',
+    welcome_patient: 'RESEND_TEMPLATE_WELCOME_PATIENT_ID',
+    recovery_professional: 'RESEND_TEMPLATE_RECOVERY_PROFESSIONAL_ID',
+    recovery_patient: 'RESEND_TEMPLATE_RECOVERY_PATIENT_ID'
+  };
+  const envKey = keyByKind[kind];
+  const id = sanitizeString(process.env[envKey] || '', 200);
+  return id || null;
+}
 
 function resolveTemplateProfileByRole(role: unknown): 'professional' | 'patient' {
   const normalized = sanitizeString(role, 40).toLowerCase();
@@ -359,6 +377,8 @@ async function sendTransactionalEmailSafe(params: {
   context: string;
   from?: string;
   replyTo?: string;
+  templateKind?: ResendTemplateKind;
+  templateData?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }): Promise<boolean> {
   try {
@@ -367,7 +387,9 @@ async function sendTransactionalEmailSafe(params: {
       subject: params.subject,
       html: params.html,
       from: params.from || OFFICIAL_FROM_NOREPLY,
-      replyTo: params.replyTo || OFFICIAL_TRANSACTIONAL_REPLY_TO
+      replyTo: params.replyTo || OFFICIAL_TRANSACTIONAL_REPLY_TO,
+      templateId: resolveResendTemplateId(params.templateKind),
+      templateData: params.templateData
     });
     return true;
   } catch (error: any) {
@@ -447,13 +469,17 @@ async function sendEmailViaResend({
   subject,
   html,
   from,
-  replyTo
+  replyTo,
+  templateId,
+  templateData
 }: {
   to: string;
   subject: string;
   html: string;
   from?: string;
   replyTo?: string;
+  templateId?: string | null;
+  templateData?: Record<string, unknown>;
 }): Promise<void> {
   const apiKey = sanitizeString(process.env.RESEND_API_KEY || '', 500);
   const defaultFrom = sanitizeString(process.env.RESEND_FROM_EMAIL || '', 320);
@@ -463,15 +489,22 @@ async function sendEmailViaResend({
     throw new Error('RESEND_API_KEY e RESEND_FROM_EMAIL são obrigatórios para envio de e-mails transacionais.');
   }
 
-  const payload = {
+  const payload: Record<string, any> = {
     from: effectiveFrom,
     to: [to],
     subject,
     html,
     ...(effectiveReplyTo ? { reply_to: [effectiveReplyTo] } : {})
   };
+  if (templateId) {
+    payload.template = {
+      id: templateId,
+      variables: templateData || {}
+    };
+    delete payload.html;
+  }
 
-  const response = await fetch('https://api.resend.com/emails', {
+  let response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -479,6 +512,25 @@ async function sendEmailViaResend({
     },
     body: JSON.stringify(payload)
   });
+
+  // Fallback seguro para HTML caso template remoto não esteja disponível/configurado corretamente.
+  if (!response.ok && templateId) {
+    const fallbackPayload = {
+      from: effectiveFrom,
+      to: [to],
+      subject,
+      html,
+      ...(effectiveReplyTo ? { reply_to: [effectiveReplyTo] } : {})
+    };
+    response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(fallbackPayload)
+    });
+  }
 
   if (!response.ok) {
     const body = await response.text();
@@ -2709,6 +2761,11 @@ async function startServer() {
       context: 'signup_activation',
       from: roleToUse === 'patient' ? OFFICIAL_FROM_NOREPLY : OFFICIAL_FROM_CONTACT,
       replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+      templateKind: roleToUse === 'patient' ? 'welcome_patient' : 'welcome_professional',
+      templateData: {
+        nome: name || safeEmail.split('@')[0],
+        link_ativacao: activationLink
+      },
       metadata: {
         email: maskEmail(safeEmail),
         role: roleToUse
@@ -2840,6 +2897,11 @@ async function startServer() {
         context: 'resend_confirmation',
         from: resolveTemplateProfileByRole(profile?.role) === 'patient' ? OFFICIAL_FROM_NOREPLY : OFFICIAL_FROM_CONTACT,
         replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+        templateKind: resolveTemplateProfileByRole(profile?.role) === 'patient' ? 'welcome_patient' : 'welcome_professional',
+        templateData: {
+          nome: sanitizeString(profile?.name || authUser.user_metadata?.full_name || email.split('@')[0], 180),
+          link_ativacao: activationLink
+        },
         metadata: {
           email: maskEmail(email),
           userId: authUser.id
@@ -2926,6 +2988,13 @@ async function startServer() {
         context: 'password_recovery_request',
         from: OFFICIAL_FROM_NOREPLY,
         replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+        templateKind: resolveTemplateProfileByRole(profile?.role) === 'patient' ? 'recovery_patient' : 'recovery_professional',
+        templateData: {
+          nome: sanitizeString(profile?.name || authUser.user_metadata?.full_name || email.split('@')[0], 180),
+          codigo: code,
+          link_recuperacao: recoveryLink || '',
+          expira_em_minutos: 15
+        },
         metadata: {
           email: maskEmail(email),
           userId: authUser.id
@@ -4170,6 +4239,53 @@ async function startServer() {
           .eq('id', authUserId);
       };
 
+      const sendPatientActivationEmailOrFail = async () => {
+        const signupLink = await generateSupabaseActionLink({
+          type: 'signup',
+          email: normalizedEmail,
+          redirectTo: getAuthRedirectUrl()
+        });
+        const fallbackRecoveryLink = signupLink
+          ? null
+          : await generateSupabaseActionLink({
+              type: 'recovery',
+              email: normalizedEmail,
+              redirectTo: getRecoveryRedirectUrl()
+            });
+        const activationLink = signupLink || fallbackRecoveryLink;
+        if (!activationLink) {
+          throw new Error('Não foi possível gerar link de ativação do paciente.');
+        }
+
+        const activationEmail = buildActivationEmailTemplate({
+          nome: safeName,
+          link_ativacao: activationLink,
+          perfil: 'patient'
+        });
+
+        const sent = await sendTransactionalEmailSafe({
+          to: normalizedEmail,
+          subject: activationEmail.subject,
+          html: activationEmail.html,
+          context: 'patient_create_user_activation',
+          from: OFFICIAL_FROM_NOREPLY,
+          replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+          templateKind: 'welcome_patient',
+          templateData: {
+            nome: safeName,
+            link_ativacao: activationLink
+          },
+          metadata: {
+            email: maskEmail(normalizedEmail),
+            clinicId: isUuid(safeClinicId) ? safeClinicId : null
+          }
+        });
+
+        if (!sent) {
+          throw new Error('Error sending confirmation email');
+        }
+      };
+
       // 1. Check if user already exists in 'users' table
       const { data: existingUser, error: checkError } = await supabase
         .from('users')
@@ -4182,7 +4298,12 @@ async function startServer() {
 
       if (existingUser) {
         await ensurePatientLink(existingUser.id);
-        return res.json({ success: true, message: 'User already exists', userId: existingUser.id });
+        await sendPatientActivationEmailOrFail();
+        return res.json({
+          success: true,
+          message: 'Paciente vinculado e e-mail de ativação enviado.',
+          userId: existingUser.id
+        });
       }
 
       // 2. Create user in Supabase Auth (Admin API)
@@ -4192,7 +4313,7 @@ async function startServer() {
       const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
         email: normalizedEmail,
         password: tempPassword,
-        email_confirm: true,
+        email_confirm: false,
         user_metadata: { full_name: safeName }
       });
 
@@ -4208,7 +4329,12 @@ async function startServer() {
           if (foundUser) {
             await upsertPatientProfile(foundUser.id);
             await ensurePatientLink(foundUser.id);
-            return res.json({ success: true, userId: foundUser.id });
+            await sendPatientActivationEmailOrFail();
+            return res.json({
+              success: true,
+              userId: foundUser.id,
+              message: 'Paciente vinculado e e-mail de ativação enviado.'
+            });
           }
         }
         throw authError;
@@ -4217,8 +4343,14 @@ async function startServer() {
       if (authUser?.user) {
         await upsertPatientProfile(authUser.user.id);
         await ensurePatientLink(authUser.user.id);
+        await sendPatientActivationEmailOrFail();
 
-        return res.json({ success: true, userId: authUser.user.id, tempPassword });
+        return res.json({
+          success: true,
+          userId: authUser.user.id,
+          tempPassword,
+          message: 'Paciente criado e e-mail de ativação enviado.'
+        });
       }
 
       res.status(500).json({ error: 'Failed to create user' });
@@ -4443,7 +4575,7 @@ async function startServer() {
         .from('patients')
         .update(updates)
         .eq('id', req.params.id)
-        .select('id, clinic_id, status')
+        .select('id, clinic_id, status, email')
         .maybeSingle();
       
       if (error) throw error;
@@ -4454,6 +4586,30 @@ async function startServer() {
       if (isUuid(clinicForSync)) {
         queueActivePatientSync(clinicForSync, 'patient_patch');
       }
+
+      const patientEmail = sanitizeEmail(updatedPatient?.email);
+      if (patientEmail) {
+        const nextPatientStatus = sanitizeString(
+          updates?.status !== undefined ? updates.status : updatedPatient?.status,
+          40
+        ).toLowerCase();
+        const hasClinicLink = Boolean(sanitizeString(updatedPatient?.clinic_id, 120));
+        const mappedUserStatus =
+          nextPatientStatus === 'inactive' || !hasClinicLink
+            ? 'waiting_treatment'
+            : nextPatientStatus || 'active';
+
+        await supabase
+          .from('users')
+          .update({
+            status: mappedUserStatus,
+            clinic_id: hasClinicLink ? sanitizeString(updatedPatient?.clinic_id, 120) : null,
+            updated_at: new Date().toISOString()
+          })
+          .eq('email', patientEmail)
+          .eq('role', 'patient');
+      }
+
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
@@ -4914,6 +5070,13 @@ async function startServer() {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const role = sanitizeString((req as any).session?.user?.role, 40).toLowerCase();
+      const { data: patientRow } = await supabase
+        .from('patients')
+        .select('email')
+        .eq('id', patientId)
+        .maybeSingle();
+      const patientEmail = sanitizeEmail(patientRow?.email);
+
       let query = supabase
         .from('notes')
         .select('*')
@@ -4921,10 +5084,32 @@ async function startServer() {
       if (role === 'patient') {
         query = query.in('visibility', ['patient', 'shared', 'family']);
       }
-      const { data, error } = await query.order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      res.json({ success: true, data });
+      const { data: notesById, error: notesByIdError } = await query.order('created_at', { ascending: false });
+      if (notesByIdError) throw notesByIdError;
+
+      let notesByEmail: any[] = [];
+      if (patientEmail) {
+        let emailQuery = supabase
+          .from('notes')
+          .select('*')
+          .eq('patient_email', patientEmail)
+          .neq('patient_id', patientId);
+
+        // Em novo vínculo entre clínicas, só compartilhamos notas marcadas como compartilháveis.
+        emailQuery = emailQuery.in('visibility', ['shared', 'family', 'patient']);
+        if (role === 'patient') {
+          emailQuery = emailQuery.in('visibility', ['patient', 'shared', 'family']);
+        }
+
+        const { data: notesByEmailData, error: notesByEmailError } = await emailQuery.order('created_at', { ascending: false });
+        if (notesByEmailError) throw notesByEmailError;
+        notesByEmail = Array.isArray(notesByEmailData) ? notesByEmailData : [];
+      }
+
+      const merged = [...(Array.isArray(notesById) ? notesById : []), ...notesByEmail];
+      const deduped = Array.from(new Map(merged.map((item: any) => [String(item?.id || crypto.randomUUID()), item])).values())
+        .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime());
+      res.json({ success: true, data: deduped });
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }
@@ -5037,14 +5222,36 @@ async function startServer() {
     try {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
-      const { data, error } = await supabase
+      const { data: patientRow } = await supabase
+        .from('patients')
+        .select('email')
+        .eq('id', patientId)
+        .maybeSingle();
+      const patientEmail = sanitizeEmail(patientRow?.email);
+
+      const { data: historyById, error: historyByIdError } = await supabase
         .from('history')
         .select('*')
         .eq('patient_id', patientId)
         .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      res.json({ success: true, data });
+      if (historyByIdError) throw historyByIdError;
+
+      let historyByEmail: any[] = [];
+      if (patientEmail) {
+        const { data: historyByEmailData, error: historyByEmailError } = await supabase
+          .from('history')
+          .select('*')
+          .eq('patient_email', patientEmail)
+          .neq('patient_id', patientId)
+          .order('created_at', { ascending: false });
+        if (historyByEmailError) throw historyByEmailError;
+        historyByEmail = Array.isArray(historyByEmailData) ? historyByEmailData : [];
+      }
+
+      const merged = [...(Array.isArray(historyById) ? historyById : []), ...historyByEmail];
+      const deduped = Array.from(new Map(merged.map((item: any) => [String(item?.id || crypto.randomUUID()), item])).values())
+        .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime());
+      res.json({ success: true, data: deduped });
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }
@@ -5586,14 +5793,36 @@ async function startServer() {
     try {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
-      const { data, error } = await supabase
+      const { data: patientRow } = await supabase
+        .from('patients')
+        .select('email')
+        .eq('id', patientId)
+        .maybeSingle();
+      const patientEmail = sanitizeEmail(patientRow?.email);
+
+      const { data: tasksById, error: tasksByIdError } = await supabase
         .from('tasks')
         .select('*')
         .eq('patient_id', patientId)
         .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      res.json({ success: true, data });
+      if (tasksByIdError) throw tasksByIdError;
+
+      let tasksByEmail: any[] = [];
+      if (patientEmail) {
+        const { data: tasksByEmailData, error: tasksByEmailError } = await supabase
+          .from('tasks')
+          .select('*')
+          .eq('patient_email', patientEmail)
+          .neq('patient_id', patientId)
+          .order('created_at', { ascending: false });
+        if (tasksByEmailError) throw tasksByEmailError;
+        tasksByEmail = Array.isArray(tasksByEmailData) ? tasksByEmailData : [];
+      }
+
+      const merged = [...(Array.isArray(tasksById) ? tasksById : []), ...tasksByEmail];
+      const deduped = Array.from(new Map(merged.map((item: any) => [String(item?.id || crypto.randomUUID()), item])).values())
+        .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime());
+      res.json({ success: true, data: deduped });
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }
