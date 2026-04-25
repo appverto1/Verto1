@@ -4078,6 +4078,55 @@ async function startServer() {
       const safeName = sanitizeString(name, 160) || String(safeEmail || email).split('@')[0];
       const safeClinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120);
       const safeProfessionalId = sanitizeString(req.session.user?.id, 120);
+      const normalizedEmail = String(safeEmail || email || '').trim().toLowerCase();
+      if (!normalizedEmail) {
+        return res.status(400).json({ success: false, error: 'Email inválido.' });
+      }
+
+      const upsertPatientProfile = async (authUserId: string) => {
+        const profilePayload = cleanObject({
+          id: authUserId,
+          email: normalizedEmail,
+          name: safeName,
+          role: 'patient',
+          subscription_status: 'pending',
+          plan_price: 4.90,
+          clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
+          status: 'active',
+          created_at: new Date().toISOString()
+        });
+
+        const { error: profileError } = await supabase
+          .from('users')
+          .upsert([profilePayload], { onConflict: 'id' });
+
+        if (!profileError) return;
+
+        const profileErrorMessage = String(profileError?.message || '');
+        const isSchemaMismatch =
+          profileErrorMessage.toLowerCase().includes('column') ||
+          profileErrorMessage.toLowerCase().includes('schema');
+
+        if (!isSchemaMismatch) {
+          throw profileError;
+        }
+
+        const fallbackProfilePayload = cleanObject({
+          id: authUserId,
+          email: normalizedEmail,
+          name: safeName,
+          role: 'patient',
+          clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
+          status: 'active',
+          created_at: new Date().toISOString()
+        });
+
+        const { error: fallbackProfileError } = await supabase
+          .from('users')
+          .upsert([fallbackProfilePayload], { onConflict: 'id' });
+
+        if (fallbackProfileError) throw fallbackProfileError;
+      };
 
       const ensurePatientLink = async (authUserId: string) => {
         const patientPayload = cleanObject({
@@ -4125,7 +4174,8 @@ async function startServer() {
       const { data: existingUser, error: checkError } = await supabase
         .from('users')
         .select('id')
-        .eq('email', safeEmail || email)
+        .eq('email', normalizedEmail)
+        .limit(1)
         .maybeSingle();
 
       if (checkError) throw checkError;
@@ -4140,7 +4190,7 @@ async function startServer() {
       const tempPassword = Math.random().toString(36).slice(-10) + 'Verto123!';
       
       const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
-        email: safeEmail || email,
+        email: normalizedEmail,
         password: tempPassword,
         email_confirm: true,
         user_metadata: { full_name: safeName }
@@ -4151,21 +4201,12 @@ async function startServer() {
         if (authError.message.includes('already registered')) {
           // Try to find the user by email in auth to get their ID
           const { data: listUsers, error: listError } = await supabase.auth.admin.listUsers();
-          const foundUser = listUsers?.users.find(u => u.email === email);
+          if (listError) throw listError;
+          const foundUser = listUsers?.users.find(
+            (u) => String(u.email || '').trim().toLowerCase() === normalizedEmail
+          );
           if (foundUser) {
-            // Create the profile in 'users' table
-            const newProfile = cleanObject({
-              id: foundUser.id,
-              email: safeEmail || email,
-              name: safeName,
-              role: 'patient',
-              subscription_status: 'pending',
-              plan_price: 4.90,
-              clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
-              status: 'active',
-              created_at: new Date().toISOString()
-            });
-            await supabase.from('users').upsert([newProfile], { onConflict: 'id' });
+            await upsertPatientProfile(foundUser.id);
             await ensurePatientLink(foundUser.id);
             return res.json({ success: true, userId: foundUser.id });
           }
@@ -4174,24 +4215,7 @@ async function startServer() {
       }
 
       if (authUser?.user) {
-        // 3. Create profile in 'users' table
-        const newProfile = cleanObject({
-          id: authUser.user.id,
-          email: safeEmail || email,
-          name: safeName,
-          role: 'patient',
-          subscription_status: 'pending',
-          plan_price: 4.90,
-          clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
-          status: 'active',
-          created_at: new Date().toISOString()
-        });
-
-        const { error: profileError } = await supabase
-          .from('users')
-          .upsert([newProfile], { onConflict: 'id' });
-
-        if (profileError) throw profileError;
+        await upsertPatientProfile(authUser.user.id);
         await ensurePatientLink(authUser.user.id);
 
         return res.json({ success: true, userId: authUser.user.id, tempPassword });

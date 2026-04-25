@@ -1,5 +1,5 @@
 import Dexie, { Table } from 'dexie';
-import { ensureFreshSession } from '../lib/supabase';
+import { ensureFreshSession, getSupabase } from '../lib/supabase';
 
 export interface OfflineRecord {
   id: string;

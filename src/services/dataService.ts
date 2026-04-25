@@ -133,15 +133,19 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
   };
 
   // 1. Save locally first
-  await saveEncryptedRecord({
-    id,
-    data: payloadWithIdempotency,
-    type,
-    sync_status: 'pending',
-    last_updated: Date.now(),
-    method,
-    endpoint
-  });
+  try {
+    await saveEncryptedRecord({
+      id,
+      data: payloadWithIdempotency,
+      type,
+      sync_status: 'pending',
+      last_updated: Date.now(),
+      method,
+      endpoint
+    });
+  } catch (offlineError) {
+    console.error(`[offline-cache] failed to persist ${type} locally:`, offlineError);
+  }
 
   // 2. Try to sync with server
   try {
@@ -357,10 +361,13 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify({ email, name, type })
       });
-      if (response.ok) {
-        return await response.json();
-      }
-      return { success: false, error: 'Failed to create patient user' };
+      const result = await safeJson(response);
+      if (response.ok) return result;
+      return {
+        success: false,
+        error: result?.error || result?.message || 'Failed to create patient user',
+        details: result
+      };
     } catch (error) {
       console.error('Error creating patient user:', error);
       return { success: false, error: String(error) };
