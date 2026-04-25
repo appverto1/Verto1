@@ -20,7 +20,13 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
 
   const firstRow = safeData[0] || {};
   const periodKeys = Object.keys(firstRow).filter((key) => key !== 'name');
-  const yTicks = Array.from({ length: Math.floor(maxScore) + 1 }, (_, i) => i);
+  const safeMaxScore = Math.max(1, Number(maxScore) || 1);
+  const yTicks =
+    safeMaxScore === 100
+      ? [0, 20, 40, 60, 80, 100]
+      : safeMaxScore <= 10
+        ? Array.from({ length: safeMaxScore + 1 }, (_, i) => i)
+        : Array.from({ length: 6 }, (_, i) => Math.round((safeMaxScore * i) / 5));
   
   // Calculate dynamic width based on number of labels to prevent crowding
   const minWidth = Math.max(980, safeData.length * Math.max(180, periodKeys.length * 90));
@@ -39,12 +45,12 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
         </div>
       </div>
       <div className="overflow-x-auto pb-3 no-scrollbar">
-        <div style={{ minWidth: `${minWidth}px`, height: '430px', minHeight: '380px' }} className="relative z-10 min-w-0 min-h-0">
+        <div style={{ minWidth: `${minWidth}px`, height: '560px', minHeight: '520px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
-          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
+          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={420}>
             <BarChart
               data={safeData}
-              margin={{ top: 16, right: 28, left: 4, bottom: 80 }}
+              margin={{ top: 24, right: 28, left: 8, bottom: 120 }}
               barGap={12}
               barCategoryGap="30%"
             >
@@ -64,10 +70,11 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
               <YAxis 
                 axisLine={false} 
                 tickLine={false} 
-                tick={{ fill: '#A3AED0', fontSize: 10, fontWeight: 'bold' }}
+                tick={{ fill: '#7f93b8', fontSize: 12, fontWeight: 'bold' }}
                 dx={-5}
                 domain={[0, maxScore]}
                 ticks={yTicks}
+                width={52}
               />
             <Tooltip 
               cursor={{ fill: '#F8FAFC' }}

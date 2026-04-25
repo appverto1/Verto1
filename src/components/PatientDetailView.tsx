@@ -1875,6 +1875,65 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         {activeTab === 'history' ? ( 
           <div className="space-y-6"> 
             {!isKidsProfile && (
+              <div className="space-y-4 mb-6">
+                <div className="bg-white border border-gray-100 rounded-3xl p-5 shadow-sm">
+                  <p className="text-sm font-semibold text-gray-700">Histórico Adulto</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Comparativo por domínio do protocolo, entre duas datas selecionadas.
+                  </p>
+                </div>
+                <div className="bg-white border border-gray-100 rounded-3xl p-4 sm:p-5 shadow-sm space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Protocolo</label>
+                      <select
+                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
+                        value={selectedChartProtocolId}
+                        onChange={(e) => setSelectedChartProtocolId(e.target.value)}
+                      >
+                        {ageCompatibleProtocols.map((protocol: any) => (
+                          <option key={protocol.id} value={protocol.id}>{protocol.title}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Data Base</label>
+                      <select
+                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
+                        value={comparisonDate1}
+                        onChange={(e) => setComparisonDate1(e.target.value)}
+                      >
+                        <option value="">Selecione...</option>
+                        {adultProtocolSnapshotDates.map((date: any) => (
+                          <option key={`adult-date-base-${date.key}`} value={date.key}>{date.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Data Comparação</label>
+                      <select
+                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
+                        value={comparisonDate2}
+                        onChange={(e) => setComparisonDate2(e.target.value)}
+                      >
+                        <option value="">Selecione...</option>
+                        {adultProtocolSnapshotDates.map((date: any) => (
+                          <option key={`adult-date-comp-${date.key}`} value={date.key}>{date.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="min-h-[520px] min-w-0">
+                    <ComparisonBarChart
+                      data={adultDomainComparisonData}
+                      title={`Comparativo por Domínio (${selectedChartProtocol?.title || 'Protocolo'})`}
+                      maxScore={100}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+            {!isKidsProfile && (
               <div className="bg-white border border-gray-100 p-5 rounded-3xl shadow-sm">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-semibold text-gray-800 tracking-tight">Atividades para realizar fora do consultório</h3>
@@ -1990,65 +2049,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   <EvolutionLineChart chartData={radarChartData} maxScore={selectedProtocolMaxScore} />
                 </div>
               </React.Fragment>
-            ) : (
-              <div className="space-y-4 mb-6">
-                <div className="bg-white border border-gray-100 rounded-3xl p-5 shadow-sm">
-                  <p className="text-sm font-semibold text-gray-700">Histórico Adulto</p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Comparativo por domínio do protocolo, entre duas datas selecionadas.
-                  </p>
-                </div>
-                <div className="bg-white border border-gray-100 rounded-3xl p-4 sm:p-5 shadow-sm space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <div>
-                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Protocolo</label>
-                      <select
-                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
-                        value={selectedChartProtocolId}
-                        onChange={(e) => setSelectedChartProtocolId(e.target.value)}
-                      >
-                        {ageCompatibleProtocols.map((protocol: any) => (
-                          <option key={protocol.id} value={protocol.id}>{protocol.title}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Data Base</label>
-                      <select
-                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
-                        value={comparisonDate1}
-                        onChange={(e) => setComparisonDate1(e.target.value)}
-                      >
-                        <option value="">Selecione...</option>
-                        {adultProtocolSnapshotDates.map((date: any) => (
-                          <option key={`adult-date-base-${date.key}`} value={date.key}>{date.label}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Data Comparação</label>
-                      <select
-                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
-                        value={comparisonDate2}
-                        onChange={(e) => setComparisonDate2(e.target.value)}
-                      >
-                        <option value="">Selecione...</option>
-                        {adultProtocolSnapshotDates.map((date: any) => (
-                          <option key={`adult-date-comp-${date.key}`} value={date.key}>{date.label}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  <div className="min-h-[360px] min-w-0">
-                    <ComparisonBarChart
-                      data={adultDomainComparisonData}
-                      title={`Comparativo por Domínio (${selectedChartProtocol?.title || 'Protocolo'})`}
-                      maxScore={100}
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
+            ) : null}
             {isKidsProfile && ((sortedDateKeys?.length || 0) > 0 ? sortedDateKeys.map((dateKey, gIdx) => ( 
               <div key={dateKey} className="relative pl-6 border-l-2 border-gray-200 ml-2"> 
                 <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-[#7551FF] border-4 border-white ring-1 ring-gray-100"></div> 
