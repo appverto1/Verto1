@@ -5465,13 +5465,24 @@ async function startServer() {
         { createIfMissing: true, fallbackName: sanitizeString(req.body?.patient_name, 160) }
       );
       const safeVisibility = new Set(['private', 'shared', 'family', 'professional', 'patient']);
+      const normalizedVisibility = safeVisibility.has(String(req.body?.visibility))
+        ? String(req.body?.visibility)
+        : 'private';
+      const normalizedType = (() => {
+        const providedType = sanitizeString(req.body?.type, 40).toLowerCase();
+        if (providedType && safeVisibility.has(providedType)) return providedType;
+        if (normalizedVisibility === 'professional') return 'professional';
+        if (normalizedVisibility === 'patient' || normalizedVisibility === 'shared' || normalizedVisibility === 'family') return 'shared';
+        return 'private';
+      })();
       const payload = cleanObject({
         id: sanitizeString(req.body?.id, 120) || undefined,
         patient_id: resolvedPatientId,
         patient_email: sanitizeEmail(req.body?.patient_email),
         text: sanitizeTextField(req.body?.text, 12000),
         content: sanitizeTextField(req.body?.text, 12000),
-        visibility: safeVisibility.has(String(req.body?.visibility)) ? String(req.body?.visibility) : 'private',
+        visibility: normalizedVisibility,
+        type: normalizedType,
         subject: sanitizeTextField(req.body?.subject, 100) || 'Geral',
         original_id: sanitizeString(req.body?.original_id, 120) || undefined,
         therapist_id: sanitizeString(req.session.user.id, 120),
@@ -6403,13 +6414,23 @@ async function startServer() {
       }
 
       const safeVisibility = new Set(['private', 'shared', 'family', 'professional', 'patient']);
+      const updatedVisibility =
+        req.body?.visibility !== undefined
+          ? (safeVisibility.has(String(req.body?.visibility)) ? String(req.body?.visibility) : undefined)
+          : undefined;
+      const updatedType =
+        updatedVisibility !== undefined
+          ? (updatedVisibility === 'professional'
+              ? 'professional'
+              : updatedVisibility === 'patient' || updatedVisibility === 'shared' || updatedVisibility === 'family'
+                ? 'shared'
+                : 'private')
+          : undefined;
       const updates = cleanObject({
         text: req.body?.text !== undefined ? sanitizeTextField(req.body?.text, 12000) : undefined,
         content: req.body?.text !== undefined ? sanitizeTextField(req.body?.text, 12000) : undefined,
-        visibility:
-          req.body?.visibility !== undefined
-            ? (safeVisibility.has(String(req.body?.visibility)) ? String(req.body?.visibility) : undefined)
-            : undefined,
+        visibility: updatedVisibility,
+        type: updatedType,
         subject: req.body?.subject !== undefined ? (sanitizeTextField(req.body?.subject, 100) || 'Geral') : undefined,
         updated_at: new Date().toISOString()
       });
