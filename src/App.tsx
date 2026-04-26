@@ -526,6 +526,55 @@ export default function App() {
   const [crp, setCrp] = useState<string>('');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
+
+  const normalizeAndDecorateNotes = (rawNotes: any[]) => {
+    const normalized = (Array.isArray(rawNotes) ? rawNotes : []).map((n: any) => {
+      const visibility = String(n?.visibility || '').toLowerCase();
+      const fallbackType =
+        visibility === 'professional'
+          ? 'professional'
+          : visibility === 'patient' || visibility === 'shared' || visibility === 'family'
+            ? 'shared'
+            : 'private';
+      return {
+        ...n,
+        id: n?.id,
+        patientId: n?.patientId || n?.patient_id,
+        originalId: n?.originalId || n?.original_id || null,
+        type: n?.type || fallbackType,
+        hasSharedCopy: Boolean(n?.hasSharedCopy),
+        hasProfessionalCopy: Boolean(n?.hasProfessionalCopy),
+        date: n?.date || (n?.created_at ? new Date(n.created_at).toLocaleString() : new Date().toLocaleString())
+      };
+    });
+
+    const copiesByOriginal = new Map<string, { patient: boolean; professional: boolean }>();
+    for (const note of normalized) {
+      const originalId = String(note?.originalId || '').trim();
+      if (!originalId) continue;
+      const visibility = String(note?.visibility || '').toLowerCase();
+      const type = String(note?.type || '').toLowerCase();
+      const marker = copiesByOriginal.get(originalId) || { patient: false, professional: false };
+      if (visibility === 'patient' || visibility === 'shared' || visibility === 'family' || type === 'shared') {
+        marker.patient = true;
+      }
+      if (visibility === 'professional' || type === 'professional') {
+        marker.professional = true;
+      }
+      copiesByOriginal.set(originalId, marker);
+    }
+
+    return normalized.map((note: any) => {
+      const originalId = String(note?.originalId || '').trim();
+      if (originalId) return note;
+      const marker = copiesByOriginal.get(String(note?.id || ''));
+      return {
+        ...note,
+        hasSharedCopy: Boolean(marker?.patient || note?.hasSharedCopy),
+        hasProfessionalCopy: Boolean(marker?.professional || note?.hasProfessionalCopy)
+      };
+    });
+  };
   const [clinicStateHydrated, setClinicStateHydrated] = useState(false);
   const clinicStateSyncTimerRef = useRef<any>(null);
   const inactivityTimerRef = useRef<any>(null);
@@ -698,7 +747,7 @@ export default function App() {
         : {},
     );
     setAllPatients(Array.isArray(hydrated.patients) ? hydrated.patients : []);
-    setTherapistNotes(Array.isArray(hydrated.notes) ? hydrated.notes : []);
+    setTherapistNotes(normalizeAndDecorateNotes(Array.isArray(hydrated.notes) ? hydrated.notes : []));
     setHistory(Array.isArray(hydrated.history) ? hydrated.history : []);
     setTasks(Array.isArray(hydrated.tasks) ? hydrated.tasks : []);
     setClinicalRecords(Array.isArray(hydrated.clinicalRecords) ? hydrated.clinicalRecords : []);
@@ -1096,7 +1145,7 @@ export default function App() {
               patientId: newId,
               date: new Date(n.created_at).toLocaleString()
             }));
-            setTherapistNotes(prev => [...prev, ...existingNotes]);
+            setTherapistNotes(prev => normalizeAndDecorateNotes([...prev, ...existingNotes]));
           }
         }
       }
@@ -1564,111 +1613,143 @@ export default function App() {
     }
   };
   
-  useEffect(() => { 
-    (window as any).handleToggleNoteTypeApp = (id: any, targetVisibility: string) => {
+  useEffect(() => {
+    (window as any).handleToggleNoteTypeApp = async (id: any, targetVisibility: string) => {
       const isUuid = (value: any) =>
         typeof value === 'string' &&
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 
-      setTherapistNotes(prev => {
-        const noteIndex = prev.findIndex(n => n.id === id);
-        if (noteIndex === -1) return prev;
-        const note = prev[noteIndex];
-        const targetLabel = (targetVisibility === 'patient' || targetVisibility === 'shared') ? 'paciente' : 'profissionais';
-        const originalPatientName = allPatients.find((p) => p.id === note.patientId)?.name || `ID ${note.patientId}`;
+      const normalizedTarget = targetVisibility === 'shared' ? 'patient' : targetVisibility;
+      const copyKey = normalizedTarget === 'patient' ? 'hasSharedCopy' : 'hasProfessionalCopy';
+      const targetLabel = normalizedTarget === 'patient' ? 'paciente' : 'profissionais';
+      const notesSnapshot = Array.isArray(therapistNotes) ? [...therapistNotes] : [];
+      const note = notesSnapshot.find((n: any) => n.id === id);
+      if (!note) return;
 
-        // If trying to remove a copy
-        if ((note.visibility === targetVisibility || note.type === targetVisibility) && note.originalId) {
-          onAddActivityLog(
-            "Remoção de compartilhamento de anotação",
-            `Cópia de anotação removida da visibilidade ${targetLabel} no prontuário de ${originalPatientName}.`,
-            "clinical"
-          );
-          (async () => {
-            const { dataService } = await import('./services/dataService');
-            if (isUuid(note.id)) {
-              await dataService.deleteNote(String(note.id));
-            }
-          })();
-          const newNotes = prev.filter(n => n.id !== id);
-          return newNotes.map(n => {
-            if (n.id === note.originalId) {
-              if (targetVisibility === 'patient' || targetVisibility === 'shared') return { ...n, hasSharedCopy: false };
-              if (targetVisibility === 'professional') return { ...n, hasProfessionalCopy: false };
-            }
-            return n;
-          });
-        }
-        
-        // If trying to create a copy
-        const copyKey = (targetVisibility === 'patient' || targetVisibility === 'shared') ? 'hasSharedCopy' : 'hasProfessionalCopy';
-        if (note[copyKey]) {
-          // Remove existing copy
-          const copy = prev.find(n => n.originalId === id && (n.visibility === targetVisibility || n.type === targetVisibility));
-          let newNotes = prev;
-          if (copy) {
-            onAddActivityLog(
-              "Remoção de compartilhamento de anotação",
-              `Cópia de anotação removida da visibilidade ${targetLabel} no prontuário de ${originalPatientName}.`,
-              "clinical"
-            );
-            (async () => {
-              const { dataService } = await import('./services/dataService');
-              if (isUuid(copy.id)) {
-                await dataService.deleteNote(String(copy.id));
-              }
-            })();
-            newNotes = prev.filter(n => n.id !== copy.id);
-          }
-          return newNotes.map(n => n.id === id ? { ...n, [copyKey]: false } : n);
-        }
+      const patientId = String(note?.patientId || note?.patient_id || '').trim();
+      if (!patientId) {
+        console.warn('[notes-share] patientId ausente para nota', { noteId: id });
+        return;
+      }
 
-        // Create new copy
-        const newCopyId = crypto.randomUUID();
-        const newCopy = {
-          ...note,
-          id: newCopyId,
-          visibility: targetVisibility,
-          type: targetVisibility, // Keep type for legacy compatibility
-          originalId: id,
-          hasSharedCopy: false,
-          hasProfessionalCopy: false
-        };
-        
-        // Sync copy to Backend
-        (async () => {
-          const { dataService } = await import('./services/dataService');
-          const patient = allPatients.find(p => p.id === note.patientId);
-          const result = await dataService.addNote({
-            id: newCopyId,
-            patient_id: String(note.patientId),
-            patient_email: patient?.email || null,
-            text: note.text,
-            visibility: targetVisibility,
-            subject: note.subject || "Geral",
-            original_id: String(id)
-          });
-          if (result?.success && result?.data?.id) {
-            setTherapistNotes(current =>
-              current.map((n: any) => (n.id === newCopyId ? { ...n, id: result.data.id } : n))
-            );
-          }
-          await dataService.saveActivityLog({
-            title: "Compartilhamento de anotação",
-            details: `Anotação compartilhada com ${targetLabel} no prontuário de ${patient?.name || `ID ${note.patientId}`}.`,
-            category: "clinical"
-          });
-        })();
-        onAddActivityLog(
-          "Compartilhamento de anotação",
-          `Anotação compartilhada com ${targetLabel} no prontuário de ${originalPatientName}.`,
-          "clinical"
+      const patient = allPatients.find((p: any) => String(p.id) === patientId);
+      const originalPatientName = patient?.name || `ID ${patientId}`;
+      const { dataService } = await import('./services/dataService');
+
+      // Removing a copy directly
+      const isCopy = Boolean(note?.originalId || note?.original_id);
+      const noteVisibility = String(note?.visibility || '').toLowerCase();
+      const noteType = String(note?.type || '').toLowerCase();
+      if (isCopy && (noteVisibility === normalizedTarget || noteType === normalizedTarget)) {
+        setTherapistNotes((prev: any[]) =>
+          normalizeAndDecorateNotes(
+            prev
+              .filter((n: any) => n.id !== id)
+              .map((n: any) =>
+                String(n.id) === String(note.originalId || note.original_id)
+                  ? { ...n, [copyKey]: false }
+                  : n,
+              ),
+          ),
         );
+        if (isUuid(String(note.id))) {
+          const delResult = await dataService.deleteNote(String(note.id));
+          if (!delResult?.success) {
+            console.warn('[notes-share] falha ao remover cópia:', delResult);
+          }
+        }
+        onAddActivityLog(
+          'Remoção de compartilhamento de anotação',
+          `Cópia de anotação removida da visibilidade ${targetLabel} no prontuário de ${originalPatientName}.`,
+          'clinical',
+        );
+        return;
+      }
 
-        return prev.map(n => n.id === id ? { ...n, [copyKey]: true } : n).concat(newCopy);
+      // Toggle off from original note
+      const existingCopy = notesSnapshot.find(
+        (n: any) =>
+          String(n?.originalId || n?.original_id || '') === String(id) &&
+          (String(n?.visibility || '').toLowerCase() === normalizedTarget ||
+            String(n?.type || '').toLowerCase() === normalizedTarget),
+      );
+      if (existingCopy) {
+        setTherapistNotes((prev: any[]) =>
+          normalizeAndDecorateNotes(
+            prev
+              .filter((n: any) => n.id !== existingCopy.id)
+              .map((n: any) => (n.id === id ? { ...n, [copyKey]: false } : n)),
+          ),
+        );
+        if (isUuid(String(existingCopy.id))) {
+          const delResult = await dataService.deleteNote(String(existingCopy.id));
+          if (!delResult?.success) {
+            console.warn('[notes-share] falha ao remover compartilhamento:', delResult);
+          }
+        }
+        onAddActivityLog(
+          'Remoção de compartilhamento de anotação',
+          `Cópia de anotação removida da visibilidade ${targetLabel} no prontuário de ${originalPatientName}.`,
+          'clinical',
+        );
+        return;
+      }
+
+      // Toggle on: create persisted copy
+      const newCopyId = crypto.randomUUID();
+      const newCopy = {
+        ...note,
+        id: newCopyId,
+        patientId,
+        visibility: normalizedTarget,
+        type: normalizedTarget === 'professional' ? 'professional' : 'shared',
+        originalId: String(id),
+        hasSharedCopy: false,
+        hasProfessionalCopy: false,
+      };
+
+      setTherapistNotes((prev: any[]) =>
+        normalizeAndDecorateNotes(prev.map((n: any) => (n.id === id ? { ...n, [copyKey]: true } : n)).concat(newCopy)),
+      );
+
+      const result = await dataService.addNote({
+        id: newCopyId,
+        patient_id: patientId,
+        patient_email: patient?.email || note?.patient_email || null,
+        text: note.text,
+        visibility: normalizedTarget,
+        type: normalizedTarget === 'professional' ? 'professional' : 'shared',
+        subject: note.subject || 'Geral',
+        original_id: String(id),
       });
+
+      if (result?.success && result?.data?.id) {
+        setTherapistNotes((current: any[]) =>
+          normalizeAndDecorateNotes(current.map((n: any) => (n.id === newCopyId ? { ...n, id: result.data.id } : n))),
+        );
+      } else if (result?.success === false && !(result?.offline && result?.pending)) {
+        console.warn('[notes-share] falha ao salvar compartilhamento:', result);
+        setTherapistNotes((prev: any[]) =>
+          normalizeAndDecorateNotes(
+            prev
+              .filter((n: any) => n.id !== newCopyId)
+              .map((n: any) => (n.id === id ? { ...n, [copyKey]: false } : n)),
+          ),
+        );
+      }
+
+      await dataService.saveActivityLog({
+        title: 'Compartilhamento de anotação',
+        details: `Anotação compartilhada com ${targetLabel} no prontuário de ${originalPatientName}.`,
+        category: 'clinical',
+      });
+      onAddActivityLog(
+        'Compartilhamento de anotação',
+        `Anotação compartilhada com ${targetLabel} no prontuário de ${originalPatientName}.`,
+        'clinical',
+      );
     };
-  }, [allPatients]);
+  }, [allPatients, therapistNotes]);
 
   const handleAddFamilyNote = async (pid: any, txt: string, image?: string) => {
     const noteText = `🏠 REGISTRO DA FAMÍLIA\n${txt}`;
