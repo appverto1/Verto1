@@ -420,6 +420,29 @@ export const dataService = {
     return await saveOfflineFirst(id, updates, 'patient', `/api/patients/${id}`, 'PATCH');
   },
 
+  async deletePatient(id: string) {
+    try {
+      const endpoint = `/api/patients/${id}`;
+      const response = await fetchWithAuthRetry(endpoint, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (!response.ok) {
+        return {
+          success: false,
+          error: normalizeApiErrorMessage(result?.error || result?.message || `Falha ao excluir paciente (${response.status})`),
+          details: result
+        };
+      }
+      return { success: true, data: result };
+    } catch (error) {
+      console.error('Error deleting patient:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
   async getActivityLogs() {
     const endpoint = '/api/logs';
     try {

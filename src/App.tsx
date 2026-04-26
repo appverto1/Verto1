@@ -1224,9 +1224,10 @@ export default function App() {
   const handleUpdatePatient = async (updatedData: any) => { 
     // Split updates
     const { diagnosis, anamnesisData, pei, evaluationLinks, interventionTaskLinks, ...identityData } = updatedData;
+    const isDeleteOrUnlink = updatedData?.clinic_id === null || String(updatedData?.status || '').toLowerCase() === 'deleted';
 
     // If unlinking (clinic_id is null), remove from local state
-    if (updatedData.clinic_id === null) {
+    if (isDeleteOrUnlink) {
       setAllPatients(prev => prev.filter(p => p.id !== updatedData.id));
       setClinicalRecords(prev => prev.filter(r => r.patientId !== updatedData.id));
       setTherapistAgenda(prev => prev.filter(a => a.id !== updatedData.id));
@@ -1264,26 +1265,36 @@ export default function App() {
     // Sync to Backend
     if (typeof updatedData.id === 'string' || typeof updatedData.id === 'number') {
       const { dataService } = await import('./services/dataService');
-      await dataService.updatePatient(String(updatedData.id), {
-        name: updatedData.name,
-        email: updatedData.email,
-        phone: updatedData.phone,
-        age: updatedData.age,
-        diagnosis: updatedData.diagnosis,
-        type: updatedData.type,
-        clinic_id: updatedData.clinic_id,
-        status: updatedData.status
-      });
+      if (isDeleteOrUnlink) {
+        const deleteResult = await dataService.deletePatient(String(updatedData.id));
+        if (!deleteResult?.success) {
+          alert(`Não foi possível excluir/desvincular paciente: ${toReadableError(deleteResult?.error || 'Erro desconhecido')}`);
+        }
+      } else {
+        await dataService.updatePatient(String(updatedData.id), {
+          name: updatedData.name,
+          email: updatedData.email,
+          phone: updatedData.phone,
+          age: updatedData.age,
+          diagnosis: updatedData.diagnosis,
+          type: updatedData.type,
+          clinic_id: updatedData.clinic_id,
+          status: updatedData.status
+        });
+      }
 
       if (
-        anamnesisData !== undefined ||
-        diagnosis !== undefined ||
-        updatedData?.type !== undefined ||
-        pei !== undefined ||
-        evaluationLinks !== undefined ||
-        interventionTaskLinks !== undefined ||
-        updatedData?.anamnesisRenewalMonths !== undefined ||
-        updatedData?.lastAnamnesisAt !== undefined
+        !isDeleteOrUnlink &&
+        (
+          anamnesisData !== undefined ||
+          diagnosis !== undefined ||
+          updatedData?.type !== undefined ||
+          pei !== undefined ||
+          evaluationLinks !== undefined ||
+          interventionTaskLinks !== undefined ||
+          updatedData?.anamnesisRenewalMonths !== undefined ||
+          updatedData?.lastAnamnesisAt !== undefined
+        )
       ) {
         const recordPayload: any = {
           workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,

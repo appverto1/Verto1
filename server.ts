@@ -4746,13 +4746,17 @@ async function startServer() {
     try {
       let query = supabase.from('patients').select('*');
       const role = req.session.user.role as AppRole;
+      const scopedClinicId = currentClinicId(req.session.user);
 
       if (role === 'coordinator' || role === 'receptionist') {
-        if (req.session.user.clinicId) {
-          query = query.eq('clinic_id', req.session.user.clinicId);
+        if (scopedClinicId) {
+          query = query.eq('clinic_id', scopedClinicId);
         }
       } else if (role === 'therapist') {
         query = query.eq('therapist_id', req.session.user.id);
+        if (scopedClinicId) {
+          query = query.eq('clinic_id', scopedClinicId);
+        }
       }
       
       const { data, error } = await query;
@@ -4842,20 +4846,36 @@ async function startServer() {
   app.patch('/api/patients/:id', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const canChangeClinic = hasGlobalClinicAccess(req.session.user);
+      const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const scopedClinicId = currentClinicId(req.session.user);
+      const canUnlinkInCurrentClinic =
+        role === 'coordinator' ||
+        role === 'receptionist' ||
+        role === 'therapist' ||
+        hasGlobalClinicAccess(req.session.user);
+      const incomingClinicId = req.body?.clinic_id;
+      const allowClinicUpdate =
+        canChangeClinic ||
+        (incomingClinicId === null && canUnlinkInCurrentClinic);
+
       const updates = cleanObject({
         name: req.body?.name !== undefined ? sanitizeString(req.body?.name, 160) : undefined,
         email: req.body?.email !== undefined ? sanitizeEmail(req.body?.email) : undefined,
         phone: req.body?.phone !== undefined ? sanitizePhone(req.body?.phone) : undefined,
         age: req.body?.age !== undefined ? asSafeNumber(req.body?.age, 0, 130) : undefined,
         diagnosis: req.body?.diagnosis !== undefined ? sanitizeString(req.body?.diagnosis, 2000) : undefined,
-        clinic_id: canChangeClinic && req.body?.clinic_id !== undefined ? sanitizeString(req.body?.clinic_id, 100) : undefined,
+        clinic_id: allowClinicUpdate && req.body?.clinic_id !== undefined ? sanitizeString(req.body?.clinic_id, 100) : undefined,
         status: req.body?.status !== undefined ? sanitizeString(req.body?.status, 40) : undefined
       });
 
-      const { data: updatedPatient, error } = await supabase
+      let patientUpdateQuery = supabase
         .from('patients')
         .update(updates)
-        .eq('id', req.params.id)
+        .eq('id', req.params.id);
+      if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
+        patientUpdateQuery = patientUpdateQuery.eq('clinic_id', scopedClinicId);
+      }
+      const { data: updatedPatient, error } = await patientUpdateQuery
         .select('id, clinic_id, status, email')
         .maybeSingle();
       
@@ -4880,15 +4900,25 @@ async function startServer() {
             ? 'waiting_treatment'
             : nextPatientStatus || 'active';
 
-        await supabase
-          .from('users')
-          .update({
-            status: mappedUserStatus,
-            clinic_id: hasClinicLink ? sanitizeString(updatedPatient?.clinic_id, 120) : null,
-            updated_at: new Date().toISOString()
-          })
-          .eq('email', patientEmail)
-          .eq('role', 'patient');
+        let safeUserPatch: Record<string, any> = cleanObject({
+          status: mappedUserStatus,
+          clinic_id: hasClinicLink ? sanitizeString(updatedPatient?.clinic_id, 120) : null,
+          updated_at: new Date().toISOString()
+        });
+
+        while (Object.keys(safeUserPatch).length > 0) {
+          const { error: userPatchError } = await supabase
+            .from('users')
+            .update(safeUserPatch)
+            .eq('email', patientEmail)
+            .eq('role', 'patient');
+          if (!userPatchError) break;
+          const missingColumn = extractMissingColumnName(userPatchError);
+          if (!missingColumn || !(missingColumn in safeUserPatch)) {
+            throw userPatchError;
+          }
+          delete safeUserPatch[missingColumn];
+        }
       }
 
       void persistActivityLog({
@@ -5485,6 +5515,103 @@ async function startServer() {
       res.json({ success: true, data: deduped });
     } catch (error) {
       res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.delete('/api/patients/:id', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.params.id, 120);
+      if (!isUuid(patientId)) {
+        return res.status(400).json({ success: false, error: 'patientId inválido.' });
+      }
+
+      const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const scopedClinicId = currentClinicId(req.session.user);
+      let findQuery = supabase
+        .from('patients')
+        .select('id, clinic_id, email, name, therapist_id')
+        .eq('id', patientId);
+      if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
+        findQuery = findQuery.eq('clinic_id', scopedClinicId);
+      }
+      const { data: patientRow, error: findError } = await findQuery.maybeSingle();
+      if (findError) throw findError;
+      if (!patientRow?.id) {
+        return res.status(404).json({ success: false, error: 'Paciente não encontrado no escopo da clínica.' });
+      }
+      if (role === 'therapist' && sanitizeString(patientRow?.therapist_id, 120) !== sanitizeString(req.session.user?.id, 120)) {
+        return res.status(403).json({ success: false, error: 'Terapeuta sem permissão para excluir este paciente.' });
+      }
+
+      const nowIso = new Date().toISOString();
+      const unlinkPayload = cleanObject({
+        clinic_id: null,
+        status: 'deleted',
+        therapist_id: null,
+        updated_at: nowIso,
+        deleted_at: nowIso
+      });
+      const fallbackUnlinkPayload = cleanObject({
+        clinic_id: null,
+        status: 'deleted',
+        therapist_id: null
+      });
+
+      let { error: unlinkError } = await supabase
+        .from('patients')
+        .update(unlinkPayload)
+        .eq('id', patientId);
+      if (unlinkError) {
+        const missingColumn = extractMissingColumnName(unlinkError);
+        if (!missingColumn) throw unlinkError;
+        let safeFallbackPayload = { ...fallbackUnlinkPayload };
+        delete safeFallbackPayload[missingColumn];
+        const fallbackResult = await supabase
+          .from('patients')
+          .update(safeFallbackPayload)
+          .eq('id', patientId);
+        unlinkError = fallbackResult.error;
+        if (unlinkError) throw unlinkError;
+      }
+
+      const patientEmail = sanitizeEmail(patientRow?.email);
+      if (patientEmail) {
+        let safeUserPatch: Record<string, any> = cleanObject({
+          status: 'waiting_treatment',
+          clinic_id: null,
+          updated_at: nowIso
+        });
+        while (Object.keys(safeUserPatch).length > 0) {
+          const { error: userPatchError } = await supabase
+            .from('users')
+            .update(safeUserPatch)
+            .eq('email', patientEmail)
+            .eq('role', 'patient');
+          if (!userPatchError) break;
+          const missingColumn = extractMissingColumnName(userPatchError);
+          if (!missingColumn || !(missingColumn in safeUserPatch)) {
+            throw userPatchError;
+          }
+          delete safeUserPatch[missingColumn];
+        }
+      }
+
+      if (scopedClinicId && isUuid(scopedClinicId)) {
+        queueActivePatientSync(scopedClinicId, 'patient_delete');
+      }
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(scopedClinicId || req.session.user?.id, 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+        title: 'Paciente excluído/desvinculado',
+        content: `Paciente ${sanitizeString(patientRow?.name || patientId, 180)} foi removido da clínica.`,
+        type: 'management'
+      });
+
+      return res.json({ success: true, deletedId: patientId });
+    } catch (error) {
+      console.error('[PatientsDelete] error:', error);
+      return res.status(500).json({ success: false, error: extractSupabaseErrorMessage(error) });
     }
   });
 
