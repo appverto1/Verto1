@@ -1864,6 +1864,8 @@ async function startServer() {
           const session = event.data.object as Stripe.Checkout.Session;
           const userId = sanitizeString((session.metadata as any)?.userId, 120);
           const clinicId = sanitizeString((session.metadata as any)?.clinicId, 120);
+          const flowType = sanitizeString((session.metadata as any)?.flowType, 80);
+          const planNameFromMetadata = sanitizeString((session.metadata as any)?.planName, 80);
           const customerEmail = sanitizeEmail(session.customer_details?.email || session.customer_email);
 
           await updateClinicSubscriptionStatus({
@@ -1892,6 +1894,93 @@ async function startServer() {
             } catch (metadataError: any) {
               console.error('[Stripe Webhook] Falha ao atualizar metadata da subscription:', {
                 message: metadataError?.message || String(metadataError)
+              });
+            }
+          }
+
+          // Fluxo de onboarding profissional: ativação só após pagamento confirmado.
+          if (flowType === 'professional_signup' && (userId || customerEmail)) {
+            try {
+              let effectiveUserId = userId;
+              let effectiveEmail = customerEmail;
+              let profile: any = null;
+
+              if (effectiveUserId) {
+                const { data: profileByUser } = await supabase
+                  .from('users')
+                  .select('id, email, name, role')
+                  .eq('id', effectiveUserId)
+                  .maybeSingle();
+                profile = profileByUser || null;
+              }
+
+              if (!profile && effectiveEmail) {
+                const { data: profileByEmail } = await supabase
+                  .from('users')
+                  .select('id, email, name, role')
+                  .eq('email', effectiveEmail)
+                  .maybeSingle();
+                profile = profileByEmail || null;
+              }
+
+              if (profile?.id) {
+                effectiveUserId = sanitizeString(profile.id, 120);
+                effectiveEmail = sanitizeEmail(profile.email) || effectiveEmail;
+                await supabase
+                  .from('users')
+                  .update({
+                    subscription_status: 'active',
+                    plan_name: normalizeProfessionalPlan(planNameFromMetadata) || undefined,
+                    updated_at: new Date().toISOString()
+                  })
+                  .eq('id', effectiveUserId);
+              }
+
+              if (effectiveUserId) {
+                const { data: authData, error: authError } = await supabase.auth.admin.getUserById(effectiveUserId);
+                if (!authError) {
+                  const authUser = authData?.user;
+                  const isEmailConfirmed = Boolean((authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at);
+                  const authEmail = sanitizeEmail(authUser?.email);
+                  const targetEmail = authEmail || effectiveEmail;
+
+                  if (!isEmailConfirmed && targetEmail) {
+                    const activationLink =
+                      (await generateSupabaseActionLink({
+                        type: 'signup',
+                        email: targetEmail,
+                        redirectTo: getAuthRedirectUrl()
+                      })) || getAuthRedirectUrl();
+
+                    const activationEmail = buildActivationEmailTemplate({
+                      nome: sanitizeString(profile?.name || authUser?.user_metadata?.full_name || targetEmail.split('@')[0], 180),
+                      link_ativacao: activationLink,
+                      perfil: 'professional'
+                    });
+
+                    await sendTransactionalEmailSafe({
+                      to: targetEmail,
+                      subject: activationEmail.subject,
+                      html: activationEmail.html,
+                      context: 'professional_signup_after_payment',
+                      from: OFFICIAL_FROM_CONTACT,
+                      replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+                      templateKind: 'welcome_professional',
+                      templateData: {
+                        nome: sanitizeString(profile?.name || authUser?.user_metadata?.full_name || targetEmail.split('@')[0], 180),
+                        link_ativacao: activationLink
+                      },
+                      metadata: {
+                        userId: effectiveUserId,
+                        email: maskEmail(targetEmail)
+                      }
+                    });
+                  }
+                }
+              }
+            } catch (postPaymentEmailError: any) {
+              console.error('[Stripe Webhook] Falha ao enviar ativação pós-pagamento:', {
+                message: postPaymentEmailError?.message || String(postPaymentEmailError)
               });
             }
           }
@@ -2620,7 +2709,10 @@ async function startServer() {
     }
   });
 
-  const registerUserWithEmailConfirmation = async (payload: any) => {
+  const registerUserWithEmailConfirmation = async (
+    payload: any,
+    options: { deferActivationEmail?: boolean } = {}
+  ) => {
     if (!supabaseAuthClient) {
       return {
         ok: false,
@@ -2743,42 +2835,47 @@ async function startServer() {
       await ensureClinicAndMembershipForCoordinator(authUser.id, name || null);
     }
 
-    const activationLink =
-      (await generateSupabaseActionLink({
-        type: 'signup',
-        email: safeEmail,
-        redirectTo: authRedirectTo
-      })) || authRedirectTo;
-    const activationEmail = buildActivationEmailTemplate({
-      nome: name || safeEmail.split('@')[0],
-      link_ativacao: activationLink,
-      perfil: resolveTemplateProfileByRole(roleToUse)
-    });
-    const activationEmailSent = await sendTransactionalEmailSafe({
-      to: safeEmail,
-      subject: activationEmail.subject,
-      html: activationEmail.html,
-      context: 'signup_activation',
-      from: roleToUse === 'patient' ? OFFICIAL_FROM_NOREPLY : OFFICIAL_FROM_CONTACT,
-      replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
-      templateKind: roleToUse === 'patient' ? 'welcome_patient' : 'welcome_professional',
-      templateData: {
+    let activationEmailSent = false;
+    if (!options.deferActivationEmail) {
+      const activationLink =
+        (await generateSupabaseActionLink({
+          type: 'signup',
+          email: safeEmail,
+          redirectTo: authRedirectTo
+        })) || authRedirectTo;
+      const activationEmail = buildActivationEmailTemplate({
         nome: name || safeEmail.split('@')[0],
-        link_ativacao: activationLink
-      },
-      metadata: {
-        email: maskEmail(safeEmail),
-        role: roleToUse
-      }
-    });
+        link_ativacao: activationLink,
+        perfil: resolveTemplateProfileByRole(roleToUse)
+      });
+      activationEmailSent = await sendTransactionalEmailSafe({
+        to: safeEmail,
+        subject: activationEmail.subject,
+        html: activationEmail.html,
+        context: 'signup_activation',
+        from: roleToUse === 'patient' ? OFFICIAL_FROM_NOREPLY : OFFICIAL_FROM_CONTACT,
+        replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+        templateKind: roleToUse === 'patient' ? 'welcome_patient' : 'welcome_professional',
+        templateData: {
+          nome: name || safeEmail.split('@')[0],
+          link_ativacao: activationLink
+        },
+        metadata: {
+          email: maskEmail(safeEmail),
+          role: roleToUse
+        }
+      });
+    }
 
     await persistIdentityAuditLog({
       title: 'Cadastro iniciado com confirmação de e-mail',
-      content: `Cadastro de ${maskEmail(safeEmail)} iniciado. Confirmação de e-mail pendente.${phoneMasked ? ` Telefone para validação: ${phoneMasked}.` : ''} E-mail oficial de ativação ${activationEmailSent ? 'enviado' : 'com falha de envio'}.`,
+      content: options.deferActivationEmail
+        ? `Cadastro de ${maskEmail(safeEmail)} iniciado em modo pendente de pagamento.${phoneMasked ? ` Telefone para validação: ${phoneMasked}.` : ''} E-mail de ativação será enviado após confirmação de pagamento.`
+        : `Cadastro de ${maskEmail(safeEmail)} iniciado. Confirmação de e-mail pendente.${phoneMasked ? ` Telefone para validação: ${phoneMasked}.` : ''} E-mail oficial de ativação ${activationEmailSent ? 'enviado' : 'com falha de envio'}.`,
       identifier: safeEmail,
       channel: 'email',
       userId: authUser.id,
-      status: activationEmailSent ? 'pending_confirmation' : 'warning'
+      status: options.deferActivationEmail ? 'pending' : activationEmailSent ? 'pending_confirmation' : 'warning'
     });
 
     return {
@@ -2786,9 +2883,12 @@ async function startServer() {
       status: 200,
       body: {
         success: true,
+        userId: authUser.id,
         pendingEmailVerification: true,
         pendingPhoneVerification: false,
-        message: 'Conta criada. Enviamos um link de confirmação para seu e-mail. Confirme antes de acessar funcionalidades sensíveis.'
+        message: options.deferActivationEmail
+          ? 'Conta criada em modo pendente de pagamento. O e-mail de ativação será enviado após confirmação no Stripe.'
+          : 'Conta criada. Enviamos um link de confirmação para seu e-mail. Confirme antes de acessar funcionalidades sensíveis.'
       }
     };
   };
@@ -7033,6 +7133,156 @@ async function startServer() {
   });
 
   // --- STRIPE ROUTES ---
+  app.post('/api/stripe/create-checkout-registration', async (req, res) => {
+    try {
+      const safeEmail = sanitizeEmail(req.body?.email);
+      const rawPassword = typeof req.body?.password === 'string' ? req.body.password : '';
+      const password = validateStrongPassword(rawPassword);
+      const safeName = sanitizeString(req.body?.name, 180);
+      const safeCrp = sanitizeString(req.body?.crp, 80);
+      const requestedPlan = normalizeProfessionalPlan(req.body?.planName || '') || sanitizeString(req.body?.planName, 80);
+
+      if (!safeEmail || !password || !safeName || !requestedPlan) {
+        return res.status(400).json({ error: 'Dados obrigatórios ausentes para checkout do cadastro profissional.' });
+      }
+      if (!['Essencial', 'Crescimento', 'Avançado'].includes(requestedPlan)) {
+        return res.status(400).json({ error: 'Plano profissional inválido.' });
+      }
+
+      const planPricesCents: Record<string, number> = {
+        Essencial: 14990,
+        Crescimento: 39990,
+        Avançado: 67990
+      };
+      const planPricesDecimal: Record<string, number> = {
+        Essencial: 149.90,
+        Crescimento: 399.90,
+        Avançado: 679.90
+      };
+
+      let userId: string | null = null;
+      const existingAuthUser = await findAuthUserByEmail(safeEmail);
+      if (existingAuthUser?.id) {
+        const { data: existingProfile } = await supabase
+          .from('users')
+          .select('id, role, subscription_status')
+          .eq('id', existingAuthUser.id)
+          .maybeSingle();
+
+        const existingRole = sanitizeString(existingProfile?.role, 40).toLowerCase();
+        const existingSub = sanitizeString(existingProfile?.subscription_status, 40).toLowerCase();
+        if (existingRole === 'patient') {
+          return res.status(409).json({ error: 'Este e-mail já está cadastrado como paciente.' });
+        }
+        if (existingSub === 'active') {
+          return res.status(409).json({ error: 'Este e-mail já possui assinatura ativa. Faça login.' });
+        }
+
+        userId = sanitizeString(existingAuthUser.id, 120);
+        const { error: updateExistingError } = await supabase
+          .from('users')
+          .update({
+            name: safeName,
+            role: 'coordinator',
+            plan_name: requestedPlan,
+            plan_price: planPricesDecimal[requestedPlan] || null,
+            subscription_status: 'pending',
+            crp: safeCrp || undefined,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', userId);
+        if (updateExistingError) {
+          const fallbackMissingCrp = String(updateExistingError?.message || '').toLowerCase().includes('crp');
+          if (!fallbackMissingCrp) throw updateExistingError;
+          const { error: fallbackUpdateError } = await supabase
+            .from('users')
+            .update({
+              name: safeName,
+              role: 'coordinator',
+              plan_name: requestedPlan,
+              plan_price: planPricesDecimal[requestedPlan] || null,
+              subscription_status: 'pending',
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', userId);
+          if (fallbackUpdateError) throw fallbackUpdateError;
+        }
+      } else {
+        const signupResult = await registerUserWithEmailConfirmation(
+          {
+            email: safeEmail,
+            password,
+            name: safeName,
+            role: 'professional',
+            intendedRole: 'coordinator',
+            planName: requestedPlan,
+            crp: safeCrp
+          },
+          { deferActivationEmail: true }
+        );
+
+        if (!signupResult.ok) {
+          return res.status(signupResult.status).json(signupResult.body);
+        }
+        userId = sanitizeString((signupResult.body as any)?.userId, 120);
+      }
+
+      if (!userId) {
+        return res.status(500).json({ error: 'Não foi possível preparar o cadastro para pagamento.' });
+      }
+
+      const stripe = getStripe();
+      const origin = req.headers.origin || `${req.protocol}://${req.get('host')}`;
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        line_items: [
+          {
+            price_data: {
+              currency: 'brl',
+              product_data: {
+                name: `Plano ${requestedPlan} - Verto`
+              },
+              unit_amount: planPricesCents[requestedPlan],
+              recurring: {
+                interval: 'month'
+              }
+            },
+            quantity: 1
+          }
+        ],
+        mode: 'subscription',
+        success_url: `${origin}/?payment=success&mode=professional-signup`,
+        cancel_url: `${origin}/?payment=cancel&mode=professional-signup`,
+        customer_email: safeEmail,
+        metadata: {
+          flowType: 'professional_signup',
+          userId,
+          clinicId: userId,
+          planName: requestedPlan
+        },
+        subscription_data: {
+          metadata: {
+            flowType: 'professional_signup',
+            userId,
+            clinicId: userId,
+            planName: requestedPlan
+          }
+        }
+      });
+
+      return res.json({ success: true, url: session.url });
+    } catch (error: any) {
+      console.error('[Stripe] create-checkout-registration error:', {
+        message: error?.message || String(error),
+        code: error?.code || null,
+        details: error?.details || null
+      });
+      return res.status(500).json({
+        error: error?.message || 'Erro ao iniciar pagamento do cadastro profissional.'
+      });
+    }
+  });
+
   app.post('/api/stripe/create-checkout', checkAuth, async (req, res) => {
     try {
       const user = req.session.user;

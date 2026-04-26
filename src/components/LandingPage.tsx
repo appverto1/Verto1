@@ -405,8 +405,16 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         return;
       }
 
+      if (registerType === 'professional' && !selectedPlan) {
+        setRegisterStep(3);
+        return;
+      }
+
       setLoading(true);
-      const response = await fetch('/api/auth/signup', {
+      const endpoint = registerType === 'professional'
+        ? '/api/stripe/create-checkout-registration'
+        : '/api/auth/signup';
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -432,6 +440,14 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         throw new Error(data?.error || `Erro ao criar conta (HTTP ${response.status})`);
       }
 
+      if (registerType === 'professional') {
+        if (data?.url) {
+          window.location.href = data.url;
+          return;
+        }
+        throw new Error('Checkout não retornou URL de pagamento.');
+      }
+
       alert(data.message || 'Conta criada. Verifique seu e-mail para confirmar o cadastro.');
       setShowRegister(false);
       setLoginStep('email');
@@ -451,27 +467,12 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
 	  const handleSelectPlan = async (planName: string) => {
     try {
-      setLoading(true);
-      
-      // Call create-checkout with the selected plan
-      const checkoutRes = await fetch('/api/stripe/create-checkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ planName })
-      });
-      const checkoutData = await checkoutRes.json();
-      
-      if (checkoutData.url) {
-        window.location.href = checkoutData.url;
-      } else {
-        throw new Error(checkoutData.error || 'Erro ao iniciar checkout');
-      }
+      setSelectedPlan(planName);
+      const fakeEvent = { preventDefault: () => {} } as React.FormEvent;
+      await handleRegister(fakeEvent);
     } catch (err: any) {
       console.error('Select plan error:', err);
       setRegisterError('Erro ao processar checkout: ' + err.message);
-    } finally {
-      setLoading(false);
     }
   };
 
