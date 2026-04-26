@@ -80,6 +80,20 @@ async function safeJson(response: Response) {
   }
 }
 
+function normalizeApiErrorMessage(value: any): string {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    const message = value.message || value.error || value.details;
+    if (typeof message === 'string') return message;
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return '[erro não serializável]';
+    }
+  }
+  return String(value || 'Erro desconhecido');
+}
+
 function parseJsonObject(value: any) {
   if (!value) return null;
   if (typeof value === 'object') return value;
@@ -393,7 +407,7 @@ export const dataService = {
       if (response.ok) return result;
       return {
         success: false,
-        error: result?.error || result?.message || 'Failed to create patient user',
+        error: normalizeApiErrorMessage(result?.error || result?.message || 'Failed to create patient user'),
         details: result
       };
     } catch (error) {

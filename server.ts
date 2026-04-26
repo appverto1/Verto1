@@ -4492,7 +4492,7 @@ async function startServer() {
           .eq('id', authUserId);
       };
 
-      const sendPatientActivationEmailOrFail = async () => {
+      const sendPatientActivationEmail = async (): Promise<{ sent: boolean; reason?: string }> => {
         const signupLink = await generateSupabaseActionLink({
           type: 'signup',
           email: normalizedEmail,
@@ -4507,7 +4507,13 @@ async function startServer() {
             });
         const activationLink = signupLink || fallbackRecoveryLink;
         if (!activationLink) {
-          throw new Error('Não foi possível gerar link de ativação do paciente.');
+          const reason = 'Não foi possível gerar link de ativação do paciente.';
+          console.error('[PatientActivation] link generation failed:', {
+            email: maskEmail(normalizedEmail),
+            clinicId: isUuid(safeClinicId) ? safeClinicId : null,
+            reason
+          });
+          return { sent: false, reason };
         }
 
         const activationEmail = buildActivationEmailTemplate({
@@ -4535,8 +4541,9 @@ async function startServer() {
         });
 
         if (!sent) {
-          throw new Error('Error sending confirmation email');
+          return { sent: false, reason: 'Falha no envio do e-mail de ativação.' };
         }
+        return { sent: true };
       };
 
       // 1. Check if user already exists in 'users' table
@@ -4558,11 +4565,15 @@ async function startServer() {
           });
         }
         await ensurePatientLink(existingUser.id);
-        await sendPatientActivationEmailOrFail();
+        const emailResult = await sendPatientActivationEmail();
         return res.json({
           success: true,
-          message: 'Paciente vinculado e e-mail de ativação enviado.',
-          userId: existingUser.id
+          message: emailResult.sent
+            ? 'Paciente vinculado e e-mail de ativação enviado.'
+            : 'Paciente vinculado, mas não foi possível enviar o e-mail de ativação agora.',
+          warning: emailResult.sent ? null : (emailResult.reason || 'Falha no envio de e-mail transacional'),
+          activationEmailSent: emailResult.sent,
+          userId: existingUser.id,
         });
       }
 
@@ -4589,11 +4600,15 @@ async function startServer() {
           if (foundUser) {
             await upsertPatientProfile(foundUser.id);
             await ensurePatientLink(foundUser.id);
-            await sendPatientActivationEmailOrFail();
+            const emailResult = await sendPatientActivationEmail();
             return res.json({
               success: true,
               userId: foundUser.id,
-              message: 'Paciente vinculado e e-mail de ativação enviado.'
+              message: emailResult.sent
+                ? 'Paciente vinculado e e-mail de ativação enviado.'
+                : 'Paciente vinculado, mas não foi possível enviar o e-mail de ativação agora.',
+              warning: emailResult.sent ? null : (emailResult.reason || 'Falha no envio de e-mail transacional'),
+              activationEmailSent: emailResult.sent
             });
           }
         }
@@ -4603,19 +4618,31 @@ async function startServer() {
       if (authUser?.user) {
         await upsertPatientProfile(authUser.user.id);
         await ensurePatientLink(authUser.user.id);
-        await sendPatientActivationEmailOrFail();
+        const emailResult = await sendPatientActivationEmail();
 
         return res.json({
           success: true,
           userId: authUser.user.id,
-          message: 'Paciente criado e e-mail de ativação enviado.'
+          message: emailResult.sent
+            ? 'Paciente criado e e-mail de ativação enviado.'
+            : 'Paciente criado, mas não foi possível enviar o e-mail de ativação agora.',
+          warning: emailResult.sent ? null : (emailResult.reason || 'Falha no envio de e-mail transacional'),
+          activationEmailSent: emailResult.sent
         });
       }
 
       res.status(500).json({ error: 'Failed to create user' });
     } catch (error) {
       console.error('Error creating patient user:', error);
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({
+        success: false,
+        error: extractSupabaseErrorMessage(error),
+        details: {
+          context: 'patients_create_user',
+          email: maskEmail(sanitizeEmail(req.body?.email) || ''),
+          code: sanitizeString((error as any)?.code, 40) || null
+        }
+      });
     }
   });
 

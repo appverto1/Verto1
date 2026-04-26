@@ -1150,10 +1150,18 @@ export default function App() {
             setTherapistNotes(prev => normalizeAndDecorateNotes([...prev, ...existingNotes]));
           }
         } else {
-          alert(`Paciente cadastrado com sucesso. Enviamos o e-mail de ativação para ${data.email}.`);
+          if (userResult.activationEmailSent === false) {
+            alert(
+              `Paciente cadastrado e vinculado, mas o e-mail de ativação não foi enviado agora.\n` +
+              `Motivo: ${toReadableError(userResult.warning || userResult.error || 'falha no provedor de e-mail')}\n` +
+              `Você pode usar o recurso de reenviar ativação depois.`
+            );
+          } else {
+            alert(`Paciente cadastrado com sucesso. Enviamos o e-mail de ativação para ${data.email}.`);
+          }
         }
       } else if (userResult?.error) {
-        alert(`Não foi possível enviar o convite do paciente: ${userResult.error}`);
+        alert(`Não foi possível enviar o convite do paciente: ${toReadableError(userResult.error)}`);
       }
     }
 
@@ -2008,3 +2016,16 @@ export default function App() {
   );
 }
 
+  const toReadableError = (input: any) => {
+    if (typeof input === 'string') return input;
+    if (input && typeof input === 'object') {
+      if (typeof input.error === 'string') return input.error;
+      if (typeof input.message === 'string') return input.message;
+      try {
+        return JSON.stringify(input);
+      } catch {
+        return 'Erro desconhecido';
+      }
+    }
+    return String(input || 'Erro desconhecido');
+  };
