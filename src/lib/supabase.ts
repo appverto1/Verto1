@@ -44,21 +44,10 @@ export const ensureFreshSession = async () => {
       console.warn('Supabase getSession warning:', error.message);
       return null;
     }
-
-    const session = data?.session || null;
-    if (!session?.refresh_token) return session;
-
-    const expiresAt = Number(session.expires_at || 0);
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    const shouldRefresh = expiresAt > 0 && expiresAt - nowSeconds <= 60;
-    if (!shouldRefresh) return session;
-
-    const refreshed = await client.auth.refreshSession({ refresh_token: session.refresh_token });
-    if (refreshed.error) {
-      console.warn('Supabase refreshSession warning:', refreshed.error.message);
-      return session;
-    }
-    return refreshed.data?.session || session;
+    // We keep this lightweight and avoid forced manual refresh here.
+    // Supabase autoRefreshToken handles renewal internally; forcing refresh with a stale
+    // token can trigger SIGNED_OUT loops in production.
+    return data?.session || null;
   } catch (error: any) {
     console.warn('ensureFreshSession failed:', error?.message || String(error));
     return null;

@@ -963,7 +963,7 @@ export default function App() {
       });
       if (result?.success && result?.data?.id) {
         setTherapistNotes(prev => prev.map((n: any) => (n.id === tempId ? { ...n, id: result.data.id } : n)));
-      } else if (result?.success === false) {
+      } else if (result?.success === false && !(result?.offline && result?.pending)) {
         setTherapistNotes(prev => prev.filter((n: any) => n.id !== tempId));
         const errMsg = String(result?.error || 'Não foi possível persistir a anotação no servidor.');
         alert(errMsg);
@@ -1566,6 +1566,10 @@ export default function App() {
   
   useEffect(() => { 
     (window as any).handleToggleNoteTypeApp = (id: any, targetVisibility: string) => {
+      const isUuid = (value: any) =>
+        typeof value === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
       setTherapistNotes(prev => {
         const noteIndex = prev.findIndex(n => n.id === id);
         if (noteIndex === -1) return prev;
@@ -1582,7 +1586,9 @@ export default function App() {
           );
           (async () => {
             const { dataService } = await import('./services/dataService');
-            await dataService.deleteNote(String(note.id));
+            if (isUuid(note.id)) {
+              await dataService.deleteNote(String(note.id));
+            }
           })();
           const newNotes = prev.filter(n => n.id !== id);
           return newNotes.map(n => {
@@ -1608,7 +1614,9 @@ export default function App() {
             );
             (async () => {
               const { dataService } = await import('./services/dataService');
-              await dataService.deleteNote(String(copy.id));
+              if (isUuid(copy.id)) {
+                await dataService.deleteNote(String(copy.id));
+              }
             })();
             newNotes = prev.filter(n => n.id !== copy.id);
           }
@@ -1616,9 +1624,10 @@ export default function App() {
         }
 
         // Create new copy
+        const newCopyId = crypto.randomUUID();
         const newCopy = {
           ...note,
-          id: Date.now() + Math.random(),
+          id: newCopyId,
           visibility: targetVisibility,
           type: targetVisibility, // Keep type for legacy compatibility
           originalId: id,
@@ -1630,7 +1639,8 @@ export default function App() {
         (async () => {
           const { dataService } = await import('./services/dataService');
           const patient = allPatients.find(p => p.id === note.patientId);
-          await dataService.addNote({
+          const result = await dataService.addNote({
+            id: newCopyId,
             patient_id: String(note.patientId),
             patient_email: patient?.email || null,
             text: note.text,
@@ -1638,6 +1648,11 @@ export default function App() {
             subject: note.subject || "Geral",
             original_id: String(id)
           });
+          if (result?.success && result?.data?.id) {
+            setTherapistNotes(current =>
+              current.map((n: any) => (n.id === newCopyId ? { ...n, id: result.data.id } : n))
+            );
+          }
           await dataService.saveActivityLog({
             title: "Compartilhamento de anotação",
             details: `Anotação compartilhada com ${targetLabel} no prontuário de ${patient?.name || `ID ${note.patientId}`}.`,

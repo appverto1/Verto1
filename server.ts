@@ -6402,6 +6402,7 @@ async function startServer() {
     try {
       const noteId = sanitizeString(req.params.noteId, 120);
       if (!noteId) return res.status(400).json({ success: false, error: 'noteId inválido.' });
+      if (!isUuid(noteId)) return res.status(400).json({ success: false, error: 'noteId deve ser UUID.' });
       const { data: existing, error: existingError } = await supabase
         .from('notes')
         .select('*')
@@ -6446,6 +6447,7 @@ async function startServer() {
     try {
       const noteId = sanitizeString(req.params.noteId, 120);
       if (!noteId) return res.status(400).json({ success: false, error: 'noteId inválido.' });
+      if (!isUuid(noteId)) return res.status(400).json({ success: false, error: 'noteId deve ser UUID.' });
       const { data: existing, error: existingError } = await supabase
         .from('notes')
         .select('id, patient_id')
