@@ -1986,6 +1986,20 @@ async function startServer() {
           }
           break;
         }
+        case 'checkout.session.expired': {
+          const session = event.data.object as Stripe.Checkout.Session;
+          const flowType = sanitizeString((session.metadata as any)?.flowType, 80);
+          if (flowType === 'professional_signup') {
+            await trackProfessionalSignupCheckoutCancellation({
+              userId: sanitizeString((session.metadata as any)?.userId, 120) || null,
+              email: sanitizeEmail(session.customer_details?.email || session.customer_email) || null,
+              planName: sanitizeString((session.metadata as any)?.planName, 80) || null,
+              checkoutSessionId: sanitizeString(session.id, 200) || null,
+              source: 'stripe_checkout_session_expired'
+            });
+          }
+          break;
+        }
         case 'invoice.payment_failed': {
           const invoice = event.data.object as Stripe.Invoice;
           const subscriptionId = sanitizeString(String(invoice.subscription || ''), 120);
@@ -2315,6 +2329,89 @@ async function startServer() {
       return JSON.stringify(redact(input)).slice(0, 1200);
     } catch {
       return '';
+    }
+  };
+
+  const trackProfessionalSignupCheckoutCancellation = async ({
+    userId,
+    email,
+    planName,
+    checkoutSessionId,
+    source
+  }: {
+    userId?: string | null;
+    email?: string | null;
+    planName?: string | null;
+    checkoutSessionId?: string | null;
+    source?: string | null;
+  }) => {
+    try {
+      const safeUserIdFromBody = sanitizeString(userId, 120);
+      const safeEmail = sanitizeEmail(email);
+      let resolvedUserId = safeUserIdFromBody || '';
+
+      if (!resolvedUserId && safeEmail) {
+        const authUser = await findAuthUserByEmail(safeEmail);
+        resolvedUserId = sanitizeString(authUser?.id, 120) || '';
+      }
+      if (!resolvedUserId) return;
+
+      const { data: profile } = await supabase
+        .from('users')
+        .select('id, name, email, phone, plan_name, subscription_status')
+        .eq('id', resolvedUserId)
+        .maybeSingle();
+      if (!profile) return;
+
+      const currentStatus = sanitizeString(profile.subscription_status, 40).toLowerCase();
+      if (currentStatus === 'active') return;
+
+      const safePlanName = sanitizeString(planName || profile.plan_name, 80);
+      const safeSource = sanitizeString(source, 80) || 'cancel_url_return';
+      const safeSessionId = sanitizeString(checkoutSessionId, 200);
+      const maskedEmail = maskEmail(sanitizeEmail(profile.email) || safeEmail);
+      const maskedPhone = profile.phone ? maskPhone(String(profile.phone)) : null;
+
+      await persistActivityLog({
+        userId: resolvedUserId,
+        clinicId: resolvedUserId,
+        actorName: sanitizeString(profile.name || profile.email || 'Lead profissional', 180),
+        title: 'Checkout cancelado (lead em recuperação)',
+        content: `Lead ${maskedEmail} cancelou checkout${safePlanName ? ` do plano ${safePlanName}` : ''}.`,
+        type: 'lead_recovery',
+        actionType: 'checkout_cancelled',
+        payloadDetails: JSON.stringify({
+          email: maskedEmail,
+          phone: maskedPhone,
+          planName: safePlanName || null,
+          checkoutSessionId: safeSessionId || null,
+          source: safeSource
+        })
+      });
+
+      // Optional enrichment when extra columns exist in production schema.
+      const leadPatch = cleanObject({
+        lead_status: 'checkout_cancelled',
+        lead_source: safeSource,
+        lead_last_checkout_session_id: safeSessionId || null,
+        lead_last_checkout_cancelled_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      });
+      const leadPatchKeys = Object.keys(leadPatch);
+      if (leadPatchKeys.length > 0) {
+        const { error: patchError } = await supabase
+          .from('users')
+          .update(leadPatch)
+          .eq('id', resolvedUserId);
+        if (patchError) {
+          const message = String(patchError?.message || '').toLowerCase();
+          if (!message.includes('column') && !message.includes('schema cache')) {
+            console.warn('[Lead Recovery] Falha ao atualizar patch de lead:', message);
+          }
+        }
+      }
+    } catch (error: any) {
+      console.warn('[Lead Recovery] Falha ao registrar cancelamento de checkout:', error?.message || String(error));
     }
   };
 
@@ -7140,9 +7237,10 @@ async function startServer() {
       const password = validateStrongPassword(rawPassword);
       const safeName = sanitizeString(req.body?.name, 180);
       const safeCrp = sanitizeString(req.body?.crp, 80);
+      const safePhone = sanitizePhoneE164(req.body?.phone || req.body?.whatsappPhone || req.body?.whatsapp);
       const requestedPlan = normalizeProfessionalPlan(req.body?.planName || '') || sanitizeString(req.body?.planName, 80);
 
-      if (!safeEmail || !password || !safeName || !requestedPlan) {
+      if (!safeEmail || !password || !safeName || !requestedPlan || !safePhone) {
         return res.status(400).json({ error: 'Dados obrigatórios ausentes para checkout do cadastro profissional.' });
       }
       if (!['Essencial', 'Crescimento', 'Avançado'].includes(requestedPlan)) {
@@ -7184,6 +7282,7 @@ async function startServer() {
           .update({
             name: safeName,
             role: 'coordinator',
+            phone: safePhone,
             plan_name: requestedPlan,
             plan_price: planPricesDecimal[requestedPlan] || null,
             subscription_status: 'pending',
@@ -7192,13 +7291,15 @@ async function startServer() {
           })
           .eq('id', userId);
         if (updateExistingError) {
-          const fallbackMissingCrp = String(updateExistingError?.message || '').toLowerCase().includes('crp');
-          if (!fallbackMissingCrp) throw updateExistingError;
+          const normalizedUpdateError = String(updateExistingError?.message || '').toLowerCase();
+          const fallbackMissingField = normalizedUpdateError.includes('crp') || normalizedUpdateError.includes('phone');
+          if (!fallbackMissingField) throw updateExistingError;
           const { error: fallbackUpdateError } = await supabase
             .from('users')
             .update({
               name: safeName,
               role: 'coordinator',
+              phone: safePhone,
               plan_name: requestedPlan,
               plan_price: planPricesDecimal[requestedPlan] || null,
               subscription_status: 'pending',
@@ -7216,7 +7317,8 @@ async function startServer() {
             role: 'professional',
             intendedRole: 'coordinator',
             planName: requestedPlan,
-            crp: safeCrp
+            crp: safeCrp,
+            phone: safePhone
           },
           { deferActivationEmail: true }
         );
@@ -7252,7 +7354,7 @@ async function startServer() {
         ],
         mode: 'subscription',
         success_url: `${origin}/?payment=success&mode=professional-signup`,
-        cancel_url: `${origin}/?payment=cancel&mode=professional-signup`,
+        cancel_url: `${origin}/?payment=cancel&mode=professional-signup&lead_ref=${encodeURIComponent(userId)}&plan=${encodeURIComponent(requestedPlan)}&checkout_session_id={CHECKOUT_SESSION_ID}`,
         customer_email: safeEmail,
         metadata: {
           flowType: 'professional_signup',
@@ -7280,6 +7382,89 @@ async function startServer() {
       return res.status(500).json({
         error: error?.message || 'Erro ao iniciar pagamento do cadastro profissional.'
       });
+    }
+  });
+
+  app.get('/api/owner/leads/recovery', checkAuth, checkOwner, async (_req: any, res) => {
+    try {
+      const pendingStatuses = ['pending', 'incomplete', 'incomplete_expired', 'past_due', 'unpaid', 'checkout_abandoned'];
+      const { data: candidates, error: usersError } = await supabase
+        .from('users')
+        .select('id, name, email, phone, plan_name, subscription_status, created_at, updated_at')
+        .eq('role', 'coordinator')
+        .in('subscription_status', pendingStatuses)
+        .order('created_at', { ascending: false })
+        .limit(1000);
+      if (usersError) throw usersError;
+
+      const candidateIds = (candidates || []).map((user: any) => sanitizeString(user.id, 120)).filter(Boolean);
+      let leadLogs: any[] = [];
+      if (candidateIds.length > 0) {
+        const { data: logsData, error: logsError } = await supabase
+          .from('activity_logs')
+          .select('id, user_id, title, content, action_type, payload_details, timestamp')
+          .eq('type', 'lead_recovery')
+          .in('user_id', candidateIds)
+          .order('timestamp', { ascending: false })
+          .limit(5000);
+        if (!logsError) {
+          leadLogs = logsData || [];
+        } else {
+          const { data: fallbackLogs } = await supabase
+            .from('activity_logs')
+            .select('id, user_id, title, content, action_type, payload_details, timestamp')
+            .in('user_id', candidateIds)
+            .ilike('title', '%Checkout cancelado%')
+            .order('timestamp', { ascending: false })
+            .limit(5000);
+          leadLogs = fallbackLogs || [];
+        }
+      }
+
+      const grouped = new Map<string, { lastAt: string | null; cancelCount: number; source: string | null }>();
+      for (const log of leadLogs) {
+        const userId = sanitizeString(log?.user_id, 120);
+        if (!userId) continue;
+        const rawSource = (() => {
+          try {
+            const payload = JSON.parse(String(log?.payload_details || '{}'));
+            return sanitizeString(payload?.source, 80);
+          } catch {
+            return null;
+          }
+        })();
+        const existing = grouped.get(userId);
+        const timestamp = sanitizeString(log?.timestamp, 80) || null;
+        if (!existing) {
+          grouped.set(userId, { lastAt: timestamp, cancelCount: 1, source: rawSource || null });
+        } else {
+          existing.cancelCount += 1;
+          if (!existing.lastAt && timestamp) existing.lastAt = timestamp;
+          if (!existing.source && rawSource) existing.source = rawSource;
+          grouped.set(userId, existing);
+        }
+      }
+
+      const data = (candidates || []).map((user: any) => {
+        const leadMeta = grouped.get(sanitizeString(user.id, 120));
+        return {
+          userId: sanitizeString(user.id, 120),
+          name: sanitizeString(user.name, 180) || 'Lead sem nome',
+          email: sanitizeEmail(user.email),
+          phone: sanitizeString(user.phone, 40) || null,
+          planName: sanitizeString(user.plan_name, 80) || null,
+          subscriptionStatus: sanitizeString(user.subscription_status, 40) || 'pending',
+          createdAt: sanitizeString(user.created_at, 80) || null,
+          lastUpdatedAt: sanitizeString(user.updated_at, 80) || null,
+          lastCheckoutCancelAt: leadMeta?.lastAt || null,
+          cancelCount: Number(leadMeta?.cancelCount || 0),
+          lastCancelSource: leadMeta?.source || null
+        };
+      });
+
+      return res.json({ success: true, data });
+    } catch (error) {
+      return res.status(500).json({ error: String(error) });
     }
   });
 
@@ -7413,6 +7598,33 @@ async function startServer() {
         error: error.message || 'Erro ao criar sessão de pagamento',
         details: process.env.NODE_ENV === 'production' ? undefined : error.stack
       });
+    }
+  });
+
+  app.post('/api/stripe/checkout-cancelled', async (req, res) => {
+    try {
+      const leadRef = sanitizeString(req.body?.leadRef || req.body?.userId, 120);
+      const email = sanitizeEmail(req.body?.email);
+      const planName = sanitizeString(req.body?.planName, 80);
+      const checkoutSessionId = sanitizeString(req.body?.checkoutSessionId || req.body?.sessionId, 200);
+      const source = sanitizeString(req.body?.source, 80) || 'frontend_cancel_event';
+
+      if (!leadRef && !email) {
+        return res.status(400).json({ success: false, error: 'leadRef ou email é obrigatório.' });
+      }
+
+      await trackProfessionalSignupCheckoutCancellation({
+        userId: leadRef || null,
+        email: email || null,
+        planName: planName || null,
+        checkoutSessionId: checkoutSessionId || null,
+        source
+      });
+
+      return res.json({ success: true });
+    } catch (error: any) {
+      console.warn('[Stripe] checkout-cancelled tracking error:', error?.message || String(error));
+      return res.status(200).json({ success: true });
     }
   });
 

@@ -5,6 +5,8 @@ import {
   DollarSign,
   LayoutDashboard,
   LogOut,
+  MessageCircle,
+  Phone,
   Shield,
   TrendingUp,
   Users
@@ -34,7 +36,7 @@ const formatPercent = (value: number) => `${Number(value || 0).toLocaleString('p
 export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [loading, setLoading] = useState(true);
   const [bootstrapping, setBootstrapping] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'financial' | 'customers'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'financial' | 'customers' | 'leads'>('overview');
   const [stats, setStats] = useState<any>(null);
   const [financial, setFinancial] = useState<any>({
     summary: {},
@@ -45,6 +47,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     source: 'fallback'
   });
   const [allCustomers, setAllCustomers] = useState<any[]>([]);
+  const [leadRecoveryItems, setLeadRecoveryItems] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [financialFeatureSurveys, setFinancialFeatureSurveys] = useState<any[]>([]);
 
@@ -56,19 +59,21 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         const token = session?.access_token;
         const headers = { Authorization: token ? `Bearer ${token}` : '' };
 
-        const [statsRes, financialRes, customersRes, surveysRes] = await Promise.all([
+        const [statsRes, financialRes, customersRes, surveysRes, leadsRes] = await Promise.all([
           fetch('/api/owner/stats', { credentials: 'include', headers }),
           fetch('/api/owner/financial-overview', { credentials: 'include', headers }),
           fetch('/api/owner/clients', { credentials: 'include', headers }),
-          fetch('/api/owner/financial-feature-surveys', { credentials: 'include', headers })
+          fetch('/api/owner/financial-feature-surveys', { credentials: 'include', headers }),
+          fetch('/api/owner/leads/recovery', { credentials: 'include', headers })
         ]);
 
         const statsData = await statsRes.json();
         const financialData = await financialRes.json();
         const customersData = await customersRes.json();
         const surveysData = await surveysRes.json();
+        const leadsData = await leadsRes.json();
 
-        if (!statsRes.ok || !financialRes.ok || !customersRes.ok) {
+        if (!statsRes.ok || !financialRes.ok || !customersRes.ok || !leadsRes.ok) {
           throw new Error('Erro ao carregar dados do super admin.');
         }
 
@@ -76,6 +81,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         if (financialData.success) setFinancial(financialData.data);
         if (customersData.success) setAllCustomers(customersData.data || []);
         if (surveysData.success) setFinancialFeatureSurveys(surveysData.data || []);
+        if (leadsData.success) setLeadRecoveryItems(leadsData.data || []);
       } catch (error: any) {
         console.error('Owner dashboard error:', error);
         alert(error.message || 'Nao foi possivel carregar o painel.');
@@ -92,21 +98,24 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     const token = session?.access_token;
     const headers = { Authorization: token ? `Bearer ${token}` : '' };
 
-    const [statsRes, financialRes, customersRes, surveysRes] = await Promise.all([
+    const [statsRes, financialRes, customersRes, surveysRes, leadsRes] = await Promise.all([
       fetch('/api/owner/stats', { credentials: 'include', headers }),
       fetch('/api/owner/financial-overview', { credentials: 'include', headers }),
       fetch('/api/owner/clients', { credentials: 'include', headers }),
-      fetch('/api/owner/financial-feature-surveys', { credentials: 'include', headers })
+      fetch('/api/owner/financial-feature-surveys', { credentials: 'include', headers }),
+      fetch('/api/owner/leads/recovery', { credentials: 'include', headers })
     ]);
 
     const statsData = await statsRes.json();
     const financialData = await financialRes.json();
     const customersData = await customersRes.json();
     const surveysData = await surveysRes.json();
+    const leadsData = await leadsRes.json();
     if (statsData.success) setStats(statsData.stats);
     if (financialData.success) setFinancial(financialData.data);
     if (customersData.success) setAllCustomers(customersData.data || []);
     if (surveysData.success) setFinancialFeatureSurveys(surveysData.data || []);
+    if (leadsData.success) setLeadRecoveryItems(leadsData.data || []);
   };
 
   const handleBootstrapFinance = async () => {
@@ -172,6 +181,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           <SidebarItem icon={<LayoutDashboard size={18} />} label="Resumo" active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} />
           <SidebarItem icon={<BarChart3 size={18} />} label="DRE e EBITDA" active={activeTab === 'financial'} onClick={() => setActiveTab('financial')} />
           <SidebarItem icon={<Users size={18} />} label="Clientes e Lucro" active={activeTab === 'customers'} onClick={() => setActiveTab('customers')} />
+          <SidebarItem icon={<MessageCircle size={18} />} label="Recuperação de Leads" active={activeTab === 'leads'} onClick={() => setActiveTab('leads')} />
         </nav>
 
         <div className="mt-auto p-6 border-t border-slate-100">
@@ -189,7 +199,13 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           <div>
             <p className="text-xs uppercase tracking-[0.18em] text-slate-400 font-bold">Governanca Financeira</p>
             <h1 className="text-3xl font-black text-slate-900">
-              {activeTab === 'overview' ? 'Visao Geral da Rentabilidade' : activeTab === 'financial' ? 'DRE Completo' : 'Clientes e Performance'}
+              {activeTab === 'overview'
+                ? 'Visao Geral da Rentabilidade'
+                : activeTab === 'financial'
+                  ? 'DRE Completo'
+                  : activeTab === 'customers'
+                    ? 'Clientes e Performance'
+                    : 'Recuperacao de Leads'}
             </h1>
           </div>
           <div className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">
@@ -447,6 +463,91 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       {item.notes && <p className="text-xs text-slate-600 mt-2">{item.notes}</p>}
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'leads' && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-[24px] border border-slate-100 p-5 flex flex-wrap gap-4 items-center justify-between">
+              <div className="flex items-center gap-2">
+                <MessageCircle size={17} className="text-slate-500" />
+                <span className="text-sm font-bold text-slate-600">
+                  Leads de checkout cancelado para recuperação comercial
+                </span>
+              </div>
+              <button
+                onClick={refreshAll}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-black uppercase tracking-[0.12em] text-slate-700 hover:bg-slate-50"
+              >
+                Atualizar lista
+              </button>
+            </div>
+
+            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
+              <h3 className="text-lg font-black mb-4">Fila de Recuperação</h3>
+              {leadRecoveryItems.length === 0 ? (
+                <p className="text-sm text-slate-500">Nenhum lead pendente no momento.</p>
+              ) : (
+                <div className="space-y-3 max-h-[560px] overflow-y-auto pr-1">
+                  {leadRecoveryItems.map((lead) => {
+                    const whatsappDigits = String(lead.phone || '').replace(/\D/g, '');
+                    const waLink = whatsappDigits
+                      ? `https://wa.me/${whatsappDigits}?text=${encodeURIComponent('Olá, vi seu cadastro na Verto e posso te ajudar a concluir a ativação.')}`
+                      : null;
+
+                    return (
+                      <div
+                        key={lead.userId}
+                        className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between"
+                      >
+                        <div>
+                          <p className="font-black text-sm text-slate-800">{lead.name || 'Lead sem nome'}</p>
+                          <p className="text-xs text-slate-500">{lead.email || 'Sem e-mail'}</p>
+                          <div className="flex flex-wrap items-center gap-2 mt-2">
+                            <span className="px-2 py-1 rounded-full bg-indigo-50 text-indigo-600 text-[10px] font-black uppercase tracking-[0.1em]">
+                              {lead.planName || 'Plano não informado'}
+                            </span>
+                            <span className="px-2 py-1 rounded-full bg-amber-50 text-amber-700 text-[10px] font-black uppercase tracking-[0.1em]">
+                              {lead.subscriptionStatus || 'pending'}
+                            </span>
+                            <span className="px-2 py-1 rounded-full bg-slate-200 text-slate-700 text-[10px] font-black uppercase tracking-[0.1em]">
+                              Cancelamentos: {Number(lead.cancelCount || 0)}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-2">
+                            Último cancelamento:{' '}
+                            {lead.lastCheckoutCancelAt
+                              ? new Date(lead.lastCheckoutCancelAt).toLocaleString('pt-BR')
+                              : 'Não registrado'}
+                          </p>
+                        </div>
+
+                        <div className="flex flex-col gap-2 min-w-[220px]">
+                          <div className="text-xs font-semibold text-slate-600 flex items-center gap-2">
+                            <Phone size={14} />
+                            {lead.phone || 'Sem WhatsApp informado'}
+                          </div>
+                          {waLink ? (
+                            <a
+                              href={waLink}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 text-white text-xs font-black uppercase tracking-[0.1em] px-3 py-2 hover:bg-emerald-600 transition-colors"
+                            >
+                              <MessageCircle size={14} /> Contatar no WhatsApp
+                            </a>
+                          ) : (
+                            <div className="text-[11px] text-rose-600 font-semibold">
+                              Lead sem telefone. Solicite atualização do cadastro.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

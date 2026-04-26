@@ -42,6 +42,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [crp, setCrp] = useState('');
+  const [whatsappPhone, setWhatsappPhone] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [loginError, setLoginError] = useState('');
@@ -294,6 +295,51 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     }
   }, []);
 
+  useEffect(() => {
+    const syncCancelledCheckoutLead = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const payment = params.get('payment');
+      const mode = params.get('mode');
+      const leadRef = params.get('lead_ref');
+      const checkoutSessionId = params.get('checkout_session_id') || params.get('session_id');
+      const planName = params.get('plan');
+
+      if (payment !== 'cancel' || mode !== 'professional-signup' || !leadRef) return;
+
+      const dedupeKey = `verto_lead_cancel_sent_${leadRef}_${checkoutSessionId || 'no-session'}`;
+      if (sessionStorage.getItem(dedupeKey) === '1') return;
+
+      try {
+        await fetch('/api/stripe/checkout-cancelled', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            leadRef,
+            checkoutSessionId,
+            planName,
+            source: 'cancel_url_return'
+          })
+        });
+        sessionStorage.setItem(dedupeKey, '1');
+      } catch (error) {
+        console.error('Lead cancel sync error:', error);
+      } finally {
+        params.delete('payment');
+        params.delete('mode');
+        params.delete('lead_ref');
+        params.delete('checkout_session_id');
+        params.delete('session_id');
+        params.delete('plan');
+        const nextQuery = params.toString();
+        const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash}`;
+        window.history.replaceState({}, document.title, nextUrl);
+      }
+    };
+
+    void syncCancelledCheckoutLead();
+  }, []);
+
   const handle2FALogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
@@ -388,6 +434,19 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     return null;
   };
 
+  const normalizeWhatsappPhone = (value: string) => {
+    const digits = String(value || '').replace(/\D/g, '');
+    if (!digits) return '';
+    if (digits.length === 13 && digits.startsWith('55')) return `+${digits}`;
+    if (digits.length >= 10 && digits.length <= 11) return `+55${digits}`;
+    return '';
+  };
+
+  const buildEnterpriseWhatsappUrl = () => {
+    const message = 'Olá, me interessei pelo plano enterprise da Verto';
+    return `https://wa.me/5511959348563?text=${encodeURIComponent(message)}`;
+  };
+
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegisterError('');
@@ -395,6 +454,10 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     try {
       if ((registerType === 'professional' || registerType === 'coordinator') && !crp.trim()) {
         setRegisterError('CRP é obrigatório para profissionais.');
+        return;
+      }
+      if ((registerType === 'professional' || registerType === 'coordinator') && !normalizeWhatsappPhone(whatsappPhone)) {
+        setRegisterError('WhatsApp é obrigatório para profissionais (com DDD).');
         return;
       }
 
@@ -425,6 +488,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           role: registerType === 'professional' ? 'coordinator' : 'patient',
           crp: registerType === 'professional' ? crp : undefined,
           planName: registerType === 'patient' ? 'Paciente' : selectedPlan,
+          phone: registerType === 'professional' ? normalizeWhatsappPhone(whatsappPhone) : undefined,
           acquisitionChannel
         })
       });
@@ -1690,6 +1754,22 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                         </div>
                       )}
 
+                      {registerType === 'professional' && (
+                        <div>
+                          <label className="block text-[9px] md:text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1 ml-1">
+                            WhatsApp (Obrigatório)
+                          </label>
+                          <input
+                            type="tel"
+                            required
+                            className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-2.5 md:py-3 px-4 md:px-5 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
+                            placeholder="(11) 99999-9999"
+                            value={whatsappPhone}
+                            onChange={(e) => { setWhatsappPhone(e.target.value); if (registerError) setRegisterError(''); }}
+                          />
+                        </div>
+                      )}
+
                       <div>
                         <label className="block text-[9px] md:text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1 ml-1">E-mail</label>
                         <input 
@@ -1777,7 +1857,22 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                         <Rocket size={20} />
                       </div>
                       <h2 className="text-base md:text-lg font-semibold tracking-tight">Quase lá, {name.split(' ')[0]}!</h2>
-                      <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider mt-1">Selecione o plano ideal para você</p>
+                      <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider mt-1">Escolha o plano ideal para a fase da sua clínica</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
+                      <div className="bg-violet-50 border border-violet-100 rounded-xl px-3 py-2">
+                        <p className="text-[9px] uppercase tracking-wider text-violet-500 font-semibold">Inclui</p>
+                        <p className="text-[11px] text-slate-700 font-medium">Prontuário + Agenda</p>
+                      </div>
+                      <div className="bg-sky-50 border border-sky-100 rounded-xl px-3 py-2">
+                        <p className="text-[9px] uppercase tracking-wider text-sky-500 font-semibold">Suporte</p>
+                        <p className="text-[11px] text-slate-700 font-medium">Onboarding assistido</p>
+                      </div>
+                      <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">
+                        <p className="text-[9px] uppercase tracking-wider text-emerald-500 font-semibold">Escala</p>
+                        <p className="text-[11px] text-slate-700 font-medium">Upgrade sem perda de dados</p>
+                      </div>
                     </div>
 
                     <div className="space-y-2 md:space-y-2.5">
@@ -1801,15 +1896,18 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                           </div>
                         </button>
                       ))}
-                      <button 
-                        onClick={() => handleSelectPlan('Enterprise')}
+                      <button
+                        type="button"
+                        onClick={() => window.open(buildEnterpriseWhatsappUrl(), '_blank', 'noopener,noreferrer')}
                         className="w-full p-3 md:p-4 bg-gray-900 text-white rounded-2xl hover:bg-black transition-all flex items-center justify-between group text-left"
                       >
                         <div>
                           <h3 className="font-semibold text-[11px] md:text-xs">Enterprise</h3>
-                          <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">Clínicas de grande porte</p>
+                          <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">Clínicas de grande porte com suporte dedicado</p>
                         </div>
-                        <span className="text-[8px] md:text-[9px] font-semibold uppercase tracking-wider">Sob Consulta</span>
+                        <span className="text-[8px] md:text-[9px] font-semibold uppercase tracking-wider flex items-center gap-1">
+                          <MessageCircle size={12} /> Falar no WhatsApp
+                        </span>
                       </button>
                     </div>
                   </div>
