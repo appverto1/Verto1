@@ -395,13 +395,13 @@ export const dataService = {
     }
   },
 
-  async createPatientUser(email: string, name: string, type?: string) {
+  async createPatientUser(email: string, name: string, type?: string, cpf?: string | null) {
     try {
       const response = await fetch('/api/patients/create-user', {
         method: 'POST',
         headers: await getAuthHeaders(),
         credentials: 'include',
-        body: JSON.stringify({ email, name, type })
+        body: JSON.stringify({ email, name, type, cpf: cpf || undefined })
       });
       const result = await safeJson(response);
       if (response.ok) return result;

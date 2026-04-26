@@ -1109,6 +1109,11 @@ export default function App() {
 
     if(data.scheduleImmediate) setTherapistAgenda(prev => [...prev, {id: newId, name: data.name, date: data.date || todayStr, time: data.time, status: 'pending', type: 'Primeira', color: 'bg-blue-100 text-blue-600'}].sort((a,b) => a.time.localeCompare(b.time))); 
     onAddActivityLog("Cadastro de Paciente", `Paciente ID ${newId} cadastrado no sistema.`, 'management');
+    const rollbackOptimisticPatient = () => {
+      setAllPatients(prev => prev.filter((p: any) => String(p.id) !== String(newId)));
+      setClinicalRecords(prev => prev.filter((r: any) => String(r.patientId) !== String(newId)));
+      setTherapistAgenda(prev => prev.filter((a: any) => String(a.id) !== String(newId)));
+    };
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -1119,6 +1124,7 @@ export default function App() {
         data.email,
         data.name,
         resolvedPortalType,
+        data.cpf || data.anamnesisData?.cpf || null,
       );
       if (userResult.success) {
         console.log(`User account created for patient: ${data.email}`);
@@ -1162,6 +1168,8 @@ export default function App() {
         }
       } else if (userResult?.error) {
         alert(`Não foi possível enviar o convite do paciente: ${toReadableError(userResult.error)}`);
+        rollbackOptimisticPatient();
+        return;
       }
     }
 
@@ -1169,11 +1177,18 @@ export default function App() {
     const fbResult = await dataService.savePatient({
       name: data.name,
       email: data.email || '',
+      cpf: data.cpf || data.anamnesisData?.cpf || '',
       phone: data.phone,
       age: data.anamnesisData?.idade || data.age || 0,
       diagnosis: data.diagnosis,
       type: resolvedPortalType
     });
+
+    if (!fbResult?.success) {
+      alert(`Não foi possível cadastrar paciente: ${toReadableError(fbResult?.error || 'Erro desconhecido')}`);
+      rollbackOptimisticPatient();
+      return;
+    }
 
     let persistedPatientId: string | number = newId;
     if (fbResult.success && fbResult.data) {
@@ -1199,7 +1214,7 @@ export default function App() {
       grupo: data.anamnesisData?.grupo || "",
       comoConheceu: data.anamnesisData?.comoConheceu || "",
       rg: data.anamnesisData?.rg || "",
-      cpf: data.anamnesisData?.cpf || "",
+      cpf: data.cpf || data.anamnesisData?.cpf || "",
       cep: data.anamnesisData?.cep || "",
       email: data.email || data.anamnesisData?.email || "",
       logradouro: data.anamnesisData?.logradouro || "",

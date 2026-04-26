@@ -226,6 +226,13 @@ function sanitizePhone(value: unknown): string | null {
   return digits.slice(0, 20);
 }
 
+function normalizeCpf(value: unknown): string | null {
+  const digits = sanitizeString(value, 32).replace(/\D/g, '');
+  if (!digits) return null;
+  if (digits.length !== 11) return null;
+  return digits;
+}
+
 function sanitizeDate(value: unknown): string | null {
   const date = sanitizeString(value, 10);
   if (!DATE_ONLY_REGEX.test(date)) return null;
@@ -1269,6 +1276,105 @@ function currentClinicId(user: any): string | null {
 function hasGlobalClinicAccess(user: any): boolean {
   const role = sanitizeString(user?.role, 40).toLowerCase();
   return role === 'admin' || role === 'owner';
+}
+
+async function findDuplicatePatientInClinic(params: {
+  clinicId?: unknown;
+  email?: unknown;
+  cpf?: unknown;
+  excludePatientId?: unknown;
+}): Promise<{ field: 'email' | 'cpf'; patientId: string; patientName: string; value: string } | null> {
+  const safeClinicId = sanitizeString(params.clinicId, 120);
+  if (!safeClinicId || !isUuid(safeClinicId)) return null;
+
+  const safeEmail = sanitizeEmail(params.email);
+  const safeCpf = normalizeCpf(params.cpf);
+  const excludedId = sanitizeString(params.excludePatientId, 120);
+  const isExcluded = (candidateId: unknown) =>
+    Boolean(excludedId && sanitizeString(candidateId, 120) === excludedId);
+
+  if (safeEmail) {
+    const { data: emailRows, error: emailError } = await supabase
+      .from('patients')
+      .select('id, name, email, status')
+      .eq('clinic_id', safeClinicId)
+      .eq('email', safeEmail)
+      .limit(10);
+    if (emailError) throw emailError;
+
+    const hit = (emailRows || []).find((row: any) => !isExcluded(row?.id));
+    if (hit?.id) {
+      return {
+        field: 'email',
+        patientId: sanitizeString(hit.id, 120),
+        patientName: sanitizeString(hit.name, 180) || 'Paciente',
+        value: safeEmail
+      };
+    }
+  }
+
+  if (safeCpf) {
+    try {
+      const { data: cpfRows, error: cpfError } = await supabase
+        .from('patients')
+        .select('id, name, cpf, status')
+        .eq('clinic_id', safeClinicId)
+        .eq('cpf', safeCpf)
+        .limit(10);
+      if (cpfError) throw cpfError;
+
+      const hit = (cpfRows || []).find((row: any) => !isExcluded(row?.id));
+      if (hit?.id) {
+        return {
+          field: 'cpf',
+          patientId: sanitizeString(hit.id, 120),
+          patientName: sanitizeString(hit.name, 180) || 'Paciente',
+          value: safeCpf
+        };
+      }
+    } catch (rawError: any) {
+      const missingColumn = extractMissingColumnName(rawError);
+      if (missingColumn !== 'cpf') throw rawError;
+    }
+
+    // Fallback de CPF para ambientes legados: busca no payload criptografado.
+    const { data: recordRows, error: recordError } = await supabase
+      .from('patient_records')
+      .select('patient_id, payload_encrypted')
+      .eq('clinic_id', safeClinicId)
+      .limit(3000);
+
+    if (recordError) {
+      const missingTable = String(recordError?.message || '')
+        .toLowerCase()
+        .includes('patient_records');
+      if (!missingTable) throw recordError;
+    } else {
+      for (const row of recordRows || []) {
+        const candidatePatientId = sanitizeString((row as any)?.patient_id, 120);
+        if (!candidatePatientId || isExcluded(candidatePatientId)) continue;
+        const decryptedPayload = decryptJsonPayload(
+          sanitizeString((row as any)?.payload_encrypted, 2_000_000),
+        );
+        const payloadCpf = normalizeCpf((decryptedPayload as any)?.cpf);
+        if (payloadCpf && payloadCpf === safeCpf) {
+          const { data: patientRow } = await supabase
+            .from('patients')
+            .select('id, name')
+            .eq('id', candidatePatientId)
+            .maybeSingle();
+          return {
+            field: 'cpf',
+            patientId: sanitizeString(patientRow?.id || candidatePatientId, 120),
+            patientName: sanitizeString(patientRow?.name, 180) || 'Paciente',
+            value: safeCpf
+          };
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 async function getClinicPatientIdsByEmail(clinicId: string, patientEmail: string): Promise<string[]> {
@@ -4351,7 +4457,7 @@ async function startServer() {
 
   // Create Patient User Account (called by therapist when adding a patient)
   app.post('/api/patients/create-user', checkAuth, async (req: any, res) => {
-    const { email, name, type } = req.body;
+    const { email, name, type, cpf } = req.body;
     if (!email) return res.status(400).json({ error: 'Email is required' });
 
     try {
@@ -4363,8 +4469,28 @@ async function startServer() {
       const safeClinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120);
       const safeProfessionalId = sanitizeString(req.session.user?.id, 120);
       const normalizedEmail = String(safeEmail || email || '').trim().toLowerCase();
+      const normalizedCpf = normalizeCpf(cpf);
       if (!normalizedEmail) {
         return res.status(400).json({ success: false, error: 'Email inválido.' });
+      }
+
+      const duplicatePatient = await findDuplicatePatientInClinic({
+        clinicId: safeClinicId,
+        email: normalizedEmail,
+        cpf: normalizedCpf
+      });
+      if (duplicatePatient) {
+        const conflictFieldLabel = duplicatePatient.field === 'cpf' ? 'CPF' : 'e-mail';
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_DUPLICATE_IN_CLINIC',
+          error: `Já existe um paciente nesta clínica com o mesmo ${conflictFieldLabel}.`,
+          details: {
+            field: duplicatePatient.field,
+            patientId: duplicatePatient.patientId,
+            patientName: duplicatePatient.patientName
+          }
+        });
       }
 
       const upsertPatientProfile = async (authUserId: string) => {
@@ -4781,6 +4907,7 @@ async function startServer() {
         id: isUuid(sanitizeString(req.body?.id, 120)) ? sanitizeString(req.body?.id, 120) : undefined,
         name: safeName,
         email: sanitizeEmail(req.body?.email),
+        cpf: normalizeCpf(req.body?.cpf || req.body?.anamnesisData?.cpf),
         phone: sanitizePhone(req.body?.phone || req.body?.telefone),
         age: asSafeNumber(req.body?.age, 0, 130),
         diagnosis: sanitizeString(req.body?.diagnosis, 2000),
@@ -4792,6 +4919,26 @@ async function startServer() {
 
       if (!safeBody.name) {
         return res.status(400).json({ error: 'Nome do paciente é obrigatório.' });
+      }
+
+      const duplicatePatient = await findDuplicatePatientInClinic({
+        clinicId: safeBody.clinic_id || safeClinicId,
+        email: safeBody.email,
+        cpf: safeBody.cpf,
+        excludePatientId: safeBody.id
+      });
+      if (duplicatePatient) {
+        const fieldLabel = duplicatePatient.field === 'cpf' ? 'CPF' : 'e-mail';
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_DUPLICATE_IN_CLINIC',
+          error: `Cadastro bloqueado: já existe um paciente nesta clínica com o mesmo ${fieldLabel}.`,
+          details: {
+            field: duplicatePatient.field,
+            patientId: duplicatePatient.patientId,
+            patientName: duplicatePatient.patientName
+          }
+        });
       }
 
       let { data, error } = await supabase
@@ -4806,6 +4953,7 @@ async function startServer() {
           id: safeBody.id,
           name: safeBody.name,
           email: safeBody.email,
+          cpf: safeBody.cpf,
           phone: safeBody.phone,
           age: safeBody.age,
           diagnosis: safeBody.diagnosis
