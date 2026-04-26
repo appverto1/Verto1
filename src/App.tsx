@@ -529,18 +529,30 @@ export default function App() {
 
   const normalizeAndDecorateNotes = (rawNotes: any[]) => {
     const normalized = (Array.isArray(rawNotes) ? rawNotes : []).map((n: any) => {
-      const visibility = String(n?.visibility || '').toLowerCase();
+      const rawVisibility = String(n?.visibility || '').toLowerCase();
+      const rawType = String(n?.type || '').toLowerCase();
+      const visibility =
+        rawVisibility ||
+        (rawType === 'professional'
+          ? 'professional'
+          : rawType === 'shared'
+            ? 'patient'
+            : rawType === 'family'
+              ? 'family'
+              : 'private');
       const fallbackType =
-        visibility === 'professional'
+        rawType ||
+        (visibility === 'professional'
           ? 'professional'
           : visibility === 'patient' || visibility === 'shared' || visibility === 'family'
             ? 'shared'
-            : 'private';
+            : 'private');
       return {
         ...n,
         id: n?.id,
         patientId: n?.patientId || n?.patient_id,
         originalId: n?.originalId || n?.original_id || null,
+        visibility,
         type: n?.type || fallbackType,
         hasSharedCopy: Boolean(n?.hasSharedCopy),
         hasProfessionalCopy: Boolean(n?.hasProfessionalCopy),
@@ -1005,6 +1017,7 @@ export default function App() {
       const result = await dataService.addNote({
         id: tempId,
         patient_id: String(pid),
+        patient_name: patient?.name || null,
         patient_email: patient?.email || null,
         text: txt,
         visibility,
@@ -1109,20 +1122,9 @@ export default function App() {
       );
       if (userResult.success) {
         console.log(`User account created for patient: ${data.email}`);
-        if (userResult.tempPassword) {
-          const safePassword = String(userResult.tempPassword);
-          try {
-            if (navigator?.clipboard?.writeText) {
-              await navigator.clipboard.writeText(safePassword);
-            }
-          } catch (error) {
-            console.warn('Não foi possível copiar a senha temporária automaticamente:', error);
-          }
-          window.prompt(
-            `Conta criada para o paciente ${data.email}. Copie a senha temporária abaixo e compartilhe com segurança:`,
-            safePassword
-          );
-        } else if (userResult.message === 'User already exists') {
+        const normalizedMessage = String(userResult?.message || '').toLowerCase();
+        const alreadyExists = normalizedMessage.includes('already exists');
+        if (alreadyExists) {
           // If user already exists, we should inform that history will be linked
           alert(`O paciente com o email ${data.email} já possui uma conta no sistema. Todo o histórico clínico anterior será vinculado a este novo prontuário.`);
           
@@ -1147,7 +1149,11 @@ export default function App() {
             }));
             setTherapistNotes(prev => normalizeAndDecorateNotes([...prev, ...existingNotes]));
           }
+        } else {
+          alert(`Paciente cadastrado com sucesso. Enviamos o e-mail de ativação para ${data.email}.`);
         }
+      } else if (userResult?.error) {
+        alert(`Não foi possível enviar o convite do paciente: ${userResult.error}`);
       }
     }
 
@@ -1615,6 +1621,7 @@ export default function App() {
   
   useEffect(() => {
     (window as any).handleToggleNoteTypeApp = async (id: any, targetVisibility: string) => {
+      try {
       const isUuid = (value: any) =>
         typeof value === 'string' &&
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -1715,6 +1722,7 @@ export default function App() {
       const result = await dataService.addNote({
         id: newCopyId,
         patient_id: patientId,
+        patient_name: patient?.name || null,
         patient_email: patient?.email || note?.patient_email || null,
         text: note.text,
         visibility: normalizedTarget,
@@ -1736,6 +1744,8 @@ export default function App() {
               .map((n: any) => (n.id === id ? { ...n, [copyKey]: false } : n)),
           ),
         );
+        alert(String(result?.error || 'Não foi possível persistir o compartilhamento da anotação.'));
+        return;
       }
 
       await dataService.saveActivityLog({
@@ -1748,6 +1758,10 @@ export default function App() {
         `Anotação compartilhada com ${targetLabel} no prontuário de ${originalPatientName}.`,
         'clinical',
       );
+      } catch (error) {
+        console.error('[notes-share] erro inesperado ao alternar compartilhamento:', error);
+        alert('Falha ao compartilhar anotação. Tente novamente.');
+      }
     };
   }, [allPatients, therapistNotes]);
 

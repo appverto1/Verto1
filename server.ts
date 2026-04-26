@@ -4351,12 +4351,15 @@ async function startServer() {
 
   // Create Patient User Account (called by therapist when adding a patient)
   app.post('/api/patients/create-user', checkAuth, async (req: any, res) => {
-    const { email, name } = req.body;
+    const { email, name, type } = req.body;
     if (!email) return res.status(400).json({ error: 'Email is required' });
 
     try {
       const safeEmail = sanitizeEmail(email);
       const safeName = sanitizeString(name, 160) || String(safeEmail || email).split('@')[0];
+      const safePortalType = sanitizeString(type, 80) || 'adult_conventional';
+      const allowedPortalTypes = new Set(['kids_tea', 'adult_tea', 'adult_conventional', 'conventional']);
+      const normalizedPortalType = allowedPortalTypes.has(safePortalType) ? safePortalType : 'adult_conventional';
       const safeClinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120);
       const safeProfessionalId = sanitizeString(req.session.user?.id, 120);
       const normalizedEmail = String(safeEmail || email || '').trim().toLowerCase();
@@ -4370,6 +4373,7 @@ async function startServer() {
           email: normalizedEmail,
           name: safeName,
           role: 'patient',
+          type: normalizedPortalType,
           subscription_status: 'pending',
           plan_price: 4.90,
           clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
@@ -4397,6 +4401,7 @@ async function startServer() {
           email: normalizedEmail,
           name: safeName,
           role: 'patient',
+          type: normalizedPortalType,
           clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
           status: 'active',
           created_at: new Date().toISOString()
@@ -4410,41 +4415,77 @@ async function startServer() {
       };
 
       const ensurePatientLink = async (authUserId: string) => {
-        const patientPayload = cleanObject({
+        const patientPayloadBase = cleanObject({
           name: safeName,
           email: safeEmail,
           status: 'active',
+          type: normalizedPortalType,
           clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
           therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined,
           created_at: new Date().toISOString()
         });
-        if (!patientPayload.email) return;
+        if (!patientPayloadBase.email) return;
 
         let existingPatientQuery = supabase
           .from('patients')
           .select('id')
-          .eq('email', patientPayload.email);
-        if (patientPayload.clinic_id) {
-          existingPatientQuery = existingPatientQuery.eq('clinic_id', patientPayload.clinic_id);
+          .eq('email', patientPayloadBase.email);
+        if (patientPayloadBase.clinic_id) {
+          existingPatientQuery = existingPatientQuery.eq('clinic_id', patientPayloadBase.clinic_id);
         }
         const { data: existingPatient } = await existingPatientQuery.limit(1).maybeSingle();
 
+        const upsertPatientData = cleanObject({
+          name: safeName,
+          email: safeEmail,
+          status: 'active',
+          type: normalizedPortalType,
+          clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
+          therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined
+        });
+        const fallbackPatientData = cleanObject({
+          name: safeName,
+          email: safeEmail,
+          status: 'active',
+          clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
+          therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined
+        });
+
         if (existingPatient?.id) {
-          await supabase
+          const { error: updatePatientError } = await supabase
             .from('patients')
-            .update({
-              status: 'active',
-              therapist_id: patientPayload.therapist_id || null
-            })
+            .update(upsertPatientData)
             .eq('id', existingPatient.id);
+          if (updatePatientError) {
+            const schemaMismatch = String(updatePatientError?.message || '').toLowerCase().includes('column');
+            if (!schemaMismatch) throw updatePatientError;
+            const { error: updateFallbackError } = await supabase
+              .from('patients')
+              .update(fallbackPatientData)
+              .eq('id', existingPatient.id);
+            if (updateFallbackError) throw updateFallbackError;
+          }
         } else {
-          await supabase.from('patients').insert([patientPayload]);
+          const { error: insertPatientError } = await supabase.from('patients').insert([{
+            ...upsertPatientData,
+            created_at: new Date().toISOString()
+          }]);
+          if (insertPatientError) {
+            const schemaMismatch = String(insertPatientError?.message || '').toLowerCase().includes('column');
+            if (!schemaMismatch) throw insertPatientError;
+            const { error: insertFallbackError } = await supabase.from('patients').insert([{
+              ...fallbackPatientData,
+              created_at: new Date().toISOString()
+            }]);
+            if (insertFallbackError) throw insertFallbackError;
+          }
         }
 
         await supabase
           .from('users')
           .update({
             role: 'patient',
+            type: normalizedPortalType,
             clinic_id: isUuid(safeClinicId) ? safeClinicId : null,
             status: 'active'
           })
@@ -4501,7 +4542,7 @@ async function startServer() {
       // 1. Check if user already exists in 'users' table
       const { data: existingUser, error: checkError } = await supabase
         .from('users')
-        .select('id')
+        .select('id, role')
         .eq('email', normalizedEmail)
         .limit(1)
         .maybeSingle();
@@ -4509,6 +4550,13 @@ async function startServer() {
       if (checkError) throw checkError;
 
       if (existingUser) {
+        const existingRole = sanitizeString(existingUser.role, 40).toLowerCase();
+        if (existingRole && existingRole !== 'patient') {
+          return res.status(409).json({
+            success: false,
+            error: 'Este e-mail já está associado a um usuário profissional.'
+          });
+        }
         await ensurePatientLink(existingUser.id);
         await sendPatientActivationEmailOrFail();
         return res.json({
@@ -4519,14 +4567,14 @@ async function startServer() {
       }
 
       // 2. Create user in Supabase Auth (Admin API)
-      // We generate a temporary password or let them use magic link/reset password
-      const tempPassword = Math.random().toString(36).slice(-10) + 'Verto123!';
+      // Cadastro orientado por ativação via e-mail: senha será definida no link de ativação
+      const generatedPassword = `${crypto.randomBytes(10).toString('hex')}V!a9`;
       
       const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
         email: normalizedEmail,
-        password: tempPassword,
+        password: generatedPassword,
         email_confirm: false,
-        user_metadata: { full_name: safeName }
+        user_metadata: { full_name: safeName, role: 'patient', type: normalizedPortalType }
       });
 
       if (authError) {
@@ -4560,7 +4608,6 @@ async function startServer() {
         return res.json({
           success: true,
           userId: authUser.user.id,
-          tempPassword,
           message: 'Paciente criado e e-mail de ativação enviado.'
         });
       }

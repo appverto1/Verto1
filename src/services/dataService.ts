@@ -166,6 +166,24 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
       return result;
     }
     const errorPayload = await safeJson(response);
+    const isRetryable = response.status >= 500 || response.status === 429 || response.status === 408;
+
+    if (!isRetryable) {
+      // Validation/auth errors should not remain in pending loop forever.
+      await markRecordSyncStatus(id, 'synced');
+      return {
+        success: false,
+        offline: false,
+        pending: false,
+        status: response.status,
+        error:
+          errorPayload?.error ||
+          errorPayload?.message ||
+          `Falha ao persistir (${response.status})`,
+        data: payloadWithIdempotency
+      };
+    }
+
     return {
       success: false,
       offline: true,
