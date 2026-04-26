@@ -313,6 +313,9 @@ function extractMissingColumnName(error: any): string | null {
   const qualifiedMatch = message.match(/column\s+[a-zA-Z0-9_]+\."?([a-zA-Z0-9_]+)"?\s+does not exist/i);
   if (qualifiedMatch?.[1]) return sanitizeString(qualifiedMatch[1], 120).toLowerCase();
 
+  const postgrestCacheMatch = message.match(/could\s+not\s+find\s+the\s+'?([a-zA-Z0-9_]+)'?\s+column\s+of\s+'?[a-zA-Z0-9_]+'?\s+in\s+the\s+schema\s+cache/i);
+  if (postgrestCacheMatch?.[1]) return sanitizeString(postgrestCacheMatch[1], 120).toLowerCase();
+
   return null;
 }
 
