@@ -194,6 +194,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
           errorPayload?.error ||
           errorPayload?.message ||
           `Falha ao persistir (${response.status})`,
+        details: errorPayload,
         data: payloadWithIdempotency
       };
     }
@@ -207,6 +208,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
         errorPayload?.error ||
         errorPayload?.message ||
         `Falha ao persistir (${response.status})`,
+      details: errorPayload,
       data: payloadWithIdempotency
     };
   } catch (error) {

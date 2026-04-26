@@ -1184,14 +1184,85 @@ export default function App() {
       type: resolvedPortalType
     });
 
-    if (!fbResult?.success) {
-      alert(`Não foi possível cadastrar paciente: ${toReadableError(fbResult?.error || 'Erro desconhecido')}`);
-      rollbackOptimisticPatient();
-      return;
+    let persistedPatientId: string | number = newId;
+    const duplicateConflict =
+      !fbResult?.success &&
+      Number(fbResult?.status) === 409 &&
+      /já existe um paciente|mesmo e-mail|mesmo cpf|duplicate/i.test(
+        String(fbResult?.error || ""),
+      );
+
+    if (duplicateConflict) {
+      const existingIdFromApi = String(
+        fbResult?.details?.details?.patientId || "",
+      ).trim();
+
+      let matchedPatient: any = null;
+      if (existingIdFromApi) {
+        const patientsRes = await dataService.getPatients();
+        if (patientsRes?.success && Array.isArray(patientsRes?.data)) {
+          matchedPatient = patientsRes.data.find(
+            (p: any) => String(p?.id) === existingIdFromApi,
+          );
+        }
+      }
+
+      if (!matchedPatient) {
+        const patientsRes = await dataService.getPatients();
+        if (patientsRes?.success && Array.isArray(patientsRes?.data)) {
+          const targetEmail = String(data.email || "")
+            .trim()
+            .toLowerCase();
+          const targetCpf = String(data.cpf || data.anamnesisData?.cpf || "")
+            .replace(/\D/g, "")
+            .trim();
+          matchedPatient = patientsRes.data.find((p: any) => {
+            const emailMatch =
+              targetEmail &&
+              String(p?.email || "")
+                .trim()
+                .toLowerCase() === targetEmail;
+            const cpfMatch =
+              targetCpf &&
+              String(p?.cpf || "")
+                .replace(/\D/g, "")
+                .trim() === targetCpf;
+            return Boolean(emailMatch || cpfMatch);
+          });
+        }
+      }
+
+      if (matchedPatient?.id) {
+        persistedPatientId = matchedPatient.id;
+        setAllPatients((prev) =>
+          mergePatients(
+            prev.map((p) =>
+              String(p.id) === String(newId) ? { ...p, id: matchedPatient.id } : p,
+            ),
+            [{ ...newPatient, ...matchedPatient, id: matchedPatient.id }],
+          ),
+        );
+        setClinicalRecords((prev) =>
+          prev.map((r) =>
+            String(r.patientId) === String(newId)
+              ? { ...r, patientId: matchedPatient.id }
+              : r,
+          ),
+        );
+      } else {
+        alert(
+          "Paciente já existe na clínica e foi vinculado, mas não foi possível reconciliar o registro no painel agora. Atualize a página para visualizar.",
+        );
+      }
     }
 
-    let persistedPatientId: string | number = newId;
-    if (fbResult.success && fbResult.data) {
+    if (!fbResult?.success) {
+      if (!duplicateConflict) {
+        alert(`Não foi possível cadastrar paciente: ${toReadableError(fbResult?.error || 'Erro desconhecido')}`);
+        rollbackOptimisticPatient();
+        return;
+      }
+    } else if (fbResult.success && fbResult.data) {
       const realId = fbResult.data.id;
       setAllPatients(prev => mergePatients(
         prev.map(p => p.id === newId ? { ...p, id: realId } : p),
