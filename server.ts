@@ -5695,14 +5695,15 @@ async function startServer() {
       const unlinkPayload = cleanObject({
         clinic_id: null,
         status: 'deleted',
-        therapist_id: null,
+        // Algumas bases têm `therapist_id` como NOT NULL.
+        // Mantemos o vínculo histórico do terapeuta para evitar violação de constraint.
+        therapist_id: sanitizeString(patientRow?.therapist_id, 120) || undefined,
         updated_at: nowIso,
         deleted_at: nowIso
       });
       const fallbackUnlinkPayload = cleanObject({
         clinic_id: null,
-        status: 'deleted',
-        therapist_id: null
+        status: 'deleted'
       });
 
       let { error: unlinkError } = await supabase
