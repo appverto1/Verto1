@@ -4381,37 +4381,20 @@ async function startServer() {
           created_at: new Date().toISOString()
         });
 
-        const { error: profileError } = await supabase
-          .from('users')
-          .upsert([profilePayload], { onConflict: 'id' });
+        let safeProfilePayload: Record<string, any> = { ...profilePayload };
+        while (Object.keys(safeProfilePayload).length > 0) {
+          const { error: profileError } = await supabase
+            .from('users')
+            .upsert([safeProfilePayload], { onConflict: 'id' });
 
-        if (!profileError) return;
+          if (!profileError) return;
 
-        const profileErrorMessage = String(profileError?.message || '');
-        const isSchemaMismatch =
-          profileErrorMessage.toLowerCase().includes('column') ||
-          profileErrorMessage.toLowerCase().includes('schema');
-
-        if (!isSchemaMismatch) {
-          throw profileError;
+          const missingColumn = extractMissingColumnName(profileError);
+          if (!missingColumn || !(missingColumn in safeProfilePayload)) {
+            throw profileError;
+          }
+          delete safeProfilePayload[missingColumn];
         }
-
-        const fallbackProfilePayload = cleanObject({
-          id: authUserId,
-          email: normalizedEmail,
-          name: safeName,
-          role: 'patient',
-          type: normalizedPortalType,
-          clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
-          status: 'active',
-          created_at: new Date().toISOString()
-        });
-
-        const { error: fallbackProfileError } = await supabase
-          .from('users')
-          .upsert([fallbackProfilePayload], { onConflict: 'id' });
-
-        if (fallbackProfileError) throw fallbackProfileError;
       };
 
       const ensurePatientLink = async (authUserId: string) => {
@@ -4481,15 +4464,27 @@ async function startServer() {
           }
         }
 
-        await supabase
-          .from('users')
-          .update({
-            role: 'patient',
-            type: normalizedPortalType,
-            clinic_id: isUuid(safeClinicId) ? safeClinicId : null,
-            status: 'active'
-          })
-          .eq('id', authUserId);
+        let safeUserUpdatePayload: Record<string, any> = cleanObject({
+          role: 'patient',
+          type: normalizedPortalType,
+          clinic_id: isUuid(safeClinicId) ? safeClinicId : null,
+          status: 'active'
+        });
+
+        while (Object.keys(safeUserUpdatePayload).length > 0) {
+          const { error: userUpdateError } = await supabase
+            .from('users')
+            .update(safeUserUpdatePayload)
+            .eq('id', authUserId);
+
+          if (!userUpdateError) break;
+
+          const missingColumn = extractMissingColumnName(userUpdateError);
+          if (!missingColumn || !(missingColumn in safeUserUpdatePayload)) {
+            throw userUpdateError;
+          }
+          delete safeUserUpdatePayload[missingColumn];
+        }
       };
 
       const sendPatientActivationEmail = async (): Promise<{ sent: boolean; reason?: string }> => {
