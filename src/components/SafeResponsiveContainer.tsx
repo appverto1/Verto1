@@ -45,8 +45,15 @@ export function SafeResponsiveContainer({
     };
   }, [minHeight]);
 
+  const wrapperStyle: React.CSSProperties = {
+    minHeight,
+    minWidth,
+    width: typeof width === 'number' ? `${width}px` : width || '100%',
+    height: typeof height === 'number' ? `${height}px` : height || '100%'
+  };
+
   return (
-    <div ref={wrapperRef} className={className} style={{ minHeight, minWidth }}>
+    <div ref={wrapperRef} className={className} style={wrapperStyle}>
       {ready ? (
         <ResponsiveContainer width={width} height={height} minHeight={minHeight} minWidth={minWidth}>
           {children}

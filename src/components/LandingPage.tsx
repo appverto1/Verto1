@@ -580,7 +580,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
       {/* Hero Section */}
       <section className="pt-40 pb-20 px-6">
-        <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-[1fr_1.25fr] gap-16 items-center">
           <div className="animate-slide-up">
             <div className="inline-flex items-center gap-2 bg-purple-50 text-[#7a32fc] px-4 py-2 rounded-full text-xs font-semibold uppercase tracking-widest mb-6">
               <Rocket size={14} />
@@ -607,14 +607,14 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
             </div>
           </div>
 
-          <div className="relative lg:w-[50%] lg:justify-self-end">
+          <div className="relative w-full lg:justify-self-end">
             <div className="absolute -top-20 -right-20 w-64 h-64 bg-purple-100 rounded-full blur-3xl opacity-50 animate-pulse"></div>
             <div className="absolute -bottom-20 -left-20 w-64 h-64 bg-purple-100 rounded-full blur-3xl opacity-50 animate-pulse delay-700"></div>
             
-            <div className="relative bg-white rounded-[40px] shadow-2xl border border-gray-100 p-4 overflow-hidden group">
-              <div className="w-full aspect-[16/10] rounded-[32px] overflow-hidden">
+            <div className="relative bg-white rounded-[40px] shadow-2xl border border-gray-100 p-4 md:p-5 overflow-hidden group">
+              <div className="w-full h-[280px] sm:h-[340px] md:h-[420px] lg:h-[500px] rounded-[32px] overflow-hidden">
                   <img
-                    src="/Design_sem_nome_(1).jpg"
+                    src="/hero_verto_photo.png"
                     onError={(e) => {
                       e.currentTarget.onerror = null;
                       e.currentTarget.src = '/Gemini_Generated_Image_m804z0m804z0m804.jpg';
@@ -625,7 +625,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               </div>
               
               {/* Professional Insight Card - Replaces the "balloon" */}
-              <div className="absolute bottom-10 left-10 right-10 md:right-auto md:w-80 bg-white/90 backdrop-blur-md p-6 rounded-[32px] shadow-2xl border border-white/20 animate-slide-up">
+              <div className="absolute bottom-5 left-5 right-5 md:bottom-8 md:left-8 md:right-auto md:w-80 bg-white/90 backdrop-blur-md p-5 md:p-6 rounded-[32px] shadow-2xl border border-white/20 animate-slide-up">
                 <div className="flex items-center gap-4 mb-4">
                   <div className="w-12 h-12 bg-[#7a32fc] text-white rounded-2xl flex items-center justify-center shadow-lg shadow-purple-500/30">
                     <Activity size={24} />

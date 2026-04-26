@@ -1965,7 +1965,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       </select>
                     </div>
                   </div>
-                  <div className="min-h-[520px] min-w-0">
+                  <div className="min-h-0 min-w-0">
                     <ComparisonBarChart
                       data={adultDomainComparisonData}
                       title={`Comparativo por Domínio (${selectedChartProtocol?.title || 'Protocolo'})`}

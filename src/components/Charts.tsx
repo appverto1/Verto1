@@ -45,12 +45,12 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
         </div>
       </div>
       <div className="overflow-x-auto pb-2 no-scrollbar">
-        <div style={{ minWidth: `${minWidth}px`, height: '460px', minHeight: '420px' }} className="relative z-10 min-w-0 min-h-0">
+        <div style={{ minWidth: `${minWidth}px`, height: '400px', minHeight: '400px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
           <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={360}>
             <BarChart
               data={safeData}
-              margin={{ top: 20, right: 24, left: 6, bottom: 86 }}
+              margin={{ top: 16, right: 24, left: 6, bottom: 56 }}
               barGap={12}
               barCategoryGap="30%"
             >
@@ -62,7 +62,7 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
                 interval={0}
                 angle={-30}
                 textAnchor="end"
-                height={78}
+                height={54}
                 tickMargin={8}
                 tick={{ fill: '#8ba0c5', fontSize: 11, fontWeight: 'bold' }}
                 padding={{ left: 30, right: 30 }}
@@ -111,7 +111,7 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
           )}
       </div>
       </div>
-      <div className="mt-1 flex flex-wrap items-center justify-center gap-4 px-2">
+      <div className="mt-2 flex flex-wrap items-center justify-center gap-4 px-2">
         {periodKeys.map((period, index) => (
           <div key={`legend-${period}`} className="flex items-center gap-2 text-[11px] font-semibold text-gray-600">
             <span className="h-3 w-3 rounded-full" style={{ backgroundColor: periodColors[index % periodColors.length] }} />
@@ -160,12 +160,12 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
       <div className="absolute top-0 right-0 w-32 sm:w-48 h-32 sm:h-48 bg-indigo-50/50 rounded-bl-full -z-0"></div>
       
       <div className="overflow-x-auto pb-3 no-scrollbar cursor-grab active:cursor-grabbing">
-        <div style={{ minWidth: `${minWidth}px`, height: '430px', minHeight: '380px' }} className="relative z-10 min-w-0 min-h-0">
+        <div style={{ minWidth: `${minWidth}px`, height: '390px', minHeight: '360px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
           <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
             <BarChart
               data={data}
-              margin={{ top: 16, right: 28, left: 4, bottom: 80 }}
+              margin={{ top: 16, right: 28, left: 4, bottom: 56 }}
               barGap={12}
               barCategoryGap="35%"
             >
@@ -177,7 +177,7 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
                 interval={0}
                 angle={-30}
                 textAnchor="end"
-                height={84}
+                height={56}
                 tickMargin={10}
                 tick={{ fill: '#A3AED0', fontSize: 10, fontWeight: 'bold' }}
                 padding={{ left: 30, right: 30 }}
@@ -282,12 +282,12 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
     <div className="bg-white/70 backdrop-blur-md p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-white/50 mb-8 animate-fade-in relative overflow-hidden chart-glow">
       <div className="absolute top-0 right-0 w-32 sm:w-48 h-32 sm:h-48 bg-indigo-50/50 rounded-bl-full -z-0"></div>
       <div className="overflow-x-auto pb-3 no-scrollbar">
-        <div style={{ minWidth: `${minWidth}px`, height: '430px', minHeight: '380px' }} className="relative z-10 min-w-0 min-h-0">
+        <div style={{ minWidth: `${minWidth}px`, height: '390px', minHeight: '360px' }} className="relative z-10 min-w-0 min-h-0">
           {isMounted ? (
           <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
             <LineChart
               data={data}
-              margin={{ top: 16, right: 28, left: 4, bottom: 80 }}
+              margin={{ top: 16, right: 28, left: 4, bottom: 56 }}
             >
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
               <XAxis 
@@ -297,7 +297,7 @@ export const EvolutionLineChart = ({ chartData, maxScore = 1 }: any) => {
                 interval={0}
                 angle={-30}
                 textAnchor="end"
-                height={84}
+                height={56}
                 tickMargin={10}
                 tick={{ fill: '#A3AED0', fontSize: 10, fontWeight: 'bold' }}
                 padding={{ left: 30, right: 30 }}

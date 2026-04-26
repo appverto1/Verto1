@@ -295,13 +295,25 @@ function extractSupabaseErrorMessage(error: any): string {
 }
 
 function isMissingRelationError(error: any): boolean {
+  const code = sanitizeString(error?.code, 20).toUpperCase();
   const message = extractSupabaseErrorMessage(error).toLowerCase();
+  if (code === '42P01') return true;
   return (
-    message.includes('does not exist') ||
-    message.includes('relation') ||
-    message.includes('schema cache') ||
-    message.includes('42p01')
+    message.includes('relation') && message.includes('does not exist')
   );
+}
+
+function extractMissingColumnName(error: any): string | null {
+  const message = extractSupabaseErrorMessage(error);
+  if (!message) return null;
+
+  const directMatch = message.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i);
+  if (directMatch?.[1]) return sanitizeString(directMatch[1], 120).toLowerCase();
+
+  const qualifiedMatch = message.match(/column\s+[a-zA-Z0-9_]+\."?([a-zA-Z0-9_]+)"?\s+does not exist/i);
+  if (qualifiedMatch?.[1]) return sanitizeString(qualifiedMatch[1], 120).toLowerCase();
+
+  return null;
 }
 
 function logRouteDbError(route: string, error: any, context: Record<string, any> = {}) {
@@ -5261,6 +5273,106 @@ async function startServer() {
     }
   });
 
+  const NOTE_VISIBILITY_ALLOWED = new Set(['patient', 'shared', 'family']);
+
+  const noteIsReadableByPatient = (note: any): boolean => {
+    const visibility = sanitizeString(note?.visibility, 40).toLowerCase();
+    const legacyType = sanitizeString(note?.type, 40).toLowerCase();
+    return NOTE_VISIBILITY_ALLOWED.has(visibility) || NOTE_VISIBILITY_ALLOWED.has(legacyType);
+  };
+
+  const fetchNotesWithRoleFilter = async (params: {
+    patientId?: string;
+    patientEmail?: string;
+    excludePatientId?: string;
+    role: string;
+  }) => {
+    let query = supabase.from('notes').select('*');
+    if (params.patientId) query = query.eq('patient_id', params.patientId);
+    if (params.patientEmail) query = query.eq('patient_email', params.patientEmail);
+    if (params.excludePatientId) query = query.neq('patient_id', params.excludePatientId);
+
+    const needsPatientVisibilityFilter = params.role === 'patient';
+    if (needsPatientVisibilityFilter) {
+      query = query.in('visibility', ['patient', 'shared', 'family']);
+    }
+
+    let result = await query.order('created_at', { ascending: false });
+    if (!result.error) return { data: result.data || [], error: null };
+
+    if (needsPatientVisibilityFilter && isMissingColumnError(result.error, 'visibility')) {
+      let fallbackQuery = supabase.from('notes').select('*');
+      if (params.patientId) fallbackQuery = fallbackQuery.eq('patient_id', params.patientId);
+      if (params.patientEmail) fallbackQuery = fallbackQuery.eq('patient_email', params.patientEmail);
+      if (params.excludePatientId) fallbackQuery = fallbackQuery.neq('patient_id', params.excludePatientId);
+      result = await fallbackQuery.order('created_at', { ascending: false });
+      if (result.error) return { data: null, error: result.error };
+      const filtered = (result.data || []).filter((note: any) => noteIsReadableByPatient(note));
+      return { data: filtered, error: null };
+    }
+
+    return { data: null, error: result.error };
+  };
+
+  const upsertNoteWithSchemaFallback = async (basePayload: Record<string, any>) => {
+    let candidate = { ...basePayload };
+    const triedMissingColumns = new Set<string>();
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const { data, error } = await supabase
+        .from('notes')
+        .upsert([candidate], { onConflict: 'id' })
+        .select()
+        .single();
+
+      if (!error) {
+        return { data, error: null, payload: candidate };
+      }
+
+      const missingColumn = extractMissingColumnName(error);
+      if (!missingColumn || triedMissingColumns.has(missingColumn)) {
+        return { data: null, error, payload: candidate };
+      }
+
+      triedMissingColumns.add(missingColumn);
+      const nextCandidate = { ...candidate };
+      delete nextCandidate[missingColumn];
+      candidate = nextCandidate;
+    }
+
+    return { data: null, error: { message: 'Falha ao salvar anotação após fallback de schema.' }, payload: candidate };
+  };
+
+  const updateNoteWithSchemaFallback = async (noteId: string, baseUpdates: Record<string, any>) => {
+    let candidate = { ...baseUpdates };
+    const triedMissingColumns = new Set<string>();
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const { data, error } = await supabase
+        .from('notes')
+        .update(candidate)
+        .eq('id', noteId)
+        .select('*')
+        .single();
+
+      if (!error) {
+        return { data, error: null, payload: candidate };
+      }
+
+      const missingColumn = extractMissingColumnName(error);
+      if (!missingColumn || triedMissingColumns.has(missingColumn)) {
+        return { data: null, error, payload: candidate };
+      }
+
+      triedMissingColumns.add(missingColumn);
+      const nextCandidate = { ...candidate };
+      delete nextCandidate[missingColumn];
+      candidate = nextCandidate;
+    }
+
+    return { data: null, error: { message: 'Falha ao atualizar anotação após fallback de schema.' }, payload: candidate };
+  };
+
   // Notes
   app.get('/api/notes/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
     try {
@@ -5274,31 +5386,23 @@ async function startServer() {
         .maybeSingle();
       const patientEmail = sanitizeEmail(patientRow?.email);
 
-      let query = supabase
-        .from('notes')
-        .select('*')
-        .eq('patient_id', patientId);
-      if (role === 'patient') {
-        query = query.in('visibility', ['patient', 'shared', 'family']);
-      }
-      const { data: notesById, error: notesByIdError } = await query.order('created_at', { ascending: false });
+      const notesByIdResult = await fetchNotesWithRoleFilter({
+        patientId,
+        role
+      });
+      const notesById = notesByIdResult.data;
+      const notesByIdError = notesByIdResult.error;
       if (notesByIdError) throw notesByIdError;
 
       let notesByEmail: any[] = [];
       if (patientEmail) {
-        let emailQuery = supabase
-          .from('notes')
-          .select('*')
-          .eq('patient_email', patientEmail)
-          .neq('patient_id', patientId);
-
-        // Em novo vínculo entre clínicas, só compartilhamos notas marcadas como compartilháveis.
-        emailQuery = emailQuery.in('visibility', ['shared', 'family', 'patient']);
-        if (role === 'patient') {
-          emailQuery = emailQuery.in('visibility', ['patient', 'shared', 'family']);
-        }
-
-        const { data: notesByEmailData, error: notesByEmailError } = await emailQuery.order('created_at', { ascending: false });
+        const notesByEmailResult = await fetchNotesWithRoleFilter({
+          patientEmail,
+          excludePatientId: patientId,
+          role: 'patient'
+        });
+        const notesByEmailData = notesByEmailResult.data;
+        const notesByEmailError = notesByEmailResult.error;
         if (notesByEmailError) throw notesByEmailError;
         notesByEmail = Array.isArray(notesByEmailData) ? notesByEmailData : [];
       }
@@ -5325,26 +5429,24 @@ async function startServer() {
         return res.status(403).json({ error: 'Acesso negado' });
       }
 
-      let query = supabase
-        .from('notes')
-        .select('*')
-        .eq('patient_email', safeEmail)
-        .order('created_at', { ascending: false });
+      const roleForFilter = !isPrivileged && isSelfRequest ? 'patient' : userRole;
+      const queryResult = await fetchNotesWithRoleFilter({
+        patientEmail: safeEmail,
+        role: roleForFilter
+      });
+      let data = Array.isArray(queryResult.data) ? queryResult.data : [];
+      const error = queryResult.error;
+      if (error) throw error;
 
       if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
         const clinicId = currentClinicId(req.session.user);
         if (!clinicId) return res.status(403).json({ error: 'Clínica não identificada.' });
         const clinicPatientIds = await getClinicPatientIdsByEmail(clinicId, safeEmail);
         if (clinicPatientIds.length === 0) return res.json({ success: true, data: [] });
-        query = query.in('patient_id', clinicPatientIds);
-      }
-      
-      if (!isPrivileged && isSelfRequest) {
-        query = query.in('visibility', ['patient', 'shared', 'family']);
+        const idSet = new Set(clinicPatientIds);
+        data = data.filter((note: any) => idSet.has(sanitizeString(note?.patient_id, 120)));
       }
 
-      const { data, error } = await query;
-      if (error) throw error;
       res.json({ success: true, data });
     } catch (error) {
       res.status(500).json({ error: String(error) });
@@ -5365,10 +5467,12 @@ async function startServer() {
         patient_id: resolvedPatientId,
         patient_email: sanitizeEmail(req.body?.patient_email),
         text: sanitizeTextField(req.body?.text, 12000),
+        content: sanitizeTextField(req.body?.text, 12000),
         visibility: safeVisibility.has(String(req.body?.visibility)) ? String(req.body?.visibility) : 'private',
         subject: sanitizeTextField(req.body?.subject, 100) || 'Geral',
         original_id: sanitizeString(req.body?.original_id, 120) || undefined,
         therapist_id: sanitizeString(req.session.user.id, 120),
+        user_id: sanitizeString(req.session.user.id, 120),
         created_at: sanitizeString(req.body?.created_at, 40) || new Date().toISOString()
       });
 
@@ -5379,11 +5483,7 @@ async function startServer() {
         return res.status(400).json({ error: 'patient_id inválido para salvar anotações.' });
       }
 
-      const { data, error } = await supabase
-        .from('notes')
-        .upsert([payload], { onConflict: 'id' })
-        .select()
-        .single();
+      const { data, error } = await upsertNoteWithSchemaFallback(payload);
       
       if (error) throw error;
       try {
@@ -6302,6 +6402,7 @@ async function startServer() {
       const safeVisibility = new Set(['private', 'shared', 'family', 'professional', 'patient']);
       const updates = cleanObject({
         text: req.body?.text !== undefined ? sanitizeTextField(req.body?.text, 12000) : undefined,
+        content: req.body?.text !== undefined ? sanitizeTextField(req.body?.text, 12000) : undefined,
         visibility:
           req.body?.visibility !== undefined
             ? (safeVisibility.has(String(req.body?.visibility)) ? String(req.body?.visibility) : undefined)
@@ -6309,12 +6410,7 @@ async function startServer() {
         subject: req.body?.subject !== undefined ? (sanitizeTextField(req.body?.subject, 100) || 'Geral') : undefined,
         updated_at: new Date().toISOString()
       });
-      const { data, error } = await supabase
-        .from('notes')
-        .update(updates)
-        .eq('id', noteId)
-        .select('*')
-        .single();
+      const { data, error } = await updateNoteWithSchemaFallback(noteId, updates);
       if (error) throw error;
       return res.json({ success: true, data });
     } catch (error) {
@@ -7277,36 +7373,40 @@ async function startServer() {
         }
 
         userId = sanitizeString(existingAuthUser.id, 120);
-        const { error: updateExistingError } = await supabase
-          .from('users')
-          .update({
-            name: safeName,
-            role: 'coordinator',
-            phone: safePhone,
-            plan_name: requestedPlan,
-            plan_price: planPricesDecimal[requestedPlan] || null,
-            subscription_status: 'pending',
-            crp: safeCrp || undefined,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', userId);
-        if (updateExistingError) {
-          const normalizedUpdateError = String(updateExistingError?.message || '').toLowerCase();
-          const fallbackMissingField = normalizedUpdateError.includes('crp') || normalizedUpdateError.includes('phone');
-          if (!fallbackMissingField) throw updateExistingError;
-          const { error: fallbackUpdateError } = await supabase
+        let profileUpdatePayload = cleanObject({
+          name: safeName,
+          role: 'coordinator',
+          phone: safePhone,
+          plan_name: requestedPlan,
+          plan_price: planPricesDecimal[requestedPlan] || null,
+          subscription_status: 'pending',
+          crp: safeCrp || undefined,
+          updated_at: new Date().toISOString()
+        });
+
+        const alreadyRemoved = new Set<string>();
+        let updateSucceeded = false;
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const { error: updateExistingError } = await supabase
             .from('users')
-            .update({
-              name: safeName,
-              role: 'coordinator',
-              phone: safePhone,
-              plan_name: requestedPlan,
-              plan_price: planPricesDecimal[requestedPlan] || null,
-              subscription_status: 'pending',
-              updated_at: new Date().toISOString()
-            })
+            .update(profileUpdatePayload)
             .eq('id', userId);
-          if (fallbackUpdateError) throw fallbackUpdateError;
+          if (!updateExistingError) {
+            updateSucceeded = true;
+            break;
+          }
+
+          const missingColumn = extractMissingColumnName(updateExistingError);
+          if (!missingColumn || alreadyRemoved.has(missingColumn)) {
+            throw updateExistingError;
+          }
+
+          alreadyRemoved.add(missingColumn);
+          const { [missingColumn]: _removed, ...rest } = profileUpdatePayload as any;
+          profileUpdatePayload = rest;
+        }
+        if (!updateSucceeded) {
+          throw new Error('Não foi possível atualizar cadastro existente para checkout.');
         }
       } else {
         const signupResult = await registerUserWithEmailConfirmation(
