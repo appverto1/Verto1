@@ -3377,7 +3377,8 @@ async function startServer() {
         context: 'password_recovery_request',
         from: OFFICIAL_FROM_NOREPLY,
         replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
-        templateKind: resolveTemplateProfileByRole(profile?.role) === 'patient' ? 'recovery_patient' : 'recovery_professional',
+        // For recovery we force server-rendered HTML to guarantee fresh link/code delivery.
+        templateKind: undefined,
         templateData: {
           nome: sanitizeString(profile?.name || authUser.user_metadata?.full_name || email.split('@')[0], 180),
           codigo: code,

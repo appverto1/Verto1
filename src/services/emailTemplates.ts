@@ -126,6 +126,10 @@ const PROFESSIONAL_RECOVERY_HTML = `
               <p style="margin:0 0 16px;">
                 <a href="{{link_recuperacao}}" style="display:inline-block;background-color:rgb(139,92,246);color:#fff;text-decoration:none;padding:14px 24px;border-radius:999px;font-size:18px;font-weight:700;">Redefinir minha senha</a>
               </p>
+              <p style="margin:0 0 8px;color:#4c1d95;font-size:14px;font-weight:700;">Código de recuperação:</p>
+              <p style="margin:0 0 16px;color:#2e1065;font-size:28px;letter-spacing:3px;font-weight:800;">{{codigo}}</p>
+              <p style="margin:0;color:#6d28d9;font-size:13px;line-height:1.45;">Se o botão não funcionar, use este link:</p>
+              <p style="margin:6px 0 0;word-break:break-all;color:#6d28d9;font-size:12px;line-height:1.4;">{{link_recuperacao}}</p>
               <p style="font-size:0.875rem;color:rgb(139,92,246);margin-top:20px;">Se você não solicitou essa alteração, por favor, ignore este e-mail. Sua senha atual permanecerá segura.</p>
             </td></tr>
           </table>
@@ -147,6 +151,10 @@ const PATIENT_RECOVERY_HTML = `
               <p style="margin:0 0 16px;">
                 <a href="{{link_recuperacao}}" style="display:inline-block;background-color:rgb(139,92,246);color:#fff;text-decoration:none;padding:14px 24px;border-radius:999px;font-size:18px;font-weight:700;">Criar nova senha</a>
               </p>
+              <p style="margin:0 0 8px;color:#4c1d95;font-size:14px;font-weight:700;">Código de recuperação:</p>
+              <p style="margin:0 0 16px;color:#2e1065;font-size:28px;letter-spacing:3px;font-weight:800;">{{codigo}}</p>
+              <p style="margin:0;color:#6d28d9;font-size:13px;line-height:1.45;">Se o botão não funcionar, use este link:</p>
+              <p style="margin:6px 0 0;word-break:break-all;color:#6d28d9;font-size:12px;line-height:1.4;">{{link_recuperacao}}</p>
             </td></tr>
           </table>
         </td>
@@ -206,7 +214,9 @@ export const buildPasswordRecoveryEmailTemplate = (
   if (input.perfil === 'professional') {
     return {
       subject: 'Recuperação de Senha - Verto',
-      html: PROFESSIONAL_RECOVERY_HTML.replace(/\{\{link_recuperacao\}\}/g, linkForTemplate)
+      html: PROFESSIONAL_RECOVERY_HTML
+        .replace(/\{\{link_recuperacao\}\}/g, linkForTemplate)
+        .replace(/\{\{codigo\}\}/g, escapeHtml(String(input.codigo || '').trim()))
     };
   }
 
@@ -215,5 +225,6 @@ export const buildPasswordRecoveryEmailTemplate = (
     html: PATIENT_RECOVERY_HTML
       .replace(/\{\{nome\}\}/g, nome)
       .replace(/\{\{link_recuperacao\}\}/g, linkForTemplate)
+      .replace(/\{\{codigo\}\}/g, escapeHtml(String(input.codigo || '').trim()))
   };
 };
