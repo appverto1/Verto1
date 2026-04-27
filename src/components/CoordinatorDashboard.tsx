@@ -2859,6 +2859,79 @@ export function CoordinatorDashboard({
     );
   }
 
+  const desktopNavItems = isReceptionist
+    ? [
+        { id: "dashboard", label: "Painel", icon: LayoutDashboard },
+        { id: "patients", label: "Pacientes", icon: ClipboardList },
+        { id: "agenda", label: "Agenda", icon: CalendarDays },
+        { id: "rooms", label: "Salas", icon: DoorOpen },
+        { id: "logs", label: "Log de Atividades", icon: History },
+        { id: "settings", label: "Configurações", icon: Settings },
+      ]
+    : [
+        { id: "dashboard", label: "Painel", icon: LayoutDashboard },
+        { id: "patients", label: "Pacientes", icon: ClipboardList },
+        { id: "protocols", label: "Protocolos", icon: ClipboardCheck },
+        { id: "logs", label: "Log de Atividades", icon: History },
+        { id: "settings", label: "Configurações", icon: Settings },
+        {
+          id: "financial",
+          label: "Financeiro (DRE)",
+          icon: DollarSign,
+          badge: "EM BREVE",
+        },
+        { id: "flow", label: "Verto Flow", icon: Zap, badge: "EM BREVE" },
+        {
+          id: "birthdays",
+          label: "Aniversariantes",
+          icon: Heart,
+          badge: "EM BREVE",
+        },
+      ];
+
+  const mobileNavItems = isReceptionist
+    ? [
+        { id: "dashboard", label: "Painel", icon: LayoutDashboard },
+        { id: "patients", label: "Pacientes", icon: ClipboardList },
+        { id: "agenda", label: "Agenda", icon: CalendarDays },
+        { id: "rooms", label: "Salas", icon: DoorOpen },
+        { id: "logs", label: "Registros", icon: History },
+        { id: "settings", label: "Configurações", icon: Settings },
+      ]
+    : [
+        { id: "dashboard", label: "Painel", icon: LayoutDashboard },
+        { id: "patients", label: "Pacientes", icon: ClipboardList },
+        {
+          id: "protocols",
+          label: "Protocolos",
+          icon: ClipboardCheck,
+        },
+        { id: "logs", label: "Registros", icon: History },
+        {
+          id: "settings",
+          label: "Configurações",
+          icon: Settings,
+        },
+        {
+          id: "financial",
+          label: "Financeiro",
+          icon: DollarSign,
+          badge: "EM BREVE",
+        },
+        {
+          id: "flow",
+          label: "Fluxo Verto",
+          icon: Zap,
+          badge: "EM BREVE",
+        },
+        {
+          id: "birthdays",
+          label: "Aniversariantes",
+          icon: Heart,
+          badge: "EM BREVE",
+        },
+      ];
+
   return (
     <div className="min-h-screen bg-[#F4F7FE] flex">
       {/* Sidebar */}
@@ -2882,26 +2955,7 @@ export function CoordinatorDashboard({
         </div>
 
         <nav className="space-y-2 flex-1 overflow-y-auto no-scrollbar pr-2">
-            {filterTabsByRole([
-              { id: "dashboard", label: "Painel", icon: LayoutDashboard },
-              { id: "patients", label: "Pacientes", icon: ClipboardList },
-              { id: "protocols", label: "Protocolos", icon: ClipboardCheck },
-              { id: "logs", label: "Log de Atividades", icon: History },
-              { id: "settings", label: "Configurações", icon: Settings },
-              {
-                id: "financial",
-                label: "Financeiro (DRE)",
-              icon: DollarSign,
-              badge: "EM BREVE",
-            },
-            { id: "flow", label: "Verto Flow", icon: Zap, badge: "EM BREVE" },
-            {
-              id: "birthdays",
-              label: "Aniversariantes",
-              icon: Heart,
-              badge: "EM BREVE",
-            },
-          ]).map((item) => (
+            {filterTabsByRole(desktopNavItems as any).map((item: any) => (
             <button
               key={item.id}
               onClick={() => navigateToTab(item.id as any)}
@@ -3071,39 +3125,7 @@ export function CoordinatorDashboard({
                 </div>
 
                 <nav className="space-y-1 flex-1 overflow-y-auto no-scrollbar">
-                  {filterTabsByRole([
-                    { id: "dashboard", label: "Painel", icon: LayoutDashboard },
-                    { id: "patients", label: "Pacientes", icon: ClipboardList },
-                    {
-                      id: "protocols",
-                      label: "Protocolos",
-                      icon: ClipboardCheck,
-                    },
-                    { id: "logs", label: "Registros", icon: History },
-                    {
-                      id: "settings",
-                      label: "Configurações",
-                      icon: Settings,
-                    },
-                    {
-                      id: "financial",
-                      label: "Financeiro",
-                      icon: DollarSign,
-                      badge: "EM BREVE",
-                    },
-                    {
-                      id: "flow",
-                      label: "Fluxo Verto",
-                      icon: Zap,
-                      badge: "EM BREVE",
-                    },
-                    {
-                      id: "birthdays",
-                      label: "Aniversariantes",
-                      icon: Heart,
-                      badge: "EM BREVE",
-                    },
-                  ]).map((item) => (
+                  {filterTabsByRole(mobileNavItems as any).map((item: any) => (
                     <button
                       key={item.id}
                       onClick={() => {
