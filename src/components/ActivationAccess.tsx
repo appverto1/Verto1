@@ -11,6 +11,8 @@ type ActivationAccessProps = {
 };
 
 export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
+  const isRecoveryRoute =
+    typeof window !== 'undefined' && /^\/reset-password\/?$/.test(window.location.pathname);
   const [email, setEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [identifiedEmail, setIdentifiedEmail] = useState('');
@@ -233,7 +235,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       }
 
       if (!session?.user) {
-        if (authRouteBase === '/ativar') {
+        if (!isRecoveryRoute) {
           const fallbackEmail = String(identifiedEmail || email).trim().toLowerCase();
           if (fallbackEmail) {
             const bootstrapLink = await requestAuthBootstrap(fallbackEmail);
@@ -250,7 +252,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
           window.location.href = bootstrapLink;
           return;
         }
-        throw new Error('Nao foi possivel validar o link automaticamente. Solicite um novo e-mail de ativacao.');
+        throw new Error('Link de recuperação inválido ou expirado. Solicite um novo e-mail de recuperação.');
       }
 
       const { error: updateError } = await supabase.auth.updateUser({
@@ -272,7 +274,11 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       if (!loginRes?.success) {
         throw new Error(loginRes?.error || 'Senha definida, mas nao foi possivel concluir o login.');
       }
-      setMessage('Senha definida com sucesso. Redirecionando...');
+      setMessage(
+        isRecoveryRoute
+          ? 'Senha redefinida com sucesso. Redirecionando...'
+          : 'Senha definida com sucesso. Redirecionando...',
+      );
     } catch (err: any) {
       setError(err?.message || 'Falha ao definir senha.');
     } finally {
@@ -284,9 +290,13 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
       <div className="w-full max-w-xl bg-white border border-slate-100 rounded-3xl shadow-sm p-6 md:p-8">
         <div className="text-center mb-6">
-          <h1 className="text-2xl font-extrabold text-slate-900">Ativacao de Conta</h1>
+          <h1 className="text-2xl font-extrabold text-slate-900">
+            {isRecoveryRoute ? 'Recuperacao de Senha' : 'Ativacao de Conta'}
+          </h1>
           <p className="text-sm text-slate-500 mt-2">
-            {isActivationLinkContext
+            {isRecoveryRoute
+              ? 'Defina sua nova senha pelo link recebido no e-mail de recuperacao.'
+              : isActivationLinkContext
               ? 'Defina sua senha para ativar o acesso. O e-mail ja foi identificado no convite.'
               : 'Entre com Google, entre com sua senha, ou ative sua conta pelo link recebido no e-mail.'}
           </p>
@@ -298,12 +308,12 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
             disabled={loading}
             className="w-full h-11 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold hover:bg-slate-50 transition disabled:opacity-60"
           >
-            Entrar com Google
+            {isRecoveryRoute ? 'Continuar com Google' : 'Entrar com Google'}
           </button>
 
           <div className="border-t border-slate-100 pt-4 space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Definir senha
+              {isRecoveryRoute ? 'Redefinir senha' : 'Definir senha'}
             </p>
             {identifiedEmail ? (
               <p className="text-xs text-slate-500">
@@ -336,7 +346,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
               disabled={loading}
               className="w-full h-11 rounded-xl border border-[#7a32fc] text-[#7a32fc] font-semibold hover:bg-violet-50 transition disabled:opacity-60"
             >
-              Definir senha e entrar
+              {isRecoveryRoute ? 'Redefinir senha e entrar' : 'Definir senha e entrar'}
             </button>
           </div>
         </div>
