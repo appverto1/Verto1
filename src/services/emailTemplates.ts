@@ -122,14 +122,10 @@ const PROFESSIONAL_RECOVERY_HTML = `
           <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;padding:28px;">
             <tr><td>
               <h1 style="margin:0;padding:0;font-size:1.5rem;line-height:1.333;color:rgb(46,16,101);font-weight:700;margin-bottom:1rem;">Recuperação de Senha 🔐</h1>
-              <p style="margin:0;padding:0;font-size:1.125rem;line-height:1.75rem;color:rgb(91,33,182);margin-bottom:1.5rem;margin-top:16px;">Recebemos uma solicitação para redefinir a senha da sua conta Verto. Clique no botão abaixo para escolher uma nova senha:</p>
-              <p style="margin:0 0 16px;">
-                <a href="{{link_recuperacao}}" style="display:inline-block;background-color:rgb(139,92,246);color:#fff;text-decoration:none;padding:14px 24px;border-radius:999px;font-size:18px;font-weight:700;">Redefinir minha senha</a>
-              </p>
+              <p style="margin:0;padding:0;font-size:1.125rem;line-height:1.75rem;color:rgb(91,33,182);margin-bottom:1.5rem;margin-top:16px;">Recebemos uma solicitação para redefinir a senha da sua conta Verto. Use o código abaixo no aplicativo para concluir a recuperação:</p>
               <p style="margin:0 0 8px;color:#4c1d95;font-size:14px;font-weight:700;">Código de recuperação:</p>
               <p style="margin:0 0 16px;color:#2e1065;font-size:28px;letter-spacing:3px;font-weight:800;">{{codigo}}</p>
-              <p style="margin:0;color:#6d28d9;font-size:13px;line-height:1.45;">Se o botão não funcionar, use este link:</p>
-              <p style="margin:6px 0 0;word-break:break-all;color:#6d28d9;font-size:12px;line-height:1.4;">{{link_recuperacao}}</p>
+              <p style="margin:0;color:#6d28d9;font-size:13px;line-height:1.45;">Acesse <strong>appverto.com.br/reset-password</strong>, informe seu e-mail, código e nova senha.</p>
               <p style="font-size:0.875rem;color:rgb(139,92,246);margin-top:20px;">Se você não solicitou essa alteração, por favor, ignore este e-mail. Sua senha atual permanecerá segura.</p>
             </td></tr>
           </table>
@@ -147,14 +143,10 @@ const PATIENT_RECOVERY_HTML = `
           <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;padding:28px;">
             <tr><td>
               <h1 style="margin:0;padding:0;font-size:1.5rem;line-height:1.333;color:rgb(46,16,101);font-weight:700;margin-bottom:1rem;">Esqueceu sua senha?</h1>
-              <p style="margin:0;padding:0;font-size:1.125rem;line-height:1.75rem;color:rgb(91,33,182);margin-bottom:1.5rem;margin-top:16px;">Não se preocupe, {{nome}}! Acontece com os melhores. Clique no botão abaixo para criar uma nova senha e voltar para o seu painel:</p>
-              <p style="margin:0 0 16px;">
-                <a href="{{link_recuperacao}}" style="display:inline-block;background-color:rgb(139,92,246);color:#fff;text-decoration:none;padding:14px 24px;border-radius:999px;font-size:18px;font-weight:700;">Criar nova senha</a>
-              </p>
+              <p style="margin:0;padding:0;font-size:1.125rem;line-height:1.75rem;color:rgb(91,33,182);margin-bottom:1.5rem;margin-top:16px;">Não se preocupe, {{nome}}! Use o código abaixo no aplicativo para criar sua nova senha:</p>
               <p style="margin:0 0 8px;color:#4c1d95;font-size:14px;font-weight:700;">Código de recuperação:</p>
               <p style="margin:0 0 16px;color:#2e1065;font-size:28px;letter-spacing:3px;font-weight:800;">{{codigo}}</p>
-              <p style="margin:0;color:#6d28d9;font-size:13px;line-height:1.45;">Se o botão não funcionar, use este link:</p>
-              <p style="margin:6px 0 0;word-break:break-all;color:#6d28d9;font-size:12px;line-height:1.4;">{{link_recuperacao}}</p>
+              <p style="margin:0;color:#6d28d9;font-size:13px;line-height:1.45;">Acesse <strong>appverto.com.br/reset-password</strong>, informe seu e-mail, código e nova senha.</p>
             </td></tr>
           </table>
         </td>
@@ -208,14 +200,11 @@ export const buildPasswordRecoveryEmailTemplate = (
   input: PasswordRecoveryTemplateInput
 ): { subject: string; html: string } => {
   const nome = escapeHtml(toSafeName(input.nome));
-  const recoveryLink = String(input.link_recuperacao || '').trim();
-  const linkForTemplate = recoveryLink || '#';
 
   if (input.perfil === 'professional') {
     return {
       subject: 'Recuperação de Senha - Verto',
       html: PROFESSIONAL_RECOVERY_HTML
-        .replace(/\{\{link_recuperacao\}\}/g, linkForTemplate)
         .replace(/\{\{codigo\}\}/g, escapeHtml(String(input.codigo || '').trim()))
     };
   }
@@ -224,7 +213,6 @@ export const buildPasswordRecoveryEmailTemplate = (
     subject: 'Recuperação de Senha - Verto',
     html: PATIENT_RECOVERY_HTML
       .replace(/\{\{nome\}\}/g, nome)
-      .replace(/\{\{link_recuperacao\}\}/g, linkForTemplate)
       .replace(/\{\{codigo\}\}/g, escapeHtml(String(input.codigo || '').trim()))
   };
 };
