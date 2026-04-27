@@ -259,7 +259,20 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
               <p className="text-xs text-slate-500">
                 E-mail identificado: <span className="font-semibold">{identifiedEmail}</span>
               </p>
-            ) : null}
+            ) : (
+              <div className="space-y-1">
+                <p className="text-xs text-slate-500">
+                  Informe o e-mail usado no convite para validar a ativação.
+                </p>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="seuemail@exemplo.com"
+                  className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
+                />
+              </div>
+            )}
             <input
               type="password"
               value={newPassword}

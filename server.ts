@@ -3274,11 +3274,18 @@ async function startServer() {
       }
 
       const profileRole = role === 'patient' ? 'patient' : 'coordinator';
-      const activationLink = await generateSupabaseActionLink({
+      const activationLinkFromSignup = await generateSupabaseActionLink({
         type: 'signup',
         email,
         redirectTo: getActivationRedirectUrl(profileRole, email),
       });
+      const activationLink =
+        activationLinkFromSignup ||
+        (await generateSupabaseActionLink({
+          type: 'recovery',
+          email,
+          redirectTo: getActivationRedirectUrl(profileRole, email),
+        }));
 
       if (!activationLink) {
         return res.status(500).json({
