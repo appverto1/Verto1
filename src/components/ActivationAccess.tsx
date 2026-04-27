@@ -19,6 +19,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const [message, setMessage] = useState('');
   const [intendedRole, setIntendedRole] = useState<'patient' | 'coordinator'>('patient');
   const [isActivationLinkContext, setIsActivationLinkContext] = useState(true);
+  const [hasAuthLinkParams, setHasAuthLinkParams] = useState(false);
   const authRouteBase = useMemo(() => {
     if (typeof window === 'undefined') return '/ativar';
     return /^\/reset-password\/?$/.test(window.location.pathname)
@@ -59,6 +60,12 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     const { type, code, tokenHash, accessToken, refreshToken, hasActivationParams } =
       parseActivationParams();
     const supabase = await getSupabase();
+    setHasAuthLinkParams(hasActivationParams);
+
+    if (authRouteBase === '/ativar' && !hasActivationParams) {
+      setIsActivationLinkContext(false);
+      return null;
+    }
 
     if (code) {
       try {
@@ -105,7 +112,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       return session;
     }
 
-    setIsActivationLinkContext(true);
+    setIsActivationLinkContext(hasActivationParams);
     return null;
   };
 
@@ -195,6 +202,9 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       if (!newPassword) {
         throw new Error('Informe a nova senha.');
       }
+      if (authRouteBase === '/ativar' && !hasAuthLinkParams) {
+        throw new Error('Abra esta tela somente pelo link de ativação enviado por e-mail.');
+      }
       const supabase = await getSupabase();
       let {
         data: { session },
@@ -205,6 +215,9 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       }
 
       if (!session?.user) {
+        if (authRouteBase === '/ativar') {
+          throw new Error('Link de ativação inválido ou expirado. Solicite um novo convite.');
+        }
         const fallbackEmail = String(identifiedEmail || email).trim().toLowerCase();
         const bootstrapLink = await requestAuthBootstrap(fallbackEmail);
         if (bootstrapLink) {

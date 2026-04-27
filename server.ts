@@ -3272,6 +3272,15 @@ async function startServer() {
       if (!authUser?.id) {
         return res.status(404).json({ success: false, error: 'Conta não encontrada para ativação.' });
       }
+      const isAlreadyConfirmed = Boolean(
+        (authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at,
+      );
+      if (isAlreadyConfirmed) {
+        return res.status(409).json({
+          success: false,
+          error: 'Conta já ativada. Use o fluxo de recuperação de senha se necessário.',
+        });
+      }
 
       const profileRole = role === 'patient' ? 'patient' : 'coordinator';
       const activationLinkFromSignup = await generateSupabaseActionLink({

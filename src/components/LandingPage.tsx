@@ -70,6 +70,16 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   const [recoveryMessage, setRecoveryMessage] = useState('');
   const [recoveryError, setRecoveryError] = useState('');
 
+  const parseApiResponse = async (response: Response) => {
+    const text = await response.text();
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { error: text.slice(0, 300) };
+    }
+  };
+
   const resetPasswordRecoveryState = () => {
     setShowPasswordRecovery(false);
     setRecoveryStep('request');
@@ -198,7 +208,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         credentials: 'include',
         body: JSON.stringify({ email: recoveryEmail })
       });
-      const data = await response.json();
+      const data = await parseApiResponse(response);
       if (!response.ok) {
         throw new Error(data?.error || 'Falha ao iniciar recuperação.');
       }
@@ -232,7 +242,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         credentials: 'include',
         body: JSON.stringify(payload)
       });
-      const data = await response.json();
+      const data = await parseApiResponse(response);
 
       if (!response.ok) {
         if (response.status === 401 && data?.error === 'MFA_REQUIRED') {
