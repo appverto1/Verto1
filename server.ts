@@ -226,6 +226,17 @@ function sanitizePhone(value: unknown): string | null {
   return digits.slice(0, 20);
 }
 
+function normalizeBrazilMobilePhone(value: unknown): string | null {
+  const digits = sanitizeString(value, 40).replace(/\D/g, '');
+  if (!digits) return null;
+  const normalized = digits.startsWith('55') && digits.length >= 13
+    ? digits.slice(2)
+    : digits;
+  if (!/^\d{11}$/.test(normalized)) return null;
+  if (normalized[2] !== '9') return null;
+  return normalized;
+}
+
 function normalizeCpf(value: unknown): string | null {
   const digits = sanitizeString(value, 32).replace(/\D/g, '');
   if (!digits) return null;
@@ -456,6 +467,26 @@ type OtpChallenge = {
 };
 
 const otpStore = new Map<string, OtpChallenge>();
+const activeSessionByUserId = new Map<string, string>();
+
+function issueSessionToken(userId: string): string {
+  const safeUserId = sanitizeString(userId, 120);
+  const token = crypto.randomUUID();
+  if (safeUserId) {
+    activeSessionByUserId.set(safeUserId, token);
+  }
+  return token;
+}
+
+function invalidateActiveSession(userId?: unknown, expectedToken?: unknown): void {
+  const safeUserId = sanitizeString(userId, 120);
+  if (!safeUserId) return;
+  const safeExpectedToken = sanitizeString(expectedToken, 120);
+  const current = activeSessionByUserId.get(safeUserId);
+  if (!safeExpectedToken || current === safeExpectedToken) {
+    activeSessionByUserId.delete(safeUserId);
+  }
+}
 
 function setOtpChallenge(challenge: OtpChallenge): void {
   otpStore.set(challenge.key, challenge);
@@ -1628,6 +1659,7 @@ function buildSessionUserPayload(input: any) {
     clinicId: selectedWorkspace?.clinicId || sanitizeString(input?.clinicId, 120) || null,
     activeWorkspaceId,
     mustSelectWorkspace,
+    sessionToken: sanitizeString(input?.sessionToken, 120) || null,
     emailVerified: Boolean(input?.emailVerified),
     phoneVerified: Boolean(input?.phoneVerified),
     firstLoginCompleted: Boolean(input?.firstLoginCompleted),
@@ -2326,6 +2358,16 @@ async function startServer() {
   const checkAuth = async (req: any, res: any, next: any) => {
     // 1. Check Session (Cookie-based)
     if (req.session && req.session.user) {
+      const sessionUserId = sanitizeString(req.session.user?.id, 120);
+      const sessionToken = sanitizeString(req.session.user?.sessionToken, 120);
+      const activeToken = sessionUserId ? activeSessionByUserId.get(sessionUserId) : null;
+      if (sessionUserId && activeToken && sessionToken && activeToken !== sessionToken) {
+        req.session.destroy(() => {});
+        return res.status(401).json({
+          error: 'SESSION_REVOKED',
+          message: 'Sua conta foi acessada em outro dispositivo. Faça login novamente.'
+        });
+      }
       syncWorkspaceContextInSession(req, res, () => {});
       if (mustBlockUnverifiedEmail(req, req.session.user)) {
         return res.status(403).json({
@@ -2356,14 +2398,15 @@ async function startServer() {
           if (profile) {
             const workspaces = await fetchUserWorkspaces(user.id);
             const selectedWorkspace = workspaces.find((w: any) => w.clinicId === profile.clinic_id) || workspaces[0] || null;
-            req.session.user = buildSessionUserPayload({
-              id: user.id,
-              email: user.email,
-              role: selectedWorkspace?.role || profile.role,
-              name: profile.name,
-              profilePicture: sanitizeUrl(profile.profile_picture) || null,
-              type: profile.type || user.user_metadata?.type || null,
-              age: typeof profile.age === 'number' ? profile.age : null,
+              req.session.user = buildSessionUserPayload({
+                id: user.id,
+                email: user.email,
+                role: selectedWorkspace?.role || profile.role,
+                name: profile.name,
+                sessionToken: issueSessionToken(sanitizeString(user.id, 120)),
+                profilePicture: sanitizeUrl(profile.profile_picture) || null,
+                type: profile.type || user.user_metadata?.type || null,
+                age: typeof profile.age === 'number' ? profile.age : null,
               subscriptionStatus: profile.subscription_status,
               planName: profile.plan_name,
               planPrice: profile.plan_price,
@@ -2905,6 +2948,7 @@ async function startServer() {
         email: user.email,
         role: roleForSession,
         name: profile.name,
+        sessionToken: issueSessionToken(sanitizeString(user.id, 120)),
         profilePicture: sanitizeUrl(profile.profile_picture) || null,
         type: profile.type || user.user_metadata?.type || null,
         age: typeof profile.age === 'number' ? profile.age : null,
@@ -3854,6 +3898,7 @@ async function startServer() {
   });
 
   app.post('/api/auth/logout', (req, res) => {
+    invalidateActiveSession(req.session?.user?.id, req.session?.user?.sessionToken);
     req.session.destroy((err) => {
       if (err) return res.status(500).json({ error: 'Logout failed' });
       res.clearCookie('verto-session');
@@ -4542,8 +4587,22 @@ async function startServer() {
       const safeProfessionalId = sanitizeString(req.session.user?.id, 120);
       const normalizedEmail = String(safeEmail || email || '').trim().toLowerCase();
       const normalizedCpf = normalizeCpf(cpf);
+      const rawPhone = req.body?.phone ?? req.body?.telefone;
+      const normalizedPhone = normalizeBrazilMobilePhone(rawPhone);
       if (!normalizedEmail) {
         return res.status(400).json({ success: false, error: 'Email inválido.' });
+      }
+      if (rawPhone !== undefined && rawPhone !== null && String(rawPhone).trim() && !normalizedPhone) {
+        return res.status(400).json({
+          success: false,
+          error: 'Telefone inválido. Informe DDD + 9 dígitos (11 números).'
+        });
+      }
+      if (cpf !== undefined && cpf !== null && String(cpf).trim() && !normalizedCpf) {
+        return res.status(400).json({
+          success: false,
+          error: 'CPF inválido. Informe 11 dígitos.'
+        });
       }
 
       const duplicatePatient = await findDuplicatePatientInClinic({
@@ -4596,14 +4655,15 @@ async function startServer() {
       };
 
       const ensurePatientLink = async (authUserId: string) => {
-        const patientPayloadBase = cleanObject({
-          name: safeName,
-          email: safeEmail,
-          status: 'active',
-          type: normalizedPortalType,
-          clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
-          therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined,
-          created_at: new Date().toISOString()
+          const patientPayloadBase = cleanObject({
+            name: safeName,
+            email: safeEmail,
+            phone: normalizedPhone || undefined,
+            status: 'active',
+            type: normalizedPortalType,
+            clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
+            therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined,
+            created_at: new Date().toISOString()
         });
         if (!patientPayloadBase.email) return;
 
@@ -4616,21 +4676,23 @@ async function startServer() {
         }
         const { data: existingPatient } = await existingPatientQuery.limit(1).maybeSingle();
 
-        const upsertPatientData = cleanObject({
-          name: safeName,
-          email: safeEmail,
-          status: 'active',
-          type: normalizedPortalType,
-          clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
-          therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined
-        });
-        const fallbackPatientData = cleanObject({
-          name: safeName,
-          email: safeEmail,
-          status: 'active',
-          clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
-          therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined
-        });
+          const upsertPatientData = cleanObject({
+            name: safeName,
+            email: safeEmail,
+            phone: normalizedPhone || undefined,
+            status: 'active',
+            type: normalizedPortalType,
+            clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
+            therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined
+          });
+          const fallbackPatientData = cleanObject({
+            name: safeName,
+            email: safeEmail,
+            phone: normalizedPhone || undefined,
+            status: 'active',
+            clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
+            therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined
+          });
 
         if (existingPatient?.id) {
           const { error: updatePatientError } = await supabase
@@ -4975,12 +5037,18 @@ async function startServer() {
       const safeName = sanitizeString(req.body?.name || req.body?.nome, 160);
       const safeClinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
       const safeTherapistId = sanitizeString(req.body?.therapist_id || req.session.user?.id, 100);
+      const rawEmail = req.body?.email;
+      const safeEmail = sanitizeEmail(rawEmail);
+      const rawCpf = req.body?.cpf || req.body?.anamnesisData?.cpf;
+      const safeCpf = normalizeCpf(rawCpf);
+      const rawPhone = req.body?.phone || req.body?.telefone;
+      const safePhone = normalizeBrazilMobilePhone(rawPhone);
       const safeBody = cleanObject({
         id: isUuid(sanitizeString(req.body?.id, 120)) ? sanitizeString(req.body?.id, 120) : undefined,
         name: safeName,
-        email: sanitizeEmail(req.body?.email),
-        cpf: normalizeCpf(req.body?.cpf || req.body?.anamnesisData?.cpf),
-        phone: sanitizePhone(req.body?.phone || req.body?.telefone),
+        email: safeEmail,
+        cpf: safeCpf,
+        phone: safePhone || sanitizePhone(rawPhone),
         age: asSafeNumber(req.body?.age, 0, 130),
         diagnosis: sanitizeString(req.body?.diagnosis, 2000),
         status: sanitizeString(req.body?.status, 40) || undefined,
@@ -4991,6 +5059,15 @@ async function startServer() {
 
       if (!safeBody.name) {
         return res.status(400).json({ error: 'Nome do paciente é obrigatório.' });
+      }
+      if (rawEmail !== undefined && rawEmail !== null && String(rawEmail).trim() && !safeEmail) {
+        return res.status(400).json({ error: 'E-mail inválido. Informe um domínio válido.' });
+      }
+      if (rawCpf !== undefined && rawCpf !== null && String(rawCpf).trim() && !safeCpf) {
+        return res.status(400).json({ error: 'CPF inválido. Informe 11 dígitos.' });
+      }
+      if (rawPhone !== undefined && rawPhone !== null && String(rawPhone).trim() && !safePhone) {
+        return res.status(400).json({ error: 'Telefone inválido. Informe DDD + 9 dígitos (11 números).' });
       }
 
       const duplicatePatient = await findDuplicatePatientInClinic({
@@ -5077,11 +5154,28 @@ async function startServer() {
       const allowClinicUpdate =
         canChangeClinic ||
         (incomingClinicId === null && canUnlinkInCurrentClinic);
+      const rawEmail = req.body?.email;
+      const rawPhone = req.body?.phone;
+      const safeEmail = rawEmail !== undefined ? sanitizeEmail(rawEmail) : undefined;
+      const safePhone = rawPhone !== undefined ? normalizeBrazilMobilePhone(rawPhone) : undefined;
+      const rawCpf = req.body?.cpf;
+      const safeCpf = rawCpf !== undefined ? normalizeCpf(rawCpf) : undefined;
+
+      if (rawEmail !== undefined && rawEmail !== null && String(rawEmail).trim() && !safeEmail) {
+        return res.status(400).json({ success: false, error: 'E-mail inválido. Informe um domínio válido.' });
+      }
+      if (rawPhone !== undefined && rawPhone !== null && String(rawPhone).trim() && !safePhone) {
+        return res.status(400).json({ success: false, error: 'Telefone inválido. Informe DDD + 9 dígitos (11 números).' });
+      }
+      if (rawCpf !== undefined && rawCpf !== null && String(rawCpf).trim() && !safeCpf) {
+        return res.status(400).json({ success: false, error: 'CPF inválido. Informe 11 dígitos.' });
+      }
 
       const updates = cleanObject({
         name: req.body?.name !== undefined ? sanitizeString(req.body?.name, 160) : undefined,
-        email: req.body?.email !== undefined ? sanitizeEmail(req.body?.email) : undefined,
-        phone: req.body?.phone !== undefined ? sanitizePhone(req.body?.phone) : undefined,
+        email: safeEmail,
+        phone: safePhone !== undefined ? safePhone : undefined,
+        cpf: safeCpf !== undefined ? safeCpf : undefined,
         age: req.body?.age !== undefined ? asSafeNumber(req.body?.age, 0, 130) : undefined,
         diagnosis: req.body?.diagnosis !== undefined ? sanitizeString(req.body?.diagnosis, 2000) : undefined,
         clinic_id: allowClinicUpdate && req.body?.clinic_id !== undefined ? sanitizeString(req.body?.clinic_id, 100) : undefined,

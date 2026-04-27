@@ -933,7 +933,51 @@ export function CoordinatorDashboard({
     );
   };
 
+  const normalizeCpfInput = (value: string) =>
+    String(value || "")
+      .replace(/\D/g, "")
+      .slice(0, 11);
+
+  const normalizeBrazilMobileInput = (value: string) => {
+    const digits = String(value || "")
+      .replace(/\D/g, "")
+      .slice(0, 11);
+    return digits;
+  };
+
+  const isValidBrazilMobile = (value: string) => /^\d{2}9\d{8}$/.test(value);
+  const isValidCpf = (value: string) => /^\d{11}$/.test(value);
+  const isValidEmail = (value: string) =>
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim().toLowerCase());
+
+  const formatCpf = (value: string) => {
+    const v = normalizeCpfInput(value);
+    if (v.length <= 3) return v;
+    if (v.length <= 6) return `${v.slice(0, 3)}.${v.slice(3)}`;
+    if (v.length <= 9) return `${v.slice(0, 3)}.${v.slice(3, 6)}.${v.slice(6)}`;
+    return `${v.slice(0, 3)}.${v.slice(3, 6)}.${v.slice(6, 9)}-${v.slice(9, 11)}`;
+  };
+
+  const formatBrazilMobile = (value: string) => {
+    const v = normalizeBrazilMobileInput(value);
+    if (v.length <= 2) return v;
+    if (v.length <= 7) return `(${v.slice(0, 2)}) ${v.slice(2)}`;
+    return `(${v.slice(0, 2)}) ${v.slice(2, 7)}-${v.slice(7, 11)}`;
+  };
+
   const handlePatientFormChange = (field: string, value: any) => {
+    if (field === "cpf" || field === "responsavelCpf") {
+      setNewPatientForm((prev: any) => ({ ...prev, [field]: formatCpf(String(value || "")) }));
+      return;
+    }
+    if (field === "telefone" || field === "responsavelTelefone") {
+      setNewPatientForm((prev: any) => ({ ...prev, [field]: formatBrazilMobile(String(value || "")) }));
+      return;
+    }
+    if (field === "email") {
+      setNewPatientForm((prev: any) => ({ ...prev, [field]: String(value || "").trim().toLowerCase() }));
+      return;
+    }
     setNewPatientForm((prev: any) => ({ ...prev, [field]: value }));
   };
 
@@ -1013,6 +1057,31 @@ export function CoordinatorDashboard({
       showToast("O nome do paciente é obrigatório.", "error");
       return;
     }
+    const normalizedPhone = normalizeBrazilMobileInput(newPatientForm.telefone);
+    if (!isValidBrazilMobile(normalizedPhone)) {
+      showToast("Telefone inválido. Use DDD + 9 dígitos (ex.: 11912345678).", "error");
+      return;
+    }
+    const normalizedEmail = String(newPatientForm.email || "").trim().toLowerCase();
+    if (normalizedEmail && !isValidEmail(normalizedEmail)) {
+      showToast("E-mail inválido. Informe um domínio válido.", "error");
+      return;
+    }
+    const normalizedCpf = normalizeCpfInput(newPatientForm.cpf);
+    if (normalizedCpf && !isValidCpf(normalizedCpf)) {
+      showToast("CPF inválido. Informe 11 dígitos.", "error");
+      return;
+    }
+    const normalizedGuardianCpf = normalizeCpfInput(newPatientForm.responsavelCpf);
+    if (newPatientForm.menorDeIdade && normalizedGuardianCpf && !isValidCpf(normalizedGuardianCpf)) {
+      showToast("CPF do responsável inválido. Informe 11 dígitos.", "error");
+      return;
+    }
+    const normalizedGuardianPhone = normalizeBrazilMobileInput(newPatientForm.responsavelTelefone);
+    if (newPatientForm.menorDeIdade && normalizedGuardianPhone && !isValidBrazilMobile(normalizedGuardianPhone)) {
+      showToast("Telefone do responsável inválido. Use DDD + 9 dígitos.", "error");
+      return;
+    }
     showProcessing(
       editingPatientId
         ? "Salvando alterações do paciente..."
@@ -1030,8 +1099,8 @@ export function CoordinatorDashboard({
       id: editingPatientId || crypto.randomUUID(),
       name: newPatientForm.nome.trim(),
       socialName: newPatientForm.nomeSocial?.trim() || null,
-      phone: String(newPatientForm.telefone || "").trim(),
-      email: String(newPatientForm.email || "").trim() || null,
+      phone: normalizedPhone || null,
+      email: normalizedEmail || null,
       age: calculateAgeFromBirthDate(newPatientForm.dataNascimento),
       gender: newPatientForm.genero || null,
       insuranceType: newPatientForm.convenioTipo || "particular",
@@ -1046,7 +1115,7 @@ export function CoordinatorDashboard({
       group: newPatientForm.grupo || null,
       source: newPatientForm.comoConheceu || null,
       rg: newPatientForm.rg || null,
-      cpf: newPatientForm.cpf || null,
+      cpf: normalizedCpf || null,
       cep: newPatientForm.cep || null,
       address: {
         logradouro: newPatientForm.logradouro || null,
@@ -1061,8 +1130,8 @@ export function CoordinatorDashboard({
         ? {
             nome: newPatientForm.responsavelNome || null,
             dataNascimento: newPatientForm.responsavelDataNascimento || null,
-            cpf: newPatientForm.responsavelCpf || null,
-            telefone: newPatientForm.responsavelTelefone || null,
+            cpf: normalizedGuardianCpf || null,
+            telefone: normalizedGuardianPhone || null,
           }
         : null,
       type: newPatientForm.patientProfileType || "adult_conventional",
@@ -1251,7 +1320,7 @@ export function CoordinatorDashboard({
     const roleDefault = isTherapist
       ? { tab: "history" as const, openAnamnesis: false }
       : isReceptionist
-        ? { tab: "files" as const, openAnamnesis: true }
+        ? { tab: "files" as const, openAnamnesis: false }
         : { tab: "history" as const, openAnamnesis: false };
 
     const nextOptions = isReceptionist
@@ -3768,7 +3837,7 @@ export function CoordinatorDashboard({
                         <div className="flex-1 min-w-0">
                           <h4 className="font-medium text-slate-900 truncate flex items-center gap-2">
                             {normalizeUtf8Text(patient.name)}
-                            {isPatientPendingAnamnesis(patient) && (
+                            {!isReceptionist && isPatientPendingAnamnesis(patient) && (
                               <span
                                 title="Novo paciente pendente de ficha anamnese"
                                 className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-100 text-amber-700 text-xs font-black shrink-0"
@@ -3795,16 +3864,18 @@ export function CoordinatorDashboard({
                           </button>
                           {openMenuId === patient.id && (
                             <div className="absolute right-0 top-full mt-2 w-40 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 py-2 animate-in fade-in zoom-in duration-200">
-                              <button
-                                onClick={() => {
-                                  onPatientClick(patient.id, { tab: "history" });
-                                  setOpenMenuId(null);
-                                }}
-                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
-                              >
-                                <FileText size={14} className="text-blue-500" />{" "}
-                                Prontuário
-                              </button>
+                              {!isReceptionist && (
+                                <button
+                                  onClick={() => {
+                                    onPatientClick(patient.id, { tab: "history" });
+                                    setOpenMenuId(null);
+                                  }}
+                                  className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                                >
+                                  <FileText size={14} className="text-blue-500" />{" "}
+                                  Prontuário
+                                </button>
+                              )}
                               <button
                                 onClick={() => {
                                   openPatientProfileModal(patient);
@@ -3815,19 +3886,21 @@ export function CoordinatorDashboard({
                                 <Search size={14} className="text-[#7a32fc]" />{" "}
                                 Ver mais (cadastro)
                               </button>
-                              <button
-                                onClick={() => {
-                                  onPatientClick(patient.id, {
-                                    tab: "history",
-                                    openAnamnesis: true,
-                                  });
-                                  setOpenMenuId(null);
-                                }}
-                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
-                              >
-                                <ClipboardCheck size={14} className="text-purple-500" />
-                                Ficha Anamnese
-                              </button>
+                              {!isReceptionist && (
+                                <button
+                                  onClick={() => {
+                                    onPatientClick(patient.id, {
+                                      tab: "history",
+                                      openAnamnesis: true,
+                                    });
+                                    setOpenMenuId(null);
+                                  }}
+                                  className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                                >
+                                  <ClipboardCheck size={14} className="text-purple-500" />
+                                  Ficha Anamnese
+                                </button>
+                              )}
                               <button
                                 onClick={() => {
                                   handleEditPatient(patient);
@@ -3854,7 +3927,9 @@ export function CoordinatorDashboard({
                             className={`w-2 h-2 rounded-full animate-pulse ${isPatientPendingAnamnesis(patient) ? "bg-amber-500" : "bg-green-500"}`}
                           />
                           <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">
-                            {isPatientPendingAnamnesis(patient)
+                            {isReceptionist
+                              ? "Cadastro do paciente"
+                              : isPatientPendingAnamnesis(patient)
                               ? "Pendente de Anamnese"
                               : "Paciente Ativo"}
                           </span>
@@ -3867,25 +3942,42 @@ export function CoordinatorDashboard({
                               : "Adulto Convencional"}
                         </div>
                       </div>
-                      <div className="mt-3 grid grid-cols-2 gap-2">
-                        <button
-                          onClick={() =>
-                            onPatientClick(patient.id, {
-                              tab: "history",
-                              openAnamnesis: true,
-                            })
-                          }
-                          className="px-3 py-2 rounded-xl bg-purple-50 text-purple-700 text-[10px] font-bold uppercase tracking-wider hover:bg-purple-100 transition-all"
-                        >
-                          Ficha Anamnese
-                        </button>
-                        <button
-                          onClick={() => onPatientClick(patient.id, { tab: "files" })}
-                          className="px-3 py-2 rounded-xl bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider hover:bg-slate-200 transition-all"
-                        >
-                          Arquivos
-                        </button>
-                      </div>
+                      {isReceptionist ? (
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <button
+                            onClick={() => openPatientProfileModal(patient)}
+                            className="px-3 py-2 rounded-xl bg-blue-50 text-blue-700 text-[10px] font-bold uppercase tracking-wider hover:bg-blue-100 transition-all"
+                          >
+                            Ver cadastro
+                          </button>
+                          <button
+                            onClick={() => handleEditPatient(patient)}
+                            className="px-3 py-2 rounded-xl bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider hover:bg-slate-200 transition-all"
+                          >
+                            Editar cadastro
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <button
+                            onClick={() =>
+                              onPatientClick(patient.id, {
+                                tab: "history",
+                                openAnamnesis: true,
+                              })
+                            }
+                            className="px-3 py-2 rounded-xl bg-purple-50 text-purple-700 text-[10px] font-bold uppercase tracking-wider hover:bg-purple-100 transition-all"
+                          >
+                            Ficha Anamnese
+                          </button>
+                          <button
+                            onClick={() => onPatientClick(patient.id, { tab: "files" })}
+                            className="px-3 py-2 rounded-xl bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider hover:bg-slate-200 transition-all"
+                          >
+                            Arquivos
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

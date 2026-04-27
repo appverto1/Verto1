@@ -101,6 +101,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   }, [allowedTabs, isKidsProfile]);
   const canAccessTab = (tab: 'history' | 'notes' | 'report' | 'plan' | 'session' | 'files') =>
     allowedTabsSet.has(tab);
+  const canOpenAnamnesis = canAccessTab('history') && canAccessTab('notes');
 
   useEffect(() => {
     if (initialTab && canAccessTab(initialTab)) {
@@ -1882,9 +1883,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             >
               <MessageCircle size={16} /> WhatsApp
             </a>
-            <button id="anamnesis-btn" onClick={() => setShowAnamnesis(true)} className="flex-1 sm:flex-none bg-[#F4F7FE] text-[#7a32fc] px-4 py-2.5 rounded-xl text-xs font-semibold hover:bg-[#7a32fc]/10 transition-colors flex items-center justify-center gap-2 border border-blue-100"> 
-              <FileText size={16} /> Ficha Anamnese 
-            </button> 
+            {canOpenAnamnesis && (
+              <button id="anamnesis-btn" onClick={() => setShowAnamnesis(true)} className="flex-1 sm:flex-none bg-[#F4F7FE] text-[#7a32fc] px-4 py-2.5 rounded-xl text-xs font-semibold hover:bg-[#7a32fc]/10 transition-colors flex items-center justify-center gap-2 border border-blue-100"> 
+                <FileText size={16} /> Ficha Anamnese 
+              </button>
+            )}
             <button 
               onClick={() => setIsUnlinkingModalOpen(true)}
               className="p-2.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
