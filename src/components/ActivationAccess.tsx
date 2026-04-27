@@ -156,6 +156,26 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     [],
   );
 
+  const handleGoogleLogin = async () => {
+    setLoading(true);
+    setError('');
+    setMessage('');
+    try {
+      localStorage.setItem('verto_intended_role', intendedRole);
+      const supabase = await getSupabase();
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/ativar?role=${intendedRole}`,
+        },
+      });
+      if (oauthError) throw oauthError;
+    } catch (err: any) {
+      setError(err?.message || 'Falha ao iniciar login com Google.');
+      setLoading(false);
+    }
+  };
+
   const handleSetPassword = async () => {
     setLoading(true);
     setError('');
@@ -223,6 +243,14 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         </div>
 
         <div className="space-y-4">
+          <button
+            onClick={handleGoogleLogin}
+            disabled={loading}
+            className="w-full h-11 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold hover:bg-slate-50 transition disabled:opacity-60"
+          >
+            Entrar com Google
+          </button>
+
           <div className="border-t border-slate-100 pt-4 space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
               Definir senha
