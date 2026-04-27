@@ -1349,6 +1349,19 @@ export const dataService = {
       hydratedPatients.push({
         ...patient,
         anamnesisData,
+        pei: Array.isArray(recordPayload?.pei) ? recordPayload.pei : Array.isArray(patient?.pei) ? patient.pei : [],
+        evaluationLinks:
+          recordPayload?.evaluationLinks && typeof recordPayload.evaluationLinks === 'object'
+            ? recordPayload.evaluationLinks
+            : patient?.evaluationLinks && typeof patient.evaluationLinks === 'object'
+              ? patient.evaluationLinks
+              : {},
+        interventionTaskLinks:
+          recordPayload?.interventionTaskLinks && typeof recordPayload.interventionTaskLinks === 'object'
+            ? recordPayload.interventionTaskLinks
+            : patient?.interventionTaskLinks && typeof patient.interventionTaskLinks === 'object'
+              ? patient.interventionTaskLinks
+              : {},
         anamnesisSubmissions: submissions,
         anamnesisTemplate: clinicTemplateRes?.data || {},
         anamnesisRenewalMonths: [2, 3, 6, 12].includes(Number(recordPayload?.anamnesisRenewalMonths))
@@ -1361,6 +1374,15 @@ export const dataService = {
         patientId,
         diagnosis: recordPayload?.diagnosis || patient?.diagnosis || null,
         anamnesisData,
+        pei: Array.isArray(recordPayload?.pei) ? recordPayload.pei : Array.isArray(patient?.pei) ? patient.pei : [],
+        evaluationLinks:
+          recordPayload?.evaluationLinks && typeof recordPayload.evaluationLinks === 'object'
+            ? recordPayload.evaluationLinks
+            : {},
+        interventionTaskLinks:
+          recordPayload?.interventionTaskLinks && typeof recordPayload.interventionTaskLinks === 'object'
+            ? recordPayload.interventionTaskLinks
+            : {},
         anamneseJsonb: anamnesisData,
         anamnesisSubmissions: submissions
       });

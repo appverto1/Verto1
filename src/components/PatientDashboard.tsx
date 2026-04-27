@@ -200,10 +200,25 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       const when = new Date(item.date || item.created_at || 0);
       return when >= weekAgo;
     }).length;
-    const totalTasksDone = history.filter((item: any) => item.type === 'task').length;
+    const weekPhotos = familyDiaryHistory.filter((item: any) => {
+      const when = new Date(item.date || item.created_at || 0);
+      return item.type === 'photo' && when >= weekAgo;
+    }).length;
     const stars = Math.min(5, Math.max(1, Math.ceil(weekLogs / 2)));
-    return { weekLogs, totalTasksDone, stars };
+    return { weekLogs, weekPhotos, stars };
   }, [familyDiaryHistory, history]);
+
+  const hasFamilyPhotoToday = useMemo(() => {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    return familyDiaryHistory.some((item: any) => {
+      if (item.type !== 'photo') return false;
+      const raw = item.date || item.created_at;
+      if (!raw) return false;
+      const parsed = new Date(raw);
+      if (Number.isNaN(parsed.getTime())) return false;
+      return parsed.toISOString().slice(0, 10) === todayStr;
+    });
+  }, [familyDiaryHistory]);
 
   const handleConfirmFamilyNote = () => {
     if (isReadOnlyMode) return;
@@ -234,6 +249,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (isReadOnlyMode) return;
+    if (hasFamilyPhotoToday && !familyImage) {
+      alert('A família já enviou uma foto hoje. Você pode editar com desenho na foto atual ou enviar nova foto amanhã.');
+      e.target.value = '';
+      return;
+    }
     const file = e.target.files?.[0];
     if (file) {
       setIsUploading(true);
@@ -388,8 +408,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                         <p className="text-base sm:text-lg">{'⭐'.repeat(kidsGamification.stars)}</p>
                       </div>
                       <div className="bg-green-50 border border-green-100 rounded-2xl p-3 text-center">
-                        <p className="text-[10px] uppercase text-green-600 font-bold tracking-widest">Missões</p>
-                        <p className="text-lg font-extrabold text-green-700">{kidsGamification.totalTasksDone}</p>
+                        <p className="text-[10px] uppercase text-green-600 font-bold tracking-widest">Fotos 7d</p>
+                        <p className="text-lg font-extrabold text-green-700">{kidsGamification.weekPhotos}</p>
                       </div>
                     </div>
                     <div className="flex items-center justify-between mb-4 sm:mb-6 px-1 sm:px-2">
@@ -471,34 +491,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     </div>
                   )}
                 </div>
-
-                <div className="mt-4 mb-10"> 
-                  <div className="flex items-center justify-between mb-4">
-                     <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-widest flex items-center gap-2"> <Trophy size={16} /> Histórico </h2>
-                  </div>
-                  <div className="border-l-2 border-gray-100 ml-3 pb-4 pl-6 space-y-8"> 
-                    {sortedKidsDateKeys.length > 0 ? sortedKidsDateKeys.map(dateKey => ( 
-                      <div key={dateKey} className="relative animate-slide-up"> 
-                        <div className="absolute -left-[31px] top-0 w-4 h-4 rounded-full bg-[#7a32fc] border-2 border-white ring-4 ring-blue-50"></div> 
-                        <h3 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 bg-gray-50 px-3 py-1 rounded-full w-fit">{dateKey}</h3> 
-                        <div className="space-y-4"> 
-                          {groupedKidsTimeline[dateKey].map((item: any) => ( 
-                            <HistoryCard 
-                              key={item.id} 
-                              item={item} 
-                              energyTags={ENERGY_TAGS} 
-                              isTherapist={false} 
-                              isKid={true}
-                              fullHistory={history}
-                              peiGoals={user.pei || []}
-                              protocols={protocols}
-                            /> 
-                          ))} 
-                        </div> 
-                      </div> 
-                    )) : ( <p className="text-center text-gray-400 text-xs py-4 italic">Nenhuma atividade clínica registrada.</p> )} 
-                  </div> 
-                </div> 
             </div>
 
             {isFamilyLogOpen && (
@@ -529,17 +521,22 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                           </div>
                         </div>
                       ) : (
-                        <label className={`w-24 h-24 rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center gap-1 text-gray-400 hover:border-blue-300 hover:text-blue-400 transition-all cursor-pointer ${isUploading ? 'opacity-50 cursor-wait' : ''}`}>
+                        <label className={`w-24 h-24 rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center gap-1 text-gray-400 transition-all ${isUploading || hasFamilyPhotoToday ? 'opacity-50 cursor-not-allowed' : 'hover:border-blue-300 hover:text-blue-400 cursor-pointer'}`}>
                           {isUploading ? (
                             <RefreshCcw size={24} className="animate-spin" />
                           ) : (
                             <Camera size={24} />
                           )}
-                          <span className="text-[10px] font-bold uppercase">{isUploading ? 'Enviando' : 'Foto'}</span>
-                          {!isUploading && <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />}
+                          <span className="text-[10px] font-bold uppercase">{isUploading ? 'Enviando' : hasFamilyPhotoToday ? '1 foto/dia' : 'Foto'}</span>
+                          {!isUploading && !hasFamilyPhotoToday && <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />}
                         </label>
                       )}
                     </div>
+                    {hasFamilyPhotoToday && !familyImage && (
+                      <p className="mt-2 text-[11px] text-amber-600 font-medium">
+                        Limite diário: já existe uma foto enviada hoje no Diário da Família.
+                      </p>
+                    )}
                   </div>
                   <button 
                     onClick={handleConfirmFamilyNote} 

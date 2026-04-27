@@ -783,6 +783,45 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, user?.role, user?.activeWorkspaceId, user?.clinicId]);
 
+  const resolvePatientIdentityForPortal = (candidate?: any) => {
+    const candidateId = String(candidate?.patientId ?? candidate?.patient_id ?? candidate?.id ?? '').trim();
+    const candidateEmail = String(candidate?.patient_email || candidate?.email || '').trim().toLowerCase();
+
+    const byId = candidateId ? allPatients.find((p: any) => String(p?.id) === candidateId) : null;
+    const byEmail = candidateEmail
+      ? allPatients.find((p: any) => String(p?.email || '').trim().toLowerCase() === candidateEmail)
+      : null;
+    const byUserEmail =
+      user?.email
+        ? allPatients.find(
+            (p: any) => String(p?.email || '').trim().toLowerCase() === String(user.email).trim().toLowerCase(),
+          )
+        : null;
+
+    return {
+      patientId: String(byId?.id || byEmail?.id || byUserEmail?.id || candidateId || user?.id || '').trim(),
+      patientEmail: String(
+        byId?.email ||
+          byEmail?.email ||
+          byUserEmail?.email ||
+          candidateEmail ||
+          user?.email ||
+          '',
+      )
+        .trim()
+        .toLowerCase() || null,
+      patientName: String(
+        byId?.name ||
+          byEmail?.name ||
+          byUserEmail?.name ||
+          candidate?.patient_name ||
+          candidate?.name ||
+          user?.name ||
+          'Paciente',
+      ).trim(),
+    };
+  };
+
   useEffect(() => {
     const fetchPatientScopedData = async () => {
       if (!user || user.role !== 'patient' || !user.email) return;
@@ -1007,6 +1046,11 @@ export default function App() {
   };
   const handleAddNote = async (pid: any, txt: string, visibility: string, subject?: string) => {
     const patient = allPatients.find(p => p.id === pid);
+    const patientIdentity = resolvePatientIdentityForPortal({
+      patientId: pid,
+      patient_email: patient?.email || null,
+      patient_name: patient?.name || null
+    });
     const tempId = crypto.randomUUID();
     const newNote = { 
       id: tempId, 
@@ -1024,9 +1068,9 @@ export default function App() {
     try {
       const result = await dataService.addNote({
         id: tempId,
-        patient_id: String(pid),
-        patient_name: patient?.name || null,
-        patient_email: patient?.email || null,
+        patient_id: String(patientIdentity.patientId || pid),
+        patient_name: patientIdentity.patientName || null,
+        patient_email: patientIdentity.patientEmail,
         text: txt,
         visibility,
         subject: subject || "Geral"
@@ -1312,6 +1356,12 @@ export default function App() {
         : 6,
       lastAnamnesisAt: data.lastAnamnesisAt || null,
       patientProfileType: resolvedPortalType,
+      diagnosis: data.diagnosis || "",
+      pei: Array.isArray(data.pei) ? data.pei : [],
+      evaluationLinks:
+        data.evaluationLinks && typeof data.evaluationLinks === 'object' ? data.evaluationLinks : {},
+      interventionTaskLinks:
+        data.interventionTaskLinks && typeof data.interventionTaskLinks === 'object' ? data.interventionTaskLinks : {},
       anamnese: data.anamnesisData || {}
     });
   };
@@ -1520,9 +1570,10 @@ export default function App() {
   };
 
   const handleMoodCheckin = async (l: number, n: string, i: string, t: any) => {
+    const identity = resolvePatientIdentityForPortal();
     const item = {
       id: Date.now(),
-      patientId: user.id,
+      patientId: identity.patientId || user.id,
       type: 'checkin',
       title: "Check-in",
       time: new Date().toLocaleTimeString(),
@@ -1535,8 +1586,9 @@ export default function App() {
     setHistory(prev => [item, ...prev]);
     try {
       await dataService.addHistoryItem({
-        patient_id: String(user.id),
-        patient_email: user.email || null,
+        patient_id: String(identity.patientId || user.id),
+        patient_email: identity.patientEmail,
+        patient_name: identity.patientName,
         type: 'checkin',
         title: 'Check-in',
         energy: l,
@@ -1548,11 +1600,13 @@ export default function App() {
     }
   };
   const handleCompleteTask = async (t: any, e: number, n: string) => { 
+    const identity = resolvePatientIdentityForPortal(t);
+    const targetPatientId = String(identity.patientId || t?.patientId || t?.patient_id || user?.id || '').trim();
     const time = new Date().toLocaleTimeString();
     const isKid = user.age <= 12;
     const newHistoryItem = { 
       id: Date.now(), 
-      patientId: user.id, 
+      patientId: targetPatientId, 
       type: t.type || 'task', 
       title: t.title, 
       time, 
@@ -1569,13 +1623,14 @@ export default function App() {
     
     // Add a note about the patient completing the task
     const noteText = `✅ TAREFA CONCLUÍDA PELO PACIENTE\nAtividade: ${t.title}\n${isKid ? `Pontuação: ${e}\n` : ''}Anotações do Paciente: ${n || "Nenhuma observação."}`;
-    handleAddNote(user.id, noteText, 'private', 'Evolução');
+    handleAddNote(targetPatientId, noteText, 'private', 'Evolução');
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
     await dataService.addHistoryItem({
-      patient_id: String(user.id),
-      patient_email: user.email || null,
+      patient_id: targetPatientId,
+      patient_email: identity.patientEmail,
+      patient_name: identity.patientName,
       type: t.type || 'task',
       title: t.title,
       score: isKid ? e : null,
@@ -1641,82 +1696,91 @@ export default function App() {
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
-    await dataService.addHistoryItem({
-      patient_id: String(pid),
-      patient_email: targetPatient?.email || null,
-      type: 'task',
-      title: title,
-      score: finalScore,
-      note: evalComment || "",
-      icon: "🎯"
-    });
+    try {
+      await dataService.addHistoryItem({
+        patient_id: String(pid),
+        patient_email: targetPatient?.email || null,
+        type: 'task',
+        title: title,
+        score: finalScore,
+        note: evalComment || "",
+        icon: "🎯"
+      });
+    } catch (error) {
+      console.error('Falha ao persistir registro de sessão:', error);
+    }
 
-    setHistory(prev => {
-      const updatedHistory = [newHistoryItem, ...prev];
-      
-      // Regra de Maestria para Criança: 5 vezes consecutivas nota 1.0
-      const targetPatient = allPatients.find(p => p.id === pid);
-      const clinicalRecord = clinicalRecords.find(r => r.patientId === pid);
-      const isKid = (targetPatient?.age !== undefined && targetPatient.age <= 12) || clinicalRecord?.anamnesisData?.formType === 'child';
+    const updatedHistory = [newHistoryItem, ...history];
+    setHistory(updatedHistory);
 
-      if (isKid) {
-        const peiGoal = clinicalRecord?.pei?.find((g: any) => g.name === title);
-        
-        // Filtra o histórico deste paciente para esta habilidade específica
-        // Considera apenas registros feitos APÓS a criação da meta no PEI
-        const skillHistory = updatedHistory
-          .filter(h => h.patientId === pid && h.title === title && h.type === 'task' && (!peiGoal || h.id > peiGoal.id))
-          .sort((a, b) => b.id - a.id);
+    const sourcePei = Array.isArray(clinicalRecord?.pei)
+      ? clinicalRecord.pei
+      : Array.isArray(targetPatient?.pei)
+        ? targetPatient.pei
+        : [];
+    let updatedPei = sourcePei;
 
-        let consecutiveCount = 0;
-        for (const h of skillHistory) {
-          if (h.score === 1) consecutiveCount++;
-          else break;
-        }
+    if (isKid && sourcePei.length > 0) {
+      const peiGoal = sourcePei.find((g: any) => g.name === title);
+      const skillHistory = updatedHistory
+        .filter((h: any) => h.patientId === pid && h.title === title && h.type === 'task' && (!peiGoal || h.id > peiGoal.id))
+        .sort((a: any, b: any) => Number(b.id) - Number(a.id));
 
-        const progress = Math.min(consecutiveCount * 20, 100);
-        const isMastered = progress === 100;
-
-        // Atualiza o status no PEI do paciente
-        setAllPatients(allPrev => allPrev.map(p => {
-          if (p.id === pid && p.pei) {
-            const updatedPei = p.pei.map((goal: any) => {
-              if (goal.name === title) {
-                return { 
-                  ...goal, 
-                  status: isMastered ? 'completed' : 'in_progress', 
-                  progress: progress 
-                };
-              }
-              return goal;
-            });
-            return { ...p, pei: updatedPei };
-          }
-          return p;
-        }));
-
-        if (isMastered && peiGoal?.status !== 'completed') {
-          // Adiciona uma nota automática sobre a conquista
-          handleAddNote(pid, `🏆 CRITÉRIO DE MAESTRIA ATINGIDO!\nA habilidade "${title}" foi realizada de forma independente por 5 vezes consecutivas. Status atualizado para Adquirida.`, 'private', 'Maestria');
-        }
-      } else {
-        // Para pacientes adultos, se registrar um treino, marca como em progresso
-        setAllPatients(allPrev => allPrev.map(p => {
-          if (p.id === pid && p.pei) {
-            const updatedPei = p.pei.map((goal: any) => {
-              if (goal.name === title && goal.status === 'not_started') {
-                return { ...goal, status: 'in_progress' };
-              }
-              return goal;
-            });
-            return { ...p, pei: updatedPei };
-          }
-          return p;
-        }));
+      let consecutiveCount = 0;
+      for (const h of skillHistory) {
+        if (h.score === 1) consecutiveCount += 1;
+        else break;
       }
-      
-      return updatedHistory;
-    });
+
+      const progress = Math.min(consecutiveCount * 20, 100);
+      const isMastered = progress === 100;
+      updatedPei = sourcePei.map((goal: any) =>
+        goal.name === title
+          ? { ...goal, status: isMastered ? 'completed' : 'in_progress', progress }
+          : goal
+      );
+
+      if (isMastered && peiGoal?.status !== 'completed') {
+        handleAddNote(
+          pid,
+          `🏆 CRITÉRIO DE MAESTRIA ATINGIDO!\nA habilidade "${title}" foi realizada de forma independente por 5 vezes consecutivas. Status atualizado para Adquirida.`,
+          'private',
+          'Maestria'
+        );
+      }
+    } else if (!isKid && sourcePei.length > 0) {
+      updatedPei = sourcePei.map((goal: any) =>
+        goal.name === title && goal.status === 'not_started' ? { ...goal, status: 'in_progress' } : goal
+      );
+    }
+
+    if (Array.isArray(updatedPei) && updatedPei !== sourcePei) {
+      setAllPatients((allPrev: any[]) =>
+        allPrev.map((p: any) => (p.id === pid ? { ...p, pei: updatedPei } : p))
+      );
+      setClinicalRecords((prev: any[]) =>
+        prev.map((r: any) => (r.patientId === pid ? { ...r, pei: updatedPei } : r))
+      );
+
+      try {
+        await dataService.savePatientRecord(String(pid), {
+          workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+          diagnosis: clinicalRecord?.diagnosis || targetPatient?.diagnosis || '',
+          anamnese: clinicalRecord?.anamnesisData || targetPatient?.anamnesisData || {},
+          pei: updatedPei,
+          evaluationLinks:
+            clinicalRecord?.evaluationLinks && typeof clinicalRecord.evaluationLinks === 'object'
+              ? clinicalRecord.evaluationLinks
+              : {},
+          interventionTaskLinks:
+            clinicalRecord?.interventionTaskLinks && typeof clinicalRecord.interventionTaskLinks === 'object'
+              ? clinicalRecord.interventionTaskLinks
+              : {}
+        });
+      } catch (error) {
+        console.error('Falha ao persistir atualização de PEI no prontuário:', error);
+      }
+    }
 
     return newId;
   };
@@ -1879,12 +1943,14 @@ export default function App() {
   }, [allPatients, therapistNotes]);
 
   const handleAddFamilyNote = async (pid: any, txt: string, image?: string) => {
+    const identity = resolvePatientIdentityForPortal({ patientId: pid });
+    const targetPatientId = String(identity.patientId || pid || user?.id || '').trim();
     const noteText = `🏠 REGISTRO DA FAMÍLIA\n${txt}`;
-    handleAddNote(pid, noteText, 'family', 'Família');
+    handleAddNote(targetPatientId, noteText, 'family', 'Família');
     
     const newHistoryItem = {
       id: Date.now(),
-      patientId: pid,
+      patientId: targetPatientId,
       type: image ? 'photo' : 'family_note',
       title: image ? "Foto enviada" : "Registro da Família",
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -1903,7 +1969,9 @@ export default function App() {
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
     await dataService.addHistoryItem({
-      patient_id: String(pid),
+      patient_id: targetPatientId,
+      patient_email: identity.patientEmail,
+      patient_name: identity.patientName,
       type: image ? 'photo' : 'family_note',
       title: image ? "Foto enviada" : "Registro da Família",
       note: txt,

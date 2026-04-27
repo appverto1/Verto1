@@ -15,22 +15,12 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     typeof window !== 'undefined' && /^\/reset-password\/?$/.test(window.location.pathname);
   const [email, setEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [recoveryCode, setRecoveryCode] = useState('');
-  const [recoveryMfaToken, setRecoveryMfaToken] = useState('');
-  const [recoveryMfaRequired, setRecoveryMfaRequired] = useState(false);
   const [identifiedEmail, setIdentifiedEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [intendedRole, setIntendedRole] = useState<'patient' | 'coordinator'>('patient');
   const [isActivationLinkContext, setIsActivationLinkContext] = useState(true);
-  const [hasAuthLinkParams, setHasAuthLinkParams] = useState(false);
-  const authRouteBase = useMemo(() => {
-    if (typeof window === 'undefined') return '/ativar';
-    return /^\/reset-password\/?$/.test(window.location.pathname)
-      ? '/reset-password'
-      : '/ativar';
-  }, []);
 
   const parseActivationParams = () => {
     const searchParams = new URLSearchParams(window.location.search);
@@ -65,33 +55,6 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     const { type, code, tokenHash, accessToken, refreshToken, hasActivationParams } =
       parseActivationParams();
     const supabase = await getSupabase();
-    const searchParams = new URLSearchParams(window.location.search);
-    const signedEmailParam = String(searchParams.get('email') || '').trim().toLowerCase();
-    const {
-      data: { session: existingSession },
-    } = await supabase.auth.getSession();
-    const existingEmail = String(existingSession?.user?.email || '').trim().toLowerCase();
-    const hasMatchedExistingSession =
-      Boolean(signedEmailParam) && Boolean(existingEmail) && existingEmail === signedEmailParam;
-    setHasAuthLinkParams(hasActivationParams || hasMatchedExistingSession);
-
-    if (authRouteBase === '/ativar' && !hasActivationParams) {
-      if (hasMatchedExistingSession) {
-        setIdentifiedEmail(existingEmail);
-        setEmail(existingEmail);
-        setIsActivationLinkContext(true);
-        return existingSession;
-      }
-      if (signedEmailParam) {
-        const bootstrapLink = await requestAuthBootstrap(signedEmailParam);
-        if (bootstrapLink) {
-          window.location.href = bootstrapLink;
-          return null;
-        }
-      }
-      setIsActivationLinkContext(false);
-      return null;
-    }
 
     if (code) {
       try {
@@ -133,33 +96,28 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       setEmail(sessionEmail);
       setIsActivationLinkContext(true);
       if (hasActivationParams) {
-        window.history.replaceState({}, document.title, authRouteBase);
+        window.history.replaceState({}, document.title, '/ativar');
       }
       return session;
     }
 
-    setIsActivationLinkContext(hasActivationParams);
+    setIsActivationLinkContext(true);
     return null;
   };
 
-  const requestAuthBootstrap = async (targetEmail: string) => {
+  const requestActivationBootstrap = async (targetEmail: string) => {
     const safeEmail = String(targetEmail || '').trim().toLowerCase();
     if (!safeEmail) return null;
     try {
-      const endpoint =
-        authRouteBase === '/reset-password'
-          ? '/api/auth/password/recovery/bootstrap'
-          : '/api/auth/activation/bootstrap';
-      const response = await fetch(endpoint, {
+      const response = await fetch('/api/auth/activation/bootstrap', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ email: safeEmail, role: intendedRole }),
       });
       const result = await response.json();
-      const link = result?.activationLink || result?.recoveryLink;
-      if (response.ok && result?.success && link) {
-        return String(link);
+      if (response.ok && result?.success && result?.activationLink) {
+        return String(result.activationLink);
       }
     } catch (bootstrapError) {
       console.error('Activation bootstrap error:', bootstrapError);
@@ -171,20 +129,16 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     const params = new URLSearchParams(window.location.search);
     const roleParam = String(params.get('role') || '').toLowerCase();
     const emailParam = String(params.get('email') || '').trim().toLowerCase();
-    const recoveryCodeParam = String(params.get('code') || '').trim();
     if (emailParam) {
       setEmail(emailParam);
       setIdentifiedEmail(emailParam);
-    }
-    if (isRecoveryRoute && recoveryCodeParam) {
-      setRecoveryCode(recoveryCodeParam);
     }
     if (roleParam === 'coordinator' || roleParam === 'therapist' || roleParam === 'receptionist') {
       setIntendedRole('coordinator');
       return;
     }
     setIntendedRole('patient');
-  }, [isRecoveryRoute]);
+  }, []);
 
   useEffect(() => {
     const hydrateActivationContext = async () => {
@@ -214,7 +168,9 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}${authRouteBase}?role=${intendedRole}`,
+          redirectTo: isRecoveryRoute
+            ? `${window.location.origin}/reset-password`
+            : `${window.location.origin}/ativar?role=${intendedRole}`,
         },
       });
       if (oauthError) throw oauthError;
@@ -244,56 +200,17 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       if (!session?.user) {
         if (!isRecoveryRoute) {
           const fallbackEmail = String(identifiedEmail || email).trim().toLowerCase();
-          if (fallbackEmail) {
-            const bootstrapLink = await requestAuthBootstrap(fallbackEmail);
-            if (bootstrapLink) {
-              window.location.href = bootstrapLink;
-              return;
-            }
+          const bootstrapLink = await requestActivationBootstrap(fallbackEmail);
+          if (bootstrapLink) {
+            window.location.href = bootstrapLink;
+            return;
           }
-          throw new Error('Link de ativação inválido ou expirado. Solicite um novo convite.');
         }
-        const recoveryEmail = String(identifiedEmail || email).trim().toLowerCase();
-        const recoveryOtpCode = String(recoveryCode || '').trim();
-        if (!recoveryEmail || !recoveryOtpCode) {
-          throw new Error('Informe e-mail e código de recuperação para redefinir a senha.');
-        }
-
-        const payload: Record<string, string> = {
-          email: recoveryEmail,
-          code: recoveryOtpCode,
-          newPassword,
-        };
-        const safeMfaToken = String(recoveryMfaToken || '').trim();
-        if (safeMfaToken) payload.mfaToken = safeMfaToken;
-
-        const verifyResponse = await fetch('/api/auth/password/recovery/verify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify(payload),
-        });
-        const verifyData = await verifyResponse.json().catch(() => ({}));
-        if (!verifyResponse.ok) {
-          if (verifyData?.error === 'MFA_REQUIRED') {
-            setRecoveryMfaRequired(true);
-            throw new Error(
-              verifyData?.message || 'MFA obrigatório para concluir a recuperação.',
-            );
-          }
-          throw new Error(
-            verifyData?.message || verifyData?.error || 'Falha ao validar recuperação por código.',
-          );
-        }
-
-        const { data: signedInData, error: signInError } = await supabase.auth.signInWithPassword({
-          email: recoveryEmail,
-          password: newPassword,
-        });
-        if (signInError || !signedInData?.session) {
-          throw new Error('Senha redefinida, mas não foi possível entrar automaticamente.');
-        }
-        session = signedInData.session;
+        throw new Error(
+          isRecoveryRoute
+            ? 'Link de recuperacao invalido ou expirado. Solicite um novo e-mail de recuperacao.'
+            : 'Nao foi possivel validar o link automaticamente. Solicite um novo e-mail de ativacao.',
+        );
       }
 
       const { error: updateError } = await supabase.auth.updateUser({
@@ -374,24 +291,6 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
                 />
               </div>
             )}
-            {isRecoveryRoute ? (
-              <input
-                type="text"
-                value={recoveryCode}
-                onChange={(e) => setRecoveryCode(e.target.value)}
-                placeholder="Código de recuperação (6 dígitos)"
-                className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
-              />
-            ) : null}
-            {isRecoveryRoute && recoveryMfaRequired ? (
-              <input
-                type="text"
-                value={recoveryMfaToken}
-                onChange={(e) => setRecoveryMfaToken(e.target.value)}
-                placeholder="Código MFA (se habilitado)"
-                className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
-              />
-            ) : null}
             <input
               type="password"
               value={newPassword}

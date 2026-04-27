@@ -1478,7 +1478,42 @@ async function resolvePatientIdForRequest(
 ): Promise<string | null> {
   const safeRaw = sanitizeString(rawPatientId, 120);
   if (!safeRaw) return null;
-  if (isUuid(safeRaw)) return safeRaw;
+  if (isUuid(safeRaw)) {
+    const role = sanitizeString(user?.role, 40).toLowerCase();
+    const safeEmail = sanitizeEmail(user?.email);
+    const clinicId = currentClinicId(user);
+
+    const { data: byId, error: byIdError } = await supabase
+      .from('patients')
+      .select('id')
+      .eq('id', safeRaw)
+      .maybeSingle();
+
+    if (!byIdError && byId?.id) return sanitizeString(byId.id, 120);
+
+    // Patient sessions can send auth user UUID instead of patients.id.
+    // In this case, resolve by e-mail to keep persistence linked correctly.
+    if (role === 'patient' && safeEmail) {
+      let byEmailQuery = supabase
+        .from('patients')
+        .select('id')
+        .eq('email', safeEmail)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (clinicId) {
+        byEmailQuery = byEmailQuery.eq('clinic_id', clinicId);
+      }
+
+      const { data: byEmailRows, error: byEmailError } = await byEmailQuery;
+      if (!byEmailError && Array.isArray(byEmailRows) && byEmailRows[0]?.id) {
+        return sanitizeString(byEmailRows[0].id, 120);
+      }
+      return null;
+    }
+
+    return safeRaw;
+  }
 
   const clinicId = currentClinicId(user);
   if (!clinicId) return null;
@@ -6194,6 +6229,32 @@ async function startServer() {
         { createIfMissing: true, fallbackName: sanitizeString(req.body?.patient_name, 160) }
       );
       const safeType = sanitizeString(req.body?.type, 80) || 'task';
+      const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      if (role === 'patient' && safeType === 'photo') {
+        const safeEmail = sanitizeEmail(req.body?.patient_email || req.session.user?.email);
+        if (!safeEmail) {
+          return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível para validação de foto diária.' });
+        }
+        const now = new Date();
+        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).toISOString();
+        const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0).toISOString();
+
+        const { data: todayPhotos, error: todayPhotosError } = await supabase
+          .from('history')
+          .select('id')
+          .eq('type', 'photo')
+          .eq('patient_email', safeEmail)
+          .gte('created_at', startOfDay)
+          .lt('created_at', endOfDay)
+          .limit(1);
+        if (todayPhotosError) throw todayPhotosError;
+        if (Array.isArray(todayPhotos) && todayPhotos.length > 0) {
+          return res.status(409).json({
+            success: false,
+            error: 'Limite diário atingido: apenas 1 foto por dia pode ser enviada no Portal da Família.'
+          });
+        }
+      }
       const docData = cleanObject({
         id: sanitizeString(req.body?.id, 120) || undefined,
         patient_id: resolvedPatientId,
