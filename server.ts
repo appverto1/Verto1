@@ -3362,11 +3362,7 @@ async function startServer() {
         .select('name, role')
         .eq('id', authUser.id)
         .maybeSingle();
-      const recoveryLink = await generateSupabaseActionLink({
-        type: 'recovery',
-        email,
-        redirectTo: getRecoveryRedirectUrl()
-      });
+      const recoveryLink = `${getRecoveryRedirectUrl()}?mode=code&email=${encodeURIComponent(email)}`;
       const recoveryEmail = buildPasswordRecoveryEmailTemplate({
         nome: sanitizeString(profile?.name || authUser.user_metadata?.full_name || email.split('@')[0], 180),
         codigo: code,

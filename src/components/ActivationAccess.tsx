@@ -15,6 +15,9 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     typeof window !== 'undefined' && /^\/reset-password\/?$/.test(window.location.pathname);
   const [email, setEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [recoveryCode, setRecoveryCode] = useState('');
+  const [recoveryMfaToken, setRecoveryMfaToken] = useState('');
+  const [recoveryMfaRequired, setRecoveryMfaRequired] = useState(false);
   const [identifiedEmail, setIdentifiedEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -246,7 +249,47 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
           }
           throw new Error('Link de ativação inválido ou expirado. Solicite um novo convite.');
         }
-        throw new Error('Link de recuperação inválido ou expirado. Solicite um novo e-mail de recuperação.');
+        const recoveryEmail = String(identifiedEmail || email).trim().toLowerCase();
+        const recoveryOtpCode = String(recoveryCode || '').trim();
+        if (!recoveryEmail || !recoveryOtpCode) {
+          throw new Error('Informe e-mail e código de recuperação para redefinir a senha.');
+        }
+
+        const payload: Record<string, string> = {
+          email: recoveryEmail,
+          code: recoveryOtpCode,
+          newPassword,
+        };
+        const safeMfaToken = String(recoveryMfaToken || '').trim();
+        if (safeMfaToken) payload.mfaToken = safeMfaToken;
+
+        const verifyResponse = await fetch('/api/auth/password/recovery/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(payload),
+        });
+        const verifyData = await verifyResponse.json().catch(() => ({}));
+        if (!verifyResponse.ok) {
+          if (verifyData?.error === 'MFA_REQUIRED') {
+            setRecoveryMfaRequired(true);
+            throw new Error(
+              verifyData?.message || 'MFA obrigatório para concluir a recuperação.',
+            );
+          }
+          throw new Error(
+            verifyData?.message || verifyData?.error || 'Falha ao validar recuperação por código.',
+          );
+        }
+
+        const { data: signedInData, error: signInError } = await supabase.auth.signInWithPassword({
+          email: recoveryEmail,
+          password: newPassword,
+        });
+        if (signInError || !signedInData?.session) {
+          throw new Error('Senha redefinida, mas não foi possível entrar automaticamente.');
+        }
+        session = signedInData.session;
       }
 
       const { error: updateError } = await supabase.auth.updateUser({
@@ -327,6 +370,24 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
                 />
               </div>
             )}
+            {isRecoveryRoute ? (
+              <input
+                type="text"
+                value={recoveryCode}
+                onChange={(e) => setRecoveryCode(e.target.value)}
+                placeholder="Código de recuperação (6 dígitos)"
+                className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
+              />
+            ) : null}
+            {isRecoveryRoute && recoveryMfaRequired ? (
+              <input
+                type="text"
+                value={recoveryMfaToken}
+                onChange={(e) => setRecoveryMfaToken(e.target.value)}
+                placeholder="Código MFA (se habilitado)"
+                className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
+              />
+            ) : null}
             <input
               type="password"
               value={newPassword}
