@@ -10,7 +10,6 @@ import { SecureImage } from './SecureMedia';
 
 export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false }: any) => { 
   const [selectedSnapshotDate, setSelectedSnapshotDate] = useState("all");
-  const [kidComparisonMode, setKidComparisonMode] = useState<'all' | 'improved' | 'declined'>('all');
   const [selectedTask, setSelectedTask] = useState<any>(null); 
   const [taskEnergy, setTaskEnergy] = useState(50); 
   const [taskNote, setTaskNote] = useState(""); 
@@ -147,38 +146,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
     return { labels, datasets };
   }, [history, protocols, selectedSnapshotDate, user]);
-
-  const kidChartViewData = useMemo(() => {
-    if (!kidChartData?.labels?.length || kidComparisonMode === 'all') return kidChartData;
-    const datasets = kidChartData.datasets || [];
-    if (datasets.length < 2) return kidChartData;
-
-    const currentDataset = datasets.find((d: any) => String(d.label || '').toLowerCase().includes('(agora)')) || datasets[datasets.length - 1];
-    const baselineDataset = datasets.find((d: any) => d !== currentDataset) || null;
-    if (!baselineDataset) return kidChartData;
-
-    const selectedIndexes = currentDataset.data
-      .map((value: number, idx: number) => {
-        const base = Number(baselineDataset.data[idx] ?? 0);
-        const curr = Number(value ?? 0);
-        const delta = curr - base;
-        if (kidComparisonMode === 'improved') return delta > 0 ? idx : -1;
-        return delta < 0 ? idx : -1;
-      })
-      .filter((idx: number) => idx >= 0);
-
-    if (selectedIndexes.length === 0) {
-      return { labels: [], datasets: [] };
-    }
-
-    return {
-      labels: selectedIndexes.map((i: number) => kidChartData.labels[i]),
-      datasets: datasets.map((dataset: any) => ({
-        ...dataset,
-        data: selectedIndexes.map((i: number) => dataset.data[i])
-      }))
-    };
-  }, [kidChartData, kidComparisonMode]);
 
   const familyDiaryHistory = useMemo(() => {
     return history
@@ -413,7 +380,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                       </div>
                     </div>
                     <div className="flex items-center justify-between mb-4 sm:mb-6 px-1 sm:px-2">
-                        <h2 className="text-lg sm:text-xl font-semibold text-gray-700 flex items-center gap-2"><Trophy className="text-yellow-500" size={20}/> Nível de Herói</h2>
+                        <h2 className="text-lg sm:text-xl font-semibold text-[#7a32fc] flex items-center gap-2"><Trophy className="text-yellow-500" size={20}/> Nível de Herói</h2>
                         <div className="relative w-28 sm:w-32">
                             <select 
                                 className="w-full bg-blue-50 border border-blue-100 text-[9px] sm:text-[10px] font-semibold text-[#7a32fc] px-2 sm:px-3 py-1.5 sm:py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
@@ -428,28 +395,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 text-[#7a32fc] pointer-events-none" size={10} />
                         </div>
                     </div>
-                    <div className="mb-4 flex flex-wrap gap-2">
-                      <button
-                        onClick={() => setKidComparisonMode('all')}
-                        className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${kidComparisonMode === 'all' ? 'bg-[#7a32fc] text-white' : 'bg-gray-100 text-gray-600'}`}
-                      >
-                        Tudo
-                      </button>
-                      <button
-                        onClick={() => setKidComparisonMode('improved')}
-                        className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${kidComparisonMode === 'improved' ? 'bg-green-500 text-white' : 'bg-green-50 text-green-700'}`}
-                      >
-                        Melhora
-                      </button>
-                      <button
-                        onClick={() => setKidComparisonMode('declined')}
-                        className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${kidComparisonMode === 'declined' ? 'bg-red-500 text-white' : 'bg-red-50 text-red-700'}`}
-                      >
-                        Piora
-                      </button>
-                    </div>
                     <div className="w-full min-h-[300px] sm:min-h-[350px]">
-                        <EvolutionBarChart chartData={kidChartViewData} />
+                        <EvolutionBarChart chartData={kidChartData} />
                     </div>
                     <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-widest text-center mt-2">Arraste lateralmente para melhor visualização</p>
                 </div>
