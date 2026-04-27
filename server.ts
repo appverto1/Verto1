@@ -3313,37 +3313,11 @@ async function startServer() {
   });
 
   app.post('/api/auth/password/recovery/bootstrap', async (req, res) => {
-    try {
-      const email = sanitizeEmail(req.body?.email);
-      if (!email) {
-        return res.status(400).json({ success: false, error: 'E-mail inválido.' });
-      }
-
-      const authUser = await findAuthUserByEmail(email);
-      if (!authUser?.id) {
-        return res.status(404).json({ success: false, error: 'Conta não encontrada para recuperação.' });
-      }
-
-      const recoveryLink = await generateSupabaseActionLink({
-        type: 'recovery',
-        email,
-        redirectTo: getRecoveryRedirectUrl(),
-      });
-
-      if (!recoveryLink) {
-        return res.status(500).json({
-          success: false,
-          error: 'Não foi possível gerar novo link de recuperação no momento.',
-        });
-      }
-
-      return res.json({ success: true, recoveryLink });
-    } catch (error: any) {
-      return res.status(500).json({
-        success: false,
-        error: sanitizeString(error?.message || 'Falha ao recuperar link de redefinição.', 500),
-      });
-    }
+    return res.status(410).json({
+      success: false,
+      error:
+        'Bootstrap de recuperação desativado por segurança. Solicite um novo e-mail de recuperação.',
+    });
   });
 
   app.post('/api/auth/password/recovery/email/request', recoveryLimiter, async (req, res) => {

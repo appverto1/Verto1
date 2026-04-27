@@ -246,12 +246,6 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
           }
           throw new Error('Link de ativação inválido ou expirado. Solicite um novo convite.');
         }
-        const fallbackEmail = String(identifiedEmail || email).trim().toLowerCase();
-        const bootstrapLink = await requestAuthBootstrap(fallbackEmail);
-        if (bootstrapLink) {
-          window.location.href = bootstrapLink;
-          return;
-        }
         throw new Error('Link de recuperação inválido ou expirado. Solicite um novo e-mail de recuperação.');
       }
 
