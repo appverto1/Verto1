@@ -3362,7 +3362,7 @@ async function startServer() {
         .select('name, role')
         .eq('id', authUser.id)
         .maybeSingle();
-      const recoveryLink = `${getRecoveryRedirectUrl()}?mode=code&email=${encodeURIComponent(email)}`;
+      const recoveryLink = `${getRecoveryRedirectUrl()}?mode=code&email=${encodeURIComponent(email)}&code=${encodeURIComponent(code)}`;
       const recoveryEmail = buildPasswordRecoveryEmailTemplate({
         nome: sanitizeString(profile?.name || authUser.user_metadata?.full_name || email.split('@')[0], 180),
         codigo: code,

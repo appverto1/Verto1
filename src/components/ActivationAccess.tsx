@@ -171,16 +171,20 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     const params = new URLSearchParams(window.location.search);
     const roleParam = String(params.get('role') || '').toLowerCase();
     const emailParam = String(params.get('email') || '').trim().toLowerCase();
+    const recoveryCodeParam = String(params.get('code') || '').trim();
     if (emailParam) {
       setEmail(emailParam);
       setIdentifiedEmail(emailParam);
+    }
+    if (isRecoveryRoute && recoveryCodeParam) {
+      setRecoveryCode(recoveryCodeParam);
     }
     if (roleParam === 'coordinator' || roleParam === 'therapist' || roleParam === 'receptionist') {
       setIntendedRole('coordinator');
       return;
     }
     setIntendedRole('patient');
-  }, []);
+  }, [isRecoveryRoute]);
 
   useEffect(() => {
     const hydrateActivationContext = async () => {
