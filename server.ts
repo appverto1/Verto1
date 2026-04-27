@@ -280,6 +280,19 @@ function getAuthRedirectUrl(): string {
   return `${baseUrl.replace(/\/+$/, '')}/auth/callback`;
 }
 
+function getActivationRedirectUrl(role?: unknown): string {
+  const baseUrl = sanitizeString(
+    process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '',
+    500
+  );
+  if (!baseUrl) {
+    throw new Error('VERTO_APP_BASE_URL (ou APP_BASE_URL) deve estar definida para ativação de conta.');
+  }
+  const normalizedRole = sanitizeString(role, 40).toLowerCase();
+  const roleParam = normalizedRole === 'patient' ? 'patient' : 'coordinator';
+  return `${baseUrl.replace(/\/+$/, '')}/ativar?role=${roleParam}`;
+}
+
 function getRecoveryRedirectUrl(): string {
   const baseUrl = sanitizeString(
     process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '',
@@ -2070,8 +2083,8 @@ async function startServer() {
                       (await generateSupabaseActionLink({
                         type: 'signup',
                         email: targetEmail,
-                        redirectTo: getAuthRedirectUrl()
-                      })) || getAuthRedirectUrl();
+                        redirectTo: getActivationRedirectUrl('coordinator')
+                      })) || getActivationRedirectUrl('coordinator');
 
                     const activationEmail = buildActivationEmailTemplate({
                       nome: sanitizeString(profile?.name || authUser?.user_metadata?.full_name || targetEmail.split('@')[0], 180),
@@ -2965,7 +2978,7 @@ async function startServer() {
       };
     }
 
-    const authRedirectTo = getAuthRedirectUrl();
+    const authRedirectTo = getActivationRedirectUrl(intendedRole || role || 'coordinator');
     const existingAuthUser = await findAuthUserByEmail(safeEmail);
     if (existingAuthUser?.id) {
       return {
@@ -3201,8 +3214,8 @@ async function startServer() {
         (await generateSupabaseActionLink({
           type: 'signup',
           email,
-          redirectTo: getAuthRedirectUrl()
-        })) || getAuthRedirectUrl();
+          redirectTo: getActivationRedirectUrl(profile?.role)
+        })) || getActivationRedirectUrl(profile?.role);
       const activationEmail = buildActivationEmailTemplate({
         nome: sanitizeString(profile?.name || authUser.user_metadata?.full_name || email.split('@')[0], 180),
         link_ativacao: activationLink,
@@ -4617,7 +4630,7 @@ async function startServer() {
         const signupLink = await generateSupabaseActionLink({
           type: 'signup',
           email: normalizedEmail,
-          redirectTo: getAuthRedirectUrl()
+          redirectTo: getActivationRedirectUrl('patient')
         });
         const fallbackRecoveryLink = signupLink
           ? null
