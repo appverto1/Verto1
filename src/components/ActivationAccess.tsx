@@ -14,10 +14,12 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [identifiedEmail, setIdentifiedEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [intendedRole, setIntendedRole] = useState<'patient' | 'coordinator'>('patient');
+  const [isActivationLinkContext, setIsActivationLinkContext] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -27,6 +29,41 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       return;
     }
     setIntendedRole('patient');
+  }, []);
+
+  useEffect(() => {
+    const hydrateActivationContext = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const typeParam = String(params.get('type') || '').toLowerCase();
+      const hasActivationParams =
+        Boolean(params.get('token_hash')) ||
+        Boolean(params.get('access_token')) ||
+        Boolean(params.get('refresh_token')) ||
+        Boolean(params.get('code')) ||
+        typeParam === 'signup' ||
+        typeParam === 'recovery' ||
+        typeParam === 'invite';
+
+      try {
+        const supabase = await getSupabase();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const sessionEmail = String(session?.user?.email || '').trim().toLowerCase();
+        if (sessionEmail) {
+          setIdentifiedEmail(sessionEmail);
+          setEmail(sessionEmail);
+          setIsActivationLinkContext(true);
+          return;
+        }
+      } catch (sessionError) {
+        console.error('Activation session detection failed:', sessionError);
+      }
+
+      setIsActivationLinkContext(hasActivationParams);
+    };
+
+    void hydrateActivationContext();
   }, []);
 
   const passwordHint = useMemo(
@@ -111,10 +148,11 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       const {
         data: { session: refreshedSession },
       } = await supabase.auth.getSession();
+      const userEmail = String(session.user.email || identifiedEmail || email).trim().toLowerCase();
       const loginRes = await onLogin(
         refreshedSession || session,
         intendedRole,
-        { email: session.user.email || email },
+        { email: userEmail },
         { provider: 'email' },
       );
       if (!loginRes?.success) {
@@ -134,7 +172,9 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         <div className="text-center mb-6">
           <h1 className="text-2xl font-extrabold text-slate-900">Ativação de Conta</h1>
           <p className="text-sm text-slate-500 mt-2">
-            Continue com Google, entre com sua senha, ou defina uma nova senha usando o link de ativação.
+            {isActivationLinkContext
+              ? 'Defina sua senha para ativar o acesso. O e-mail já foi identificado no convite.'
+              : 'Entre com Google, entre com sua senha, ou ative sua conta pelo link recebido no e-mail.'}
           </p>
         </div>
 
@@ -147,36 +187,41 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
             Entrar com Google
           </button>
 
-          <div className="border-t border-slate-100 pt-4 space-y-3">
-            <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">E-mail</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="seuemail@exemplo.com"
-              className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
-            />
-            <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">Senha</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Sua senha"
-              className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
-            />
-            <button
-              onClick={handleEmailLogin}
-              disabled={loading}
-              className="w-full h-11 rounded-xl bg-[#7a32fc] text-white font-semibold hover:opacity-95 transition disabled:opacity-60"
-            >
-              Entrar com e-mail
-            </button>
-          </div>
+          {!isActivationLinkContext ? (
+            <div className="border-t border-slate-100 pt-4 space-y-3">
+              <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">E-mail</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="seuemail@exemplo.com"
+                className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
+              />
+              <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">Senha</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Sua senha"
+                className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
+              />
+              <button
+                onClick={handleEmailLogin}
+                disabled={loading}
+                className="w-full h-11 rounded-xl bg-[#7a32fc] text-white font-semibold hover:opacity-95 transition disabled:opacity-60"
+              >
+                Entrar com e-mail
+              </button>
+            </div>
+          ) : null}
 
           <div className="border-t border-slate-100 pt-4 space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Definir senha (link de ativação)
+              Definir senha
             </p>
+            {identifiedEmail ? (
+              <p className="text-xs text-slate-500">E-mail identificado: <span className="font-semibold">{identifiedEmail}</span></p>
+            ) : null}
             <input
               type="password"
               value={newPassword}
@@ -201,4 +246,3 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     </div>
   );
 };
-
