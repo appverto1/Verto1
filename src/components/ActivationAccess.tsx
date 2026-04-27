@@ -60,9 +60,23 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     const { type, code, tokenHash, accessToken, refreshToken, hasActivationParams } =
       parseActivationParams();
     const supabase = await getSupabase();
-    setHasAuthLinkParams(hasActivationParams);
+    const searchParams = new URLSearchParams(window.location.search);
+    const signedEmailParam = String(searchParams.get('email') || '').trim().toLowerCase();
+    const {
+      data: { session: existingSession },
+    } = await supabase.auth.getSession();
+    const existingEmail = String(existingSession?.user?.email || '').trim().toLowerCase();
+    const hasMatchedExistingSession =
+      Boolean(signedEmailParam) && Boolean(existingEmail) && existingEmail === signedEmailParam;
+    setHasAuthLinkParams(hasActivationParams || hasMatchedExistingSession);
 
     if (authRouteBase === '/ativar' && !hasActivationParams) {
+      if (hasMatchedExistingSession) {
+        setIdentifiedEmail(existingEmail);
+        setEmail(existingEmail);
+        setIsActivationLinkContext(true);
+        return existingSession;
+      }
       setIsActivationLinkContext(false);
       return null;
     }
