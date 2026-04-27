@@ -77,6 +77,13 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         setIsActivationLinkContext(true);
         return existingSession;
       }
+      if (signedEmailParam) {
+        const bootstrapLink = await requestAuthBootstrap(signedEmailParam);
+        if (bootstrapLink) {
+          window.location.href = bootstrapLink;
+          return null;
+        }
+      }
       setIsActivationLinkContext(false);
       return null;
     }
