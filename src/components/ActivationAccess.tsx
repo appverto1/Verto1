@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import { getSupabase } from '../lib/supabase';
 
 type ActivationAccessProps = {
@@ -21,6 +21,89 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const [intendedRole, setIntendedRole] = useState<'patient' | 'coordinator'>('patient');
   const [isActivationLinkContext, setIsActivationLinkContext] = useState(false);
 
+  const parseActivationParams = () => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+
+    const type = String(searchParams.get('type') || hashParams.get('type') || '').toLowerCase();
+    const code = String(searchParams.get('code') || '').trim();
+    const tokenHash = String(searchParams.get('token_hash') || hashParams.get('token_hash') || '').trim();
+    const accessToken = String(searchParams.get('access_token') || hashParams.get('access_token') || '').trim();
+    const refreshToken = String(searchParams.get('refresh_token') || hashParams.get('refresh_token') || '').trim();
+
+    const hasActivationParams =
+      Boolean(code) ||
+      Boolean(tokenHash) ||
+      Boolean(accessToken) ||
+      Boolean(refreshToken) ||
+      type === 'signup' ||
+      type === 'recovery' ||
+      type === 'invite';
+
+    return {
+      type,
+      code,
+      tokenHash,
+      accessToken,
+      refreshToken,
+      hasActivationParams,
+    };
+  };
+
+  const establishSessionFromUrl = async () => {
+    const { type, code, tokenHash, accessToken, refreshToken, hasActivationParams } =
+      parseActivationParams();
+    const supabase = await getSupabase();
+
+    if (code) {
+      try {
+        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+        if (exchangeError) throw exchangeError;
+      } catch (exchangeErr) {
+        console.error('Activation code exchange error:', exchangeErr);
+      }
+    } else if (tokenHash) {
+      try {
+        const otpType = type || 'signup';
+        const { error: verifyError } = await supabase.auth.verifyOtp({
+          token_hash: tokenHash,
+          type: otpType as any,
+        });
+        if (verifyError) throw verifyError;
+      } catch (verifyErr) {
+        console.error('Activation token verification error:', verifyErr);
+      }
+    } else if (accessToken && refreshToken) {
+      try {
+        const { error: setSessionError } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        });
+        if (setSessionError) throw setSessionError;
+      } catch (setSessionErr) {
+        console.error('Activation setSession error:', setSessionErr);
+      }
+    }
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    const sessionEmail = String(session?.user?.email || '').trim().toLowerCase();
+    if (sessionEmail) {
+      setIdentifiedEmail(sessionEmail);
+      setEmail(sessionEmail);
+      setIsActivationLinkContext(true);
+      if (hasActivationParams) {
+        window.history.replaceState({}, document.title, '/ativar');
+      }
+      return session;
+    }
+
+    setIsActivationLinkContext(hasActivationParams);
+    return null;
+  };
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const roleParam = String(params.get('role') || '').toLowerCase();
@@ -33,41 +116,19 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
 
   useEffect(() => {
     const hydrateActivationContext = async () => {
-      const params = new URLSearchParams(window.location.search);
-      const typeParam = String(params.get('type') || '').toLowerCase();
-      const hasActivationParams =
-        Boolean(params.get('token_hash')) ||
-        Boolean(params.get('access_token')) ||
-        Boolean(params.get('refresh_token')) ||
-        Boolean(params.get('code')) ||
-        typeParam === 'signup' ||
-        typeParam === 'recovery' ||
-        typeParam === 'invite';
-
       try {
-        const supabase = await getSupabase();
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        const sessionEmail = String(session?.user?.email || '').trim().toLowerCase();
-        if (sessionEmail) {
-          setIdentifiedEmail(sessionEmail);
-          setEmail(sessionEmail);
-          setIsActivationLinkContext(true);
-          return;
-        }
+        await establishSessionFromUrl();
       } catch (sessionError) {
         console.error('Activation session detection failed:', sessionError);
+        setError('Nao foi possivel validar o link de ativacao. Abra novamente pelo e-mail.');
       }
-
-      setIsActivationLinkContext(hasActivationParams);
     };
 
     void hydrateActivationContext();
   }, []);
 
   const passwordHint = useMemo(
-    () => 'Use no mínimo 12 caracteres, com maiúscula, minúscula, número e símbolo.',
+    () => 'Use no minimo 12 caracteres, com maiuscula, minuscula, numero e simbolo.',
     [],
   );
 
@@ -95,7 +156,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         { provider: 'email' },
       );
       if (!loginRes?.success) {
-        throw new Error(loginRes?.error || 'Não foi possível concluir o login.');
+        throw new Error(loginRes?.error || 'Nao foi possivel concluir o login.');
       }
     } catch (err: any) {
       setError(err?.message || 'Falha ao entrar.');
@@ -133,11 +194,16 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         throw new Error('Informe a nova senha.');
       }
       const supabase = await getSupabase();
-      const {
+      let {
         data: { session },
       } = await supabase.auth.getSession();
+
       if (!session?.user) {
-        throw new Error('Abra esta tela a partir do link de ativação recebido no e-mail.');
+        session = await establishSessionFromUrl();
+      }
+
+      if (!session?.user) {
+        throw new Error('Abra esta tela a partir do link de ativacao recebido no e-mail.');
       }
 
       const { error: updateError } = await supabase.auth.updateUser({
@@ -148,6 +214,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       const {
         data: { session: refreshedSession },
       } = await supabase.auth.getSession();
+
       const userEmail = String(session.user.email || identifiedEmail || email).trim().toLowerCase();
       const loginRes = await onLogin(
         refreshedSession || session,
@@ -156,7 +223,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         { provider: 'email' },
       );
       if (!loginRes?.success) {
-        throw new Error(loginRes?.error || 'Senha definida, mas não foi possível concluir o login.');
+        throw new Error(loginRes?.error || 'Senha definida, mas nao foi possivel concluir o login.');
       }
       setMessage('Senha definida com sucesso. Redirecionando...');
     } catch (err: any) {
@@ -170,22 +237,24 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
       <div className="w-full max-w-xl bg-white border border-slate-100 rounded-3xl shadow-sm p-6 md:p-8">
         <div className="text-center mb-6">
-          <h1 className="text-2xl font-extrabold text-slate-900">Ativação de Conta</h1>
+          <h1 className="text-2xl font-extrabold text-slate-900">Ativacao de Conta</h1>
           <p className="text-sm text-slate-500 mt-2">
             {isActivationLinkContext
-              ? 'Defina sua senha para ativar o acesso. O e-mail já foi identificado no convite.'
+              ? 'Defina sua senha para ativar o acesso. O e-mail ja foi identificado no convite.'
               : 'Entre com Google, entre com sua senha, ou ative sua conta pelo link recebido no e-mail.'}
           </p>
         </div>
 
         <div className="space-y-4">
-          <button
-            onClick={handleGoogleLogin}
-            disabled={loading}
-            className="w-full h-12 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-semibold transition disabled:opacity-60"
-          >
-            Entrar com Google
-          </button>
+          {!isActivationLinkContext ? (
+            <button
+              onClick={handleGoogleLogin}
+              disabled={loading}
+              className="w-full h-12 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-semibold transition disabled:opacity-60"
+            >
+              Entrar com Google
+            </button>
+          ) : null}
 
           {!isActivationLinkContext ? (
             <div className="border-t border-slate-100 pt-4 space-y-3">
@@ -220,7 +289,9 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
               Definir senha
             </p>
             {identifiedEmail ? (
-              <p className="text-xs text-slate-500">E-mail identificado: <span className="font-semibold">{identifiedEmail}</span></p>
+              <p className="text-xs text-slate-500">
+                E-mail identificado: <span className="font-semibold">{identifiedEmail}</span>
+              </p>
             ) : null}
             <input
               type="password"
