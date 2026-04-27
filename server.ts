@@ -280,7 +280,7 @@ function getAuthRedirectUrl(): string {
   return `${baseUrl.replace(/\/+$/, '')}/auth/callback`;
 }
 
-function getActivationRedirectUrl(role?: unknown): string {
+function getActivationRedirectUrl(role?: unknown, email?: unknown): string {
   const baseUrl = sanitizeString(
     process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '',
     500
@@ -290,7 +290,9 @@ function getActivationRedirectUrl(role?: unknown): string {
   }
   const normalizedRole = sanitizeString(role, 40).toLowerCase();
   const roleParam = normalizedRole === 'patient' ? 'patient' : 'coordinator';
-  return `${baseUrl.replace(/\/+$/, '')}/ativar?role=${roleParam}`;
+  const safeEmail = sanitizeEmail(email);
+  const emailParam = safeEmail ? `&email=${encodeURIComponent(safeEmail)}` : '';
+  return `${baseUrl.replace(/\/+$/, '')}/ativar?role=${roleParam}${emailParam}`;
 }
 
 function getRecoveryRedirectUrl(): string {
@@ -2083,8 +2085,8 @@ async function startServer() {
                       (await generateSupabaseActionLink({
                         type: 'signup',
                         email: targetEmail,
-                        redirectTo: getActivationRedirectUrl('coordinator')
-                      })) || getActivationRedirectUrl('coordinator');
+                        redirectTo: getActivationRedirectUrl('coordinator', targetEmail)
+                      })) || getActivationRedirectUrl('coordinator', targetEmail);
 
                     const activationEmail = buildActivationEmailTemplate({
                       nome: sanitizeString(profile?.name || authUser?.user_metadata?.full_name || targetEmail.split('@')[0], 180),
@@ -2978,7 +2980,7 @@ async function startServer() {
       };
     }
 
-    const authRedirectTo = getActivationRedirectUrl(intendedRole || role || 'coordinator');
+    const authRedirectTo = getActivationRedirectUrl(intendedRole || role || 'coordinator', safeEmail);
     const existingAuthUser = await findAuthUserByEmail(safeEmail);
     if (existingAuthUser?.id) {
       return {
@@ -3214,8 +3216,8 @@ async function startServer() {
         (await generateSupabaseActionLink({
           type: 'signup',
           email,
-          redirectTo: getActivationRedirectUrl(profile?.role)
-        })) || getActivationRedirectUrl(profile?.role);
+          redirectTo: getActivationRedirectUrl(profile?.role, email)
+        })) || getActivationRedirectUrl(profile?.role, email);
       const activationEmail = buildActivationEmailTemplate({
         nome: sanitizeString(profile?.name || authUser.user_metadata?.full_name || email.split('@')[0], 180),
         link_ativacao: activationLink,
@@ -3254,6 +3256,42 @@ async function startServer() {
       return res.json({
         success: true,
         message: 'Se este e-mail estiver cadastrado, você receberá instruções.'
+      });
+    }
+  });
+
+  app.post('/api/auth/activation/bootstrap', async (req, res) => {
+    try {
+      const email = sanitizeEmail(req.body?.email);
+      const role = sanitizeString(req.body?.role, 40).toLowerCase();
+      if (!email) {
+        return res.status(400).json({ success: false, error: 'E-mail inválido.' });
+      }
+
+      const authUser = await findAuthUserByEmail(email);
+      if (!authUser?.id) {
+        return res.status(404).json({ success: false, error: 'Conta não encontrada para ativação.' });
+      }
+
+      const profileRole = role === 'patient' ? 'patient' : 'coordinator';
+      const activationLink = await generateSupabaseActionLink({
+        type: 'signup',
+        email,
+        redirectTo: getActivationRedirectUrl(profileRole, email),
+      });
+
+      if (!activationLink) {
+        return res.status(500).json({
+          success: false,
+          error: 'Não foi possível gerar novo link de ativação no momento.',
+        });
+      }
+
+      return res.json({ success: true, activationLink });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        error: sanitizeString(error?.message || 'Falha ao recuperar link de ativação.', 500),
       });
     }
   });
@@ -4630,7 +4668,7 @@ async function startServer() {
         const signupLink = await generateSupabaseActionLink({
           type: 'signup',
           email: normalizedEmail,
-          redirectTo: getActivationRedirectUrl('patient')
+          redirectTo: getActivationRedirectUrl('patient', normalizedEmail)
         });
         const fallbackRecoveryLink = signupLink
           ? null

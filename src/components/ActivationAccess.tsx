@@ -12,14 +12,13 @@ type ActivationAccessProps = {
 
 export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [identifiedEmail, setIdentifiedEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [intendedRole, setIntendedRole] = useState<'patient' | 'coordinator'>('patient');
-  const [isActivationLinkContext, setIsActivationLinkContext] = useState(false);
+  const [isActivationLinkContext, setIsActivationLinkContext] = useState(true);
 
   const parseActivationParams = () => {
     const searchParams = new URLSearchParams(window.location.search);
@@ -100,13 +99,38 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       return session;
     }
 
-    setIsActivationLinkContext(hasActivationParams);
+    setIsActivationLinkContext(true);
+    return null;
+  };
+
+  const requestActivationBootstrap = async (targetEmail: string) => {
+    const safeEmail = String(targetEmail || '').trim().toLowerCase();
+    if (!safeEmail) return null;
+    try {
+      const response = await fetch('/api/auth/activation/bootstrap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email: safeEmail, role: intendedRole }),
+      });
+      const result = await response.json();
+      if (response.ok && result?.success && result?.activationLink) {
+        return String(result.activationLink);
+      }
+    } catch (bootstrapError) {
+      console.error('Activation bootstrap error:', bootstrapError);
+    }
     return null;
   };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const roleParam = String(params.get('role') || '').toLowerCase();
+    const emailParam = String(params.get('email') || '').trim().toLowerCase();
+    if (emailParam) {
+      setEmail(emailParam);
+      setIdentifiedEmail(emailParam);
+    }
     if (roleParam === 'coordinator' || roleParam === 'therapist' || roleParam === 'receptionist') {
       setIntendedRole('coordinator');
       return;
@@ -132,59 +156,6 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     [],
   );
 
-  const handleEmailLogin = async () => {
-    setLoading(true);
-    setError('');
-    setMessage('');
-    try {
-      const safeEmail = String(email || '').trim().toLowerCase();
-      if (!safeEmail || !password) {
-        throw new Error('Informe e-mail e senha para entrar.');
-      }
-
-      const supabase = await getSupabase();
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({
-        email: safeEmail,
-        password,
-      });
-      if (signInError) throw signInError;
-
-      const loginRes = await onLogin(
-        data.session,
-        intendedRole,
-        { email: safeEmail, password },
-        { provider: 'email' },
-      );
-      if (!loginRes?.success) {
-        throw new Error(loginRes?.error || 'Nao foi possivel concluir o login.');
-      }
-    } catch (err: any) {
-      setError(err?.message || 'Falha ao entrar.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    setLoading(true);
-    setError('');
-    setMessage('');
-    try {
-      localStorage.setItem('verto_intended_role', intendedRole);
-      const supabase = await getSupabase();
-      const { error: oauthError } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/ativar`,
-        },
-      });
-      if (oauthError) throw oauthError;
-    } catch (err: any) {
-      setError(err?.message || 'Falha ao iniciar login com Google.');
-      setLoading(false);
-    }
-  };
-
   const handleSetPassword = async () => {
     setLoading(true);
     setError('');
@@ -203,7 +174,13 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       }
 
       if (!session?.user) {
-        throw new Error('Abra esta tela a partir do link de ativacao recebido no e-mail.');
+        const fallbackEmail = String(identifiedEmail || email).trim().toLowerCase();
+        const bootstrapLink = await requestActivationBootstrap(fallbackEmail);
+        if (bootstrapLink) {
+          window.location.href = bootstrapLink;
+          return;
+        }
+        throw new Error('Nao foi possivel validar o link automaticamente. Solicite um novo e-mail de ativacao.');
       }
 
       const { error: updateError } = await supabase.auth.updateUser({
@@ -246,44 +223,6 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         </div>
 
         <div className="space-y-4">
-          {!isActivationLinkContext ? (
-            <button
-              onClick={handleGoogleLogin}
-              disabled={loading}
-              className="w-full h-12 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-semibold transition disabled:opacity-60"
-            >
-              Entrar com Google
-            </button>
-          ) : null}
-
-          {!isActivationLinkContext ? (
-            <div className="border-t border-slate-100 pt-4 space-y-3">
-              <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">E-mail</label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="seuemail@exemplo.com"
-                className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
-              />
-              <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">Senha</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Sua senha"
-                className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
-              />
-              <button
-                onClick={handleEmailLogin}
-                disabled={loading}
-                className="w-full h-11 rounded-xl bg-[#7a32fc] text-white font-semibold hover:opacity-95 transition disabled:opacity-60"
-              >
-                Entrar com e-mail
-              </button>
-            </div>
-          ) : null}
-
           <div className="border-t border-slate-100 pt-4 space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
               Definir senha
