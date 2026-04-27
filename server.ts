@@ -3303,6 +3303,40 @@ async function startServer() {
     }
   });
 
+  app.post('/api/auth/password/recovery/bootstrap', async (req, res) => {
+    try {
+      const email = sanitizeEmail(req.body?.email);
+      if (!email) {
+        return res.status(400).json({ success: false, error: 'E-mail inválido.' });
+      }
+
+      const authUser = await findAuthUserByEmail(email);
+      if (!authUser?.id) {
+        return res.status(404).json({ success: false, error: 'Conta não encontrada para recuperação.' });
+      }
+
+      const recoveryLink = await generateSupabaseActionLink({
+        type: 'recovery',
+        email,
+        redirectTo: getRecoveryRedirectUrl(),
+      });
+
+      if (!recoveryLink) {
+        return res.status(500).json({
+          success: false,
+          error: 'Não foi possível gerar novo link de recuperação no momento.',
+        });
+      }
+
+      return res.json({ success: true, recoveryLink });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        error: sanitizeString(error?.message || 'Falha ao recuperar link de redefinição.', 500),
+      });
+    }
+  });
+
   app.post('/api/auth/password/recovery/email/request', recoveryLimiter, async (req, res) => {
     const email = sanitizeEmail(req.body?.email);
     const genericResponse = {

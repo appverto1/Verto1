@@ -19,6 +19,12 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const [message, setMessage] = useState('');
   const [intendedRole, setIntendedRole] = useState<'patient' | 'coordinator'>('patient');
   const [isActivationLinkContext, setIsActivationLinkContext] = useState(true);
+  const authRouteBase = useMemo(() => {
+    if (typeof window === 'undefined') return '/ativar';
+    return /^\/reset-password\/?$/.test(window.location.pathname)
+      ? '/reset-password'
+      : '/ativar';
+  }, []);
 
   const parseActivationParams = () => {
     const searchParams = new URLSearchParams(window.location.search);
@@ -94,7 +100,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       setEmail(sessionEmail);
       setIsActivationLinkContext(true);
       if (hasActivationParams) {
-        window.history.replaceState({}, document.title, '/ativar');
+        window.history.replaceState({}, document.title, authRouteBase);
       }
       return session;
     }
@@ -103,19 +109,24 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     return null;
   };
 
-  const requestActivationBootstrap = async (targetEmail: string) => {
+  const requestAuthBootstrap = async (targetEmail: string) => {
     const safeEmail = String(targetEmail || '').trim().toLowerCase();
     if (!safeEmail) return null;
     try {
-      const response = await fetch('/api/auth/activation/bootstrap', {
+      const endpoint =
+        authRouteBase === '/reset-password'
+          ? '/api/auth/password/recovery/bootstrap'
+          : '/api/auth/activation/bootstrap';
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ email: safeEmail, role: intendedRole }),
       });
       const result = await response.json();
-      if (response.ok && result?.success && result?.activationLink) {
-        return String(result.activationLink);
+      const link = result?.activationLink || result?.recoveryLink;
+      if (response.ok && result?.success && link) {
+        return String(link);
       }
     } catch (bootstrapError) {
       console.error('Activation bootstrap error:', bootstrapError);
@@ -166,7 +177,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/ativar?role=${intendedRole}`,
+          redirectTo: `${window.location.origin}${authRouteBase}?role=${intendedRole}`,
         },
       });
       if (oauthError) throw oauthError;
@@ -195,7 +206,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
 
       if (!session?.user) {
         const fallbackEmail = String(identifiedEmail || email).trim().toLowerCase();
-        const bootstrapLink = await requestActivationBootstrap(fallbackEmail);
+        const bootstrapLink = await requestAuthBootstrap(fallbackEmail);
         if (bootstrapLink) {
           window.location.href = bootstrapLink;
           return;

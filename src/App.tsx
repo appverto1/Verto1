@@ -16,6 +16,10 @@ export default function App() {
   const isActivationRoute =
     typeof window !== 'undefined' &&
     /^\/ativar\/?$/.test(window.location.pathname);
+  const isResetPasswordRoute =
+    typeof window !== 'undefined' &&
+    /^\/reset-password\/?$/.test(window.location.pathname);
+  const isAuthActionRoute = isActivationRoute || isResetPasswordRoute;
   const [user, setUser] = useState<any>(null); 
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -2002,7 +2006,7 @@ export default function App() {
       <GlobalStyles />
       
       {!user ? (
-        isActivationRoute ? (
+        isAuthActionRoute ? (
           <ActivationAccess onLogin={handleLoginSuccess} />
         ) : (
           <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />
