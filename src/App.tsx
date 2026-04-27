@@ -1,6 +1,7 @@
 ﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS } from './components/Common';
 import { LandingPage } from './components/LandingPage';
+import { ActivationAccess } from './components/ActivationAccess';
 import { PatientDashboard } from './components/PatientDashboard';
 import { CoordinatorDashboard } from './components/CoordinatorDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -12,6 +13,9 @@ import { syncOfflineData } from './services/localDb';
 import { dataService } from './services/dataService';
 
 export default function App() {
+  const isActivationRoute =
+    typeof window !== 'undefined' &&
+    /^\/ativar\/?$/.test(window.location.pathname);
   const [user, setUser] = useState<any>(null); 
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -1998,7 +2002,11 @@ export default function App() {
       <GlobalStyles />
       
       {!user ? (
-        <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />
+        isActivationRoute ? (
+          <ActivationAccess onLogin={handleLoginSuccess} />
+        ) : (
+          <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />
+        )
       ) : showWorkspacePicker && Array.isArray(user.workspaces) && user.workspaces.length > 1 ? (
         <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
           <div className="w-full max-w-2xl bg-white rounded-3xl border border-slate-100 shadow-sm p-6">
