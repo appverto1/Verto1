@@ -98,6 +98,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   }, [availableSnapshots, selectedBaseDate, selectedCompareDate]);
 
   const kidChartData = useMemo(() => {
+    const defaultKidsDomains = [
+      'Mando (Mand)',
+      'Tato (Tact)',
+      'Ouvinte (Listener)',
+      'Percepção Visual (VP-MTS)',
+      'Brincar Independente (Play)',
+      'Imitação Motora (Imitation)',
+      'Ecoico (Echoic)'
+    ];
+
     // Prioritize VB-MAPP for crianças, otherwise use first protocol
     const vbmapp = protocols?.find((p: any) => p.title.includes('VB-MAPP'));
     const selectedProto = vbmapp || protocols?.[0] || { data: [] };
@@ -131,7 +141,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       skills: Array.from(skillsSet).map((s) => ({ name: s }))
     }));
 
-    const effectiveDomains = protocolDomains.length > 0 ? protocolDomains : fallbackDomains;
+    const effectiveDomains = (protocolDomains.length > 0 ? protocolDomains : fallbackDomains).length > 0
+      ? (protocolDomains.length > 0 ? protocolDomains : fallbackDomains)
+      : defaultKidsDomains.map((name) => ({ name, skills: [{ name }] }));
     const labels = effectiveDomains.map((d: any) => d.name);
     
     const getDomainScores = (dateFilter: string | null) =>
