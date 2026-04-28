@@ -10,6 +10,15 @@ import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
 
 export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs }: any) => { 
+  const rawProfileType = String(
+    patient?.type ||
+    patient?.profileType ||
+    patient?.patient_type ||
+    patient?.anamnesisData?.formType ||
+    ''
+  ).toLowerCase();
+  const isExplicitKidsType = ['kids_tea', 'kids', 'child', 'infantil', 'crianca', 'criança'].includes(rawProfileType);
+  const isExplicitAdultType = ['adult', 'adulto', 'conventional', 'adult_conventional'].includes(rawProfileType);
   const rawPatientAge = patient?.age;
   const hasExplicitAge =
     rawPatientAge !== null &&
@@ -18,8 +27,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const normalizedPatientAge = hasExplicitAge ? Number(rawPatientAge) : Number.NaN;
   const hasNumericAge = Number.isFinite(normalizedPatientAge) && normalizedPatientAge >= 0;
   const isKidsProfile =
-    patient?.anamnesisData?.formType === 'child' ||
-    (patient?.anamnesisData?.formType !== 'adult' && hasNumericAge && normalizedPatientAge <= 12);
+    isExplicitKidsType ||
+    (!isExplicitAdultType && (
+      patient?.anamnesisData?.formType === 'child' ||
+      (patient?.anamnesisData?.formType !== 'adult' && hasNumericAge && normalizedPatientAge <= 12)
+    ));
   const [activeTab, setActiveTab] = useState(initialTab); 
   const [newNote, setNewNote] = useState(""); 
   const [noteMode, setNoteMode] = useState('private'); 
