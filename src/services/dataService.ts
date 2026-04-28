@@ -969,6 +969,35 @@ export const dataService = {
     }
   },
 
+  async uploadDataUrl(bucket: string, path: string, dataUrl: string, contentTypeHint?: string) {
+    try {
+      const response = await fetch('/api/storage/upload', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({
+          bucket,
+          path,
+          contentType: contentTypeHint || 'image/png',
+          fileBase64: dataUrl
+        })
+      });
+
+      const result = await safeJson(response);
+      if (response.ok && result?.success && result?.url) {
+        return { success: true, url: result.url, path: result.path };
+      }
+
+      return {
+        success: false,
+        error: result?.error || `Falha no upload base64 (${response.status}).`
+      };
+    } catch (error: any) {
+      console.error('uploadDataUrl error:', error);
+      return { success: false, error: error?.message || String(error) };
+    }
+  },
+
   async getClinicMembers() {
     try {
       const response = await fetch('/api/clinic/members', {
