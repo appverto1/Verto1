@@ -496,6 +496,7 @@ export default function App() {
   const [tasks, setTasks] = useState<any[]>([]);
   const [patientAssignedTaskCount, setPatientAssignedTaskCount] = useState(0);
   const [patientAssignedTasksLoadError, setPatientAssignedTasksLoadError] = useState(false);
+  const [patientContextLoaded, setPatientContextLoaded] = useState(false);
   const [clinicalRecords, setClinicalRecords] = useState<any[]>([]);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
   const todayStr = new Date().toISOString().split('T')[0];
@@ -825,6 +826,7 @@ export default function App() {
   useEffect(() => {
     const fetchPatientScopedData = async () => {
       if (!user || user.role !== 'patient' || !user.email) return;
+      setPatientContextLoaded(false);
       const [historyRes, tasksRes, assignedTasksRes, notesRes] = await Promise.allSettled([
         dataService.getPatientSelfHistory(),
         dataService.getPatientSelfTasks(),
@@ -908,6 +910,7 @@ export default function App() {
           return { ...prev, treatmentStatus: fetchedTreatmentStatus };
         });
       }
+      setPatientContextLoaded(true);
     };
 
     void fetchPatientScopedData();
@@ -915,6 +918,7 @@ export default function App() {
 
   const patientIsReadOnlyMode = useMemo(() => {
     if (!user || user.role !== 'patient') return false;
+    if (!patientContextLoaded) return false;
     const normalizedStatus = String(user?.treatmentStatus || '').trim().toLowerCase();
     const hasClinicContext = Boolean(String(user?.clinicId || user?.activeWorkspaceId || '').trim());
     const hasActiveStatus = normalizedStatus === 'active';
@@ -924,7 +928,7 @@ export default function App() {
     if (patientAssignedTasksLoadError) return false;
     if (!normalizedStatus) return false;
     return true;
-  }, [user, patientAssignedTaskCount, patientAssignedTasksLoadError]);
+  }, [user, patientAssignedTaskCount, patientAssignedTasksLoadError, patientContextLoaded]);
 
   useEffect(() => {
     if (!user) return;
@@ -2243,6 +2247,9 @@ export default function App() {
           sharedNotes={therapistNotes.filter(n => {
             const noteVisibility = String(n?.visibility || n?.type || '').toLowerCase();
             const isPatientNote = noteVisibility === 'shared' || noteVisibility === 'patient' || noteVisibility === 'family';
+            if (user.role === 'patient') {
+              return isPatientNote;
+            }
             return (n.patientId === user.id || n?.patient_email === user.email) && isPatientNote;
           })} 
           protocols={protocols} 

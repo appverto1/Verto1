@@ -186,7 +186,25 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       const hasStarMarker = /\u2b50|⭐/.test(String(item?.subject || '')) || /\[STAR\]/i.test(String(item?.text || item?.note || ''));
       return isFamily && (Number(item?.score ?? 0) >= 1 || hasStarMarker);
     }).length;
-    return { weekLogs, weekPhotos, stars: Math.max(stars, sharedFamilyStars) };
+    const milestoneBySource = new Map<string, { awarded: boolean; ts: number }>();
+    (Array.isArray(sharedNotes) ? sharedNotes : []).forEach((item: any) => {
+      const subject = String(item?.subject || '').trim().toLowerCase();
+      const text = String(item?.text || item?.note || '').trim();
+      const isEvent = subject === 'milestone_event' || text.startsWith('MILESTONE_EVENT|');
+      if (!isEvent) return;
+      const sourceMatch = text.match(/source=([^|]+)/i);
+      const awardedMatch = text.match(/awarded=([01])/i);
+      const source = String(sourceMatch?.[1] || '').trim();
+      if (!source) return;
+      const awarded = String(awardedMatch?.[1] || '0') === '1';
+      const ts = new Date(item?.created_at || item?.date || 0).getTime() || 0;
+      const prev = milestoneBySource.get(source);
+      if (!prev || ts >= prev.ts) {
+        milestoneBySource.set(source, { awarded, ts });
+      }
+    });
+    const milestoneEventStars = Array.from(milestoneBySource.values()).filter((e) => e.awarded).length;
+    return { weekLogs, weekPhotos, stars: Math.max(stars, sharedFamilyStars, milestoneEventStars) };
   }, [familyDiaryHistory, history, sharedNotes]);
   const kidsCheckpointLevel = useMemo(() => Math.floor((kidsGamification.stars || 0) / 5), [kidsGamification.stars]);
 
