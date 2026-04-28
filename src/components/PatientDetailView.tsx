@@ -568,38 +568,60 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const radarChartData = useMemo(() => {
     const selectedProto = protocols.find((p: any) => String(p.id) === String(selectedChartProtocolId));
     if (!selectedProto) return { labels: [], datasets: [] };
+    const normalizeSkill = (value: any) =>
+      String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+    const isSameSkill = (skillName: string, taskTitle: string) => {
+      const a = normalizeSkill(skillName);
+      const b = normalizeSkill(taskTitle);
+      if (!a || !b) return false;
+      return a === b || a.includes(b) || b.includes(a);
+    };
+    const getEventTs = (row: any) => {
+      const raw = row?.created_at || row?.date || row?.eventDateRaw || row?.eventDate || '';
+      const ts = new Date(raw).getTime();
+      return Number.isFinite(ts) ? ts : 0;
+    };
 
     const labels = selectedProto.data.map((d: any) => d.name);
     
     const latestHistory = history.filter((h: any) => h.patientId === patient.id && h.type === 'task' && h.score !== undefined);
     const currentData = selectedProto.data.map((domain: any) => {
-      const skillNames = domain.skills.map((s: any) => s.name.trim().toLowerCase());
+      const skillNames = domain.skills.map((s: any) => String(s.name || ''));
       const useMasteryLogic = selectedProto.title.includes('VB-MAPP');
       
       const skillLatestScoreMap: any = {};
-      const skillLatestIdMap: any = {};
+      const skillLatestTsMap: any = {};
       const skillScoresMap: any = {};
       
       latestHistory.forEach((evalItem: any) => {
-        const title = evalItem.title.trim().toLowerCase();
-        if (skillNames.includes(title)) {
+        const title = String(evalItem?.title || '');
+        const matchedSkill = skillNames.find((skillName: string) => isSameSkill(skillName, title));
+        if (matchedSkill) {
+          const key = normalizeSkill(matchedSkill);
           if (useMasteryLogic) {
             // Logic for VB-MAPP: Latest score / Mastery
-            if (!skillLatestIdMap[title] || evalItem.id > skillLatestIdMap[title]) {
-              skillLatestIdMap[title] = evalItem.id;
+            const currentTs = getEventTs(evalItem);
+            if (!skillLatestTsMap[key] || currentTs >= skillLatestTsMap[key]) {
+              skillLatestTsMap[key] = currentTs;
               
               // Check if mastered in PEI first
-              const peiGoal = patient.pei?.find((g: any) => g.name.trim().toLowerCase() === title);
+              const peiGoal = patient.pei?.find((g: any) => isSameSkill(String(g?.name || ''), title));
               if (peiGoal?.status === 'completed') {
-                skillLatestScoreMap[title] = 1;
+                skillLatestScoreMap[key] = 1;
               } else {
-                skillLatestScoreMap[title] = evalItem.score;
+                skillLatestScoreMap[key] = Number(evalItem?.score ?? 0) || 0;
               }
             }
           } else {
             // Logic for AFLS and others: Averages
-            if (!skillScoresMap[title]) skillScoresMap[title] = [];
-            skillScoresMap[title].push(evalItem.score);
+            if (!skillScoresMap[key]) skillScoresMap[key] = [];
+            skillScoresMap[key].push(Number(evalItem?.score ?? 0) || 0);
           }
         }
       });
@@ -634,23 +656,26 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         h.dateGroup === selectedSnapshotDate
       );
       const historicalData = selectedProto.data.map((domain: any) => {
-        const skillNames = domain.skills.map((s: any) => s.name.trim().toLowerCase());
+        const skillNames = domain.skills.map((s: any) => String(s.name || ''));
         const useMasteryLogic = selectedProto.title.includes('VB-MAPP');
         const skillLatestScoreMap: any = {};
-        const skillLatestIdMap: any = {};
+        const skillLatestTsMap: any = {};
         const skillScoresMap: any = {};
         
         dayHistory.forEach((h: any) => {
-          const title = h.title.trim().toLowerCase();
-          if (skillNames.includes(title)) {
+          const title = String(h?.title || '');
+          const matchedSkill = skillNames.find((skillName: string) => isSameSkill(skillName, title));
+          if (matchedSkill) {
+            const key = normalizeSkill(matchedSkill);
             if (useMasteryLogic) {
-              if (!skillLatestIdMap[title] || h.id > skillLatestIdMap[title]) {
-                skillLatestIdMap[title] = h.id;
-                skillLatestScoreMap[title] = h.score;
+              const currentTs = getEventTs(h);
+              if (!skillLatestTsMap[key] || currentTs >= skillLatestTsMap[key]) {
+                skillLatestTsMap[key] = currentTs;
+                skillLatestScoreMap[key] = Number(h?.score ?? 0) || 0;
               }
             } else {
-              if (!skillScoresMap[title]) skillScoresMap[title] = [];
-              skillScoresMap[title].push(h.score);
+              if (!skillScoresMap[key]) skillScoresMap[key] = [];
+              skillScoresMap[key].push(Number(h?.score ?? 0) || 0);
             }
           }
         });
@@ -784,20 +809,44 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         };
       });
 
-    const existingKeys = new Set(
-      baseHistory.map((h: any) => {
-        const note = String(h?.note || '').trim().toLowerCase();
-        const date = String(h?.date || h?.created_at || '').trim();
-        return `${note}::${date}`;
-      }),
-    );
+    const normalizeMergeKey = (note: any, date: any) =>
+      `${String(note || '').trim().toLowerCase()}::${String(date || '').trim()}`;
 
-    const dedupedFamily = familyNotes.filter((entry: any) => {
-      const key = `${String(entry?.note || '').trim().toLowerCase()}::${String(entry?.date || '').trim()}`;
-      return !existingKeys.has(key);
+    const byKey = new Map<string, any>();
+    baseHistory.forEach((h: any) => {
+      const key = normalizeMergeKey(h?.note, h?.date || h?.created_at);
+      byKey.set(key, h);
     });
 
-    return [...dedupedFamily, ...baseHistory];
+    familyNotes.forEach((entry: any) => {
+      const key = normalizeMergeKey(entry?.note, entry?.date);
+      const current = byKey.get(key);
+      if (!current) {
+        byKey.set(key, entry);
+        return;
+      }
+      const merged = {
+        ...current,
+        // Preserve family enrichment when duplicated with history rows
+        image: current?.image || entry?.image || null,
+        subject: current?.subject || entry?.subject,
+        score: Math.max(
+          Number(current?.score ?? 0) || 0,
+          Number(entry?.score ?? 0) || 0
+        ),
+        type:
+          current?.type === 'family_note' || current?.type === 'photo'
+            ? current?.type
+            : entry?.type || current?.type
+      };
+      byKey.set(key, merged);
+    });
+
+    return Array.from(byKey.values()).sort((a: any, b: any) => {
+      const aTs = new Date(a?.date || a?.created_at || 0).getTime();
+      const bTs = new Date(b?.date || b?.created_at || 0).getTime();
+      return bTs - aTs;
+    });
   }, [history, notes, isKidsProfile, patient?.id]);
 
   const kidsReportSelectableNotes = useMemo(() => {
