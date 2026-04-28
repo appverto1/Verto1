@@ -2871,15 +2871,21 @@ export function CoordinatorDashboard({
               initialTab={patientOpenTab}
               openAnamnesisOnLoad={openAnamnesisOnPatientOpen}
               onAnamnesisOpenConsumed={() => setOpenAnamnesisOnPatientOpen(false)}
-              history={patientsHistory.filter(
-                (h) => h.patientId === selectedPatientId,
-              )}
-              notes={therapistNotes.filter(
-                (n) => n.patientId === selectedPatientId,
-              )}
-              patientTasks={(allTasks || []).filter(
-                (t) => t.patientId === selectedPatientId,
-              )}
+              history={patientsHistory.filter((h) => {
+                const itemPatientId = String(h?.patientId ?? h?.patient_id ?? "").trim();
+                const currentPatientId = String(selectedPatientId ?? "").trim();
+                return itemPatientId !== "" && itemPatientId === currentPatientId;
+              })}
+              notes={therapistNotes.filter((n) => {
+                const itemPatientId = String(n?.patientId ?? n?.patient_id ?? "").trim();
+                const currentPatientId = String(selectedPatientId ?? "").trim();
+                return itemPatientId !== "" && itemPatientId === currentPatientId;
+              })}
+              patientTasks={(allTasks || []).filter((t) => {
+                const itemPatientId = String(t?.patientId ?? t?.patient_id ?? "").trim();
+                const currentPatientId = String(selectedPatientId ?? "").trim();
+                return itemPatientId !== "" && itemPatientId === currentPatientId;
+              })}
               onAddNote={(
                 pid: any,
                 txt: string,

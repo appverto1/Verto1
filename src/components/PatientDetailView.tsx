@@ -731,7 +731,73 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     if (isCreatingNewTask) { setFinalTaskTitle(newTaskName); setFinalTaskSubtitle(newTaskObjective); } 
   }, [newTaskName, newTaskObjective, isCreatingNewTask]); 
 
-  const groupedHistory = (history || []).reduce((groups: any, item: any) => { const group = groups[item.dateGroup] || []; group.push(item); groups[item.dateGroup] = group; return groups; }, {}); 
+  const historyWithFamilyNotes = useMemo(() => {
+    const baseHistory = Array.isArray(history) ? history : [];
+    if (!isKidsProfile) return baseHistory;
+
+    const familyNotes = (Array.isArray(notes) ? notes : [])
+      .filter((n: any) => {
+        const visibility = String(n?.visibility || n?.type || '').toLowerCase();
+        const subject = String(n?.subject || '').toLowerCase();
+        const text = String(n?.text || '').toLowerCase();
+        return (
+          visibility === 'family' ||
+          subject.includes('fam') ||
+          text.includes('registro da família') ||
+          text.includes('registro da familia')
+        );
+      })
+      .map((n: any) => {
+        const rawText = String(n?.text || '');
+        const normalizedText = rawText
+          .replace(/^🏠\s*registro da fam[ií]lia\s*\n?/i, '')
+          .trim();
+        const createdAt = n?.created_at || n?.date || new Date().toISOString();
+        const dateObj = new Date(createdAt);
+        const dateGroup = Number.isNaN(dateObj.getTime())
+          ? 'Hoje'
+          : dateObj.toLocaleDateString('pt-BR');
+        return {
+          id: `note-family-${n?.id}`,
+          patientId: n?.patientId ?? n?.patient_id ?? patient?.id,
+          type: 'family_note',
+          title: 'Registro da Família',
+          note: normalizedText || rawText,
+          image:
+            n?.image ||
+            n?.image_url ||
+            n?.imageUrl ||
+            n?.photo ||
+            n?.photo_url ||
+            n?.photoUrl ||
+            null,
+          icon: '🏠',
+          dateGroup,
+          date: createdAt,
+          time: Number.isNaN(dateObj.getTime())
+            ? ''
+            : dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          isFromNotes: true
+        };
+      });
+
+    const existingKeys = new Set(
+      baseHistory.map((h: any) => {
+        const note = String(h?.note || '').trim().toLowerCase();
+        const date = String(h?.date || h?.created_at || '').trim();
+        return `${note}::${date}`;
+      }),
+    );
+
+    const dedupedFamily = familyNotes.filter((entry: any) => {
+      const key = `${String(entry?.note || '').trim().toLowerCase()}::${String(entry?.date || '').trim()}`;
+      return !existingKeys.has(key);
+    });
+
+    return [...dedupedFamily, ...baseHistory];
+  }, [history, notes, isKidsProfile, patient?.id]);
+
+  const groupedHistory = (historyWithFamilyNotes || []).reduce((groups: any, item: any) => { const group = groups[item.dateGroup] || []; group.push(item); groups[item.dateGroup] = group; return groups; }, {}); 
   const sortedDateKeys = Object.keys(groupedHistory).sort((a, b) => { if (a === "Hoje") return -1; if (b === "Hoje") return 1; if (a === "Ontem") return -1; if (b === "Ontem") return 1; return b.localeCompare(a); }); 
   
   const filteredNotes = useMemo(() => {
