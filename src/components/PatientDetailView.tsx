@@ -830,7 +830,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       return isFamily && Number(h?.score ?? 0) >= 1;
     }).length;
   }, [isKidsProfile, historyWithFamilyNotes]);
-  const kidsMilestoneCheckpoint = useMemo(() => Math.floor(kidsMilestoneStars / 5), [kidsMilestoneStars]);
 
   const groupedHistory = (historyWithFamilyNotes || []).reduce((groups: any, item: any) => { const group = groups[item.dateGroup] || []; group.push(item); groups[item.dateGroup] = group; return groups; }, {}); 
   const sortedDateKeys = Object.keys(groupedHistory).sort((a, b) => { if (a === "Hoje") return -1; if (b === "Hoje") return 1; if (a === "Ontem") return -1; if (b === "Ontem") return 1; return b.localeCompare(a); }); 
@@ -2041,7 +2040,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   </div>
                   <div className="text-right">
                     <p className="text-lg font-extrabold text-amber-600">{kidsMilestoneStars} ⭐</p>
-                    <p className="text-[11px] font-semibold text-amber-500 uppercase tracking-wider">Checkpoint {kidsMilestoneCheckpoint}</p>
                   </div>
                 </div>
               </div>
