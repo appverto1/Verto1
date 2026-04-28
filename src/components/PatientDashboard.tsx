@@ -84,15 +84,64 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return Number.isFinite(parsed) ? parsed : null;
   };
 
-  const availableSnapshots = useMemo(() => {
-    const clinicalScored = (Array.isArray(history) ? history : []).filter((h: any) => {
-      const type = String(h?.type || '').toLowerCase();
-      if (type === 'family_note' || type === 'photo') return false;
-      return parseScore(h?.score) !== null;
+  const getEventScore = (item: any): number | null => {
+    const direct = parseScore(item?.score);
+    if (direct !== null) return direct;
+    const professional = parseScore(item?.pro_score);
+    if (professional !== null) return professional;
+    const nestedTask = parseScore(item?.task_data?.pro_score ?? item?.task_data?.score);
+    if (nestedTask !== null) return nestedTask;
+    return null;
+  };
+
+  const scoredClinicalEvents = useMemo(() => {
+    const fromHistory = (Array.isArray(history) ? history : [])
+      .filter((h: any) => {
+        const type = String(h?.type || '').toLowerCase();
+        if (type === 'family_note' || type === 'photo') return false;
+        return getEventScore(h) !== null;
+      })
+      .map((h: any) => ({
+        ...h,
+        score: getEventScore(h),
+        _source: 'history'
+      }));
+
+    const fromTasks = (Array.isArray(tasks) ? tasks : [])
+      .filter((t: any) => getEventScore(t) !== null)
+      .map((t: any) => ({
+        id: t?.id || `task-${t?.task_id || Math.random()}`,
+        type: 'task_scored',
+        title: t?.title || t?.task_data?.title || '',
+        domain: t?.domain || t?.task_data?.domain || t?.domainName || '',
+        dateGroup: t?.dateGroup || '',
+        created_at: t?.completed_at || t?.updated_at || t?.scheduled_at || t?.created_at || null,
+        date: t?.completed_at || t?.scheduled_at || t?.created_at || null,
+        task_data: t?.task_data || null,
+        score: getEventScore(t),
+        _source: 'task'
+      }));
+
+    const merged = [...fromHistory, ...fromTasks];
+    const dedup = new Map<string, any>();
+    merged.forEach((item: any) => {
+      const key = String(item?.id || `${item?._source}-${item?.title || ''}-${item?.created_at || item?.date || ''}-${item?.domain || ''}`);
+      const prev = dedup.get(key);
+      if (!prev) {
+        dedup.set(key, item);
+        return;
+      }
+      const prevTs = new Date(prev?.created_at || prev?.date || 0).getTime() || 0;
+      const curTs = new Date(item?.created_at || item?.date || 0).getTime() || 0;
+      if (curTs >= prevTs) dedup.set(key, item);
     });
-    const dates = clinicalScored.map((h: any) => getSnapshotKey(h)).filter(Boolean);
+    return Array.from(dedup.values());
+  }, [history, tasks]);
+
+  const availableSnapshots = useMemo(() => {
+    const dates = scoredClinicalEvents.map((h: any) => getSnapshotKey(h)).filter(Boolean);
     return Array.from(new Set(dates)).sort((a: any, b: any) => new Date(String(b)).getTime() - new Date(String(a)).getTime());
-  }, [history]);
+  }, [scoredClinicalEvents]);
 
   useEffect(() => {
     if (!availableSnapshots.length) {
@@ -146,18 +195,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return left === right || left.includes(right) || right.includes(left);
     };
 
-    const sourceHistory = Array.isArray(history)
-      ? history.filter((h: any) => {
-          const t = String(h?.type || '').toLowerCase();
-          return t !== 'family_note' && t !== 'photo';
-        })
-      : [];
+    const sourceHistory = Array.isArray(scoredClinicalEvents) ? scoredClinicalEvents : [];
 
     const historyTaskDomainsMap = new Map<string, Set<string>>();
     sourceHistory.forEach((h: any) => {
       const type = String(h?.type || '').toLowerCase();
       if (type === 'family_note' || type === 'photo') return;
-      const score = parseScore(h?.score);
+      const score = getEventScore(h);
       if (score === null) return;
       const rawDomain = String(
         h?.domain ||
@@ -191,10 +235,19 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       sourceHistory.forEach((h: any) => {
         const title = String(h?.title || h?.task_data?.title || '').trim();
         const inDateScope = !dateFilter || getSnapshotKey(h) === dateFilter;
-        const rawDomain = String(h?.domain || h?.domainName || h?.task_data?.domain || h?.metadata?.domain || '').trim();
+        const rawDomain = String(
+          h?.domain ||
+          h?.domainName ||
+          h?.task_data?.domain ||
+          h?.task_data?.domainName ||
+          h?.metadata?.domain ||
+          ''
+        ).trim();
         const matchesBySkill = skillNames.some((skillName: string) => isSameSkill(skillName, title));
-        const matchesByDomain = rawDomain && rawDomain.toLowerCase() === String(domain?.name || '').toLowerCase();
-        const rawScore = parseScore(h?.score);
+        const matchesByDomain =
+          rawDomain &&
+          normalizeSkill(rawDomain) === normalizeSkill(String(domain?.name || ''));
+        const rawScore = getEventScore(h);
         const type = String(h?.type || '').toLowerCase();
         const isScoredClinicalEvent = rawScore !== null && type !== 'family_note' && type !== 'photo';
         if (isScoredClinicalEvent && inDateScope && (matchesBySkill || matchesByDomain)) {
@@ -255,7 +308,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     }
 
     return { labels, datasets };
-  }, [history, protocols, selectedBaseDate, selectedCompareDate, user, availableSnapshots]);
+  }, [scoredClinicalEvents, protocols, selectedBaseDate, selectedCompareDate, user, availableSnapshots]);
 
   const familyDiaryHistory = useMemo(() => {
     return history
@@ -577,7 +630,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             className="w-full bg-blue-50 border border-blue-100 text-[10px] sm:text-[11px] font-semibold text-[#7a32fc] px-3 py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
                             value={selectedBaseDate}
                             onChange={(e) => setSelectedBaseDate(e.target.value)}
+                            disabled={availableSnapshots.length === 0}
                           >
+                            {availableSnapshots.length === 0 && <option value="">Sem dados avaliados</option>}
                             {availableSnapshots.map((date: any) => (
                               <option key={date} value={date}>{date}</option>
                             ))}
@@ -592,6 +647,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             className="w-full bg-emerald-50 border border-emerald-100 text-[10px] sm:text-[11px] font-semibold text-emerald-700 px-3 py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
                             value={selectedCompareDate}
                             onChange={(e) => setSelectedCompareDate(e.target.value)}
+                            disabled={availableSnapshots.length === 0}
                           >
                             <option value="">Sem comparação</option>
                             {availableSnapshots

@@ -6164,7 +6164,15 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
       }
 
+      const sessionUserId = sanitizeString(req.session.user?.id, 120);
       const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail);
+      const scopedPatientIds = Array.from(
+        new Set(
+          [sessionUserId, ...patientIds]
+            .map((id) => sanitizeString(id, 120))
+            .filter((id) => isUuid(id))
+        )
+      );
 
       const { data: historyByEmail, error: historyByEmailError } = await supabase
         .from('history')
@@ -6174,11 +6182,11 @@ async function startServer() {
       if (historyByEmailError) throw historyByEmailError;
 
       let historyById: any[] = [];
-      if (patientIds.length > 0) {
+      if (scopedPatientIds.length > 0) {
         const { data: historyByIdData, error: historyByIdError } = await supabase
           .from('history')
           .select('*')
-          .in('patient_id', patientIds)
+          .in('patient_id', scopedPatientIds)
           .order('created_at', { ascending: false });
         if (historyByIdError) throw historyByIdError;
         historyById = Array.isArray(historyByIdData) ? historyByIdData : [];
@@ -6194,17 +6202,33 @@ async function startServer() {
         ).values()
       );
 
-      const { data: assignedCompleted, error: assignedError } = await supabase
+      const assignedRows: any[] = [];
+      const { data: assignedByEmail, error: assignedByEmailError } = await supabase
         .from('assigned_tasks')
         .select('*')
         .eq('status', 'completed')
         .eq('patient_email', patientEmail)
         .order('completed_at', { ascending: false });
-      if (assignedError) {
-        console.warn('[PatientSelfHistory] assigned_tasks fallback warning:', assignedError.message || String(assignedError));
+      if (assignedByEmailError) {
+        console.warn('[PatientSelfHistory] assigned_tasks by email warning:', assignedByEmailError.message || String(assignedByEmailError));
+      } else if (Array.isArray(assignedByEmail)) {
+        assignedRows.push(...assignedByEmail);
+      }
+      if (scopedPatientIds.length > 0) {
+        const { data: assignedById, error: assignedByIdError } = await supabase
+          .from('assigned_tasks')
+          .select('*')
+          .eq('status', 'completed')
+          .in('patient_id', scopedPatientIds)
+          .order('completed_at', { ascending: false });
+        if (assignedByIdError) {
+          console.warn('[PatientSelfHistory] assigned_tasks by id warning:', assignedByIdError.message || String(assignedByIdError));
+        } else if (Array.isArray(assignedById)) {
+          assignedRows.push(...assignedById);
+        }
       }
 
-      const mappedAssignedHistory = (assignedCompleted || []).map((task: any) => {
+      const mappedAssignedHistory = Array.from(new Map(assignedRows.map((task: any) => [String(task?.id || crypto.randomUUID()), task])).values()).map((task: any) => {
         const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
         return {
           id: `assigned:${task.id}`,
@@ -6230,11 +6254,11 @@ async function startServer() {
       }
 
       let tasksById: any[] = [];
-      if (patientIds.length > 0) {
+      if (scopedPatientIds.length > 0) {
         const { data: tasksByIdData, error: tasksByIdError } = await supabase
           .from('tasks')
           .select('*')
-          .in('patient_id', patientIds)
+          .in('patient_id', scopedPatientIds)
           .order('created_at', { ascending: false });
         if (tasksByIdError) {
           console.warn('[PatientSelfHistory] tasks by id warning:', tasksByIdError.message || String(tasksByIdError));

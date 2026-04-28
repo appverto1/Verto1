@@ -622,7 +622,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
             <div className="absolute -bottom-20 -left-20 w-64 h-64 bg-purple-100 rounded-full blur-3xl opacity-50 animate-pulse delay-700"></div>
             
             <div className="relative bg-white rounded-[40px] shadow-2xl border border-gray-100 p-2 md:p-3 overflow-hidden group">
-              <div className="w-full h-[320px] sm:h-[420px] md:h-[520px] lg:h-[620px] xl:h-[680px] rounded-[32px] overflow-hidden">
+              <div className="w-full h-[240px] sm:h-[290px] md:h-[340px] lg:h-[380px] xl:h-[420px] rounded-[32px] overflow-hidden">
                   <img
                     src="/Hero-Verto.png"
                     onError={(e) => {
@@ -630,6 +630,9 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                       e.currentTarget.src = '/Design_sem_nome_(1).jpg';
                     }}
                     alt="Interface da Verto em uso durante sessão terapêutica."
+                    loading="eager"
+                    decoding="async"
+                    fetchPriority="high"
                     className="rounded-[32px] w-full h-full object-contain object-center bg-white transform group-hover:scale-[1.01] transition-transform duration-700"
                   />
               </div>
