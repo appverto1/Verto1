@@ -169,6 +169,18 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       'Imitação Motora (Imitation)',
       'Ecoico (Echoic)'
     ];
+    const inferKidsDomainFromTitle = (title: any): string => {
+      const n = normalizeSkill(title);
+      if (!n) return '';
+      if (n.includes('mando') || n.includes('mand')) return 'Mando (Mand)';
+      if (n.includes('tato') || n.includes('tact')) return 'Tato (Tact)';
+      if (n.includes('ouvinte') || n.includes('listener')) return 'Ouvinte (Listener)';
+      if (n.includes('percepcao visual') || n.includes('visual') || n.includes('vp mts') || n.includes('vpmts')) return 'Percepção Visual (VP-MTS)';
+      if (n.includes('brincar') || n.includes('play')) return 'Brincar Independente (Play)';
+      if (n.includes('imitacao') || n.includes('imitation') || n.includes('motora')) return 'Imitação Motora (Imitation)';
+      if (n.includes('ecoico') || n.includes('echoic')) return 'Ecoico (Echoic)';
+      return '';
+    };
 
     // Prioritize VB-MAPP for crianças, otherwise use first protocol
     const vbmapp = protocols?.find((p: any) => p.title.includes('VB-MAPP'));
@@ -208,6 +220,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         h?.domainName ||
         h?.task_data?.domain ||
         h?.metadata?.domain ||
+        inferKidsDomainFromTitle(h?.title || h?.task_data?.title || '') ||
         'Geral'
       ).trim();
       const domainName = rawDomain || 'Geral';
@@ -221,9 +234,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       skills: Array.from(skillsSet).map((s) => ({ name: s }))
     }));
 
-    const effectiveDomains = (protocolDomains.length > 0 ? protocolDomains : fallbackDomains).length > 0
-      ? (protocolDomains.length > 0 ? protocolDomains : fallbackDomains)
-      : defaultKidsDomains.map((name) => ({ name, skills: [{ name }] }));
+    const fallbackHasOnlyGeneral =
+      fallbackDomains.length === 1 &&
+      normalizeSkill(fallbackDomains[0]?.name) === 'geral';
+    const effectiveDomains = protocolDomains.length > 0
+      ? protocolDomains
+      : (fallbackDomains.length > 0 && !fallbackHasOnlyGeneral
+          ? fallbackDomains
+          : defaultKidsDomains.map((name) => ({ name, skills: [{ name }] })));
     const labels = effectiveDomains.map((d: any) => d.name);
     
     const getDomainScores = (dateFilter: string | null) =>
@@ -241,6 +259,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           h?.task_data?.domain ||
           h?.task_data?.domainName ||
           h?.metadata?.domain ||
+          inferKidsDomainFromTitle(title) ||
           ''
         ).trim();
         const matchesBySkill = skillNames.some((skillName: string) => isSameSkill(skillName, title));
