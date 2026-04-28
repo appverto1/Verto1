@@ -210,17 +210,25 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   useEffect(() => {
     if (!isKidsProfile) return;
-    const previous = previousStarsRef.current || 0;
+    const patientKey = String(user?.id || user?.email || 'unknown');
+    const storageKey = `kids_star_seen_total:${patientKey}`;
+    const stored = Number(window.localStorage.getItem(storageKey) || '0');
+    const baseline = Number.isFinite(stored) ? stored : 0;
+    const previous = Math.max(previousStarsRef.current || 0, baseline);
     const current = Number(kidsGamification.stars || 0);
     if (current > previous) {
       setCelebrationKey((v) => v + 1);
       setShowStarCelebration(true);
       const timer = window.setTimeout(() => setShowStarCelebration(false), 1800);
       previousStarsRef.current = current;
+      window.localStorage.setItem(storageKey, String(current));
       return () => window.clearTimeout(timer);
     }
     previousStarsRef.current = current;
-  }, [kidsGamification.stars, isKidsProfile]);
+    if (current >= baseline) {
+      window.localStorage.setItem(storageKey, String(current));
+    }
+  }, [kidsGamification.stars, isKidsProfile, user?.id, user?.email]);
 
   const hasFamilyPhotoToday = useMemo(() => {
     const todayStr = new Date().toISOString().slice(0, 10);
