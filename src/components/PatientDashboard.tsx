@@ -171,9 +171,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       const when = new Date(item.date || item.created_at || 0);
       return item.type === 'photo' && when >= weekAgo;
     }).length;
-    const stars = Math.min(5, Math.max(1, Math.ceil(weekLogs / 2)));
+    const stars = familyDiaryHistory.filter((item: any) => {
+      const isFamily = item.type === 'family_note' || item.type === 'photo';
+      return isFamily && Number(item?.score ?? 0) >= 1;
+    }).length;
     return { weekLogs, weekPhotos, stars };
   }, [familyDiaryHistory, history]);
+  const kidsCheckpointLevel = useMemo(() => Math.floor((kidsGamification.stars || 0) / 5), [kidsGamification.stars]);
 
   const hasFamilyPhotoToday = useMemo(() => {
     const todayStr = new Date().toISOString().slice(0, 10);
@@ -371,8 +375,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                         <p className="text-lg font-extrabold text-blue-700">{kidsGamification.weekLogs}</p>
                       </div>
                       <div className="bg-yellow-50 border border-yellow-100 rounded-2xl p-3 text-center">
-                        <p className="text-[10px] uppercase text-yellow-600 font-bold tracking-widest">Estrelas</p>
-                        <p className="text-base sm:text-lg">{'⭐'.repeat(kidsGamification.stars)}</p>
+                        <p className="text-[10px] uppercase text-yellow-600 font-bold tracking-widest">Estrelas da Clínica</p>
+                        <p className="text-base sm:text-lg font-extrabold text-yellow-700">{kidsGamification.stars} ⭐</p>
+                        <p className="text-[10px] text-yellow-700 font-semibold mt-1">Checkpoint {kidsCheckpointLevel}</p>
                       </div>
                       <div className="bg-green-50 border border-green-100 rounded-2xl p-3 text-center">
                         <p className="text-[10px] uppercase text-green-600 font-bold tracking-widest">Fotos 7d</p>

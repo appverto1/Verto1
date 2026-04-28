@@ -797,6 +797,40 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     return [...dedupedFamily, ...baseHistory];
   }, [history, notes, isKidsProfile, patient?.id]);
 
+  const kidsReportSelectableNotes = useMemo(() => {
+    if (!isKidsProfile) return [];
+    const targetPatientId = String(patient?.id || '').trim();
+    return (Array.isArray(notes) ? notes : []).filter((n: any) => {
+      const notePatientId = String(n?.patientId ?? n?.patient_id ?? '').trim();
+      return notePatientId !== '' && notePatientId === targetPatientId;
+    });
+  }, [isKidsProfile, notes, patient?.id]);
+
+  const resolveFamilyImageForNote = (note: any) => {
+    if (!note) return null;
+    const normalizedText = String(note?.text || '')
+      .replace(/^🏠\s*registro da fam[ií]lia\s*\n?/i, '')
+      .trim()
+      .toLowerCase();
+    if (!normalizedText) return null;
+    const match = (historyWithFamilyNotes || []).find((h: any) => {
+      if (!(h?.type === 'family_note' || h?.type === 'photo')) return false;
+      const hText = String(h?.note || '').trim().toLowerCase();
+      return hText === normalizedText && Boolean(h?.image || h?.image_url || h?.imageUrl || h?.photo || h?.photo_url || h?.photoUrl);
+    });
+    if (!match) return null;
+    return match?.image || match?.image_url || match?.imageUrl || match?.photo || match?.photo_url || match?.photoUrl || null;
+  };
+
+  const kidsMilestoneStars = useMemo(() => {
+    if (!isKidsProfile) return 0;
+    return (historyWithFamilyNotes || []).filter((h: any) => {
+      const isFamily = h?.type === 'family_note' || h?.type === 'photo';
+      return isFamily && Number(h?.score ?? 0) >= 1;
+    }).length;
+  }, [isKidsProfile, historyWithFamilyNotes]);
+  const kidsMilestoneCheckpoint = useMemo(() => Math.floor(kidsMilestoneStars / 5), [kidsMilestoneStars]);
+
   const groupedHistory = (historyWithFamilyNotes || []).reduce((groups: any, item: any) => { const group = groups[item.dateGroup] || []; group.push(item); groups[item.dateGroup] = group; return groups; }, {}); 
   const sortedDateKeys = Object.keys(groupedHistory).sort((a, b) => { if (a === "Hoje") return -1; if (b === "Hoje") return 1; if (a === "Ontem") return -1; if (b === "Ontem") return 1; return b.localeCompare(a); }); 
   
@@ -1997,6 +2031,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       <div className="p-6"> 
         {activeTab === 'history' ? ( 
           <div className="space-y-6"> 
+            {isKidsProfile && (
+              <div className="bg-white border border-amber-100 rounded-3xl p-5 shadow-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800">Marcos validados pela clínica</p>
+                    <p className="text-xs text-gray-500 mt-1">Cada foto da família validada com ⭐ conta para premiações clínicas.</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-lg font-extrabold text-amber-600">{kidsMilestoneStars} ⭐</p>
+                    <p className="text-[11px] font-semibold text-amber-500 uppercase tracking-wider">Checkpoint {kidsMilestoneCheckpoint}</p>
+                  </div>
+                </div>
+              </div>
+            )}
             {!isKidsProfile && (
               <div className="space-y-4 mb-6">
                 <div className="bg-white border border-gray-100 rounded-3xl p-5 shadow-sm">
@@ -2435,13 +2483,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                     <FileText size={18} className="text-[#7a32fc]" /> Observações Selecionadas para o Relatório
                   </h4>
                   <div className="space-y-4">
-                    {notes.filter((n: any) => selectedReportNotes.includes(n.id)).map((note: any) => (
+                    {kidsReportSelectableNotes.filter((n: any) => selectedReportNotes.includes(n.id)).map((note: any) => (
                       <div key={note.id} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
                         <div className="flex justify-between items-center mb-3">
                           <span className="text-[10px] font-semibold text-gray-400 uppercase">{note.date}</span>
                           {note.subject && <span className="text-[10px] font-semibold text-[#7a32fc] uppercase tracking-widest">#{note.subject}</span>}
                         </div>
                         <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{note.text}</p>
+                        {resolveFamilyImageForNote(note) && (
+                          <div className="mt-4 rounded-xl overflow-hidden border border-orange-100 bg-orange-50">
+                            <SecureImage
+                              src={resolveFamilyImageForNote(note)}
+                              alt="Foto do registro da família"
+                              className="w-full h-auto object-contain"
+                            />
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -2485,7 +2542,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
                   {isKidsProfile
-                    ? notes.filter((n: any) => n.patientId === patient.id).map((note: any) => (
+                    ? kidsReportSelectableNotes.map((note: any) => (
                         <div
                           key={note.id}
                           onClick={() => toggleReportNote(note.id)}

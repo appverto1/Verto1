@@ -1968,7 +1968,7 @@ export default function App() {
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
-    await dataService.addHistoryItem({
+    const historySaveResult = await dataService.addHistoryItem({
       patient_id: targetPatientId,
       patient_email: identity.patientEmail,
       patient_name: identity.patientName,
@@ -1978,6 +1978,11 @@ export default function App() {
       image: image,
       icon: image ? "📸" : "🏠"
     });
+
+    if (!historySaveResult?.success) {
+      console.warn('[family-note] Falha ao persistir histórico da família:', historySaveResult);
+      alert(`Registro salvo parcialmente. Não foi possível persistir a foto no histórico: ${historySaveResult?.error || 'erro desconhecido'}`);
+    }
   };
 
   const handleLogout = async () => {

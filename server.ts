@@ -6258,7 +6258,7 @@ async function startServer() {
       const docData = cleanObject({
         id: sanitizeString(req.body?.id, 120) || undefined,
         patient_id: resolvedPatientId,
-        patient_email: sanitizeEmail(req.body?.patient_email),
+        patient_email: sanitizeEmail(req.body?.patient_email || req.session.user?.email),
         type: safeType,
         title: sanitizeTextField(req.body?.title, 180),
         score: asSafeNumber(req.body?.score, 0, 100),
