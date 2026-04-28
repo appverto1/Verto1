@@ -123,7 +123,7 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
           {item.note && <p>"{sanitizeDescriptionForDisplay(item.note)}"</p>}
           {item.image && (
             <div className={`${item.note ? 'mt-3' : ''} rounded-lg overflow-hidden border border-orange-200`}>
-              <SecureImage src={item.image} alt="Registro da FamÃ­lia" className="w-full h-auto" />
+              <SecureImage src={item.image} alt="Registro da FamÃ­lia" className="w-full max-w-[380px] max-h-56 object-contain bg-white mx-auto" />
             </div>
           )}
         </div>
@@ -214,4 +214,5 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
     </div> 
   ); 
 };
+
 

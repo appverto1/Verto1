@@ -1,4 +1,4 @@
-﻿import React, { useState, useMemo } from 'react';
+﻿import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle } from 'lucide-react';
 import { EvolutionLineChart, EvolutionBarChart } from './Charts';
@@ -34,6 +34,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const [isUploading, setIsUploading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [showStarCelebration, setShowStarCelebration] = useState(false);
+  const [celebrationKey, setCelebrationKey] = useState(0);
+  const previousStarsRef = useRef<number>(0);
   const userType = typeof user.type === 'string' ? user.type.toLowerCase() : '';
   const hasExplicitPatientType = Boolean(userType);
   const userAge =
@@ -175,9 +178,29 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       const isFamily = item.type === 'family_note' || item.type === 'photo';
       return isFamily && Number(item?.score ?? 0) >= 1;
     }).length;
-    return { weekLogs, weekPhotos, stars };
-  }, [familyDiaryHistory, history]);
+    const sharedFamilyStars = (Array.isArray(sharedNotes) ? sharedNotes : []).filter((item: any) => {
+      const type = String(item?.type || '').toLowerCase();
+      const visibility = String(item?.visibility || '').toLowerCase();
+      const isFamily = type === 'family_note' || type === 'photo' || visibility === 'family';
+      return isFamily && Number(item?.score ?? 0) >= 1;
+    }).length;
+    return { weekLogs, weekPhotos, stars: Math.max(stars, sharedFamilyStars) };
+  }, [familyDiaryHistory, history, sharedNotes]);
   const kidsCheckpointLevel = useMemo(() => Math.floor((kidsGamification.stars || 0) / 5), [kidsGamification.stars]);
+
+  useEffect(() => {
+    if (!isKidsProfile) return;
+    const previous = previousStarsRef.current || 0;
+    const current = Number(kidsGamification.stars || 0);
+    if (current > previous) {
+      setCelebrationKey((v) => v + 1);
+      setShowStarCelebration(true);
+      const timer = window.setTimeout(() => setShowStarCelebration(false), 1800);
+      previousStarsRef.current = current;
+      return () => window.clearTimeout(timer);
+    }
+    previousStarsRef.current = current;
+  }, [kidsGamification.stars, isKidsProfile]);
 
   const hasFamilyPhotoToday = useMemo(() => {
     const todayStr = new Date().toISOString().slice(0, 10);
@@ -388,8 +411,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                         <p className="text-[10px] uppercase text-blue-600 font-bold tracking-widest">Registros 7d</p>
                         <p className="text-lg font-extrabold text-blue-700">{kidsGamification.weekLogs}</p>
                       </div>
-                      <div className="bg-yellow-50 border border-yellow-100 rounded-2xl p-3 text-center">
-                        <p className="text-[10px] uppercase text-yellow-600 font-bold tracking-widest">Estrelas da Clínica</p>
+                      <div className="bg-yellow-50 border border-yellow-100 rounded-2xl p-3 text-center relative overflow-hidden">
+                        {showStarCelebration && (
+                          <div key={celebrationKey} className="pointer-events-none absolute inset-0">
+                            <div className="absolute left-3 top-2 animate-bounce text-sm">✨</div>
+                            <div className="absolute right-4 top-3 animate-ping text-xs">⭐</div>
+                            <div className="absolute left-1/2 -translate-x-1/2 top-1 animate-pulse text-lg">🎉</div>
+                            <div className="absolute left-6 bottom-3 animate-bounce text-xs">🌟</div>
+                            <div className="absolute right-5 bottom-2 animate-pulse text-sm">💜</div>
+                          </div>
+                        )}
                         <p className="text-base sm:text-lg font-extrabold text-yellow-700">{kidsGamification.stars} ⭐</p>
                         <p className="text-[10px] text-yellow-700 font-semibold mt-1">Checkpoint {kidsCheckpointLevel}</p>
                       </div>
@@ -1065,4 +1096,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     </div> 
   ); 
 };
+
+
+
+
+
+
 
