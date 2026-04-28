@@ -1089,6 +1089,28 @@ export default function App() {
     }
   };
   const handleUpdateHistoryItem = async (id: any, score: number, evalComment: string) => { 
+    const rawId = String(id || '');
+    if (rawId.startsWith('note-family-')) {
+      const noteId = rawId.replace('note-family-', '');
+      setTherapistNotes(prev =>
+        prev.map((n: any) =>
+          String(n.id) === String(noteId)
+            ? { ...n, score, visibility: n?.visibility || 'family', type: n?.type || 'family_note' }
+            : n
+        )
+      );
+      try {
+        await dataService.updateNote(String(noteId), {
+          score,
+          visibility: 'family',
+          type: 'family_note'
+        });
+      } catch (error) {
+        console.error('Falha ao persistir estrela em anotação de família:', error);
+      }
+      return;
+    }
+
     const item = history.find(i => i.id === id);
     if (item) {
       const updatedItem = { ...item, score, evalComment: evalComment || '' };

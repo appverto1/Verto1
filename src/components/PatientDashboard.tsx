@@ -422,7 +422,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                           </div>
                         )}
                         <p className="text-base sm:text-lg font-extrabold text-yellow-700">{kidsGamification.stars} ⭐</p>
-                        <p className="text-[10px] text-yellow-700 font-semibold mt-1">Checkpoint {kidsCheckpointLevel}</p>
+                        <p className="text-[10px] text-yellow-700 font-semibold mt-1">{kidsCheckpointLevel > 0 ? '⭐'.repeat(Math.min(5, kidsCheckpointLevel)) : ''}</p>
                       </div>
                       <div className="bg-green-50 border border-green-100 rounded-2xl p-3 text-center">
                         <p className="text-[10px] uppercase text-green-600 font-bold tracking-widest">Fotos 7d</p>
