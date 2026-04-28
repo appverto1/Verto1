@@ -6982,12 +6982,35 @@ async function startServer() {
     try {
       const noteId = sanitizeString(req.params.noteId, 120);
       if (!noteId) return res.status(400).json({ success: false, error: 'noteId inválido.' });
-      if (!isUuid(noteId)) return res.status(404).json({ success: false, error: 'Nota não encontrada.' });
-      const { data: existing, error: existingError } = await supabase
-        .from('notes')
-        .select('*')
-        .eq('id', noteId)
-        .maybeSingle();
+      let existing: any = null;
+      let existingError: any = null;
+
+      if (isUuid(noteId)) {
+        const result = await supabase
+          .from('notes')
+          .select('*')
+          .eq('id', noteId)
+          .maybeSingle();
+        existing = result.data;
+        existingError = result.error;
+      } else {
+        // Fallback for legacy/local IDs: resolve by patient + text/subject and update latest match.
+        const fallbackPatientId = sanitizeString(req.body?.patient_id, 120);
+        const fallbackText = sanitizeTextField(req.body?.text, 12000);
+        const fallbackSubject = sanitizeTextField(req.body?.subject, 100);
+        let fallbackQuery = supabase
+          .from('notes')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(1);
+        if (isUuid(fallbackPatientId)) fallbackQuery = fallbackQuery.eq('patient_id', fallbackPatientId);
+        if (fallbackText) fallbackQuery = fallbackQuery.eq('text', fallbackText);
+        if (fallbackSubject) fallbackQuery = fallbackQuery.eq('subject', fallbackSubject);
+        const fallbackResult = await fallbackQuery.maybeSingle();
+        existing = fallbackResult.data;
+        existingError = fallbackResult.error;
+      }
+
       if (existingError) throw existingError;
       if (!existing) return res.status(404).json({ success: false, error: 'Nota não encontrada.' });
       if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
@@ -7018,7 +7041,8 @@ async function startServer() {
         subject: req.body?.subject !== undefined ? (sanitizeTextField(req.body?.subject, 100) || 'Geral') : undefined,
         updated_at: new Date().toISOString()
       });
-      const { data, error } = await updateNoteWithSchemaFallback(noteId, updates);
+      const effectiveNoteId = sanitizeString(existing?.id, 120);
+      const { data, error } = await updateNoteWithSchemaFallback(effectiveNoteId, updates);
       if (error) throw error;
       return res.json({ success: true, data });
     } catch (error) {
@@ -7030,18 +7054,36 @@ async function startServer() {
     try {
       const noteId = sanitizeString(req.params.noteId, 120);
       if (!noteId) return res.status(400).json({ success: false, error: 'noteId inválido.' });
-      if (!isUuid(noteId)) return res.status(404).json({ success: false, error: 'Nota não encontrada.' });
-      const { data: existing, error: existingError } = await supabase
-        .from('notes')
-        .select('id, patient_id')
-        .eq('id', noteId)
-        .maybeSingle();
+      let existing: any = null;
+      let existingError: any = null;
+      if (isUuid(noteId)) {
+        const result = await supabase
+          .from('notes')
+          .select('id, patient_id')
+          .eq('id', noteId)
+          .maybeSingle();
+        existing = result.data;
+        existingError = result.error;
+      } else {
+        const fallbackPatientId = sanitizeString(req.body?.patient_id, 120);
+        const fallbackText = sanitizeTextField(req.body?.text, 12000);
+        let fallbackQuery = supabase
+          .from('notes')
+          .select('id, patient_id')
+          .order('created_at', { ascending: false })
+          .limit(1);
+        if (isUuid(fallbackPatientId)) fallbackQuery = fallbackQuery.eq('patient_id', fallbackPatientId);
+        if (fallbackText) fallbackQuery = fallbackQuery.eq('text', fallbackText);
+        const fallbackResult = await fallbackQuery.maybeSingle();
+        existing = fallbackResult.data;
+        existingError = fallbackResult.error;
+      }
       if (existingError) throw existingError;
       if (!existing) return res.status(404).json({ success: false, error: 'Nota não encontrada.' });
       if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
       }
-      const { error } = await supabase.from('notes').delete().eq('id', noteId);
+      const { error } = await supabase.from('notes').delete().eq('id', sanitizeString(existing.id, 120));
       if (error) throw error;
       return res.json({ success: true });
     } catch (error) {

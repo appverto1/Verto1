@@ -176,14 +176,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     }).length;
     const stars = familyDiaryHistory.filter((item: any) => {
       const isFamily = item.type === 'family_note' || item.type === 'photo';
-      const hasStarMarker = /\u2b50|⭐/.test(String(item?.subject || ''));
+      const hasStarMarker = /\u2b50|⭐/.test(String(item?.subject || '')) || /\[STAR\]/i.test(String(item?.note || item?.text || ''));
       return isFamily && (Number(item?.score ?? 0) >= 1 || hasStarMarker);
     }).length;
     const sharedFamilyStars = (Array.isArray(sharedNotes) ? sharedNotes : []).filter((item: any) => {
       const type = String(item?.type || '').toLowerCase();
       const visibility = String(item?.visibility || '').toLowerCase();
       const isFamily = type === 'family_note' || type === 'photo' || visibility === 'family';
-      const hasStarMarker = /\u2b50|⭐/.test(String(item?.subject || ''));
+      const hasStarMarker = /\u2b50|⭐/.test(String(item?.subject || '')) || /\[STAR\]/i.test(String(item?.text || item?.note || ''));
       return isFamily && (Number(item?.score ?? 0) >= 1 || hasStarMarker);
     }).length;
     return { weekLogs, weekPhotos, stars: Math.max(stars, sharedFamilyStars) };

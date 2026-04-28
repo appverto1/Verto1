@@ -749,7 +749,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       })
       .map((n: any) => {
         const rawText = String(n?.text || '');
+        const hasStarMarker = /\[STAR\]/i.test(rawText) || /\u2b50|⭐/.test(String(n?.subject || ''));
         const normalizedText = rawText
+          .replace(/\[STAR\]/gi, '')
           .replace(/^🏠\s*registro da fam[ií]lia\s*\n?/i, '')
           .trim();
         const createdAt = n?.created_at || n?.date || new Date().toISOString();
@@ -772,7 +774,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             n?.photoUrl ||
             null,
           icon: '🏠',
-          score: Number.isFinite(Number(n?.score)) ? Number(n.score) : 0,
+          score: hasStarMarker ? 1 : (Number.isFinite(Number(n?.score)) ? Number(n.score) : 0),
           dateGroup,
           date: createdAt,
           time: Number.isNaN(dateObj.getTime())
@@ -827,7 +829,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     if (!isKidsProfile) return 0;
     return (historyWithFamilyNotes || []).filter((h: any) => {
       const isFamily = h?.type === 'family_note' || h?.type === 'photo';
-      const hasStarMarker = /\u2b50|⭐/.test(String(h?.subject || ''));
+      const hasStarMarker = /\u2b50|⭐/.test(String(h?.subject || '')) || /\[STAR\]/i.test(String(h?.note || h?.text || ''));
       return isFamily && (Number(h?.score ?? 0) >= 1 || hasStarMarker);
     }).length;
   }, [isKidsProfile, historyWithFamilyNotes]);

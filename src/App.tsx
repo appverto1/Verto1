@@ -1095,10 +1095,19 @@ export default function App() {
     }
   };
   const handleUpdateHistoryItem = async (id: any, score: number, evalComment: string) => { 
+    const STAR_MARKER = '[STAR]';
+    const applyStarMarker = (text: string, starred: boolean) => {
+      const cleaned = String(text || '')
+        .replace(/\[STAR\]/gi, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+      return starred ? `${STAR_MARKER} ${cleaned}`.trim() : cleaned;
+    };
     const rawId = String(id || '');
     if (rawId.startsWith('note-family-')) {
       const noteId = rawId.replace('note-family-', '');
       const starred = Number(score || 0) >= 1;
+      const matchingNote = (Array.isArray(therapistNotes) ? therapistNotes : []).find((n: any) => String(n.id) === String(noteId));
       setTherapistNotes(prev =>
         prev.map((n: any) =>
           String(n.id) === String(noteId)
@@ -1107,7 +1116,9 @@ export default function App() {
                 score,
                 visibility: n?.visibility || 'family',
                 type: n?.type || 'family_note',
-                subject: starred ? `⭐ ${String(n?.subject || 'Geral').replace(/\u2b50|⭐/g, '').trim()}` : String(n?.subject || 'Geral').replace(/\u2b50|⭐/g, '').trim()
+                subject: starred ? `⭐ ${String(n?.subject || 'Geral').replace(/\u2b50|⭐/g, '').trim()}` : String(n?.subject || 'Geral').replace(/\u2b50|⭐/g, '').trim(),
+                text: applyStarMarker(String(n?.text || n?.note || ''), starred),
+                note: applyStarMarker(String(n?.note || n?.text || ''), starred)
               }
             : n
         )
@@ -1117,7 +1128,9 @@ export default function App() {
           score,
           visibility: 'family',
           type: 'family_note',
-          subject: starred ? '⭐ Família' : 'Família'
+          subject: starred ? '⭐ Família' : 'Família',
+          patient_id: String(matchingNote?.patientId || matchingNote?.patient_id || ''),
+          text: applyStarMarker(String(matchingNote?.text || matchingNote?.note || ''), starred)
         });
       } catch (error) {
         console.error('Falha ao persistir estrela em anotação de família:', error);
@@ -1149,6 +1162,8 @@ export default function App() {
                   ...n,
                   score,
                   subject: starred ? `⭐ ${String(n?.subject || 'Família').replace(/\u2b50|⭐/g, '').trim()}` : String(n?.subject || 'Família').replace(/\u2b50|⭐/g, '').trim()
+                  ,text: applyStarMarker(String(n?.text || n?.note || ''), starred)
+                  ,note: applyStarMarker(String(n?.note || n?.text || ''), starred)
                 }
               : n
           )
@@ -1173,7 +1188,9 @@ export default function App() {
             score,
             visibility: matchingNote?.visibility || 'family',
             type: matchingNote?.type || 'family_note',
-            subject: starred ? '⭐ Família' : 'Família'
+            subject: starred ? '⭐ Família' : 'Família',
+            patient_id: String(item?.patientId || item?.patient_id || ''),
+            text: applyStarMarker(String(matchingNote?.text || item?.note || item?.text || ''), starred)
           });
         }
       } catch (error) {
