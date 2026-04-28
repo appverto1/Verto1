@@ -76,8 +76,21 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return `${y}-${m}-${d}`;
   };
 
+  const parseScore = (value: any): number | null => {
+    if (value === null || value === undefined || value === '') return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const normalized = String(value).replace(',', '.').trim();
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
   const availableSnapshots = useMemo(() => {
-    const dates = history.map((h: any) => getSnapshotKey(h)).filter(Boolean);
+    const clinicalScored = (Array.isArray(history) ? history : []).filter((h: any) => {
+      const type = String(h?.type || '').toLowerCase();
+      if (type === 'family_note' || type === 'photo') return false;
+      return parseScore(h?.score) !== null;
+    });
+    const dates = clinicalScored.map((h: any) => getSnapshotKey(h)).filter(Boolean);
     return Array.from(new Set(dates)).sort((a: any, b: any) => new Date(String(b)).getTime() - new Date(String(a)).getTime());
   }, [history]);
 
@@ -1249,10 +1262,3 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
 
 
-    const parseScore = (value: any): number | null => {
-      if (value === null || value === undefined || value === '') return null;
-      if (typeof value === 'number' && Number.isFinite(value)) return value;
-      const normalized = String(value).replace(',', '.').trim();
-      const parsed = Number(normalized);
-      return Number.isFinite(parsed) ? parsed : null;
-    };
