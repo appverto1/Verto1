@@ -624,13 +624,13 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
             <div className="relative bg-white rounded-[40px] shadow-2xl border border-gray-100 p-2 md:p-3 overflow-hidden group">
               <div className="w-full h-[320px] sm:h-[420px] md:h-[520px] lg:h-[620px] xl:h-[680px] rounded-[32px] overflow-hidden">
                   <img
-                    src="/Gemini_Generated_Image_m804z0m804z0m804.jpg"
+                    src="/Hero-Verto.png"
                     onError={(e) => {
                       e.currentTarget.onerror = null;
-                      e.currentTarget.src = '/hero_verto_photo.png';
+                      e.currentTarget.src = '/Design_sem_nome_(1).jpg';
                     }}
-                    alt="Uma mão humana segurando uma caneta sobre um caderno aberto com a letra 'V' estilizada nas cores da Verto, simbolizando a personalização e a conexão humana na terapia."
-                    className="rounded-[32px] w-full h-full object-cover object-center transform group-hover:scale-[1.02] transition-transform duration-700"
+                    alt="Interface da Verto em uso durante sessão terapêutica."
+                    className="rounded-[32px] w-full h-full object-contain object-center bg-white transform group-hover:scale-[1.01] transition-transform duration-700"
                   />
               </div>
               

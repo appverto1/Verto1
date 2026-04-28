@@ -118,8 +118,30 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         })).filter((d: any) => d.name)
       : [];
 
+    const normalizeSkill = (value: any) =>
+      String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+    const isSameSkill = (a: string, b: string) => {
+      const left = normalizeSkill(a);
+      const right = normalizeSkill(b);
+      if (!left || !right) return false;
+      return left === right || left.includes(right) || right.includes(left);
+    };
+
+    const sourceHistory = Array.isArray(history)
+      ? history.filter((h: any) => {
+          const t = String(h?.type || '').toLowerCase();
+          return t !== 'family_note' && t !== 'photo';
+        })
+      : [];
+
     const historyTaskDomainsMap = new Map<string, Set<string>>();
-    history.forEach((h: any) => {
+    sourceHistory.forEach((h: any) => {
       const type = String(h?.type || '').toLowerCase();
       if (type === 'family_note' || type === 'photo') return;
       const score = Number(h?.score);
@@ -153,23 +175,23 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       const skillLatestScoreMap: any = {};
       const skillLatestTsMap: any = {};
       
-      history.forEach((h: any) => {
-        const title = String(h?.title || '').trim().toLowerCase();
+      sourceHistory.forEach((h: any) => {
+        const title = String(h?.title || h?.task_data?.title || '').trim();
         const inDateScope = !dateFilter || getSnapshotKey(h) === dateFilter;
         const rawDomain = String(h?.domain || h?.domainName || h?.task_data?.domain || h?.metadata?.domain || '').trim();
-        const matchesBySkill = skillNames.includes(title);
+        const matchesBySkill = skillNames.some((skillName: string) => isSameSkill(skillName, title));
         const matchesByDomain = rawDomain && rawDomain.toLowerCase() === String(domain?.name || '').toLowerCase();
         const rawScore = Number(h?.score);
         const type = String(h?.type || '').toLowerCase();
         const isScoredClinicalEvent = Number.isFinite(rawScore) && type !== 'family_note' && type !== 'photo';
         if (isScoredClinicalEvent && inDateScope && (matchesBySkill || matchesByDomain)) {
           const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
-          const skillKey = matchesBySkill ? title : `__domain__${String(domain?.name || '').toLowerCase()}`;
+          const skillKey = matchesBySkill ? normalizeSkill(title) : `__domain__${String(domain?.name || '').toLowerCase()}`;
           if (!skillLatestTsMap[skillKey] || ts >= skillLatestTsMap[skillKey]) {
             skillLatestTsMap[skillKey] = ts;
             
             // Use 0-1 scale for the chart
-            const peiGoal = user.pei?.find((g: any) => g.name.trim().toLowerCase() === title);
+            const peiGoal = user.pei?.find((g: any) => isSameSkill(String(g?.name || ''), title));
             if (peiGoal?.status === 'completed') {
               skillLatestScoreMap[skillKey] = 1;
             } else {

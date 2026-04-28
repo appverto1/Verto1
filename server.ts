@@ -6165,17 +6165,34 @@ async function startServer() {
       }
 
       const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail);
-      let query = supabase
+
+      const { data: historyByEmail, error: historyByEmailError } = await supabase
         .from('history')
         .select('*')
-        .eq('patient_email', patientEmail);
+        .eq('patient_email', patientEmail)
+        .order('created_at', { ascending: false });
+      if (historyByEmailError) throw historyByEmailError;
 
+      let historyById: any[] = [];
       if (patientIds.length > 0) {
-        query = query.in('patient_id', patientIds);
+        const { data: historyByIdData, error: historyByIdError } = await supabase
+          .from('history')
+          .select('*')
+          .in('patient_id', patientIds)
+          .order('created_at', { ascending: false });
+        if (historyByIdError) throw historyByIdError;
+        historyById = Array.isArray(historyByIdData) ? historyByIdData : [];
       }
 
-      const { data, error } = await query.order('created_at', { ascending: false });
-      if (error) throw error;
+      const mergedHistory = [...(Array.isArray(historyByEmail) ? historyByEmail : []), ...historyById];
+      const dedupedHistory = Array.from(
+        new Map(
+          mergedHistory.map((item: any) => {
+            const key = String(item?.id || `${item?.patient_id || ''}|${item?.type || ''}|${item?.title || ''}|${item?.created_at || ''}|${item?.score ?? ''}`);
+            return [key, item];
+          })
+        ).values()
+      );
 
       const { data: assignedCompleted, error: assignedError } = await supabase
         .from('assigned_tasks')
@@ -6202,7 +6219,7 @@ async function startServer() {
           created_at: task.completed_at || task.updated_at || task.created_at
         };
       });
-      const consolidatedHistory = [...(data || []), ...mappedAssignedHistory]
+      const consolidatedHistory = [...dedupedHistory, ...mappedAssignedHistory]
         .sort((a: any, b: any) => {
           const aTs = new Date(a?.created_at || 0).getTime();
           const bTs = new Date(b?.created_at || 0).getTime();
