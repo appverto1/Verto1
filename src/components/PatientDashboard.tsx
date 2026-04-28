@@ -144,8 +144,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     sourceHistory.forEach((h: any) => {
       const type = String(h?.type || '').toLowerCase();
       if (type === 'family_note' || type === 'photo') return;
-      const score = Number(h?.score);
-      if (!Number.isFinite(score)) return;
+      const score = parseScore(h?.score);
+      if (score === null) return;
       const rawDomain = String(
         h?.domain ||
         h?.domainName ||
@@ -181,9 +181,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         const rawDomain = String(h?.domain || h?.domainName || h?.task_data?.domain || h?.metadata?.domain || '').trim();
         const matchesBySkill = skillNames.some((skillName: string) => isSameSkill(skillName, title));
         const matchesByDomain = rawDomain && rawDomain.toLowerCase() === String(domain?.name || '').toLowerCase();
-        const rawScore = Number(h?.score);
+        const rawScore = parseScore(h?.score);
         const type = String(h?.type || '').toLowerCase();
-        const isScoredClinicalEvent = Number.isFinite(rawScore) && type !== 'family_note' && type !== 'photo';
+        const isScoredClinicalEvent = rawScore !== null && type !== 'family_note' && type !== 'photo';
         if (isScoredClinicalEvent && inDateScope && (matchesBySkill || matchesByDomain)) {
           const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
           const skillKey = matchesBySkill ? normalizeSkill(title) : `__domain__${String(domain?.name || '').toLowerCase()}`;
@@ -1249,3 +1249,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
 
 
+    const parseScore = (value: any): number | null => {
+      if (value === null || value === undefined || value === '') return null;
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
+      const normalized = String(value).replace(',', '.').trim();
+      const parsed = Number(normalized);
+      return Number.isFinite(parsed) ? parsed : null;
+    };

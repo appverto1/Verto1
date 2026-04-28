@@ -6219,7 +6219,54 @@ async function startServer() {
           created_at: task.completed_at || task.updated_at || task.created_at
         };
       });
-      const consolidatedHistory = [...dedupedHistory, ...mappedAssignedHistory]
+
+      const { data: tasksByEmail, error: tasksByEmailError } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('patient_email', patientEmail)
+        .order('created_at', { ascending: false });
+      if (tasksByEmailError) {
+        console.warn('[PatientSelfHistory] tasks by email warning:', tasksByEmailError.message || String(tasksByEmailError));
+      }
+
+      let tasksById: any[] = [];
+      if (patientIds.length > 0) {
+        const { data: tasksByIdData, error: tasksByIdError } = await supabase
+          .from('tasks')
+          .select('*')
+          .in('patient_id', patientIds)
+          .order('created_at', { ascending: false });
+        if (tasksByIdError) {
+          console.warn('[PatientSelfHistory] tasks by id warning:', tasksByIdError.message || String(tasksByIdError));
+        } else {
+          tasksById = Array.isArray(tasksByIdData) ? tasksByIdData : [];
+        }
+      }
+
+      const taskRows = [
+        ...(Array.isArray(tasksByEmail) ? tasksByEmail : []),
+        ...tasksById
+      ];
+      const mappedTaskScoreHistory = Array.from(
+        new Map(
+          taskRows.map((t: any) => [String(t?.id || crypto.randomUUID()), t])
+        ).values()
+      )
+        .filter((t: any) => t?.pro_score !== null && t?.pro_score !== undefined)
+        .map((t: any) => ({
+          id: `taskscore:${t.id}`,
+          patient_id: t.patient_id,
+          patient_email: t.patient_email,
+          type: String(t.type || 'task'),
+          title: sanitizeTextField(t.title || 'Tarefa avaliada', 180),
+          score: asSafeNumber(t.pro_score, 0, 100),
+          energy: null,
+          note: '',
+          icon: sanitizeString(t.icon, 40) || '🎯',
+          created_at: t.updated_at || t.created_at
+        }));
+
+      const consolidatedHistory = [...dedupedHistory, ...mappedAssignedHistory, ...mappedTaskScoreHistory]
         .sort((a: any, b: any) => {
           const aTs = new Date(a?.created_at || 0).getTime();
           const bTs = new Date(b?.created_at || 0).getTime();

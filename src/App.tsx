@@ -827,9 +827,11 @@ export default function App() {
     const fetchPatientScopedData = async () => {
       if (!user || user.role !== 'patient' || !user.email) return;
       setPatientContextLoaded(false);
-      const [historyRes, historyByEmailRes, tasksRes, assignedTasksRes, notesRes] = await Promise.allSettled([
+      const identity = resolvePatientIdentityForPortal(user);
+      const [historyRes, historyByEmailRes, historyByIdRes, tasksRes, assignedTasksRes, notesRes] = await Promise.allSettled([
         dataService.getPatientSelfHistory(),
         dataService.getHistoryByEmail(user.email),
+        identity?.patientId ? dataService.getHistory(identity.patientId) : Promise.resolve({ success: true, data: [] }),
         dataService.getPatientSelfTasks(),
         dataService.getPatientSelfAssignedTasks(),
         dataService.getNotesByEmail(user.email)
@@ -837,13 +839,15 @@ export default function App() {
 
       const safeHistoryRes = historyRes.status === 'fulfilled' ? historyRes.value : null;
       const safeHistoryByEmailRes = historyByEmailRes.status === 'fulfilled' ? historyByEmailRes.value : null;
+      const safeHistoryByIdRes = historyByIdRes.status === 'fulfilled' ? historyByIdRes.value : null;
       const safeTasksRes = tasksRes.status === 'fulfilled' ? tasksRes.value : null;
       const safeAssignedTasksRes = assignedTasksRes.status === 'fulfilled' ? assignedTasksRes.value : null;
       const safeNotesRes = notesRes.status === 'fulfilled' ? notesRes.value : null;
 
       const mergedHistoryRaw = [
         ...(Array.isArray(safeHistoryRes?.data) ? safeHistoryRes.data : []),
-        ...(Array.isArray(safeHistoryByEmailRes?.data) ? safeHistoryByEmailRes.data : [])
+        ...(Array.isArray(safeHistoryByEmailRes?.data) ? safeHistoryByEmailRes.data : []),
+        ...(Array.isArray(safeHistoryByIdRes?.data) ? safeHistoryByIdRes.data : [])
       ];
 
       const historySeen = new Set<string>();

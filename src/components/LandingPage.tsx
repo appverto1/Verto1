@@ -634,30 +634,6 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                   />
               </div>
               
-              {/* Professional Insight Card - Replaces the "balloon" */}
-              <div className="absolute bottom-5 left-5 right-5 md:bottom-8 md:left-8 md:right-auto md:w-80 bg-white/90 backdrop-blur-md p-5 md:p-6 rounded-[32px] shadow-2xl border border-white/20 animate-slide-up">
-                <div className="flex items-center gap-4 mb-4">
-                  <div className="w-12 h-12 bg-[#7a32fc] text-white rounded-2xl flex items-center justify-center shadow-lg shadow-purple-500/30">
-                    <Activity size={24} />
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-semibold text-[#7a32fc] uppercase tracking-widest">Insight Clínico</p>
-                    <p className="text-base font-semibold text-gray-900">Análise de Energia</p>
-                  </div>
-                </div>
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs font-semibold text-gray-500">Nível Sensorial</span>
-                    <span className="text-xs font-semibold text-orange-500">ALTO</span>
-                  </div>
-                  <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-orange-500 w-[85%] rounded-full"></div>
-                  </div>
-                  <p className="text-[11px] text-gray-500 font-normal leading-tight">
-                    Paciente apresenta sinais de sobrecarga sensorial. Sugerido pausa reguladora.
-                  </p>
-                </div>
-              </div>
             </div>
           </div>
         </div>
