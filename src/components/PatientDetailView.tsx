@@ -827,7 +827,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     if (!isKidsProfile) return 0;
     return (historyWithFamilyNotes || []).filter((h: any) => {
       const isFamily = h?.type === 'family_note' || h?.type === 'photo';
-      return isFamily && Number(h?.score ?? 0) >= 1;
+      const hasStarMarker = /\u2b50|⭐/.test(String(h?.subject || ''));
+      return isFamily && (Number(h?.score ?? 0) >= 1 || hasStarMarker);
     }).length;
   }, [isKidsProfile, historyWithFamilyNotes]);
 

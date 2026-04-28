@@ -1098,10 +1098,17 @@ export default function App() {
     const rawId = String(id || '');
     if (rawId.startsWith('note-family-')) {
       const noteId = rawId.replace('note-family-', '');
+      const starred = Number(score || 0) >= 1;
       setTherapistNotes(prev =>
         prev.map((n: any) =>
           String(n.id) === String(noteId)
-            ? { ...n, score, visibility: n?.visibility || 'family', type: n?.type || 'family_note' }
+            ? {
+                ...n,
+                score,
+                visibility: n?.visibility || 'family',
+                type: n?.type || 'family_note',
+                subject: starred ? `⭐ ${String(n?.subject || 'Geral').replace(/\u2b50|⭐/g, '').trim()}` : String(n?.subject || 'Geral').replace(/\u2b50|⭐/g, '').trim()
+              }
             : n
         )
       );
@@ -1109,7 +1116,8 @@ export default function App() {
         await dataService.updateNote(String(noteId), {
           score,
           visibility: 'family',
-          type: 'family_note'
+          type: 'family_note',
+          subject: starred ? '⭐ Família' : 'Família'
         });
       } catch (error) {
         console.error('Falha ao persistir estrela em anotação de família:', error);
@@ -1122,6 +1130,7 @@ export default function App() {
     if (isFamilyHistory) {
       const patientId = String(item?.patientId || item?.patient_id || '').trim();
       const normalizedItemText = String(item?.note || item?.text || '').trim().toLowerCase();
+      const starred = Number(score || 0) >= 1;
       const matchingNote = (Array.isArray(therapistNotes) ? therapistNotes : []).find((n: any) => {
         const samePatient = String(n?.patientId || n?.patient_id || '').trim() === patientId;
         const sameFamilyType = ['family', 'patient', 'shared'].includes(String(n?.visibility || '').toLowerCase()) ||
@@ -1134,7 +1143,15 @@ export default function App() {
       setHistory(prev => prev.map((h: any) => (String(h.id) === rawId ? { ...h, score } : h)));
       if (matchingNote) {
         setTherapistNotes(prev =>
-          prev.map((n: any) => (String(n.id) === String(matchingNote.id) ? { ...n, score } : n))
+          prev.map((n: any) =>
+            String(n.id) === String(matchingNote.id)
+              ? {
+                  ...n,
+                  score,
+                  subject: starred ? `⭐ ${String(n?.subject || 'Família').replace(/\u2b50|⭐/g, '').trim()}` : String(n?.subject || 'Família').replace(/\u2b50|⭐/g, '').trim()
+                }
+              : n
+          )
         );
       }
 
@@ -1155,7 +1172,8 @@ export default function App() {
           await dataService.updateNote(String(matchingNote.id), {
             score,
             visibility: matchingNote?.visibility || 'family',
-            type: matchingNote?.type || 'family_note'
+            type: matchingNote?.type || 'family_note',
+            subject: starred ? '⭐ Família' : 'Família'
           });
         }
       } catch (error) {

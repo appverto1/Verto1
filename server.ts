@@ -6982,6 +6982,7 @@ async function startServer() {
     try {
       const noteId = sanitizeString(req.params.noteId, 120);
       if (!noteId) return res.status(400).json({ success: false, error: 'noteId inválido.' });
+      if (!isUuid(noteId)) return res.status(404).json({ success: false, error: 'Nota não encontrada.' });
       const { data: existing, error: existingError } = await supabase
         .from('notes')
         .select('*')
@@ -7029,6 +7030,7 @@ async function startServer() {
     try {
       const noteId = sanitizeString(req.params.noteId, 120);
       if (!noteId) return res.status(400).json({ success: false, error: 'noteId inválido.' });
+      if (!isUuid(noteId)) return res.status(404).json({ success: false, error: 'Nota não encontrada.' });
       const { data: existing, error: existingError } = await supabase
         .from('notes')
         .select('id, patient_id')
