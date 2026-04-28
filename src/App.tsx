@@ -825,15 +825,17 @@ export default function App() {
   useEffect(() => {
     const fetchPatientScopedData = async () => {
       if (!user || user.role !== 'patient' || !user.email) return;
-      const [historyRes, tasksRes, assignedTasksRes] = await Promise.allSettled([
+      const [historyRes, tasksRes, assignedTasksRes, notesRes] = await Promise.allSettled([
         dataService.getPatientSelfHistory(),
         dataService.getPatientSelfTasks(),
-        dataService.getPatientSelfAssignedTasks()
+        dataService.getPatientSelfAssignedTasks(),
+        dataService.getNotesByEmail(user.email)
       ]);
 
       const safeHistoryRes = historyRes.status === 'fulfilled' ? historyRes.value : null;
       const safeTasksRes = tasksRes.status === 'fulfilled' ? tasksRes.value : null;
       const safeAssignedTasksRes = assignedTasksRes.status === 'fulfilled' ? assignedTasksRes.value : null;
+      const safeNotesRes = notesRes.status === 'fulfilled' ? notesRes.value : null;
 
       setHistory(
         Array.isArray(safeHistoryRes?.data)
@@ -887,6 +889,10 @@ export default function App() {
           : [];
         return [...baseTasks, ...assignedPending];
       })());
+
+      setTherapistNotes(
+        normalizeAndDecorateNotes(Array.isArray(safeNotesRes?.data) ? safeNotesRes.data : [])
+      );
 
       const assignedCount = Array.isArray(safeAssignedTasksRes?.data) ? safeAssignedTasksRes.data.length : 0;
       setPatientAssignedTaskCount(assignedCount);

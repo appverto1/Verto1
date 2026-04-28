@@ -772,6 +772,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             n?.photoUrl ||
             null,
           icon: '🏠',
+          score: Number.isFinite(Number(n?.score)) ? Number(n.score) : 0,
           dateGroup,
           date: createdAt,
           time: Number.isNaN(dateObj.getTime())

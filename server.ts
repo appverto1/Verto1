@@ -5991,9 +5991,14 @@ async function startServer() {
         const clinicId = currentClinicId(req.session.user);
         if (!clinicId) return res.status(403).json({ error: 'Clínica não identificada.' });
         const clinicPatientIds = await getClinicPatientIdsByEmail(clinicId, safeEmail);
-        if (clinicPatientIds.length === 0) return res.json({ success: true, data: [] });
         const idSet = new Set(clinicPatientIds);
-        data = data.filter((note: any) => idSet.has(sanitizeString(note?.patient_id, 120)));
+        data = data.filter((note: any) => {
+          const notePatientId = sanitizeString(note?.patient_id, 120);
+          if (idSet.has(notePatientId)) return true;
+          // Cross-clinic continuity for patient history:
+          // allow only records that are explicitly shareable with patient/family
+          return noteIsReadableByPatient(note);
+        });
       }
 
       res.json({ success: true, data });
@@ -6030,6 +6035,9 @@ async function startServer() {
         visibility: normalizedVisibility,
         type: normalizedType,
         subject: sanitizeTextField(req.body?.subject, 100) || 'Geral',
+        score: req.body?.score !== undefined ? asSafeNumber(req.body?.score, 0, 100) : undefined,
+        image: sanitizeUrl(req.body?.image),
+        image_url: sanitizeUrl(req.body?.image_url),
         original_id: sanitizeString(req.body?.original_id, 120) || undefined,
         therapist_id: sanitizeString(req.session.user.id, 120),
         user_id: sanitizeString(req.session.user.id, 120),
@@ -7004,6 +7012,9 @@ async function startServer() {
         content: req.body?.text !== undefined ? sanitizeTextField(req.body?.text, 12000) : undefined,
         visibility: updatedVisibility,
         type: updatedType,
+        score: req.body?.score !== undefined ? asSafeNumber(req.body?.score, 0, 100) : undefined,
+        image: req.body?.image !== undefined ? sanitizeUrl(req.body?.image) : undefined,
+        image_url: req.body?.image_url !== undefined ? sanitizeUrl(req.body?.image_url) : undefined,
         subject: req.body?.subject !== undefined ? (sanitizeTextField(req.body?.subject, 100) || 'Geral') : undefined,
         updated_at: new Date().toISOString()
       });
