@@ -6316,6 +6316,57 @@ async function startServer() {
       res.status(500).json({ success: false, error: String(error) });
     }
   });
+
+  app.get('/api/patient/self/protocols', checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const patientEmail = sanitizeEmail(req.session.user?.email);
+      if (!patientEmail) {
+        return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
+      }
+
+      const { data: patientLinks, error: patientLinksError } = await supabase
+        .from('patients')
+        .select('clinic_id, status, created_at')
+        .eq('email', patientEmail);
+
+      if (patientLinksError) throw patientLinksError;
+
+      const links = Array.isArray(patientLinks) ? patientLinks : [];
+      const activeClinicIds = links
+        .filter((row: any) => sanitizeString(row?.status, 40).toLowerCase() === 'active')
+        .map((row: any) => sanitizeString(row?.clinic_id, 120))
+        .filter((id: string) => isUuid(id));
+      const fallbackClinicIds = links
+        .map((row: any) => sanitizeString(row?.clinic_id, 120))
+        .filter((id: string) => isUuid(id));
+
+      const clinicIds = (activeClinicIds.length > 0 ? activeClinicIds : fallbackClinicIds);
+      if (clinicIds.length === 0) {
+        return res.json({ success: true, data: [] });
+      }
+
+      const { data: states, error: statesError } = await supabase
+        .from('clinic_state')
+        .select('clinic_id, protocols, updated_at')
+        .in('clinic_id', clinicIds);
+
+      if (statesError) throw statesError;
+
+      const orderedStates = (Array.isArray(states) ? states : [])
+        .sort((a: any, b: any) => {
+          const aTs = new Date(a?.updated_at || 0).getTime() || 0;
+          const bTs = new Date(b?.updated_at || 0).getTime() || 0;
+          return bTs - aTs;
+        });
+
+      const selectedState = orderedStates.find((s: any) => Array.isArray(s?.protocols) && s.protocols.length > 0) || orderedStates[0];
+      const protocols = Array.isArray(selectedState?.protocols) ? selectedState.protocols : [];
+      return res.json({ success: true, data: protocols });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: String(error) });
+    }
+  });
+
   app.post('/api/history', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload de relatório/evolução')) return;

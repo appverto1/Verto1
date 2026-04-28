@@ -742,6 +742,23 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'task', '/api/tasks');
   },
 
+  async getPatientSelfProtocols() {
+    try {
+      const response = await fetch('/api/patient/self/protocols', {
+        headers: await buildConditionalHeaders('/api/patient/self/protocols', 'profile'),
+        credentials: 'include',
+      });
+      const result = await safeJson(response);
+      if (!response.ok || !result?.success) {
+        return { success: false, data: [], error: result?.error || 'Falha ao carregar protocolos do paciente.' };
+      }
+      return { success: true, data: Array.isArray(result?.data) ? result.data : [] };
+    } catch (error: any) {
+      console.error('Error fetching patient self protocols:', error);
+      return { success: false, data: [], error: normalizeApiErrorMessage(error?.message || 'Falha ao carregar protocolos do paciente.') };
+    }
+  },
+
   async updateTask(taskId: string, updates: any) {
     try {
       const response = await fetchWithAuthRetry(`/api/tasks/${taskId}`, {

@@ -828,13 +828,14 @@ export default function App() {
       if (!user || user.role !== 'patient' || !user.email) return;
       setPatientContextLoaded(false);
       const identity = resolvePatientIdentityForPortal(user);
-      const [historyRes, historyByEmailRes, historyByIdRes, tasksRes, assignedTasksRes, notesRes] = await Promise.allSettled([
+      const [historyRes, historyByEmailRes, historyByIdRes, tasksRes, assignedTasksRes, notesRes, protocolsRes] = await Promise.allSettled([
         dataService.getPatientSelfHistory(),
         dataService.getHistoryByEmail(user.email),
         identity?.patientId ? dataService.getHistory(identity.patientId) : Promise.resolve({ success: true, data: [] }),
         dataService.getPatientSelfTasks(),
         dataService.getPatientSelfAssignedTasks(),
-        dataService.getNotesByEmail(user.email)
+        dataService.getNotesByEmail(user.email),
+        dataService.getPatientSelfProtocols()
       ]);
 
       const safeHistoryRes = historyRes.status === 'fulfilled' ? historyRes.value : null;
@@ -843,6 +844,7 @@ export default function App() {
       const safeTasksRes = tasksRes.status === 'fulfilled' ? tasksRes.value : null;
       const safeAssignedTasksRes = assignedTasksRes.status === 'fulfilled' ? assignedTasksRes.value : null;
       const safeNotesRes = notesRes.status === 'fulfilled' ? notesRes.value : null;
+      const safeProtocolsRes = protocolsRes.status === 'fulfilled' ? protocolsRes.value : null;
 
       const mergedHistoryRaw = [
         ...(Array.isArray(safeHistoryRes?.data) ? safeHistoryRes.data : []),
@@ -920,6 +922,7 @@ export default function App() {
       setTherapistNotes(
         normalizeAndDecorateNotes(Array.isArray(safeNotesRes?.data) ? safeNotesRes.data : [])
       );
+      setProtocols(Array.isArray(safeProtocolsRes?.data) ? safeProtocolsRes.data : []);
 
       const assignedCount = Array.isArray(safeAssignedTasksRes?.data) ? safeAssignedTasksRes.data.length : 0;
       setPatientAssignedTaskCount(assignedCount);
