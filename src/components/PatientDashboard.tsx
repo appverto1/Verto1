@@ -9,7 +9,8 @@ import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
 
 export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false }: any) => { 
-  const [selectedSnapshotDate, setSelectedSnapshotDate] = useState("all");
+  const [selectedBaseDate, setSelectedBaseDate] = useState("");
+  const [selectedCompareDate, setSelectedCompareDate] = useState("");
   const [selectedTask, setSelectedTask] = useState<any>(null); 
   const [taskEnergy, setTaskEnergy] = useState(50); 
   const [taskNote, setTaskNote] = useState(""); 
@@ -68,23 +69,41 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return Array.from(new Set(dates)).sort((a: any, b: any) => new Date(b).getTime() - new Date(a).getTime());
   }, [history]);
 
+  useEffect(() => {
+    if (!availableSnapshots.length) {
+      setSelectedBaseDate("");
+      setSelectedCompareDate("");
+      return;
+    }
+    if (!selectedBaseDate || !availableSnapshots.includes(selectedBaseDate)) {
+      setSelectedBaseDate(availableSnapshots[0]);
+      return;
+    }
+    if (!selectedCompareDate || selectedCompareDate === selectedBaseDate || !availableSnapshots.includes(selectedCompareDate)) {
+      const firstDifferent = availableSnapshots.find((d: any) => d !== selectedBaseDate) || "";
+      setSelectedCompareDate(firstDifferent);
+    }
+  }, [availableSnapshots, selectedBaseDate, selectedCompareDate]);
+
   const kidChartData = useMemo(() => {
     // Prioritize VB-MAPP for crianças, otherwise use first protocol
     const vbmapp = protocols?.find((p: any) => p.title.includes('VB-MAPP'));
     const selectedProto = vbmapp || protocols?.[0] || { data: [] };
     const labels = selectedProto.data.map((d: any) => d.name);
     
-    // Current scores (latest for each skill)
-    const currentData = selectedProto.data.map((domain: any) => {
+    const getDomainScores = (dateFilter: string | null) =>
+      selectedProto.data.map((domain: any) => {
       const skillNames = domain.skills.map((s: any) => s.name.trim().toLowerCase());
       const skillLatestScoreMap: any = {};
-      const skillLatestIdMap: any = {};
+      const skillLatestTsMap: any = {};
       
       history.forEach((h: any) => {
-        const title = h.title.trim().toLowerCase();
-        if (h.type === 'task' && h.score !== undefined && skillNames.includes(title)) {
-          if (!skillLatestIdMap[title] || h.id > skillLatestIdMap[title]) {
-            skillLatestIdMap[title] = h.id;
+        const title = String(h?.title || '').trim().toLowerCase();
+        const inDateScope = !dateFilter || String(h?.dateGroup || '') === dateFilter;
+        if (h.type === 'task' && h.score !== undefined && inDateScope && skillNames.includes(title)) {
+          const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
+          if (!skillLatestTsMap[title] || ts >= skillLatestTsMap[title]) {
+            skillLatestTsMap[title] = ts;
             
             // Use 0-1 scale for the chart
             const peiGoal = user.pei?.find((g: any) => g.name.trim().toLowerCase() === title);
@@ -101,54 +120,34 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return latestScores.length > 0 ? (latestScores.reduce((a: any, b: any) => a + b, 0) / latestScores.length) : 0;
     });
 
-    const currentDataset = {
-      label: 'Meus Super Poderes (Agora)',
-      data: currentData,
-      backgroundColor: 'rgba(5, 205, 153, 0.15)',
-      borderColor: '#05CD99',
-      borderWidth: 3,
-      pointBackgroundColor: '#05CD99',
-      pointRadius: 6
-    };
-
+    const resolvedBaseDate = selectedBaseDate || availableSnapshots[0] || "";
     const datasets: any[] = [];
-
-    if (selectedSnapshotDate !== "all") {
-      const historicalData = selectedProto.data.map((domain: any) => {
-        const skillNames = domain.skills.map((s: any) => s.name.trim().toLowerCase());
-        const skillLatestScoreMap: any = {};
-        const skillLatestIdMap: any = {};
-        
-        history.forEach((h: any) => {
-          const title = h.title.trim().toLowerCase();
-          if (h.type === 'task' && h.score !== undefined && h.dateGroup === selectedSnapshotDate && skillNames.includes(title)) {
-            if (!skillLatestIdMap[title] || h.id > skillLatestIdMap[title]) {
-              skillLatestIdMap[title] = h.id;
-              skillLatestScoreMap[title] = h.score;
-            }
-          }
-        });
-
-        const latestScores: any[] = Object.values(skillLatestScoreMap);
-        return latestScores.length > 0 ? (latestScores.reduce((a: any, b: any) => a + b, 0) / latestScores.length) : 0;
-      });
-
+    if (resolvedBaseDate) {
       datasets.push({
-        label: `Meus Poderes em ${selectedSnapshotDate}`,
-        data: historicalData,
-        backgroundColor: 'rgba(238, 93, 80, 0.15)',
-        borderColor: '#EE5D50',
-        borderWidth: 2,
-        borderDash: [5, 5],
-        pointBackgroundColor: '#EE5D50',
-        pointRadius: 4
+        label: resolvedBaseDate,
+        data: getDomainScores(resolvedBaseDate),
+        backgroundColor: 'rgba(122, 50, 252, 0.12)',
+        borderColor: '#7a32fc',
+        borderWidth: 4,
+        pointBackgroundColor: '#7a32fc',
+        pointRadius: 6
+      });
+    }
+    if (selectedCompareDate && selectedCompareDate !== resolvedBaseDate) {
+      datasets.push({
+        label: selectedCompareDate,
+        data: getDomainScores(selectedCompareDate),
+        backgroundColor: 'rgba(5, 205, 153, 0.12)',
+        borderColor: '#05CD99',
+        borderWidth: 3,
+        borderDash: [7, 5],
+        pointBackgroundColor: '#05CD99',
+        pointRadius: 5
       });
     }
 
-    datasets.push(currentDataset);
-
     return { labels, datasets };
-  }, [history, protocols, selectedSnapshotDate, user]);
+  }, [history, protocols, selectedBaseDate, selectedCompareDate, user, availableSnapshots]);
 
   const familyDiaryHistory = useMemo(() => {
     return history
@@ -459,13 +458,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     </div>
                     <div className="flex items-center justify-between mb-4 sm:mb-6 px-1 sm:px-2">
                         <h2 className="text-lg sm:text-xl font-semibold text-[#7a32fc] flex items-center gap-2"><Trophy className="text-yellow-500" size={20}/> Nível de Herói</h2>
-                        <div className="relative w-28 sm:w-32">
+                        <div className="relative w-36 sm:w-40">
                             <select 
                                 className="w-full bg-blue-50 border border-blue-100 text-[9px] sm:text-[10px] font-semibold text-[#7a32fc] px-2 sm:px-3 py-1.5 sm:py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
-                                value={selectedSnapshotDate}
-                                onChange={(e) => setSelectedSnapshotDate(e.target.value)}
+                                value={selectedBaseDate}
+                                onChange={(e) => setSelectedBaseDate(e.target.value)}
                             >
-                                <option value="all">Hoje</option>
                                 {availableSnapshots.map((date: any) => (
                                     <option key={date} value={date}>{date}</option>
                                 ))}
@@ -473,10 +471,27 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 text-[#7a32fc] pointer-events-none" size={10} />
                         </div>
                     </div>
-                    <div className="w-full min-h-[300px] sm:min-h-[350px]">
-                        <EvolutionBarChart chartData={kidChartData} />
+                    <div className="mb-4 sm:mb-5 px-1 sm:px-2">
+                      <div className="relative w-full sm:w-56">
+                        <select
+                          className="w-full bg-emerald-50 border border-emerald-100 text-[10px] sm:text-[11px] font-semibold text-emerald-700 px-3 py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
+                          value={selectedCompareDate}
+                          onChange={(e) => setSelectedCompareDate(e.target.value)}
+                        >
+                          <option value="">Sem comparação</option>
+                          {availableSnapshots
+                            .filter((date: any) => date !== selectedBaseDate)
+                            .map((date: any) => (
+                              <option key={`compare-${date}`} value={date}>{date}</option>
+                            ))}
+                        </select>
+                        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 text-emerald-600 pointer-events-none" size={10} />
+                      </div>
                     </div>
-                    <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-widest text-center mt-2">Arraste lateralmente para melhor visualização</p>
+                    <div className="w-full min-h-[300px] sm:min-h-[350px]">
+                        <EvolutionLineChart chartData={kidChartData} maxScore={1} />
+                    </div>
+                    <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-widest text-center mt-2">Filtro por datas para comparação do progresso</p>
                 </div>
 
                 <div className="bg-white p-4 sm:p-6 rounded-[28px] shadow-lg border border-blue-100 mb-6">
