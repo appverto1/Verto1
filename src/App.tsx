@@ -827,21 +827,42 @@ export default function App() {
     const fetchPatientScopedData = async () => {
       if (!user || user.role !== 'patient' || !user.email) return;
       setPatientContextLoaded(false);
-      const [historyRes, tasksRes, assignedTasksRes, notesRes] = await Promise.allSettled([
+      const [historyRes, historyByEmailRes, tasksRes, assignedTasksRes, notesRes] = await Promise.allSettled([
         dataService.getPatientSelfHistory(),
+        dataService.getHistoryByEmail(user.email),
         dataService.getPatientSelfTasks(),
         dataService.getPatientSelfAssignedTasks(),
         dataService.getNotesByEmail(user.email)
       ]);
 
       const safeHistoryRes = historyRes.status === 'fulfilled' ? historyRes.value : null;
+      const safeHistoryByEmailRes = historyByEmailRes.status === 'fulfilled' ? historyByEmailRes.value : null;
       const safeTasksRes = tasksRes.status === 'fulfilled' ? tasksRes.value : null;
       const safeAssignedTasksRes = assignedTasksRes.status === 'fulfilled' ? assignedTasksRes.value : null;
       const safeNotesRes = notesRes.status === 'fulfilled' ? notesRes.value : null;
 
+      const mergedHistoryRaw = [
+        ...(Array.isArray(safeHistoryRes?.data) ? safeHistoryRes.data : []),
+        ...(Array.isArray(safeHistoryByEmailRes?.data) ? safeHistoryByEmailRes.data : [])
+      ];
+
+      const historySeen = new Set<string>();
+      const mergedHistory = mergedHistoryRaw.filter((h: any) => {
+        const key = String(h?.id || '') || [
+          String(h?.patient_id || h?.patientId || user.id || ''),
+          String(h?.type || ''),
+          String(h?.title || ''),
+          String(h?.created_at || h?.date || ''),
+          String(h?.score ?? '')
+        ].join('|');
+        if (!key || historySeen.has(key)) return false;
+        historySeen.add(key);
+        return true;
+      });
+
       setHistory(
-        Array.isArray(safeHistoryRes?.data)
-          ? safeHistoryRes.data.map((h: any) => ({
+        Array.isArray(mergedHistory)
+          ? mergedHistory.map((h: any) => ({
               ...h,
               patientId: h?.patient_id || h?.patientId || user.id,
               time: h?.created_at

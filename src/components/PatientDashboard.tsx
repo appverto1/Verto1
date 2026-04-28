@@ -120,7 +120,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
     const historyTaskDomainsMap = new Map<string, Set<string>>();
     history.forEach((h: any) => {
-      if (String(h?.type || '').toLowerCase() !== 'task') return;
+      const type = String(h?.type || '').toLowerCase();
+      if (type === 'family_note' || type === 'photo') return;
       const score = Number(h?.score);
       if (!Number.isFinite(score)) return;
       const rawDomain = String(
@@ -158,7 +159,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         const rawDomain = String(h?.domain || h?.domainName || h?.task_data?.domain || h?.metadata?.domain || '').trim();
         const matchesBySkill = skillNames.includes(title);
         const matchesByDomain = rawDomain && rawDomain.toLowerCase() === String(domain?.name || '').toLowerCase();
-        if (h.type === 'task' && h.score !== undefined && inDateScope && (matchesBySkill || matchesByDomain)) {
+        const rawScore = Number(h?.score);
+        const type = String(h?.type || '').toLowerCase();
+        const isScoredClinicalEvent = Number.isFinite(rawScore) && type !== 'family_note' && type !== 'photo';
+        if (isScoredClinicalEvent && inDateScope && (matchesBySkill || matchesByDomain)) {
           const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
           const skillKey = matchesBySkill ? title : `__domain__${String(domain?.name || '').toLowerCase()}`;
           if (!skillLatestTsMap[skillKey] || ts >= skillLatestTsMap[skillKey]) {
@@ -169,7 +173,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             if (peiGoal?.status === 'completed') {
               skillLatestScoreMap[skillKey] = 1;
             } else {
-              skillLatestScoreMap[skillKey] = Number(h.score);
+              skillLatestScoreMap[skillKey] = rawScore;
             }
           }
         }
