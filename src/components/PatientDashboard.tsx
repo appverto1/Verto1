@@ -513,36 +513,44 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                         <p className="text-lg font-extrabold text-green-700">{kidsGamification.weekPhotos}</p>
                       </div>
                     </div>
-                    <div className="flex items-center justify-between mb-4 sm:mb-6 px-1 sm:px-2">
-                        <h2 className="text-lg sm:text-xl font-semibold text-[#7a32fc] flex items-center gap-2"><Trophy className="text-yellow-500" size={20}/> Nível de Herói</h2>
-                        <div className="relative w-36 sm:w-40">
-                            <select 
-                                className="w-full bg-blue-50 border border-blue-100 text-[9px] sm:text-[10px] font-semibold text-[#7a32fc] px-2 sm:px-3 py-1.5 sm:py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
-                                value={selectedBaseDate}
-                                onChange={(e) => setSelectedBaseDate(e.target.value)}
-                            >
-                                {availableSnapshots.map((date: any) => (
-                                    <option key={date} value={date}>{date}</option>
-                                ))}
-                            </select>
-                            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 text-[#7a32fc] pointer-events-none" size={10} />
-                        </div>
-                    </div>
                     <div className="mb-4 sm:mb-5 px-1 sm:px-2">
-                      <div className="relative w-full sm:w-56">
-                        <select
-                          className="w-full bg-emerald-50 border border-emerald-100 text-[10px] sm:text-[11px] font-semibold text-emerald-700 px-3 py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
-                          value={selectedCompareDate}
-                          onChange={(e) => setSelectedCompareDate(e.target.value)}
-                        >
-                          <option value="">Sem comparação</option>
-                          {availableSnapshots
-                            .filter((date: any) => date !== selectedBaseDate)
-                            .map((date: any) => (
-                              <option key={`compare-${date}`} value={date}>{date}</option>
+                      <h2 className="text-lg sm:text-xl font-semibold text-[#7a32fc] flex items-center justify-center gap-2 text-center">
+                        <Trophy className="text-yellow-500" size={20}/> Nível de Herói
+                      </h2>
+                    </div>
+                    <div className="mb-4 sm:mb-5 px-1 sm:px-2 grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 items-end">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider font-bold text-blue-500 mb-1.5">Data Atual</p>
+                        <div className="relative">
+                          <select 
+                            className="w-full bg-blue-50 border border-blue-100 text-[10px] sm:text-[11px] font-semibold text-[#7a32fc] px-3 py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
+                            value={selectedBaseDate}
+                            onChange={(e) => setSelectedBaseDate(e.target.value)}
+                          >
+                            {availableSnapshots.map((date: any) => (
+                              <option key={date} value={date}>{date}</option>
                             ))}
-                        </select>
-                        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 text-emerald-600 pointer-events-none" size={10} />
+                          </select>
+                          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 text-[#7a32fc] pointer-events-none" size={10} />
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider font-bold text-emerald-600 mb-1.5">Data Comparação</p>
+                        <div className="relative">
+                          <select
+                            className="w-full bg-emerald-50 border border-emerald-100 text-[10px] sm:text-[11px] font-semibold text-emerald-700 px-3 py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
+                            value={selectedCompareDate}
+                            onChange={(e) => setSelectedCompareDate(e.target.value)}
+                          >
+                            <option value="">Sem comparação</option>
+                            {availableSnapshots
+                              .filter((date: any) => date !== selectedBaseDate)
+                              .map((date: any) => (
+                                <option key={`compare-${date}`} value={date}>{date}</option>
+                              ))}
+                          </select>
+                          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 text-emerald-600 pointer-events-none" size={10} />
+                        </div>
                       </div>
                     </div>
                     <div className="w-full min-h-[300px] sm:min-h-[350px]">
