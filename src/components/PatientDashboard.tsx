@@ -65,9 +65,20 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const moodOptions = [ { value: 10, emoji: "😫", label: "Esgotado", color: "bg-red-100 border-red-200 hover:bg-red-200" }, { value: 30, emoji: "😕", label: "Baixo", color: "bg-orange-100 border-orange-200 hover:bg-orange-200" }, { value: 50, emoji: "😐", label: "Normal", color: "bg-yellow-100 border-yellow-200 hover:bg-yellow-200" }, { value: 70, emoji: "🙂", label: "Bem", color: "bg-blue-100 border-blue-200 hover:bg-blue-200" }, { value: 90, emoji: "🤩", label: "Ótimo!", color: "bg-green-100 border-green-200 hover:bg-green-200" } ];
 
+  const getSnapshotKey = (item: any) => {
+    const raw = String(item?.dateGroup || '').trim();
+    if (raw && raw !== 'Hoje' && raw !== 'Ontem') return raw;
+    const dt = new Date(item?.created_at || item?.date || 0);
+    if (Number.isNaN(dt.getTime())) return '';
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, '0');
+    const d = String(dt.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
   const availableSnapshots = useMemo(() => {
-    const dates = history.filter((h: any) => h.dateGroup).map((h: any) => h.dateGroup);
-    return Array.from(new Set(dates)).sort((a: any, b: any) => new Date(b).getTime() - new Date(a).getTime());
+    const dates = history.map((h: any) => getSnapshotKey(h)).filter(Boolean);
+    return Array.from(new Set(dates)).sort((a: any, b: any) => new Date(String(b)).getTime() - new Date(String(a)).getTime());
   }, [history]);
 
   useEffect(() => {
@@ -100,7 +111,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       
       history.forEach((h: any) => {
         const title = String(h?.title || '').trim().toLowerCase();
-        const inDateScope = !dateFilter || String(h?.dateGroup || '') === dateFilter;
+        const inDateScope = !dateFilter || getSnapshotKey(h) === dateFilter;
         if (h.type === 'task' && h.score !== undefined && inDateScope && skillNames.includes(title)) {
           const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
           if (!skillLatestTsMap[title] || ts >= skillLatestTsMap[title]) {
@@ -127,6 +138,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       datasets.push({
         label: resolvedBaseDate,
         data: getDomainScores(resolvedBaseDate),
+        backgroundColor: 'rgba(122, 50, 252, 0.12)',
+        borderColor: '#7a32fc',
+        borderWidth: 4,
+        pointBackgroundColor: '#7a32fc',
+        pointRadius: 6
+      });
+    } else {
+      datasets.push({
+        label: 'Atual',
+        data: getDomainScores(null),
         backgroundColor: 'rgba(122, 50, 252, 0.12)',
         borderColor: '#7a32fc',
         borderWidth: 4,
