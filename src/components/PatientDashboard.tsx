@@ -101,10 +101,41 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     // Prioritize VB-MAPP for crianças, otherwise use first protocol
     const vbmapp = protocols?.find((p: any) => p.title.includes('VB-MAPP'));
     const selectedProto = vbmapp || protocols?.[0] || { data: [] };
-    const labels = selectedProto.data.map((d: any) => d.name);
+    const protocolDomains = Array.isArray(selectedProto?.data)
+      ? selectedProto.data.map((d: any) => ({
+          name: String(d?.name || '').trim(),
+          skills: Array.isArray(d?.skills) ? d.skills : []
+        })).filter((d: any) => d.name)
+      : [];
+
+    const historyTaskDomainsMap = new Map<string, Set<string>>();
+    history.forEach((h: any) => {
+      if (String(h?.type || '').toLowerCase() !== 'task') return;
+      const score = Number(h?.score);
+      if (!Number.isFinite(score)) return;
+      const rawDomain = String(
+        h?.domain ||
+        h?.domainName ||
+        h?.task_data?.domain ||
+        h?.metadata?.domain ||
+        'Geral'
+      ).trim();
+      const domainName = rawDomain || 'Geral';
+      const rawSkill = String(h?.title || h?.taskTitle || h?.task_data?.title || '').trim();
+      if (!historyTaskDomainsMap.has(domainName)) historyTaskDomainsMap.set(domainName, new Set<string>());
+      if (rawSkill) historyTaskDomainsMap.get(domainName)!.add(rawSkill);
+    });
+
+    const fallbackDomains = Array.from(historyTaskDomainsMap.entries()).map(([name, skillsSet]) => ({
+      name,
+      skills: Array.from(skillsSet).map((s) => ({ name: s }))
+    }));
+
+    const effectiveDomains = protocolDomains.length > 0 ? protocolDomains : fallbackDomains;
+    const labels = effectiveDomains.map((d: any) => d.name);
     
     const getDomainScores = (dateFilter: string | null) =>
-      selectedProto.data.map((domain: any) => {
+      effectiveDomains.map((domain: any) => {
       const skillNames = domain.skills.map((s: any) => s.name.trim().toLowerCase());
       const skillLatestScoreMap: any = {};
       const skillLatestTsMap: any = {};
@@ -112,17 +143,21 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       history.forEach((h: any) => {
         const title = String(h?.title || '').trim().toLowerCase();
         const inDateScope = !dateFilter || getSnapshotKey(h) === dateFilter;
-        if (h.type === 'task' && h.score !== undefined && inDateScope && skillNames.includes(title)) {
+        const rawDomain = String(h?.domain || h?.domainName || h?.task_data?.domain || h?.metadata?.domain || '').trim();
+        const matchesBySkill = skillNames.includes(title);
+        const matchesByDomain = rawDomain && rawDomain.toLowerCase() === String(domain?.name || '').toLowerCase();
+        if (h.type === 'task' && h.score !== undefined && inDateScope && (matchesBySkill || matchesByDomain)) {
           const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
-          if (!skillLatestTsMap[title] || ts >= skillLatestTsMap[title]) {
-            skillLatestTsMap[title] = ts;
+          const skillKey = matchesBySkill ? title : `__domain__${String(domain?.name || '').toLowerCase()}`;
+          if (!skillLatestTsMap[skillKey] || ts >= skillLatestTsMap[skillKey]) {
+            skillLatestTsMap[skillKey] = ts;
             
             // Use 0-1 scale for the chart
             const peiGoal = user.pei?.find((g: any) => g.name.trim().toLowerCase() === title);
             if (peiGoal?.status === 'completed') {
-              skillLatestScoreMap[title] = 1;
+              skillLatestScoreMap[skillKey] = 1;
             } else {
-              skillLatestScoreMap[title] = h.score;
+              skillLatestScoreMap[skillKey] = Number(h.score);
             }
           }
         }
