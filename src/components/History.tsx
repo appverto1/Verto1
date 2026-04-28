@@ -76,7 +76,7 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
 
   const isFamilyEntry = item.type === 'family_note' || item.type === 'photo';
   const hasStarMarker = /\u2b50|⭐/.test(String(item?.subject || ''));
-  const isMilestoneAwarded = Number(item?.score ?? 0) >= 1 || hasStarMarker;
+  const isMilestoneAwarded = Boolean(item?.milestoneAwarded) || Number(item?.score ?? 0) >= 1 || hasStarMarker;
   const handleToggleMilestone = () => {
     emitEvaluate({
       score: isMilestoneAwarded ? 0 : 1,

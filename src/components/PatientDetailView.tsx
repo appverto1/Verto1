@@ -760,6 +760,24 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const baseHistory = Array.isArray(history) ? history : [];
     if (!isKidsProfile) return baseHistory;
 
+    const milestoneBySource = new Map<string, { awarded: boolean; timestamp: number }>();
+    (Array.isArray(notes) ? notes : []).forEach((n: any) => {
+      const subject = String(n?.subject || '').trim().toLowerCase();
+      const text = String(n?.text || '').trim();
+      const isMilestoneEvent = subject === 'milestone_event' || text.startsWith('MILESTONE_EVENT|');
+      if (!isMilestoneEvent) return;
+      const sourceMatch = text.match(/source=([^|]+)/i);
+      const awardedMatch = text.match(/awarded=([01])/i);
+      const sourceRef = String(sourceMatch?.[1] || '').trim();
+      if (!sourceRef) return;
+      const awarded = String(awardedMatch?.[1] || '0') === '1';
+      const ts = new Date(n?.created_at || n?.date || 0).getTime() || 0;
+      const current = milestoneBySource.get(sourceRef);
+      if (!current || ts >= current.timestamp) {
+        milestoneBySource.set(sourceRef, { awarded, timestamp: ts });
+      }
+    });
+
     const familyNotes = (Array.isArray(notes) ? notes : [])
       .filter((n: any) => {
         const visibility = String(n?.visibility || n?.type || '').toLowerCase();
@@ -786,6 +804,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           : dateObj.toLocaleDateString('pt-BR');
         return {
           id: `note-family-${n?.id}`,
+          sourceRef: `note-family-${n?.id}`,
           patientId: n?.patientId ?? n?.patient_id ?? patient?.id,
           type: 'family_note',
           title: 'Registro da Família',
@@ -799,7 +818,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             n?.photoUrl ||
             null,
           icon: '🏠',
-          score: hasStarMarker ? 1 : (Number.isFinite(Number(n?.score)) ? Number(n.score) : 0),
+          score:
+            milestoneBySource.get(`note-family-${n?.id}`)?.awarded
+              ? 1
+              : hasStarMarker
+                ? 1
+                : (Number.isFinite(Number(n?.score)) ? Number(n.score) : 0),
+          milestoneAwarded: Boolean(milestoneBySource.get(`note-family-${n?.id}`)?.awarded),
           dateGroup,
           date: createdAt,
           time: Number.isNaN(dateObj.getTime())
@@ -830,10 +855,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         // Preserve family enrichment when duplicated with history rows
         image: current?.image || entry?.image || null,
         subject: current?.subject || entry?.subject,
-        score: Math.max(
-          Number(current?.score ?? 0) || 0,
-          Number(entry?.score ?? 0) || 0
-        ),
+        score: Math.max(Number(current?.score ?? 0) || 0, Number(entry?.score ?? 0) || 0),
+        milestoneAwarded:
+          Boolean(current?.milestoneAwarded) ||
+          Boolean(entry?.milestoneAwarded) ||
+          Boolean(milestoneBySource.get(String(current?.sourceRef || current?.id || ''))?.awarded),
         type:
           current?.type === 'family_note' || current?.type === 'photo'
             ? current?.type
@@ -842,7 +868,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       byKey.set(key, merged);
     });
 
-    return Array.from(byKey.values()).sort((a: any, b: any) => {
+    const mergedValues = Array.from(byKey.values()).map((item: any) => {
+      const sourceRef = String(item?.sourceRef || item?.id || '');
+      const eventAwarded = Boolean(milestoneBySource.get(sourceRef)?.awarded);
+      const hasMarker = /\[STAR\]/i.test(String(item?.note || item?.text || '')) || /\u2b50|⭐/.test(String(item?.subject || ''));
+      return {
+        ...item,
+        milestoneAwarded: Boolean(item?.milestoneAwarded) || eventAwarded,
+        score: (Boolean(item?.milestoneAwarded) || eventAwarded || hasMarker || Number(item?.score ?? 0) >= 1) ? 1 : Number(item?.score ?? 0)
+      };
+    });
+
+    return mergedValues.sort((a: any, b: any) => {
       const aTs = new Date(a?.date || a?.created_at || 0).getTime();
       const bTs = new Date(b?.date || b?.created_at || 0).getTime();
       return bTs - aTs;

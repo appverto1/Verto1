@@ -1104,6 +1104,21 @@ export default function App() {
       return starred ? `${STAR_MARKER} ${cleaned}`.trim() : cleaned;
     };
     const rawId = String(id || '');
+    const persistMilestoneEvent = async (payload: { patientId?: string; patientEmail?: string | null; sourceRef: string; awarded: boolean }) => {
+      try {
+        await dataService.addNote({
+          id: crypto.randomUUID(),
+          patient_id: String(payload.patientId || '').trim(),
+          patient_email: payload.patientEmail || null,
+          text: `MILESTONE_EVENT|source=${payload.sourceRef}|awarded=${payload.awarded ? 1 : 0}`,
+          visibility: 'family',
+          subject: 'milestone_event',
+          type: 'family_note'
+        });
+      } catch (error) {
+        console.error('Falha ao persistir evento de marco:', error);
+      }
+    };
     if (rawId.startsWith('note-family-')) {
       const noteId = rawId.replace('note-family-', '');
       const starred = Number(score || 0) >= 1;
@@ -1124,13 +1139,11 @@ export default function App() {
         )
       );
       try {
-        await dataService.updateNote(String(noteId), {
-          score,
-          visibility: 'family',
-          type: 'family_note',
-          subject: starred ? '⭐ Família' : 'Família',
-          patient_id: String(matchingNote?.patientId || matchingNote?.patient_id || ''),
-          text: applyStarMarker(String(matchingNote?.text || matchingNote?.note || ''), starred)
+        await persistMilestoneEvent({
+          patientId: String(matchingNote?.patientId || matchingNote?.patient_id || ''),
+          patientEmail: matchingNote?.patient_email || null,
+          sourceRef: rawId,
+          awarded: starred
         });
       } catch (error) {
         console.error('Falha ao persistir estrela em anotação de família:', error);
@@ -1171,28 +1184,12 @@ export default function App() {
       }
 
       try {
-        // Try history first when ID is persisted; fallback to notes for legacy/temp IDs.
-        let historyPersisted = false;
-        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(rawId)) {
-          const historyResult = await dataService.updateHistoryItem(rawId, {
-            score,
-            note: evalComment || item?.note || '',
-            title: item?.title || 'Registro da Família',
-            patient_id: patientId || undefined
-          });
-          historyPersisted = Boolean(historyResult?.success);
-        }
-
-        if (!historyPersisted && matchingNote?.id) {
-          await dataService.updateNote(String(matchingNote.id), {
-            score,
-            visibility: matchingNote?.visibility || 'family',
-            type: matchingNote?.type || 'family_note',
-            subject: starred ? '⭐ Família' : 'Família',
-            patient_id: String(item?.patientId || item?.patient_id || ''),
-            text: applyStarMarker(String(matchingNote?.text || item?.note || item?.text || ''), starred)
-          });
-        }
+        await persistMilestoneEvent({
+          patientId: String(item?.patientId || item?.patient_id || ''),
+          patientEmail: matchingNote?.patient_email || allPatients.find((p: any) => String(p.id) === String(item?.patientId || item?.patient_id || ''))?.email || null,
+          sourceRef: rawId,
+          awarded: starred
+        });
       } catch (error) {
         console.error('Falha ao persistir estrelinha de registro da família:', error);
       }
