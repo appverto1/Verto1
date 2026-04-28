@@ -1118,6 +1118,52 @@ export default function App() {
     }
 
     const item = history.find(i => i.id === id);
+    const isFamilyHistory = item && (item.type === 'family_note' || item.type === 'photo');
+    if (isFamilyHistory) {
+      const patientId = String(item?.patientId || item?.patient_id || '').trim();
+      const normalizedItemText = String(item?.note || item?.text || '').trim().toLowerCase();
+      const matchingNote = (Array.isArray(therapistNotes) ? therapistNotes : []).find((n: any) => {
+        const samePatient = String(n?.patientId || n?.patient_id || '').trim() === patientId;
+        const sameFamilyType = ['family', 'patient', 'shared'].includes(String(n?.visibility || '').toLowerCase()) ||
+          ['family_note', 'photo', 'shared'].includes(String(n?.type || '').toLowerCase());
+        const normalizedNoteText = String(n?.text || n?.note || '').trim().toLowerCase();
+        return samePatient && sameFamilyType && normalizedItemText && normalizedNoteText === normalizedItemText;
+      });
+
+      // Immediate UI update
+      setHistory(prev => prev.map((h: any) => (String(h.id) === rawId ? { ...h, score } : h)));
+      if (matchingNote) {
+        setTherapistNotes(prev =>
+          prev.map((n: any) => (String(n.id) === String(matchingNote.id) ? { ...n, score } : n))
+        );
+      }
+
+      try {
+        // Try history first when ID is persisted; fallback to notes for legacy/temp IDs.
+        let historyPersisted = false;
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(rawId)) {
+          const historyResult = await dataService.updateHistoryItem(rawId, {
+            score,
+            note: evalComment || item?.note || '',
+            title: item?.title || 'Registro da Família',
+            patient_id: patientId || undefined
+          });
+          historyPersisted = Boolean(historyResult?.success);
+        }
+
+        if (!historyPersisted && matchingNote?.id) {
+          await dataService.updateNote(String(matchingNote.id), {
+            score,
+            visibility: matchingNote?.visibility || 'family',
+            type: matchingNote?.type || 'family_note'
+          });
+        }
+      } catch (error) {
+        console.error('Falha ao persistir estrelinha de registro da família:', error);
+      }
+      return;
+    }
+
     if (item) {
       const updatedItem = { ...item, score, evalComment: evalComment || '' };
       const noteText = `📝 ATUALIZAÇÃO DE REGISTRO\nAtividade: ${updatedItem.title}\nPontuação: ${updatedItem.score}\nObs: ${updatedItem.evalComment || "Nenhuma observação."}`;
