@@ -11,6 +11,7 @@ import { SecureImage } from './SecureMedia';
 export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false }: any) => { 
   const [selectedBaseDate, setSelectedBaseDate] = useState("");
   const [selectedCompareDate, setSelectedCompareDate] = useState("");
+  const [selectedSnapshotDate, setSelectedSnapshotDate] = useState("all");
   const [selectedTask, setSelectedTask] = useState<any>(null); 
   const [taskEnergy, setTaskEnergy] = useState(50); 
   const [taskNote, setTaskNote] = useState(""); 
