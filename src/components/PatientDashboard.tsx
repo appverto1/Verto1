@@ -51,7 +51,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const isKidsProfile =
     userType === 'kids_tea' ||
     (!hasExplicitPatientType && ((userAge !== null && userAge <= 12) || user.anamnesisData?.formType === 'child'));
-  const isConventionalAdult = userType === 'conventional' && !isKidsProfile;
+  const isConventionalAdult = (userType === 'conventional' || userType === 'adult_conventional') && !isKidsProfile;
   const readOnlyNotice = "Você não possui um tratamento ativo no momento. Entre em contato com sua clínica para retomar o acompanhamento.";
 
   const conventionalMoodTags = [
@@ -806,7 +806,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (isReadOnlyMode) return;
     if (selectedMood) { 
       setShowMoodSuccess(true); 
-      setTimeout(() => { onMoodCheckin(selectedMood.value, moodNote, selectedMood.emoji, selectedTag); setIsMoodModalOpen(false); setShowMoodSuccess(false); setMoodNote(""); setSelectedMood(null); setSelectedTag(null); setDailyCheckinDone(true); }, 2000); 
+      const moodValue = isConventionalAdult ? null : selectedMood.value;
+      setTimeout(() => { onMoodCheckin(moodValue, moodNote, selectedMood.emoji, selectedTag); setIsMoodModalOpen(false); setShowMoodSuccess(false); setMoodNote(""); setSelectedMood(null); setSelectedTag(null); setDailyCheckinDone(true); }, 2000); 
     } 
   }; 
   const openTaskModal = (task: any) => {
@@ -836,7 +837,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         ? interventionDetails
         : taskNote;
       setTimeout(() => { 
-        onCompleteTask(selectedTask, taskEnergy, finalNote); 
+        onCompleteTask(selectedTask, isConventionalAdult ? null : taskEnergy, finalNote); 
         setShowTaskSuccess(false); 
         setSelectedTask(null); 
         setInterventionResponse("");
@@ -936,7 +937,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       )}
       {!dailyCheckinDone ? ( 
         <div className="mb-8 animate-slide-up"> 
-          <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2 px-1"> {user.type === 'conventional' ? <Smile size={16} /> : <BatteryCharging size={16} />} {user.type === 'conventional' ? 'Como você se sente?' : 'Como se sente agora?'} </h2> 
+          <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2 px-1"> {isConventionalAdult ? <Smile size={16} /> : <BatteryCharging size={16} />} {isConventionalAdult ? 'Como está se sentindo?' : 'Como se sente agora?'} </h2> 
           <div className="flex overflow-x-auto pb-8 pt-4 -mx-6 px-6 gap-4 snap-x snap-mandatory no-scrollbar items-center"> 
             {moodOptions.map((mood) => { 
               const isHovered = hoveredMood === mood.value; 
@@ -945,7 +946,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 <button key={mood.value} disabled={isReadOnlyMode} onClick={() => handleEmojiClick(mood)} onMouseEnter={() => setHoveredMood(mood.value)} onMouseLeave={() => setHoveredMood(null)} className={` snap-center shrink-0 w-40 h-56 sm:w-48 sm:h-64 rounded-[32px] flex flex-col items-center p-6 transition-all duration-500 border-4 shadow-lg ${mood.color} ${isHovered ? 'scale-110 -translate-y-4 shadow-2xl z-10 rotate-1' : 'scale-100'} ${isDimmed ? 'opacity-50 scale-95 blur-[1px]' : 'opacity-100'} group relative overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed`} > 
                   <div className="absolute top-[-20%] right-[-20%] w-24 h-24 rounded-full bg-white/20 blur-xl"></div> 
                   <div className="absolute bottom-[-10%] left-[-10%] w-20 h-20 rounded-full bg-white/30 blur-lg"></div> 
-                  <div className="w-full flex justify-between items-center opacity-60 group-hover:opacity-100 transition-opacity z-10"> {user.type !== 'conventional' && <React.Fragment><BatteryFull size={20} className="text-gray-700" /> <span className="text-xs font-semibold text-gray-700">{mood.value}%</span></React.Fragment>} </div> 
+                  <div className="w-full flex justify-between items-center opacity-60 group-hover:opacity-100 transition-opacity z-10"> {!isConventionalAdult && <React.Fragment><BatteryFull size={20} className="text-gray-700" /> <span className="text-xs font-semibold text-gray-700">{mood.value}%</span></React.Fragment>} </div> 
                   <span className="text-7xl sm:text-8xl filter drop-shadow-md transform transition-transform duration-500 group-hover:scale-125 group-hover:rotate-12 z-10 my-auto"> {mood.emoji} </span> 
                 </button> 
               ); 
@@ -958,7 +959,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         <div className="bg-white rounded-[32px] p-6 shadow-sm border border-gray-100 mb-6 animate-fade-in flex items-center justify-between"> 
           <div className="flex items-center gap-4"> 
             <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center text-green-600"> <Check size={24} /> </div> 
-            <div> <h3 className="font-semibold text-gray-800 tracking-tight">{user.type === 'conventional' ? 'Sentimento Registrado!' : 'Energia Registrada!'}</h3> <p className="text-xs text-gray-400">Obrigado por compartilhar.</p> </div> 
+            <div> <h3 className="font-semibold text-gray-800 tracking-tight">{isConventionalAdult ? 'Sentimento Registrado!' : 'Energia Registrada!'}</h3> <p className="text-xs text-gray-400">Obrigado por compartilhar.</p> </div> 
           </div> 
           <button disabled={isReadOnlyMode} onClick={() => setDailyCheckinDone(false)} className="text-[10px] font-semibold text-[#7a32fc] bg-[#7a32fc]/10 px-4 py-2 rounded-xl hover:bg-[#7a32fc]/20 transition-colors flex items-center gap-2 uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed" > <RefreshCcw size={14} /> Ajustar </button> 
         </div> 
@@ -1055,7 +1056,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-pop relative"> 
             <button onClick={closeMoodModal} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button> 
             <div className="text-center mb-4"> 
-              {user.type !== 'conventional' && (
+              {!isConventionalAdult && (
                 <div className="inline-flex items-center gap-2 bg-gray-100 px-4 py-1.5 rounded-full mb-4"> <BatteryFull size={16} className="text-gray-500" /> <span className="text-sm font-semibold text-gray-600">Energia registrada: <span className="text-[#7a32fc]">{selectedMood.value}%</span></span> </div> 
               )}
               <div className="text-6xl mb-2 animate-bounce-slight">{selectedMood.emoji}</div> 
@@ -1084,7 +1085,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 {selectedTask.type === 'intervention'
                   ? 'Instruções da tarefa de intervenção'
                   : isConventionalAdult
-                    ? 'Como foi realizar esta atividade em nível de esforço?'
+                    ? 'Como foi fazer essa tarefa?'
                     : 'Como foi realizar esta atividade?'}
               </p> 
             </div> 
@@ -1153,11 +1154,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
                     {isConventionalAdult ? (
                       <button
-                        onClick={handleEnergyCommit}
-                        disabled={!interventionResponse.trim()}
-                        className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={handleConfirmTask}
+                        disabled={showTaskSuccess || !interventionResponse.trim()}
+                        className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showTaskSuccess ? 'bg-green-500 text-white' : 'bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'}`}
                       >
-                        Concluir escrita e informar esforço
+                        {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Enviar Resposta</React.Fragment>}
                       </button>
                     ) : (
                       <button 
@@ -1171,47 +1172,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                   </React.Fragment>
                 )}
 
-                {isConventionalAdult && taskStep === 2 && (
-                  <div className="space-y-4">
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Nível de esforço</span>
-                        <div className="flex items-center gap-2 text-sm font-semibold text-[#7a32fc]">
-                          <span>{taskEnergy < 50 ? '😟' : '🙂'}</span>
-                          <span>{taskEnergy}%</span>
-                        </div>
-                      </div>
-                      <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
-                        <div className="h-3 rounded-full bg-gradient-to-r from-[#EE5D50] via-[#FFB547] to-[#05CD99]" style={{ width: `${taskEnergy}%` }}></div>
-                      </div>
-                      <div className="flex justify-between text-[10px] text-gray-400 font-semibold mt-1">
-                        <span>Mais difícil 😟</span>
-                        <span>Mais fácil 🙂</span>
-                      </div>
-                    </div>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      value={taskEnergy}
-                      onChange={(e) => setTaskEnergy(Number(e.target.value))}
-                      className="w-full"
-                    />
-                    <textarea
-                      className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none font-medium"
-                      placeholder="Quer falar mais sobre isso?"
-                      value={taskNote}
-                      onChange={(e) => setTaskNote(e.target.value)}
-                    ></textarea>
-                    <button
-                      onClick={handleConfirmTask}
-                      disabled={showTaskSuccess}
-                      className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-500 text-white shadow-green-500/30 hover:opacity-90"
-                    >
-                      {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir</React.Fragment>}
-                    </button>
-                  </div>
-                )}
               </div>
             ) : taskStep === 1 ? ( 
               <div className="animate-slide-up"> 
@@ -1274,30 +1234,20 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                   <React.Fragment>
                     {isConventionalAdult ? (
                       <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                          <span className="font-semibold text-gray-700">Esforço</span>
-                          <div className="flex items-center gap-2 bg-white px-3 py-1 rounded-full shadow-sm">
-                            <span className="text-xl">{taskEnergy < 50 ? '😟' : '🙂'}</span>
-                            <span className="text-lg font-semibold text-[#7a32fc]">{taskEnergy}%</span>
-                          </div>
-                        </div>
-                        <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
-                          <div className="h-3 rounded-full bg-gradient-to-r from-[#EE5D50] via-[#FFB547] to-[#05CD99]" style={{ width: `${taskEnergy}%` }}></div>
-                        </div>
-                        <input
-                          type="range"
-                          min="0"
-                          max="100"
-                          value={taskEnergy}
-                          onChange={(e) => setTaskEnergy(Number(e.target.value))}
-                          onMouseUp={handleEnergyCommit}
-                          onTouchEnd={handleEnergyCommit}
-                          className="w-full"
-                        />
-                        <div className="flex justify-between text-[10px] text-gray-400 font-semibold">
-                          <span>Mais difícil 😟</span>
-                          <span>Mais fácil 🙂</span>
-                        </div>
+                        <textarea
+                          className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none mb-2 font-medium"
+                          placeholder="Como foi fazer essa tarefa?"
+                          value={taskNote}
+                          onChange={(e) => setTaskNote(e.target.value)}
+                          autoFocus
+                        ></textarea>
+                        <button
+                          onClick={handleConfirmTask}
+                          disabled={showTaskSuccess}
+                          className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-500 text-white shadow-green-500/30 hover:opacity-90"
+                        >
+                          {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir</React.Fragment>}
+                        </button>
                       </div>
                     ) : (
                       <React.Fragment>

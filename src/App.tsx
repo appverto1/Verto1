@@ -1722,15 +1722,19 @@ export default function App() {
     return { success: true };
   };
 
-  const handleMoodCheckin = async (l: number, n: string, i: string, t: any) => {
+  const handleMoodCheckin = async (l: number | null, n: string, i: string, t: any) => {
     const identity = resolvePatientIdentityForPortal();
+    const userType = String(user?.type || '').toLowerCase();
+    const isConventionalAdult = userType === 'conventional' || userType === 'adult_conventional';
+    const normalizedEnergy = typeof l === 'number' && Number.isFinite(l) ? l : null;
+    const persistedEnergy = isConventionalAdult ? null : normalizedEnergy;
     const item = {
       id: Date.now(),
       patientId: identity.patientId || user.id,
       type: 'checkin',
       title: "Check-in",
       time: new Date().toLocaleTimeString(),
-      energy: l,
+      energy: persistedEnergy,
       note: n,
       icon: i,
       dateGroup: "Hoje",
@@ -1744,7 +1748,7 @@ export default function App() {
         patient_name: identity.patientName,
         type: 'checkin',
         title: 'Check-in',
-        energy: l,
+        energy: persistedEnergy,
         note: n,
         icon: i
       });
@@ -1752,19 +1756,25 @@ export default function App() {
       console.error('Falha ao persistir check-in do paciente:', error);
     }
   };
-  const handleCompleteTask = async (t: any, e: number, n: string) => { 
+  const handleCompleteTask = async (t: any, e: number | null, n: string) => { 
     const identity = resolvePatientIdentityForPortal(t);
     const targetPatientId = String(identity.patientId || t?.patientId || t?.patient_id || user?.id || '').trim();
     const time = new Date().toLocaleTimeString();
     const isKid = user.age <= 12;
+    const userType = String(user?.type || '').toLowerCase();
+    const isConventionalAdult = (userType === 'conventional' || userType === 'adult_conventional') && !isKid;
+    const normalizedEffort = typeof e === 'number' && Number.isFinite(e) ? e : null;
+    const energyValue = isKid
+      ? ((normalizedEffort ?? 0) / (t.maxScore || 1) * 100)
+      : (isConventionalAdult ? null : normalizedEffort);
     const newHistoryItem = { 
       id: Date.now(), 
       patientId: targetPatientId, 
       type: t.type || 'task', 
       title: t.title, 
       time, 
-      energy: isKid ? (e / (t.maxScore || 1) * 100) : e, 
-      score: isKid ? e : undefined,
+      energy: energyValue,
+      score: isKid ? normalizedEffort : undefined,
       note: n, 
       icon: t.icon, 
       dateGroup: "Hoje",
@@ -1786,8 +1796,8 @@ export default function App() {
       patient_name: identity.patientName,
       type: t.type || 'task',
       title: t.title,
-      score: isKid ? e : null,
-      energy: isKid ? (e / (t.maxScore || 1) * 100) : e,
+      score: isKid ? normalizedEffort : null,
+      energy: energyValue,
       note: n,
       icon: t.icon
     });
@@ -1797,10 +1807,15 @@ export default function App() {
     const completionTargetId = assignedTaskId || (isTaskIdUuid ? String(t.id) : '');
     if (completionTargetId) {
       try {
-        await dataService.completeAssignedTask(completionTargetId, {
-          patient_effort: Math.max(0, Math.min(100, Number(e) || 0)),
+        const completionPayload: any = {
           patient_comment: n || ''
-        });
+        };
+        if (typeof normalizedEffort === 'number' && Number.isFinite(normalizedEffort) && !isConventionalAdult) {
+          completionPayload.patient_effort = Math.max(0, Math.min(100, normalizedEffort));
+        } else {
+          completionPayload.patient_effort = null;
+        }
+        await dataService.completeAssignedTask(completionTargetId, completionPayload);
       } catch (error) {
         console.error('Falha ao concluir assigned task (não bloqueante):', error);
       }
