@@ -8,6 +8,7 @@ import { SessionMode } from './SessionMode';
 import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
+import { calculateDomainMastery } from '../utils/clinicalMath';
 
 export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs }: any) => { 
   const rawProfileType = String(
@@ -568,6 +569,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const radarChartData = useMemo(() => {
     const selectedProto = protocols.find((p: any) => String(p.id) === String(selectedChartProtocolId));
     if (!selectedProto) return { labels: [], datasets: [] };
+
     const normalizeSkill = (value: any) =>
       String(value || '')
         .normalize('NFD')
@@ -576,147 +578,86 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         .replace(/\s+/g, ' ')
         .trim()
         .toLowerCase();
-    const isSameSkill = (skillName: string, taskTitle: string) => {
-      const a = normalizeSkill(skillName);
-      const b = normalizeSkill(taskTitle);
-      if (!a || !b) return false;
-      return a === b || a.includes(b) || b.includes(a);
-    };
-    const getEventTs = (row: any) => {
-      const raw = row?.created_at || row?.date || row?.eventDateRaw || row?.eventDate || '';
-      const ts = new Date(raw).getTime();
-      return Number.isFinite(ts) ? ts : 0;
+
+    const isSameSkill = (a: string, b: string) => {
+      const left = normalizeSkill(a);
+      const right = normalizeSkill(b);
+      if (!left || !right) return false;
+      return left === right || left.includes(right) || right.includes(left);
     };
 
-    const labels = selectedProto.data.map((d: any) => d.name);
-    const normalizeToPercent = (score: number) => {
-      const base = Math.max(1, Number(selectedProtocolMaxScore) || 1);
-      const normalized = (Math.max(0, Number(score) || 0) / base) * 100;
-      return Number(Math.max(0, Math.min(100, normalized)).toFixed(2));
+    const labels = selectedProto.data.map((d: any) => String(d?.name || '').trim()).filter(Boolean);
+
+    const sourceHistory = (Array.isArray(history) ? history : [])
+      .filter((h: any) => String(h?.patientId || h?.patient_id || '') === String(patient.id))
+      .filter((h: any) => String(h?.type || '').toLowerCase() === 'task')
+      .filter((h: any) => h?.score !== undefined && h?.score !== null)
+      .map((h: any) => {
+        const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
+        const score = Math.max(0, Math.min(1, Number(h?.score ?? 0) || 0));
+        return { ...h, _ts: ts, _score: score, _titleKey: normalizeSkill(String(h?.title || '')) };
+      })
+      .sort((a: any, b: any) => a._ts - b._ts);
+
+    const getDomainPercent = (domain: any, mode: 'first' | 'latest') => {
+      const domainTasks = (Array.isArray(domain?.skills) ? domain.skills : [])
+        .map((s: any) => ({
+          name: String(s?.name || '').trim(),
+          maxScore: Math.max(1, Number(s?.maxScore ?? s?.max_score ?? 1) || 1)
+        }))
+        .filter((s: any) => s.name);
+      if (!domainTasks.length) return 0;
+      const domainEvents = sourceHistory
+        .filter((row: any) => domainTasks.some((task: any) => isSameSkill(task.name, String(row?.title || ''))))
+        .map((row: any) => ({
+          title: row?.title || '',
+          score: row?._score,
+          maxScore: 1,
+          created_at: row?.created_at || row?.date || null
+        }));
+      return calculateDomainMastery(domainEvents, domainTasks, { mode: mode === 'first' ? 'baseline' : 'latest' });
     };
-    
-    const latestHistory = history.filter((h: any) => h.patientId === patient.id && h.type === 'task' && h.score !== undefined);
-    const currentData = selectedProto.data.map((domain: any) => {
-      const skillNames = domain.skills.map((s: any) => String(s.name || ''));
-      const useMasteryLogic = selectedProto.title.includes('VB-MAPP');
-      
-      const skillLatestScoreMap: any = {};
-      const skillLatestTsMap: any = {};
-      const skillScoresMap: any = {};
-      
-      latestHistory.forEach((evalItem: any) => {
-        const title = String(evalItem?.title || '');
-        const matchedSkill = skillNames.find((skillName: string) => isSameSkill(skillName, title));
-        if (matchedSkill) {
-          const key = normalizeSkill(matchedSkill);
-          if (useMasteryLogic) {
-            // Logic for VB-MAPP: Latest score / Mastery
-            const currentTs = getEventTs(evalItem);
-            if (!skillLatestTsMap[key] || currentTs >= skillLatestTsMap[key]) {
-              skillLatestTsMap[key] = currentTs;
-              
-              // Check if mastered in PEI first
-              const peiGoal = patient.pei?.find((g: any) => isSameSkill(String(g?.name || ''), title));
-              if (peiGoal?.status === 'completed') {
-                skillLatestScoreMap[key] = 1;
-              } else {
-                skillLatestScoreMap[key] = Number(evalItem?.score ?? 0) || 0;
-              }
-            }
-          } else {
-            // Logic for AFLS and others: Averages
-            if (!skillScoresMap[key]) skillScoresMap[key] = [];
-            skillScoresMap[key].push(Number(evalItem?.score ?? 0) || 0);
-          }
-        }
-      });
 
-      if (useMasteryLogic) {
-        const latestScores: any[] = Object.values(skillLatestScoreMap);
-        return latestScores.length > 0 ? (latestScores.reduce((a: any, b: any) => a + b, 0) / latestScores.length) : 0;
-      } else {
-        const skillAverages = Object.values(skillScoresMap).map((scores: any) => 
-          scores.reduce((a: any, b: any) => a + b, 0) / scores.length
-        );
-        return skillAverages.length > 0 ? (skillAverages.reduce((a: any, b: any) => a + b, 0) / skillAverages.length) : 0;
-      }
-    });
-
-    const datasets = [];
+    const currentData = selectedProto.data.map((domain: any) => getDomainPercent(domain, 'latest'));
 
     if (selectedSnapshotDate === "all") {
-      datasets.push({
-        label: 'Desempenho Geral Atual',
-        data: currentData.map(normalizeToPercent),
-        backgroundColor: 'rgba(67, 24, 255, 0.25)',
-        borderColor: '#7a32fc',
-        pointBackgroundColor: '#7a32fc',
-        borderWidth: 4
-      });
-    } else {
-      const dayHistory = history.filter((h: any) => 
-        h.patientId === patient.id && 
-        h.type === 'task' && 
-        h.score !== undefined && 
-        h.dateGroup === selectedSnapshotDate
-      );
-      const historicalData = selectedProto.data.map((domain: any) => {
-        const skillNames = domain.skills.map((s: any) => String(s.name || ''));
-        const useMasteryLogic = selectedProto.title.includes('VB-MAPP');
-        const skillLatestScoreMap: any = {};
-        const skillLatestTsMap: any = {};
-        const skillScoresMap: any = {};
-        
-        dayHistory.forEach((h: any) => {
-          const title = String(h?.title || '');
-          const matchedSkill = skillNames.find((skillName: string) => isSameSkill(skillName, title));
-          if (matchedSkill) {
-            const key = normalizeSkill(matchedSkill);
-            if (useMasteryLogic) {
-              const currentTs = getEventTs(h);
-              if (!skillLatestTsMap[key] || currentTs >= skillLatestTsMap[key]) {
-                skillLatestTsMap[key] = currentTs;
-                skillLatestScoreMap[key] = Number(h?.score ?? 0) || 0;
-              }
-            } else {
-              if (!skillScoresMap[key]) skillScoresMap[key] = [];
-              skillScoresMap[key].push(Number(h?.score ?? 0) || 0);
-            }
+      return {
+        labels,
+        datasets: [
+          {
+            label: 'Intervenção Atual',
+            data: currentData,
+            backgroundColor: 'rgba(67, 24, 255, 0.25)',
+            borderColor: '#7a32fc',
+            pointBackgroundColor: '#7a32fc',
+            borderWidth: 4
           }
-        });
-
-        if (useMasteryLogic) {
-          const latestScores: any[] = Object.values(skillLatestScoreMap);
-          return latestScores.length > 0 ? (latestScores.reduce((a: any, b: any) => a + b, 0) / latestScores.length) : 0;
-        } else {
-          const skillAverages = Object.values(skillScoresMap).map((scores: any) => 
-            scores.reduce((a: any, b: any) => a + b, 0) / scores.length
-          );
-          return skillAverages.length > 0 ? (skillAverages.reduce((a: any, b: any) => a + b, 0) / skillAverages.length) : 0;
-        }
-      });
-
-      datasets.push({
-        label: `Avaliação em ${selectedSnapshotDate}`,
-        data: historicalData.map(normalizeToPercent),
-        backgroundColor: 'rgba(5, 205, 153, 0.35)', 
-        borderColor: '#05CD99',
-        pointBackgroundColor: '#05CD99',
-        borderWidth: 4
-      });
-
-      datasets.push({
-        label: 'Referência (Média Atual)',
-        data: currentData.map(normalizeToPercent),
-        backgroundColor: 'rgba(122, 50, 252, 0.03)',
-        borderColor: 'rgba(122, 50, 252, 0.25)',
-        borderDash: [8, 4],
-        pointRadius: 0,
-        borderWidth: 2
-      });
+        ]
+      };
     }
 
-    return { labels, datasets };
+    const baselineData = selectedProto.data.map((domain: any) => getDomainPercent(domain, 'first'));
+    return {
+      labels,
+      datasets: [
+        {
+          label: `Avaliação ${selectedSnapshotDate}`,
+          data: baselineData,
+          backgroundColor: 'rgba(5, 205, 153, 0.35)',
+          borderColor: '#05CD99',
+          pointBackgroundColor: '#05CD99',
+          borderWidth: 4
+        },
+        {
+          label: 'Intervenção Atual',
+          data: currentData,
+          backgroundColor: 'rgba(122, 50, 252, 0.25)',
+          borderColor: '#7a32fc',
+          pointBackgroundColor: '#7a32fc',
+          borderWidth: 4
+        }
+      ]
+    };
   }, [history, protocols, patient.id, selectedChartProtocolId, selectedSnapshotDate]);
 
   const safeProtocols = protocols || []; 
@@ -1256,58 +1197,33 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     if (isKidsProfile || !selectedChartProtocol) return [];
     if (!comparisonDate1 || !comparisonDate2) return [];
 
-    const normalizeSkillName = (value: any) => String(value || '').trim().toLowerCase();
-    const buildScoreByDomainForDate = (dateKey: string) => {
-      const latestBySkill = new Map<string, any>();
-      adultProtocolTasks.forEach((task: any) => {
-        const taskDateKey = toDateKey(task?.eventDateRaw || task?.eventDate);
-        if (taskDateKey !== dateKey) return;
-        const skillKey = normalizeSkillName(task?.taskTitle);
-        if (!skillKey) return;
-        const prev = latestBySkill.get(skillKey);
-        const currentTime = new Date(task?.eventDateRaw || task?.eventDate || 0).getTime();
-        const prevTime = prev ? new Date(prev?.eventDateRaw || prev?.eventDate || 0).getTime() : -1;
-        if (!prev || currentTime >= prevTime) latestBySkill.set(skillKey, task);
-      });
-
-      const scoreMap = new Map<string, { obtained: number; possible: number }>();
-      (selectedChartProtocol.data || []).forEach((domain: any) => {
-        const domainName = String(domain?.name || 'Sem domínio');
-        let obtained = 0;
-        let possible = 0;
-        (domain?.skills || []).forEach((skill: any) => {
-          const key = normalizeSkillName(skill?.name);
-          const entry = latestBySkill.get(key);
-          if (!entry) return;
-          const taskData = entry?.taskData && typeof entry.taskData === 'object' ? entry.taskData : {};
-          const maxScore = Math.max(
-            1,
-            Number(taskData?.maxScore ?? taskData?.max_score ?? entry?.maxScore ?? skill?.maxScore ?? 4) || 4
-          );
-          const score = entry?.professionalScore === null || entry?.professionalScore === undefined
-            ? 0
-            : Math.max(0, Math.min(maxScore, Number(entry.professionalScore) || 0));
-          obtained += score;
-          possible += maxScore;
-        });
-        scoreMap.set(domainName, { obtained, possible });
-      });
-      return scoreMap;
-    };
-
-    const date1Map = buildScoreByDomainForDate(comparisonDate1);
-    const date2Map = buildScoreByDomainForDate(comparisonDate2);
+    const taskRows = adultProtocolTasks.map((task: any) => ({
+      title: task?.taskTitle || '',
+      professionalScore: task?.professionalScore,
+      maxScore: task?.maxScore,
+      eventDateRaw: task?.eventDateRaw || task?.eventDate
+    }));
 
     return (selectedChartProtocol.data || []).map((domain: any) => {
       const domainName = String(domain?.name || 'Sem domínio');
-      const d1 = date1Map.get(domainName) || { obtained: 0, possible: 0 };
-      const d2 = date2Map.get(domainName) || { obtained: 0, possible: 0 };
-      const d1Percent = d1.possible > 0 ? Number(((d1.obtained / d1.possible) * 100).toFixed(2)) : 0;
-      const d2Percent = d2.possible > 0 ? Number(((d2.obtained / d2.possible) * 100).toFixed(2)) : 0;
+      const domainTasks = (domain?.skills || []).map((skill: any) => ({
+        name: String(skill?.name || ''),
+        maxScore: Math.max(1, Number(skill?.maxScore ?? skill?.max_score ?? 4) || 4)
+      }));
+      const d1 = calculateDomainMastery(taskRows, domainTasks, {
+        mode: 'latest',
+        periodStart: `${comparisonDate1}T00:00:00`,
+        periodEnd: `${comparisonDate1}T23:59:59.999`
+      });
+      const d2 = calculateDomainMastery(taskRows, domainTasks, {
+        mode: 'latest',
+        periodStart: `${comparisonDate2}T00:00:00`,
+        periodEnd: `${comparisonDate2}T23:59:59.999`
+      });
       return {
         name: domainName,
-        [comparisonDate1]: d1Percent,
-        [comparisonDate2]: d2Percent
+        [comparisonDate1]: d1,
+        [comparisonDate2]: d2
       };
     });
   }, [isKidsProfile, selectedChartProtocol, comparisonDate1, comparisonDate2, adultProtocolTasks]);
@@ -1316,58 +1232,33 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     if (isKidsProfile || !selectedChartProtocol) return [];
     if (!adultReportDate1 || !adultReportDate2) return [];
 
-    const normalizeSkillName = (value: any) => String(value || '').trim().toLowerCase();
-    const buildScoreByDomainForDate = (dateKey: string) => {
-      const latestBySkill = new Map<string, any>();
-      adultTasksInPeriod.forEach((task: any) => {
-        const taskDateKey = toDateKey(task?.eventDateRaw || task?.eventDate);
-        if (taskDateKey !== dateKey) return;
-        const skillKey = normalizeSkillName(task?.taskTitle);
-        if (!skillKey) return;
-        const prev = latestBySkill.get(skillKey);
-        const currentTime = new Date(task?.eventDateRaw || task?.eventDate || 0).getTime();
-        const prevTime = prev ? new Date(prev?.eventDateRaw || prev?.eventDate || 0).getTime() : -1;
-        if (!prev || currentTime >= prevTime) latestBySkill.set(skillKey, task);
-      });
-
-      const scoreMap = new Map<string, { obtained: number; possible: number }>();
-      (selectedChartProtocol.data || []).forEach((domain: any) => {
-        const domainName = String(domain?.name || 'Sem domínio');
-        let obtained = 0;
-        let possible = 0;
-        (domain?.skills || []).forEach((skill: any) => {
-          const key = normalizeSkillName(skill?.name);
-          const entry = latestBySkill.get(key);
-          if (!entry) return;
-          const taskData = entry?.taskData && typeof entry.taskData === 'object' ? entry.taskData : {};
-          const maxScore = Math.max(
-            1,
-            Number(taskData?.maxScore ?? taskData?.max_score ?? entry?.maxScore ?? skill?.maxScore ?? 4) || 4
-          );
-          const score = entry?.professionalScore === null || entry?.professionalScore === undefined
-            ? 0
-            : Math.max(0, Math.min(maxScore, Number(entry.professionalScore) || 0));
-          obtained += score;
-          possible += maxScore;
-        });
-        scoreMap.set(domainName, { obtained, possible });
-      });
-      return scoreMap;
-    };
-
-    const date1Map = buildScoreByDomainForDate(adultReportDate1);
-    const date2Map = buildScoreByDomainForDate(adultReportDate2);
+    const taskRows = adultTasksInPeriod.map((task: any) => ({
+      title: task?.taskTitle || '',
+      professionalScore: task?.professionalScore,
+      maxScore: task?.maxScore,
+      eventDateRaw: task?.eventDateRaw || task?.eventDate
+    }));
 
     return (selectedChartProtocol.data || []).map((domain: any) => {
       const domainName = String(domain?.name || 'Sem domínio');
-      const d1 = date1Map.get(domainName) || { obtained: 0, possible: 0 };
-      const d2 = date2Map.get(domainName) || { obtained: 0, possible: 0 };
-      const d1Percent = d1.possible > 0 ? Number(((d1.obtained / d1.possible) * 100).toFixed(2)) : 0;
-      const d2Percent = d2.possible > 0 ? Number(((d2.obtained / d2.possible) * 100).toFixed(2)) : 0;
+      const domainTasks = (domain?.skills || []).map((skill: any) => ({
+        name: String(skill?.name || ''),
+        maxScore: Math.max(1, Number(skill?.maxScore ?? skill?.max_score ?? 4) || 4)
+      }));
+      const d1 = calculateDomainMastery(taskRows, domainTasks, {
+        mode: 'latest',
+        periodStart: `${adultReportDate1}T00:00:00`,
+        periodEnd: `${adultReportDate1}T23:59:59.999`
+      });
+      const d2 = calculateDomainMastery(taskRows, domainTasks, {
+        mode: 'latest',
+        periodStart: `${adultReportDate2}T00:00:00`,
+        periodEnd: `${adultReportDate2}T23:59:59.999`
+      });
       return {
         name: domainName,
-        [adultReportDate1]: d1Percent,
-        [adultReportDate2]: d2Percent
+        [adultReportDate1]: d1,
+        [adultReportDate2]: d2
       };
     });
   }, [isKidsProfile, selectedChartProtocol, adultReportDate1, adultReportDate2, adultTasksInPeriod]);

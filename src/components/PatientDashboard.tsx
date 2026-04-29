@@ -7,6 +7,7 @@ import { HistoryCard } from './History';
 import { DrawingCanvas } from './DrawingCanvas';
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
+import { calculateDomainMastery } from '../utils/clinicalMath';
 
 export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false }: any) => { 
   const [selectedBaseDate, setSelectedBaseDate] = useState("");
@@ -283,58 +284,27 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
     const resolveDomainProgressPercent = (dateFilter: string | null, mode: 'first' | 'latest') => {
       const cutoffTs = resolveCutoffTimestamp(dateFilter);
-
+      const modeNormalized = mode === 'first' ? 'baseline' : 'latest';
       return effectiveDomains.map((domain: any) => {
         const domainName = String(domain?.name || 'Geral').trim() || 'Geral';
-        const domainKey = normalizeSkill(domainName);
-        const protocolSkills = (Array.isArray(domain?.skills) ? domain.skills : [])
-          .map((s: any) => String(s?.name || '').trim())
-          .filter(Boolean);
-
-        let taskUniverseKeys = new Set<string>(protocolSkills.map((skill: string) => normalizeSkill(skill)).filter(Boolean));
-
-        if (!taskUniverseKeys.size) {
-          scoredEvents.forEach((event: any) => {
-            if (event._domainKey === domainKey && event._titleKey) {
-              taskUniverseKeys.add(event._titleKey);
-            }
-          });
-        }
-
-        const taskValues = new Map<string, number>();
-        const taskFirstTs = new Map<string, number>();
-        const taskLastTs = new Map<string, number>();
-
-        scoredEvents.forEach((event: any) => {
-          if (event._timestamp > cutoffTs) return;
-          const matchesDomain = event._domainKey === domainKey;
-          const matchesBySkill = Array.from(taskUniverseKeys).some((taskKey) => taskKey && (taskKey === event._titleKey || taskKey.includes(event._titleKey) || event._titleKey.includes(taskKey)));
-          if (!matchesDomain && !matchesBySkill) return;
-
-          const taskKey = event._titleKey || `${domainKey}::domain`;
-          if (!taskUniverseKeys.has(taskKey) && matchesDomain) taskUniverseKeys.add(taskKey);
-
-          const firstTs = taskFirstTs.get(taskKey);
-          const lastTs = taskLastTs.get(taskKey);
-          if (firstTs === undefined || event._timestamp < firstTs) {
-            taskFirstTs.set(taskKey, event._timestamp);
-            if (mode === 'first') taskValues.set(taskKey, event._score);
-          }
-          if (lastTs === undefined || event._timestamp >= lastTs) {
-            taskLastTs.set(taskKey, event._timestamp);
-            if (mode === 'latest') taskValues.set(taskKey, event._score);
-          }
-        });
-
-        const totalTasks = taskUniverseKeys.size;
-        if (!totalTasks) return 0;
-
-        let obtained = 0;
-        taskUniverseKeys.forEach((taskKey) => {
-          obtained += Math.max(0, Math.min(1, Number(taskValues.get(taskKey) ?? 0)));
-        });
-
-        return Number(((obtained / totalTasks) * 100).toFixed(2));
+        const domainTasks = (Array.isArray(domain?.skills) ? domain.skills : []).map((skill: any) => ({
+          name: String(skill?.name || '').trim(),
+          maxScore: Math.max(1, Number(skill?.maxScore ?? skill?.max_score ?? 1) || 1)
+        }));
+        const domainEvents = scoredEvents
+          .filter((event: any) => event._timestamp <= cutoffTs)
+          .filter((event: any) => {
+            const matchesDomain = normalizeSkill(event?._domain || '') === normalizeSkill(domainName);
+            const matchesSkill = domainTasks.some((task: any) => isSameSkill(task.name, event?._title || ''));
+            return matchesDomain || matchesSkill;
+          })
+          .map((event: any) => ({
+            title: event?._title || '',
+            score: event?._score,
+            maxScore: 1,
+            created_at: event?.created_at || event?.date || null
+          }));
+        return calculateDomainMastery(domainEvents, domainTasks, { mode: modeNormalized as any });
       });
     };
 
