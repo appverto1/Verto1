@@ -307,7 +307,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const datasets: any[] = [];
     if (resolvedBaseDate) {
       datasets.push({
-        label: resolvedBaseDate,
+        label: formatFilterDate(resolvedBaseDate),
         data: getDomainScores(resolvedBaseDate),
         backgroundColor: 'rgba(122, 50, 252, 0.12)',
         borderColor: '#7a32fc',
@@ -328,7 +328,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     }
     if (selectedCompareDate && selectedCompareDate !== resolvedBaseDate) {
       datasets.push({
-        label: selectedCompareDate,
+        label: formatFilterDate(selectedCompareDate),
         data: getDomainScores(selectedCompareDate),
         backgroundColor: 'rgba(5, 205, 153, 0.12)',
         borderColor: '#05CD99',
