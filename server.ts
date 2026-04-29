@@ -3609,6 +3609,7 @@ async function startServer() {
   // Login (receives Supabase access token from client, verifies it, and sets session)
   app.post('/api/auth/login', async (req, res) => {
     const { intendedRole } = req.body;
+    const activationFlow = Boolean(req.body?.activationFlow);
     let accessToken = sanitizeString(req.body?.accessToken, 8000);
     const credentialEmail = sanitizeEmail(req.body?.email);
     const credentialPassword = typeof req.body?.password === 'string' ? req.body.password : '';
@@ -3926,6 +3927,61 @@ async function startServer() {
         null;
       const roleForSession = selectedWorkspace?.role || profile.role;
       const clinicForSession = selectedWorkspace?.clinicId || profile.clinic_id;
+
+      if (roleForSession === 'patient') {
+        const profileStatus = sanitizeString((profile as any)?.status, 60).toLowerCase();
+        if (profileStatus === 'pending_activation' && !activationFlow) {
+          return res.status(403).json({
+            error: 'PATIENT_ACTIVATION_REQUIRED',
+            message: 'Ative sua conta pelo link enviado por e-mail antes de acessar o portal.'
+          });
+        }
+
+        if (profileStatus === 'pending_activation' && activationFlow) {
+          const safePatientEmail = sanitizeEmail(user.email);
+          const userUpdatesBase = cleanObject({
+            status: 'active',
+            first_login_completed: true,
+            updated_at: new Date().toISOString()
+          });
+          let safeUserUpdates: Record<string, any> = { ...userUpdatesBase };
+          while (Object.keys(safeUserUpdates).length > 0) {
+            const { error: activateUserError } = await supabase
+              .from('users')
+              .update(safeUserUpdates)
+              .eq('id', user.id);
+            if (!activateUserError) break;
+            const missingColumn = extractMissingColumnName(activateUserError);
+            if (!missingColumn || !(missingColumn in safeUserUpdates)) throw activateUserError;
+            delete safeUserUpdates[missingColumn];
+          }
+
+          if (safePatientEmail) {
+            const patientUpdates = cleanObject({
+              status: 'active',
+              updated_at: new Date().toISOString()
+            });
+            let patientQuery = supabase
+              .from('patients')
+              .update(patientUpdates)
+              .ilike('email', safePatientEmail);
+            if (isUuid(clinicForSession)) {
+              patientQuery = patientQuery.eq('clinic_id', clinicForSession);
+            }
+            const { error: activatePatientError } = await patientQuery;
+            if (activatePatientError) {
+              console.warn('[Auth] Patient activation status update warning:', activatePatientError.message || String(activatePatientError));
+            }
+          }
+
+          profile = {
+            ...profile,
+            status: 'active',
+            first_login_completed: true
+          };
+        }
+      }
+
       const treatmentStatus = await updatePatientStatusIfNeeded({
         id: user.id,
         role: roleForSession,
@@ -4726,7 +4782,7 @@ async function startServer() {
           subscription_status: 'pending',
           plan_price: 4.90,
           clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
-          status: 'active',
+          status: 'pending_activation',
           created_at: new Date().toISOString()
         });
 
@@ -4772,7 +4828,7 @@ async function startServer() {
             name: safeName,
             email: safeEmail,
             phone: normalizedPhone || undefined,
-            status: 'active',
+            status: 'pending_activation',
             type: normalizedPortalType,
             clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
             therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined
@@ -4781,7 +4837,7 @@ async function startServer() {
             name: safeName,
             email: safeEmail,
             phone: normalizedPhone || undefined,
-            status: 'active',
+            status: 'pending_activation',
             clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
             therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined
           });
@@ -4820,7 +4876,7 @@ async function startServer() {
           role: 'patient',
           type: normalizedPortalType,
           clinic_id: isUuid(safeClinicId) ? safeClinicId : null,
-          status: 'active'
+          status: 'pending_activation'
         });
 
         while (Object.keys(safeUserUpdatePayload).length > 0) {

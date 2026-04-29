@@ -289,8 +289,11 @@ export default function App() {
         if (event === 'SIGNED_IN' && session) {
           const intendedRole = localStorage.getItem('verto_intended_role') || 'therapist';
           localStorage.removeItem('verto_intended_role');
+          const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
+          const isActivationFlow = /^\/(ativar|reset-password)\/?$/i.test(currentPath);
           await handleLoginSuccess(session, intendedRole, undefined, {
-            provider: session?.user?.app_metadata?.provider || null
+            provider: session?.user?.app_metadata?.provider || null,
+            activationFlow: isActivationFlow
           });
         } else if (event === 'SIGNED_OUT') {
           console.log('Supabase SIGNED_OUT event received');
@@ -417,7 +420,7 @@ export default function App() {
     supabaseSession: any,
     intendedRole?: string,
     credentials?: { email?: string; password?: string },
-    authContext?: { provider?: string | null },
+    authContext?: { provider?: string | null; activationFlow?: boolean },
   ) => {
     try {
       if (!supabaseSession) {
@@ -455,6 +458,7 @@ export default function App() {
       }
 
       const provider = authContext?.provider || supabaseSession?.user?.app_metadata?.provider || null;
+      const activationFlow = Boolean(authContext?.activationFlow);
       const accessToken = supabaseSession.access_token;
       const response = await fetch('/api/auth/login', {
         method: 'POST',
@@ -464,6 +468,7 @@ export default function App() {
           accessToken,
           intendedRole,
           provider,
+          activationFlow,
           email: credentials?.email || null,
           password: credentials?.password || null,
         })
