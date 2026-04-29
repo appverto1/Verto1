@@ -1728,7 +1728,7 @@ async function derivePatientTreatmentStatus(user: any): Promise<'active' | 'inac
     const { data } = await supabase
       .from('patients')
       .select('id, clinic_id, status')
-      .eq('email', safeEmail)
+      .ilike('email', safeEmail)
       .limit(1000);
     patientRows = Array.isArray(data) ? data : [];
   }
@@ -1755,8 +1755,9 @@ async function derivePatientTreatmentStatus(user: any): Promise<'active' | 'inac
     hasAssignedTasks = Number(count || 0) > 0;
   }
 
-  if (hasActivePatientStatus || (hasLinkedClinic && hasAssignedTasks) || hasAssignedTasks) return 'active';
-  if (hasLinkedClinic) return 'inactive';
+  // Regra de vínculo: paciente já vinculado à clínica não deve cair como "sem tratamento ativo"
+  // imediatamente após ativação/login, mesmo sem tarefas atribuídas ainda.
+  if (hasActivePatientStatus || hasLinkedClinic || hasAssignedTasks) return 'active';
   return 'waiting_treatment';
 }
 
@@ -1790,7 +1791,7 @@ async function updatePatientStatusIfNeeded(user: any): Promise<'active' | 'inact
       await supabase
         .from('patients')
         .update({ status: 'active' })
-        .eq('email', safeEmail)
+        .ilike('email', safeEmail)
         .in('status', ['pending', 'waiting_treatment', 'inactive']);
     }
   } catch (error) {
