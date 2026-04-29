@@ -1443,7 +1443,7 @@ async function getPatientIdsByEmailAcrossClinics(patientEmail: string): Promise<
   const { data, error } = await supabase
     .from('patients')
     .select('id')
-    .eq('email', safeEmail)
+    .ilike('email', safeEmail)
     .limit(1000);
   if (error) return [];
   return (data || [])
@@ -3730,7 +3730,64 @@ async function startServer() {
         return res.json({ success: true, twoFactorRequired: true, email: user.email });
       }
 
-      // If profile doesn't exist (first time Google login), create it
+      // If profile doesn't exist for this auth user ID, try reconciling by e-mail first.
+      if (!profile && user.email) {
+        const safeUserEmail = sanitizeEmail(user.email);
+        if (safeUserEmail) {
+          const { data: profileByEmail, error: profileByEmailError } = await supabase
+            .from('users')
+            .select('*')
+            .ilike('email', safeUserEmail)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (profileByEmailError && profileByEmailError.code !== 'PGRST116') {
+            console.warn('[Auth] profileByEmail lookup warning:', profileByEmailError.message || String(profileByEmailError));
+          }
+
+          if (profileByEmail) {
+            const reconciledProfilePayload = cleanObject({
+              id: user.id,
+              email: safeUserEmail,
+              name: sanitizeString(profileByEmail.name, 180) || user.user_metadata?.full_name || safeUserEmail.split('@')[0],
+              role: ensureRole(profileByEmail.role) ? profileByEmail.role : 'patient',
+              clinic_id: sanitizeString(profileByEmail.clinic_id, 120) || null,
+              subscription_status: sanitizeString(profileByEmail.subscription_status, 40) || 'pending',
+              plan_name: sanitizeString(profileByEmail.plan_name, 120) || null,
+              plan_price: profileByEmail.plan_price ?? null,
+              type: sanitizeString(profileByEmail.type, 80) || null,
+              status: sanitizeString(profileByEmail.status, 40) || 'active',
+              phone: sanitizeString(profileByEmail.phone, 30) || null,
+              created_at: new Date().toISOString()
+            });
+
+            let safeReconciledPayload: Record<string, any> = { ...reconciledProfilePayload };
+            while (Object.keys(safeReconciledPayload).length > 0) {
+              const { error: reconcileUpsertError } = await supabase
+                .from('users')
+                .upsert([safeReconciledPayload], { onConflict: 'id' });
+              if (!reconcileUpsertError) break;
+              const missingColumn = extractMissingColumnName(reconcileUpsertError);
+              if (!missingColumn || !(missingColumn in safeReconciledPayload)) {
+                throw reconcileUpsertError;
+              }
+              delete safeReconciledPayload[missingColumn];
+            }
+
+            const { data: reconciledProfile } = await supabase
+              .from('users')
+              .select('*')
+              .eq('id', user.id)
+              .maybeSingle();
+            if (reconciledProfile) {
+              profile = reconciledProfile;
+            }
+          }
+        }
+      }
+
+      // If profile still doesn't exist (first time Google login), create it
       if (!profile) {
         let finalRole: AppRole = normalizeRequestedRole(intendedRole);
         
@@ -6910,18 +6967,38 @@ async function startServer() {
       }
 
       const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail);
-      let query = supabase
+      const { data: tasksByEmail, error: tasksByEmailError } = await supabase
         .from('tasks')
         .select('*')
-        .eq('patient_email', patientEmail);
+        .eq('patient_email', patientEmail)
+        .order('created_at', { ascending: false });
+      if (tasksByEmailError) throw tasksByEmailError;
 
+      let tasksById: any[] = [];
       if (patientIds.length > 0) {
-        query = query.in('patient_id', patientIds);
+        const { data: tasksByIdData, error: tasksByIdError } = await supabase
+          .from('tasks')
+          .select('*')
+          .in('patient_id', patientIds)
+          .order('created_at', { ascending: false });
+        if (tasksByIdError) throw tasksByIdError;
+        tasksById = Array.isArray(tasksByIdData) ? tasksByIdData : [];
       }
 
-      const { data, error } = await query.order('created_at', { ascending: false });
-      if (error) throw error;
-      res.json({ success: true, data: data || [] });
+      const merged = Array.from(
+        new Map(
+          [...(Array.isArray(tasksByEmail) ? tasksByEmail : []), ...tasksById].map((row: any) => [
+            String(row?.id || crypto.randomUUID()),
+            row
+          ])
+        ).values()
+      ).sort((a: any, b: any) => {
+        const aTs = new Date(a?.created_at || 0).getTime();
+        const bTs = new Date(b?.created_at || 0).getTime();
+        return bTs - aTs;
+      });
+
+      res.json({ success: true, data: merged });
     } catch (error) {
       res.status(500).json({ success: false, error: String(error) });
     }
@@ -7277,25 +7354,45 @@ async function startServer() {
       }
 
       const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail);
-      let query = supabase
+      const { data: byEmail, error: byEmailError } = await supabase
         .from('assigned_tasks')
         .select('*')
-        .eq('patient_email', patientEmail);
-
-      if (patientIds.length > 0) {
-        query = query.in('patient_id', patientIds);
+        .eq('patient_email', patientEmail)
+        .order('scheduled_at', { ascending: false });
+      if (byEmailError) {
+        if (/assigned_tasks/i.test(String(byEmailError?.message || ''))) {
+          return res.status(200).json({ success: true, data: [], warning: 'Tabela assigned_tasks não criada.' });
+        }
+        throw byEmailError;
       }
 
       const nowIso = new Date().toISOString();
-      const { data, error } = await query.order('scheduled_at', { ascending: false });
-      if (error) {
-        if (/assigned_tasks/i.test(String(error?.message || ''))) {
-          return res.status(200).json({ success: true, data: [], warning: 'Tabela assigned_tasks não criada.' });
+      let byId: any[] = [];
+      if (patientIds.length > 0) {
+        const { data: byIdData, error: byIdError } = await supabase
+          .from('assigned_tasks')
+          .select('*')
+          .in('patient_id', patientIds)
+          .order('scheduled_at', { ascending: false });
+        if (byIdError) {
+          if (/assigned_tasks/i.test(String(byIdError?.message || ''))) {
+            return res.status(200).json({ success: true, data: [], warning: 'Tabela assigned_tasks não criada.' });
+          }
+          throw byIdError;
         }
-        throw error;
+        byId = Array.isArray(byIdData) ? byIdData : [];
       }
 
-      const visibleTasks = (data || []).filter((task: any) => {
+      const merged = Array.from(
+        new Map(
+          [...(Array.isArray(byEmail) ? byEmail : []), ...byId].map((row: any) => [
+            String(row?.id || crypto.randomUUID()),
+            row
+          ])
+        ).values()
+      );
+
+      const visibleTasks = merged.filter((task: any) => {
         const scheduledAt = sanitizeString(task?.scheduled_at, 60);
         if (!scheduledAt) return true;
         return scheduledAt <= nowIso;
