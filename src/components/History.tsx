@@ -207,7 +207,15 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
                     <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1 tracking-widest">Pontuação (0-{maxScore})</label> 
                     <select className="w-full bg-white border border-gray-200 rounded-lg p-2 text-sm font-semibold text-gray-700 outline-none focus:border-[#7551FF]" value={score} onChange={(e) => setScore(e.target.value)}> 
                       <option value="">-</option> 
-                      {[...Array(Math.floor(maxScore) + 1)].map((_, i) => (<option key={i} value={i}>{i}</option>))}
+                      {maxScore === 1 ? (
+                        <React.Fragment>
+                          <option value={0}>0</option>
+                          <option value={0.5}>0.5</option>
+                          <option value={1}>1</option>
+                        </React.Fragment>
+                      ) : (
+                        [...Array(Math.floor(maxScore) + 1)].map((_, i) => (<option key={i} value={i}>{i}</option>))
+                      )}
                     </select> 
                   </div> 
                   <div> 

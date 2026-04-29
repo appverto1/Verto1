@@ -589,6 +589,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     };
 
     const labels = selectedProto.data.map((d: any) => d.name);
+    const normalizeToPercent = (score: number) => {
+      const base = Math.max(1, Number(selectedProtocolMaxScore) || 1);
+      const normalized = (Math.max(0, Number(score) || 0) / base) * 100;
+      return Number(Math.max(0, Math.min(100, normalized)).toFixed(2));
+    };
     
     const latestHistory = history.filter((h: any) => h.patientId === patient.id && h.type === 'task' && h.score !== undefined);
     const currentData = selectedProto.data.map((domain: any) => {
@@ -642,7 +647,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     if (selectedSnapshotDate === "all") {
       datasets.push({
         label: 'Desempenho Geral Atual',
-        data: currentData,
+        data: currentData.map(normalizeToPercent),
         backgroundColor: 'rgba(67, 24, 255, 0.25)',
         borderColor: '#7a32fc',
         pointBackgroundColor: '#7a32fc',
@@ -693,7 +698,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
       datasets.push({
         label: `Avaliação em ${selectedSnapshotDate}`,
-        data: historicalData,
+        data: historicalData.map(normalizeToPercent),
         backgroundColor: 'rgba(5, 205, 153, 0.35)', 
         borderColor: '#05CD99',
         pointBackgroundColor: '#05CD99',
@@ -702,7 +707,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
       datasets.push({
         label: 'Referência (Média Atual)',
-        data: currentData,
+        data: currentData.map(normalizeToPercent),
         backgroundColor: 'rgba(122, 50, 252, 0.03)',
         borderColor: 'rgba(122, 50, 252, 0.25)',
         borderDash: [8, 4],
@@ -2308,7 +2313,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   </div>
                 </div>
                 <div id="evolution-chart-container" className="min-h-[320px] min-w-0">
-                  <EvolutionBarChart chartData={radarChartData} maxScore={selectedProtocolMaxScore} />
+                  <EvolutionBarChart chartData={radarChartData} maxScore={100} />
                 </div>
               </React.Fragment>
             ) : null}

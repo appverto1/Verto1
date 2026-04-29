@@ -1198,7 +1198,7 @@ export default function App() {
       return;
     }
 
-    const item = history.find(i => i.id === id);
+    const item = history.find(i => String(i.id) === rawId);
     const isFamilyHistory = item && (item.type === 'family_note' || item.type === 'photo');
     if (isFamilyHistory) {
       const patientId = String(item?.patientId || item?.patient_id || '').trim();
@@ -1247,7 +1247,7 @@ export default function App() {
       const updatedItem = { ...item, score, evalComment: evalComment || '' };
       const noteText = `📝 ATUALIZAÇÃO DE REGISTRO\nAtividade: ${updatedItem.title}\nPontuação: ${updatedItem.score}\nObs: ${updatedItem.evalComment || "Nenhuma observação."}`;
       handleAddNote(item.patientId, noteText, 'private', 'Sessão');
-      setHistory(prev => prev.map(i => i.id === id ? updatedItem : i));
+      setHistory(prev => prev.map(i => (String(i.id) === rawId ? updatedItem : i)));
       onAddActivityLog("Edição de Histórico", `Registro de atividade "${item.title}" (ID ${id}) editado.`);
       try {
         await dataService.updateHistoryItem(String(id), {
