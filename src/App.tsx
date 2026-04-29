@@ -1056,14 +1056,16 @@ export default function App() {
     setTasks(prev => [...prev, taskToPersist]);
     onAddActivityLog("Criação de Tarefa", `Tarefa "${taskToPersist.title}" criada para o paciente ID ${taskToPersist.patientId}.`);
 
-    // Sync to Backend
-    const persisted = await dataService.addTask({
-      ...taskToPersist,
-      patient_id: String(taskToPersist.patientId),
-      patient_email: patient?.email || null
-    });
-    if (persisted?.success && persisted?.data?.id) {
-      setTasks(prev => prev.map(task => (task.id === taskToPersist.id ? { ...task, id: persisted.data.id } : task)));
+    if (!isAdultTask) {
+      // Sync to Backend (fluxo legado/kids)
+      const persisted = await dataService.addTask({
+        ...taskToPersist,
+        patient_id: String(taskToPersist.patientId),
+        patient_email: patient?.email || null
+      });
+      if (persisted?.success && persisted?.data?.id) {
+        setTasks(prev => prev.map(task => (task.id === taskToPersist.id ? { ...task, id: persisted.data.id } : task)));
+      }
     }
   };
   const handleUpdateTask = async (id: any, fields: any) => {
@@ -1078,26 +1080,57 @@ export default function App() {
     // Sync to Backend
     if (mergedTask) {
       const patient = allPatients.find(p => p.id === mergedTask.patientId);
-      await dataService.updateTask(String(id), {
-        id: String(id),
-        patient_id: String(mergedTask.patientId),
-        patient_email: patient?.email || mergedTask.patient_email || null,
-        title: mergedTask.title,
-        description: mergedTask.description || '',
-        type: mergedTask.type || 'task',
-        max_score:
-          Number.isFinite(Number(mergedTask.maxScore))
-            ? Math.max(1, Math.min(100, Number(mergedTask.maxScore)))
-            : undefined,
-        icon: mergedTask.icon || '',
-        color: mergedTask.color || '',
-        completed: Boolean(mergedTask.completed),
-        is_daily_reminder: Boolean(mergedTask.isDailyReminder || mergedTask.is_daily_reminder),
-        linked_task: mergedTask.linkedTask || mergedTask.linked_task || null
-      });
+      const isAdultTask = Number(patient?.age || 0) > 12;
+      if (isAdultTask) {
+        const assignedId = String(mergedTask.assignedTaskId || mergedTask.id || '').trim();
+        if (assignedId) {
+          await dataService.updateAssignedTask(assignedId, {
+            task_type: mergedTask.type || 'task',
+            task_data: {
+              title: mergedTask.title,
+              description: mergedTask.description || '',
+              icon: mergedTask.icon || '',
+              color: mergedTask.color || '',
+              linkedTask: mergedTask.linkedTask || mergedTask.linked_task || '',
+              linkedProtocolId: mergedTask.linkedProtocolId || '',
+              maxScore:
+                Number.isFinite(Number(mergedTask.maxScore))
+                  ? Math.max(1, Math.min(10, Number(mergedTask.maxScore)))
+                  : undefined
+            },
+            scheduled_at: mergedTask.scheduledAt || mergedTask.scheduled_at || undefined,
+            status: mergedTask.completed ? 'completed' : 'pending'
+          });
+        }
+      } else {
+        await dataService.updateTask(String(id), {
+          id: String(id),
+          patient_id: String(mergedTask.patientId),
+          patient_email: patient?.email || mergedTask.patient_email || null,
+          title: mergedTask.title,
+          description: mergedTask.description || '',
+          type: mergedTask.type || 'task',
+          max_score:
+            Number.isFinite(Number(mergedTask.maxScore))
+              ? Math.max(1, Math.min(100, Number(mergedTask.maxScore)))
+              : undefined,
+          icon: mergedTask.icon || '',
+          color: mergedTask.color || '',
+          completed: Boolean(mergedTask.completed),
+          is_daily_reminder: Boolean(mergedTask.isDailyReminder || mergedTask.is_daily_reminder),
+          linked_task: mergedTask.linkedTask || mergedTask.linked_task || null
+        });
+      }
     }
   };
   const handleAddNote = async (pid: any, txt: string, visibility: string, subject?: string) => {
+    const normalizeNoteVisibility = (raw: string) => {
+      const safe = String(raw || '').toLowerCase();
+      if (safe === 'professional' || safe === 'shared_clinic') return 'shared_clinic';
+      if (safe === 'patient' || safe === 'shared' || safe === 'family' || safe === 'shared_patient') return 'shared_patient';
+      return 'private';
+    };
+    const normalizedVisibility = normalizeNoteVisibility(visibility);
     const patient = allPatients.find(p => p.id === pid);
     const patientIdentity = resolvePatientIdentityForPortal({
       patientId: pid,
@@ -1110,11 +1143,11 @@ export default function App() {
       patientId: pid, 
       text: txt, 
       date: new Date().toLocaleString(), 
-      visibility, 
+      visibility: normalizedVisibility, 
       subject: subject || "Geral" 
     };
     setTherapistNotes(prev => [newNote, ...prev]);
-    onAddActivityLog("Registro de Evolução", `Nova nota (${visibility}) adicionada ao prontuário do paciente ID ${pid}.`);
+    onAddActivityLog("Registro de Evolução", `Nova nota (${normalizedVisibility}) adicionada ao prontuário do paciente ID ${pid}.`);
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -1125,7 +1158,7 @@ export default function App() {
         patient_name: patientIdentity.patientName || null,
         patient_email: patientIdentity.patientEmail,
         text: txt,
-        visibility,
+        visibility: normalizedVisibility,
         subject: subject || "Geral"
       });
       if (result?.success && result?.data?.id) {
@@ -1971,9 +2004,12 @@ export default function App() {
         typeof value === 'string' &&
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 
-      const normalizedTarget = targetVisibility === 'shared' ? 'patient' : targetVisibility;
-      const copyKey = normalizedTarget === 'patient' ? 'hasSharedCopy' : 'hasProfessionalCopy';
-      const targetLabel = normalizedTarget === 'patient' ? 'paciente' : 'profissionais';
+      const normalizedTarget =
+        targetVisibility === 'shared' || targetVisibility === 'patient' || targetVisibility === 'shared_patient'
+          ? 'shared_patient'
+          : 'shared_clinic';
+      const copyKey = normalizedTarget === 'shared_patient' ? 'hasSharedCopy' : 'hasProfessionalCopy';
+      const targetLabel = normalizedTarget === 'shared_patient' ? 'paciente' : 'profissionais';
       const notesSnapshot = Array.isArray(therapistNotes) ? [...therapistNotes] : [];
       const note = notesSnapshot.find((n: any) => n.id === id);
       if (!note) return;
@@ -1992,7 +2028,15 @@ export default function App() {
       const isCopy = Boolean(note?.originalId || note?.original_id);
       const noteVisibility = String(note?.visibility || '').toLowerCase();
       const noteType = String(note?.type || '').toLowerCase();
-      if (isCopy && (noteVisibility === normalizedTarget || noteType === normalizedTarget)) {
+      if (
+        isCopy &&
+        (
+          noteVisibility === normalizedTarget ||
+          noteType === normalizedTarget ||
+          (normalizedTarget === 'shared_patient' && (noteVisibility === 'patient' || noteVisibility === 'shared' || noteType === 'shared' || noteType === 'patient')) ||
+          (normalizedTarget === 'shared_clinic' && (noteVisibility === 'professional' || noteType === 'professional'))
+        )
+      ) {
         setTherapistNotes((prev: any[]) =>
           normalizeAndDecorateNotes(
             prev
@@ -2022,8 +2066,22 @@ export default function App() {
       const existingCopy = notesSnapshot.find(
         (n: any) =>
           String(n?.originalId || n?.original_id || '') === String(id) &&
-          (String(n?.visibility || '').toLowerCase() === normalizedTarget ||
-            String(n?.type || '').toLowerCase() === normalizedTarget),
+          (
+            String(n?.visibility || '').toLowerCase() === normalizedTarget ||
+            String(n?.type || '').toLowerCase() === normalizedTarget ||
+            (normalizedTarget === 'shared_patient' &&
+              (
+                String(n?.visibility || '').toLowerCase() === 'patient' ||
+                String(n?.visibility || '').toLowerCase() === 'shared' ||
+                String(n?.type || '').toLowerCase() === 'patient' ||
+                String(n?.type || '').toLowerCase() === 'shared'
+              )) ||
+            (normalizedTarget === 'shared_clinic' &&
+              (
+                String(n?.visibility || '').toLowerCase() === 'professional' ||
+                String(n?.type || '').toLowerCase() === 'professional'
+              ))
+          ),
       );
       if (existingCopy) {
         setTherapistNotes((prev: any[]) =>
@@ -2054,7 +2112,7 @@ export default function App() {
         id: newCopyId,
         patientId,
         visibility: normalizedTarget,
-        type: normalizedTarget === 'professional' ? 'professional' : 'shared',
+        type: normalizedTarget === 'shared_clinic' ? 'professional' : 'shared',
         originalId: String(id),
         hasSharedCopy: false,
         hasProfessionalCopy: false,
@@ -2071,7 +2129,7 @@ export default function App() {
         patient_email: patient?.email || note?.patient_email || null,
         text: note.text,
         visibility: normalizedTarget,
-        type: normalizedTarget === 'professional' ? 'professional' : 'shared',
+        type: normalizedTarget === 'shared_clinic' ? 'professional' : 'shared',
         subject: note.subject || 'Geral',
         original_id: String(id),
       });
@@ -2311,7 +2369,11 @@ export default function App() {
           energyTags={(user.type === 'conventional' || user.type === 'adult_conventional') ? ADULT_CONVENTIONAL_TAGS : ENERGY_TAGS} 
           sharedNotes={therapistNotes.filter(n => {
             const noteVisibility = String(n?.visibility || n?.type || '').toLowerCase();
-            const isPatientNote = noteVisibility === 'shared' || noteVisibility === 'patient' || noteVisibility === 'family';
+            const isPatientNote =
+              noteVisibility === 'shared' ||
+              noteVisibility === 'patient' ||
+              noteVisibility === 'family' ||
+              noteVisibility === 'shared_patient';
             if (user.role === 'patient') {
               return isPatientNote;
             }

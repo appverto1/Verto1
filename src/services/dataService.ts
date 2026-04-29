@@ -110,6 +110,14 @@ function ensureArray(value: any) {
   return Array.isArray(value) ? value : [];
 }
 
+function normalizeNoteVisibility(value: any): 'private' | 'shared_patient' | 'shared_clinic' {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return 'private';
+  if (raw === 'shared_clinic' || raw === 'professional') return 'shared_clinic';
+  if (raw === 'shared_patient' || raw === 'shared' || raw === 'patient' || raw === 'family') return 'shared_patient';
+  return 'private';
+}
+
 type OfflineType = 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment';
 
 async function buildConditionalHeaders(endpoint: string, type: OfflineType, includeBearer = false) {
@@ -986,6 +994,26 @@ export const dataService = {
     }
   },
 
+  async updateAssignedTask(taskId: string, payload: {
+    task_type?: string;
+    task_data?: Record<string, any>;
+    scheduled_at?: string;
+    status?: 'pending' | 'completed';
+  }) {
+    try {
+      const response = await fetchWithAuthRetry(`/api/assigned-tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error updating assigned task:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
   async uploadDataUrl(bucket: string, path: string, dataUrl: string, contentTypeHint?: string) {
     try {
       const response = await fetch('/api/storage/upload', {
@@ -1346,17 +1374,19 @@ export const dataService = {
       const patientId = String(patient?.id || '').trim();
       if (!patientId) continue;
 
-      const [notesResponse, historyResponse, tasksResponse, recordResponse, submissionsResponse] = await Promise.all([
+      const [notesResponse, historyResponse, tasksResponse, assignedTasksResponse, recordResponse, submissionsResponse] = await Promise.all([
         fetch(`/api/notes/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' }),
         fetch(`/api/history/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' }),
         fetch(`/api/tasks/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' }),
+        fetch(`/api/assigned-tasks/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' }),
         fetch(`/api/patient-records/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' }),
         fetch(`/api/patient-anamnesis/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' })
       ]);
-      const [notesRes, historyRes, tasksRes, patientRecordRes, submissionsRes] = await Promise.all([
+      const [notesRes, historyRes, tasksRes, assignedTasksRes, patientRecordRes, submissionsRes] = await Promise.all([
         safeJson(notesResponse),
         safeJson(historyResponse),
         safeJson(tasksResponse),
+        safeJson(assignedTasksResponse),
         safeJson(recordResponse),
         safeJson(submissionsResponse)
       ]);
@@ -1364,6 +1394,7 @@ export const dataService = {
       const patientNotes = ensureArray(notesRes?.data).map((n: any) => ({
         ...n,
         patientId: n?.patient_id || patientId,
+        visibility: normalizeNoteVisibility(n?.visibility || n?.type),
         date: n?.created_at ? new Date(n.created_at).toLocaleString() : new Date().toLocaleString()
       }));
       const patientHistory = ensureArray(historyRes?.data).map((h: any) => ({
@@ -1383,10 +1414,32 @@ export const dataService = {
         ...t,
         patientId: t?.patient_id || patientId
       }));
+      const patientAssignedTasks = ensureArray(assignedTasksRes?.data).map((t: any) => {
+        const taskData = t?.task_data && typeof t.task_data === 'object' ? t.task_data : {};
+        return {
+          id: String(t?.id || ''),
+          assignedTaskId: String(t?.id || ''),
+          patientId: t?.patient_id || patientId,
+          patient_id: t?.patient_id || patientId,
+          patient_email: t?.patient_email || patient?.email || null,
+          title: taskData?.title || 'Tarefa agendada',
+          description: taskData?.description || '',
+          icon: taskData?.icon || '🎯',
+          color: taskData?.color || 'bg-blue-100 text-blue-600',
+          type: t?.task_type || 'task',
+          maxScore: Number(taskData?.maxScore || taskData?.max_score || 4),
+          scheduledAt: t?.scheduled_at || null,
+          scheduled_at: t?.scheduled_at || null,
+          status: t?.status || 'pending',
+          task_data: taskData,
+          created_at: t?.created_at || t?.scheduled_at || null
+        };
+      });
 
       notes.push(...patientNotes);
       history.push(...patientHistory);
       tasks.push(...patientTasks);
+      tasks.push(...patientAssignedTasks);
 
       const recordPayload = parseJsonObject(patientRecordRes?.data?.payload) || {};
       const anamnesisData = parseJsonObject(recordPayload?.anamnese) || null;

@@ -5724,7 +5724,17 @@ async function startServer() {
     }
   });
 
-  const NOTE_VISIBILITY_ALLOWED = new Set(['patient', 'shared', 'family']);
+  const NOTE_VISIBILITY_ALLOWED = new Set(['patient', 'shared', 'family', 'shared_patient']);
+  const NOTE_VISIBILITY_CANONICAL = new Set(['private', 'shared_patient', 'shared_clinic']);
+
+  const normalizeNoteVisibility = (input: unknown): 'private' | 'shared_patient' | 'shared_clinic' => {
+    const raw = sanitizeString(input, 60).toLowerCase();
+    if (!raw) return 'private';
+    if (raw === 'shared_clinic' || raw === 'professional') return 'shared_clinic';
+    if (raw === 'shared_patient' || raw === 'shared' || raw === 'patient' || raw === 'family') return 'shared_patient';
+    if (raw === 'private') return 'private';
+    return 'private';
+  };
 
   const noteIsReadableByPatient = (note: any): boolean => {
     const visibility = sanitizeString(note?.visibility, 40).toLowerCase();
@@ -5745,7 +5755,7 @@ async function startServer() {
 
     const needsPatientVisibilityFilter = params.role === 'patient';
     if (needsPatientVisibilityFilter) {
-      query = query.in('visibility', ['patient', 'shared', 'family']);
+      query = query.in('visibility', ['patient', 'shared', 'family', 'shared_patient']);
     }
 
     let result = await query.order('created_at', { ascending: false });
@@ -6015,15 +6025,14 @@ async function startServer() {
         req.session.user,
         { createIfMissing: true, fallbackName: sanitizeString(req.body?.patient_name, 160) }
       );
-      const safeVisibility = new Set(['private', 'shared', 'family', 'professional', 'patient']);
-      const normalizedVisibility = safeVisibility.has(String(req.body?.visibility))
-        ? String(req.body?.visibility)
-        : 'private';
+      const normalizedVisibility = normalizeNoteVisibility(req.body?.visibility);
       const normalizedType = (() => {
         const providedType = sanitizeString(req.body?.type, 40).toLowerCase();
-        if (providedType && safeVisibility.has(providedType)) return providedType;
-        if (normalizedVisibility === 'professional') return 'professional';
-        if (normalizedVisibility === 'patient' || normalizedVisibility === 'shared' || normalizedVisibility === 'family') return 'shared';
+        if (providedType && NOTE_VISIBILITY_CANONICAL.has(providedType as any)) return providedType;
+        if (providedType === 'shared' || providedType === 'patient' || providedType === 'family') return 'shared';
+        if (providedType === 'professional') return 'professional';
+        if (normalizedVisibility === 'shared_clinic') return 'professional';
+        if (normalizedVisibility === 'shared_patient') return 'shared';
         return 'private';
       })();
       const payload = cleanObject({
@@ -7156,16 +7165,15 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
       }
 
-      const safeVisibility = new Set(['private', 'shared', 'family', 'professional', 'patient']);
       const updatedVisibility =
         req.body?.visibility !== undefined
-          ? (safeVisibility.has(String(req.body?.visibility)) ? String(req.body?.visibility) : undefined)
+          ? normalizeNoteVisibility(req.body?.visibility)
           : undefined;
       const updatedType =
         updatedVisibility !== undefined
-          ? (updatedVisibility === 'professional'
+          ? (updatedVisibility === 'shared_clinic'
               ? 'professional'
-              : updatedVisibility === 'patient' || updatedVisibility === 'shared' || updatedVisibility === 'family'
+              : updatedVisibility === 'shared_patient'
                 ? 'shared'
                 : 'private')
           : undefined;
@@ -7350,6 +7358,64 @@ async function startServer() {
         }
         throw error;
       }
+
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || String(error) });
+    }
+  });
+
+  app.patch('/api/assigned-tasks/:taskId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const taskId = sanitizeString(req.params.taskId, 120);
+      if (!taskId) return res.status(400).json({ success: false, error: 'taskId inválido.' });
+
+      const { data: existing, error: existingError } = await supabase
+        .from('assigned_tasks')
+        .select('*')
+        .eq('id', taskId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) return res.status(404).json({ success: false, error: 'Tarefa não encontrada.' });
+      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+
+      const existingTaskData = existing?.task_data && typeof existing.task_data === 'object' ? existing.task_data : {};
+      const incomingTaskData =
+        req.body?.task_data && typeof req.body.task_data === 'object'
+          ? req.body.task_data
+          : req.body?.taskData && typeof req.body.taskData === 'object'
+            ? req.body.taskData
+            : null;
+
+      const mergedTaskData = incomingTaskData
+        ? {
+            ...existingTaskData,
+            title: sanitizeString(incomingTaskData?.title, 240) || existingTaskData?.title || undefined,
+            description: sanitizeTextField(incomingTaskData?.description, 4000) || existingTaskData?.description || undefined,
+            icon: sanitizeString(incomingTaskData?.icon, 40) || existingTaskData?.icon || undefined,
+            color: sanitizeString(incomingTaskData?.color, 80) || existingTaskData?.color || undefined,
+            linkedTask: sanitizeString(incomingTaskData?.linkedTask, 120) || existingTaskData?.linkedTask || undefined,
+            linkedProtocolId: sanitizeString(incomingTaskData?.linkedProtocolId, 120) || existingTaskData?.linkedProtocolId || undefined,
+            maxScore: asSafeNumber(incomingTaskData?.maxScore ?? incomingTaskData?.max_score, 1, 10) ?? existingTaskData?.maxScore ?? existingTaskData?.max_score
+          }
+        : undefined;
+
+      const updates = cleanObject({
+        task_type: req.body?.task_type !== undefined ? sanitizeString(req.body?.task_type, 60) : undefined,
+        task_data: mergedTaskData,
+        scheduled_at: req.body?.scheduled_at !== undefined ? sanitizeString(req.body?.scheduled_at, 60) : undefined,
+        status: req.body?.status !== undefined ? sanitizeString(req.body?.status, 40).toLowerCase() : undefined
+      });
+
+      const { data, error } = await supabase
+        .from('assigned_tasks')
+        .update(updates)
+        .eq('id', taskId)
+        .select('*')
+        .single();
+      if (error) throw error;
 
       return res.json({ success: true, data });
     } catch (error: any) {
