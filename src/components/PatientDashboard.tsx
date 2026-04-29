@@ -76,6 +76,19 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return `${y}-${m}-${d}`;
   };
 
+  const formatFilterDate = (value: string) => {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) return raw;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      const [year, month, day] = raw.split('-');
+      return `${day}/${month}/${year}`;
+    }
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return raw;
+    return parsed.toLocaleDateString('pt-BR');
+  };
+
   const parseScore = (value: any): number | null => {
     if (value === null || value === undefined || value === '') return null;
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -653,7 +666,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                           >
                             {availableSnapshots.length === 0 && <option value="">Sem dados avaliados</option>}
                             {availableSnapshots.map((date: any) => (
-                              <option key={date} value={date}>{date}</option>
+                              <option key={date} value={date}>{formatFilterDate(String(date))}</option>
                             ))}
                           </select>
                           <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 text-[#7a32fc] pointer-events-none" size={10} />
@@ -672,7 +685,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             {availableSnapshots
                               .filter((date: any) => date !== selectedBaseDate)
                               .map((date: any) => (
-                                <option key={`compare-${date}`} value={date}>{date}</option>
+                                <option key={`compare-${date}`} value={date}>{formatFilterDate(String(date))}</option>
                               ))}
                           </select>
                           <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 text-emerald-600 pointer-events-none" size={10} />
@@ -1015,7 +1028,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 >
                   <option value="all">Todos os dias</option>
                   {availableSnapshots.map((date: any) => (
-                    <option key={date} value={date}>{date}</option>
+                    <option key={date} value={date}>{formatFilterDate(String(date))}</option>
                   ))}
                 </select>
                 <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={14} />
