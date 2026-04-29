@@ -517,9 +517,21 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
 
   const filteredHistoryList = useMemo(() => {
-    if (selectedSnapshotDate === "all") return history;
-    return history.filter((h: any) => h.dateGroup === selectedSnapshotDate);
-  }, [history, selectedSnapshotDate]);
+    const scopedByDate =
+      selectedSnapshotDate === "all"
+        ? history
+        : history.filter((h: any) => h.dateGroup === selectedSnapshotDate);
+
+    if (!isConventionalAdult) return scopedByDate;
+
+    return scopedByDate.filter((item: any) => {
+      const directScore = parseScore(item?.score);
+      const proScore = parseScore(item?.pro_score);
+      const nestedScore = parseScore(item?.task_data?.pro_score ?? item?.task_data?.score);
+      const hasProfessionalScore = directScore !== null || proScore !== null || nestedScore !== null;
+      return !hasProfessionalScore;
+    });
+  }, [history, selectedSnapshotDate, isConventionalAdult]);
 
   const groupedHistory = filteredHistoryList.reduce((groups: any, item: any) => { const group = groups[item.dateGroup] || []; group.push(item); group.sort((a: any, b: any) => b.id - a.id); groups[item.dateGroup] = group; return groups; }, {}); 
   const sortedDateKeys = Object.keys(groupedHistory).sort((a, b) => { if (a === "Hoje") return -1; if (b === "Hoje") return 1; if (a === "Ontem") return -1; if (b === "Ontem") return 1; return b.localeCompare(a); }); 
@@ -646,10 +658,48 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                         <Trophy className="text-yellow-500" size={20}/> Nível de Herói
                       </h2>
                     </div>
-                    <div className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4 text-center">
-                      <p className="text-sm font-semibold text-violet-700">Avaliações clínicas ficam visíveis apenas para profissionais.</p>
-                      <p className="text-xs text-violet-500 mt-1">Aqui no portal da família você acompanha registros, fotos e conquistas por estrelinhas.</p>
+                    <div className="mb-4 sm:mb-5 px-1 sm:px-2 grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 items-end">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider font-bold text-blue-500 mb-1.5">Data Atual</p>
+                        <div className="relative">
+                          <select
+                            className="w-full bg-blue-50 border border-blue-100 text-[10px] sm:text-[11px] font-semibold text-[#7a32fc] px-3 py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
+                            value={selectedBaseDate}
+                            onChange={(e) => setSelectedBaseDate(e.target.value)}
+                            disabled={availableSnapshots.length === 0}
+                          >
+                            {availableSnapshots.length === 0 && <option value="">Sem dados avaliados</option>}
+                            {availableSnapshots.map((date: any) => (
+                              <option key={date} value={date}>{formatFilterDate(String(date))}</option>
+                            ))}
+                          </select>
+                          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 text-[#7a32fc] pointer-events-none" size={10} />
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider font-bold text-emerald-600 mb-1.5">Data Comparação</p>
+                        <div className="relative">
+                          <select
+                            className="w-full bg-emerald-50 border border-emerald-100 text-[10px] sm:text-[11px] font-semibold text-emerald-700 px-3 py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
+                            value={selectedCompareDate}
+                            onChange={(e) => setSelectedCompareDate(e.target.value)}
+                            disabled={availableSnapshots.length === 0}
+                          >
+                            <option value="">Sem comparação</option>
+                            {availableSnapshots
+                              .filter((date: any) => date !== selectedBaseDate)
+                              .map((date: any) => (
+                                <option key={`compare-${date}`} value={date}>{formatFilterDate(String(date))}</option>
+                              ))}
+                          </select>
+                          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 text-emerald-600 pointer-events-none" size={10} />
+                        </div>
+                      </div>
                     </div>
+                    <div className="w-full min-h-[300px] sm:min-h-[350px]">
+                      <EvolutionBarChart chartData={kidChartData} maxScore={100} />
+                    </div>
+                    <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-widest text-center mt-2">Filtro por datas para comparação do progresso</p>
                 </div>
 
                 <div className="bg-white p-4 sm:p-6 rounded-[28px] shadow-lg border border-blue-100 mb-6">
