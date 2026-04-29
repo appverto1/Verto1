@@ -2,7 +2,7 @@
 import { ChevronLeft, MessageCircle, FileText, SlidersHorizontal, ChevronDown, Calendar, FileOutput, Download, EyeOff, Share2, Eye, Edit, X, UploadCloud, FileUp, File, Trash2, Activity, Search, Plus, Filter, Target, Zap, Info, BarChart2, CheckCircle2, RotateCcw } from 'lucide-react';
 import { TutorialOverlay } from './Tutorial';
 import { AnamnesisModal } from './Anamnesis';
-import { ComparisonBarChart, EvolutionLineChart } from './Charts';
+import { ComparisonBarChart, EvolutionBarChart } from './Charts';
 import { HistoryCard } from './History';
 import { SessionMode } from './SessionMode';
 import { ENERGY_TAGS } from './Common';
@@ -2308,7 +2308,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   </div>
                 </div>
                 <div id="evolution-chart-container" className="min-h-[320px] min-w-0">
-                  <EvolutionLineChart chartData={radarChartData} maxScore={selectedProtocolMaxScore} />
+                  <EvolutionBarChart chartData={radarChartData} maxScore={selectedProtocolMaxScore} />
                 </div>
               </React.Fragment>
             ) : null}

@@ -75,6 +75,15 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
   }; 
 
   const isFamilyEntry = item.type === 'family_note' || item.type === 'photo';
+  const displayIcon = (() => {
+    const raw = String(item?.icon || '').trim();
+    if (raw && raw !== '??') return raw;
+    if (item?.type === 'photo') return '📷';
+    if (item?.type === 'family_note') return '🏠';
+    if (item?.type === 'intervention') return '🧩';
+    if (item?.type === 'task') return '🎯';
+    return '📝';
+  })();
   const hasStarMarker = /\u2b50|⭐/.test(String(item?.subject || ''));
   const isMilestoneAwarded = Boolean(item?.milestoneAwarded) || Number(item?.score ?? 0) >= 1 || hasStarMarker;
   const handleToggleMilestone = () => {
@@ -88,7 +97,7 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
     <div id={id} className="bg-white rounded-2xl p-5 card-shadow hover:shadow-lg transition-shadow mb-4 animate-fade-in border border-transparent hover:border-gray-100"> 
       <div className="flex justify-between items-start mb-3"> 
         <div className="flex items-center gap-2"> 
-          <span className="text-xl p-2 bg-gray-50 rounded-lg">{item.icon}</span> 
+          <span className="text-xl p-2 bg-gray-50 rounded-lg">{displayIcon}</span> 
           <div> 
             <h4 className="font-semibold text-gray-800">{item.title}</h4> 
             <div className="flex flex-wrap gap-1 mt-0.5">

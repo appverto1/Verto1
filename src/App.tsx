@@ -923,7 +923,7 @@ export default function App() {
                   patientId: t?.patient_id || user.id,
                   title: taskData.title || 'Tarefa agendada',
                   description: taskData.description || '',
-                  icon: taskData.icon || '??',
+                  icon: taskData.icon || '🎯',
                   color: taskData.color || 'bg-blue-100 text-blue-600',
                   type: t?.task_type || 'task',
                   maxScore: Number(taskData?.maxScore || taskData?.max_score || 4),
@@ -1245,7 +1245,7 @@ export default function App() {
 
     if (item) {
       const updatedItem = { ...item, score, evalComment: evalComment || '' };
-      const noteText = `?? ATUALIZAÇÃO DE REGISTRO\nAtividade: ${updatedItem.title}\nPontuação: ${updatedItem.score}\nObs: ${updatedItem.evalComment || "Nenhuma observação."}`;
+      const noteText = `📝 ATUALIZAÇÃO DE REGISTRO\nAtividade: ${updatedItem.title}\nPontuação: ${updatedItem.score}\nObs: ${updatedItem.evalComment || "Nenhuma observação."}`;
       handleAddNote(item.patientId, noteText, 'private', 'Sessão');
       setHistory(prev => prev.map(i => i.id === id ? updatedItem : i));
       onAddActivityLog("Edição de Histórico", `Registro de atividade "${item.title}" (ID ${id}) editado.`);
@@ -1838,11 +1838,11 @@ export default function App() {
       score: finalScore,
       evalComment: evalComment || "",
       dateGroup: "Hoje",
-      icon: "??"
+      icon: "🎯"
     };
     
     // Add a note about the trial
-    const noteText = `?? NOVO REGISTRO\nAtividade: ${title}\nPontuação: ${finalScore}${evalComment ? `\nAnotações do Profissional: ${evalComment}` : ""}`;
+    const noteText = `🎯 NOVO REGISTRO\nAtividade: ${title}\nPontuação: ${finalScore}${evalComment ? `\nAnotações do Profissional: ${evalComment}` : ""}`;
     handleAddNote(pid, noteText, 'private', 'Sessão');
 
     onAddActivityLog("Registro de Avaliação", `Avaliação da habilidade "${title}" registrada para o paciente ID ${pid}. Pontuação: ${score}.`);
@@ -1857,7 +1857,7 @@ export default function App() {
         title: title,
         score: finalScore,
         note: evalComment || "",
-        icon: "??"
+        icon: "🎯"
       });
     } catch (error) {
       console.error('Falha ao persistir registro de sessão:', error);
@@ -1896,7 +1896,7 @@ export default function App() {
       if (isMastered && peiGoal?.status !== 'completed') {
         handleAddNote(
           pid,
-          `?? CRITÉRIO DE MAESTRIA ATINGIDO!\nA habilidade "${title}" foi realizada de forma independente por 5 vezes consecutivas. Status atualizado para Adquirida.`,
+          `⭐ CRITÉRIO DE MAESTRIA ATINGIDO!\nA habilidade "${title}" foi realizada de forma independente por 5 vezes consecutivas. Status atualizado para Adquirida.`,
           'private',
           'Maestria'
         );
@@ -2098,7 +2098,7 @@ export default function App() {
   const handleAddFamilyNote = async (pid: any, txt: string, image?: string) => {
     const identity = resolvePatientIdentityForPortal({ patientId: pid });
     const targetPatientId = String(identity.patientId || pid || user?.id || '').trim();
-    const noteText = `?? REGISTRO DA FAMÍLIA\n${txt}`;
+    const noteText = `🏠 REGISTRO DA FAMÍLIA\n${txt}`;
     handleAddNote(targetPatientId, noteText, 'family', 'Família');
     
     const newHistoryItem = {
@@ -2109,7 +2109,7 @@ export default function App() {
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       note: txt,
       image: image,
-      icon: image ? "??" : "??",
+      icon: image ? "📷" : "🏠",
       dateGroup: "Hoje",
       date: new Date().toISOString()
     };
@@ -2129,7 +2129,7 @@ export default function App() {
       title: image ? "Foto enviada" : "Registro da Família",
       note: txt,
       image: image,
-      icon: image ? "??" : "??"
+      icon: image ? "📷" : "🏠"
     });
 
     if (!historySaveResult?.success) {
