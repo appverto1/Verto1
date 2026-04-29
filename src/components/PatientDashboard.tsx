@@ -1,7 +1,7 @@
 ﻿import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle } from 'lucide-react';
-import { EvolutionLineChart, EvolutionBarChart } from './Charts';
+import { EvolutionBarChart } from './Charts';
 import { LogoVerto, SuccessOverlay, BigEnergySlider, ENERGY_TAGS } from './Common';
 import { HistoryCard } from './History';
 import { DrawingCanvas } from './DrawingCanvas';
@@ -182,6 +182,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       'Imitação Motora (Imitation)',
       'Ecoico (Echoic)'
     ];
+
+    const normalizeSkill = (value: any) =>
+      String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+
     const inferKidsDomainFromTitle = (title: any): string => {
       const n = normalizeSkill(title);
       if (!n) return '';
@@ -195,24 +205,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return '';
     };
 
-    // Prioritize VB-MAPP for crianças, otherwise use first protocol
-    const vbmapp = protocols?.find((p: any) => p.title.includes('VB-MAPP'));
-    const selectedProto = vbmapp || protocols?.[0] || { data: [] };
-    const protocolDomains = Array.isArray(selectedProto?.data)
-      ? selectedProto.data.map((d: any) => ({
-          name: String(d?.name || '').trim(),
-          skills: Array.isArray(d?.skills) ? d.skills : []
-        })).filter((d: any) => d.name)
-      : [];
-
-    const normalizeSkill = (value: any) =>
-      String(value || '')
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toLowerCase();
     const isSameSkill = (a: string, b: string) => {
       const left = normalizeSkill(a);
       const right = normalizeSkill(b);
@@ -220,127 +212,157 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return left === right || left.includes(right) || right.includes(left);
     };
 
-    const sourceHistory = Array.isArray(scoredClinicalEvents) ? scoredClinicalEvents : [];
+    const vbmapp = protocols?.find((p: any) => String(p?.title || '').includes('VB-MAPP'));
+    const selectedProto = vbmapp || protocols?.[0] || { data: [] };
+    const protocolDomains = Array.isArray(selectedProto?.data)
+      ? selectedProto.data
+          .map((d: any) => ({
+            name: String(d?.name || '').trim(),
+            skills: Array.isArray(d?.skills) ? d.skills : []
+          }))
+          .filter((d: any) => d.name)
+      : [];
 
-    const historyTaskDomainsMap = new Map<string, Set<string>>();
-    sourceHistory.forEach((h: any) => {
-      const type = String(h?.type || '').toLowerCase();
-      if (type === 'family_note' || type === 'photo') return;
-      const score = getEventScore(h);
-      if (score === null) return;
-      const rawDomain = String(
-        h?.domain ||
-        h?.domainName ||
-        h?.task_data?.domain ||
-        h?.metadata?.domain ||
-        inferKidsDomainFromTitle(h?.title || h?.task_data?.title || '') ||
-        'Geral'
-      ).trim();
-      const domainName = rawDomain || 'Geral';
-      const rawSkill = String(h?.title || h?.taskTitle || h?.task_data?.title || '').trim();
-      if (!historyTaskDomainsMap.has(domainName)) historyTaskDomainsMap.set(domainName, new Set<string>());
-      if (rawSkill) historyTaskDomainsMap.get(domainName)!.add(rawSkill);
+    const sourceHistory = Array.isArray(scoredClinicalEvents) ? scoredClinicalEvents : [];
+    const scoredEvents = sourceHistory
+      .map((h: any) => {
+        const scoreRaw = getEventScore(h);
+        if (scoreRaw === null) return null;
+        const score = Math.max(0, Math.min(1, Number(scoreRaw) || 0));
+        const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
+        const title = String(h?.title || h?.taskTitle || h?.task_data?.title || '').trim();
+        const domain = String(
+          h?.domain ||
+            h?.domainName ||
+            h?.task_data?.domain ||
+            h?.task_data?.domainName ||
+            h?.metadata?.domain ||
+            inferKidsDomainFromTitle(title) ||
+            'Geral'
+        ).trim();
+        return {
+          ...h,
+          _score: score,
+          _timestamp: ts,
+          _title: title,
+          _titleKey: normalizeSkill(title),
+          _domain: domain || 'Geral',
+          _domainKey: normalizeSkill(domain || 'Geral')
+        };
+      })
+      .filter(Boolean)
+      .sort((a: any, b: any) => a._timestamp - b._timestamp);
+
+    const fallbackDomainMap = new Map<string, Set<string>>();
+    scoredEvents.forEach((event: any) => {
+      const domainName = event._domain || 'Geral';
+      if (!fallbackDomainMap.has(domainName)) fallbackDomainMap.set(domainName, new Set<string>());
+      if (event._title) fallbackDomainMap.get(domainName)!.add(event._title);
     });
 
-    const fallbackDomains = Array.from(historyTaskDomainsMap.entries()).map(([name, skillsSet]) => ({
+    const fallbackDomains = Array.from(fallbackDomainMap.entries()).map(([name, skillsSet]) => ({
       name,
       skills: Array.from(skillsSet).map((s) => ({ name: s }))
     }));
 
     const fallbackHasOnlyGeneral =
-      fallbackDomains.length === 1 &&
-      normalizeSkill(fallbackDomains[0]?.name) === 'geral';
-    const effectiveDomains = protocolDomains.length > 0
+      fallbackDomains.length === 1 && normalizeSkill(fallbackDomains[0]?.name) === 'geral';
+    const effectiveDomains = protocolDomains.length
       ? protocolDomains
-      : (fallbackDomains.length > 0 && !fallbackHasOnlyGeneral
-          ? fallbackDomains
-          : defaultKidsDomains.map((name) => ({ name, skills: [{ name }] })));
-    const labels = effectiveDomains.map((d: any) => d.name);
-    
-    const getDomainScores = (dateFilter: string | null) =>
-      effectiveDomains.map((domain: any) => {
-      const skillNames = domain.skills.map((s: any) => s.name.trim().toLowerCase());
-      const skillLatestScoreMap: any = {};
-      const skillLatestTsMap: any = {};
-      
-      sourceHistory.forEach((h: any) => {
-        const title = String(h?.title || h?.task_data?.title || '').trim();
-        const inDateScope = !dateFilter || getSnapshotKey(h) === dateFilter;
-        const rawDomain = String(
-          h?.domain ||
-          h?.domainName ||
-          h?.task_data?.domain ||
-          h?.task_data?.domainName ||
-          h?.metadata?.domain ||
-          inferKidsDomainFromTitle(title) ||
-          ''
-        ).trim();
-        const matchesBySkill = skillNames.some((skillName: string) => isSameSkill(skillName, title));
-        const matchesByDomain =
-          rawDomain &&
-          normalizeSkill(rawDomain) === normalizeSkill(String(domain?.name || ''));
-        const rawScore = getEventScore(h);
-        const type = String(h?.type || '').toLowerCase();
-        const isScoredClinicalEvent = rawScore !== null && type !== 'family_note' && type !== 'photo';
-        if (isScoredClinicalEvent && inDateScope && (matchesBySkill || matchesByDomain)) {
-          const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
-          const skillKey = matchesBySkill ? normalizeSkill(title) : `__domain__${String(domain?.name || '').toLowerCase()}`;
-          if (!skillLatestTsMap[skillKey] || ts >= skillLatestTsMap[skillKey]) {
-            skillLatestTsMap[skillKey] = ts;
-            
-            // Use 0-1 scale for the chart
-            const peiGoal = user.pei?.find((g: any) => isSameSkill(String(g?.name || ''), title));
-            if (peiGoal?.status === 'completed') {
-              skillLatestScoreMap[skillKey] = 1;
-            } else {
-              skillLatestScoreMap[skillKey] = rawScore;
-            }
-          }
-        }
-      });
+      : fallbackDomains.length && !fallbackHasOnlyGeneral
+        ? fallbackDomains
+        : defaultKidsDomains.map((name) => ({ name, skills: [{ name }] }));
 
-      const latestScores: any[] = Object.values(skillLatestScoreMap);
-      return latestScores.length > 0 ? (latestScores.reduce((a: any, b: any) => a + b, 0) / latestScores.length) : 0;
-    });
+    const labels = effectiveDomains.map((d: any) => d.name);
+
+    const resolveCutoffTimestamp = (dateFilter: string | null) => {
+      if (!dateFilter) return Number.POSITIVE_INFINITY;
+      const parsed = new Date(`${dateFilter}T23:59:59.999`).getTime();
+      return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+    };
+
+    const resolveDomainProgressPercent = (dateFilter: string | null, mode: 'first' | 'latest') => {
+      const cutoffTs = resolveCutoffTimestamp(dateFilter);
+
+      return effectiveDomains.map((domain: any) => {
+        const domainName = String(domain?.name || 'Geral').trim() || 'Geral';
+        const domainKey = normalizeSkill(domainName);
+        const protocolSkills = (Array.isArray(domain?.skills) ? domain.skills : [])
+          .map((s: any) => String(s?.name || '').trim())
+          .filter(Boolean);
+
+        let taskUniverseKeys = new Set<string>(protocolSkills.map((skill: string) => normalizeSkill(skill)).filter(Boolean));
+
+        if (!taskUniverseKeys.size) {
+          scoredEvents.forEach((event: any) => {
+            if (event._domainKey === domainKey && event._titleKey) {
+              taskUniverseKeys.add(event._titleKey);
+            }
+          });
+        }
+
+        const taskValues = new Map<string, number>();
+        const taskFirstTs = new Map<string, number>();
+        const taskLastTs = new Map<string, number>();
+
+        scoredEvents.forEach((event: any) => {
+          if (event._timestamp > cutoffTs) return;
+          const matchesDomain = event._domainKey === domainKey;
+          const matchesBySkill = Array.from(taskUniverseKeys).some((taskKey) => taskKey && (taskKey === event._titleKey || taskKey.includes(event._titleKey) || event._titleKey.includes(taskKey)));
+          if (!matchesDomain && !matchesBySkill) return;
+
+          const taskKey = event._titleKey || `${domainKey}::domain`;
+          if (!taskUniverseKeys.has(taskKey) && matchesDomain) taskUniverseKeys.add(taskKey);
+
+          const firstTs = taskFirstTs.get(taskKey);
+          const lastTs = taskLastTs.get(taskKey);
+          if (firstTs === undefined || event._timestamp < firstTs) {
+            taskFirstTs.set(taskKey, event._timestamp);
+            if (mode === 'first') taskValues.set(taskKey, event._score);
+          }
+          if (lastTs === undefined || event._timestamp >= lastTs) {
+            taskLastTs.set(taskKey, event._timestamp);
+            if (mode === 'latest') taskValues.set(taskKey, event._score);
+          }
+        });
+
+        const totalTasks = taskUniverseKeys.size;
+        if (!totalTasks) return 0;
+
+        let obtained = 0;
+        taskUniverseKeys.forEach((taskKey) => {
+          obtained += Math.max(0, Math.min(1, Number(taskValues.get(taskKey) ?? 0)));
+        });
+
+        return Number(((obtained / totalTasks) * 100).toFixed(2));
+      });
+    };
 
     const resolvedBaseDate = selectedBaseDate || availableSnapshots[0] || "";
-    const datasets: any[] = [];
-    if (resolvedBaseDate) {
-      datasets.push({
-        label: formatFilterDate(resolvedBaseDate),
-        data: getDomainScores(resolvedBaseDate),
-        backgroundColor: 'rgba(122, 50, 252, 0.12)',
-        borderColor: '#7a32fc',
-        borderWidth: 4,
-        pointBackgroundColor: '#7a32fc',
-        pointRadius: 6
-      });
-    } else {
-      datasets.push({
-        label: 'Atual',
-        data: getDomainScores(null),
-        backgroundColor: 'rgba(122, 50, 252, 0.12)',
-        borderColor: '#7a32fc',
-        borderWidth: 4,
-        pointBackgroundColor: '#7a32fc',
-        pointRadius: 6
-      });
-    }
-    if (selectedCompareDate && selectedCompareDate !== resolvedBaseDate) {
-      datasets.push({
-        label: formatFilterDate(selectedCompareDate),
-        data: getDomainScores(selectedCompareDate),
-        backgroundColor: 'rgba(5, 205, 153, 0.12)',
-        borderColor: '#05CD99',
-        borderWidth: 3,
-        borderDash: [7, 5],
-        pointBackgroundColor: '#05CD99',
-        pointRadius: 5
-      });
-    }
+    const resolvedCurrentDate = selectedCompareDate || availableSnapshots[0] || "";
+    const baselineData = resolveDomainProgressPercent(resolvedBaseDate || null, 'first');
+    const currentData = resolveDomainProgressPercent(resolvedCurrentDate || null, 'latest');
 
-    return { labels, datasets };
-  }, [scoredClinicalEvents, protocols, selectedBaseDate, selectedCompareDate, user, availableSnapshots]);
+    return {
+      labels,
+      datasets: [
+        {
+          label: `Avaliação ${formatFilterDate(resolvedBaseDate || selectedBaseDate || '') || 'Inicial'}`,
+          data: baselineData,
+          backgroundColor: 'rgba(122, 50, 252, 0.9)',
+          borderColor: '#7a32fc',
+          borderWidth: 2
+        },
+        {
+          label: `Intervenção ${formatFilterDate(resolvedCurrentDate || selectedCompareDate || '') || 'Atual'}`,
+          data: currentData,
+          backgroundColor: 'rgba(5, 205, 153, 0.9)',
+          borderColor: '#05CD99',
+          borderWidth: 2
+        }
+      ]
+    };
+  }, [scoredClinicalEvents, protocols, selectedBaseDate, selectedCompareDate, availableSnapshots]);
 
   const familyDiaryHistory = useMemo(() => {
     return history
@@ -693,7 +715,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                       </div>
                     </div>
                     <div className="w-full min-h-[300px] sm:min-h-[350px]">
-                        <EvolutionLineChart chartData={kidChartData} maxScore={1} />
+                        <EvolutionBarChart chartData={kidChartData} maxScore={100} />
                     </div>
                     <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-widest text-center mt-2">Filtro por datas para comparação do progresso</p>
                 </div>
