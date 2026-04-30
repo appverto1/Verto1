@@ -107,7 +107,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
 
   const requestActivationBootstrap = async (targetEmail: string) => {
     const safeEmail = String(targetEmail || '').trim().toLowerCase();
-    if (!safeEmail) return null;
+    if (!safeEmail) return { link: null, alreadyConfirmed: false };
     try {
       const response = await fetch('/api/auth/activation/bootstrap', {
         method: 'POST',
@@ -117,12 +117,15 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       });
       const result = await response.json();
       if (response.ok && result?.success && result?.activationLink) {
-        return String(result.activationLink);
+        return { link: String(result.activationLink), alreadyConfirmed: false };
+      }
+      if (response.status === 409 && String(result?.code || '').toUpperCase() === 'ALREADY_CONFIRMED') {
+        return { link: null, alreadyConfirmed: true };
       }
     } catch (bootstrapError) {
       console.error('Activation bootstrap error:', bootstrapError);
     }
-    return null;
+    return { link: null, alreadyConfirmed: false };
   };
 
   useEffect(() => {
@@ -200,10 +203,15 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       if (!session?.user) {
         if (!isRecoveryRoute) {
           const fallbackEmail = String(identifiedEmail || email).trim().toLowerCase();
-          const bootstrapLink = await requestActivationBootstrap(fallbackEmail);
-          if (bootstrapLink) {
-            window.location.href = bootstrapLink;
+          const bootstrapResult = await requestActivationBootstrap(fallbackEmail);
+          if (bootstrapResult?.link) {
+            window.location.href = bootstrapResult.link;
             return;
+          }
+          if (bootstrapResult?.alreadyConfirmed) {
+            throw new Error(
+              'Esta conta já foi ativada. Faça login normal ou use "Esqueci minha senha".',
+            );
           }
         }
         throw new Error(

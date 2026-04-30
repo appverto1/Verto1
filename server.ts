@@ -3400,19 +3400,10 @@ async function startServer() {
         (authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at,
       );
       if (isAlreadyConfirmed) {
-        const profileRole = role === 'patient' ? 'patient' : 'coordinator';
-        const recoveryLink =
-          (await generateSupabaseActionLink({
-            type: 'recovery',
-            email,
-            redirectTo: getActivationRedirectUrl(profileRole, email),
-          })) ||
-          getActivationRedirectUrl(profileRole, email);
-        return res.json({
-          success: true,
-          alreadyConfirmed: true,
-          activationLink: recoveryLink,
-          message: 'Conta já ativada. Enviando fallback para redefinição/entrada segura.',
+        return res.status(409).json({
+          success: false,
+          code: 'ALREADY_CONFIRMED',
+          error: 'Conta já ativada. Use login normal ou recuperação de senha.',
         });
       }
 
@@ -5228,6 +5219,17 @@ async function startServer() {
         const patientEmail = sanitizeEmail(patient?.email);
         if (!patientEmail) {
           return res.status(400).json({ success: false, error: 'Paciente sem e-mail cadastrado.' });
+        }
+        const authUser = await findAuthUserByEmail(patientEmail);
+        const isAlreadyConfirmed = Boolean(
+          (authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at,
+        );
+        if (isAlreadyConfirmed) {
+          return res.status(409).json({
+            success: false,
+            code: 'ALREADY_CONFIRMED',
+            error: 'Conta já ativada. Use reenvio de recuperação de senha.',
+          });
         }
 
         const profileName = sanitizeString(patient?.name, 180) || patientEmail.split('@')[0];
