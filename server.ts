@@ -5130,12 +5130,28 @@ async function startServer() {
       const objectPath = sanitizeString(req.body?.path, 260);
       const contentType = sanitizeString(req.body?.contentType, 120) || 'application/octet-stream';
       const dataUrl = sanitizeString(req.body?.fileBase64, 8_000_000);
+      const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const actorId = sanitizeString(req.session.user?.id, 120);
 
       if (bucketName !== 'patient-photos') {
         return res.status(400).json({ success: false, error: 'Bucket inválido para upload.' });
       }
       if (!objectPath || objectPath.includes('..')) {
         return res.status(400).json({ success: false, error: 'Path inválido.' });
+      }
+      const ownerPatientId = sanitizeString(objectPath.split('/')[0], 120);
+      if (!isUuid(ownerPatientId)) {
+        return res.status(400).json({ success: false, error: 'Path inválido: paciente não identificado.' });
+      }
+      if (role === 'patient') {
+        if (!isUuid(actorId) || actorId !== ownerPatientId) {
+          return res.status(403).json({ success: false, error: 'Você só pode enviar fotos para o próprio histórico.' });
+        }
+      } else {
+        const canAccess = await canAccessPatientInCurrentClinic(ownerPatientId, req.session.user);
+        if (!canAccess) {
+          return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
+        }
       }
       if (!dataUrl) {
         return res.status(400).json({ success: false, error: 'Arquivo ausente.' });
@@ -5166,13 +5182,18 @@ async function startServer() {
           allowedMimeTypes: ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp']
         });
         if (createError) throw createError;
+      } else if (Boolean((exists as any)?.public)) {
+        return res.status(500).json({
+          success: false,
+          error: 'Configuração insegura: bucket patient-photos está público. Ajuste para privado no Supabase.'
+        });
       }
 
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from(bucketName)
         .upload(objectPath, fileBuffer, {
           cacheControl: '3600',
-          upsert: true,
+          upsert: false,
           contentType: validation.detectedMime
         });
 
@@ -5180,7 +5201,7 @@ async function startServer() {
 
       const { data: signedData, error: signedError } = await supabase.storage
         .from(bucketName)
-        .createSignedUrl(uploadData.path, 60 * 60 * 24 * 30);
+        .createSignedUrl(uploadData.path, 60 * 10);
 
       if (signedError) throw signedError;
 
