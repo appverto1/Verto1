@@ -1263,7 +1263,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     });
   }, [isKidsProfile, selectedChartProtocol, adultReportDate1, adultReportDate2, adultTasksInPeriod]);
   
-  const handleSchedule = () => { 
+  const handleSchedule = async () => { 
     if (!scheduleDate || !scheduleTime) { alert("Selecione data e hora."); return; } 
     let scheduledAt; try { scheduledAt = new Date(`${scheduleDate}T${scheduleTime}`).toISOString(); } catch (e) { alert("Data inválida"); return; } 
     if (planType === 'task' || planType === 'intervention') { 
@@ -1370,10 +1370,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           setProtocols([...protocols, newProtocol]); 
         } 
       } else { if (!selectedSkillId) { alert("Selecione uma tarefa."); return; } } 
-      onAddTask(taskPayload); 
+      const saved = (await onAddTask(taskPayload)) !== false;
+      if (!saved) return;
     } else { 
       if (!message) { alert("Escreva uma mensagem."); return; } 
-      onAddTask({ id: Date.now(), patientId: patient.id, title: "Reforço Positivo", icon: "ðŸŒŸ", color: "bg-yellow-100 text-yellow-600", completed: false, type: 'reinforcement', scheduledAt: scheduledAt, description: message }); 
+      const saved = (await onAddTask({ id: Date.now(), patientId: patient.id, title: "Reforço Positivo", icon: "ðŸŒŸ", color: "bg-yellow-100 text-yellow-600", completed: false, type: 'reinforcement', scheduledAt: scheduledAt, description: message })) !== false;
+      if (!saved) return;
     } 
     setShowConfirmation(true); setMessage(''); setNewTaskName(''); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setNewProtocolName(''); setNewDomainName(''); setNewTaskCode(''); setNewTaskObjective(''); setNewTaskExample(''); setNewTaskCriteria(''); setNewTaskComment(''); setSelectedProtocolId(''); setSelectedDomainId(''); setSelectedSkillId(''); setLinkedTask(''); setLinkedInterventionProtocolId('');
   }; 

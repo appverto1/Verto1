@@ -1135,7 +1135,7 @@ export default function App() {
 
     if (isAdultTask && !persistedRemotely) {
       alert('Não foi possível salvar o agendamento no servidor. Tente novamente.');
-      return;
+      return false;
     }
 
     setTasks(prev => [...prev, taskToPersist]);
@@ -1150,8 +1150,13 @@ export default function App() {
       });
       if (persisted?.success && persisted?.data?.id) {
         setTasks(prev => prev.map(task => (task.id === taskToPersist.id ? { ...task, id: persisted.data.id } : task)));
+        return true;
       }
+      setTasks(prev => prev.filter(task => task.id !== taskToPersist.id));
+      alert(persisted?.error || 'Não foi possível salvar o agendamento no servidor. Tente novamente.');
+      return false;
     }
+    return true;
   };
   const handleUpdateTask = async (id: any, fields: any) => {
     let mergedTask: any = null;

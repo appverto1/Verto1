@@ -7145,13 +7145,28 @@ async function startServer() {
         return res.status(400).json({ error: 'patient_id inválido para salvar tarefas.' });
       }
 
-      const { data, error } = await supabase
-        .from('tasks')
-        .upsert([payload], { onConflict: 'id' })
-        .select()
-        .single();
-      
-      if (error) throw error;
+      let safePayload: Record<string, any> = { ...payload };
+      let data: any = null;
+      while (Object.keys(safePayload).length > 0) {
+        const result = await supabase
+          .from('tasks')
+          .upsert([safePayload], { onConflict: 'id' })
+          .select()
+          .single();
+        if (!result.error) {
+          data = result.data;
+          break;
+        }
+        const missingColumn = extractMissingColumnName(result.error);
+        if (missingColumn && missingColumn in safePayload) {
+          delete safePayload[missingColumn];
+          continue;
+        }
+        throw result.error;
+      }
+      if (!data) {
+        return res.status(500).json({ error: 'Não foi possível persistir tarefa por incompatibilidade de schema.' });
+      }
       try {
         await persistActivityLog({
           userId: sanitizeString(req.session.user?.id, 120),
