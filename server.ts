@@ -1457,6 +1457,24 @@ function isUuid(value: string | null | undefined): boolean {
   return UUID_REGEX.test(value);
 }
 
+function parseTaskScheduleToMs(value: string | null | undefined): number | null {
+  const raw = sanitizeString(value, 80);
+  if (!raw) return null;
+
+  const direct = new Date(raw).getTime();
+  if (Number.isFinite(direct)) return direct;
+
+  const brMatch = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (brMatch) {
+    const [, dd, mm, yyyy, hh = '00', min = '00', ss = '00'] = brMatch;
+    const isoLike = `${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}`;
+    const parsed = new Date(isoLike).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  return null;
+}
+
 function derivePatientNameFromLegacyId(rawId: string): string {
   const base = rawId
     .replace(/^mock-/i, '')
@@ -1494,18 +1512,27 @@ async function resolvePatientIdForRequest(
     // Patient sessions can send auth user UUID instead of patients.id.
     // In this case, resolve by e-mail to keep persistence linked correctly.
     if (role === 'patient' && safeEmail) {
-      let byEmailQuery = supabase
-        .from('patients')
-        .select('id')
-        .eq('email', safeEmail)
-        .order('created_at', { ascending: false })
-        .limit(1);
+      const resolveByEmailRows = async (scopedToClinic: boolean) => {
+        let byEmailQuery = supabase
+          .from('patients')
+          .select('id')
+          .ilike('email', safeEmail)
+          .order('created_at', { ascending: false })
+          .limit(1);
+        if (scopedToClinic && clinicId) {
+          byEmailQuery = byEmailQuery.eq('clinic_id', clinicId);
+        }
+        return await byEmailQuery;
+      };
 
-      if (clinicId) {
-        byEmailQuery = byEmailQuery.eq('clinic_id', clinicId);
+      // 1) Try clinic-scoped match first (when session has clinic context)
+      const { data: byEmailScopedRows, error: byEmailScopedError } = await resolveByEmailRows(true);
+      if (!byEmailScopedError && Array.isArray(byEmailScopedRows) && byEmailScopedRows[0]?.id) {
+        return sanitizeString(byEmailScopedRows[0].id, 120);
       }
 
-      const { data: byEmailRows, error: byEmailError } = await byEmailQuery;
+      // 2) Fallback to any clinic match for this e-mail
+      const { data: byEmailRows, error: byEmailError } = await resolveByEmailRows(false);
       if (!byEmailError && Array.isArray(byEmailRows) && byEmailRows[0]?.id) {
         return sanitizeString(byEmailRows[0].id, 120);
       }
@@ -7414,7 +7441,7 @@ async function startServer() {
       const { data: byEmail, error: byEmailError } = await supabase
         .from('assigned_tasks')
         .select('*')
-        .eq('patient_email', patientEmail)
+        .ilike('patient_email', patientEmail)
         .order('scheduled_at', { ascending: false });
       if (byEmailError) {
         if (/assigned_tasks/i.test(String(byEmailError?.message || ''))) {
@@ -7452,6 +7479,9 @@ async function startServer() {
       const visibleTasks = merged.filter((task: any) => {
         const scheduledAt = sanitizeString(task?.scheduled_at, 60);
         if (!scheduledAt) return true;
+        const scheduledMs = parseTaskScheduleToMs(scheduledAt);
+        const nowMs = Date.now();
+        if (typeof scheduledMs === 'number' && Number.isFinite(scheduledMs)) return scheduledMs <= nowMs;
         return scheduledAt <= nowIso;
       });
 

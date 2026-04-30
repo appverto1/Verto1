@@ -517,6 +517,7 @@ export default function App() {
   const [patientAssignedTaskCount, setPatientAssignedTaskCount] = useState(0);
   const [patientAssignedTasksLoadError, setPatientAssignedTasksLoadError] = useState(false);
   const [patientContextLoaded, setPatientContextLoaded] = useState(false);
+  const [resolvedPatientPortalId, setResolvedPatientPortalId] = useState<string>('');
   const [clinicalRecords, setClinicalRecords] = useState<any[]>([]);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
   const todayStr = new Date().toISOString().split('T')[0];
@@ -800,6 +801,14 @@ export default function App() {
       setClinicStateHydrated(false);
       return;
     }
+
+    // Paciente tem hidratação própria (histórico/tarefas/notas) e não deve
+    // receber sobreposição do estado clínico global após F5.
+    if (user.role === 'patient') {
+      setClinicStateHydrated(false);
+      return;
+    }
+
     void hydrateState(user);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, user?.role, user?.activeWorkspaceId, user?.clinicId]);
@@ -820,7 +829,7 @@ export default function App() {
         : null;
 
     return {
-      patientId: String(byId?.id || byEmail?.id || byUserEmail?.id || candidateId || user?.id || '').trim(),
+      patientId: String(byId?.id || byEmail?.id || byUserEmail?.id || resolvedPatientPortalId || candidateId || user?.id || '').trim(),
       patientEmail: String(
         byId?.email ||
           byEmail?.email ||
@@ -886,6 +895,17 @@ export default function App() {
         return true;
       });
 
+      const candidateResolvedIds = [
+        ...(Array.isArray(mergedHistory) ? mergedHistory : []),
+        ...(Array.isArray(safeTasksRes?.data) ? safeTasksRes.data : []),
+        ...(Array.isArray(safeAssignedTasksRes?.data) ? safeAssignedTasksRes.data : [])
+      ]
+        .map((row: any) => String(row?.patient_id || row?.patientId || '').trim())
+        .filter((id: string) => id.length > 0 && id !== String(user.id || '').trim());
+      if (candidateResolvedIds.length > 0) {
+        setResolvedPatientPortalId(candidateResolvedIds[0]);
+      }
+
       setHistory(
         Array.isArray(mergedHistory)
           ? mergedHistory.map((h: any) => ({
@@ -914,11 +934,7 @@ export default function App() {
           ? safeAssignedTasksRes.data
               .filter((t: any) => {
                 if (String(t?.status || '').toLowerCase() === 'completed') return false;
-                const scheduledAt = String(t?.scheduled_at || '').trim();
-                if (!scheduledAt) return true;
-                const scheduledMs = new Date(scheduledAt).getTime();
-                if (!Number.isFinite(scheduledMs)) return true;
-                return scheduledMs <= Date.now();
+                return true;
               })
               .map((t: any) => {
                 const taskData = t?.task_data && typeof t.task_data === 'object' ? t.task_data : {};
