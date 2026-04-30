@@ -7623,12 +7623,33 @@ async function startServer() {
         icon: req.body?.icon !== undefined ? sanitizeString(req.body?.icon, 40) : undefined,
         updated_at: new Date().toISOString()
       });
-      const { data, error } = await supabase
-        .from('history')
-        .update(updates)
-        .eq('id', historyId)
-        .select('*')
-        .single();
+      let data: any = null;
+      let error: any = null;
+      {
+        const result = await supabase
+          .from('history')
+          .update(updates)
+          .eq('id', historyId)
+          .select('*')
+          .single();
+        data = result.data;
+        error = result.error;
+      }
+
+      // Compatibilidade com produção: alguns ambientes não têm updated_at na history.
+      if (error && /updated_at/i.test(String(error?.message || ''))) {
+        const fallbackUpdates: any = { ...updates };
+        delete fallbackUpdates.updated_at;
+        const retry = await supabase
+          .from('history')
+          .update(fallbackUpdates)
+          .eq('id', historyId)
+          .select('*')
+          .single();
+        data = retry.data;
+        error = retry.error;
+      }
+
       if (error) throw error;
       return res.json({ success: true, data });
     } catch (error: any) {
