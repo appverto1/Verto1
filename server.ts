@@ -6397,7 +6397,7 @@ async function startServer() {
       const { data: tasksByEmail, error: tasksByEmailError } = await supabase
         .from('tasks')
         .select('*')
-        .eq('patient_email', patientEmail)
+        .ilike('patient_email', patientEmail)
         .order('created_at', { ascending: false });
       if (tasksByEmailError) {
         console.warn('[PatientSelfHistory] tasks by email warning:', tasksByEmailError.message || String(tasksByEmailError));
@@ -7467,10 +7467,72 @@ async function startServer() {
         byId = Array.isArray(byIdData) ? byIdData : [];
       }
 
-      const merged = Array.from(
+      const mergedAssigned = Array.from(
         new Map(
           [...(Array.isArray(byEmail) ? byEmail : []), ...byId].map((row: any) => [
             String(row?.id || crypto.randomUUID()),
+            row
+          ])
+        ).values()
+      );
+
+      // Fallback robusto: caso assigned_tasks esteja vazio/indisponível para este paciente,
+      // também lemos tarefas pendentes da tabela legacy `tasks` com scheduled_at.
+      const { data: legacyTasksByEmail, error: legacyTasksByEmailError } = await supabase
+        .from('tasks')
+        .select('*')
+        .ilike('patient_email', patientEmail)
+        .eq('completed', false)
+        .order('created_at', { ascending: false });
+      if (legacyTasksByEmailError) {
+        console.warn('[PatientSelfAssignedTasks] fallback tasks by email warning:', legacyTasksByEmailError.message || String(legacyTasksByEmailError));
+      }
+
+      let legacyTasksById: any[] = [];
+      if (patientIds.length > 0) {
+        const { data: legacyTasksByIdData, error: legacyTasksByIdError } = await supabase
+          .from('tasks')
+          .select('*')
+          .in('patient_id', patientIds)
+          .eq('completed', false)
+          .order('created_at', { ascending: false });
+        if (legacyTasksByIdError) {
+          console.warn('[PatientSelfAssignedTasks] fallback tasks by id warning:', legacyTasksByIdError.message || String(legacyTasksByIdError));
+        } else {
+          legacyTasksById = Array.isArray(legacyTasksByIdData) ? legacyTasksByIdData : [];
+        }
+      }
+
+      const mergedLegacyTasks = Array.from(
+        new Map(
+          [...(Array.isArray(legacyTasksByEmail) ? legacyTasksByEmail : []), ...legacyTasksById].map((row: any) => [
+            String(row?.id || crypto.randomUUID()),
+            row
+          ])
+        ).values()
+      ).map((task: any) => ({
+        id: String(task?.id || crypto.randomUUID()),
+        patient_id: sanitizeString(task?.patient_id, 120) || null,
+        patient_email: sanitizeEmail(task?.patient_email),
+        professional_id: sanitizeString(task?.therapist_id, 120) || null,
+        task_type: sanitizeString(task?.type, 60) || 'task',
+        task_data: {
+          title: sanitizeString(task?.title, 240) || 'Tarefa agendada',
+          description: sanitizeTextField(task?.description, 4000) || '',
+          icon: sanitizeString(task?.icon, 40) || '🎯',
+          color: sanitizeString(task?.color, 80) || 'bg-blue-100 text-blue-600',
+          linkedTask: sanitizeString(task?.linked_task, 120) || undefined,
+          maxScore: asSafeNumber(task?.max_score, 1, 100) ?? 4
+        },
+        scheduled_at: sanitizeString((task as any)?.scheduled_at, 80) || sanitizeString(task?.created_at, 80) || null,
+        status: 'pending',
+        _source: 'tasks_fallback'
+      }));
+
+      const merged = Array.from(
+        new Map(
+          [...mergedAssigned, ...mergedLegacyTasks].map((row: any) => [
+            `${String(row?._source || 'assigned')}::${String(row?.id || crypto.randomUUID())}`,
             row
           ])
         ).values()

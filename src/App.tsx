@@ -984,15 +984,18 @@ export default function App() {
     if (!user || user.role !== 'patient') return false;
     if (!patientContextLoaded) return false;
     const normalizedStatus = String(user?.treatmentStatus || '').trim().toLowerCase();
-    const hasClinicContext = Boolean(String(user?.clinicId || user?.activeWorkspaceId || '').trim());
     const hasActiveStatus = normalizedStatus === 'active';
-    const hasAssignedTasks = hasClinicContext && patientAssignedTaskCount > 0;
+    const hasAssignedTasks = patientAssignedTaskCount > 0;
+    const hasRenderableTasks = Array.isArray(tasks) && tasks.some((t: any) => {
+      const taskType = String(t?.type || t?.task_type || '').toLowerCase();
+      return taskType === 'task' || taskType === 'reinforcement' || taskType === 'intervention';
+    });
 
-    if (hasActiveStatus || hasAssignedTasks) return false;
+    if (hasActiveStatus || hasAssignedTasks || hasRenderableTasks) return false;
     if (patientAssignedTasksLoadError) return false;
     if (!normalizedStatus) return false;
     return true;
-  }, [user, patientAssignedTaskCount, patientAssignedTasksLoadError, patientContextLoaded]);
+  }, [user, patientAssignedTaskCount, patientAssignedTasksLoadError, patientContextLoaded, tasks]);
 
   useEffect(() => {
     if (!user) return;
