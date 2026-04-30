@@ -941,6 +941,44 @@ function cleanObject<T extends Record<string, any>>(input: T): Partial<T> {
   return Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
 
+function isVbMappTask(taskLike: any): boolean {
+  const candidates = [
+    taskLike?.protocol_id,
+    taskLike?.protocolId,
+    taskLike?.protocol_title,
+    taskLike?.protocolTitle,
+    taskLike?.title,
+    taskLike?.name
+  ]
+    .map((v) => sanitizeString(v, 180).toLowerCase())
+    .filter(Boolean);
+  return candidates.some((v) => /vb[\s-]?mapp/.test(v));
+}
+
+async function resolveVbMappMasteryCriterionByClinicId(clinicId: string | null | undefined): Promise<number> {
+  const fallback = 5;
+  const safeClinicId = sanitizeString(clinicId, 120);
+  if (!safeClinicId) return fallback;
+  try {
+    const { data, error } = await supabase
+      .from('clinics')
+      .select('vbmapp_mastery_criterion')
+      .eq('id', safeClinicId)
+      .maybeSingle();
+    if (error) {
+      if (/vbmapp_mastery_criterion|relation "clinics"/i.test(String(error?.message || ''))) {
+        return fallback;
+      }
+      return fallback;
+    }
+    const criterion = asSafeNumber((data as any)?.vbmapp_mastery_criterion, 1, 20);
+    if (criterion === 10) return 10;
+    return 5;
+  } catch {
+    return fallback;
+  }
+}
+
 function ensureRole(role: unknown): role is AppRole {
   return typeof role === 'string' && (ALL_ROLES as string[]).includes(role);
 }
@@ -8156,6 +8194,10 @@ async function startServer() {
       if (!existing) return res.status(404).json({ success: false, error: 'Tarefa não encontrada.' });
 
       const existingTaskData = existing.task_data && typeof existing.task_data === 'object' ? existing.task_data : {};
+      const isVbMapp = isVbMappTask(existingTaskData) || isVbMappTask(existing);
+      const clinicCriterion = await resolveVbMappMasteryCriterionByClinicId(
+        sanitizeString(existing?.clinic_id, 120) || sanitizeString(req.session.user?.clinicId, 120)
+      );
       const maxScoreFromTask =
         asSafeNumber(
           existingTaskData?.maxScore ??
@@ -8168,22 +8210,46 @@ async function startServer() {
       if (proScore === null) {
         return res.status(400).json({ success: false, error: `pro_score deve estar entre 0 e ${maxScoreFromTask}.` });
       }
+      const existingConsecutive = asSafeNumber(existing?.consecutive_successes, 0, 1000) || 0;
+      const nextConsecutive = isVbMapp
+        ? (proScore >= 1 ? existingConsecutive + 1 : 0)
+        : existingConsecutive;
 
       const reviewNote = sanitizeTextField(req.body?.pro_review_note, 4000);
-      const { data, error } = await supabase
+      let reviewPayload: any = {
+        pro_score: proScore,
+        pro_review_note: reviewNote,
+        task_data: {
+          ...existingTaskData,
+          maxScore: maxScoreFromTask
+        },
+        reviewed_at: new Date().toISOString()
+      };
+      if (isVbMapp) {
+        reviewPayload.consecutive_successes = nextConsecutive;
+      }
+
+      let updateResult = await supabase
         .from('assigned_tasks')
-        .update({
-          pro_score: proScore,
-          pro_review_note: reviewNote,
-          task_data: {
-            ...existingTaskData,
-            maxScore: maxScoreFromTask
-          },
-          reviewed_at: new Date().toISOString()
-        })
+        .update(reviewPayload)
         .eq('id', taskId)
         .select('*')
         .single();
+
+      if (updateResult.error) {
+        const missingColumn = extractMissingColumnName(updateResult.error);
+        if (missingColumn && missingColumn in reviewPayload) {
+          delete reviewPayload[missingColumn];
+          updateResult = await supabase
+            .from('assigned_tasks')
+            .update(reviewPayload)
+            .eq('id', taskId)
+            .select('*')
+            .single();
+        }
+      }
+
+      const { data, error } = updateResult;
       if (error) throw error;
 
       let suggestedTask: any = null;
@@ -9074,7 +9140,18 @@ async function startServer() {
         };
       });
 
-      return res.json({ success: true, data });
+      return res.json({
+        success: true,
+        data,
+        mastery_feedback: isVbMapp
+          ? {
+              protocol: 'VB-MAPP',
+              consecutive_successes: nextConsecutive,
+              criterion: clinicCriterion,
+              progress_text: `Sucesso consecutivo: ${Math.min(nextConsecutive, clinicCriterion)} de ${clinicCriterion}`
+            }
+          : null
+      });
     } catch (error) {
       return res.status(500).json({ error: String(error) });
     }

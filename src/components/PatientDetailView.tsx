@@ -599,6 +599,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       })
       .sort((a: any, b: any) => a._ts - b._ts);
 
+    const isVbMappProtocol = /vb[\s-]?mapp/i.test(String(selectedProto?.title || ''));
+    const vbmappCriterion = Number((selectedProto as any)?.masteryCriterion ?? (selectedProto as any)?.vbmapp_mastery_criterion ?? 5) || 5;
+
     const getDomainPercent = (domain: any, mode: 'first' | 'latest') => {
       const domainTasks = (Array.isArray(domain?.skills) ? domain.skills : [])
         .map((s: any) => ({
@@ -613,9 +616,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           title: row?.title || '',
           score: row?._score,
           maxScore: 1,
+          consecutive_successes: row?.consecutive_successes,
           created_at: row?.created_at || row?.date || null
         }));
-      return calculateDomainMastery(domainEvents, domainTasks, { mode: mode === 'first' ? 'baseline' : 'latest' });
+      return calculateDomainMastery(domainEvents, domainTasks, {
+        mode: mode === 'first' ? 'baseline' : 'latest',
+        protocolKind: isVbMappProtocol ? 'vbmapp' : 'other',
+        vbmappMasteryCriterion: vbmappCriterion
+      });
     };
 
     const currentData = selectedProto.data.map((domain: any) => getDomainPercent(domain, 'latest'));
@@ -1230,6 +1238,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       title: task?.taskTitle || '',
       professionalScore: task?.professionalScore,
       maxScore: task?.maxScore,
+      consecutive_successes: task?.consecutiveSuccesses ?? task?.consecutive_successes,
       eventDateRaw: task?.eventDateRaw || task?.eventDate
     }));
 
@@ -1239,15 +1248,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         name: String(skill?.name || ''),
         maxScore: Math.max(1, Number(skill?.maxScore ?? skill?.max_score ?? 4) || 4)
       }));
+      const isVbMappProtocol = /vb[\s-]?mapp/i.test(String(selectedChartProtocol?.title || ''));
+      const vbmappCriterion = Number((selectedChartProtocol as any)?.masteryCriterion ?? (selectedChartProtocol as any)?.vbmapp_mastery_criterion ?? 5) || 5;
       const d1 = calculateDomainMastery(taskRows, domainTasks, {
         mode: 'latest',
         periodStart: `${comparisonDate1}T00:00:00`,
-        periodEnd: `${comparisonDate1}T23:59:59.999`
+        periodEnd: `${comparisonDate1}T23:59:59.999`,
+        protocolKind: isVbMappProtocol ? 'vbmapp' : 'other',
+        vbmappMasteryCriterion: vbmappCriterion
       });
       const d2 = calculateDomainMastery(taskRows, domainTasks, {
         mode: 'latest',
         periodStart: `${comparisonDate2}T00:00:00`,
-        periodEnd: `${comparisonDate2}T23:59:59.999`
+        periodEnd: `${comparisonDate2}T23:59:59.999`,
+        protocolKind: isVbMappProtocol ? 'vbmapp' : 'other',
+        vbmappMasteryCriterion: vbmappCriterion
       });
       return {
         name: domainName,
@@ -1265,6 +1280,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       title: task?.taskTitle || '',
       professionalScore: task?.professionalScore,
       maxScore: task?.maxScore,
+      consecutive_successes: task?.consecutiveSuccesses ?? task?.consecutive_successes,
       eventDateRaw: task?.eventDateRaw || task?.eventDate
     }));
 
@@ -1274,15 +1290,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         name: String(skill?.name || ''),
         maxScore: Math.max(1, Number(skill?.maxScore ?? skill?.max_score ?? 4) || 4)
       }));
+      const isVbMappProtocol = /vb[\s-]?mapp/i.test(String(selectedChartProtocol?.title || ''));
+      const vbmappCriterion = Number((selectedChartProtocol as any)?.masteryCriterion ?? (selectedChartProtocol as any)?.vbmapp_mastery_criterion ?? 5) || 5;
       const d1 = calculateDomainMastery(taskRows, domainTasks, {
         mode: 'latest',
         periodStart: `${adultReportDate1}T00:00:00`,
-        periodEnd: `${adultReportDate1}T23:59:59.999`
+        periodEnd: `${adultReportDate1}T23:59:59.999`,
+        protocolKind: isVbMappProtocol ? 'vbmapp' : 'other',
+        vbmappMasteryCriterion: vbmappCriterion
       });
       const d2 = calculateDomainMastery(taskRows, domainTasks, {
         mode: 'latest',
         periodStart: `${adultReportDate2}T00:00:00`,
-        periodEnd: `${adultReportDate2}T23:59:59.999`
+        periodEnd: `${adultReportDate2}T23:59:59.999`,
+        protocolKind: isVbMappProtocol ? 'vbmapp' : 'other',
+        vbmappMasteryCriterion: vbmappCriterion
       });
       return {
         name: domainName,
@@ -1468,6 +1490,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       delete next[taskId];
       return next;
     });
+
+    if (result?.mastery_feedback?.protocol === 'VB-MAPP') {
+      alert(result.mastery_feedback.progress_text || 'Sucesso consecutivo registrado no VB-MAPP.');
+    }
 
     const suggestedTask = result?.suggestedTask;
     if (suggestedTask) {

@@ -282,6 +282,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
     };
 
+    const isVbMappProtocol = /vb[\s-]?mapp/i.test(String(selectedProto?.title || ''));
+    const vbmappCriterion = Number((selectedProto as any)?.masteryCriterion ?? (selectedProto as any)?.vbmapp_mastery_criterion ?? 5) || 5;
+
     const resolveDomainProgressPercent = (dateFilter: string | null, mode: 'first' | 'latest') => {
       const cutoffTs = resolveCutoffTimestamp(dateFilter);
       const modeNormalized = mode === 'first' ? 'baseline' : 'latest';
@@ -302,9 +305,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             title: event?._title || '',
             score: event?._score,
             maxScore: 1,
+            consecutive_successes: event?.consecutive_successes,
             created_at: event?.created_at || event?.date || null
           }));
-        return calculateDomainMastery(domainEvents, domainTasks, { mode: modeNormalized as any });
+        return calculateDomainMastery(domainEvents, domainTasks, {
+          mode: modeNormalized as any,
+          protocolKind: isVbMappProtocol ? 'vbmapp' : 'other',
+          vbmappMasteryCriterion: vbmappCriterion
+        });
       });
     };
 

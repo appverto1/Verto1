@@ -14,6 +14,11 @@ type ClinicalTaskLike = {
   professionalScore?: number | string | null;
   max_score?: number | string | null;
   maxScore?: number | string | null;
+  consecutive_successes?: number | string | null;
+  protocol_id?: string | number | null;
+  protocolId?: string | number | null;
+  protocol_title?: string | null;
+  protocolTitle?: string | null;
   eventDate?: Date | string | null;
   eventDateRaw?: string | null;
   created_at?: string | null;
@@ -53,6 +58,8 @@ type CalculateDomainMasteryOptions = {
   mode?: 'latest' | 'baseline';
   periodStart?: Date | string | null;
   periodEnd?: Date | string | null;
+  protocolKind?: 'vbmapp' | 'other';
+  vbmappMasteryCriterion?: number;
 };
 
 export function calculateDomainMastery(
@@ -83,6 +90,10 @@ export function calculateDomainMastery(
   protocolUniverse.forEach((task) => maxByKey.set(task.key, task.maxScore));
 
   const selectedByKey = new Map<string, { ts: number; score: number; maxScore: number }>();
+  const timelineByKey = new Map<
+    string,
+    Array<{ ts: number; score: number; maxScore: number; consecutive: number | null }>
+  >();
 
   (Array.isArray(tasks) ? tasks : []).forEach((row) => {
     const title = String(row?.taskTitle || row?.title || '').trim();
@@ -102,7 +113,11 @@ export function calculateDomainMastery(
     const rowMax = toNumber(row?.maxScore ?? row?.max_score);
     const maxScore = Math.max(1, Number(rowMax ?? maxByKey.get(matched.key) ?? 1));
     const score = Math.max(0, Math.min(maxScore, Number(scoreRaw)));
+    const explicitConsecutive = toNumber(row?.consecutive_successes);
     const prev = selectedByKey.get(matched.key);
+    const timeline = timelineByKey.get(matched.key) || [];
+    timeline.push({ ts, score, maxScore, consecutive: explicitConsecutive });
+    timelineByKey.set(matched.key, timeline);
 
     if (!prev) {
       selectedByKey.set(matched.key, { ts, score, maxScore });
@@ -119,10 +134,46 @@ export function calculateDomainMastery(
     const selected = selectedByKey.get(task.key);
     const maxScore = maxByKey.get(task.key) ?? 1;
     possible += maxScore;
-    obtained += selected ? Math.max(0, Math.min(maxScore, selected.score)) : 0;
+    if (!selected) return;
+
+    if (protocolKind !== 'vbmapp') {
+      obtained += Math.max(0, Math.min(maxScore, selected.score));
+      return;
+    }
+
+    const timeline = (timelineByKey.get(task.key) || []).sort((a, b) => a.ts - b.ts);
+    const selectedIdx = timeline.findIndex((r) => r.ts === selected.ts && r.score === selected.score);
+    const upto = selectedIdx >= 0 ? timeline.slice(0, selectedIdx + 1) : timeline;
+
+    let streak = 0;
+    let lastBaseScore = 0;
+    for (const row of upto) {
+      if (row.score >= 1) {
+        streak += 1;
+      } else {
+        streak = 0;
+        lastBaseScore = row.score >= 0.5 ? 0.5 : 0;
+      }
+    }
+    const last = upto[upto.length - 1];
+    if (!last) return;
+
+    // If backend persisted consecutive_successes, trust it for latest row.
+    if (last.consecutive !== null && Number.isFinite(last.consecutive)) {
+      streak = Math.max(0, Math.floor(last.consecutive));
+    }
+
+    const basePercent = last.score >= 1 ? lastBaseScore * 100 : last.score >= 0.5 ? 50 : 0;
+    const increment = (100 - basePercent) / criterion;
+    const progressPercent = last.score >= 1
+      ? Math.min(100, basePercent + streak * increment)
+      : basePercent;
+
+    obtained += (Math.max(0, Math.min(100, progressPercent)) / 100) * maxScore;
   });
 
   if (possible <= 0) return 0;
   return Number(((obtained / possible) * 100).toFixed(2));
 }
-
+  const protocolKind = options?.protocolKind || 'other';
+  const criterion = Math.max(1, Math.floor(toNumber(options?.vbmappMasteryCriterion) ?? 5));
