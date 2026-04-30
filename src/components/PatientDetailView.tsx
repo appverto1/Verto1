@@ -832,10 +832,38 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     });
   }, [history, notes, isKidsProfile, patient?.id]);
 
+  const normalizeNoteText = (value: string) =>
+    String(value || '')
+      .replace(/ðŸ“/g, '📝')
+      .replace(/ðŸŽ¯/g, '🎯')
+      .replace(/ðŸ /g, '🏠')
+      .replace(/PontuaÃ§Ã£o/g, 'Pontuação')
+      .replace(/AnotaÃ§Ãµes/g, 'Anotações')
+      .replace(/observaÃ§Ã£o/gi, 'observação')
+      .replace(/famÃ­lia/gi, 'família')
+      .replace(/sessÃ£o/gi, 'sessão')
+      .replace(/avaliaÃ§Ã£o/gi, 'avaliação')
+      .replace(/Ã¡/g, 'á')
+      .replace(/Ã©/g, 'é')
+      .replace(/Ã­/g, 'í')
+      .replace(/Ã³/g, 'ó')
+      .replace(/Ãº/g, 'ú')
+      .replace(/Ã£/g, 'ã')
+      .replace(/Ã§/g, 'ç')
+      .replace(/Â/g, '')
+      .trim();
+
+  const isSystemMilestoneEvent = (note: any) => {
+    const subject = String(note?.subject || '').trim().toLowerCase();
+    const text = String(note?.text || '').trim();
+    return subject === 'milestone_event' || text.startsWith('MILESTONE_EVENT|');
+  };
+
   const kidsReportSelectableNotes = useMemo(() => {
     if (!isKidsProfile) return [];
     const targetPatientId = String(patient?.id || '').trim();
     return (Array.isArray(notes) ? notes : []).filter((n: any) => {
+      if (isSystemMilestoneEvent(n)) return false;
       const notePatientId = String(n?.patientId ?? n?.patient_id ?? '').trim();
       return notePatientId !== '' && notePatientId === targetPatientId;
     });
@@ -871,12 +899,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   
   const filteredNotes = useMemo(() => {
     return (notes || []).filter((n: any) => {
+      if (isSystemMilestoneEvent(n)) return false;
       const matchPatient = n.patientId === patient.id;
       const matchVisibility = (n.visibility || n.type || 'private') === noteMode;
       
       const searchLower = noteSearchQuery.toLowerCase();
       const matchSearch = !noteSearchQuery || 
-        n.text.toLowerCase().includes(searchLower) || 
+        normalizeNoteText(n.text).toLowerCase().includes(searchLower) || 
         (n.subject && n.subject.toLowerCase().includes(searchLower));
         
       const matchSubject = !noteSubjectFilter || (n.subject && n.subject.toLowerCase().includes(noteSubjectFilter.toLowerCase()));
@@ -1284,7 +1313,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         id: Date.now() + (isCreatingNewTask ? 1 : 0), 
         patientId: patient.id, 
         title: finalTaskTitle || newTaskName, 
-        icon: planType === 'intervention' ? "âœï¸" : "ðŸ“‹", 
+        icon: planType === 'intervention' ? "✍️" : "📋",
         color: planType === 'intervention' ? "bg-green-100 text-green-600" : "bg-blue-100 text-blue-600", 
         completed: false, 
         type: planType, 
@@ -1706,6 +1735,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const end = new Date(reportEndDate);
     
     const reportData = notes.filter((n: any) => {
+      if (isSystemMilestoneEvent(n)) return false;
       if (n.patientId !== patient.id) return false;
       const parts = n.date.split(' ')[0].split('/');
       const noteDate = new Date(parts[2], parts[1]-1, parts[0]);
@@ -1719,7 +1749,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
     let csvContent = "Data,Tipo,Anotacao\n";
     reportData.forEach((n: any) => {
-      csvContent += `"${n.date}","${(n.visibility === 'patient' || n.type === 'shared') ? 'Paciente' : (n.visibility === 'professional' || n.type === 'professional') ? 'Profissional' : 'Privada'}","${n.text.replace(/"/g, '""')}"\n`;
+      csvContent += `"${n.date}","${(n.visibility === 'patient' || n.type === 'shared') ? 'Paciente' : (n.visibility === 'professional' || n.type === 'professional') ? 'Profissional' : 'Privada'}","${normalizeNoteText(n.text).replace(/"/g, '""')}"\n`;
     });
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -2333,7 +2363,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       )}
                     </div>
                   </div> 
-                  <p className="text-sm text-gray-700 whitespace-pre-wrap mb-1">{note.text}</p> 
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap mb-1">{normalizeNoteText(note.text)}</p> 
                   <div className="flex items-center gap-2 mt-2">
                     {(note.visibility === 'patient' || note.type === 'shared') && <span className="text-[9px] font-semibold bg-[#7a32fc] text-white px-2 py-0.5 rounded-full uppercase">Visível para Paciente (Portátil)</span>}
                     {(note.visibility === 'professional' || note.type === 'professional') && <span className="text-[9px] font-semibold bg-indigo-600 text-white px-2 py-0.5 rounded-full uppercase">Visível para Equipe (Portátil)</span>}
@@ -2475,7 +2505,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                           <span className="text-[10px] font-semibold text-gray-400 uppercase">{note.date}</span>
                           {note.subject && <span className="text-[10px] font-semibold text-[#7a32fc] uppercase tracking-widest">#{note.subject}</span>}
                         </div>
-                        <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{note.text}</p>
+                        <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{normalizeNoteText(note.text)}</p>
                         {resolveFamilyImageForNote(note) && (
                           <div className="mt-4 rounded-xl overflow-hidden border border-orange-100 bg-orange-50">
                             <SecureImage
@@ -2538,7 +2568,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                             <span className="text-[9px] font-semibold text-gray-400 uppercase">{note.date}</span>
                             {selectedReportNotes.includes(note.id) && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
                           </div>
-                          <p className="text-xs text-gray-600 line-clamp-3">{note.text}</p>
+                          <p className="text-xs text-gray-600 line-clamp-3">{normalizeNoteText(note.text)}</p>
                         </div>
                       ))
                     : adultTasksInPeriod.map((task: any) => {
@@ -3126,8 +3156,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   {((isKidsProfile ? (patientTasks || []) : adultScheduledTasks).length || 0) > 0 ? ((isKidsProfile ? (patientTasks || []) : adultScheduledTasks).map((task: any) => ( 
                     <div key={task.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between"> 
                       <div className="flex items-center gap-3"> 
-                        <span className="text-xl">{task.type === 'reinforcement' ? 'ðŸŒŸ' : task.type === 'intervention' ? 'âœï¸' : 'ðŸ“‹'}</span> 
-                        <div><p className="font-semibold text-gray-800 text-sm tracking-tight">{task.title}</p><p className="text-xs text-gray-500">{new Date(task.scheduledAt).toLocaleDateString('pt-BR')} â€¢ {new Date(task.scheduledAt).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</p></div> 
+                        <span className="text-xl">{task.type === 'reinforcement' ? '🌟' : task.type === 'intervention' ? '✍️' : '📋'}</span> 
+                        <div><p className="font-semibold text-gray-800 text-sm tracking-tight">{task.title}</p><p className="text-xs text-gray-500">{new Date(task.scheduledAt).toLocaleDateString('pt-BR')} • {new Date(task.scheduledAt).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</p></div> 
                       </div> 
                       <div className="flex items-center gap-2"> 
                         <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase ${task.type === 'reinforcement' ? 'bg-yellow-100 text-yellow-600' : task.type === 'intervention' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>{task.type === 'reinforcement' ? 'Reforço' : task.type === 'intervention' ? 'Intervenção' : (!isKidsProfile ? 'Avaliação' : 'Tarefa')}</span> 

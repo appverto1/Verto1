@@ -1277,13 +1277,13 @@ export default function App() {
         setTherapistNotes(prev => prev.map((n: any) => (n.id === tempId ? { ...n, id: result.data.id } : n)));
       } else if (result?.success === false && !(result?.offline && result?.pending)) {
         setTherapistNotes(prev => prev.filter((n: any) => n.id !== tempId));
-        const errMsg = String(result?.error || 'NÃ£o foi possÃ­vel persistir a anotaÃ§Ã£o no servidor.');
+        const errMsg = String(result?.error || 'Não foi possível persistir a anotação no servidor.');
         alert(errMsg);
       }
     } catch (error) {
       console.error("Falha ao sincronizar nota no servidor:", error);
       setTherapistNotes(prev => prev.filter((n: any) => n.id !== tempId));
-      alert('Falha ao salvar anotaÃ§Ã£o. Tente novamente.');
+      alert('Falha ao salvar anotação. Tente novamente.');
     }
   };
   const handleUpdateHistoryItem = async (id: any, score: number, evalComment: string) => { 
@@ -1395,17 +1395,17 @@ export default function App() {
           awarded: starred
         });
       } catch (error) {
-        console.error('Falha ao persistir estrelinha de registro da famÃ­lia:', error);
+        console.error('Falha ao persistir estrelinha de registro da família:', error);
       }
       return;
     }
 
     if (item) {
       const updatedItem = { ...item, score, evalComment: evalComment || '' };
-      const noteText = `ðŸ“ ATUALIZAÃ‡ÃƒO DE REGISTRO\nAtividade: ${updatedItem.title}\nPontuaÃ§Ã£o: ${updatedItem.score}\nObs: ${updatedItem.evalComment || "Nenhuma observaÃ§Ã£o."}`;
-      handleAddNote(item.patientId, noteText, 'private', 'SessÃ£o');
+      const noteText = `📝 ATUALIZAÇÃO DE REGISTRO\nAtividade: ${updatedItem.title}\nPontuação: ${updatedItem.score}\nObs: ${updatedItem.evalComment || "Nenhuma observação."}`;
+      handleAddNote(item.patientId, noteText, 'private', 'Sessão');
       setHistory(prev => prev.map(i => (String(i.id) === rawId ? updatedItem : i)));
-      onAddActivityLog("EdiÃ§Ã£o de HistÃ³rico", `Registro de atividade "${item.title}" (ID ${id}) editado.`);
+      onAddActivityLog("Edição de Histórico", `Registro de atividade "${item.title}" (ID ${id}) editado.`);
       try {
         await dataService.updateHistoryItem(String(id), {
           score,
@@ -1415,7 +1415,7 @@ export default function App() {
           patient_email: allPatients.find(p => p.id === item.patientId)?.email || null
         });
       } catch (error) {
-        console.error('Falha ao persistir ediÃ§Ã£o de histÃ³rico:', error);
+        console.error('Falha ao persistir edição de histórico:', error);
       }
     }
   };
@@ -1992,7 +1992,7 @@ export default function App() {
       });
     });
 
-    // Normalize score for crianÃ§as if it's not already 0, 0.5 or 1
+    // Normalize score for crianças if it's not already 0, 0.5 or 1
     let finalScore = score;
     if (isKid && skillMaxScore === 1 && ![0, 0.5, 1].includes(score)) {
       if (score >= 3) finalScore = 1;
@@ -2010,14 +2010,14 @@ export default function App() {
       score: finalScore,
       evalComment: evalComment || "",
       dateGroup: "Hoje",
-      icon: "ðŸŽ¯"
+      icon: "🎯"
     };
     
     // Add a note about the trial
-    const noteText = `ðŸŽ¯ NOVO REGISTRO\nAtividade: ${title}\nPontuaÃ§Ã£o: ${finalScore}${evalComment ? `\nAnotaÃ§Ãµes do Profissional: ${evalComment}` : ""}`;
-    handleAddNote(pid, noteText, 'private', 'SessÃ£o');
+    const noteText = `🎯 NOVO REGISTRO\nAtividade: ${title}\nPontuação: ${finalScore}${evalComment ? `\nAnotações do Profissional: ${evalComment}` : ""}`;
+    handleAddNote(pid, noteText, 'private', 'Sessão');
 
-    onAddActivityLog("Registro de AvaliaÃ§Ã£o", `AvaliaÃ§Ã£o da habilidade "${title}" registrada para o paciente ID ${pid}. PontuaÃ§Ã£o: ${score}.`);
+    onAddActivityLog("Registro de Avaliação", `Avaliação da habilidade "${title}" registrada para o paciente ID ${pid}. Pontuação: ${score}.`);
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -2029,10 +2029,10 @@ export default function App() {
         title: title,
         score: finalScore,
         note: evalComment || "",
-        icon: "ðŸŽ¯"
+        icon: "🎯"
       });
     } catch (error) {
-      console.error('Falha ao persistir registro de sessÃ£o:', error);
+      console.error('Falha ao persistir registro de sessão:', error);
     }
 
     const updatedHistory = [newHistoryItem, ...history];
@@ -2476,7 +2476,7 @@ export default function App() {
         <div className="min-h-screen flex items-center justify-center bg-white">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#7a32fc] mx-auto"></div>
-            <p className="mt-4 text-sm text-slate-500">Carregando dados da clÃ­nica...</p>
+            <p className="mt-4 text-sm text-slate-500">Carregando dados da clínica...</p>
           </div>
         </div>
       ) : ((user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && !user.firstLoginCompleted) || showOnboarding ? (
