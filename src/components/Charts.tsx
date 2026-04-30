@@ -4,6 +4,16 @@ import { BarChart2, Info } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell, LineChart, Line } from 'recharts';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 
+const parseDateFromLabel = (label: string): number => {
+  if (!label) return Number.NaN;
+  const direct = Date.parse(label);
+  if (Number.isFinite(direct)) return direct;
+  const match = label.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (!match) return Number.NaN;
+  const [, dd, mm, yyyy] = match;
+  return new Date(Number(yyyy), Number(mm) - 1, Number(dd)).getTime();
+};
+
 export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => setIsMounted(true), []);
@@ -19,7 +29,15 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
   }
 
   const firstRow = safeData[0] || {};
-  const periodKeys = Object.keys(firstRow).filter((key) => key !== 'name');
+  const rawPeriodKeys = Object.keys(firstRow).filter((key) => key !== 'name');
+  const periodKeys = [...rawPeriodKeys].sort((a, b) => {
+    const aTime = parseDateFromLabel(a);
+    const bTime = parseDateFromLabel(b);
+    if (Number.isFinite(aTime) && Number.isFinite(bTime)) {
+      return aTime - bTime;
+    }
+    return rawPeriodKeys.indexOf(a) - rawPeriodKeys.indexOf(b);
+  });
   const safeMaxScore = Math.max(1, Number(maxScore) || 1);
   const yTicks =
     safeMaxScore === 100
@@ -31,7 +49,7 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
   // Calculate dynamic width based on number of labels to prevent crowding
   const minWidth = Math.max(980, safeData.length * Math.max(180, periodKeys.length * 90));
   const periodColors = periodKeys.length === 2
-    ? ['#EE5D50', '#05CD99']
+    ? ['#7a32fc', '#05CD99']
     : ['#7a32fc', '#05CD99', '#FFB547', '#7551FF', '#EE5D50', '#00C2FF'];
 
   return (
@@ -87,8 +105,8 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
               }}
             />
             {periodKeys.map((period, index, array) => {
-              // If we have exactly 2 periods, use Red for the first (oldest) and Green for the second (newest)
-              // Otherwise use the standard palette
+              // Chronological comparison order:
+              // left/first = oldest (purple), right/second = newest (green).
               const fillColor = array.length === 2
                 ? periodColors[index]
                 : periodColors[index % periodColors.length];
