@@ -1376,6 +1376,18 @@ export default function App() {
       }
 
       try {
+        await dataService.updateHistoryItem(String(rawId), {
+          score,
+          note: String(item?.note || item?.text || ''),
+          title: String(item?.title || ''),
+          icon: String(item?.icon || ''),
+          patient_id: String(item?.patientId || item?.patient_id || ''),
+          patient_email:
+            String(item?.patient_email || '').trim().toLowerCase() ||
+            allPatients.find((p: any) => String(p.id) === String(item?.patientId || item?.patient_id || ''))?.email ||
+            null
+        });
+
         await persistMilestoneEvent({
           patientId: String(item?.patientId || item?.patient_id || ''),
           patientEmail: matchingNote?.patient_email || allPatients.find((p: any) => String(p.id) === String(item?.patientId || item?.patient_id || ''))?.email || null,
