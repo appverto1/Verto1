@@ -457,6 +457,11 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     return `https://wa.me/5511959348563?text=${encodeURIComponent(message)}`;
   };
 
+  const buildDemoWhatsappUrl = () => {
+    const message = 'Olá, tenho interesse em agendar uma demonstração da Verto.';
+    return `https://wa.me/5511959348563?text=${encodeURIComponent(message)}`;
+  };
+
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegisterError('');
@@ -592,10 +597,6 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       <section className="pt-40 pb-20 px-6">
         <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-[0.95fr_1.35fr] gap-16 items-center">
           <div className="animate-slide-up">
-            <div className="inline-flex items-center gap-2 bg-purple-50 text-[#7a32fc] px-4 py-2 rounded-full text-xs font-semibold uppercase tracking-widest mb-6">
-              <Rocket size={14} />
-              Verto
-            </div>
             <h1 className="text-6xl md:text-7xl font-semibold leading-[0.9] tracking-tighter mb-8">
               O centro da <br />
               terapia é a <br />
@@ -607,7 +608,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
             <div className="flex flex-col sm:flex-row gap-4">
               <button 
                 onClick={() => {
-                  window.open('https://calendly.com/verto-health', '_blank');
+                  window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer');
                 }}
                 className="bg-[#7a32fc] text-white px-10 py-5 rounded-3xl font-semibold text-lg shadow-2xl shadow-purple-500/30 hover:scale-105 transition-all flex items-center justify-center gap-3"
               >
@@ -1068,7 +1069,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               </div>
               <button 
                 onClick={() => {
-                  window.open('https://calendly.com/verto-health', '_blank');
+                  window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer');
                 }}
                 className="w-full bg-slate-900 text-white py-4 rounded-2xl font-semibold text-sm mb-8 hover:bg-black transition-all"
               >
@@ -1206,7 +1207,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 Nossa equipe está pronta para entender seu desafio e mostrar como a Verto pode ajudar. Agende uma demonstração sem compromisso e veja a plataforma em ação.
               </p>
               <a 
-                href="https://wa.me/5511959348563" 
+                href={buildDemoWhatsappUrl()} 
                 target="_blank" 
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-3 bg-[#25D366] text-white px-10 py-5 rounded-3xl font-semibold text-lg shadow-2xl shadow-green-500/20 hover:scale-105 transition-all"
