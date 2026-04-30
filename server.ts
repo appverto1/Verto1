@@ -3400,9 +3400,19 @@ async function startServer() {
         (authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at,
       );
       if (isAlreadyConfirmed) {
-        return res.status(409).json({
-          success: false,
-          error: 'Conta já ativada. Use o fluxo de recuperação de senha se necessário.',
+        const profileRole = role === 'patient' ? 'patient' : 'coordinator';
+        const recoveryLink =
+          (await generateSupabaseActionLink({
+            type: 'recovery',
+            email,
+            redirectTo: getActivationRedirectUrl(profileRole, email),
+          })) ||
+          getActivationRedirectUrl(profileRole, email);
+        return res.json({
+          success: true,
+          alreadyConfirmed: true,
+          activationLink: recoveryLink,
+          message: 'Conta já ativada. Enviando fallback para redefinição/entrada segura.',
         });
       }
 
