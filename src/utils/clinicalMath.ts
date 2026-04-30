@@ -68,6 +68,8 @@ export function calculateDomainMastery(
   options?: CalculateDomainMasteryOptions
 ): number {
   const mode = options?.mode || 'latest';
+  const protocolKind = options?.protocolKind || 'other';
+  const criterion = Math.max(1, Math.floor(toNumber(options?.vbmappMasteryCriterion) ?? 5));
   const periodStartTs = options?.periodStart ? new Date(options.periodStart).getTime() : Number.NEGATIVE_INFINITY;
   const periodEndTs = options?.periodEnd ? new Date(options.periodEnd).getTime() : Number.POSITIVE_INFINITY;
 
@@ -175,5 +177,3 @@ export function calculateDomainMastery(
   if (possible <= 0) return 0;
   return Number(((obtained / possible) * 100).toFixed(2));
 }
-  const protocolKind = options?.protocolKind || 'other';
-  const criterion = Math.max(1, Math.floor(toNumber(options?.vbmappMasteryCriterion) ?? 5));
