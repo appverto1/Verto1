@@ -424,6 +424,28 @@ export default function App() {
   ) => {
     try {
       if (!supabaseSession) {
+        if (credentials?.email && credentials?.password) {
+          const response = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              accessToken: null,
+              intendedRole,
+              provider: authContext?.provider || 'email',
+              activationFlow: Boolean(authContext?.activationFlow),
+              email: credentials.email,
+              password: credentials.password,
+            })
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || !result?.success) {
+            return { success: false, error: result?.error || 'Erro no login' };
+          }
+          const resolvedUser = await applyResolvedUserState(result.user, null);
+          return { success: true, user: resolvedUser };
+        }
+
         // If no session provided, we might already have the user from signup-direct
         // or we just need to refresh the session from the server
         const supabase = await getSupabase();
