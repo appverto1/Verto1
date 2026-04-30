@@ -7601,8 +7601,19 @@ async function startServer() {
         .maybeSingle();
       if (existingError) throw existingError;
       if (!existing) return res.status(404).json({ success: false, error: 'Registro não encontrado.' });
-      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
-        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      const scopedPatientId = sanitizeString(existing.patient_id, 120);
+      const hasDirectAccess = await canAccessPatientInCurrentClinic(scopedPatientId, req.session.user);
+      if (!hasDirectAccess) {
+        const clinicId = currentClinicId(req.session.user);
+        const safeEmail = sanitizeEmail(existing.patient_email);
+        let hasEmailAccess = false;
+        if (clinicId && safeEmail) {
+          const clinicPatientIds = await getClinicPatientIdsByEmail(clinicId, safeEmail);
+          hasEmailAccess = clinicPatientIds.length > 0;
+        }
+        if (!hasEmailAccess) {
+          return res.status(403).json({ success: false, error: 'Acesso negado.' });
+        }
       }
       const updates = cleanObject({
         title: req.body?.title !== undefined ? sanitizeTextField(req.body?.title, 180) : undefined,
