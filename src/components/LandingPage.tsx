@@ -933,8 +933,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               { icon: <Activity />, title: "Relatórios de Progresso", desc: "Transforme dados de sessão em relatórios visuais automáticos que provam a evolução do paciente.", color: "text-[#05CD99]", bg: "bg-emerald-100" },
               { icon: <Heart />, title: "Portal da Família", desc: "Compartilhe o progresso do tratamento de forma lúdica, celebrando cada pequena vitória com os pais.", color: "text-pink-600", bg: "bg-pink-100" },
               { icon: <Zap />, title: "Autonomia do Paciente", desc: "Pacientes adultos assumem o protagonismo do próprio tratamento através de tarefas e registros de bem-estar.", color: "text-orange-600", bg: "bg-orange-100" },
-              { icon: <Rocket />, title: "Gestão da Clínica", desc: "Controle financeiro completo, DRE (Em Breve) e gestão administrativa simplificada para sua operação.", color: "text-emerald-600", bg: "bg-emerald-50" },
-              { icon: <Users />, title: "Equipe Multidisciplinar", desc: "Equipe alinhada em torno do mesmo planejamento, garantindo consistência e troca de informações.", color: "text-red-600", bg: "bg-red-100" }
+              { icon: <Rocket />, title: "Gestão da Clínica", desc: "Controle financeiro completo, DRE (Em Breve) e gestão administrativa simplificada para sua operação.", color: "text-emerald-600", bg: "bg-emerald-50" }
             ].map((feature, i) => (
               <div 
                 key={i}
