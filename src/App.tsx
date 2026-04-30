@@ -853,19 +853,25 @@ export default function App() {
   };
 
   useEffect(() => {
+    let mounted = true;
+    let running = false;
+
     const fetchPatientScopedData = async () => {
+      if (!mounted || running) return;
       if (!user || user.role !== 'patient' || !user.email) return;
-      setPatientContextLoaded(false);
-      const identity = resolvePatientIdentityForPortal(user);
-      const [historyRes, historyByEmailRes, historyByIdRes, tasksRes, assignedTasksRes, notesRes, protocolsRes] = await Promise.allSettled([
-        dataService.getPatientSelfHistory(),
-        dataService.getHistoryByEmail(user.email),
-        identity?.patientId ? dataService.getHistory(identity.patientId) : Promise.resolve({ success: true, data: [] }),
-        dataService.getPatientSelfTasks(),
-        dataService.getPatientSelfAssignedTasks(),
-        dataService.getNotesByEmail(user.email),
-        dataService.getPatientSelfProtocols()
-      ]);
+      running = true;
+      try {
+        if (mounted) setPatientContextLoaded(false);
+        const identity = resolvePatientIdentityForPortal(user);
+        const [historyRes, historyByEmailRes, historyByIdRes, tasksRes, assignedTasksRes, notesRes, protocolsRes] = await Promise.allSettled([
+          dataService.getPatientSelfHistory(),
+          dataService.getHistoryByEmail(user.email),
+          identity?.patientId ? dataService.getHistory(identity.patientId) : Promise.resolve({ success: true, data: [] }),
+          dataService.getPatientSelfTasks(),
+          dataService.getPatientSelfAssignedTasks(),
+          dataService.getNotesByEmail(user.email),
+          dataService.getPatientSelfProtocols()
+        ]);
 
       const safeHistoryRes = historyRes.status === 'fulfilled' ? historyRes.value : null;
       const safeHistoryByEmailRes = historyByEmailRes.status === 'fulfilled' ? historyByEmailRes.value : null;
@@ -902,11 +908,11 @@ export default function App() {
       ]
         .map((row: any) => String(row?.patient_id || row?.patientId || '').trim())
         .filter((id: string) => id.length > 0 && id !== String(user.id || '').trim());
-      if (candidateResolvedIds.length > 0) {
+      if (mounted && candidateResolvedIds.length > 0) {
         setResolvedPatientPortalId(candidateResolvedIds[0]);
       }
 
-      setHistory(
+      if (mounted) setHistory(
         Array.isArray(mergedHistory)
           ? mergedHistory.map((h: any) => ({
               ...h,
@@ -923,7 +929,7 @@ export default function App() {
             }))
           : []
       );
-      setTasks((() => {
+      if (mounted) setTasks((() => {
         const baseTasks = Array.isArray(safeTasksRes?.data)
           ? safeTasksRes.data.map((t: any) => ({
               ...t,
@@ -955,29 +961,40 @@ export default function App() {
         return [...baseTasks, ...assignedPending];
       })());
 
-      setTherapistNotes(
+      if (mounted) setTherapistNotes(
         normalizeAndDecorateNotes(Array.isArray(safeNotesRes?.data) ? safeNotesRes.data : [])
       );
-      setProtocols(Array.isArray(safeProtocolsRes?.data) ? safeProtocolsRes.data : []);
+      if (mounted) setProtocols(Array.isArray(safeProtocolsRes?.data) ? safeProtocolsRes.data : []);
 
       const assignedCount = Array.isArray(safeAssignedTasksRes?.data) ? safeAssignedTasksRes.data.length : 0;
-      setPatientAssignedTaskCount(assignedCount);
-      setPatientAssignedTasksLoadError(
+      if (mounted) setPatientAssignedTaskCount(assignedCount);
+      if (mounted) setPatientAssignedTasksLoadError(
         assignedTasksRes.status === 'rejected' ||
           (safeAssignedTasksRes?.success === false && assignedCount === 0)
       );
 
       const fetchedTreatmentStatus = String(safeHistoryRes?.treatmentStatus || '').trim().toLowerCase();
-      if (fetchedTreatmentStatus && fetchedTreatmentStatus !== String(user?.treatmentStatus || '').trim().toLowerCase()) {
+      if (mounted && fetchedTreatmentStatus && fetchedTreatmentStatus !== String(user?.treatmentStatus || '').trim().toLowerCase()) {
         setUser((prev: any) => {
           if (!prev || prev.id !== user.id) return prev;
           return { ...prev, treatmentStatus: fetchedTreatmentStatus };
         });
       }
-      setPatientContextLoaded(true);
+        if (mounted) setPatientContextLoaded(true);
+      } finally {
+        running = false;
+      }
     };
 
     void fetchPatientScopedData();
+    const interval = window.setInterval(() => {
+      void fetchPatientScopedData();
+    }, 60_000);
+
+    return () => {
+      mounted = false;
+      window.clearInterval(interval);
+    };
   }, [user]);
 
   const patientIsReadOnlyMode = useMemo(() => {

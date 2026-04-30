@@ -7124,6 +7124,11 @@ async function startServer() {
           : req.body?.maxScore !== undefined
             ? asSafeNumber(req.body?.maxScore, 1, 100)
             : undefined,
+        scheduled_at: req.body?.scheduled_at !== undefined
+          ? sanitizeString(req.body?.scheduled_at, 60)
+          : req.body?.scheduledAt !== undefined
+            ? sanitizeString(req.body?.scheduledAt, 60)
+            : undefined,
         icon: sanitizeString(req.body?.icon, 40),
         color: sanitizeString(req.body?.color, 80),
         completed: Boolean(req.body?.completed),
@@ -7206,6 +7211,12 @@ async function startServer() {
         completed: req.body?.completed !== undefined ? Boolean(req.body?.completed) : undefined,
         is_daily_reminder: req.body?.is_daily_reminder !== undefined ? Boolean(req.body?.is_daily_reminder) : undefined,
         linked_task: req.body?.linked_task !== undefined ? sanitizeString(req.body?.linked_task, 120) : undefined,
+        scheduled_at:
+          req.body?.scheduled_at !== undefined
+            ? (sanitizeString(req.body?.scheduled_at, 60) || undefined)
+            : req.body?.scheduledAt !== undefined
+              ? (sanitizeString(req.body?.scheduledAt, 60) || undefined)
+              : undefined,
         updated_at: new Date().toISOString()
       });
       const { data, error } = await supabase
