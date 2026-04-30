@@ -594,7 +594,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           <div className="animate-slide-up">
             <div className="inline-flex items-center gap-2 bg-purple-50 text-[#7a32fc] px-4 py-2 rounded-full text-xs font-semibold uppercase tracking-widest mb-6">
               <Rocket size={14} />
-              O Futuro da Terapia Neuroevolutiva
+              Verto
             </div>
             <h1 className="text-6xl md:text-7xl font-semibold leading-[0.9] tracking-tighter mb-8">
               O centro da <br />
@@ -602,8 +602,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               <span className="text-[#7a32fc]">evolução</span>.
             </h1>
             <p className="text-xl text-gray-500 font-normal leading-relaxed mb-10 max-w-lg">
-              A Verto é a única plataforma projetada para transformar avaliações em resultados reais. 
-              Da primeira consulta à alta, tudo converge para o progresso do seu paciente.
+              A Verto é a solução que transforma um tratamento unilateral para um ecossistema integrado de colaboração, onde profissionais, pacientes e suas famílias trabalham juntos no progresso do paciente.
             </p>
             <div className="flex flex-col sm:flex-row gap-4">
               <button 
