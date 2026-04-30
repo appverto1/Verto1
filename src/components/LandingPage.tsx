@@ -983,7 +983,16 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 Começar Agora
               </button>
               <ul className="space-y-4 flex-1">
-                {['Até 2 Profissionais', 'Planos Terapêuticos Ilimitados', 'Relatórios de Evolução Automáticos', 'Portal do Paciente', 'Gestão Financeira Básica', 'Histórico Portátil', 'Dashboard do Profissional'].map((f, i) => (
+                <li className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">Todas as funcionalidades inclusas</li>
+                {[
+                  'Até 2 profissionais',
+                  'Plano terapêutico inteligente por domínio',
+                  'Prontuário e histórico clínico centralizados',
+                  'Agenda completa com gestão de salas',
+                  'Portal do Paciente + Diário da Família (Kids)',
+                  'Relatórios visuais comparativos',
+                  'LGPD + HIPAA com proteção avançada'
+                ].map((f, i) => (
                   <li key={i} className="flex items-start gap-3 text-sm font-medium text-gray-600">
                     <Check size={18} className="text-green-500 shrink-0 mt-0.5" />
                     {f}
@@ -1015,8 +1024,16 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 Começar Agora
               </button>
               <ul className="space-y-4 flex-1">
-                <li className="text-xs font-semibold text-[#7a32fc] uppercase tracking-widest mb-2">Tudo do Essencial +</li>
-                {['3 a 7 Profissionais', 'Dashboard de Evolução Clínica', 'Relatórios Consolidados', 'Gestão Financeira Avançada', 'Suporte Prioritário'].map((f, i) => (
+                <li className="text-xs font-semibold text-[#7a32fc] uppercase tracking-widest mb-2">Todas as funcionalidades inclusas</li>
+                {[
+                  '3 a 7 profissionais',
+                  'Plano terapêutico inteligente por domínio',
+                  'Prontuário e histórico clínico centralizados',
+                  'Agenda completa com gestão de salas',
+                  'Portal do Paciente + Diário da Família (Kids)',
+                  'Relatórios visuais comparativos',
+                  'LGPD + HIPAA com proteção avançada'
+                ].map((f, i) => (
                   <li key={i} className="flex items-start gap-3 text-sm font-medium text-gray-600">
                     <Check size={18} className="text-[#7a32fc] shrink-0 mt-0.5" />
                     {f}
@@ -1047,8 +1064,16 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 Começar Agora
               </button>
               <ul className="space-y-4 flex-1">
-                <li className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">Tudo do Crescimento +</li>
-                {['7 a 12 Profissionais', 'Múltiplos Workspaces de PEI', 'API de Integração de Dados', 'Gerente de Conta Dedicado'].map((f, i) => (
+                <li className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">Todas as funcionalidades inclusas</li>
+                {[
+                  '8 a 12 profissionais',
+                  'Plano terapêutico inteligente por domínio',
+                  'Prontuário e histórico clínico centralizados',
+                  'Agenda completa com gestão de salas',
+                  'Portal do Paciente + Diário da Família (Kids)',
+                  'Relatórios visuais comparativos',
+                  'LGPD + HIPAA com proteção avançada'
+                ].map((f, i) => (
                   <li key={i} className="flex items-start gap-3 text-sm font-medium text-gray-600">
                     <Check size={18} className="text-green-500 shrink-0 mt-0.5" />
                     {f}
@@ -1075,8 +1100,16 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 Agendar uma demonstração
               </button>
               <ul className="space-y-4 flex-1">
-                <li className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Tudo do Avançado +</li>
-                {['12+ Profissionais', 'Workspaces Ilimitados', 'Dashboard de Organização', 'Faturamento Centralizado', 'Opções de White-label'].map((f, i) => (
+                <li className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Todas as funcionalidades inclusas</li>
+                {[
+                  '13+ profissionais',
+                  'Plano terapêutico inteligente por domínio',
+                  'Prontuário e histórico clínico centralizados',
+                  'Agenda completa com gestão de salas',
+                  'Portal do Paciente + Diário da Família (Kids)',
+                  'Relatórios visuais comparativos',
+                  'LGPD + HIPAA com proteção avançada'
+                ].map((f, i) => (
                   <li key={i} className="flex items-start gap-3 text-sm font-medium text-slate-600">
                     <Check size={18} className="text-[#7a32fc] shrink-0 mt-0.5" />
                     {f}
