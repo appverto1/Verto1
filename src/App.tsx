@@ -1,4 +1,4 @@
-import React, { Suspense, useState, useEffect, useMemo, useRef } from 'react';
+﻿import React, { Suspense, useState, useEffect, useMemo, useRef } from 'react';
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS } from './components/Common';
 import { testSupabaseConnection, getSupabase, ensureFreshSession } from './lib/supabase';
 import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard } from 'lucide-react';
@@ -192,7 +192,7 @@ export default function App() {
       raw?.details ||
       raw?.description ||
       raw?.message ||
-      'Ação registrada no sistema.';
+      'AÃ§Ã£o registrada no sistema.';
     const type = raw?.type || raw?.category || 'system';
     const isoDate = raw?.timestamp || raw?.created_at || raw?.date || null;
     const parsedDate = isoDate ? new Date(isoDate) : null;
@@ -411,7 +411,7 @@ export default function App() {
       };
       checkSession();
     } else if (urlParams.get('payment') === 'cancel') {
-      alert('O pagamento foi cancelado. Você pode tentar novamente quando quiser.');
+      alert('O pagamento foi cancelado. VocÃª pode tentar novamente quando quiser.');
       window.history.replaceState({}, document.title, "/");
     }
   }, []);
@@ -440,13 +440,13 @@ export default function App() {
         if (!response.ok) {
           const text = await response.text();
           console.error('Login auth check failed:', response.status, text);
-          return { success: false, error: 'Erro na comunicação com o servidor' };
+          return { success: false, error: 'Erro na comunicaÃ§Ã£o com o servidor' };
         }
         
         const contentType = response.headers.get('content-type');
         if (!contentType || !contentType.includes('application/json')) {
           console.error('Login auth check returned non-JSON:', contentType);
-          return { success: false, error: 'Resposta inválida do servidor' };
+          return { success: false, error: 'Resposta invÃ¡lida do servidor' };
         }
 
         const data = await response.json();
@@ -481,14 +481,14 @@ export default function App() {
           const errData = JSON.parse(text);
           return { success: false, error: errData.error || 'Erro no login' };
         } catch (e) {
-          return { success: false, error: 'Erro na comunicação com o servidor' };
+          return { success: false, error: 'Erro na comunicaÃ§Ã£o com o servidor' };
         }
       }
 
       const contentType = response.headers.get('content-type');
       if (!contentType || !contentType.includes('application/json')) {
         console.error('Login returned non-JSON:', contentType);
-        return { success: false, error: 'Resposta inválida do servidor' };
+        return { success: false, error: 'Resposta invÃ¡lida do servidor' };
       }
 
       const data = await response.json();
@@ -503,11 +503,11 @@ export default function App() {
         // If server-side login fails, sign out of Supabase to clear local state
         const supabase = await getSupabase();
         await supabase.auth.signOut();
-        return { success: false, error: data.error || 'Erro ao sincronizar sessão com o servidor' };
+        return { success: false, error: data.error || 'Erro ao sincronizar sessÃ£o com o servidor' };
       }
     } catch (error: any) {
       console.error('Login error:', error);
-      return { success: false, error: error.message || 'Erro de conexão' };
+      return { success: false, error: error.message || 'Erro de conexÃ£o' };
     }
   };
 
@@ -657,12 +657,12 @@ export default function App() {
       }
     } catch (error: any) {
       console.error('Checkout error:', error);
-      alert('Erro de conexão: ' + error.message);
+      alert('Erro de conexÃ£o: ' + error.message);
     }
   };
 
   const handleEnterpriseContact = (currentUser: any) => {
-    const message = `Olá! Tenho interesse no plano Enterprise da Verto.\n\nNome: ${currentUser?.name || ''}\nEmail: ${currentUser?.email || ''}`;
+    const message = `OlÃ¡! Tenho interesse no plano Enterprise da Verto.\n\nNome: ${currentUser?.name || ''}\nEmail: ${currentUser?.email || ''}`;
     window.open(`https://wa.me/5511959348563?text=${encodeURIComponent(message)}`, '_blank');
   };
 
@@ -674,9 +674,9 @@ export default function App() {
         </div>
         <h2 className="text-3xl font-bold text-slate-900 mb-4 tracking-tight">Ative sua conta</h2>
         <p className="text-slate-500 font-normal mb-8 leading-relaxed">
-          Para acessar a plataforma Verto, é necessário ativar sua assinatura. 
+          Para acessar a plataforma Verto, Ã© necessÃ¡rio ativar sua assinatura. 
           {user.role === 'patient' ? (
-            <span> O valor para pacientes é de apenas <strong>R$ 4,90/mês</strong>.</span>
+            <span> O valor para pacientes Ã© de apenas <strong>R$ 4,90/mÃªs</strong>.</span>
           ) : (
             <span> Escolha um plano para concluir sua assinatura.</span>
           )}
@@ -705,10 +705,10 @@ export default function App() {
                 Assinar Crescimento (R$ 399,90)
               </button>
               <button 
-                onClick={() => handleCheckout('Avançado')}
+                onClick={() => handleCheckout('AvanÃ§ado')}
                 className="w-full bg-[#FFB547] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-amber-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
               >
-                Assinar Avançado (R$ 679,90)
+                Assinar AvanÃ§ado (R$ 679,90)
               </button>
               <button
                 onClick={() => handleEnterpriseContact(user)}
@@ -728,7 +728,7 @@ export default function App() {
         </div>
         
         <p className="mt-8 text-[10px] text-slate-400 font-medium uppercase tracking-widest">
-          Pagamento processado com segurança pelo Stripe
+          Pagamento processado com seguranÃ§a pelo Stripe
         </p>
       </div>
     </div>
@@ -802,8 +802,8 @@ export default function App() {
       return;
     }
 
-    // Paciente tem hidratação própria (histórico/tarefas/notas) e não deve
-    // receber sobreposição do estado clínico global após F5.
+    // Paciente tem hidrataÃ§Ã£o prÃ³pria (histÃ³rico/tarefas/notas) e nÃ£o deve
+    // receber sobreposiÃ§Ã£o do estado clÃ­nico global apÃ³s F5.
     if (user.role === 'patient') {
       setClinicStateHydrated(false);
       return;
@@ -944,7 +944,7 @@ export default function App() {
                   patientId: t?.patient_id || user.id,
                   title: taskData.title || 'Tarefa agendada',
                   description: taskData.description || '',
-                  icon: taskData.icon || '🎯',
+                  icon: taskData.icon || 'ðŸŽ¯',
                   color: taskData.color || 'bg-blue-100 text-blue-600',
                   type: t?.task_type || 'task',
                   maxScore: Number(taskData?.maxScore || taskData?.max_score || 4),
@@ -1014,7 +1014,7 @@ export default function App() {
           specialtySettings
         });
       } catch (error) {
-        console.error('Erro ao sincronizar estado clínico no Supabase:', error);
+        console.error('Erro ao sincronizar estado clÃ­nico no Supabase:', error);
       }
     }, 800);
 
@@ -1043,6 +1043,7 @@ export default function App() {
     const patient = allPatients.find(p => p.id === t.patientId);
     const isAdultTask = Number(patient?.age || 0) > 12;
     let taskToPersist = { ...t, id: (isUuidLike(String(t?.id || '')) ? String(t.id) : crypto.randomUUID()) };
+    let persistedRemotely = false;
 
     if (isAdultTask) {
       try {
@@ -1062,20 +1063,63 @@ export default function App() {
           scheduled_at: t.scheduledAt || new Date().toISOString(),
           status: 'pending'
         });
+
         if (assignedResult?.success && assignedResult?.data?.id) {
           taskToPersist = {
             ...taskToPersist,
             id: assignedResult.data.id,
             assignedTaskId: assignedResult.data.id
           };
+          persistedRemotely = true;
+        } else {
+          console.warn('assigned_tasks não confirmou persistência, tentando fallback em tasks:', assignedResult);
         }
       } catch (error) {
-        console.error('Falha ao criar assigned task (não bloqueante):', error);
+        console.error('Falha ao criar assigned task, tentando fallback em tasks:', error);
+      }
+
+      if (!persistedRemotely) {
+        try {
+          const fallbackPersisted = await dataService.addTask({
+            ...taskToPersist,
+            id: String(taskToPersist.id),
+            patient_id: String(taskToPersist.patientId),
+            patient_email: patient?.email || null,
+            title: taskToPersist.title,
+            description: taskToPersist.description || '',
+            type: taskToPersist.type || 'task',
+            max_score:
+              Number.isFinite(Number(taskToPersist.maxScore))
+                ? Math.max(1, Math.min(100, Number(taskToPersist.maxScore)))
+                : 4,
+            icon: taskToPersist.icon || '🎯',
+            color: taskToPersist.color || 'bg-blue-100 text-blue-600',
+            completed: false,
+            is_daily_reminder: false,
+            linked_task: taskToPersist.linkedTask || null,
+            scheduled_at: taskToPersist.scheduledAt || new Date().toISOString()
+          });
+          if (fallbackPersisted?.success) {
+            persistedRemotely = true;
+            if (fallbackPersisted?.data?.id) {
+              taskToPersist = { ...taskToPersist, id: fallbackPersisted.data.id };
+            }
+          } else {
+            console.error('Fallback em tasks falhou:', fallbackPersisted);
+          }
+        } catch (fallbackError) {
+          console.error('Erro no fallback de persistência em tasks:', fallbackError);
+        }
       }
     }
 
+    if (isAdultTask && !persistedRemotely) {
+      alert('Não foi possível salvar o agendamento no servidor. Tente novamente.');
+      return;
+    }
+
     setTasks(prev => [...prev, taskToPersist]);
-    onAddActivityLog("Criação de Tarefa", `Tarefa "${taskToPersist.title}" criada para o paciente ID ${taskToPersist.patientId}.`);
+    onAddActivityLog('Criação de Tarefa', `Tarefa "${taskToPersist.title}" criada para o paciente ID ${taskToPersist.patientId}.`);
 
     if (!isAdultTask) {
       // Sync to Backend (fluxo legado/kids)
@@ -1096,7 +1140,7 @@ export default function App() {
       mergedTask = { ...t, ...fields };
       return mergedTask;
     }));
-    onAddActivityLog("Atualização de Tarefa", `Tarefa ID ${id} atualizada.`);
+    onAddActivityLog("AtualizaÃ§Ã£o de Tarefa", `Tarefa ID ${id} atualizada.`);
 
     // Sync to Backend
     if (mergedTask) {
@@ -1168,7 +1212,7 @@ export default function App() {
       subject: subject || "Geral" 
     };
     setTherapistNotes(prev => [newNote, ...prev]);
-    onAddActivityLog("Registro de Evolução", `Nova nota (${normalizedVisibility}) adicionada ao prontuário do paciente ID ${pid}.`);
+    onAddActivityLog("Registro de EvoluÃ§Ã£o", `Nova nota (${normalizedVisibility}) adicionada ao prontuÃ¡rio do paciente ID ${pid}.`);
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -1186,13 +1230,13 @@ export default function App() {
         setTherapistNotes(prev => prev.map((n: any) => (n.id === tempId ? { ...n, id: result.data.id } : n)));
       } else if (result?.success === false && !(result?.offline && result?.pending)) {
         setTherapistNotes(prev => prev.filter((n: any) => n.id !== tempId));
-        const errMsg = String(result?.error || 'Não foi possível persistir a anotação no servidor.');
+        const errMsg = String(result?.error || 'NÃ£o foi possÃ­vel persistir a anotaÃ§Ã£o no servidor.');
         alert(errMsg);
       }
     } catch (error) {
       console.error("Falha ao sincronizar nota no servidor:", error);
       setTherapistNotes(prev => prev.filter((n: any) => n.id !== tempId));
-      alert('Falha ao salvar anotação. Tente novamente.');
+      alert('Falha ao salvar anotaÃ§Ã£o. Tente novamente.');
     }
   };
   const handleUpdateHistoryItem = async (id: any, score: number, evalComment: string) => { 
@@ -1232,7 +1276,7 @@ export default function App() {
                 score,
                 visibility: n?.visibility || 'family',
                 type: n?.type || 'family_note',
-                subject: starred ? `⭐ ${String(n?.subject || 'Geral').replace(/\u2b50|⭐/g, '').trim()}` : String(n?.subject || 'Geral').replace(/\u2b50|⭐/g, '').trim(),
+                subject: starred ? `â­ ${String(n?.subject || 'Geral').replace(/\u2b50|â­/g, '').trim()}` : String(n?.subject || 'Geral').replace(/\u2b50|â­/g, '').trim(),
                 text: applyStarMarker(String(n?.text || n?.note || ''), starred),
                 note: applyStarMarker(String(n?.note || n?.text || ''), starred)
               }
@@ -1247,7 +1291,7 @@ export default function App() {
           awarded: starred
         });
       } catch (error) {
-        console.error('Falha ao persistir estrela em anotação de família:', error);
+        console.error('Falha ao persistir estrela em anotaÃ§Ã£o de famÃ­lia:', error);
       }
       return;
     }
@@ -1275,7 +1319,7 @@ export default function App() {
               ? {
                   ...n,
                   score,
-                  subject: starred ? `⭐ ${String(n?.subject || 'Família').replace(/\u2b50|⭐/g, '').trim()}` : String(n?.subject || 'Família').replace(/\u2b50|⭐/g, '').trim()
+                  subject: starred ? `â­ ${String(n?.subject || 'FamÃ­lia').replace(/\u2b50|â­/g, '').trim()}` : String(n?.subject || 'FamÃ­lia').replace(/\u2b50|â­/g, '').trim()
                   ,text: applyStarMarker(String(n?.text || n?.note || ''), starred)
                   ,note: applyStarMarker(String(n?.note || n?.text || ''), starred)
                 }
@@ -1292,17 +1336,17 @@ export default function App() {
           awarded: starred
         });
       } catch (error) {
-        console.error('Falha ao persistir estrelinha de registro da família:', error);
+        console.error('Falha ao persistir estrelinha de registro da famÃ­lia:', error);
       }
       return;
     }
 
     if (item) {
       const updatedItem = { ...item, score, evalComment: evalComment || '' };
-      const noteText = `📝 ATUALIZAÇÃO DE REGISTRO\nAtividade: ${updatedItem.title}\nPontuação: ${updatedItem.score}\nObs: ${updatedItem.evalComment || "Nenhuma observação."}`;
-      handleAddNote(item.patientId, noteText, 'private', 'Sessão');
+      const noteText = `ðŸ“ ATUALIZAÃ‡ÃƒO DE REGISTRO\nAtividade: ${updatedItem.title}\nPontuaÃ§Ã£o: ${updatedItem.score}\nObs: ${updatedItem.evalComment || "Nenhuma observaÃ§Ã£o."}`;
+      handleAddNote(item.patientId, noteText, 'private', 'SessÃ£o');
       setHistory(prev => prev.map(i => (String(i.id) === rawId ? updatedItem : i)));
-      onAddActivityLog("Edição de Histórico", `Registro de atividade "${item.title}" (ID ${id}) editado.`);
+      onAddActivityLog("EdiÃ§Ã£o de HistÃ³rico", `Registro de atividade "${item.title}" (ID ${id}) editado.`);
       try {
         await dataService.updateHistoryItem(String(id), {
           score,
@@ -1312,7 +1356,7 @@ export default function App() {
           patient_email: allPatients.find(p => p.id === item.patientId)?.email || null
         });
       } catch (error) {
-        console.error('Falha ao persistir edição de histórico:', error);
+        console.error('Falha ao persistir ediÃ§Ã£o de histÃ³rico:', error);
       }
     }
   };
@@ -1322,7 +1366,7 @@ export default function App() {
 
   const handleUpdateAppointment = (id: any, updates: any) => {
     setTherapistAgenda(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
-    onAddActivityLog("Edição de Agendamento", `Agendamento ID ${id} atualizado: ${JSON.stringify(updates)}`, 'management');
+    onAddActivityLog("EdiÃ§Ã£o de Agendamento", `Agendamento ID ${id} atualizado: ${JSON.stringify(updates)}`, 'management');
   };
 
   const handleAddPatient = async (data: any) => { 
@@ -1391,7 +1435,7 @@ export default function App() {
         const alreadyExists = normalizedMessage.includes('already exists');
         if (alreadyExists) {
           // If user already exists, we should inform that history will be linked
-          alert(`O paciente com o email ${data.email} já possui uma conta no sistema. Todo o histórico clínico anterior será vinculado a este novo prontuário.`);
+          alert(`O paciente com o email ${data.email} jÃ¡ possui uma conta no sistema. Todo o histÃ³rico clÃ­nico anterior serÃ¡ vinculado a este novo prontuÃ¡rio.`);
           
           // Fetch existing history and notes by email
           const historyRes = await dataService.getHistoryByEmail(data.email);
@@ -1417,16 +1461,16 @@ export default function App() {
         } else {
           if (userResult.activationEmailSent === false) {
             alert(
-              `Paciente cadastrado e vinculado, mas o e-mail de ativação não foi enviado agora.\n` +
+              `Paciente cadastrado e vinculado, mas o e-mail de ativaÃ§Ã£o nÃ£o foi enviado agora.\n` +
               `Motivo: ${toReadableError(userResult.warning || userResult.error || 'falha no provedor de e-mail')}\n` +
-              `Você pode usar o recurso de reenviar ativação depois.`
+              `VocÃª pode usar o recurso de reenviar ativaÃ§Ã£o depois.`
             );
           } else {
-            alert(`Paciente cadastrado com sucesso. Enviamos o e-mail de ativação para ${data.email}.`);
+            alert(`Paciente cadastrado com sucesso. Enviamos o e-mail de ativaÃ§Ã£o para ${data.email}.`);
           }
         }
       } else if (userResult?.error) {
-        alert(`Não foi possível enviar o convite do paciente: ${toReadableError(userResult.error)}`);
+        alert(`NÃ£o foi possÃ­vel enviar o convite do paciente: ${toReadableError(userResult.error)}`);
         rollbackOptimisticPatient();
         return;
       }
@@ -1447,7 +1491,7 @@ export default function App() {
     const duplicateConflict =
       !fbResult?.success &&
       Number(fbResult?.status) === 409 &&
-      /já existe um paciente|mesmo e-mail|mesmo cpf|duplicate/i.test(
+      /jÃ¡ existe um paciente|mesmo e-mail|mesmo cpf|duplicate/i.test(
         String(fbResult?.error || ""),
       );
 
@@ -1510,14 +1554,14 @@ export default function App() {
         );
       } else {
         alert(
-          "Paciente já existe na clínica e foi vinculado, mas não foi possível reconciliar o registro no painel agora. Atualize a página para visualizar.",
+          "Paciente jÃ¡ existe na clÃ­nica e foi vinculado, mas nÃ£o foi possÃ­vel reconciliar o registro no painel agora. Atualize a pÃ¡gina para visualizar.",
         );
       }
     }
 
     if (!fbResult?.success) {
       if (!duplicateConflict) {
-        alert(`Não foi possível cadastrar paciente: ${toReadableError(fbResult?.error || 'Erro desconhecido')}`);
+        alert(`NÃ£o foi possÃ­vel cadastrar paciente: ${toReadableError(fbResult?.error || 'Erro desconhecido')}`);
         rollbackOptimisticPatient();
         return;
       }
@@ -1582,7 +1626,7 @@ export default function App() {
       setAllPatients(prev => prev.filter(p => p.id !== updatedData.id));
       setClinicalRecords(prev => prev.filter(r => r.patientId !== updatedData.id));
       setTherapistAgenda(prev => prev.filter(a => a.id !== updatedData.id));
-      onAddActivityLog("Desvinculação de Paciente", `Paciente ID ${updatedData.id} foi desvinculado.`, 'management');
+      onAddActivityLog("DesvinculaÃ§Ã£o de Paciente", `Paciente ID ${updatedData.id} foi desvinculado.`, 'management');
     } else {
       if (Object.keys(identityData).length > 1) { // More than just 'id'
         setAllPatients(prev => prev.map(p => p.id === updatedData.id ? { ...p, ...identityData } : p)); 
@@ -1610,7 +1654,7 @@ export default function App() {
       }
 
       setTherapistAgenda(prev => prev.map(a => a.id === updatedData.id ? { ...a, name: updatedData.name || a.name } : a)); 
-      onAddActivityLog("Atualização de Cadastro", `Dados do paciente ID ${updatedData.id} atualizados.`, 'management');
+      onAddActivityLog("AtualizaÃ§Ã£o de Cadastro", `Dados do paciente ID ${updatedData.id} atualizados.`, 'management');
     }
 
     // Sync to Backend
@@ -1619,7 +1663,7 @@ export default function App() {
       if (isDeleteOrUnlink) {
         const deleteResult = await dataService.deletePatient(String(updatedData.id));
         if (!deleteResult?.success) {
-          alert(`Não foi possível excluir/desvincular paciente: ${toReadableError(deleteResult?.error || 'Erro desconhecido')}`);
+          alert(`NÃ£o foi possÃ­vel excluir/desvincular paciente: ${toReadableError(deleteResult?.error || 'Erro desconhecido')}`);
         }
       } else {
         await dataService.updatePatient(String(updatedData.id), {
@@ -1721,7 +1765,7 @@ export default function App() {
            (startTime <= r.startTime && endTime >= r.endTime))
         );
         if (roomConflict) {
-          conflicts.push(`Conflito de Sala: ${sess.room} já está reservada em ${dateStr} às ${startTime}`);
+          conflicts.push(`Conflito de Sala: ${sess.room} jÃ¡ estÃ¡ reservada em ${dateStr} Ã s ${startTime}`);
         }
       }
 
@@ -1733,7 +1777,7 @@ export default function App() {
         a.status !== 'canceled'
       );
       if (profConflict) {
-        conflicts.push(`Conflito de Profissional: ${sess.professional} já tem agenda em ${dateStr} às ${startTime}`);
+        conflicts.push(`Conflito de Profissional: ${sess.professional} jÃ¡ tem agenda em ${dateStr} Ã s ${startTime}`);
       }
 
       // 3. Patient Conflict Check
@@ -1744,7 +1788,7 @@ export default function App() {
         a.status !== 'canceled'
       );
       if (patientConflict) {
-        conflicts.push(`Conflito de Paciente: ${sess.patientName} já tem sessão em ${dateStr} às ${startTime}`);
+        conflicts.push(`Conflito de Paciente: ${sess.patientName} jÃ¡ tem sessÃ£o em ${dateStr} Ã s ${startTime}`);
       }
 
       if (conflicts.length === 0) {
@@ -1772,7 +1816,7 @@ export default function App() {
       return a.time.localeCompare(b.time);
     })); 
 
-    onAddActivityLog("Agendamento de Sessão", `${numSessions} sessões agendadas para "${sess.patientName}" começando em ${sess.date}.`, 'management');
+    onAddActivityLog("Agendamento de SessÃ£o", `${numSessions} sessÃµes agendadas para "${sess.patientName}" comeÃ§ando em ${sess.date}.`, 'management');
     return { success: true };
   };
 
@@ -1839,8 +1883,8 @@ export default function App() {
     setTasks(prev => prev.filter(x => x.id !== t.id)); 
     
     // Add a note about the patient completing the task
-    const noteText = `? TAREFA CONCLUÍDA PELO PACIENTE\nAtividade: ${t.title}\n${isKid ? `Pontuação: ${e}\n` : ''}Anotações do Paciente: ${n || "Nenhuma observação."}`;
-    handleAddNote(targetPatientId, noteText, 'private', 'Evolução');
+    const noteText = `? TAREFA CONCLUÃDA PELO PACIENTE\nAtividade: ${t.title}\n${isKid ? `PontuaÃ§Ã£o: ${e}\n` : ''}AnotaÃ§Ãµes do Paciente: ${n || "Nenhuma observaÃ§Ã£o."}`;
+    handleAddNote(targetPatientId, noteText, 'private', 'EvoluÃ§Ã£o');
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -1871,7 +1915,7 @@ export default function App() {
         }
         await dataService.completeAssignedTask(completionTargetId, completionPayload);
       } catch (error) {
-        console.error('Falha ao concluir assigned task (não bloqueante):', error);
+        console.error('Falha ao concluir assigned task (nÃ£o bloqueante):', error);
       }
     }
   };
@@ -1889,7 +1933,7 @@ export default function App() {
       });
     });
 
-    // Normalize score for crianças if it's not already 0, 0.5 or 1
+    // Normalize score for crianÃ§as if it's not already 0, 0.5 or 1
     let finalScore = score;
     if (isKid && skillMaxScore === 1 && ![0, 0.5, 1].includes(score)) {
       if (score >= 3) finalScore = 1;
@@ -1907,14 +1951,14 @@ export default function App() {
       score: finalScore,
       evalComment: evalComment || "",
       dateGroup: "Hoje",
-      icon: "🎯"
+      icon: "ðŸŽ¯"
     };
     
     // Add a note about the trial
-    const noteText = `🎯 NOVO REGISTRO\nAtividade: ${title}\nPontuação: ${finalScore}${evalComment ? `\nAnotações do Profissional: ${evalComment}` : ""}`;
-    handleAddNote(pid, noteText, 'private', 'Sessão');
+    const noteText = `ðŸŽ¯ NOVO REGISTRO\nAtividade: ${title}\nPontuaÃ§Ã£o: ${finalScore}${evalComment ? `\nAnotaÃ§Ãµes do Profissional: ${evalComment}` : ""}`;
+    handleAddNote(pid, noteText, 'private', 'SessÃ£o');
 
-    onAddActivityLog("Registro de Avaliação", `Avaliação da habilidade "${title}" registrada para o paciente ID ${pid}. Pontuação: ${score}.`);
+    onAddActivityLog("Registro de AvaliaÃ§Ã£o", `AvaliaÃ§Ã£o da habilidade "${title}" registrada para o paciente ID ${pid}. PontuaÃ§Ã£o: ${score}.`);
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -1926,10 +1970,10 @@ export default function App() {
         title: title,
         score: finalScore,
         note: evalComment || "",
-        icon: "🎯"
+        icon: "ðŸŽ¯"
       });
     } catch (error) {
-      console.error('Falha ao persistir registro de sessão:', error);
+      console.error('Falha ao persistir registro de sessÃ£o:', error);
     }
 
     const updatedHistory = [newHistoryItem, ...history];
@@ -1965,7 +2009,7 @@ export default function App() {
       if (isMastered && peiGoal?.status !== 'completed') {
         handleAddNote(
           pid,
-          `⭐ CRITÉRIO DE MAESTRIA ATINGIDO!\nA habilidade "${title}" foi realizada de forma independente por 5 vezes consecutivas. Status atualizado para Adquirida.`,
+          `â­ CRITÃ‰RIO DE MAESTRIA ATINGIDO!\nA habilidade "${title}" foi realizada de forma independente por 5 vezes consecutivas. Status atualizado para Adquirida.`,
           'private',
           'Maestria'
         );
@@ -2000,7 +2044,7 @@ export default function App() {
               : {}
         });
       } catch (error) {
-        console.error('Falha ao persistir atualização de PEI no prontuário:', error);
+        console.error('Falha ao persistir atualizaÃ§Ã£o de PEI no prontuÃ¡rio:', error);
       }
     }
 
@@ -2010,11 +2054,11 @@ export default function App() {
   const handleDeleteHistoryItem = async (id: any) => {
     const item = history.find(h => h.id === id);
     setHistory(prev => prev.filter(h => h.id !== id));
-    onAddActivityLog("Exclusão de Registro", `Registro de atividade "${item?.title}" (ID ${id}) excluído do histórico.`, 'system');
+    onAddActivityLog("ExclusÃ£o de Registro", `Registro de atividade "${item?.title}" (ID ${id}) excluÃ­do do histÃ³rico.`, 'system');
     try {
       await dataService.deleteHistoryItem(String(id));
     } catch (error) {
-      console.error('Falha ao excluir histórico no servidor:', error);
+      console.error('Falha ao excluir histÃ³rico no servidor:', error);
     }
   };
   
@@ -2072,12 +2116,12 @@ export default function App() {
         if (isUuid(String(note.id))) {
           const delResult = await dataService.deleteNote(String(note.id));
           if (!delResult?.success) {
-            console.warn('[notes-share] falha ao remover cópia:', delResult);
+            console.warn('[notes-share] falha ao remover cÃ³pia:', delResult);
           }
         }
         onAddActivityLog(
-          'Remoção de compartilhamento de anotação',
-          `Cópia de anotação removida da visibilidade ${targetLabel} no prontuário de ${originalPatientName}.`,
+          'RemoÃ§Ã£o de compartilhamento de anotaÃ§Ã£o',
+          `CÃ³pia de anotaÃ§Ã£o removida da visibilidade ${targetLabel} no prontuÃ¡rio de ${originalPatientName}.`,
           'clinical',
         );
         return;
@@ -2119,8 +2163,8 @@ export default function App() {
           }
         }
         onAddActivityLog(
-          'Remoção de compartilhamento de anotação',
-          `Cópia de anotação removida da visibilidade ${targetLabel} no prontuário de ${originalPatientName}.`,
+          'RemoÃ§Ã£o de compartilhamento de anotaÃ§Ã£o',
+          `CÃ³pia de anotaÃ§Ã£o removida da visibilidade ${targetLabel} no prontuÃ¡rio de ${originalPatientName}.`,
           'clinical',
         );
         return;
@@ -2168,23 +2212,23 @@ export default function App() {
               .map((n: any) => (n.id === id ? { ...n, [copyKey]: false } : n)),
           ),
         );
-        alert(String(result?.error || 'Não foi possível persistir o compartilhamento da anotação.'));
+        alert(String(result?.error || 'NÃ£o foi possÃ­vel persistir o compartilhamento da anotaÃ§Ã£o.'));
         return;
       }
 
       await dataService.saveActivityLog({
-        title: 'Compartilhamento de anotação',
-        details: `Anotação compartilhada com ${targetLabel} no prontuário de ${originalPatientName}.`,
+        title: 'Compartilhamento de anotaÃ§Ã£o',
+        details: `AnotaÃ§Ã£o compartilhada com ${targetLabel} no prontuÃ¡rio de ${originalPatientName}.`,
         category: 'clinical',
       });
       onAddActivityLog(
-        'Compartilhamento de anotação',
-        `Anotação compartilhada com ${targetLabel} no prontuário de ${originalPatientName}.`,
+        'Compartilhamento de anotaÃ§Ã£o',
+        `AnotaÃ§Ã£o compartilhada com ${targetLabel} no prontuÃ¡rio de ${originalPatientName}.`,
         'clinical',
       );
       } catch (error) {
         console.error('[notes-share] erro inesperado ao alternar compartilhamento:', error);
-        alert('Falha ao compartilhar anotação. Tente novamente.');
+        alert('Falha ao compartilhar anotaÃ§Ã£o. Tente novamente.');
       }
     };
   }, [allPatients, therapistNotes]);
@@ -2192,18 +2236,18 @@ export default function App() {
   const handleAddFamilyNote = async (pid: any, txt: string, image?: string) => {
     const identity = resolvePatientIdentityForPortal({ patientId: pid });
     const targetPatientId = String(identity.patientId || pid || user?.id || '').trim();
-    const noteText = `🏠 REGISTRO DA FAMÍLIA\n${txt}`;
-    handleAddNote(targetPatientId, noteText, 'family', 'Família');
+    const noteText = `ðŸ  REGISTRO DA FAMÃLIA\n${txt}`;
+    handleAddNote(targetPatientId, noteText, 'family', 'FamÃ­lia');
     
     const newHistoryItem = {
       id: Date.now(),
       patientId: targetPatientId,
       type: image ? 'photo' : 'family_note',
-      title: image ? "Foto enviada" : "Registro da Família",
+      title: image ? "Foto enviada" : "Registro da FamÃ­lia",
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       note: txt,
       image: image,
-      icon: image ? "📷" : "🏠",
+      icon: image ? "ðŸ“·" : "ðŸ ",
       dateGroup: "Hoje",
       date: new Date().toISOString()
     };
@@ -2211,7 +2255,7 @@ export default function App() {
     // Also add to history timeline
     setHistory(prev => [newHistoryItem, ...prev]);
 
-    onAddActivityLog("Registro da Família", `Nova anotação da família adicionada para o paciente ID ${pid}.`);
+    onAddActivityLog("Registro da FamÃ­lia", `Nova anotaÃ§Ã£o da famÃ­lia adicionada para o paciente ID ${pid}.`);
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -2220,20 +2264,20 @@ export default function App() {
       patient_email: identity.patientEmail,
       patient_name: identity.patientName,
       type: image ? 'photo' : 'family_note',
-      title: image ? "Foto enviada" : "Registro da Família",
+      title: image ? "Foto enviada" : "Registro da FamÃ­lia",
       note: txt,
       image: image,
-      icon: image ? "📷" : "🏠"
+      icon: image ? "ðŸ“·" : "ðŸ "
     });
 
     if (!historySaveResult?.success) {
-      console.warn('[family-note] Falha ao persistir histórico da família:', historySaveResult);
-      alert(`Registro salvo parcialmente. Não foi possível persistir a foto no histórico: ${historySaveResult?.error || 'erro desconhecido'}`);
+      console.warn('[family-note] Falha ao persistir histÃ³rico da famÃ­lia:', historySaveResult);
+      alert(`Registro salvo parcialmente. NÃ£o foi possÃ­vel persistir a foto no histÃ³rico: ${historySaveResult?.error || 'erro desconhecido'}`);
     }
   };
 
   const handleLogout = async () => {
-    onAddActivityLog("Logout do Sistema", "O profissional encerrou a sessão com segurança.", "system");
+    onAddActivityLog("Logout do Sistema", "O profissional encerrou a sessÃ£o com seguranÃ§a.", "system");
     try {
       const supabase = await getSupabase();
       const { data: { session } } = await supabase.auth.getSession();
@@ -2343,7 +2387,7 @@ export default function App() {
           <div className="w-full max-w-2xl bg-white rounded-3xl border border-slate-100 shadow-sm p-6">
             <h2 className="text-xl font-bold text-slate-900">Escolha o Workspace</h2>
             <p className="text-sm text-slate-500 mt-1">
-              Seu usuário participa de mais de uma clínica. Selecione onde deseja trabalhar agora.
+              Seu usuÃ¡rio participa de mais de uma clÃ­nica. Selecione onde deseja trabalhar agora.
             </p>
             <div className="mt-6 space-y-3">
               {user.workspaces.map((workspace: any) => (
@@ -2365,7 +2409,7 @@ export default function App() {
         <div className="min-h-screen flex items-center justify-center bg-white">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#7a32fc] mx-auto"></div>
-            <p className="mt-4 text-sm text-slate-500">Carregando dados da clínica...</p>
+            <p className="mt-4 text-sm text-slate-500">Carregando dados da clÃ­nica...</p>
           </div>
         </div>
       ) : ((user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && !user.firstLoginCompleted) || showOnboarding ? (

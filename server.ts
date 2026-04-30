@@ -7510,6 +7510,13 @@ async function startServer() {
             ? req.body.taskData
             : {};
 
+      const incomingScheduledAt = sanitizeString(req.body?.scheduled_at, 60);
+      const normalizedScheduledAtMs = parseTaskScheduleToMs(incomingScheduledAt);
+      const normalizedScheduledAt =
+        typeof normalizedScheduledAtMs === 'number' && Number.isFinite(normalizedScheduledAtMs)
+          ? new Date(normalizedScheduledAtMs).toISOString()
+          : incomingScheduledAt || new Date().toISOString();
+
       const payload = cleanObject({
         id: sanitizeString(req.body?.id, 120) || undefined,
         clinic_id: clinicId || undefined,
@@ -7518,7 +7525,7 @@ async function startServer() {
         professional_id: professionalId || undefined,
         task_type: taskType,
         task_data: safeTaskData,
-        scheduled_at: sanitizeString(req.body?.scheduled_at, 40) || new Date().toISOString(),
+        scheduled_at: normalizedScheduledAt,
         status: safeStatus,
         parent_assigned_task_id: sanitizeString(req.body?.parent_assigned_task_id, 120) || undefined
       });
@@ -7586,10 +7593,19 @@ async function startServer() {
           }
         : undefined;
 
+      const incomingScheduledAt = req.body?.scheduled_at !== undefined ? sanitizeString(req.body?.scheduled_at, 60) : undefined;
+      const normalizedScheduledAtMs = incomingScheduledAt ? parseTaskScheduleToMs(incomingScheduledAt) : null;
+      const normalizedScheduledAt =
+        incomingScheduledAt === undefined
+          ? undefined
+          : (typeof normalizedScheduledAtMs === 'number' && Number.isFinite(normalizedScheduledAtMs)
+              ? new Date(normalizedScheduledAtMs).toISOString()
+              : incomingScheduledAt);
+
       const updates = cleanObject({
         task_type: req.body?.task_type !== undefined ? sanitizeString(req.body?.task_type, 60) : undefined,
         task_data: mergedTaskData,
-        scheduled_at: req.body?.scheduled_at !== undefined ? sanitizeString(req.body?.scheduled_at, 60) : undefined,
+        scheduled_at: normalizedScheduledAt,
         status: req.body?.status !== undefined ? sanitizeString(req.body?.status, 40).toLowerCase() : undefined
       });
 
