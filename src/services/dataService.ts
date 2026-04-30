@@ -1,4 +1,4 @@
-import { ensureFreshSession, getSupabase } from '../lib/supabase';
+﻿import { ensureFreshSession, getSupabase } from '../lib/supabase';
 import {
   generateId,
   getEndpointCacheMeta,
@@ -88,7 +88,7 @@ function normalizeApiErrorMessage(value: any): string {
     try {
       return JSON.stringify(value);
     } catch {
-      return '[erro não serializável]';
+      return '[erro nÃ£o serializÃ¡vel]';
     }
   }
   return String(value || 'Erro desconhecido');
@@ -1569,3 +1569,4 @@ export const dataService = {
     };
   }
 };
+

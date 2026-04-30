@@ -2931,7 +2931,15 @@ export function CoordinatorDashboard({
               history={patientsHistory.filter((h) => {
                 const itemPatientId = String(h?.patientId ?? h?.patient_id ?? "").trim();
                 const currentPatientId = String(selectedPatientId ?? "").trim();
-                return itemPatientId !== "" && itemPatientId === currentPatientId;
+                const currentPatientEmail = String(
+                  (allPatients || []).find((p: any) => String(p?.id ?? "").trim() === currentPatientId)?.email || ""
+                )
+                  .trim()
+                  .toLowerCase();
+                const itemPatientEmail = String(h?.patient_email ?? h?.email ?? "").trim().toLowerCase();
+                const byId = itemPatientId !== "" && itemPatientId === currentPatientId;
+                const byEmail = currentPatientEmail !== "" && itemPatientEmail === currentPatientEmail;
+                return byId || byEmail;
               })}
               notes={therapistNotes.filter((n) => {
                 const itemPatientId = String(n?.patientId ?? n?.patient_id ?? "").trim();

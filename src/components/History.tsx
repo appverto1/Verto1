@@ -92,7 +92,8 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
   const displayNote = sanitizeDescriptionForDisplay(repairMojibake(item?.note));
   const displayIcon = (() => {
     const raw = repairMojibake(item?.icon).trim();
-    if (raw && raw !== '??') return raw;
+    const looksCorrupted = /�|ðŸ|Ã|â/.test(raw);
+    if (raw && raw !== '??' && !looksCorrupted && raw.length <= 4) return raw;
     if (item?.type === 'photo') return '📷';
     if (item?.type === 'family_note') return '🏠';
     if (item?.type === 'intervention') return '🧩';
