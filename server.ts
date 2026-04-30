@@ -526,10 +526,18 @@ function isMissingColumnError(error: any, columnName?: string): boolean {
   const message = sanitizeString(error?.message, 500).toLowerCase();
   if (code === '42703') return true;
   if (!message) return false;
+  const isSchemaCacheMissing =
+    message.includes('could not find the') &&
+    message.includes('column') &&
+    message.includes('schema cache');
+
   if (columnName) {
-    return message.includes(columnName.toLowerCase()) && message.includes('does not exist');
+    return (
+      (message.includes(columnName.toLowerCase()) && message.includes('does not exist')) ||
+      (isSchemaCacheMissing && message.includes(`'${columnName.toLowerCase()}'`))
+    );
   }
-  return message.includes('does not exist');
+  return message.includes('does not exist') || isSchemaCacheMissing;
 }
 
 async function sendEmailViaResend({
