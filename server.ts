@@ -5194,6 +5194,198 @@ async function startServer() {
     }
   });
 
+  app.post(
+    '/api/patients/:id/resend-activation',
+    checkAuth,
+    requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'),
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.params.id, 120);
+        if (!isUuid(patientId)) {
+          return res.status(400).json({ success: false, error: 'patientId inválido.' });
+        }
+        const hasAccess = await canAccessPatientInCurrentClinic(patientId, req.session.user);
+        if (!hasAccess) {
+          return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
+        }
+
+        const { data: patient, error: patientError } = await supabase
+          .from('patients')
+          .select('id, name, email, type, clinic_id, therapist_id')
+          .eq('id', patientId)
+          .maybeSingle();
+        if (patientError) throw patientError;
+        const patientEmail = sanitizeEmail(patient?.email);
+        if (!patientEmail) {
+          return res.status(400).json({ success: false, error: 'Paciente sem e-mail cadastrado.' });
+        }
+
+        const profileName = sanitizeString(patient?.name, 180) || patientEmail.split('@')[0];
+        const activationLink =
+          (await generateSupabaseActionLink({
+            type: 'signup',
+            email: patientEmail,
+            redirectTo: getActivationRedirectUrl('patient', patientEmail)
+          })) ||
+          (await generateSupabaseActionLink({
+            type: 'recovery',
+            email: patientEmail,
+            redirectTo: getActivationRedirectUrl('patient', patientEmail)
+          })) ||
+          getActivationRedirectUrl('patient', patientEmail);
+
+        const activationEmail = buildActivationEmailTemplate({
+          nome: profileName,
+          link_ativacao: activationLink,
+          perfil: 'patient'
+        });
+
+        const sent = await sendTransactionalEmailSafe({
+          to: patientEmail,
+          subject: activationEmail.subject,
+          html: activationEmail.html,
+          context: 'patient_manual_resend_activation',
+          from: OFFICIAL_FROM_NOREPLY,
+          replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+          templateKind: 'welcome_patient',
+          templateData: {
+            nome: profileName,
+            link_ativacao: activationLink
+          },
+          metadata: {
+            patientId,
+            email: maskEmail(patientEmail)
+          }
+        });
+
+        await persistIdentityAuditLog({
+          title: 'Reenvio manual de ativação para paciente',
+          content: `Reenvio de ativação solicitado para ${maskEmail(patientEmail)}. E-mail ${sent ? 'enviado' : 'com falha de envio'}.`,
+          identifier: patientEmail,
+          channel: 'email',
+          userId: sanitizeString(req.session.user?.id, 120),
+          request: req,
+          status: sent ? 'sent' : 'warning'
+        });
+
+        return res.json({
+          success: true,
+          message: sent
+            ? 'E-mail de ativação reenviado com sucesso.'
+            : 'Reenvio solicitado, mas houve falha no envio do e-mail. Tente novamente.'
+        });
+      } catch (error: any) {
+        console.error('[Patients] resend activation error:', error);
+        return res.status(500).json({
+          success: false,
+          error: sanitizeString(error?.message || 'Falha ao reenviar e-mail de ativação.', 500)
+        });
+      }
+    }
+  );
+
+  app.post(
+    '/api/patients/:id/resend-recovery',
+    checkAuth,
+    requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'),
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.params.id, 120);
+        if (!isUuid(patientId)) {
+          return res.status(400).json({ success: false, error: 'patientId inválido.' });
+        }
+        const hasAccess = await canAccessPatientInCurrentClinic(patientId, req.session.user);
+        if (!hasAccess) {
+          return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
+        }
+
+        const { data: patient, error: patientError } = await supabase
+          .from('patients')
+          .select('id, name, email')
+          .eq('id', patientId)
+          .maybeSingle();
+        if (patientError) throw patientError;
+        const patientEmail = sanitizeEmail(patient?.email);
+        if (!patientEmail) {
+          return res.status(400).json({ success: false, error: 'Paciente sem e-mail cadastrado.' });
+        }
+
+        const authUser = await findAuthUserByEmail(patientEmail);
+        if (!authUser?.id) {
+          return res.status(404).json({ success: false, error: 'Conta de autenticação do paciente não encontrada.' });
+        }
+
+        const code = generate6DigitOtp();
+        const key = makeOtpChallengeKey('email', 'password_recovery', patientEmail);
+        setOtpChallenge({
+          key,
+          channel: 'email',
+          purpose: 'password_recovery',
+          identifier: patientEmail,
+          userId: authUser.id,
+          codeHash: hashIdentifier(code),
+          expiresAt: Date.now() + OTP_TTL_MS,
+          attempts: 0,
+          consumed: false,
+          createdAt: Date.now()
+        });
+
+        const profileName = sanitizeString(patient?.name, 180) || patientEmail.split('@')[0];
+        const recoveryLink = `${getRecoveryRedirectUrl()}?mode=code&email=${encodeURIComponent(patientEmail)}&code=${encodeURIComponent(code)}`;
+        const recoveryEmail = buildPasswordRecoveryEmailTemplate({
+          nome: profileName,
+          codigo: code,
+          link_recuperacao: recoveryLink,
+          expira_em_minutos: 15,
+          perfil: 'patient'
+        });
+
+        const sent = await sendTransactionalEmailSafe({
+          to: patientEmail,
+          subject: recoveryEmail.subject,
+          html: recoveryEmail.html,
+          context: 'patient_manual_resend_recovery',
+          from: OFFICIAL_FROM_NOREPLY,
+          replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+          templateKind: undefined,
+          templateData: {
+            nome: profileName,
+            codigo: code,
+            link_recuperacao: recoveryLink,
+            expira_em_minutos: 15
+          },
+          metadata: {
+            patientId,
+            email: maskEmail(patientEmail)
+          }
+        });
+
+        await persistIdentityAuditLog({
+          title: 'Reenvio manual de recuperação para paciente',
+          content: `Reenvio de recuperação solicitado para ${maskEmail(patientEmail)}. E-mail ${sent ? 'enviado' : 'com falha de envio'}.`,
+          identifier: patientEmail,
+          channel: 'email',
+          userId: sanitizeString(req.session.user?.id, 120),
+          request: req,
+          status: sent ? 'sent' : 'warning'
+        });
+
+        return res.json({
+          success: true,
+          message: sent
+            ? 'E-mail de recuperação reenviado com sucesso.'
+            : 'Reenvio solicitado, mas houve falha no envio do e-mail. Tente novamente.'
+        });
+      } catch (error: any) {
+        console.error('[Patients] resend recovery error:', error);
+        return res.status(500).json({
+          success: false,
+          error: sanitizeString(error?.message || 'Falha ao reenviar e-mail de recuperação.', 500)
+        });
+      }
+    }
+  );
+
   // Patients
   app.get('/api/patients', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {

@@ -43,6 +43,7 @@ import {
   Sun,
   XCircle,
   Paperclip,
+  KeyRound,
 } from "lucide-react";
 import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
@@ -1260,6 +1261,62 @@ export function CoordinatorDashboard({
     hideProcessing();
     showToast("Paciente excluído com sucesso!");
     setOpenMenuId(null);
+  };
+
+  const handleResendPatientActivationEmail = async (patient: any) => {
+    if (!patient?.id) return;
+    showProcessing("Reenviando e-mail de ativação...");
+    try {
+      const result = await dataService.resendPatientActivationEmail(String(patient.id));
+      if (!result?.success) {
+        throw new Error(result?.error || "Falha ao reenviar ativação.");
+      }
+      onAddActivityLog(
+        "Reenvio de ativação",
+        `E-mail de ativação reenviado para ${normalizeUtf8Text(patient?.name || "paciente")}.`,
+        "management",
+      );
+      showToast(
+        result?.message || "E-mail de ativação reenviado com sucesso.",
+        "success",
+      );
+    } catch (error: any) {
+      showToast(
+        error?.message || "Não foi possível reenviar o e-mail de ativação.",
+        "error",
+      );
+    } finally {
+      hideProcessing();
+      setOpenMenuId(null);
+    }
+  };
+
+  const handleResendPatientRecoveryEmail = async (patient: any) => {
+    if (!patient?.id) return;
+    showProcessing("Reenviando e-mail de recuperação...");
+    try {
+      const result = await dataService.resendPatientRecoveryEmail(String(patient.id));
+      if (!result?.success) {
+        throw new Error(result?.error || "Falha ao reenviar recuperação.");
+      }
+      onAddActivityLog(
+        "Reenvio de recuperação",
+        `E-mail de recuperação reenviado para ${normalizeUtf8Text(patient?.name || "paciente")}.`,
+        "management",
+      );
+      showToast(
+        result?.message || "E-mail de recuperação reenviado com sucesso.",
+        "success",
+      );
+    } catch (error: any) {
+      showToast(
+        error?.message || "Não foi possível reenviar o e-mail de recuperação.",
+        "error",
+      );
+    } finally {
+      hideProcessing();
+      setOpenMenuId(null);
+    }
   };
 
   const handleEditAppointment = (appointment: any) => {
@@ -3891,6 +3948,20 @@ export function CoordinatorDashboard({
                               >
                                 <Search size={14} className="text-[#7a32fc]" />{" "}
                                 Ver mais (cadastro)
+                              </button>
+                              <button
+                                onClick={() => handleResendPatientActivationEmail(patient)}
+                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                              >
+                                <Mail size={14} className="text-emerald-600" />
+                                Reenviar ativação
+                              </button>
+                              <button
+                                onClick={() => handleResendPatientRecoveryEmail(patient)}
+                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                              >
+                                <KeyRound size={14} className="text-indigo-500" />
+                                Reenviar recuperação
                               </button>
                               {!isReceptionist && (
                                 <button

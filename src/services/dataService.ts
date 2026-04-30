@@ -426,6 +426,34 @@ export const dataService = {
     }
   },
 
+  async resendPatientActivationEmail(patientId: string) {
+    try {
+      const response = await fetch(`/api/patients/${patientId}/resend-activation`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error resending patient activation email:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async resendPatientRecoveryEmail(patientId: string) {
+    try {
+      const response = await fetch(`/api/patients/${patientId}/resend-recovery`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error resending patient recovery email:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
   async updatePatient(id: string, updates: any) {
     return await saveOfflineFirst(id, updates, 'patient', `/api/patients/${id}`, 'PATCH');
   },
