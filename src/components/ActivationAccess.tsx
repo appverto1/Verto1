@@ -14,6 +14,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const isRecoveryRoute =
     typeof window !== 'undefined' && /^\/reset-password\/?$/.test(window.location.pathname);
   const [email, setEmail] = useState('');
+  const [recoveryCode, setRecoveryCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [identifiedEmail, setIdentifiedEmail] = useState('');
   const [loading, setLoading] = useState(false);
@@ -55,6 +56,15 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     const { type, code, tokenHash, accessToken, refreshToken, hasActivationParams } =
       parseActivationParams();
     const supabase = await getSupabase();
+
+    if (hasActivationParams) {
+      // Avoid stale/deleted-user local sessions hijacking activation flows.
+      try {
+        await supabase.auth.signOut({ scope: 'local' } as any);
+      } catch {
+        // no-op
+      }
+    }
 
     if (code) {
       try {
@@ -132,9 +142,13 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     const params = new URLSearchParams(window.location.search);
     const roleParam = String(params.get('role') || '').toLowerCase();
     const emailParam = String(params.get('email') || '').trim().toLowerCase();
+    const codeParam = String(params.get('code') || '').trim();
     if (emailParam) {
       setEmail(emailParam);
       setIdentifiedEmail(emailParam);
+    }
+    if (codeParam) {
+      setRecoveryCode(codeParam);
     }
     if (roleParam === 'coordinator' || roleParam === 'therapist' || roleParam === 'receptionist') {
       setIntendedRole('coordinator');
@@ -191,6 +205,44 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       if (!newPassword) {
         throw new Error('Informe a nova senha.');
       }
+      if (isRecoveryRoute) {
+        const recoveryEmail = String(identifiedEmail || email).trim().toLowerCase();
+        const otpCode = String(recoveryCode || '').trim();
+        if (!recoveryEmail || !otpCode) {
+          throw new Error('Informe e-mail e código de recuperação para redefinir a senha.');
+        }
+
+        const response = await fetch('/api/auth/password/recovery/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            email: recoveryEmail,
+            code: otpCode,
+            newPassword,
+          }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result?.success) {
+          throw new Error(
+            result?.message ||
+              result?.error ||
+              'Link de recuperacao invalido ou expirado. Solicite um novo e-mail de recuperacao.',
+          );
+        }
+
+        const loginRes = await onLogin(
+          null,
+          intendedRole,
+          { email: recoveryEmail, password: newPassword },
+          { provider: 'email' },
+        );
+        if (!loginRes?.success) {
+          throw new Error(loginRes?.error || 'Senha redefinida, mas nao foi possivel concluir o login.');
+        }
+        setMessage('Senha redefinida com sucesso. Redirecionando...');
+        return;
+      }
       const supabase = await getSupabase();
       let {
         data: { session },
@@ -224,7 +276,24 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       const { error: updateError } = await supabase.auth.updateUser({
         password: newPassword,
       });
-      if (updateError) throw updateError;
+      if (updateError) {
+        const msg = String((updateError as any)?.message || '').toLowerCase();
+        if (
+          msg.includes('user from sub claim in jwt does not exist') ||
+          msg.includes('jwt') ||
+          msg.includes('forbidden')
+        ) {
+          const fallbackEmail = String(identifiedEmail || email).trim().toLowerCase();
+          if (!isRecoveryRoute && fallbackEmail) {
+            const bootstrapResult = await requestActivationBootstrap(fallbackEmail);
+            if (bootstrapResult?.link) {
+              window.location.href = bootstrapResult.link;
+              return;
+            }
+          }
+        }
+        throw updateError;
+      }
 
       const {
         data: { session: refreshedSession },
@@ -299,6 +368,16 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
                 />
               </div>
             )}
+            {isRecoveryRoute ? (
+              <input
+                type="text"
+                inputMode="numeric"
+                value={recoveryCode}
+                onChange={(e) => setRecoveryCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                placeholder="Codigo de recuperacao (6 digitos)"
+                className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
+              />
+            ) : null}
             <input
               type="password"
               value={newPassword}
