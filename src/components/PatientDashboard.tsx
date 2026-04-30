@@ -432,12 +432,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       setShowFamilySuccess(true);
       setTimeout(async () => {
         let persistedImage = familyImage || undefined;
+        let persistedImagePath: string | undefined;
         if (persistedImage && persistedImage.startsWith('data:image/')) {
           const extension = persistedImage.includes('image/jpeg') ? 'jpg' : persistedImage.includes('image/webp') ? 'webp' : 'png';
           const fileName = `${user.id}/family-${Date.now()}.${extension}`;
           const uploadResult = await dataService.uploadDataUrl('patient-photos', fileName, persistedImage, `image/${extension === 'jpg' ? 'jpeg' : extension}`);
           if (uploadResult?.success && uploadResult.url) {
             persistedImage = uploadResult.url;
+            persistedImagePath = uploadResult.path;
           } else {
             setShowFamilySuccess(false);
             alert(`Não foi possível salvar a foto no armazenamento: ${uploadResult?.error || 'erro desconhecido'}`);
@@ -445,7 +447,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           }
         }
 
-        onAddFamilyNote(user.id, familyNote, persistedImage);
+        onAddFamilyNote(user.id, familyNote, persistedImage, persistedImagePath);
         setShowFamilySuccess(false);
         setFamilyNote("");
         setFamilyImage(null);

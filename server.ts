@@ -6477,6 +6477,36 @@ async function startServer() {
   // History
   app.get('/api/history/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
     try {
+      const signHistoryImageUrl = async (row: any) => {
+        try {
+          const directPath = sanitizeString(row?.image_path, 600);
+          const signedUrl = sanitizeString(row?.image, 4000);
+          let storagePath = directPath;
+
+          if (!storagePath && signedUrl.includes('/storage/v1/object/sign/patient-photos/')) {
+            const marker = '/storage/v1/object/sign/patient-photos/';
+            const tail = signedUrl.split(marker)[1] || '';
+            const encodedPath = tail.split('?')[0] || '';
+            if (encodedPath) storagePath = decodeURIComponent(encodedPath);
+          }
+
+          if (!storagePath) return row;
+
+          const { data: signed, error: signedError } = await supabase.storage
+            .from('patient-photos')
+            .createSignedUrl(storagePath, 60 * 10);
+          if (signedError || !signed?.signedUrl) return row;
+
+          return {
+            ...row,
+            image: signed.signedUrl,
+            image_path: storagePath
+          };
+        } catch {
+          return row;
+        }
+      };
+
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const { data: patientRow } = await supabase
@@ -6508,7 +6538,8 @@ async function startServer() {
       const merged = [...(Array.isArray(historyById) ? historyById : []), ...historyByEmail];
       const deduped = Array.from(new Map(merged.map((item: any) => [String(item?.id || crypto.randomUUID()), item])).values())
         .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime());
-      res.json({ success: true, data: deduped });
+      const enriched = await Promise.all(deduped.map(signHistoryImageUrl));
+      res.json({ success: true, data: enriched });
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }
@@ -6543,7 +6574,29 @@ async function startServer() {
       
       const { data, error } = await query;
       if (error) throw error;
-      res.json({ success: true, data });
+      const enriched = await Promise.all(
+        (Array.isArray(data) ? data : []).map(async (row: any) => {
+          try {
+            const directPath = sanitizeString(row?.image_path, 600);
+            const signedUrl = sanitizeString(row?.image, 4000);
+            let storagePath = directPath;
+            if (!storagePath && signedUrl.includes('/storage/v1/object/sign/patient-photos/')) {
+              const marker = '/storage/v1/object/sign/patient-photos/';
+              const tail = signedUrl.split(marker)[1] || '';
+              const encodedPath = tail.split('?')[0] || '';
+              if (encodedPath) storagePath = decodeURIComponent(encodedPath);
+            }
+            if (!storagePath) return row;
+            const { data: signed } = await supabase.storage
+              .from('patient-photos')
+              .createSignedUrl(storagePath, 60 * 10);
+            return { ...row, image: signed?.signedUrl || row?.image, image_path: storagePath };
+          } catch {
+            return row;
+          }
+        })
+      );
+      res.json({ success: true, data: enriched });
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }
@@ -6688,6 +6741,28 @@ async function startServer() {
           const bTs = new Date(b?.created_at || 0).getTime();
           return bTs - aTs;
         });
+      const enrichedHistory = await Promise.all(
+        consolidatedHistory.map(async (row: any) => {
+          try {
+            const directPath = sanitizeString(row?.image_path, 600);
+            const signedUrl = sanitizeString(row?.image, 4000);
+            let storagePath = directPath;
+            if (!storagePath && signedUrl.includes('/storage/v1/object/sign/patient-photos/')) {
+              const marker = '/storage/v1/object/sign/patient-photos/';
+              const tail = signedUrl.split(marker)[1] || '';
+              const encodedPath = tail.split('?')[0] || '';
+              if (encodedPath) storagePath = decodeURIComponent(encodedPath);
+            }
+            if (!storagePath) return row;
+            const { data: signed } = await supabase.storage
+              .from('patient-photos')
+              .createSignedUrl(storagePath, 60 * 10);
+            return { ...row, image: signed?.signedUrl || row?.image, image_path: storagePath };
+          } catch {
+            return row;
+          }
+        })
+      );
 
       const treatmentStatus = await updatePatientStatusIfNeeded(req.session.user);
       req.session.user.treatmentStatus = treatmentStatus;
@@ -6703,7 +6778,7 @@ async function startServer() {
         type: 'security'
       });
 
-      res.json({ success: true, data: consolidatedHistory, treatmentStatus });
+      res.json({ success: true, data: enrichedHistory, treatmentStatus });
     } catch (error) {
       res.status(500).json({ success: false, error: String(error) });
     }
@@ -6805,6 +6880,7 @@ async function startServer() {
         note: sanitizeTextField(req.body?.note, 12000),
         icon: sanitizeString(req.body?.icon, 40),
         image: sanitizeUrl(req.body?.image),
+        image_path: sanitizeString(req.body?.image_path, 600) || undefined,
         therapist_id: sanitizeString(req.session.user.id, 120),
         created_at: sanitizeString(req.body?.created_at, 40) || new Date().toISOString()
       });
@@ -6813,12 +6889,30 @@ async function startServer() {
         return res.status(400).json({ error: 'patient_id e título são obrigatórios.' });
       }
 
-      const { data, error } = await supabase
-        .from('history')
-        .upsert([docData], { onConflict: 'id' })
-        .select()
-        .single();
-      
+      let data: any = null;
+      let error: any = null;
+      {
+        const result = await supabase
+          .from('history')
+          .upsert([docData], { onConflict: 'id' })
+          .select()
+          .single();
+        data = result.data;
+        error = result.error;
+      }
+
+      if (error && /image_path/i.test(String(error?.message || ''))) {
+        const fallbackDocData = { ...docData } as any;
+        delete fallbackDocData.image_path;
+        const retry = await supabase
+          .from('history')
+          .upsert([fallbackDocData], { onConflict: 'id' })
+          .select()
+          .single();
+        data = retry.data;
+        error = retry.error;
+      }
+
       if (error) throw error;
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),

@@ -2280,7 +2280,7 @@ export default function App() {
     };
   }, [allPatients, therapistNotes]);
 
-  const handleAddFamilyNote = async (pid: any, txt: string, image?: string) => {
+  const handleAddFamilyNote = async (pid: any, txt: string, image?: string, imagePath?: string) => {
     const identity = resolvePatientIdentityForPortal({ patientId: pid });
     const targetPatientId = String(identity.patientId || pid || user?.id || '').trim();
     // Evita duplicidade: família persiste via histórico clínico (fonte única de verdade).
@@ -2313,6 +2313,7 @@ export default function App() {
       title: image ? "Foto enviada" : "Registro da Família",
       note: txt,
       image: image,
+      image_path: imagePath || null,
       icon: image ? "📷" : "🏠"
     });
 
