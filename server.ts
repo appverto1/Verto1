@@ -1313,7 +1313,7 @@ function listAnamnesisTemplateChanges(previousTemplate: any, nextTemplate: any):
 
 function currentClinicId(user: any): string | null {
   const id = sanitizeString(
-    user?.activeWorkspaceId || user?.clinicId || user?.clinic_id || user?.id,
+    user?.activeWorkspaceId || user?.clinicId || user?.clinic_id,
     120
   );
   return id || null;
@@ -1792,15 +1792,32 @@ async function canAccessPatientInCurrentClinic(patientId: string, user: any): Pr
   if (!isUuid(patientId)) return false;
   if (hasGlobalClinicAccess(user)) return true;
   const clinicId = currentClinicId(user);
-  if (!clinicId) return false;
-  const { data, error } = await supabase
+  let query = supabase
     .from('patients')
-    .select('id')
-    .eq('id', patientId)
-    .eq('clinic_id', clinicId)
-    .maybeSingle();
+    .select('id, therapist_id, clinic_id')
+    .eq('id', patientId);
+  if (clinicId) {
+    query = query.eq('clinic_id', clinicId);
+  }
+  const { data, error } = await query.maybeSingle();
   if (error) return false;
-  return Boolean(data?.id);
+  if (data?.id) return true;
+
+  // Fallback robusto: se contexto de clínica não estiver pronto na sessão,
+  // terapeuta responsável ainda pode acessar seu próprio paciente.
+  const role = sanitizeString(user?.role, 40).toLowerCase();
+  const userId = sanitizeString(user?.id, 120);
+  if (role === 'therapist' && isUuid(userId)) {
+    const { data: byTherapist, error: byTherapistError } = await supabase
+      .from('patients')
+      .select('id')
+      .eq('id', patientId)
+      .eq('therapist_id', userId)
+      .maybeSingle();
+    if (!byTherapistError && byTherapist?.id) return true;
+  }
+
+  return false;
 }
 
 async function updatePatientStatusIfNeeded(user: any): Promise<'active' | 'inactive' | 'waiting_treatment'> {
@@ -6992,7 +7009,7 @@ async function startServer() {
         const { data: tasksByEmailData, error: tasksByEmailError } = await supabase
           .from('tasks')
           .select('*')
-          .eq('patient_email', patientEmail)
+          .ilike('patient_email', patientEmail)
           .neq('patient_id', patientId)
           .order('created_at', { ascending: false });
         if (tasksByEmailError) throw tasksByEmailError;
@@ -7560,7 +7577,7 @@ async function startServer() {
         req.session.user,
         { createIfMissing: true, fallbackName: sanitizeString(req.body?.patient_name, 160) }
       );
-      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120);
+      const clinicId = currentClinicId(req.session.user);
       const professionalId = sanitizeString(req.session.user?.id, 120);
       const taskType = sanitizeString(req.body?.task_type || req.body?.type, 60) || 'task';
       const status = sanitizeString(req.body?.status, 40).toLowerCase();
