@@ -2283,18 +2283,17 @@ export default function App() {
   const handleAddFamilyNote = async (pid: any, txt: string, image?: string) => {
     const identity = resolvePatientIdentityForPortal({ patientId: pid });
     const targetPatientId = String(identity.patientId || pid || user?.id || '').trim();
-    const noteText = `ðŸ  REGISTRO DA FAMÃLIA\n${txt}`;
-    handleAddNote(targetPatientId, noteText, 'family', 'FamÃ­lia');
+    // Evita duplicidade: família persiste via histórico clínico (fonte única de verdade).
     
     const newHistoryItem = {
       id: Date.now(),
       patientId: targetPatientId,
       type: image ? 'photo' : 'family_note',
-      title: image ? "Foto enviada" : "Registro da FamÃ­lia",
+      title: image ? "Foto enviada" : "Registro da Família",
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       note: txt,
       image: image,
-      icon: image ? "ðŸ“·" : "ðŸ ",
+      icon: image ? "📷" : "🏠",
       dateGroup: "Hoje",
       date: new Date().toISOString()
     };
@@ -2302,7 +2301,7 @@ export default function App() {
     // Also add to history timeline
     setHistory(prev => [newHistoryItem, ...prev]);
 
-    onAddActivityLog("Registro da FamÃ­lia", `Nova anotaÃ§Ã£o da famÃ­lia adicionada para o paciente ID ${pid}.`);
+    onAddActivityLog("Registro da Família", `Nova anotação da família adicionada para o paciente ID ${pid}.`);
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -2311,15 +2310,23 @@ export default function App() {
       patient_email: identity.patientEmail,
       patient_name: identity.patientName,
       type: image ? 'photo' : 'family_note',
-      title: image ? "Foto enviada" : "Registro da FamÃ­lia",
+      title: image ? "Foto enviada" : "Registro da Família",
       note: txt,
       image: image,
-      icon: image ? "ðŸ“·" : "ðŸ "
+      icon: image ? "📷" : "🏠"
     });
 
     if (!historySaveResult?.success) {
-      console.warn('[family-note] Falha ao persistir histÃ³rico da famÃ­lia:', historySaveResult);
-      alert(`Registro salvo parcialmente. NÃ£o foi possÃ­vel persistir a foto no histÃ³rico: ${historySaveResult?.error || 'erro desconhecido'}`);
+      console.warn('[family-note] Falha ao persistir histórico da família:', historySaveResult);
+      alert(`Registro salvo parcialmente. Não foi possível persistir a foto no histórico: ${historySaveResult?.error || 'erro desconhecido'}`);
+      setHistory(prev => prev.filter((item: any) => item.id !== newHistoryItem.id));
+    } else if (historySaveResult?.data?.id) {
+      // Substitui ID temporário pelo ID persistido para não duplicar após rehidratação/sync.
+      setHistory(prev =>
+        prev.map((item: any) =>
+          item.id === newHistoryItem.id ? { ...item, id: historySaveResult.data.id } : item
+        )
+      );
     }
   };
 

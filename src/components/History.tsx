@@ -3,6 +3,19 @@ import { Clock, CheckSquare, X, ClipboardCheck, Info } from 'lucide-react';
 import { SecureImage } from './SecureMedia';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 
+const repairMojibake = (value: any): string => {
+  const raw = String(value ?? '');
+  if (!raw) return '';
+  if (!/[Ãâð]/.test(raw)) return raw;
+  try {
+    const bytes = Uint8Array.from([...raw].map((char) => char.charCodeAt(0) & 0xff));
+    const decoded = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    return decoded || raw;
+  } catch {
+    return raw;
+  }
+};
+
 export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protocols = [], id, isKid, fullHistory = [], peiGoals = [] }: any) => { 
   const [isEvaluating, setIsEvaluating] = useState(false); 
   const [score, setScore] = useState(item.score !== undefined ? item.score : ''); 
@@ -75,8 +88,10 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
   }; 
 
   const isFamilyEntry = item.type === 'family_note' || item.type === 'photo';
+  const displayTitle = repairMojibake(item?.title);
+  const displayNote = sanitizeDescriptionForDisplay(repairMojibake(item?.note));
   const displayIcon = (() => {
-    const raw = String(item?.icon || '').trim();
+    const raw = repairMojibake(item?.icon).trim();
     if (raw && raw !== '??') return raw;
     if (item?.type === 'photo') return '📷';
     if (item?.type === 'family_note') return '🏠';
@@ -99,7 +114,7 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
         <div className="flex items-center gap-2"> 
           <span className="text-xl p-2 bg-gray-50 rounded-lg">{displayIcon}</span> 
           <div> 
-            <h4 className="font-semibold text-gray-800">{item.title}</h4> 
+            <h4 className="font-semibold text-gray-800">{displayTitle}</h4> 
             <div className="flex flex-wrap gap-1 mt-0.5">
               {matchedSkill && <span className="text-[9px] bg-purple-50 text-[#7a32fc] px-1.5 py-0.5 rounded uppercase font-semibold tracking-wide">Protocolo Vinculado</span>} 
               {item.linkedTask && (
@@ -130,7 +145,7 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
       {(item.note || item.image) && (
         <div className={`rounded-xl p-3 text-sm italic border mb-3 ${item.type === 'intervention' ? 'bg-green-50 text-green-800 border-green-100' : (item.type === 'family_note' || item.type === 'photo') ? 'bg-orange-50 text-orange-800 border-orange-100' : 'bg-[#F4F7FE] text-gray-600 border-blue-50'}`}>
           <p className="text-[10px] font-semibold uppercase mb-1 opacity-60">{(item.type === 'family_note' || item.type === 'photo') ? 'Registro da Família:' : 'Anotações do Paciente:'}</p>
-          {item.note && <p>"{sanitizeDescriptionForDisplay(item.note)}"</p>}
+          {displayNote && <p>"{displayNote}"</p>}
           {item.image && (
             <div className={`${item.note ? 'mt-3' : ''} rounded-lg overflow-hidden border border-orange-200`}>
               <SecureImage src={item.image} alt="Registro da Família" className="w-full max-w-[380px] max-h-56 object-contain bg-white mx-auto" />
