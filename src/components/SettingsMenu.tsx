@@ -1,11 +1,10 @@
 ﻿import React, { useState, useRef, useEffect } from 'react';
-import { 
+import {
   Settings, 
   Users, 
   LogOut, 
   User, 
   CreditCard,
-  Shield,
   ChevronRight,
   ShoppingBag
 } from 'lucide-react';
@@ -127,19 +126,6 @@ export function SettingsMenu({
                     <ChevronRight size={14} className="text-slate-300" />
                   </button>
 
-                  <button
-                    onClick={() => {
-                      setIsOpen(false);
-                      onOpenInvitations?.();
-                    }}
-                    className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
-                  >
-                    <div className="flex items-center gap-3">
-                      <Shield size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
-                      <span className="text-sm font-medium">Convites e Papéis</span>
-                    </div>
-                    <ChevronRight size={14} className="text-slate-300" />
-                  </button>
                 </>
               )}
 

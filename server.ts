@@ -280,6 +280,30 @@ function generate6DigitOtp(): string {
   return String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
 }
 
+function generateTemporaryPassword(length = 20): string {
+  const safeLength = Math.max(16, Math.min(length, 64));
+  const lower = 'abcdefghijkmnopqrstuvwxyz';
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const numbers = '23456789';
+  const symbols = '!@#$%*()-_=+?';
+  const all = `${lower}${upper}${numbers}${symbols}`;
+
+  const pick = (chars: string) => chars[crypto.randomInt(0, chars.length)];
+  const chars: string[] = [
+    pick(lower),
+    pick(upper),
+    pick(numbers),
+    pick(symbols)
+  ];
+  while (chars.length < safeLength) chars.push(pick(all));
+
+  for (let i = chars.length - 1; i > 0; i -= 1) {
+    const j = crypto.randomInt(0, i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join('');
+}
+
 function getAuthRedirectUrl(): string {
   const baseUrl = sanitizeString(
     process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '',
@@ -4296,7 +4320,7 @@ async function startServer() {
         .eq('id', clinicId)
         .maybeSingle();
 
-      // Check for existing invitation
+      // Check for existing pending invitation.
       const { data: existing } = await supabase
         .from('invitations')
         .select('*')
@@ -4304,9 +4328,24 @@ async function startServer() {
         .eq('clinic_id', clinicId)
         .eq('status', 'pending')
         .maybeSingle();
-
+      let reusedExistingInvitation = false;
+      let existingInvitationId = sanitizeString(existing?.id, 120);
       if (existing) {
-        return res.status(400).json({ error: 'Já existe um convite pendente para este e-mail' });
+        reusedExistingInvitation = true;
+        // Keep invitation fresh and allow role correction on resend.
+        const patchPayload = cleanObject({
+          role,
+          invited_by: user.id,
+          updated_at: new Date().toISOString()
+        });
+        const updateResult = await supabase
+          .from('invitations')
+          .update(patchPayload)
+          .eq('id', existingInvitationId)
+          .select()
+          .single();
+        if (updateResult.error) throw updateResult.error;
+        existingInvitationId = sanitizeString(updateResult.data?.id, 120) || existingInvitationId;
       }
 
       const invitationBasePayload = cleanObject({
@@ -4325,24 +4364,32 @@ async function startServer() {
       let insertedInvitation: any = null;
       let inviteError: any = null;
 
-      for (let attempt = 0; attempt < 8; attempt += 1) {
-        const result = await supabase
-          .from('invitations')
-          .insert([invitePayload])
-          .select()
-          .single();
-        insertedInvitation = result.data;
-        inviteError = result.error;
-        if (!inviteError) break;
+      if (!reusedExistingInvitation) {
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const result = await supabase
+            .from('invitations')
+            .insert([invitePayload])
+            .select()
+            .single();
+          insertedInvitation = result.data;
+          inviteError = result.error;
+          if (!inviteError) break;
 
-        const missingColumn = extractMissingColumnName(inviteError);
-        if (!missingColumn || removedInvitationColumns.has(missingColumn)) {
-          break;
+          const missingColumn = extractMissingColumnName(inviteError);
+          if (!missingColumn || removedInvitationColumns.has(missingColumn)) {
+            break;
+          }
+
+          removedInvitationColumns.add(missingColumn);
+          const { [missingColumn]: _removed, ...rest } = invitePayload as any;
+          invitePayload = rest;
         }
-
-        removedInvitationColumns.add(missingColumn);
-        const { [missingColumn]: _removed, ...rest } = invitePayload as any;
-        invitePayload = rest;
+      } else {
+        insertedInvitation = {
+          ...(existing || {}),
+          id: existingInvitationId,
+          role
+        };
       }
 
       if (inviteError) throw inviteError;
@@ -4421,8 +4468,11 @@ async function startServer() {
         success: true,
         data,
         invitationEmailSent: emailSent,
+        resent: reusedExistingInvitation,
         message: emailSent
-          ? `Convite enviado para ${email}.`
+          ? reusedExistingInvitation
+            ? `Convite reenviado para ${email}.`
+            : `Convite enviado para ${email}.`
           : `Convite criado, mas houve falha no envio de e-mail para ${email}.`
       });
     } catch (error: any) {

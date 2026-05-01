@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Camera, CheckCircle2, Mail, Plus, UploadCloud, UserPlus, X } from 'lucide-react';
+import { Camera, CheckCircle2, UploadCloud, X } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
 
@@ -123,9 +123,6 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   const [councilNumber, setCouncilNumber] = useState('');
   const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
 
-  const [invites, setInvites] = useState<{ email: string; role: 'therapist' | 'receptionist' }[]>([]);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState<'therapist' | 'receptionist'>('therapist');
 
   useEffect(() => {
     const loadExistingProfile = async () => {
@@ -187,13 +184,6 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
     }
   };
 
-  const addInvite = () => {
-    if (!inviteEmail || !inviteEmail.includes('@')) return;
-    if (invites.some(i => i.email.toLowerCase() === inviteEmail.toLowerCase())) return;
-    setInvites(prev => [...prev, { email: inviteEmail.trim(), role: inviteRole }]);
-    setInviteEmail('');
-  };
-
   const uploadImageIfNeeded = async (input: string | null, kind: 'profile' | 'logo' | 'signature') => {
     if (!input) return null;
     if (!input.startsWith('data:image/')) return input;
@@ -235,10 +225,6 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
 
     setLoading(true);
     try {
-      for (const invite of invites) {
-        await dataService.inviteToClinic(invite.email, invite.role, { requiresCouncil: invite.role === 'therapist' });
-      }
-
       const [profilePictureUrl, clinicLogoUploadedUrl, signatureUploadedUrl] = await Promise.all([
         uploadImageIfNeeded(profilePicture, 'profile'),
         uploadImageIfNeeded(clinicLogoUrl, 'logo'),
@@ -305,7 +291,6 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
             <div className="mt-8 space-y-3 text-xs">
               <div className={step >= 1 ? 'text-white font-semibold' : 'text-violet-200'}>1. Cadastro Profissional</div>
               <div className={step >= 2 ? 'text-white font-semibold' : 'text-violet-200'}>2. Configuracoes da Clinica</div>
-              {isCoordinator && <div className={step >= 3 ? 'text-white font-semibold' : 'text-violet-200'}>3. Convites de Equipe</div>}
             </div>
           </div>
 
@@ -447,58 +432,8 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
 
                 <div className="pt-2 flex justify-between">
                   <button onClick={() => setStep(1)} className="px-6 py-3 rounded-xl bg-slate-100 text-slate-700 font-semibold">Voltar</button>
-                  {isCoordinator ? (
-                    <button disabled={!canGoNextClinic} onClick={() => setStep(3)} className="px-6 py-3 rounded-xl bg-[#7a32fc] text-white font-semibold disabled:opacity-40">Convites</button>
-                  ) : (
-                    <button disabled={loading || !canGoNextClinic} onClick={finish} className="px-6 py-3 rounded-xl bg-[#7a32fc] text-white font-semibold disabled:opacity-40">
-                      {loading ? 'Salvando...' : 'Concluir'}
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {step === 3 && isCoordinator && (
-              <div className="space-y-5">
-                <h3 className="text-lg font-bold text-slate-900">Convide sua equipe</h3>
-                <p className="text-sm text-slate-500">Defina o papel no convite. O painel e onboarding do convidado seguem este papel.</p>
-
-                <div className="grid md:grid-cols-[1fr_180px_auto] gap-3">
-                  <div className="relative">
-                    <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="email@clinica.com" className="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-50" />
-                  </div>
-                  <select value={inviteRole} onChange={(e: any) => setInviteRole(e.target.value)} className="px-4 py-3 rounded-xl bg-slate-50">
-                    <option value="therapist">Terapeuta</option>
-                    <option value="receptionist">Recepcionista</option>
-                  </select>
-                  <button onClick={addInvite} className="px-4 py-3 rounded-xl bg-slate-900 text-white font-semibold inline-flex items-center gap-2">
-                    <Plus size={16} /> Adicionar
-                  </button>
-                </div>
-
-                <div className="space-y-2">
-                  {invites.map((invite) => (
-                    <div key={invite.email} className="flex items-center justify-between p-3 rounded-xl border border-slate-200">
-                      <div className="flex items-center gap-2">
-                        <UserPlus size={16} className="text-slate-500" />
-                        <span className="text-sm font-medium text-slate-800">{invite.email}</span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs text-slate-500 uppercase">{invite.role}</span>
-                        <button type="button" onClick={() => setInvites(prev => prev.filter(i => i.email !== invite.email))} className="text-slate-400 hover:text-red-500">
-                          <X size={16} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="pt-2 flex justify-between">
-                  <button onClick={() => setStep(2)} className="px-6 py-3 rounded-xl bg-slate-100 text-slate-700 font-semibold">Voltar</button>
-                  <button disabled={loading} onClick={finish} className="px-6 py-3 rounded-xl bg-[#7a32fc] text-white font-semibold inline-flex items-center gap-2 disabled:opacity-40">
-                    {loading ? 'Finalizando...' : 'Concluir onboarding'}
-                    {!loading && <CheckCircle2 size={16} />}
+                  <button disabled={loading || !canGoNextClinic} onClick={finish} className="px-6 py-3 rounded-xl bg-[#7a32fc] text-white font-semibold disabled:opacity-40">
+                    {loading ? 'Salvando...' : 'Concluir'}
                   </button>
                 </div>
               </div>
