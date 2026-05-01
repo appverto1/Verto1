@@ -242,7 +242,43 @@ export default function App() {
   const applyResolvedUserState = async (candidateUser: any, supabaseSession?: any) => {
     const enrichedUser = enrichUserFromSessionMetadata(candidateUser, supabaseSession);
     const alignedUser = alignWorkspaceFromStorage(enrichedUser);
-    const resolvedUser = await restoreWorkspaceContextIfNeeded(alignedUser);
+    const restoredUser = await restoreWorkspaceContextIfNeeded(alignedUser);
+    let resolvedUser = restoredUser;
+
+    try {
+      const profileResult = await dataService.getUserProfile(String(restoredUser?.id || ''));
+      const professionalProfile = profileResult?.data?.professional_profile;
+      if (professionalProfile) {
+        resolvedUser = {
+          ...restoredUser,
+          profilePicture:
+            professionalProfile?.profile_photo_url ||
+            restoredUser?.profilePicture ||
+            restoredUser?.profile_picture ||
+            null,
+          profile_picture:
+            professionalProfile?.profile_photo_url ||
+            restoredUser?.profile_picture ||
+            restoredUser?.profilePicture ||
+            null,
+          signatureDataUrl:
+            professionalProfile?.signature_data_url ||
+            restoredUser?.signatureDataUrl ||
+            null,
+          clinicSettings: {
+            ...(restoredUser?.clinicSettings || {}),
+            ...(professionalProfile?.clinic_logo_url
+              ? { clinicLogoUrl: professionalProfile.clinic_logo_url }
+              : {}),
+            ...(professionalProfile?.signature_data_url
+              ? { signatureDataUrl: professionalProfile.signature_data_url }
+              : {}),
+          },
+        };
+      }
+    } catch (error) {
+      console.warn('Profile refresh after session failed:', error);
+    }
 
     setUser(resolvedUser);
     setProfilePicture(resolvedUser?.profilePicture || resolvedUser?.profile_picture || null);
@@ -252,6 +288,39 @@ export default function App() {
     setShowWorkspacePicker(computeWorkspacePickerVisibility(resolvedUser));
 
     return resolvedUser;
+  };
+
+  const isDataUrl = (value: unknown) =>
+    typeof value === 'string' && /^data:/i.test(value.trim());
+
+  const uploadProfileAssetIfNeeded = async (
+    maybeDataUrl: unknown,
+    kind: 'profile' | 'signature' | 'logo',
+    currentUserId: string,
+  ): Promise<{ url: string | null; path: string | null }> => {
+    const value = typeof maybeDataUrl === 'string' ? maybeDataUrl.trim() : '';
+    if (!value) return { url: null, path: null };
+    if (!isDataUrl(value)) return { url: value, path: null };
+
+    const extensionByMime: Record<string, string> = {
+      'image/png': 'png',
+      'image/jpeg': 'jpg',
+      'image/jpg': 'jpg',
+      'image/webp': 'webp',
+      'image/gif': 'gif',
+    };
+    const mimeMatch = value.match(/^data:([^;]+);base64,/i);
+    const mime = String(mimeMatch?.[1] || 'image/png').toLowerCase();
+    const ext = extensionByMime[mime] || 'png';
+    const objectPath = `onboarding/${currentUserId}/${kind}-${Date.now()}.${ext}`;
+    const uploaded = await dataService.uploadDataUrl('patient-photos', objectPath, value, mime);
+    if (!uploaded?.success) {
+      throw new Error(uploaded?.error || `Falha ao enviar ${kind}.`);
+    }
+    return {
+      url: String(uploaded?.url || '').trim() || null,
+      path: uploaded?.path ? `patient-photos/${uploaded.path}` : null,
+    };
   };
   
   useEffect(() => {
@@ -2603,14 +2672,59 @@ export default function App() {
           therapistNotes={therapistNotes}
           onAddNote={handleAddNote}
           onUpdateProfile={(data: any) => {
-            if (data.profilePicture !== undefined) setProfilePicture(data.profilePicture);
-            if (data.crp !== undefined) setCrp(data.crp);
-            const nextUser = { ...user, ...data };
-            setUser(nextUser);
-            dataService.saveUserProfile(user.id, {
-              ...nextUser,
-              workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
-            });
+            void (async () => {
+              const baseUser = { ...user, ...data };
+              try {
+                const profileUpload = await uploadProfileAssetIfNeeded(
+                  data?.profilePicture ?? data?.profile_picture,
+                  'profile',
+                  user.id,
+                );
+                const signatureUpload = await uploadProfileAssetIfNeeded(
+                  data?.signatureDataUrl ?? data?.signature_url ?? data?.signatureUrl,
+                  'signature',
+                  user.id,
+                );
+                const clinicLogoUpload = await uploadProfileAssetIfNeeded(
+                  data?.clinicSettings?.clinicLogoUrl,
+                  'logo',
+                  user.id,
+                );
+
+                const nextUser = {
+                  ...baseUser,
+                  profilePicture: profileUpload.url || baseUser.profilePicture || baseUser.profile_picture || null,
+                  profile_picture: profileUpload.url || baseUser.profile_picture || baseUser.profilePicture || null,
+                  signatureDataUrl: signatureUpload.url || baseUser.signatureDataUrl || null,
+                  clinicSettings: {
+                    ...(baseUser?.clinicSettings || {}),
+                    ...(clinicLogoUpload.url ? { clinicLogoUrl: clinicLogoUpload.url } : {}),
+                    ...(signatureUpload.url ? { signatureDataUrl: signatureUpload.url } : {}),
+                  },
+                };
+
+                if (nextUser.profilePicture !== undefined) setProfilePicture(nextUser.profilePicture);
+                if (nextUser.crp !== undefined) setCrp(nextUser.crp);
+                setUser(nextUser);
+
+                await dataService.saveUserProfile(user.id, {
+                  ...nextUser,
+                  profilePicturePath: profileUpload.path,
+                  signaturePath: signatureUpload.path,
+                  clinicLogoPath: clinicLogoUpload.path,
+                  workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+                });
+              } catch (error) {
+                console.error('Profile asset upload error:', error);
+                if (baseUser.profilePicture !== undefined) setProfilePicture(baseUser.profilePicture);
+                if (baseUser.crp !== undefined) setCrp(baseUser.crp);
+                setUser(baseUser);
+                await dataService.saveUserProfile(user.id, {
+                  ...baseUser,
+                  workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+                });
+              }
+            })();
           }}
           onUpdatePatient={handleUpdatePatient}
           onRecordTrial={handleRecordTrial}

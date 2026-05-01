@@ -5905,13 +5905,26 @@ async function startServer() {
           query = query.eq('clinic_id', scopedClinicId);
         }
       } else if (role === 'therapist') {
-        query = query.eq('therapist_id', req.session.user.id);
         if (scopedClinicId) {
           query = query.eq('clinic_id', scopedClinicId);
         }
+        const therapistUserId = sanitizeString(req.session.user?.id, 120);
+        query = query.or(`therapist_id.eq.${therapistUserId},professional_id.eq.${therapistUserId}`);
       }
       
-      const { data, error } = await query;
+      let { data, error } = await query;
+      if (error && isMissingColumnError(error, 'professional_id') && role === 'therapist') {
+        let fallbackQuery = supabase
+          .from('patients')
+          .select('*')
+          .eq('therapist_id', sanitizeString(req.session.user?.id, 120));
+        if (scopedClinicId) {
+          fallbackQuery = fallbackQuery.eq('clinic_id', scopedClinicId);
+        }
+        const fallbackRes = await fallbackQuery;
+        data = fallbackRes.data;
+        error = fallbackRes.error;
+      }
       
       if (error) {
         console.error('Supabase patients fetch error:', JSON.stringify(error));
@@ -7850,6 +7863,10 @@ async function startServer() {
         return res.status(403).json({ error: 'Acesso negado' });
       }
 
+      const profilePicturePath = sanitizeString(req.body?.profilePicturePath || req.body?.profile_picture_path, 260);
+      const signaturePath = sanitizeString(req.body?.signaturePath || req.body?.signature_path, 260);
+      const clinicLogoPath = sanitizeString(req.body?.clinicLogoPath || req.body?.clinic_logo_path, 260);
+
       const safePayload = cleanObject({
         id: sanitizeString(req.params.userId, 120),
         name: sanitizeString(req.body?.name, 180) || undefined,
@@ -7871,6 +7888,34 @@ async function startServer() {
       for (let attempt = 0; attempt < 12; attempt += 1) {
         const { error } = await supabase.from('users').upsert(candidate, { onConflict: 'id' });
         if (!error) {
+          const metadataPatch = cleanObject({
+            profilePicturePath: profilePicturePath || undefined,
+            signaturePath: signaturePath || undefined,
+            clinicLogoPath: clinicLogoPath || undefined
+          });
+
+          if (Object.keys(metadataPatch).length > 0) {
+            const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+            const clinicId = currentClinicId(req.session.user);
+            let profileCandidate: Record<string, any> = cleanObject({
+              user_id: sanitizeString(req.params.userId, 120),
+              clinic_id: clinicId || undefined,
+              role: role || undefined,
+              metadata: metadataPatch,
+              updated_at: new Date().toISOString()
+            });
+            for (let profileAttempt = 0; profileAttempt < 8; profileAttempt += 1) {
+              const { error: profileError } = await supabase
+                .from('professional_profiles')
+                .upsert([profileCandidate], { onConflict: 'user_id' });
+              if (!profileError) break;
+              const missingProfileColumn = extractMissingColumnName(profileError);
+              if (!missingProfileColumn || !(missingProfileColumn in profileCandidate)) break;
+              const { [missingProfileColumn]: _removed, ...rest } = profileCandidate as any;
+              profileCandidate = rest;
+            }
+          }
+
           return res.json({ success: true });
         }
 
