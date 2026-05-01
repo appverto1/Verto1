@@ -5178,6 +5178,7 @@ async function startServer() {
       const dataUrl = sanitizeString(req.body?.fileBase64, 8_000_000);
       const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
       const actorId = sanitizeString(req.session.user?.id, 120);
+      const isOnboardingUpload = objectPath.startsWith('onboarding/');
 
       if (bucketName !== 'patient-photos') {
         return res.status(400).json({ success: false, error: 'Bucket inválido para upload.' });
@@ -5185,18 +5186,32 @@ async function startServer() {
       if (!objectPath || objectPath.includes('..')) {
         return res.status(400).json({ success: false, error: 'Path inválido.' });
       }
-      const ownerPatientId = sanitizeString(objectPath.split('/')[0], 120);
-      if (!isUuid(ownerPatientId)) {
-        return res.status(400).json({ success: false, error: 'Path inválido: paciente não identificado.' });
-      }
-      if (role === 'patient') {
-        if (!isUuid(actorId) || actorId !== ownerPatientId) {
-          return res.status(403).json({ success: false, error: 'Você só pode enviar fotos para o próprio histórico.' });
+      if (isOnboardingUpload) {
+        // Onboarding paths: onboarding/{actorId}/...
+        const ownerUserId = sanitizeString(objectPath.split('/')[1], 120);
+        if (!isUuid(ownerUserId)) {
+          return res.status(400).json({ success: false, error: 'Path inválido: usuário de onboarding não identificado.' });
+        }
+        if (!isUuid(actorId) || actorId !== ownerUserId) {
+          return res.status(403).json({ success: false, error: 'Você só pode enviar arquivos do seu próprio onboarding.' });
+        }
+        if (!['coordinator', 'therapist', 'receptionist', 'admin', 'owner'].includes(role)) {
+          return res.status(403).json({ success: false, error: 'Perfil sem permissão para upload de onboarding.' });
         }
       } else {
-        const canAccess = await canAccessPatientInCurrentClinic(ownerPatientId, req.session.user);
-        if (!canAccess) {
-          return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
+        const ownerPatientId = sanitizeString(objectPath.split('/')[0], 120);
+        if (!isUuid(ownerPatientId)) {
+          return res.status(400).json({ success: false, error: 'Path inválido: paciente não identificado.' });
+        }
+        if (role === 'patient') {
+          if (!isUuid(actorId) || actorId !== ownerPatientId) {
+            return res.status(403).json({ success: false, error: 'Você só pode enviar fotos para o próprio histórico.' });
+          }
+        } else {
+          const canAccess = await canAccessPatientInCurrentClinic(ownerPatientId, req.session.user);
+          if (!canAccess) {
+            return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
+          }
         }
       }
       if (!dataUrl) {
