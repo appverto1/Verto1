@@ -275,7 +275,7 @@ export function TeamManagement({
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Lista de Membros */}
         <div className="lg:col-span-2">
-          <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 overflow-hidden">
+          <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 overflow-visible">
             <div className="p-6 border-b border-slate-50 flex items-center justify-between">
               <h2 className="font-bold text-slate-900">Membros Ativos</h2>
               <span className="px-3 py-1 bg-slate-100 text-slate-500 rounded-full text-[10px] font-bold uppercase tracking-wider">
@@ -283,7 +283,7 @@ export function TeamManagement({
               </span>
             </div>
 
-            <div className="divide-y divide-slate-50">
+            <div className="divide-y divide-slate-50 overflow-visible">
               {loading ? (
                 <div className="p-12 text-center">
                   <div className="w-8 h-8 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div>
@@ -299,7 +299,7 @@ export function TeamManagement({
                 </div>
               ) : (
                 filteredMembers.map((member) => (
-                  <div key={member.id} className="p-6 hover:bg-slate-50/50 transition-all flex items-center justify-between group">
+                  <div key={member.id} className="p-6 hover:bg-slate-50/50 transition-all flex items-center justify-between group overflow-visible">
                     <div className="flex items-center gap-4">
                       <div className="w-12 h-12 bg-slate-100 rounded-2xl flex items-center justify-center text-slate-400 font-bold text-lg">
                     {(String(member?.name || 'P').trim().charAt(0) || 'P').toUpperCase()}
@@ -341,7 +341,7 @@ export function TeamManagement({
                         </div>
                       )}
                       
-                      <div className="relative">
+                      <div className="relative z-20">
                         <button 
                           onClick={() => setOpenMenuId(openMenuId === member.id ? null : member.id)}
                           className="p-2 text-slate-400 hover:text-slate-600 hover:bg-white rounded-xl transition-all"
