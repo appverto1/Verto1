@@ -1230,6 +1230,24 @@ export const dataService = {
     }
   },
 
+  async cancelInvitation(invitationId: string) {
+    try {
+      const response = await fetch(`/api/clinic/invitations/${invitationId}/cancel`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      if (response.ok) {
+        return await response.json();
+      }
+      const err = await response.json().catch(() => ({}));
+      return { success: false, error: err.error || 'Falha ao cancelar convite' };
+    } catch (error) {
+      console.error('Error cancelling invitation:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
   async updateMemberRole(memberId: string, role: string) {
     try {
       const response = await fetch(`/api/clinic/members/${memberId}/role`, {

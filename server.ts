@@ -4333,19 +4333,39 @@ async function startServer() {
       if (existing) {
         reusedExistingInvitation = true;
         // Keep invitation fresh and allow role correction on resend.
-        const patchPayload = cleanObject({
+        let patchPayload: Record<string, any> = cleanObject({
           role,
           invited_by: user.id,
           updated_at: new Date().toISOString()
         });
-        const updateResult = await supabase
-          .from('invitations')
-          .update(patchPayload)
-          .eq('id', existingInvitationId)
-          .select()
-          .single();
-        if (updateResult.error) throw updateResult.error;
-        existingInvitationId = sanitizeString(updateResult.data?.id, 120) || existingInvitationId;
+        const removedPatchColumns = new Set<string>();
+        let updatedInvitation: any = null;
+        let updateError: any = null;
+
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const updateResult = await supabase
+            .from('invitations')
+            .update(patchPayload)
+            .eq('id', existingInvitationId)
+            .select()
+            .single();
+
+          updatedInvitation = updateResult.data;
+          updateError = updateResult.error;
+          if (!updateError) break;
+
+          const missingColumn = extractMissingColumnName(updateError);
+          if (!missingColumn || removedPatchColumns.has(missingColumn)) {
+            break;
+          }
+
+          removedPatchColumns.add(missingColumn);
+          const { [missingColumn]: _removed, ...rest } = patchPayload as any;
+          patchPayload = rest;
+        }
+
+        if (updateError) throw updateError;
+        existingInvitationId = sanitizeString(updatedInvitation?.id, 120) || existingInvitationId;
       }
 
       const invitationBasePayload = cleanObject({
@@ -4489,12 +4509,85 @@ async function startServer() {
         .from('invitations')
         .select('*')
         .eq('clinic_id', clinicId)
-        .eq('status', 'pending');
+        .order('created_at', { ascending: false })
+        .limit(200);
 
       if (error) throw error;
       res.json({ success: true, data });
     } catch (error) {
       res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.patch('/api/clinic/invitations/:invitationId/cancel', checkAuth, async (req: any, res) => {
+    try {
+      const user = req.session.user;
+      if (user.role !== 'coordinator' && user.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas coordenadores podem cancelar convites' });
+      }
+
+      const clinicId = currentClinicId(user);
+      const invitationId = sanitizeString(req.params?.invitationId, 120);
+      if (!invitationId) {
+        return res.status(400).json({ error: 'Convite inválido' });
+      }
+
+      const { data: invitation, error: findError } = await supabase
+        .from('invitations')
+        .select('id,status,clinic_id,email')
+        .eq('id', invitationId)
+        .eq('clinic_id', clinicId)
+        .maybeSingle();
+
+      if (findError) throw findError;
+      if (!invitation) {
+        return res.status(404).json({ error: 'Convite não encontrado' });
+      }
+      if (invitation.status !== 'pending') {
+        return res.status(400).json({ error: 'Somente convites pendentes podem ser cancelados' });
+      }
+
+      let cancelPayload: Record<string, any> = {
+        status: 'canceled',
+        canceled_at: new Date().toISOString(),
+        canceled_by: user.id,
+        updated_at: new Date().toISOString()
+      };
+      const removedCancelColumns = new Set<string>();
+      let cancelError: any = null;
+
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const updateResult = await supabase
+          .from('invitations')
+          .update(cancelPayload)
+          .eq('id', invitationId)
+          .eq('clinic_id', clinicId);
+
+        cancelError = updateResult.error;
+        if (!cancelError) break;
+
+        const missingColumn = extractMissingColumnName(cancelError);
+        if (!missingColumn || removedCancelColumns.has(missingColumn)) {
+          break;
+        }
+
+        removedCancelColumns.add(missingColumn);
+        const { [missingColumn]: _removed, ...rest } = cancelPayload as any;
+        cancelPayload = rest;
+      }
+
+      if (cancelError) throw cancelError;
+
+      res.json({
+        success: true,
+        message: `Convite cancelado para ${sanitizeString(invitation.email, 160)}.`
+      });
+    } catch (error: any) {
+      logRouteDbError('/api/clinic/invitations/:invitationId/cancel [PATCH]', error, {
+        invitationId: sanitizeString(req.params?.invitationId, 120),
+        userId: sanitizeString(req.session?.user?.id, 120)
+      });
+      res.status(500).json({ error: extractSupabaseErrorMessage(error) });
     }
   });
 
@@ -4538,10 +4631,29 @@ async function startServer() {
 
       if (updateError) throw updateError;
 
-      await supabase
-        .from('invitations')
-        .update({ status: 'accepted' })
-        .eq('id', invitationId);
+      let acceptPayload: Record<string, any> = {
+        status: 'accepted',
+        accepted_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      const removedAcceptColumns = new Set<string>();
+      let acceptError: any = null;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const acceptResult = await supabase
+          .from('invitations')
+          .update(acceptPayload)
+          .eq('id', invitationId);
+        acceptError = acceptResult.error;
+        if (!acceptError) break;
+        const missingColumn = extractMissingColumnName(acceptError);
+        if (!missingColumn || removedAcceptColumns.has(missingColumn)) {
+          break;
+        }
+        removedAcceptColumns.add(missingColumn);
+        const { [missingColumn]: _removed, ...rest } = acceptPayload as any;
+        acceptPayload = rest;
+      }
+      if (acceptError) throw acceptError;
 
       req.session.user.clinicId = invitation.clinic_id;
       req.session.user.activeWorkspaceId = invitation.clinic_id;

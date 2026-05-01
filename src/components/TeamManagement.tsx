@@ -56,6 +56,8 @@ export function TeamManagement({
   const [success, setSuccess] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [isAssigning, setIsAssigning] = useState(false);
+  const [cancellingInvitationId, setCancellingInvitationId] = useState<string | null>(null);
+  const [resendingInvitationId, setResendingInvitationId] = useState<string | null>(null);
   const [newMemberEmail, setNewMemberEmail] = useState('');
   const [newMemberRole, setNewMemberRole] = useState<'therapist' | 'receptionist'>('therapist');
 
@@ -130,6 +132,47 @@ export function TeamManagement({
     }
   };
 
+  const handleCancelInvitation = async (invitationId: string) => {
+    const confirmed = window.confirm('Tem certeza que deseja cancelar este convite? O link enviado ficará inválido.');
+    if (!confirmed) return;
+    setError(null);
+    setSuccess(null);
+    setCancellingInvitationId(invitationId);
+    try {
+      const result = await dataService.cancelInvitation(invitationId);
+      if (result.success) {
+        setSuccess(result.message || 'Convite cancelado com sucesso.');
+        await fetchInvitations();
+      } else {
+        setError(result.error || 'Não foi possível cancelar convite.');
+      }
+    } catch (err) {
+      setError('Erro ao cancelar convite.');
+    } finally {
+      setCancellingInvitationId(null);
+    }
+  };
+
+  const handleResendInvitation = async (invitation: any) => {
+    setError(null);
+    setSuccess(null);
+    setResendingInvitationId(invitation.id);
+    try {
+      const result = await dataService.inviteToClinic(invitation.email, invitation.role);
+      if (result.success) {
+        const baseMessage = result.message || `Convite reenviado para ${invitation.email}.`;
+        setSuccess(baseMessage);
+        await fetchInvitations();
+      } else {
+        setError(result.error || 'Não foi possível reenviar convite.');
+      }
+    } catch (err) {
+      setError('Erro ao reenviar convite.');
+    } finally {
+      setResendingInvitationId(null);
+    }
+  };
+
   const handleUpdateRole = async (memberId: string, newRole: any) => {
     try {
       const result = await dataService.updateMemberRole(memberId, newRole);
@@ -164,6 +207,8 @@ export function TeamManagement({
     m.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
     m.email.toLowerCase().includes(searchTerm.toLowerCase())
   );
+  const pendingInvitations = invitations.filter((inv) => String(inv?.status || '').toLowerCase() === 'pending');
+  const invitationHistory = invitations.filter((inv) => String(inv?.status || '').toLowerCase() !== 'pending');
 
   return (
     <div className="p-6 max-w-6xl mx-auto font-sans">
@@ -405,11 +450,11 @@ export function TeamManagement({
             </form>
 
             {/* Pending Invitations */}
-            {(invitations?.length || 0) > 0 && (
+            {(pendingInvitations.length || 0) > 0 && (
               <div className="mt-12">
                 <h3 className="text-lg font-bold text-slate-900 mb-6">Convites Pendentes</h3>
                 <div className="space-y-3">
-                  {invitations.map((inv) => (
+                  {pendingInvitations.map((inv) => (
                     <div key={inv.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between">
                       <div className="flex items-center gap-4">
                         <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-slate-400">
@@ -422,9 +467,64 @@ export function TeamManagement({
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="px-3 py-1 bg-amber-100 text-amber-600 rounded-full text-[10px] font-bold uppercase tracking-widest">Pendente</span>
+                        <button
+                          type="button"
+                          onClick={() => handleResendInvitation(inv)}
+                          disabled={resendingInvitationId === inv.id}
+                          className="px-3 py-1 rounded-full border border-blue-200 bg-blue-50 text-blue-600 text-[10px] font-bold uppercase tracking-widest hover:bg-blue-100 transition-colors disabled:opacity-60"
+                          title="Reenviar convite"
+                        >
+                          {resendingInvitationId === inv.id ? 'Reenviando...' : 'Reenviar'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleCancelInvitation(inv.id)}
+                          disabled={cancellingInvitationId === inv.id}
+                          className="px-3 py-1 rounded-full border border-red-200 bg-red-50 text-red-600 text-[10px] font-bold uppercase tracking-widest hover:bg-red-100 transition-colors disabled:opacity-60"
+                          title="Cancelar convite"
+                        >
+                          {cancellingInvitationId === inv.id ? 'Cancelando...' : 'Cancelar'}
+                        </button>
                       </div>
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {(invitationHistory.length || 0) > 0 && (
+              <div className="mt-8">
+                <h3 className="text-lg font-bold text-slate-900 mb-4">Histórico de Convites</h3>
+                <div className="space-y-3">
+                  {invitationHistory.map((inv) => {
+                    const status = String(inv?.status || '').toLowerCase();
+                    const statusLabel = status === 'accepted'
+                      ? 'Ativado'
+                      : status === 'canceled'
+                        ? 'Cancelado'
+                        : status;
+                    const statusClass = status === 'accepted'
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : status === 'canceled'
+                        ? 'bg-slate-200 text-slate-600'
+                        : 'bg-slate-100 text-slate-500';
+                    return (
+                      <div key={inv.id} className="p-4 bg-white rounded-2xl border border-slate-100 flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                          <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400">
+                            <Mail size={20} />
+                          </div>
+                          <div>
+                            <p className="font-bold text-slate-900 text-sm">{inv.email}</p>
+                            <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-widest">{inv.role}</p>
+                          </div>
+                        </div>
+                        <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest ${statusClass}`}>
+                          {statusLabel}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
