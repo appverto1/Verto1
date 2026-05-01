@@ -7353,16 +7353,42 @@ async function startServer() {
         return res.status(403).json({ error: 'Acesso negado' });
       }
 
-      const { error } = await supabase
-        .from('users')
-        .upsert({
-          ...req.body,
-          id: req.params.userId,
-          updated_at: new Date().toISOString()
-        });
-      
-      if (error) throw error;
-      res.json({ success: true });
+      const safePayload = cleanObject({
+        id: sanitizeString(req.params.userId, 120),
+        name: sanitizeString(req.body?.name, 180) || undefined,
+        email: sanitizeEmail(req.body?.email) || undefined,
+        role: sanitizeString(req.body?.role, 40) || undefined,
+        profile_picture: sanitizeUrl(req.body?.profile_picture) || sanitizeUrl(req.body?.profilePicture) || undefined,
+        crp: sanitizeString(req.body?.crp, 80) || undefined,
+        phone: sanitizePhoneE164(req.body?.phone || req.body?.whatsappPhone || req.body?.whatsapp) || undefined,
+        signature_url: sanitizeUrl(req.body?.signature_url) || sanitizeUrl(req.body?.signatureUrl) || undefined,
+        specialties: sanitizeString(req.body?.specialties, 1000) || undefined,
+        mini_curriculum: sanitizeString(req.body?.mini_curriculum || req.body?.miniCurriculum, 4000) || undefined,
+        updated_at: new Date().toISOString()
+      });
+
+      let candidate: Record<string, any> = { ...safePayload };
+      const removedColumns = new Set<string>();
+      let lastError: any = null;
+
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        const { error } = await supabase.from('users').upsert(candidate, { onConflict: 'id' });
+        if (!error) {
+          return res.json({ success: true });
+        }
+
+        lastError = error;
+        const missingColumn = extractMissingColumnName(error);
+        if (!missingColumn || removedColumns.has(missingColumn)) {
+          break;
+        }
+
+        removedColumns.add(missingColumn);
+        const { [missingColumn]: _removed, ...rest } = candidate as any;
+        candidate = rest;
+      }
+
+      throw lastError || new Error('Falha ao salvar perfil.');
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }

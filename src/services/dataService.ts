@@ -272,6 +272,9 @@ export const dataService = {
   async savePatient(patient: any) {
     const id = patient.id || generateId();
     const data = { ...patient, id, created_at: patient.created_at || new Date().toISOString() };
+    if (patient?.id) {
+      return await saveOfflineFirst(id, data, 'patient', `/api/patients/${id}`, 'PATCH');
+    }
     return await saveOfflineFirst(id, data, 'patient', '/api/patients');
   },
 
