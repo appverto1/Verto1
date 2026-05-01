@@ -94,8 +94,14 @@ function SignaturePad({ value, onChange }: { value: string | null; onChange: (v:
 export function ProfessionalOnboarding({ user, onComplete, onClose }: ProfessionalOnboardingProps) {
   const isCoordinator = user.role === 'coordinator' || user.role === 'admin';
   const isTherapist = user.role === 'therapist';
+  const onboardingWorkspaceId = String(user?.activeWorkspaceId || user?.clinicId || 'global').trim() || 'global';
+  const onboardingDraftKey = `verto:onboarding:draft:${String(user?.id || '').trim()}:${onboardingWorkspaceId}`;
+  const onboardingStepKey = `verto:onboarding:step:${String(user?.id || '').trim()}:${onboardingWorkspaceId}`;
 
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(() => {
+    const raw = Number(localStorage.getItem(onboardingStepKey) || 1);
+    return raw === 2 ? 2 : 1;
+  });
   const [loading, setLoading] = useState(false);
 
   const [fullName, setFullName] = useState(user.name || '');
@@ -123,10 +129,41 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   const [councilNumber, setCouncilNumber] = useState('');
   const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
 
+  useEffect(() => {
+    localStorage.setItem(onboardingStepKey, String(step));
+  }, [step, onboardingStepKey]);
 
   useEffect(() => {
     const loadExistingProfile = async () => {
       try {
+        const draftRaw = localStorage.getItem(onboardingDraftKey);
+        if (draftRaw) {
+          const draft = JSON.parse(draftRaw);
+          setFullName(String(draft.fullName || fullName || ''));
+          setBirthDate(String(draft.birthDate || ''));
+          setGender(String(draft.gender || ''));
+          setCep(String(draft.cep || ''));
+          setLogradouro(String(draft.logradouro || ''));
+          setNumber(String(draft.number || ''));
+          setComplement(String(draft.complement || ''));
+          setBairro(String(draft.bairro || ''));
+          setCidade(String(draft.cidade || ''));
+          setSessionDurationMinutes(String(draft.sessionDurationMinutes || '50'));
+          setCountryCode(String(draft.countryCode || '+55'));
+          setPhone(String(draft.phone || ''));
+          setProfilePicture(draft.profilePicture || null);
+          setClinicName(String(draft.clinicName || ''));
+          setClinicLogoUrl(draft.clinicLogoUrl || null);
+          setClinicCnpj(String(draft.clinicCnpj || ''));
+          setClinicPhone(String(draft.clinicPhone || ''));
+          setSpecialty(String(draft.specialty || ''));
+          setCouncil(String(draft.council || ''));
+          setCouncilNumber(String(draft.councilNumber || ''));
+          setSignatureDataUrl(draft.signatureDataUrl || null);
+        }
+        if (isTherapist && user?.clinicSettings?.clinicName) {
+          setClinicName(String(user.clinicSettings.clinicName));
+        }
         const result = await dataService.getUserProfile(user.id);
         const profile = result?.data?.professional_profile;
         if (!profile) return;
@@ -161,6 +198,56 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
     loadExistingProfile();
   }, [user.id, user.name]);
 
+  useEffect(() => {
+    const draft = {
+      fullName,
+      birthDate,
+      gender,
+      cep,
+      logradouro,
+      number,
+      complement,
+      bairro,
+      cidade,
+      sessionDurationMinutes,
+      countryCode,
+      phone,
+      profilePicture,
+      clinicName,
+      clinicLogoUrl,
+      clinicCnpj,
+      clinicPhone,
+      specialty,
+      council,
+      councilNumber,
+      signatureDataUrl
+    };
+    localStorage.setItem(onboardingDraftKey, JSON.stringify(draft));
+  }, [
+    onboardingDraftKey,
+    fullName,
+    birthDate,
+    gender,
+    cep,
+    logradouro,
+    number,
+    complement,
+    bairro,
+    cidade,
+    sessionDurationMinutes,
+    countryCode,
+    phone,
+    profilePicture,
+    clinicName,
+    clinicLogoUrl,
+    clinicCnpj,
+    clinicPhone,
+    specialty,
+    council,
+    councilNumber,
+    signatureDataUrl
+  ]);
+
   const canGoNextPersonal = fullName.trim() && birthDate && gender && cep && logradouro && number && bairro && cidade && phone;
   const councilRequired = isCoordinator || isTherapist;
   const canGoNextClinic = !isCoordinator || (clinicName.trim() && specialty.trim() && (!councilRequired || (council.trim() && councilNumber.trim())));
@@ -185,8 +272,8 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   };
 
   const uploadImageIfNeeded = async (input: string | null, kind: 'profile' | 'logo' | 'signature') => {
-    if (!input) return null;
-    if (!input.startsWith('data:image/')) return input;
+    if (!input) return { url: null as string | null, path: null as string | null };
+    if (!input.startsWith('data:image/')) return { url: input, path: null as string | null };
 
     const mimeMatch = input.match(/^data:([^;]+);base64,/);
     const contentType = mimeMatch?.[1] || 'image/png';
@@ -210,7 +297,10 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
     if (!uploadResponse.ok || !uploadResult?.success || !uploadResult?.url) {
       throw new Error(uploadResult?.error || `Não foi possível enviar a imagem (${safeKind}).`);
     }
-    return uploadResult.url as string;
+    return {
+      url: uploadResult.url as string,
+      path: uploadResult.path ? `patient-photos/${uploadResult.path}` : null
+    };
   };
 
   const finish = async () => {
@@ -225,7 +315,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
 
     setLoading(true);
     try {
-      const [profilePictureUrl, clinicLogoUploadedUrl, signatureUploadedUrl] = await Promise.all([
+      const [profileUpload, clinicLogoUpload, signatureUpload] = await Promise.all([
         uploadImageIfNeeded(profilePicture, 'profile'),
         uploadImageIfNeeded(clinicLogoUrl, 'logo'),
         uploadImageIfNeeded(signatureDataUrl, 'signature')
@@ -251,14 +341,17 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
           countryCode,
           phone,
           clinicName,
-          clinicLogoUrl: clinicLogoUploadedUrl,
+          clinicLogoUrl: clinicLogoUpload.url,
+          clinicLogoPath: clinicLogoUpload.path,
           clinicCnpj,
           clinicPhone,
           specialty,
           council,
           councilNumber,
-          signatureDataUrl: signatureUploadedUrl,
-          profilePicture: profilePictureUrl
+          signatureDataUrl: signatureUpload.url,
+          signaturePath: signatureUpload.path,
+          profilePicture: profileUpload.url,
+          profilePicturePath: profileUpload.path
         })
       });
 
@@ -269,10 +362,12 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
 
       onComplete({
         name: fullName,
-        profilePicture: profilePictureUrl,
+        profilePicture: profileUpload.url,
         firstLoginCompleted: true,
         subscriptionStatus: 'active'
       });
+      localStorage.removeItem(onboardingDraftKey);
+      localStorage.removeItem(onboardingStepKey);
     } catch (error: any) {
       alert(error.message || 'Nao foi possivel concluir onboarding.');
     } finally {
@@ -359,6 +454,14 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
             {step === 2 && (
               <div className="space-y-5">
                 <h3 className="text-lg font-bold text-slate-900">Configuracoes de clinica e credenciais</h3>
+                {isTherapist && (
+                  <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3">
+                    <p className="text-[11px] uppercase tracking-widest font-bold text-violet-500">Clínica vinculada</p>
+                    <p className="text-base font-bold text-violet-900">
+                      {clinicName || user?.clinicSettings?.clinicName || user?.workspaceName || 'Clínica do workspace'}
+                    </p>
+                  </div>
+                )}
 
                 {isCoordinator && (
                   <div className="grid md:grid-cols-2 gap-4">

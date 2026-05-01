@@ -58,6 +58,7 @@ export function TeamManagement({
   const [isAssigning, setIsAssigning] = useState(false);
   const [cancellingInvitationId, setCancellingInvitationId] = useState<string | null>(null);
   const [resendingInvitationId, setResendingInvitationId] = useState<string | null>(null);
+  const [unlinkingMemberId, setUnlinkingMemberId] = useState<string | null>(null);
   const [newMemberEmail, setNewMemberEmail] = useState('');
   const [newMemberRole, setNewMemberRole] = useState<'therapist' | 'receptionist'>('therapist');
 
@@ -184,6 +185,35 @@ export function TeamManagement({
       }
     } catch (err) {
       setError('Erro ao atualizar papel');
+    }
+  };
+
+  const handleUnlinkMember = async (member: Member) => {
+    if (!member?.id) return;
+    if (member.id === user.id) {
+      setError('Você não pode se desvincular da clínica por esta ação.');
+      return;
+    }
+    const confirmed = window.confirm(
+      `Deseja desvincular ${member.name || member.email} da clínica? Ele(a) perderá acesso a este workspace.`
+    );
+    if (!confirmed) return;
+
+    setError(null);
+    setSuccess(null);
+    setUnlinkingMemberId(member.id);
+    try {
+      const result = await dataService.unlinkClinicMember(member.id);
+      if (result.success) {
+        setSuccess(result.message || 'Membro desvinculado com sucesso.');
+        await fetchMembers();
+      } else {
+        setError(result.error || 'Não foi possível desvincular o membro.');
+      }
+    } catch (_err) {
+      setError('Erro ao desvincular membro.');
+    } finally {
+      setUnlinkingMemberId(null);
     }
   };
 
@@ -347,10 +377,11 @@ export function TeamManagement({
                             </button>
                             <div className="h-px bg-slate-50 my-1" />
                             <button 
+                              onClick={() => { handleUnlinkMember(member); setOpenMenuId(null); }}
                               className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-red-500 hover:bg-red-50 transition-all"
-                              disabled={member.id === user.id}
+                              disabled={member.id === user.id || unlinkingMemberId === member.id}
                             >
-                              <Trash2 size={14} /> Remover da Equipe
+                              <Trash2 size={14} /> {unlinkingMemberId === member.id ? 'Desvinculando...' : 'Desvincular da Clínica'}
                             </button>
                           </div>
                         )}

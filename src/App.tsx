@@ -864,7 +864,11 @@ export default function App() {
         ? hydrated.clinicState.specialtySettings
         : {},
     );
-    setAllPatients(Array.isArray(hydrated.patients) ? hydrated.patients : []);
+    const hydratedPatients = Array.isArray(hydrated.patients) ? hydrated.patients : [];
+    const scopedPatients = nextUser?.role === 'therapist'
+      ? hydratedPatients.filter((p: any) => String(p?.therapist_id || p?.professional_id || '').trim() === String(nextUser?.id || '').trim())
+      : hydratedPatients;
+    setAllPatients(scopedPatients);
     setTherapistNotes(normalizeAndDecorateNotes(Array.isArray(hydrated.notes) ? hydrated.notes : []));
     setHistory(Array.isArray(hydrated.history) ? hydrated.history : []);
     setTasks(Array.isArray(hydrated.tasks) ? hydrated.tasks : []);

@@ -774,6 +774,26 @@ function sanitizeSessionUrl(value: unknown): string | null {
   return sanitizeString(url, 1500);
 }
 
+function extractPatientPhotosStoragePath(raw: unknown): string | null {
+  const value = sanitizeString(raw, 1500);
+  if (!value) return null;
+  if (value.startsWith('patient-photos/')) {
+    const pathPart = value.slice('patient-photos/'.length);
+    return pathPart ? pathPart : null;
+  }
+  const marker = '/storage/v1/object/sign/patient-photos/';
+  if (value.includes(marker)) {
+    const encodedPath = value.split(marker)[1]?.split('?')[0] || '';
+    if (!encodedPath) return null;
+    try {
+      return decodeURIComponent(encodedPath);
+    } catch {
+      return encodedPath;
+    }
+  }
+  return null;
+}
+
 type DetectedUploadMime =
   | 'image/png'
   | 'image/jpeg'
@@ -4733,6 +4753,91 @@ async function startServer() {
       res.status(500).json({ error: String(error) });
     }
   });
+  app.patch('/api/clinic/members/:memberId/unlink', checkAuth, async (req: any, res) => {
+    const adminUser = req.session.user;
+    if (adminUser.role !== 'coordinator' && adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Apenas coordenadores podem desvincular membros' });
+    }
+
+    const memberId = sanitizeString(req.params?.memberId, 120);
+    if (!memberId) return res.status(400).json({ error: 'Membro inválido' });
+    if (memberId === sanitizeString(adminUser?.id, 120)) {
+      return res.status(400).json({ error: 'Você não pode desvincular sua própria conta por esta ação' });
+    }
+
+    try {
+      const clinicId = currentClinicId(adminUser);
+      const { data: targetMembership, error: membershipError } = await supabase
+        .from('clinic_memberships')
+        .select('user_id, clinic_id, role, status')
+        .eq('user_id', memberId)
+        .eq('clinic_id', clinicId)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      if (membershipError) throw membershipError;
+      if (!targetMembership) {
+        return res.status(404).json({ error: 'Membro não encontrado nesta clínica' });
+      }
+
+      const { error: unlinkError } = await supabase
+        .from('clinic_memberships')
+        .update({
+          status: 'inactive',
+          updated_at: new Date().toISOString()
+        })
+        .eq('user_id', memberId)
+        .eq('clinic_id', clinicId)
+        .eq('status', 'active');
+
+      if (unlinkError) throw unlinkError;
+
+      const { data: remainingMemberships, error: remainingError } = await supabase
+        .from('clinic_memberships')
+        .select('clinic_id, role, status')
+        .eq('user_id', memberId)
+        .eq('status', 'active');
+      if (remainingError) throw remainingError;
+
+      const nextMembership = (remainingMemberships || [])[0];
+      const nextClinicId = sanitizeString(nextMembership?.clinic_id, 120) || null;
+      const nextRole = ensureRole(nextMembership?.role) ? nextMembership.role : 'patient';
+
+      const userUpdatePayload: Record<string, any> = {
+        updated_at: new Date().toISOString()
+      };
+      if (nextClinicId) {
+        userUpdatePayload.clinic_id = nextClinicId;
+        userUpdatePayload.role = nextRole;
+      } else {
+        userUpdatePayload.clinic_id = null;
+        userUpdatePayload.role = 'patient';
+      }
+
+      const { error: userUpdateError } = await supabase
+        .from('users')
+        .update(userUpdatePayload)
+        .eq('id', memberId);
+      if (userUpdateError) throw userUpdateError;
+
+      await persistActivityLog({
+        title: 'Membro desvinculado da clínica',
+        content: `Usuário ${memberId} foi desvinculado da clínica ${clinicId}.`,
+        type: 'team',
+        userId: sanitizeString(adminUser?.id, 120),
+        clinicId,
+        actorName: sanitizeString(adminUser?.name || adminUser?.email || 'Coordenador', 180)
+      });
+
+      return res.json({ success: true, message: 'Membro desvinculado com sucesso.' });
+    } catch (error: any) {
+      logRouteDbError('/api/clinic/members/:memberId/unlink [PATCH]', error, {
+        memberId: sanitizeString(req.params?.memberId, 120),
+        userId: sanitizeString(req.session?.user?.id, 120)
+      });
+      return res.status(500).json({ error: extractSupabaseErrorMessage(error) });
+    }
+  });
   app.get('/api/clinic/anamnesis-template', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
@@ -7451,13 +7556,16 @@ async function startServer() {
       const phone = sanitizePhone(req.body?.phone);
       const clinicName = sanitizeString(req.body?.clinicName, 160);
       const clinicLogoUrl = sanitizeUrl(req.body?.clinicLogoUrl);
+      const clinicLogoPath = sanitizeString(req.body?.clinicLogoPath, 260);
       const clinicCnpj = sanitizeString(req.body?.clinicCnpj, 24);
       const clinicPhone = sanitizePhone(req.body?.clinicPhone);
       const specialty = sanitizeString(req.body?.specialty, 120);
       const council = sanitizeString(req.body?.council, 80);
       const councilNumber = sanitizeString(req.body?.councilNumber, 80);
       const signatureDataUrl = sanitizeUrl(req.body?.signatureDataUrl);
+      const signaturePath = sanitizeString(req.body?.signaturePath, 260);
       const profilePicture = sanitizeUrl(req.body?.profilePicture);
+      const profilePicturePath = sanitizeString(req.body?.profilePicturePath, 260);
 
       if (!fullName) {
         return res.status(400).json({ error: 'Nome completo e obrigatorio.' });
@@ -7503,7 +7611,10 @@ async function startServer() {
           metadata: {
             role,
             sessionDurationMinutes,
-            clinicCnpj: clinicCnpj || null
+            clinicCnpj: clinicCnpj || null,
+            profilePicturePath: profilePicturePath || null,
+            clinicLogoPath: clinicLogoPath || null,
+            signaturePath: signaturePath || null
           },
           updated_at: new Date().toISOString()
         }], { onConflict: 'user_id' });
@@ -7587,7 +7698,33 @@ async function startServer() {
         .select('*')
         .eq('user_id', req.params.userId)
         .maybeSingle();
-      res.json({ success: true, data: { ...data, professional_profile: profileExtra || null } });
+      const profileOut = profileExtra ? { ...profileExtra } : null;
+      if (profileOut) {
+        const metadata = (profileOut.metadata && typeof profileOut.metadata === 'object') ? { ...profileOut.metadata } : {};
+        const profilePhotoPath = extractPatientPhotosStoragePath(metadata.profilePicturePath || profileOut.profile_photo_url);
+        const clinicLogoPath = extractPatientPhotosStoragePath(metadata.clinicLogoPath || profileOut.clinic_logo_url);
+        const signaturePath = extractPatientPhotosStoragePath(metadata.signaturePath || profileOut.signature_data_url);
+
+        if (profilePhotoPath) {
+          const { data: signed } = await supabase.storage.from('patient-photos').createSignedUrl(profilePhotoPath, 60 * 10);
+          if (signed?.signedUrl) profileOut.profile_photo_url = signed.signedUrl;
+        }
+        if (clinicLogoPath) {
+          const { data: signed } = await supabase.storage.from('patient-photos').createSignedUrl(clinicLogoPath, 60 * 10);
+          if (signed?.signedUrl) profileOut.clinic_logo_url = signed.signedUrl;
+        }
+        if (signaturePath) {
+          const { data: signed } = await supabase.storage.from('patient-photos').createSignedUrl(signaturePath, 60 * 10);
+          if (signed?.signedUrl) profileOut.signature_data_url = signed.signedUrl;
+        }
+        profileOut.metadata = {
+          ...metadata,
+          profilePicturePath: profilePhotoPath || metadata.profilePicturePath || null,
+          clinicLogoPath: clinicLogoPath || metadata.clinicLogoPath || null,
+          signaturePath: signaturePath || metadata.signaturePath || null
+        };
+      }
+      res.json({ success: true, data: { ...data, professional_profile: profileOut } });
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }

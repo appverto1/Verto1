@@ -1,4 +1,4 @@
-﻿import React, { useState, useMemo, useEffect } from "react";
+﻿import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -164,6 +164,15 @@ export function CoordinatorDashboard({
   const isTherapist = capabilityRole === "therapist";
   const isReceptionist = capabilityRole === "receptionist";
   const canCreatePatients = !isTherapist;
+  const dashboardResumeKey = useMemo(() => {
+    const userId = String(user?.id || "").trim();
+    const workspaceId =
+      String(user?.activeWorkspaceId || user?.clinicId || "global").trim() ||
+      "global";
+    if (!userId) return null;
+    return `verto:dashboard:resume:${userId}:${workspaceId}`;
+  }, [user?.id, user?.activeWorkspaceId, user?.clinicId]);
+  const hasRestoredDashboardStateRef = useRef(false);
 
   const capabilityStatusForRole = (capabilityKey: string): "full" | "limited" | "none" => {
     const capability = ROLE_CAPABILITY_SECTIONS.flatMap((section) => section.items).find(
@@ -266,6 +275,64 @@ export function CoordinatorDashboard({
       return next;
     });
   };
+
+  useEffect(() => {
+    if (!dashboardResumeKey || hasRestoredDashboardStateRef.current) return;
+    hasRestoredDashboardStateRef.current = true;
+    try {
+      const raw = localStorage.getItem(dashboardResumeKey);
+      if (!raw) return;
+      const state = JSON.parse(raw || "{}");
+      const nextTab = String(state?.activeTab || "dashboard") as typeof activeTab;
+      const nextView = String(state?.view || "home");
+      const nextPatientId = String(state?.selectedPatientId || "").trim();
+      const nextPatientTab = String(state?.patientOpenTab || "history");
+
+      if (canAccessTab(nextTab)) {
+        setActiveTab(nextTab);
+        setTabHistory([nextTab]);
+      } else {
+        setActiveTab("dashboard");
+        setTabHistory(["dashboard"]);
+      }
+
+      if (nextView === "patient" && nextPatientId) {
+        setSelectedPatientId(nextPatientId);
+        if (
+          nextPatientTab === "history" ||
+          nextPatientTab === "notes" ||
+          nextPatientTab === "report" ||
+          nextPatientTab === "plan" ||
+          nextPatientTab === "session" ||
+          nextPatientTab === "files"
+        ) {
+          setPatientOpenTab(nextPatientTab);
+        }
+        setView("patient");
+      } else {
+        setView("home");
+      }
+    } catch (error) {
+      console.warn("Falha ao restaurar contexto do painel:", error);
+    }
+  }, [dashboardResumeKey]);
+
+  useEffect(() => {
+    if (!dashboardResumeKey) return;
+    try {
+      localStorage.setItem(
+        dashboardResumeKey,
+        JSON.stringify({
+          activeTab,
+          view,
+          selectedPatientId: selectedPatientId ? String(selectedPatientId) : null,
+          patientOpenTab,
+        }),
+      );
+    } catch (error) {
+      console.warn("Falha ao persistir contexto do painel:", error);
+    }
+  }, [dashboardResumeKey, activeTab, view, selectedPatientId, patientOpenTab]);
 
   const billingHistory = [
     {
@@ -5217,6 +5284,7 @@ export function CoordinatorDashboard({
     </div>
   );
 }
+
 
 
 

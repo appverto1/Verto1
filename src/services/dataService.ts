@@ -1267,6 +1267,22 @@ export const dataService = {
     }
   },
 
+  async unlinkClinicMember(memberId: string) {
+    try {
+      const response = await fetch(`/api/clinic/members/${memberId}/unlink`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include'
+      });
+      const result = await response.json();
+      if (!response.ok) return { success: false, error: result.error || 'Falha ao desvincular membro' };
+      return { success: true, ...result };
+    } catch (error) {
+      console.error('Error unlinking clinic member:', error);
+      return { success: false, error: 'Erro ao desvincular membro' };
+    }
+  },
+
   async acceptInvitation(invitationId: string) {
     try {
       const response = await fetch('/api/clinic/accept-invite', {
