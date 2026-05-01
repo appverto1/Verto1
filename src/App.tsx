@@ -365,6 +365,32 @@ export default function App() {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('payment') === 'success') {
+      const paymentMode = String(urlParams.get('mode') || '').toLowerCase();
+      if (paymentMode === 'professional-signup') {
+        const handleProfessionalSignupSuccess = async () => {
+          try {
+            const supabase = await getSupabase();
+            await supabase.auth.signOut({ scope: 'local' } as any);
+          } catch {
+            // no-op
+          }
+          try {
+            await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+          } catch {
+            // no-op
+          }
+          setUser(null);
+          setProfilePicture(null);
+          setShowWorkspacePicker(false);
+          sessionStorage.setItem(
+            'verto_professional_signup_success',
+            'Pagamento confirmado. Agora confirme seu e-mail para ativar sua conta e concluir o acesso.'
+          );
+          window.history.replaceState({}, document.title, "/?signup=check-email");
+        };
+        void handleProfessionalSignupSuccess();
+        return;
+      }
       // Refresh session to get active status
       // We might need to wait a bit for the webhook to complete
       let attempts = 0;
@@ -411,7 +437,7 @@ export default function App() {
       };
       checkSession();
     } else if (urlParams.get('payment') === 'cancel') {
-      alert('O pagamento foi cancelado. VocÃª pode tentar novamente quando quiser.');
+      alert('O pagamento foi cancelado. Você pode tentar novamente quando quiser.');
       window.history.replaceState({}, document.title, "/");
     }
   }, []);

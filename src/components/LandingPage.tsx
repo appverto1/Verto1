@@ -306,6 +306,27 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   }, []);
 
   useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const signupMode = String(urlParams.get('signup') || '').toLowerCase();
+    const postPaymentMessage = sessionStorage.getItem('verto_professional_signup_success');
+    if (signupMode === 'check-email' || postPaymentMessage) {
+      setShowLogin(true);
+      setLoginStep('email');
+      setLoginError(
+        postPaymentMessage ||
+          'Pagamento confirmado. Confirme seu e-mail para ativar sua conta e concluir o acesso.'
+      );
+      sessionStorage.removeItem('verto_professional_signup_success');
+      if (signupMode === 'check-email') {
+        urlParams.delete('signup');
+        const nextQuery = urlParams.toString();
+        const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash}`;
+        window.history.replaceState({}, document.title, nextUrl);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
     const syncCancelledCheckoutLead = async () => {
       const params = new URLSearchParams(window.location.search);
       const payment = params.get('payment');
