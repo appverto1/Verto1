@@ -10,7 +10,7 @@ import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
 import { calculateDomainMastery } from '../utils/clinicalMath';
 
-export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs }: any) => { 
+export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole }: any) => { 
   const rawProfileType = String(
     patient?.type ||
     patient?.profileType ||
@@ -89,6 +89,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [selectedPEISkillId, setSelectedPEISkillId] = useState("");
   const [isSessionModeOpen, setIsSessionModeOpen] = useState(false);
   const [isUnlinkingModalOpen, setIsUnlinkingModalOpen] = useState(false);
+  const [clinicTherapists, setClinicTherapists] = useState<any[]>([]);
+  const [isLoadingTherapists, setIsLoadingTherapists] = useState(false);
+  const [selectedTherapistId, setSelectedTherapistId] = useState<string>(
+    String(patient?.therapist_id || patient?.professional_id || '').trim()
+  );
 
   const allTabs: Array<'history' | 'notes' | 'report' | 'plan' | 'session' | 'files'> = [
     'history',
@@ -131,6 +136,55 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       onAnamnesisOpenConsumed?.();
     }
   }, [openAnamnesisOnLoad, onAnamnesisOpenConsumed, patient?.id]);
+
+  useEffect(() => {
+    setSelectedTherapistId(String(patient?.therapist_id || patient?.professional_id || '').trim());
+  }, [patient?.therapist_id, patient?.professional_id, patient?.id]);
+
+  const canManageTherapistAssignment = useMemo(() => {
+    const normalizedRole = String(userRole || '').toLowerCase();
+    return ['coordinator', 'admin', 'owner'].includes(normalizedRole);
+  }, [userRole]);
+
+  useEffect(() => {
+    const loadClinicTherapists = async () => {
+      if (!canManageTherapistAssignment) {
+        setClinicTherapists([]);
+        return;
+      }
+      setIsLoadingTherapists(true);
+      try {
+        const result = await dataService.getClinicMembers();
+        if (!result?.success || !Array.isArray(result?.data)) {
+          setClinicTherapists([]);
+          return;
+        }
+        const therapists = result.data.filter((member: any) => {
+          const role = String(member?.role || '').toLowerCase();
+          return role === 'therapist';
+        });
+        setClinicTherapists(therapists);
+      } catch (error) {
+        console.error('Erro ao carregar terapeutas da clínica:', error);
+        setClinicTherapists([]);
+      } finally {
+        setIsLoadingTherapists(false);
+      }
+    };
+    loadClinicTherapists();
+  }, [canManageTherapistAssignment, patient?.id]);
+
+  const handleTherapistAssignmentChange = async (nextTherapistId: string) => {
+    if (!onUpdatePatient) return;
+    const normalized = String(nextTherapistId || '').trim();
+    const nextValue = isUuidLike(normalized) ? normalized : null;
+    setSelectedTherapistId(nextValue || '');
+    onUpdatePatient({
+      ...patient,
+      therapist_id: nextValue,
+      professional_id: nextValue
+    });
+  };
 
   const buildInitialAvatarDataUrl = (name?: string) => {
     const initial = (name || 'P').trim().charAt(0).toUpperCase() || 'P';
@@ -2026,6 +2080,26 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                     <h1 className="text-2xl font-semibold text-gray-800 tracking-tight">{patient.name}</h1>
                 </div>
                 <p className="text-gray-500 text-xs">Detalhes do Paciente</p>
+                {canManageTherapistAssignment && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <label className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                      Terapeuta Responsável
+                    </label>
+                    <select
+                      className="min-w-[220px] bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-xs font-semibold text-gray-700 outline-none focus:border-[#7551FF]"
+                      value={selectedTherapistId}
+                      onChange={(e) => handleTherapistAssignmentChange(e.target.value)}
+                      disabled={isLoadingTherapists}
+                    >
+                      <option value="">{isLoadingTherapists ? 'Carregando terapeutas...' : 'Não atribuído'}</option>
+                      {clinicTherapists.map((therapist: any) => (
+                        <option key={String(therapist.id)} value={String(therapist.id)}>
+                          {therapist.name || therapist.email || 'Terapeuta'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
             </div> 
           </div> 
           <div className="flex items-center gap-2 w-full sm:w-auto">

@@ -233,6 +233,8 @@ export function CoordinatorDashboard({
   const [showBillingDetails, setShowBillingDetails] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
+  const [therapistMembersById, setTherapistMembersById] = useState<Record<string, any>>({});
+  const [patientTherapistFilter, setPatientTherapistFilter] = useState<string>("all");
 
   const navigateToTab = (
     tab:
@@ -275,6 +277,59 @@ export function CoordinatorDashboard({
       return next;
     });
   };
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadTherapistMembers = async () => {
+      try {
+        const result = await dataService.getClinicMembers();
+        if (!isMounted || !result?.success || !Array.isArray(result?.data)) return;
+        const byId: Record<string, any> = {};
+        result.data.forEach((member: any) => {
+          const role = String(member?.role || "").toLowerCase();
+          const id = String(member?.id || "").trim();
+          if (role === "therapist" && id) {
+            byId[id] = member;
+          }
+        });
+        setTherapistMembersById(byId);
+      } catch (error) {
+        console.error("Erro ao carregar terapeutas para exibição de responsáveis:", error);
+      }
+    };
+    loadTherapistMembers();
+    return () => {
+      isMounted = false;
+    };
+  }, [user?.activeWorkspaceId, user?.clinicId]);
+
+  const therapistFilterOptions = useMemo(() => {
+    const entries = Object.entries(therapistMembersById)
+      .map(([id, member]) => ({
+        id,
+        label: String(member?.name || member?.email || id).trim(),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+    return entries;
+  }, [therapistMembersById]);
+
+  const visiblePatients = useMemo(() => {
+    if (patientTherapistFilter === "all") return allPatients;
+    if (patientTherapistFilter === "unassigned") {
+      return allPatients.filter((patient: any) => {
+        const therapistId = String(
+          patient?.therapist_id || patient?.professional_id || "",
+        ).trim();
+        return !therapistId;
+      });
+    }
+    return allPatients.filter((patient: any) => {
+      const therapistId = String(
+        patient?.therapist_id || patient?.professional_id || "",
+      ).trim();
+      return therapistId === patientTherapistFilter;
+    });
+  }, [allPatients, patientTherapistFilter]);
 
   const billingHistory = [
     {
@@ -3946,24 +4001,46 @@ export function CoordinatorDashboard({
                 exit={{ opacity: 0, y: -20 }}
                 className="bg-white p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100"
               >
-                <div className="flex items-center justify-between mb-8">
-                  <h3 className="text-lg sm:text-xl font-bold text-slate-900">
-                    Gestão de Pacientes
-                  </h3>
-                  {canCreatePatients && (
-                    <button
-                      onClick={() => {
-                        resetPatientForm();
-                        setIsPatientRegistrationModalOpen(true);
-                      }}
-                      className="px-4 sm:px-6 py-2 sm:py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-xs sm:text-sm shadow-lg shadow-purple-500/20 hover:bg-blue-700 transition-all"
-                    >
-                      Novo Paciente
-                    </button>
+                <div className="flex flex-col gap-3 mb-8">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg sm:text-xl font-bold text-slate-900">
+                      Gestão de Pacientes
+                    </h3>
+                    {canCreatePatients && (
+                      <button
+                        onClick={() => {
+                          resetPatientForm();
+                          setIsPatientRegistrationModalOpen(true);
+                        }}
+                        className="px-4 sm:px-6 py-2 sm:py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-xs sm:text-sm shadow-lg shadow-purple-500/20 hover:bg-blue-700 transition-all"
+                      >
+                        Novo Paciente
+                      </button>
+                    )}
+                  </div>
+                  {!isReceptionist && (
+                    <div className="w-full sm:w-[360px]">
+                      <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-1.5 ml-1">
+                        Filtrar por terapeuta
+                      </label>
+                      <select
+                        className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                        value={patientTherapistFilter}
+                        onChange={(e) => setPatientTherapistFilter(e.target.value)}
+                      >
+                        <option value="all">Todos os pacientes</option>
+                        <option value="unassigned">Não atribuídos</option>
+                        {therapistFilterOptions.map((therapist) => (
+                          <option key={`therapist-filter-${therapist.id}`} value={therapist.id}>
+                            {therapist.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   )}
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-                  {allPatients.map((patient, i) => (
+                  {visiblePatients.map((patient, i) => (
                     <div
                       key={i}
                       className="p-4 sm:p-6 bg-slate-50 rounded-3xl border border-slate-100 hover:border-blue-500/30 transition-all group relative"
@@ -3987,6 +4064,26 @@ export function CoordinatorDashboard({
                           <p className="text-[10px] text-slate-400 font-medium">
                             ID: {patient.id}
                           </p>
+                          {(() => {
+                            const therapistId = String(
+                              patient?.therapist_id || patient?.professional_id || "",
+                            ).trim();
+                            if (!therapistId) {
+                              return (
+                                <p className="text-[10px] mt-1 font-semibold text-amber-600">
+                                  Terapeuta: não atribuído
+                                </p>
+                              );
+                            }
+                            const therapist = therapistMembersById[therapistId];
+                            const therapistName =
+                              therapist?.name || therapist?.email || `ID ${therapistId.slice(0, 8)}`;
+                            return (
+                              <p className="text-[10px] mt-1 font-semibold text-indigo-600">
+                                Terapeuta: {therapistName}
+                              </p>
+                            );
+                          })()}
                         </div>
                         <div className="relative">
                           <button
@@ -4132,6 +4229,11 @@ export function CoordinatorDashboard({
                       )}
                     </div>
                   ))}
+                  {visiblePatients.length === 0 && (
+                    <div className="col-span-full rounded-2xl border border-slate-100 bg-slate-50 p-6 text-sm font-medium text-slate-500">
+                      Nenhum paciente encontrado para o filtro selecionado.
+                    </div>
+                  )}
                 </div>
               </motion.div>
             )}

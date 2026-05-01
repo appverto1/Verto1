@@ -6052,6 +6052,12 @@ async function startServer() {
       const safePhone = rawPhone !== undefined ? normalizeBrazilMobilePhone(rawPhone) : undefined;
       const rawCpf = req.body?.cpf;
       const safeCpf = rawCpf !== undefined ? normalizeCpf(rawCpf) : undefined;
+      const rawTherapistId = req.body?.therapist_id;
+      const safeTherapistId = rawTherapistId !== undefined ? sanitizeString(rawTherapistId, 120) : undefined;
+      const canAssignTherapist =
+        role === 'coordinator' ||
+        role === 'admin' ||
+        role === 'owner';
 
       if (rawEmail !== undefined && rawEmail !== null && String(rawEmail).trim() && !safeEmail) {
         return res.status(400).json({ success: false, error: 'E-mail inválido. Informe um domínio válido.' });
@@ -6070,6 +6076,10 @@ async function startServer() {
         cpf: safeCpf !== undefined ? safeCpf : undefined,
         age: req.body?.age !== undefined ? asSafeNumber(req.body?.age, 0, 130) : undefined,
         diagnosis: req.body?.diagnosis !== undefined ? sanitizeString(req.body?.diagnosis, 2000) : undefined,
+        therapist_id:
+          canAssignTherapist && rawTherapistId !== undefined
+            ? (isUuid(safeTherapistId) ? safeTherapistId : null)
+            : undefined,
         clinic_id: allowClinicUpdate && req.body?.clinic_id !== undefined ? sanitizeString(req.body?.clinic_id, 100) : undefined,
         status: req.body?.status !== undefined ? sanitizeString(req.body?.status, 40) : undefined
       });
@@ -6132,7 +6142,10 @@ async function startServer() {
         clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
         actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
         title: 'Cadastro de paciente atualizado',
-        content: `Paciente ${sanitizeString(req.params.id, 120)} teve dados cadastrais atualizados.`,
+        content:
+          canAssignTherapist && rawTherapistId !== undefined
+            ? `Paciente ${sanitizeString(req.params.id, 120)} teve responsável terapêutico atualizado para ${isUuid(safeTherapistId) ? sanitizeString(safeTherapistId, 120) : 'não atribuído'}.`
+            : `Paciente ${sanitizeString(req.params.id, 120)} teve dados cadastrais atualizados.`,
         type: 'management'
       });
       res.json({ success: true });
