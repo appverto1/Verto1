@@ -24,6 +24,7 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [invitations, setInvitations] = useState<{email: string, role: string}[]>([]);
 
   // Plan limits based on LandingPage.tsx
@@ -47,6 +48,7 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
 
     setLoading(true);
     setError(null);
+    setSuccessMessage(null);
 
     try {
       const result = await dataService.inviteToClinic(email, role);
@@ -54,6 +56,12 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
         setInvitations([...invitations, { email, role }]);
         setEmail('');
         setSuccess(true);
+        setSuccessMessage(
+          result?.message ||
+            (result?.invitationEmailSent === false
+              ? 'Convite criado, mas houve falha no envio do e-mail. Tente reenviar.'
+              : 'Convite enviado com sucesso!')
+        );
         setTimeout(() => setSuccess(false), 3000);
       } else {
         setError(result.error);
@@ -165,7 +173,7 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
               {success && (
                 <div className="p-4 bg-green-50 text-green-600 rounded-2xl text-xs flex items-center gap-2">
                   <CheckCircle2 size={16} />
-                  Convite enviado com sucesso!
+                  {successMessage || 'Convite enviado com sucesso!'}
                 </div>
               )}
 

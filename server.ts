@@ -4325,21 +4325,84 @@ async function startServer() {
         .single();
 
       if (error) throw error;
-      try {
-        const { error: inviteEmailError } = await supabase.auth.admin.inviteUserByEmail(email, {
-          data: {
+
+      // Garante usuário Auth para fluxo de ativação por senha/google sem depender do e-mail do Supabase.
+      let authUser = await findAuthUserByEmail(email);
+      if (!authUser?.id) {
+        const tempPassword = generateTemporaryPassword();
+        const createResult = await supabase.auth.admin.createUser({
+          email,
+          password: tempPassword,
+          email_confirm: false,
+          user_metadata: {
+            full_name: email.split('@')[0],
             invited_role: role,
-            clinic_id: clinicId,
-            clinic_name: sanitizeString(clinic?.name, 160) || sanitizeString(user.name, 160) || 'Clinica'
+            clinic_id: clinicId
           }
         });
-        if (inviteEmailError) {
-          console.warn('Falha no envio de convite por e-mail (Supabase Auth):', inviteEmailError.message);
-        }
-      } catch (inviteMailError) {
-        console.warn('Nao foi possivel enviar e-mail de convite automatico:', inviteMailError);
+        if (createResult.error) throw createResult.error;
+        authUser = createResult.data?.user || null;
       }
-      res.json({ success: true, data });
+
+      const activationLink =
+        (await generateSupabaseActionLink({
+          type: 'signup',
+          email,
+          redirectTo: getActivationRedirectUrl('coordinator', email)
+        })) || getActivationRedirectUrl('coordinator', email);
+
+      const invitedRoleLabel = role === 'receptionist' ? 'Recepcionista' : 'Terapeuta';
+      const clinicName = sanitizeString(clinic?.name, 160) || sanitizeString(user.name, 160) || 'Clinica';
+      const activationEmail = buildActivationEmailTemplate({
+        nome: email.split('@')[0],
+        link_ativacao: activationLink,
+        perfil: 'professional'
+      });
+      const htmlWithInviteContext = activationEmail.html
+        .replace(
+          '</h1>',
+          `</h1><p style="margin:0 0 16px 0;color:#5b21b6;font-size:15px;line-height:1.55;">Você foi convidado(a) para atuar como <strong>${invitedRoleLabel}</strong> na clínica <strong>${clinicName}</strong>.</p>`
+        );
+
+      const emailSent = await sendTransactionalEmailSafe({
+        to: email,
+        subject: `Convite para ${clinicName} na Verto`,
+        html: htmlWithInviteContext,
+        context: 'clinic_invitation',
+        from: OFFICIAL_FROM_NOREPLY,
+        replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+        templateKind: 'welcome_professional',
+        templateData: {
+          nome: email.split('@')[0],
+          link_ativacao: activationLink
+        },
+        metadata: {
+          invitationId: data?.id || null,
+          clinicId,
+          invitedRole: role,
+          invitedBy: user.id,
+          email: maskEmail(email)
+        }
+      });
+
+      await persistIdentityAuditLog({
+        title: 'Convite de colaborador enviado',
+        content: `Convite para ${maskEmail(email)} como ${invitedRoleLabel} em ${clinicName}. E-mail oficial ${emailSent ? 'enviado' : 'com falha de envio'}.`,
+        identifier: email,
+        channel: 'email',
+        userId: authUser?.id || null,
+        request: req,
+        status: emailSent ? 'sent' : 'warning'
+      });
+
+      res.json({
+        success: true,
+        data,
+        invitationEmailSent: emailSent,
+        message: emailSent
+          ? `Convite enviado para ${email}.`
+          : `Convite criado, mas houve falha no envio de e-mail para ${email}.`
+      });
     } catch (error: any) {
       logRouteDbError('/api/tasks/:patientId [GET]', error, { patientId: sanitizeString(req.params.patientId, 120) });
       res.status(500).json({ error: extractSupabaseErrorMessage(error) });
