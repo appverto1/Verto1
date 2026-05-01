@@ -368,6 +368,29 @@ export default function App() {
       const paymentMode = String(urlParams.get('mode') || '').toLowerCase();
       if (paymentMode === 'professional-signup') {
         const handleProfessionalSignupSuccess = async () => {
+          const pendingSignupEmail = (() => {
+            try {
+              return String(sessionStorage.getItem('verto_pending_professional_signup_email') || '')
+                .trim()
+                .toLowerCase();
+            } catch {
+              return '';
+            }
+          })();
+
+          if (pendingSignupEmail) {
+            try {
+              await fetch('/api/auth/resend-confirmation', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ email: pendingSignupEmail })
+              });
+            } catch (error) {
+              console.warn('Falha no fallback de reenvio de confirmação pós-pagamento:', error);
+            }
+          }
+
           try {
             const supabase = await getSupabase();
             await supabase.auth.signOut({ scope: 'local' } as any);
@@ -382,6 +405,11 @@ export default function App() {
           setUser(null);
           setProfilePicture(null);
           setShowWorkspacePicker(false);
+          try {
+            sessionStorage.removeItem('verto_pending_professional_signup_email');
+          } catch {
+            // no-op
+          }
           sessionStorage.setItem(
             'verto_professional_signup_success',
             'Pagamento confirmado. Agora confirme seu e-mail para ativar sua conta e concluir o acesso.'

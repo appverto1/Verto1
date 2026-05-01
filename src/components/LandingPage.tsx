@@ -542,6 +542,14 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
       if (registerType === 'professional') {
         if (data?.url) {
+          try {
+            const safeEmail = String(email || '').trim().toLowerCase();
+            if (safeEmail) {
+              sessionStorage.setItem('verto_pending_professional_signup_email', safeEmail);
+            }
+          } catch {
+            // no-op
+          }
           window.location.href = data.url;
           return;
         }

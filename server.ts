@@ -381,6 +381,9 @@ function resolveResendTemplateId(kind?: ResendTemplateKind): string | null {
   };
   const envKey = keyByKind[kind];
   const id = sanitizeString(process.env[envKey] || '', 200);
+  if (!id && kind === 'welcome_professional') {
+    return 'bem-vindo-clnica';
+  }
   return id || null;
 }
 
@@ -9054,7 +9057,7 @@ async function startServer() {
           }
         ],
         mode: 'subscription',
-        success_url: `${origin}/?payment=success&mode=professional-signup`,
+        success_url: `${origin}/?payment=success&mode=professional-signup&signup=check-email&checkout_session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${origin}/?payment=cancel&mode=professional-signup&lead_ref=${encodeURIComponent(userId)}&plan=${encodeURIComponent(requestedPlan)}&checkout_session_id={CHECKOUT_SESSION_ID}`,
         customer_email: safeEmail,
         metadata: {
