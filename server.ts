@@ -4533,7 +4533,40 @@ async function startServer() {
         .limit(200);
 
       if (error) throw error;
-      res.json({ success: true, data });
+      const { data: membershipHistory, error: membershipHistoryError } = await supabase
+        .from('clinic_memberships')
+        .select(`
+          user_id,
+          role,
+          status,
+          updated_at,
+          created_at,
+          users:user_id (
+            id,
+            name,
+            email
+          )
+        `)
+        .eq('clinic_id', clinicId)
+        .eq('status', 'inactive')
+        .order('updated_at', { ascending: false })
+        .limit(200);
+      if (membershipHistoryError) throw membershipHistoryError;
+
+      res.json({
+        success: true,
+        data,
+        membershipHistory: (membershipHistory || []).map((m: any) => ({
+          id: `membership-${sanitizeString(m?.user_id, 120)}`,
+          user_id: sanitizeString(m?.user_id, 120),
+          email: sanitizeEmail(m?.users?.email) || '',
+          name: sanitizeString(m?.users?.name, 180) || 'Colaborador',
+          role: sanitizeString(m?.role, 40) || 'therapist',
+          status: 'unlinked',
+          created_at: m?.created_at || null,
+          updated_at: m?.updated_at || null
+        }))
+      });
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }
@@ -4598,6 +4631,15 @@ async function startServer() {
 
       if (cancelError) throw cancelError;
 
+      await persistActivityLog({
+        title: 'Convite cancelado',
+        content: `Convite para ${maskEmail(sanitizeEmail(invitation.email) || '***')} foi cancelado.`,
+        type: 'management',
+        userId: sanitizeString(user?.id, 120),
+        clinicId,
+        actorName: sanitizeString(user?.name || user?.email || 'Coordenador', 180)
+      });
+
       res.json({
         success: true,
         message: `Convite cancelado para ${sanitizeString(invitation.email, 160)}.`
@@ -4650,6 +4692,14 @@ async function startServer() {
         .eq('id', user.id);
 
       if (updateError) throw updateError;
+      await persistActivityLog({
+        title: 'Convite aceito',
+        content: `${maskEmail(sanitizeEmail(user.email) || '***')} aceitou convite e entrou na clínica.`,
+        type: 'management',
+        userId: sanitizeString(user?.id, 120),
+        clinicId: sanitizeString(invitation.clinic_id, 120),
+        actorName: sanitizeString(user?.name || user?.email || 'Colaborador', 180)
+      });
 
       let acceptPayload: Record<string, any> = {
         status: 'accepted',
@@ -4748,6 +4798,14 @@ async function startServer() {
         .eq('status', 'active');
 
       if (error) throw error;
+      await persistActivityLog({
+        title: 'Papel de colaborador atualizado',
+        content: `Colaborador ${sanitizeString(memberId, 120)} atualizado para papel ${role}.`,
+        type: 'management',
+        userId: sanitizeString(adminUser?.id, 120),
+        clinicId,
+        actorName: sanitizeString(adminUser?.name || adminUser?.email || 'Coordenador', 180)
+      });
       res.json({ success: true, message: 'Papel atualizado com sucesso' });
     } catch (error) {
       res.status(500).json({ error: String(error) });
@@ -7378,39 +7436,81 @@ async function startServer() {
 
       const role = currentUser.role as AppRole;
       const clinicId = currentClinicId(currentUser);
-      let query = supabase
-        .from('activity_logs')
-        .select('*')
-        .order('timestamp', { ascending: false })
-        .limit(500);
-
-      if ((role === 'coordinator' || role === 'admin' || role === 'owner') && clinicId) {
-        query = query.eq('clinic_id', clinicId);
-      } else {
-        query = query.eq('user_id', currentUser.id);
-      }
-
-      let data: any = [];
+      let data: any[] = [];
       let error: any = null;
-      try {
-        const result = await query;
-        data = result.data;
-        error = result.error;
-      } catch (queryError: any) {
-        error = queryError;
-      }
-      if (error && /clinic_id/i.test(String(error?.message || ''))) {
+      const isManager = role === 'coordinator' || role === 'admin' || role === 'owner';
+
+      if (isManager && clinicId) {
         try {
-          const fallback = await supabase
+          const [byClinicRes, memberRes] = await Promise.all([
+            supabase
+              .from('activity_logs')
+              .select('*')
+              .eq('clinic_id', clinicId)
+              .order('timestamp', { ascending: false })
+              .limit(500),
+            supabase
+              .from('clinic_memberships')
+              .select('user_id')
+              .eq('clinic_id', clinicId),
+          ]);
+
+          const byClinic = byClinicRes.data || [];
+          if (byClinicRes.error) error = byClinicRes.error;
+
+          const memberIds = Array.from(
+            new Set(
+              (memberRes.data || [])
+                .map((m: any) => sanitizeString(m?.user_id, 120))
+                .filter(Boolean),
+            ),
+          );
+          const currentId = sanitizeString(currentUser.id, 120);
+          if (currentId) memberIds.push(currentId);
+
+          let byMembers: any[] = [];
+          if (memberIds.length > 0) {
+            const memberLogsRes = await supabase
+              .from('activity_logs')
+              .select('*')
+              .in('user_id', Array.from(new Set(memberIds)))
+              .order('timestamp', { ascending: false })
+              .limit(1000);
+            byMembers = memberLogsRes.data || [];
+            if (memberLogsRes.error && !error) error = memberLogsRes.error;
+          }
+
+          const merged = new Map<string, any>();
+          [...byClinic, ...byMembers].forEach((row: any) => {
+            const id =
+              sanitizeString(row?.id, 120) ||
+              `${sanitizeString(row?.user_id, 120)}-${sanitizeString(row?.timestamp, 80)}`;
+            if (!id) return;
+            if (!merged.has(id)) merged.set(id, row);
+          });
+
+          data = Array.from(merged.values())
+            .sort((a: any, b: any) => {
+              const ta = new Date(a?.timestamp || a?.created_at || 0).getTime();
+              const tb = new Date(b?.timestamp || b?.created_at || 0).getTime();
+              return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
+            })
+            .slice(0, 500);
+        } catch (queryError: any) {
+          error = queryError;
+        }
+      } else {
+        try {
+          const result = await supabase
             .from('activity_logs')
             .select('*')
             .eq('user_id', currentUser.id)
             .order('timestamp', { ascending: false })
             .limit(500);
-          data = fallback.data;
-          error = fallback.error;
-        } catch (fallbackError: any) {
-          error = fallbackError;
+          data = result.data || [];
+          error = result.error;
+        } catch (queryError: any) {
+          error = queryError;
         }
       }
       

@@ -51,6 +51,7 @@ export function TeamManagement({
 }) {
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<any[]>([]);
+  const [membershipHistory, setMembershipHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -99,6 +100,7 @@ export function TeamManagement({
       const result = await dataService.getInvitations();
       if (result.success) {
         setInvitations(result.data || []);
+        setMembershipHistory(result.membershipHistory || []);
       }
     } catch (err) {
       console.error('Error fetching invitations:', err);
@@ -540,22 +542,46 @@ export function TeamManagement({
                         ? 'bg-slate-200 text-slate-600'
                         : 'bg-slate-100 text-slate-500';
                     return (
-                      <div key={inv.id} className="p-4 bg-white rounded-2xl border border-slate-100 flex items-center justify-between">
-                        <div className="flex items-center gap-4">
+                      <div key={inv.id} className="p-4 bg-white rounded-2xl border border-slate-100 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div className="flex items-center gap-4 min-w-0">
                           <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400">
                             <Mail size={20} />
                           </div>
-                          <div>
-                            <p className="font-bold text-slate-900 text-sm">{inv.email}</p>
+                          <div className="min-w-0">
+                            <p className="font-bold text-slate-900 text-sm truncate">{inv.email}</p>
                             <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-widest">{inv.role}</p>
                           </div>
                         </div>
-                        <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest ${statusClass}`}>
+                        <span className={`self-start md:self-center shrink-0 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest ${statusClass}`}>
                           {statusLabel}
                         </span>
                       </div>
                     );
                   })}
+                </div>
+              </div>
+            )}
+
+            {(membershipHistory.length || 0) > 0 && (
+              <div className="mt-8">
+                <h3 className="text-lg font-bold text-slate-900 mb-4">Colaboradores Desvinculados</h3>
+                <div className="space-y-3">
+                  {membershipHistory.map((entry) => (
+                    <div key={entry.id} className="p-4 bg-white rounded-2xl border border-slate-100 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div className="flex items-center gap-4 min-w-0">
+                        <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center text-amber-500">
+                          <Users size={20} />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-bold text-slate-900 text-sm truncate">{entry.email || entry.name || 'Colaborador'}</p>
+                          <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-widest">{entry.role}</p>
+                        </div>
+                      </div>
+                      <span className="self-start md:self-center shrink-0 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-amber-100 text-amber-700">
+                        Desvinculado
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}

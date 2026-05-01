@@ -1128,7 +1128,7 @@ export default function App() {
   // Fetch activity logs from Backend on load
   useEffect(() => {
     const fetchLogs = async () => {
-      if (user && (user.role === 'therapist' || user.role === 'coordinator')) {
+      if (user && (user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist' || user.role === 'admin' || user.role === 'owner')) {
         const { dataService } = await import('./services/dataService');
         const { success, data } = await dataService.getActivityLogs();
         if (success && data) {
