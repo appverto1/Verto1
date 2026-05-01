@@ -4309,22 +4309,44 @@ async function startServer() {
         return res.status(400).json({ error: 'Já existe um convite pendente para este e-mail' });
       }
 
-      const { data, error } = await supabase
-        .from('invitations')
-        .insert([{
-          email,
-          clinic_id: clinicId,
-          clinic_name: sanitizeString(clinic?.name, 160) || sanitizeString(user.name, 160) || 'Clinica',
-          role,
-          required_onboarding_fields: requiredOnboardingFields,
-          status: 'pending',
-          invited_by: user.id,
-          created_at: new Date().toISOString()
-        }])
-        .select()
-        .single();
+      const invitationBasePayload = cleanObject({
+        email,
+        clinic_id: clinicId,
+        clinic_name: sanitizeString(clinic?.name, 160) || sanitizeString(user.name, 160) || 'Clinica',
+        role,
+        required_onboarding_fields: requiredOnboardingFields,
+        status: 'pending',
+        invited_by: user.id,
+        created_at: new Date().toISOString()
+      });
 
-      if (error) throw error;
+      let invitePayload: Record<string, any> = { ...invitationBasePayload };
+      const removedInvitationColumns = new Set<string>();
+      let insertedInvitation: any = null;
+      let inviteError: any = null;
+
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const result = await supabase
+          .from('invitations')
+          .insert([invitePayload])
+          .select()
+          .single();
+        insertedInvitation = result.data;
+        inviteError = result.error;
+        if (!inviteError) break;
+
+        const missingColumn = extractMissingColumnName(inviteError);
+        if (!missingColumn || removedInvitationColumns.has(missingColumn)) {
+          break;
+        }
+
+        removedInvitationColumns.add(missingColumn);
+        const { [missingColumn]: _removed, ...rest } = invitePayload as any;
+        invitePayload = rest;
+      }
+
+      if (inviteError) throw inviteError;
+      const data = insertedInvitation;
 
       // Garante usuário Auth para fluxo de ativação por senha/google sem depender do e-mail do Supabase.
       let authUser = await findAuthUserByEmail(email);
