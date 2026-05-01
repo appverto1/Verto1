@@ -276,64 +276,6 @@ export function CoordinatorDashboard({
     });
   };
 
-  useEffect(() => {
-    if (!dashboardResumeKey || hasRestoredDashboardStateRef.current) return;
-    hasRestoredDashboardStateRef.current = true;
-    try {
-      const raw = localStorage.getItem(dashboardResumeKey);
-      if (!raw) return;
-      const state = JSON.parse(raw || "{}");
-      const nextTab = String(state?.activeTab || "dashboard") as typeof activeTab;
-      const nextView = String(state?.view || "home");
-      const nextPatientId = String(state?.selectedPatientId || "").trim();
-      const nextPatientTab = String(state?.patientOpenTab || "history");
-
-      if (canAccessTab(nextTab)) {
-        setActiveTab(nextTab);
-        setTabHistory([nextTab]);
-      } else {
-        setActiveTab("dashboard");
-        setTabHistory(["dashboard"]);
-      }
-
-      if (nextView === "patient" && nextPatientId) {
-        setSelectedPatientId(nextPatientId);
-        if (
-          nextPatientTab === "history" ||
-          nextPatientTab === "notes" ||
-          nextPatientTab === "report" ||
-          nextPatientTab === "plan" ||
-          nextPatientTab === "session" ||
-          nextPatientTab === "files"
-        ) {
-          setPatientOpenTab(nextPatientTab);
-        }
-        setView("patient");
-      } else {
-        setView("home");
-      }
-    } catch (error) {
-      console.warn("Falha ao restaurar contexto do painel:", error);
-    }
-  }, [dashboardResumeKey]);
-
-  useEffect(() => {
-    if (!dashboardResumeKey) return;
-    try {
-      localStorage.setItem(
-        dashboardResumeKey,
-        JSON.stringify({
-          activeTab,
-          view,
-          selectedPatientId: selectedPatientId ? String(selectedPatientId) : null,
-          patientOpenTab,
-        }),
-      );
-    } catch (error) {
-      console.warn("Falha ao persistir contexto do painel:", error);
-    }
-  }, [dashboardResumeKey, activeTab, view, selectedPatientId, patientOpenTab]);
-
   const billingHistory = [
     {
       date: "15/03/2026",
@@ -435,6 +377,64 @@ export function CoordinatorDashboard({
     useState(false);
   const [selectedPatientProfile, setSelectedPatientProfile] = useState<any>(null);
   const [filteredPatients, setFilteredPatients] = useState<any[]>([]);
+  useEffect(() => {
+    if (!dashboardResumeKey || hasRestoredDashboardStateRef.current) return;
+    hasRestoredDashboardStateRef.current = true;
+    try {
+      const raw = localStorage.getItem(dashboardResumeKey);
+      if (!raw) return;
+      const state = JSON.parse(raw || "{}");
+      const nextTab = String(state?.activeTab || "dashboard") as typeof activeTab;
+      const nextView = String(state?.view || "home");
+      const nextPatientId = String(state?.selectedPatientId || "").trim();
+      const nextPatientTab = String(state?.patientOpenTab || "history");
+
+      if (canAccessTab(nextTab)) {
+        setActiveTab(nextTab);
+        setTabHistory([nextTab]);
+      } else {
+        setActiveTab("dashboard");
+        setTabHistory(["dashboard"]);
+      }
+
+      if (nextView === "patient" && nextPatientId) {
+        setSelectedPatientId(nextPatientId);
+        if (
+          nextPatientTab === "history" ||
+          nextPatientTab === "notes" ||
+          nextPatientTab === "report" ||
+          nextPatientTab === "plan" ||
+          nextPatientTab === "session" ||
+          nextPatientTab === "files"
+        ) {
+          setPatientOpenTab(nextPatientTab);
+        }
+        setView("patient");
+      } else {
+        setView("home");
+      }
+    } catch (error) {
+      console.warn("Falha ao restaurar contexto do painel:", error);
+    }
+  }, [dashboardResumeKey, activeTab]);
+
+  useEffect(() => {
+    if (!dashboardResumeKey) return;
+    try {
+      localStorage.setItem(
+        dashboardResumeKey,
+        JSON.stringify({
+          activeTab,
+          view,
+          selectedPatientId: selectedPatientId ? String(selectedPatientId) : null,
+          patientOpenTab,
+        }),
+      );
+    } catch (error) {
+      console.warn("Falha ao persistir contexto do painel:", error);
+    }
+  }, [dashboardResumeKey, activeTab, view, selectedPatientId, patientOpenTab]);
+
   const [payments, setPayments] = useState<any[]>([]);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [selectedPaymentPatient, setSelectedPaymentPatient] =
