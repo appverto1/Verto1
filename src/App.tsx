@@ -882,8 +882,8 @@ export default function App() {
       return;
     }
 
-    // Paciente tem hidrataÃ§Ã£o prÃ³pria (histÃ³rico/tarefas/notas) e nÃ£o deve
-    // receber sobreposiÃ§Ã£o do estado clÃ­nico global apÃ³s F5.
+    // Paciente tem hidratação própria (histórico/tarefas/notas) e não deve
+    // receber sobreposição do estado clínico global após F5.
     if (user.role === 'patient') {
       setClinicStateHydrated(false);
       return;
@@ -1743,7 +1743,7 @@ export default function App() {
       setAllPatients(prev => prev.filter(p => p.id !== updatedData.id));
       setClinicalRecords(prev => prev.filter(r => r.patientId !== updatedData.id));
       setTherapistAgenda(prev => prev.filter(a => a.id !== updatedData.id));
-      onAddActivityLog("DesvinculaÃ§Ã£o de Paciente", `Paciente ID ${updatedData.id} foi desvinculado.`, 'management');
+      onAddActivityLog("Desvinculação de Paciente", `Paciente ID ${updatedData.id} foi desvinculado.`, 'management');
     } else {
       if (Object.keys(identityData).length > 1) { // More than just 'id'
         setAllPatients(prev => prev.map(p => p.id === updatedData.id ? { ...p, ...identityData } : p)); 
@@ -1771,7 +1771,7 @@ export default function App() {
       }
 
       setTherapistAgenda(prev => prev.map(a => a.id === updatedData.id ? { ...a, name: updatedData.name || a.name } : a)); 
-      onAddActivityLog("AtualizaÃ§Ã£o de Cadastro", `Dados do paciente ID ${updatedData.id} atualizados.`, 'management');
+      onAddActivityLog("Atualização de Cadastro", `Dados do paciente ID ${updatedData.id} atualizados.`, 'management');
     }
 
     // Sync to Backend
@@ -1790,6 +1790,10 @@ export default function App() {
           age: updatedData.age,
           diagnosis: updatedData.diagnosis,
           type: updatedData.type,
+          therapist_id:
+            typeof updatedData?.therapist_id !== 'undefined'
+              ? updatedData.therapist_id
+              : updatedData?.professional_id,
           clinic_id: updatedData.clinic_id,
           status: updatedData.status
         });

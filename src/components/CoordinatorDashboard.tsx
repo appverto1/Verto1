@@ -909,6 +909,17 @@ export function CoordinatorDashboard({
   }, [theme]);
 
   const normalizeUtf8Text = (value: any) => String(value ?? "").normalize("NFC");
+  const repairMojibakeText = (value: any) => {
+    const text = normalizeUtf8Text(value ?? "");
+    if (!text) return "";
+    const replacements: Array<[string, string]> = [
+      ["Ã§", "ç"], ["Ã£", "ã"], ["Ã¡", "á"], ["Ã ", "à"], ["Ã¢", "â"], ["Ãª", "ê"],
+      ["Ã©", "é"], ["Ã­", "í"], ["Ã³", "ó"], ["Ã´", "ô"], ["Ãµ", "õ"], ["Ãº", "ú"],
+      ["Â ", " "], ["â€“", "–"], ["â€”", "—"], ["â€˜", "‘"], ["â€™", "’"], ["â€œ", "“"], ["â€", "”"],
+      ["Ã", "Á"], ["Ã‰", "É"], ["Ã“", "Ó"], ["Ãš", "Ú"], ["Ã‡", "Ç"], ["Ãƒ", "Ã"],
+    ];
+    return replacements.reduce((acc, [from, to]) => acc.split(from).join(to), text);
+  };
 
   const normalizedPlanName = (() => {
     const raw = normalizeUtf8Text(user?.planName || "").trim();
@@ -4634,7 +4645,7 @@ export function CoordinatorDashboard({
                           <div className="flex-1">
                             <div className="flex items-center justify-between mb-1">
                               <p className="text-sm font-bold text-slate-900">
-                                {log.title || log.action || "Atividade registrada"}
+                                {repairMojibakeText(log.title || log.action || "Atividade registrada")}
                               </p>
                               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                                 {(() => {
@@ -4649,10 +4660,10 @@ export function CoordinatorDashboard({
                               </span>
                             </div>
                             <p className="text-xs text-slate-500 leading-relaxed">
-                              {log.content || log.details || "Ação registrada no sistema."}
+                              {repairMojibakeText(log.content || log.details || "Ação registrada no sistema.")}
                             </p>
                             <p className="text-[11px] text-slate-400 mt-1">
-                              por {log.actor_name || log.professional || "Profissional"}
+                              por {repairMojibakeText(log.actor_name || log.professional || "Profissional")}
                             </p>
                           </div>
                         </div>
