@@ -406,9 +406,14 @@ export function CoordinatorDashboard({
     active: boolean;
     message: string;
   }>({ active: false, message: "Processando..." });
-  const [theme, setTheme] = useState<"light" | "dark">(
-    (localStorage.getItem("verto_theme") as "light" | "dark") || "light",
+  const themeStorageKey = useMemo(
+    () => `verto_theme_${String(user?.id || "guest")}`,
+    [user?.id],
   );
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    const legacy = localStorage.getItem("verto_theme");
+    return legacy === "dark" || legacy === "light" ? legacy : "light";
+  });
   const [sessionDate, setSessionDate] = useState(
     new Date().toISOString().split("T")[0],
   );
@@ -773,6 +778,9 @@ export function CoordinatorDashboard({
     );
     setTherapistProfilePhotoUrl(user?.profilePicture || user?.profile_picture || null);
     setClinicLogoDataUrl(user?.clinicSettings?.clinicLogoUrl || null);
+    setWorkStart(String(user?.clinicSettings?.workStart || "08:00"));
+    setWorkEnd(String(user?.clinicSettings?.workEnd || "18:00"));
+    setClinicCnpj(String(user?.clinicSettings?.clinicCnpj || ""));
   }, [
     user?.crp,
     user?.name,
@@ -786,6 +794,9 @@ export function CoordinatorDashboard({
     user?.profilePicture,
     user?.profile_picture,
     user?.clinicSettings?.clinicLogoUrl,
+    user?.clinicSettings?.workStart,
+    user?.clinicSettings?.workEnd,
+    user?.clinicSettings?.clinicCnpj,
   ]);
 
   useEffect(() => {
@@ -909,9 +920,22 @@ export function CoordinatorDashboard({
   }, []);
 
   useEffect(() => {
+    const saved = localStorage.getItem(themeStorageKey);
+    if (saved === "dark" || saved === "light") {
+      setTheme(saved);
+      return;
+    }
+    const legacy = localStorage.getItem("verto_theme");
+    if (legacy === "dark" || legacy === "light") {
+      setTheme(legacy);
+    }
+  }, [themeStorageKey]);
+
+  useEffect(() => {
     document.body.classList.toggle("theme-dark", theme === "dark");
+    localStorage.setItem(themeStorageKey, theme);
     localStorage.setItem("verto_theme", theme);
-  }, [theme]);
+  }, [theme, themeStorageKey]);
 
   const normalizeUtf8Text = (value: any) => String(value ?? "").normalize("NFC");
   const repairMojibakeText = (value: any) => {

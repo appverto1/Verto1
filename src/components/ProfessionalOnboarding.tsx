@@ -363,6 +363,18 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
       onComplete({
         name: fullName,
         profilePicture: profileUpload.url,
+        signatureDataUrl: signatureUpload.url,
+        clinicSettings: {
+          ...(user?.clinicSettings || {}),
+          clinicName: clinicName || null,
+          clinicLogoUrl: clinicLogoUpload.url,
+          clinicCnpj: clinicCnpj || null,
+          clinicPhone: clinicPhone || null,
+          specialty: specialty || null,
+          council: council || null,
+          councilNumber: councilNumber || null,
+          signatureDataUrl: signatureUpload.url,
+        },
         firstLoginCompleted: true,
         subscriptionStatus: 'active'
       });

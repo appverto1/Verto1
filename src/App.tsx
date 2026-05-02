@@ -2615,9 +2615,17 @@ export default function App() {
         <ProfessionalOnboarding 
           user={user} 
           onComplete={(data) => {
-            setUser({ ...user, ...data, firstLoginCompleted: true });
+            setUser((prev: any) => ({
+              ...prev,
+              ...data,
+              clinicSettings: {
+                ...(prev?.clinicSettings || {}),
+                ...(data?.clinicSettings || {}),
+              },
+              firstLoginCompleted: true,
+            }));
             setShowOnboarding(false);
-          }} 
+          }}
           onClose={() => setShowOnboarding(false)}
         />
       ) : (user.role === 'therapist' || user.role === 'coordinator') && user.subscriptionStatus === 'pending' ? (
