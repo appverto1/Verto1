@@ -370,6 +370,18 @@ export function CoordinatorDashboard({
     logs: "Log de Atividades",
     billing: "Assinatura e Cobrança",
   };
+  const professionalDailyMessages = [
+    "Olá [nome], cada marco que você registra hoje é um capítulo na história de superação de alguém. 💜",
+    "A ciência é sua base, mas sua escuta é o que transforma vidas. Bom trabalho hoje! ✨",
+    "Lembre-se: para o paciente, você é a ponte entre o desafio e a conquista. 🤝",
+    "O progresso clínico raramente é uma linha reta. Valorize as pequenas vitórias de hoje! 📈",
+    "Olá [nome], grandes mudanças são feitas de pequenos marcos consistentes. 🌱",
+    "Sua dedicação é a bússola que guia o desenvolvimento de quem você atende. 🧭",
+    "Olá [nome], para cuidar do outro com excelência, lembre-se de também cuidar de você. ☕",
+    "Sua saúde mental é tão importante quanto a técnica que você aplica. Respire fundo e bom dia! ✨",
+    "Olá [nome], lembre-se que quem faz o dia bonito é você! 💜",
+    "Transformando dados em sorrisos e evolução. Vamos para mais um dia? 🚀",
+  ];
 
   const [loading, setLoading] = useState(false);
   const [isEditingRooms, setIsEditingRooms] = useState(false);
@@ -437,6 +449,14 @@ export function CoordinatorDashboard({
     useState(false);
   const [selectedPatientProfile, setSelectedPatientProfile] = useState<any>(null);
   const [filteredPatients, setFilteredPatients] = useState<any[]>([]);
+  const dashboardHeadlineMessage = useMemo(() => {
+    const todayKey = new Date().toISOString().slice(0, 10);
+    let seed = 0;
+    for (let i = 0; i < todayKey.length; i += 1) seed += todayKey.charCodeAt(i);
+    const index = seed % professionalDailyMessages.length;
+    const firstName = String(user?.name || "Profissional").trim().split(" ")[0] || "Profissional";
+    return professionalDailyMessages[index].replace("[nome]", firstName);
+  }, [user?.name]);
   useEffect(() => {
     if (!dashboardResumeKey || hasRestoredDashboardStateRef.current) return;
     hasRestoredDashboardStateRef.current = true;
@@ -2926,7 +2946,13 @@ export function CoordinatorDashboard({
         {/* Main Content */}
         <div className="flex-1 overflow-y-auto">
           {/* Header */}
-          <header className="px-4 lg:px-6 py-2.5 flex items-center justify-between sticky top-0 bg-[#F4F7FE]/80 backdrop-blur-md z-30">
+          <header
+            className={`px-4 lg:px-6 py-2.5 flex items-center justify-between sticky top-0 backdrop-blur-md z-30 ${
+              theme === "dark"
+                ? "bg-[#0f172a]/85 border-b border-slate-800/80"
+                : "bg-[#F4F7FE]/85 border-b border-slate-100/90"
+            }`}
+          >
             <div className="flex items-center gap-4">
               <button
                 onClick={() => {
@@ -2934,7 +2960,11 @@ export function CoordinatorDashboard({
                   setActiveTab("dashboard");
                   setTabHistory(["dashboard"]);
                 }}
-                className="p-2 bg-white rounded-xl text-slate-400 hover:text-[#7a32fc] shadow-sm border border-slate-100 transition-all"
+                className={`p-2 rounded-xl shadow-sm border transition-all ${
+                  theme === "dark"
+                    ? "bg-[#0b1a33] text-slate-300 border-slate-700 hover:text-violet-300"
+                    : "bg-white text-slate-400 border-slate-100 hover:text-[#7a32fc]"
+                }`}
               >
                 <ChevronRight size={20} className="rotate-180" />
               </button>
@@ -2948,10 +2978,20 @@ export function CoordinatorDashboard({
               </div>
             </div>
 
-            <div className="flex items-center gap-2 lg:gap-4 bg-white p-1.5 lg:p-2 rounded-[24px] shadow-sm border border-slate-100">
+            <div
+              className={`flex items-center gap-2 lg:gap-4 p-1.5 lg:p-2 rounded-[24px] shadow-sm border ${
+                theme === "dark"
+                  ? "bg-[#0b1a33] border-slate-700"
+                  : "bg-white border-slate-100"
+              }`}
+            >
               <button
                 onClick={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))}
-                className="p-2.5 text-slate-400 hover:text-slate-700 hover:bg-slate-50 rounded-xl transition-all"
+                className={`p-2.5 rounded-xl transition-all ${
+                  theme === "dark"
+                    ? "text-slate-300 hover:text-slate-100 hover:bg-[#122544]"
+                    : "text-slate-400 hover:text-slate-700 hover:bg-slate-50"
+                }`}
                 title={theme === "light" ? "Ativar tema escuro" : "Ativar tema claro"}
               >
                 {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
@@ -3354,7 +3394,13 @@ export function CoordinatorDashboard({
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto relative z-10">
         {/* Header */}
-        <header className="px-4 lg:px-8 py-4 flex items-center justify-between sticky top-0 bg-[#F4F7FE]/80 backdrop-blur-md z-30">
+        <header
+          className={`px-4 lg:px-8 py-4 flex items-center justify-between sticky top-0 backdrop-blur-md z-30 ${
+            theme === "dark"
+              ? "bg-[#0f172a]/85 border-b border-slate-800/80"
+              : "bg-[#F4F7FE]/85 border-b border-slate-100/90"
+          }`}
+        >
           <div className="flex items-center gap-4">
             {activeTab !== "dashboard" && (
               <button
@@ -3369,20 +3415,30 @@ export function CoordinatorDashboard({
               </button>
             )}
             <div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">
+              <p className={`text-[10px] font-bold uppercase tracking-widest mb-0.5 ${theme === "dark" ? "text-slate-300" : "text-slate-500"}`}>
                 {!isEditingRooms && activeTab === "rooms"
                   ? "Salas"
-                  : `Páginas / ${tabLabels[activeTab] || "Painel"}`}
+                  : !isEditingRooms && activeTab === "dashboard"
+                    ? "Frase do Dia"
+                    : `Páginas / ${tabLabels[activeTab] || "Painel"}`}
               </p>
-              <h1 className="text-xl lg:text-3xl font-semibold text-slate-900 tracking-tight capitalize">
+              <h1 className={`text-base lg:text-2xl font-semibold tracking-tight ${theme === "dark" ? "text-slate-100" : "text-slate-900"} ${activeTab === "dashboard" ? "" : "capitalize"}`}>
                 {!isEditingRooms && activeTab === "rooms"
                   ? "Reservas de Sala"
-                  : tabLabels[activeTab] || "Painel"}
+                  : !isEditingRooms && activeTab === "dashboard"
+                    ? dashboardHeadlineMessage
+                    : tabLabels[activeTab] || "Painel"}
               </h1>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 lg:gap-4 bg-white p-1.5 lg:p-2 rounded-[24px] shadow-sm border border-slate-100">
+          <div
+            className={`flex items-center gap-2 lg:gap-4 p-1.5 lg:p-2 rounded-[24px] shadow-sm border ${
+              theme === "dark"
+                ? "bg-[#0b1a33] border-slate-700"
+                : "bg-white border-slate-100"
+            }`}
+          >
             <div className="relative hidden md:block">
               <Search
                 className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
@@ -3391,7 +3447,11 @@ export function CoordinatorDashboard({
               <input
                 type="text"
                 placeholder="Pesquisar..."
-                className="bg-slate-50 border-none rounded-full py-3 pl-12 pr-6 text-sm font-medium outline-none focus:ring-2 ring-blue-500/20 w-48 lg:w-64 transition-all"
+                className={`border-none rounded-full py-3 pl-12 pr-6 text-sm font-medium outline-none focus:ring-2 ring-blue-500/20 w-48 lg:w-64 transition-all ${
+                  theme === "dark"
+                    ? "bg-[#122544] text-slate-100 placeholder:text-slate-400"
+                    : "bg-slate-50 text-slate-700 placeholder:text-slate-400"
+                }`}
               />
             </div>
 
