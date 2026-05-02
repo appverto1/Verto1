@@ -885,6 +885,9 @@ function sanitizeSessionUrl(value: unknown): string | null {
 function extractPatientPhotosStoragePath(raw: unknown): string | null {
   const value = sanitizeString(raw, 1500);
   if (!value) return null;
+  if (value.startsWith('onboarding/')) return value;
+  if (value.startsWith('patients/')) return value;
+  if (!value.includes('://') && value.includes('/') && !value.startsWith('data:')) return value;
   if (value.startsWith('patient-photos/')) {
     const pathPart = value.slice('patient-photos/'.length);
     return pathPart ? pathPart : null;

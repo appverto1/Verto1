@@ -54,6 +54,7 @@ import { RoomReservation } from "./RoomReservation";
 import { ProtocolManagementSystem } from "./Protocols";
 import { CalendarWidget, DayDetailsModal } from "./Calendar";
 import { LogoVerto } from "./Common";
+import { SecureImage } from "./SecureMedia";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   BarChart,
@@ -3422,16 +3423,16 @@ export function CoordinatorDashboard({
             )}
             <div>
               <p className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${theme === "dark" ? "text-slate-300" : "text-slate-500"}`}>
-                {!isEditingRooms && activeTab === "rooms"
+                {activeTab === "rooms" && !isEditingRooms
                   ? "Salas"
-                  : !isEditingRooms && activeTab === "dashboard"
+                  : activeTab === "dashboard"
                     ? dashboardGreetingLabel
                     : `Páginas / ${tabLabels[activeTab] || "Painel"}`}
               </p>
               <h1 className={`text-base lg:text-2xl font-semibold tracking-tight ${theme === "dark" ? "text-slate-100" : "text-slate-900"} ${activeTab === "dashboard" ? "max-w-[980px] leading-snug" : "capitalize"}`}>
-                {!isEditingRooms && activeTab === "rooms"
+                {activeTab === "rooms" && !isEditingRooms
                   ? "Reservas de Sala"
-                  : !isEditingRooms && activeTab === "dashboard"
+                  : activeTab === "dashboard"
                     ? dashboardHeadlineMessage
                     : tabLabels[activeTab] || "Painel"}
               </h1>
@@ -4974,7 +4975,7 @@ export function CoordinatorDashboard({
                           </label>
                           <label className="w-full min-h-[150px] p-4 bg-white border border-dashed border-slate-300 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#7a32fc] transition-all">
                             {therapistSignatureDataUrl ? (
-                              <img
+                              <SecureImage
                                 src={therapistSignatureDataUrl}
                                 alt="Assinatura digital"
                                 className="max-h-28 object-contain"
@@ -5006,7 +5007,7 @@ export function CoordinatorDashboard({
                           </label>
                           <label className="w-full min-h-[150px] p-4 bg-white border border-dashed border-slate-300 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#7a32fc] transition-all">
                             {therapistProfilePhotoUrl ? (
-                              <img
+                              <SecureImage
                                 src={therapistProfilePhotoUrl}
                                 alt="Foto de perfil"
                                 className="w-24 h-24 rounded-2xl object-cover"
@@ -5057,7 +5058,7 @@ export function CoordinatorDashboard({
                             </label>
                             <label className="w-full min-h-[150px] p-4 bg-white border border-dashed border-slate-300 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#7a32fc] transition-all">
                               {therapistSignatureDataUrl ? (
-                                <img src={therapistSignatureDataUrl} alt="Assinatura digital" className="max-h-28 object-contain" />
+                                <SecureImage src={therapistSignatureDataUrl} alt="Assinatura digital" className="max-h-28 object-contain" />
                               ) : (
                                 <span className="text-xs font-semibold text-slate-500">Clique para enviar assinatura</span>
                               )}
@@ -5079,7 +5080,7 @@ export function CoordinatorDashboard({
                             </label>
                             <label className="w-full min-h-[150px] p-4 bg-white border border-dashed border-slate-300 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#7a32fc] transition-all">
                               {therapistProfilePhotoUrl ? (
-                                <img src={therapistProfilePhotoUrl} alt="Foto de perfil" className="w-24 h-24 rounded-2xl object-cover" />
+                                <SecureImage src={therapistProfilePhotoUrl} alt="Foto de perfil" className="w-24 h-24 rounded-2xl object-cover" />
                               ) : (
                                 <span className="text-xs font-semibold text-slate-500">Clique para enviar foto</span>
                               )}
@@ -5101,7 +5102,7 @@ export function CoordinatorDashboard({
                             </label>
                             <label className="w-full min-h-[150px] p-4 bg-white border border-dashed border-slate-300 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#7a32fc] transition-all">
                               {clinicLogoDataUrl ? (
-                                <img src={clinicLogoDataUrl} alt="Logo da clínica" className="max-h-28 object-contain" />
+                                <SecureImage src={clinicLogoDataUrl} alt="Logo da clínica" className="max-h-28 object-contain" />
                               ) : (
                                 <span className="text-xs font-semibold text-slate-500">Clique para enviar logotipo</span>
                               )}

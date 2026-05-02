@@ -76,6 +76,25 @@ export const GlobalStyles = () => (
     body.theme-dark .border-blue-200 { border-color: #445b82 !important; }
     body.theme-dark .hover\\:bg-slate-50:hover { background-color: #223552 !important; }
     body.theme-dark .hover\\:text-slate-900:hover { color: #f8fafc !important; }
+    body.theme-dark button.bg-white,
+    body.theme-dark a.bg-white {
+      background-color: #122544 !important;
+      color: #e2e8f0 !important;
+      border-color: #334866 !important;
+    }
+    body.theme-dark button.bg-white:hover,
+    body.theme-dark a.bg-white:hover {
+      background-color: #1a3258 !important;
+      color: #f8fafc !important;
+    }
+    body.theme-dark .bg-white.text-slate-400,
+    body.theme-dark .bg-white.text-slate-500,
+    body.theme-dark .bg-white.text-slate-600,
+    body.theme-dark .bg-white.text-slate-700 {
+      color: #e2e8f0 !important;
+    }
+    body.theme-dark .bg-white .text-slate-400,
+    body.theme-dark .bg-white .text-slate-500 { color: #cbd5e1 !important; }
     body.theme-dark .shadow-sm,
     body.theme-dark .shadow-lg,
     body.theme-dark .shadow-xl { box-shadow: 0 10px 28px rgba(2, 6, 23, 0.45) !important; }
