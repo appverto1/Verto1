@@ -97,36 +97,19 @@ export function SettingsMenu({
               </button>
 
               {canManageTeam && (
-                <>
-                  <button
-                    onClick={() => {
-                      setIsOpen(false);
-                      onOpenOnboarding?.();
-                    }}
-                    className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
-                  >
-                    <div className="flex items-center gap-3">
-                      <Settings size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
-                      <span className="text-sm font-medium">Configurações Iniciais</span>
-                    </div>
-                    <ChevronRight size={14} className="text-slate-300" />
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setIsOpen(false);
-                      onViewTeam?.();
-                    }}
-                    className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
-                  >
-                    <div className="flex items-center gap-3">
-                      <Users size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
-                      <span className="text-sm font-medium">Gestão da Equipe</span>
-                    </div>
-                    <ChevronRight size={14} className="text-slate-300" />
-                  </button>
-
-                </>
+                <button
+                  onClick={() => {
+                    setIsOpen(false);
+                    onViewTeam?.();
+                  }}
+                  className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
+                >
+                  <div className="flex items-center gap-3">
+                    <Users size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
+                    <span className="text-sm font-medium">Gestão da Equipe</span>
+                  </div>
+                  <ChevronRight size={14} className="text-slate-300" />
+                </button>
               )}
 
               {canSeeBilling && (

@@ -908,7 +908,8 @@ export default function App() {
 
     const workspaceId = String(nextUser?.activeWorkspaceId || nextUser?.clinicId || '').trim();
     if (!workspaceId) {
-      setClinicStateHydrated(false);
+      // Fail-safe: sem workspace não pode travar a interface em loading infinito.
+      setClinicStateHydrated(true);
       return;
     }
 
