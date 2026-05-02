@@ -8,7 +8,7 @@ import { SessionMode } from './SessionMode';
 import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
-import { calculateDomainMastery } from '../utils/clinicalMath';
+import { calculateDomainMastery, normalizeScoreToPercent } from '../utils/clinicalMath';
 
 export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole }: any) => { 
   const rawProfileType = String(
@@ -1208,10 +1208,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const adultProtocolSnapshotDates = useMemo(() => {
     if (isKidsProfile) return [];
     const unique = Array.from(
-      new Set(
+      new Set<string>(
         adultProtocolTasks
           .map((task: any) => toDateKey(task?.eventDateRaw || task?.eventDate))
-          .filter(Boolean)
+          .filter((value): value is string => Boolean(value))
       )
     ).sort((a, b) => a.localeCompare(b));
 
@@ -1259,10 +1259,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const adultReportSnapshotDates = useMemo(() => {
     if (isKidsProfile) return [];
     const unique = Array.from(
-      new Set(
+      new Set<string>(
         adultTasksInPeriod
           .map((task: any) => toDateKey(task?.eventDateRaw || task?.eventDate))
-          .filter(Boolean)
+          .filter((value): value is string => Boolean(value))
       )
     ).sort((a, b) => a.localeCompare(b));
     return unique.map((key) => {
@@ -1845,7 +1845,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
   const handleGenerateAdultEvolutionReport = async () => {
     if (isKidsProfile) return;
-    if (!adultComparisonChartData.length) {
+    if (!adultDomainComparisonData.length) {
       alert('Não há dados suficientes no período para gerar o relatório adulto.');
       return;
     }
@@ -1859,7 +1859,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         `Período: ${periodStart} até ${periodEnd}`,
         '',
         'Comparativo por domínio (% Proficiência - Avaliação Inicial x Intervenção Atual):',
-        ...adultComparisonChartData.map((item: any) =>
+        ...adultDomainComparisonData.map((item: any) =>
           `${item.name}: Inicial ${item['Avaliação Inicial']}% | Atual ${item['Intervenção Atual']}%`
         ),
         '',

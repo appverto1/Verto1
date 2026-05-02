@@ -177,3 +177,10 @@ export function calculateDomainMastery(
   if (possible <= 0) return 0;
   return Number(((obtained / possible) * 100).toFixed(2));
 }
+
+export function normalizeScoreToPercent(score: number | null | undefined, maxScore: number | null | undefined): number {
+  const safeScore = toNumber(score) ?? 0;
+  const safeMax = Math.max(1, toNumber(maxScore) ?? 1);
+  const normalized = (safeScore / safeMax) * 100;
+  return Math.max(0, Math.min(100, Number(normalized.toFixed(2))));
+}

@@ -25,8 +25,16 @@ interface DataErrorInfo {
   path: string | null;
   authInfo: {
     userId: string | undefined;
-    email: string | null | undefined;
+    emailMasked: string | null | undefined;
   }
+}
+
+function maskEmailForLog(email?: string | null): string | null {
+  if (!email || !email.includes('@')) return null;
+  const [local, domain] = email.split('@');
+  if (!local || !domain) return null;
+  const safeLocal = local.length <= 2 ? `${local[0] || '*'}*` : `${local.slice(0, 2)}***`;
+  return `${safeLocal}@${domain}`;
 }
 
 async function handleDataError(error: unknown, operationType: OperationType, path: string | null) {
@@ -37,13 +45,13 @@ async function handleDataError(error: unknown, operationType: OperationType, pat
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
       userId: user?.id,
-      email: user?.email,
+      emailMasked: maskEmailForLog(user?.email),
     },
     operationType,
     path
   }
   console.error('Data Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  throw new Error(errInfo.error);
 }
 
 async function getAuthHeaders(includeBearer = true) {

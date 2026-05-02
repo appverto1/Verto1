@@ -450,13 +450,37 @@ function getRecoveryRedirectUrl(): string {
 }
 
 function extractSupabaseErrorMessage(error: any): string {
-  return sanitizeString(
-    error?.message ||
-      error?.details ||
-      error?.hint ||
-      (typeof error === 'string' ? error : JSON.stringify(error || {})),
-    1000
-  );
+  if (!error) return '';
+  if (typeof error === 'string') return sanitizeString(error, 1000);
+  return sanitizeString(error?.message || error?.details || error?.hint || 'Unexpected error', 1000);
+}
+
+const SENSITIVE_LOG_KEY_REGEX =
+  /(password|pass|token|secret|key|authorization|cookie|otp|code|mfa|session|refresh|access|bearer|credential)/i;
+
+function redactForLogs(input: any): any {
+  if (input === null || input === undefined) return input;
+  if (typeof input === 'string') {
+    const trimmed = input.length > 500 ? `${input.slice(0, 500)}...[truncated]` : input;
+    if (/bearer\s+[a-z0-9\-_\.]+/i.test(trimmed)) return '[redacted]';
+    if (/^[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+$/.test(trimmed)) return '[redacted-jwt]';
+    if (trimmed.length >= 32 && /^[A-Za-z0-9\-_]+$/.test(trimmed)) return '[redacted]';
+    return trimmed;
+  }
+  if (typeof input === 'number' || typeof input === 'boolean') return input;
+  if (Array.isArray(input)) return input.slice(0, 20).map((item) => redactForLogs(item));
+  if (typeof input === 'object') {
+    const output: Record<string, any> = {};
+    for (const [key, value] of Object.entries(input)) {
+      if (SENSITIVE_LOG_KEY_REGEX.test(key)) {
+        output[key] = '[redacted]';
+        continue;
+      }
+      output[key] = redactForLogs(value);
+    }
+    return output;
+  }
+  return String(input);
 }
 
 function isMissingRelationError(error: any): boolean {
@@ -490,8 +514,22 @@ function logRouteDbError(route: string, error: any, context: Record<string, any>
     code: sanitizeString(error?.code, 40) || null,
     details: sanitizeString(error?.details, 300) || null,
     hint: sanitizeString(error?.hint, 300) || null,
-    context
+    context: redactForLogs(context)
   });
+}
+
+function safeErrorMessageByStatus(statusCode: number): string {
+  if (statusCode === 400) return 'Requisição inválida.';
+  if (statusCode === 401) return 'Sessão expirada ou inválida. Faça login novamente.';
+  if (statusCode === 403) return 'Acesso negado.';
+  if (statusCode === 404) return 'Recurso não encontrado.';
+  if (statusCode === 409) return 'Conflito de dados.';
+  if (statusCode === 413) return 'Payload excede o limite permitido.';
+  if (statusCode === 415) return 'Tipo de conteúdo não suportado.';
+  if (statusCode === 422) return 'Dados inválidos para processamento.';
+  if (statusCode === 429) return 'Muitas tentativas. Tente novamente em alguns instantes.';
+  if (statusCode >= 500) return 'Erro interno do servidor.';
+  return 'Não foi possível processar a requisição.';
 }
 
 const OFFICIAL_FROM_CONTACT = 'Verto <contato@appverto.com.br>';
@@ -579,7 +617,7 @@ async function sendTransactionalEmailSafe(params: {
     console.error('[Email] transactional send failed:', {
       context: params.context,
       message: error?.message || String(error),
-      metadata: params.metadata || null
+      metadata: redactForLogs(params.metadata || null)
     });
     return false;
   }
@@ -603,6 +641,8 @@ type OtpChallenge = {
 
 const otpStore = new Map<string, OtpChallenge>();
 const activeSessionByUserId = new Map<string, string>();
+let otpTableChecked = false;
+let otpTableAvailable = false;
 
 function issueSessionToken(userId: string): string {
   const safeUserId = sanitizeString(userId, 120);
@@ -623,22 +663,135 @@ function invalidateActiveSession(userId?: unknown, expectedToken?: unknown): voi
   }
 }
 
-function setOtpChallenge(challenge: OtpChallenge): void {
-  otpStore.set(challenge.key, challenge);
+async function ensureOtpTableAvailability(): Promise<boolean> {
+  if (otpTableChecked) return otpTableAvailable;
+  otpTableChecked = true;
+  try {
+    const { error } = await supabase
+      .from('otp_challenges')
+      .select('key')
+      .limit(1);
+    otpTableAvailable = !error;
+    if (error) {
+      console.warn('[OTP] otp_challenges indisponível, usando fallback em memória:', error.message);
+    }
+  } catch (error: any) {
+    otpTableAvailable = false;
+    console.warn('[OTP] Falha ao validar tabela otp_challenges, usando fallback em memória:', error?.message || String(error));
+  }
+  return otpTableAvailable;
 }
 
-function getOtpChallenge(key: string): OtpChallenge | null {
-  const challenge = otpStore.get(key);
-  if (!challenge) return null;
-  if (Date.now() > challenge.expiresAt) {
-    otpStore.delete(key);
+function fromDbOtpRow(row: any): OtpChallenge | null {
+  if (!row) return null;
+  const key = sanitizeString(row.key, 200);
+  if (!key) return null;
+  const channel = sanitizeString(row.channel, 40) as RecoveryChannel;
+  const purpose = sanitizeString(row.purpose, 60) as OtpPurpose;
+  const identifier = sanitizeString(row.identifier, 320);
+  const userId = sanitizeString(row.user_id, 120) || null;
+  const codeHash = sanitizeString(row.code_hash, 500);
+  const expiresAtIso = sanitizeString(row.expires_at, 80);
+  const createdAtIso = sanitizeString(row.created_at, 80);
+  const attempts = Math.max(0, Number(row.attempts || 0));
+  const consumed = Boolean(row.consumed);
+  const expiresAtMs = expiresAtIso ? new Date(expiresAtIso).getTime() : 0;
+  const createdAtMs = createdAtIso ? new Date(createdAtIso).getTime() : Date.now();
+  if (!identifier || !codeHash || !expiresAtMs) return null;
+  return {
+    key,
+    channel: channel || 'email',
+    purpose: purpose || 'password_recovery',
+    identifier,
+    userId,
+    codeHash,
+    expiresAt: expiresAtMs,
+    attempts: Number.isFinite(attempts) ? attempts : 0,
+    consumed,
+    createdAt: Number.isFinite(createdAtMs) ? createdAtMs : Date.now()
+  };
+}
+
+async function setOtpChallenge(challenge: OtpChallenge): Promise<void> {
+  const useDb = await ensureOtpTableAvailability();
+  if (!useDb) {
+    otpStore.set(challenge.key, challenge);
+    return;
+  }
+
+  try {
+    const payload = {
+      key: sanitizeString(challenge.key, 200),
+      channel: sanitizeString(challenge.channel, 40),
+      purpose: sanitizeString(challenge.purpose, 60),
+      identifier: sanitizeString(challenge.identifier, 320).toLowerCase(),
+      user_id: sanitizeString(challenge.userId, 120) || null,
+      code_hash: sanitizeString(challenge.codeHash, 500),
+      expires_at: new Date(challenge.expiresAt).toISOString(),
+      attempts: Math.max(0, Number(challenge.attempts || 0)),
+      consumed: Boolean(challenge.consumed),
+      created_at: new Date(challenge.createdAt || Date.now()).toISOString()
+    };
+    const { error } = await supabase
+      .from('otp_challenges')
+      .upsert(payload, { onConflict: 'key' });
+    if (error) {
+      console.warn('[OTP] Falha no upsert de otp_challenges, fallback memória:', error.message);
+      otpStore.set(challenge.key, challenge);
+    }
+  } catch (error: any) {
+    console.warn('[OTP] Exceção no upsert de otp_challenges, fallback memória:', error?.message || String(error));
+    otpStore.set(challenge.key, challenge);
+  }
+}
+
+async function getOtpChallenge(key: string): Promise<OtpChallenge | null> {
+  const useDb = await ensureOtpTableAvailability();
+  if (!useDb) {
+    const challenge = otpStore.get(key);
+    if (!challenge) return null;
+    if (Date.now() > challenge.expiresAt || challenge.consumed) {
+      otpStore.delete(key);
+      return null;
+    }
+    return challenge;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('otp_challenges')
+      .select('*')
+      .eq('key', key)
+      .maybeSingle();
+    if (error || !data) return null;
+    const challenge = fromDbOtpRow(data);
+    if (!challenge) return null;
+    if (challenge.consumed || Date.now() > challenge.expiresAt) {
+      await consumeOtpChallenge(key);
+      return null;
+    }
+    return challenge;
+  } catch {
     return null;
   }
-  return challenge;
 }
 
-function consumeOtpChallenge(key: string): void {
-  otpStore.delete(key);
+async function consumeOtpChallenge(key: string): Promise<void> {
+  const useDb = await ensureOtpTableAvailability();
+  if (!useDb) {
+    otpStore.delete(key);
+    return;
+  }
+
+  try {
+    await supabase
+      .from('otp_challenges')
+      .update({ consumed: true })
+      .eq('key', key)
+      .eq('consumed', false);
+  } catch (error: any) {
+    console.warn('[OTP] Falha ao consumir OTP na base:', error?.message || String(error));
+  }
 }
 
 function makeOtpChallengeKey(channel: RecoveryChannel, purpose: OtpPurpose, identifier: string): string {
@@ -2289,6 +2442,60 @@ async function startServer() {
     }
   });
 
+  const authLoginLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    message: { error: 'Muitas tentativas de login. Tente novamente em alguns minutos.' }
+  });
+
+  const authSignupLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    message: { error: 'Muitos cadastros em sequência. Aguarde e tente novamente.' }
+  });
+
+  const inviteLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    message: { error: 'Limite temporário de convites atingido. Tente novamente mais tarde.' }
+  });
+
+  const uploadLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    message: { error: 'Muitos uploads em pouco tempo. Aguarde alguns minutos.' }
+  });
+
+  const resendActivationLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    message: { success: false, error: 'Limite de reenvios atingido. Tente novamente mais tarde.' }
+  });
+
+  const resendRecoveryLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    message: { success: false, error: 'Limite de reenvios de recuperação atingido. Tente novamente mais tarde.' }
+  });
+
   // Stripe Webhook - MUST BE BEFORE express.json()
   app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     const sig = req.headers['stripe-signature'];
@@ -2553,6 +2760,37 @@ async function startServer() {
     type: 'application/x-www-form-urlencoded'
   }));
   app.use(cookieParser());
+  app.use((req: any, res: any, next: any) => {
+    const originalJson = res.json.bind(res);
+    res.json = (body: any) => {
+      try {
+        const statusCode = Number(res.statusCode || 200);
+        if (!body || typeof body !== 'object') {
+          return originalJson(body);
+        }
+
+        const normalized = { ...body };
+        if (statusCode >= 500) {
+          if ('details' in normalized) delete normalized.details;
+          normalized.error = safeErrorMessageByStatus(statusCode);
+          if ('stack' in normalized) delete normalized.stack;
+          if ('raw' in normalized) delete normalized.raw;
+          return originalJson(normalized);
+        }
+
+        if (statusCode >= 400 && statusCode < 500 && typeof normalized.error === 'string') {
+          normalized.error = sanitizeString(normalized.error, 240) || safeErrorMessageByStatus(statusCode);
+        }
+        if ('details' in normalized && typeof normalized.details === 'string') {
+          normalized.details = sanitizeString(normalized.details, 320);
+        }
+        return originalJson(normalized);
+      } catch {
+        return originalJson({ success: false, error: 'Erro interno do servidor.' });
+      }
+    };
+    next();
+  });
 
   // Database Session Store
   // Use PostgreSQL store in production if DATABASE_URL is available
@@ -2606,6 +2844,13 @@ async function startServer() {
     }
   } else {
     console.log('Usando armazenamento de sessão em memória (MemoryStore).');
+  }
+
+  // Security hardening:
+  // In production, never run auth/session with volatile in-memory store.
+  // If persistent PostgreSQL-backed session store is unavailable, fail fast.
+  if (isProd && !sessionStore) {
+    throw new Error('SESSION_STORE_UNAVAILABLE: PostgreSQL session store is required in production.');
   }
 
   app.use(session({
@@ -2790,7 +3035,7 @@ async function startServer() {
       if (!value || typeof value !== 'object') return value;
       const output: Record<string, any> = {};
       for (const [key, nested] of Object.entries(value)) {
-        if (/password|token|secret|key|authorization|cookie/i.test(key)) {
+        if (/password|pass|token|secret|key|authorization|cookie|otp|code|mfa|session|refresh|access|bearer|credential/i.test(key)) {
           output[key] = '[redacted]';
           continue;
         }
@@ -3104,18 +3349,76 @@ async function startServer() {
       return next();
     }
 
-    const origin = req.headers.origin;
-    if (!origin) return next();
-
+    const rawOrigin = sanitizeString(req.headers.origin, 500);
+    const rawReferer = sanitizeString(req.headers.referer, 1000);
     const expected = `${req.protocol}://${req.get('host')}`;
-    if (origin !== expected) {
-      return res.status(403).json({ error: 'Origem inválida para operação sensível.' });
+    const configuredAppBase =
+      sanitizeString(process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '', 500);
+
+    const allowedOrigins = new Set<string>();
+    const pushAllowedOrigin = (value: string) => {
+      if (!value) return;
+      try {
+        const parsed = new URL(value);
+        allowedOrigins.add(parsed.origin.toLowerCase());
+      } catch {
+        // ignore invalid URL
+      }
+    };
+
+    pushAllowedOrigin(expected);
+    pushAllowedOrigin(configuredAppBase);
+
+    const requestOrigin = rawOrigin ? rawOrigin.toLowerCase() : '';
+    let refererOrigin = '';
+    if (rawReferer) {
+      try {
+        refererOrigin = new URL(rawReferer).origin.toLowerCase();
+      } catch {
+        refererOrigin = '';
+      }
+    }
+
+    const hasSessionCookie =
+      Boolean((req.cookies && req.cookies['verto-session']) ||
+      String(req.headers.cookie || '').includes('verto-session='));
+    const hasBearerAuth = String(req.headers.authorization || '').toLowerCase().startsWith('bearer ');
+
+    if (hasSessionCookie) {
+      // Cookie-authenticated requests must present same-origin proof via Origin/Referer.
+      const originAllowed = requestOrigin && allowedOrigins.has(requestOrigin);
+      const refererAllowed = refererOrigin && allowedOrigins.has(refererOrigin);
+      if (!originAllowed && !refererAllowed) {
+        return res.status(403).json({
+          error: 'Origem inválida para operação sensível.'
+        });
+      }
+      return next();
+    }
+
+    // Non-cookie API clients (e.g. bearer token) are allowed without Origin/Referer.
+    if (hasBearerAuth) {
+      return next();
+    }
+
+    // If neither cookie nor bearer is present for a state-changing request, deny.
+    if (!hasSessionCookie && !hasBearerAuth) {
+      return res.status(403).json({
+        error: 'Requisição sensível sem autenticação válida.'
+      });
     }
     return next();
   });
 
   // --- HEALTH CHECK ---
+  // Security hardening:
+  // - Production must not expose internal env/integration details.
+  // - Detailed diagnostics are available only outside production.
   app.get('/api/health', async (req, res) => {
+    if (isProd) {
+      return res.json({ status: 'ok' });
+    }
+
     const status: any = {
       supabase: 'unknown',
       stripe: 'unknown',
@@ -3136,13 +3439,13 @@ async function startServer() {
     }
 
     try {
-      const stripe = getStripe();
+      getStripe();
       status.stripe = 'ok';
     } catch (err: any) {
       status.stripe = `error: ${err.message}`;
     }
 
-    res.json(status);
+    return res.json(status);
   });
 
   // --- API ROUTES ---
@@ -3464,7 +3767,7 @@ async function startServer() {
     };
   };
 
-  app.post('/api/auth/signup', async (req, res) => {
+  app.post('/api/auth/signup', authSignupLimiter, async (req, res) => {
     try {
       const result = await registerUserWithEmailConfirmation(req.body || {});
       return res.status(result.status).json(result.body);
@@ -3499,7 +3802,7 @@ async function startServer() {
   });
 
   // Backward compatibility endpoint (now secure and confirmation-based)
-  app.post('/api/auth/signup-direct', async (req, res) => {
+  app.post('/api/auth/signup-direct', authSignupLimiter, async (req, res) => {
     try {
       const result = await registerUserWithEmailConfirmation(req.body || {});
       return res.status(result.status).json(result.body);
@@ -3683,7 +3986,7 @@ async function startServer() {
 
       const code = generate6DigitOtp();
       const key = makeOtpChallengeKey('email', 'password_recovery', email);
-      setOtpChallenge({
+      await setOtpChallenge({
         key,
         channel: 'email',
         purpose: 'password_recovery',
@@ -3701,7 +4004,9 @@ async function startServer() {
         .select('name, role')
         .eq('id', authUser.id)
         .maybeSingle();
-      const recoveryLink = `${getRecoveryRedirectUrl()}?mode=code&email=${encodeURIComponent(email)}&code=${encodeURIComponent(code)}`;
+      // Security hardening: never expose OTP in URL query params.
+      // Recovery code must be delivered by e-mail body and entered manually by user.
+      const recoveryLink = `${getRecoveryRedirectUrl()}`;
       const recoveryEmail = buildPasswordRecoveryEmailTemplate({
         nome: sanitizeString(profile?.name || authUser.user_metadata?.full_name || email.split('@')[0], 180),
         codigo: code,
@@ -3760,7 +4065,7 @@ async function startServer() {
 
     try {
       const key = makeOtpChallengeKey(channel, 'password_recovery', identifier);
-      const challenge = getOtpChallenge(key);
+      const challenge = await getOtpChallenge(key);
       if (!challenge || challenge.consumed) {
         await persistIdentityAuditLog({
           title: 'Tentativa de verificação de recuperação inválida',
@@ -3775,7 +4080,7 @@ async function startServer() {
 
       challenge.attempts += 1;
       if (challenge.attempts > 5) {
-        consumeOtpChallenge(key);
+        await consumeOtpChallenge(key);
         await persistIdentityAuditLog({
           title: 'Recuperação bloqueada por tentativas excedidas',
           content: `Tentativas excedidas para recuperação por ${channel}.`,
@@ -3790,7 +4095,7 @@ async function startServer() {
 
       const hash = hashIdentifier(code);
       if (hash !== challenge.codeHash || Date.now() > challenge.expiresAt) {
-        setOtpChallenge(challenge);
+        await setOtpChallenge(challenge);
         await persistIdentityAuditLog({
           title: 'Tentativa de verificação de recuperação inválida',
           content: `Código incorreto informado via ${channel}.`,
@@ -3804,7 +4109,7 @@ async function startServer() {
       }
 
       if (!challenge.userId) {
-        consumeOtpChallenge(key);
+        await consumeOtpChallenge(key);
         return res.status(400).json(genericError);
       }
 
@@ -3847,7 +4152,7 @@ async function startServer() {
       });
       if (updateError) throw updateError;
 
-      consumeOtpChallenge(key);
+      await consumeOtpChallenge(key);
       await persistIdentityAuditLog({
         title: 'Senha redefinida por recuperação',
         content: `Senha redefinida com sucesso via ${channel}.`,
@@ -3867,7 +4172,7 @@ async function startServer() {
 
   // --- AUTH ROUTES ---
   // Login (receives Supabase access token from client, verifies it, and sets session)
-  app.post('/api/auth/login', async (req, res) => {
+  app.post('/api/auth/login', authLoginLimiter, async (req, res) => {
     const { intendedRole } = req.body;
     const activationFlow = Boolean(req.body?.activationFlow);
     let accessToken = sanitizeString(req.body?.accessToken, 8000);
@@ -4353,7 +4658,7 @@ async function startServer() {
       });
       res.json({ success: true, data: workspaces, user: req.session.user });
     } catch (error) {
-      res.status(500).json({ success: false, error: String(error) });
+      res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }
   });
 
@@ -4391,7 +4696,7 @@ async function startServer() {
         res.json({ success: true, user: req.session.user });
       });
     } catch (error) {
-      res.status(500).json({ success: false, error: String(error) });
+      res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }
   });
 
@@ -4433,11 +4738,11 @@ async function startServer() {
       res.json({ success: true, data: members });
     } catch (error: any) {
       logRouteDbError('/api/notes/:patientId [GET]', error, { patientId: sanitizeString(req.params.patientId, 120) });
-      res.status(500).json({ error: extractSupabaseErrorMessage(error) });
+      res.status(500).json({ error: 'Falha na operação de dados.' });
     }
   });
 
-  app.post('/api/clinic/invite', checkAuth, async (req: any, res) => {
+  app.post('/api/clinic/invite', inviteLimiter, checkAuth, async (req: any, res) => {
     try {
       const email = sanitizeEmail(req.body?.email);
       const roleRaw = sanitizeString(req.body?.role, 30);
@@ -4638,7 +4943,7 @@ async function startServer() {
       });
     } catch (error: any) {
       logRouteDbError('/api/tasks/:patientId [GET]', error, { patientId: sanitizeString(req.params.patientId, 120) });
-      res.status(500).json({ error: extractSupabaseErrorMessage(error) });
+      res.status(500).json({ error: 'Falha na operação de dados.' });
     }
   });
 
@@ -4689,7 +4994,7 @@ async function startServer() {
         }))
       });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -4770,7 +5075,7 @@ async function startServer() {
         invitationId: sanitizeString(req.params?.invitationId, 120),
         userId: sanitizeString(req.session?.user?.id, 120)
       });
-      res.status(500).json({ error: extractSupabaseErrorMessage(error) });
+      res.status(500).json({ error: 'Falha na operação de dados.' });
     }
   });
 
@@ -4854,7 +5159,7 @@ async function startServer() {
 
       res.json({ success: true });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -4894,7 +5199,7 @@ async function startServer() {
       if (updateError) throw updateError;
       res.json({ success: true, message: `Papel ${role} atribuido com sucesso!` });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
   app.patch('/api/clinic/members/:memberId/role', checkAuth, async (req: any, res) => {
@@ -4929,7 +5234,7 @@ async function startServer() {
       });
       res.json({ success: true, message: 'Papel atualizado com sucesso' });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
   app.patch('/api/clinic/members/:memberId/unlink', checkAuth, async (req: any, res) => {
@@ -5014,7 +5319,7 @@ async function startServer() {
         memberId: sanitizeString(req.params?.memberId, 120),
         userId: sanitizeString(req.session?.user?.id, 120)
       });
-      return res.status(500).json({ error: extractSupabaseErrorMessage(error) });
+      return res.status(500).json({ error: 'Falha na operação de dados.' });
     }
   });
   app.get('/api/clinic/anamnesis-template', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
@@ -5036,7 +5341,7 @@ async function startServer() {
       const template = sanitizeAnamnesisTemplate(data?.template_json || {});
       return res.json({ success: true, data: { ...template, updatedAt: data?.updated_at || null } });
     } catch (error) {
-      return res.status(500).json({ error: String(error) });
+      return res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -5096,7 +5401,7 @@ async function startServer() {
 
       return res.json({ success: true, data: nextTemplate });
     } catch (error) {
-      return res.status(500).json({ error: String(error) });
+      return res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -5139,7 +5444,7 @@ async function startServer() {
         }
       });
     } catch (error) {
-      return res.status(500).json({ success: false, error: String(error) });
+      return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }
   });
 
@@ -5252,7 +5557,7 @@ async function startServer() {
         }
       });
     } catch (error) {
-      return res.status(500).json({ success: false, error: String(error) });
+      return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }
   });
 
@@ -5316,7 +5621,7 @@ async function startServer() {
 
       return res.json({ success: true, data });
     } catch (error) {
-      return res.status(500).json({ success: false, error: String(error) });
+      return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }
   });
 
@@ -5342,12 +5647,12 @@ async function startServer() {
 
       return res.json({ success: true, data: data || [] });
     } catch (error) {
-      return res.status(500).json({ success: false, error: String(error) });
+      return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }
   });
 
   // Create Patient User Account (called by therapist when adding a patient)
-  app.post('/api/patients/create-user', checkAuth, async (req: any, res) => {
+  app.post('/api/patients/create-user', authSignupLimiter, checkAuth, async (req: any, res) => {
     const { email, name, type, cpf } = req.body;
     if (!email) return res.status(400).json({ error: 'Email is required' });
 
@@ -5674,7 +5979,7 @@ async function startServer() {
       console.error('Error creating patient user:', error);
       res.status(500).json({
         success: false,
-        error: extractSupabaseErrorMessage(error),
+        error: 'Falha na operação de dados.',
         details: {
           context: 'patients_create_user',
           email: maskEmail(sanitizeEmail(req.body?.email) || ''),
@@ -5713,7 +6018,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/storage/upload', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner', 'patient'), async (req: any, res) => {
+  app.post('/api/storage/upload', uploadLimiter, checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner', 'patient'), async (req: any, res) => {
     try {
       const bucketName = sanitizeString(req.body?.bucket, 80);
       const objectPath = sanitizeString(req.body?.path, 260);
@@ -5822,6 +6127,7 @@ async function startServer() {
 
   app.post(
     '/api/patients/:id/resend-activation',
+    resendActivationLimiter,
     checkAuth,
     requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'),
     async (req: any, res) => {
@@ -5923,6 +6229,7 @@ async function startServer() {
 
   app.post(
     '/api/patients/:id/resend-recovery',
+    resendRecoveryLimiter,
     checkAuth,
     requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'),
     async (req: any, res) => {
@@ -5954,7 +6261,7 @@ async function startServer() {
 
         const code = generate6DigitOtp();
         const key = makeOtpChallengeKey('email', 'password_recovery', patientEmail);
-        setOtpChallenge({
+        await setOtpChallenge({
           key,
           channel: 'email',
           purpose: 'password_recovery',
@@ -5968,7 +6275,8 @@ async function startServer() {
         });
 
         const profileName = sanitizeString(patient?.name, 180) || patientEmail.split('@')[0];
-        const recoveryLink = `${getRecoveryRedirectUrl()}?mode=code&email=${encodeURIComponent(patientEmail)}&code=${encodeURIComponent(code)}`;
+        // Security hardening: do not leak OTP in query params.
+        const recoveryLink = `${getRecoveryRedirectUrl()}`;
         const recoveryEmail = buildPasswordRecoveryEmailTemplate({
           nome: profileName,
           codigo: code,
@@ -6180,7 +6488,7 @@ async function startServer() {
       });
       res.json({ success: true, data });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -6194,10 +6502,6 @@ async function startServer() {
         role === 'receptionist' ||
         role === 'therapist' ||
         hasGlobalClinicAccess(req.session.user);
-      const incomingClinicId = req.body?.clinic_id;
-      const allowClinicUpdate =
-        canChangeClinic ||
-        (incomingClinicId === null && canUnlinkInCurrentClinic);
       const rawEmail = req.body?.email;
       const rawPhone = req.body?.phone;
       const safeEmail = rawEmail !== undefined ? sanitizeEmail(rawEmail) : undefined;
@@ -6232,7 +6536,7 @@ async function startServer() {
           canAssignTherapist && rawTherapistId !== undefined
             ? (isUuid(safeTherapistId) ? safeTherapistId : null)
             : undefined,
-        clinic_id: allowClinicUpdate && req.body?.clinic_id !== undefined ? sanitizeString(req.body?.clinic_id, 100) : undefined,
+        clinic_id: canChangeClinic && req.body?.clinic_id !== undefined ? sanitizeString(req.body?.clinic_id, 100) : undefined,
         status: req.body?.status !== undefined ? sanitizeString(req.body?.status, 40) : undefined
       });
 
@@ -6302,7 +6606,7 @@ async function startServer() {
       });
       res.json({ success: true });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -6414,7 +6718,7 @@ async function startServer() {
 
       res.json({ success: true, encrypted: !!encrypted });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -6742,7 +7046,7 @@ async function startServer() {
           : null
       });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -6895,7 +7199,7 @@ async function startServer() {
         .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime());
       res.json({ success: true, data: deduped });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -6993,7 +7297,7 @@ async function startServer() {
       return res.json({ success: true, deletedId: patientId });
     } catch (error) {
       console.error('[PatientsDelete] error:', error);
-      return res.status(500).json({ success: false, error: extractSupabaseErrorMessage(error) });
+      return res.status(500).json({ success: false, error: 'Falha na operação de dados.' });
     }
   });
 
@@ -7011,31 +7315,32 @@ async function startServer() {
       }
 
       const roleForFilter = !isPrivileged && isSelfRequest ? 'patient' : userRole;
-      const queryResult = await fetchNotesWithRoleFilter({
-        patientEmail: safeEmail,
-        role: roleForFilter
-      });
-      let data = Array.isArray(queryResult.data) ? queryResult.data : [];
-      const error = queryResult.error;
-      if (error) throw error;
+      let query = supabase
+        .from('notes')
+        .select('*')
+        .eq('patient_email', safeEmail)
+        .order('created_at', { ascending: false });
 
       if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
         const clinicId = currentClinicId(req.session.user);
         if (!clinicId) return res.status(403).json({ error: 'Clínica não identificada.' });
         const clinicPatientIds = await getClinicPatientIdsByEmail(clinicId, safeEmail);
-        const idSet = new Set(clinicPatientIds);
-        data = data.filter((note: any) => {
-          const notePatientId = sanitizeString(note?.patient_id, 120);
-          if (idSet.has(notePatientId)) return true;
-          // Cross-clinic continuity for patient history:
-          // allow only records that are explicitly shareable with patient/family
-          return noteIsReadableByPatient(note);
-        });
+        if (clinicPatientIds.length === 0) {
+          return res.json({ success: true, data: [] });
+        }
+        query = query.in('patient_id', clinicPatientIds);
       }
 
-      res.json({ success: true, data });
+      const { data, error } = await query;
+      if (error) throw error;
+      let filtered = Array.isArray(data) ? data : [];
+      if (roleForFilter === 'patient') {
+        filtered = filtered.filter((note: any) => noteIsReadableByPatient(note));
+      }
+
+      res.json({ success: true, data: filtered });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -7109,7 +7414,7 @@ async function startServer() {
           details: extractSupabaseErrorMessage(error)
         });
       }
-      res.status(500).json({ error: extractSupabaseErrorMessage(error) });
+      res.status(500).json({ error: 'Falha na operação de dados.' });
     }
   });
 
@@ -7180,7 +7485,7 @@ async function startServer() {
       const enriched = await Promise.all(deduped.map(signHistoryImageUrl));
       res.json({ success: true, data: enriched });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -7237,7 +7542,7 @@ async function startServer() {
       );
       res.json({ success: true, data: enriched });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -7419,7 +7724,7 @@ async function startServer() {
 
       res.json({ success: true, data: enrichedHistory, treatmentStatus });
     } catch (error) {
-      res.status(500).json({ success: false, error: String(error) });
+      res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }
   });
 
@@ -7469,7 +7774,7 @@ async function startServer() {
       const protocols = Array.isArray(selectedState?.protocols) ? selectedState.protocols : [];
       return res.json({ success: true, data: protocols });
     } catch (error) {
-      return res.status(500).json({ success: false, error: String(error) });
+      return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }
   });
 
@@ -7563,7 +7868,7 @@ async function startServer() {
       });
       res.json({ success: true, data });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -7991,7 +8296,7 @@ async function startServer() {
       }
       res.json({ success: true, data: { ...data, professional_profile: profileOut } });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -8071,7 +8376,7 @@ async function startServer() {
 
       throw lastError || new Error('Falha ao salvar perfil.');
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -8111,7 +8416,7 @@ async function startServer() {
         .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime());
       res.json({ success: true, data: deduped });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -8146,7 +8451,7 @@ async function startServer() {
       if (error) throw error;
       res.json({ success: true, data });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -8191,7 +8496,7 @@ async function startServer() {
 
       res.json({ success: true, data: merged });
     } catch (error) {
-      res.status(500).json({ success: false, error: String(error) });
+      res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }
   });
   app.post('/api/tasks', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
@@ -8282,7 +8587,7 @@ async function startServer() {
           details: extractSupabaseErrorMessage(error)
         });
       }
-      res.status(500).json({ error: extractSupabaseErrorMessage(error) });
+      res.status(500).json({ error: 'Falha na operação de dados.' });
     }
   });
 
@@ -8334,7 +8639,7 @@ async function startServer() {
       return res.json({ success: true, data });
     } catch (error: any) {
       logRouteDbError('/api/tasks/:taskId [PATCH]', error, { taskId: sanitizeString(req.params.taskId, 120) });
-      return res.status(500).json({ success: false, error: extractSupabaseErrorMessage(error) });
+      return res.status(500).json({ success: false, error: 'Falha na operação de dados.' });
     }
   });
 
@@ -8357,7 +8662,7 @@ async function startServer() {
       return res.json({ success: true });
     } catch (error: any) {
       logRouteDbError('/api/tasks/:taskId [DELETE]', error, { taskId: sanitizeString(req.params.taskId, 120) });
-      return res.status(500).json({ success: false, error: extractSupabaseErrorMessage(error) });
+      return res.status(500).json({ success: false, error: 'Falha na operação de dados.' });
     }
   });
 
@@ -8425,7 +8730,7 @@ async function startServer() {
       return res.json({ success: true, data });
     } catch (error: any) {
       logRouteDbError('/api/history/:historyId [PATCH]', error, { historyId: sanitizeString(req.params.historyId, 120) });
-      return res.status(500).json({ success: false, error: extractSupabaseErrorMessage(error) });
+      return res.status(500).json({ success: false, error: 'Falha na operação de dados.' });
     }
   });
 
@@ -8448,7 +8753,7 @@ async function startServer() {
       return res.json({ success: true });
     } catch (error: any) {
       logRouteDbError('/api/history/:historyId [DELETE]', error, { historyId: sanitizeString(req.params.historyId, 120) });
-      return res.status(500).json({ success: false, error: extractSupabaseErrorMessage(error) });
+      return res.status(500).json({ success: false, error: 'Falha na operação de dados.' });
     }
   });
 
@@ -8519,7 +8824,7 @@ async function startServer() {
       if (error) throw error;
       return res.json({ success: true, data });
     } catch (error) {
-      return res.status(500).json({ success: false, error: String(error) });
+      return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }
   });
 
@@ -8560,7 +8865,7 @@ async function startServer() {
       if (error) throw error;
       return res.json({ success: true });
     } catch (error) {
-      return res.status(500).json({ success: false, error: String(error) });
+      return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }
   });
 
@@ -9039,7 +9344,7 @@ async function startServer() {
       if (error) throw error;
       res.json({ success: true, data });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -9082,7 +9387,7 @@ async function startServer() {
       });
       res.json({ success: true, data });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -9174,7 +9479,7 @@ async function startServer() {
 
       res.json({ success: true, stats: { totalUsers, activeUsers, mrr } });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -9189,7 +9494,7 @@ async function startServer() {
       if (error) throw error;
       return res.json({ success: true, data: data || [] });
     } catch (error) {
-      return res.status(500).json({ error: String(error) });
+      return res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -9354,7 +9659,7 @@ async function startServer() {
         }
       });
     } catch (error) {
-      return res.status(500).json({ error: String(error) });
+      return res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -9485,7 +9790,7 @@ async function startServer() {
         message: 'Base financeira inicial criada com sucesso.'
       });
     } catch (error) {
-      return res.status(500).json({ error: String(error) });
+      return res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -9533,7 +9838,7 @@ async function startServer() {
         }
       });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -9547,7 +9852,7 @@ async function startServer() {
       if (error) throw error;
       res.json({ success: true, data });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -9585,7 +9890,7 @@ async function startServer() {
       
       res.json({ success: true, data: dre });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -9609,7 +9914,7 @@ async function startServer() {
 
       res.json({ success: true, data: dre });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -9622,7 +9927,7 @@ async function startServer() {
       // const refund = await stripe.refunds.create({ charge: chargeId, amount: amount * 100 });
       res.json({ success: true, message: 'Reembolso processado com sucesso (Simulado)' });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -9632,7 +9937,7 @@ async function startServer() {
       // Logic to trigger a manual charge or retry via Stripe
       res.json({ success: true, message: 'Cobrança iniciada com sucesso (Simulado)' });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -9886,7 +10191,7 @@ async function startServer() {
           : null
       });
     } catch (error) {
-      return res.status(500).json({ error: String(error) });
+      return res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
@@ -10140,7 +10445,7 @@ async function startServer() {
       console.error('[Billing Summary] Erro ao gerar resumo da clínica:', error);
       res.status(500).json({
         success: false,
-        error: error?.message || 'Falha ao carregar resumo de cobrança.'
+        error: 'Falha ao carregar resumo de cobrança.'
       });
     }
   });
@@ -10178,9 +10483,9 @@ async function startServer() {
       return next(err);
     }
     
-    res.status(500).json({ 
-      error: err.message || 'Ocorreu um erro no servidor.',
-      details: err.stack
+    res.status(500).json({
+      success: false,
+      error: 'Erro interno do servidor.'
     });
   });
 
@@ -10223,6 +10528,7 @@ startServer().catch(err => {
   console.error('FATAL ERROR STARTING SERVER:', err);
   process.exit(1);
 });
+
 
 
 

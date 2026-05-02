@@ -304,8 +304,8 @@ export function CoordinatorDashboard({
   }, [user?.activeWorkspaceId, user?.clinicId]);
 
   const therapistFilterOptions = useMemo(() => {
-    const entries = Object.entries(therapistMembersById)
-      .map(([id, member]) => ({
+    const entries = Object.entries(therapistMembersById as Record<string, any>)
+      .map(([id, member]: [string, any]) => ({
         id,
         label: String(member?.name || member?.email || id).trim(),
       }))
