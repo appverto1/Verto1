@@ -827,6 +827,34 @@ export function CoordinatorDashboard({
   ]);
 
   useEffect(() => {
+    if (activeTab !== "settings") return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const profileResult = await dataService.getUserProfile(String(user?.id || ""));
+        const professionalProfile = profileResult?.data?.professional_profile;
+        if (!professionalProfile || cancelled) return;
+
+        const signedProfilePicture =
+          String(professionalProfile?.profile_photo_url || "").trim() || null;
+        const signedClinicLogo =
+          String(professionalProfile?.clinic_logo_url || "").trim() || null;
+        const signedSignature =
+          String(professionalProfile?.signature_data_url || "").trim() || null;
+
+        if (signedProfilePicture) setTherapistProfilePhotoUrl(signedProfilePicture);
+        if (signedClinicLogo) setClinicLogoDataUrl(signedClinicLogo);
+        if (signedSignature) setTherapistSignatureDataUrl(signedSignature);
+      } catch (error) {
+        console.warn("Falha ao renovar URLs assinadas de mídia no perfil.", error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, user?.id]);
+
+  useEffect(() => {
     const updateTimeline = () => {
       const now = new Date();
       const hours = now.getHours();

@@ -494,23 +494,23 @@ export function TeamManagement({
                 <h3 className="text-lg font-bold text-slate-900 mb-6">Convites Pendentes</h3>
                 <div className="space-y-3">
                   {pendingInvitations.map((inv) => (
-                    <div key={inv.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between">
-                      <div className="flex items-center gap-4">
+                    <div key={inv.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div className="flex items-center gap-4 min-w-0">
                         <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-slate-400">
                           <Mail size={20} />
                         </div>
-                        <div>
-                          <p className="font-bold text-slate-900 text-sm">{inv.email}</p>
+                        <div className="min-w-0">
+                          <p className="font-bold text-slate-900 text-sm truncate">{inv.email}</p>
                           <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-widest">{inv.role}</p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="px-3 py-1 bg-amber-100 text-amber-600 rounded-full text-[10px] font-bold uppercase tracking-widest">Pendente</span>
+                      <div className="flex flex-wrap items-center gap-2 md:justify-end">
+                        <span className="shrink-0 px-3 py-1 bg-amber-100 text-amber-600 rounded-full text-[10px] font-bold uppercase tracking-widest">Pendente</span>
                         <button
                           type="button"
                           onClick={() => handleResendInvitation(inv)}
                           disabled={resendingInvitationId === inv.id}
-                          className="px-3 py-1 rounded-full border border-blue-200 bg-blue-50 text-blue-600 text-[10px] font-bold uppercase tracking-widest hover:bg-blue-100 transition-colors disabled:opacity-60"
+                          className="shrink-0 px-3 py-1 rounded-full border border-blue-200 bg-blue-50 text-blue-600 text-[10px] font-bold uppercase tracking-widest hover:bg-blue-100 transition-colors disabled:opacity-60"
                           title="Reenviar convite"
                         >
                           {resendingInvitationId === inv.id ? 'Reenviando...' : 'Reenviar'}
@@ -519,7 +519,7 @@ export function TeamManagement({
                           type="button"
                           onClick={() => handleCancelInvitation(inv.id)}
                           disabled={cancellingInvitationId === inv.id}
-                          className="px-3 py-1 rounded-full border border-red-200 bg-red-50 text-red-600 text-[10px] font-bold uppercase tracking-widest hover:bg-red-100 transition-colors disabled:opacity-60"
+                          className="shrink-0 px-3 py-1 rounded-full border border-red-200 bg-red-50 text-red-600 text-[10px] font-bold uppercase tracking-widest hover:bg-red-100 transition-colors disabled:opacity-60"
                           title="Cancelar convite"
                         >
                           {cancellingInvitationId === inv.id ? 'Cancelando...' : 'Cancelar'}
