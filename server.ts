@@ -226,6 +226,114 @@ function sanitizePhone(value: unknown): string | null {
   return digits.slice(0, 20);
 }
 
+async function readOptionalScalarColumn(params: {
+  table: 'users' | 'clinics';
+  match: { column: string; value: string };
+  column: string;
+}): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from(params.table)
+      .select(`${params.column}`)
+      .eq(params.match.column, params.match.value)
+      .maybeSingle();
+    if (error) return null;
+    const value = sanitizeString((data as any)?.[params.column], 200);
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+async function patchTableSafely(
+  table: 'users' | 'clinics',
+  matcher: { column: string; value: string },
+  patch: Record<string, any>
+): Promise<void> {
+  let safePatch: Record<string, any> = cleanObject(patch);
+  while (Object.keys(safePatch).length > 0) {
+    const { error } = await supabase
+      .from(table)
+      .update(safePatch)
+      .eq(matcher.column, matcher.value);
+    if (!error) return;
+    const missingColumn = extractMissingColumnName(error);
+    if (!missingColumn || !(missingColumn in safePatch)) return;
+    delete safePatch[missingColumn];
+  }
+}
+
+async function persistStripeCustomerReference(params: {
+  customerId: string;
+  email?: string | null;
+  userId?: string | null;
+  clinicId?: string | null;
+}) {
+  const customerId = sanitizeString(params.customerId, 200);
+  if (!customerId) return;
+  const userId = sanitizeString(params.userId, 120);
+  const clinicId = sanitizeString(params.clinicId, 120);
+  const safeEmail = sanitizeEmail(params.email);
+
+  if (userId) {
+    await patchTableSafely('users', { column: 'id', value: userId }, {
+      stripe_customer_id: customerId,
+      stripe_customer_email: safeEmail || undefined,
+      updated_at: new Date().toISOString()
+    });
+  }
+  if (safeEmail) {
+    await patchTableSafely('users', { column: 'email', value: safeEmail }, {
+      stripe_customer_id: customerId,
+      stripe_customer_email: safeEmail,
+      updated_at: new Date().toISOString()
+    });
+  }
+  if (clinicId) {
+    await patchTableSafely('clinics', { column: 'id', value: clinicId }, {
+      stripe_customer_id: customerId,
+      stripe_customer_email: safeEmail || undefined,
+      updated_at: new Date().toISOString()
+    });
+  }
+}
+
+async function resolvePersistedStripeCustomerId(params: {
+  userId?: string | null;
+  clinicId?: string | null;
+  email?: string | null;
+}): Promise<string | null> {
+  const userId = sanitizeString(params.userId, 120);
+  const clinicId = sanitizeString(params.clinicId, 120);
+  const email = sanitizeEmail(params.email);
+
+  if (userId) {
+    const byUserId = await readOptionalScalarColumn({
+      table: 'users',
+      match: { column: 'id', value: userId },
+      column: 'stripe_customer_id'
+    });
+    if (byUserId) return byUserId;
+  }
+  if (clinicId) {
+    const byClinicId = await readOptionalScalarColumn({
+      table: 'clinics',
+      match: { column: 'id', value: clinicId },
+      column: 'stripe_customer_id'
+    });
+    if (byClinicId) return byClinicId;
+  }
+  if (email) {
+    const byEmail = await readOptionalScalarColumn({
+      table: 'users',
+      match: { column: 'email', value: email },
+      column: 'stripe_customer_id'
+    });
+    if (byEmail) return byEmail;
+  }
+  return null;
+}
+
 function normalizeBrazilMobilePhone(value: unknown): string | null {
   const digits = sanitizeString(value, 40).replace(/\D/g, '');
   if (!digits) return null;
@@ -2208,6 +2316,7 @@ async function startServer() {
           const flowType = sanitizeString((session.metadata as any)?.flowType, 80);
           const planNameFromMetadata = sanitizeString((session.metadata as any)?.planName, 80);
           const customerEmail = sanitizeEmail(session.customer_details?.email || session.customer_email);
+          const stripeCustomerId = sanitizeString(String(session.customer || ''), 200);
 
           await updateClinicSubscriptionStatus({
             clinicId,
@@ -2219,6 +2328,15 @@ async function startServer() {
           const activePatientPriceId = resolveActivePatientPriceId();
           if (clinicId && activePatientPriceId) {
             queueActivePatientSync(clinicId, 'checkout.session.completed');
+          }
+
+          if (stripeCustomerId) {
+            await persistStripeCustomerReference({
+              customerId: stripeCustomerId,
+              email: customerEmail,
+              userId,
+              clinicId
+            });
           }
 
           if (session.subscription) {
@@ -9858,7 +9976,13 @@ async function startServer() {
         120
       );
 
-      const session = await stripe.checkout.sessions.create({
+      const persistedCustomerId = await resolvePersistedStripeCustomerId({
+        userId: sanitizeString(user.id, 120),
+        clinicId,
+        email: sanitizeEmail(user.email)
+      });
+
+      const checkoutPayload: Stripe.Checkout.SessionCreateParams = {
         payment_method_types: ['card'],
         line_items: [
           {
@@ -9878,7 +10002,6 @@ async function startServer() {
         mode: 'subscription',
         success_url: `${origin}/?payment=success`,
         cancel_url: `${origin}/?payment=cancel`,
-        customer_email: user.email,
         metadata: {
           userId: user.id,
           clinicId
@@ -9889,7 +10012,15 @@ async function startServer() {
             clinicId
           }
         }
-      });
+      };
+
+      if (persistedCustomerId) {
+        checkoutPayload.customer = persistedCustomerId;
+      } else {
+        checkoutPayload.customer_email = user.email;
+      }
+
+      const session = await stripe.checkout.sessions.create(checkoutPayload);
 
       console.log('Stripe session created:', session.id);
       res.json({ url: session.url });
@@ -9911,9 +10042,22 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'E-mail da sessão não encontrado para abrir portal de faturamento.' });
       }
 
-      const customers = await stripe.customers.list({ email: safeEmail, limit: 10 });
-      const customer = customers.data?.[0];
-      if (!customer?.id) {
+      const clinicId = sanitizeString(
+        sessionUser.activeWorkspaceId || sessionUser.clinicId || sessionUser.id,
+        120
+      );
+      const persistedCustomerId = await resolvePersistedStripeCustomerId({
+        userId: sanitizeString(sessionUser.id, 120),
+        clinicId,
+        email: safeEmail
+      });
+
+      let customerId = persistedCustomerId;
+      if (!customerId) {
+        const customers = await stripe.customers.list({ email: safeEmail, limit: 10 });
+        customerId = sanitizeString(customers.data?.[0]?.id, 200);
+      }
+      if (!customerId) {
         return res.status(404).json({
           success: false,
           error: 'Cliente Stripe não encontrado para este e-mail. Faça o primeiro checkout antes de abrir o portal.'
@@ -9922,8 +10066,15 @@ async function startServer() {
 
       const origin = req.headers.origin || `${req.protocol}://${req.get('host')}`;
       const portalSession = await stripe.billingPortal.sessions.create({
-        customer: customer.id,
+        customer: customerId,
         return_url: `${origin}/?billing=return`
+      });
+
+      await persistStripeCustomerReference({
+        customerId,
+        email: safeEmail,
+        userId: sanitizeString(sessionUser.id, 120),
+        clinicId
       });
 
       return res.json({ success: true, url: portalSession.url });
