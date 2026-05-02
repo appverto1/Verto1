@@ -5333,7 +5333,7 @@ async function startServer() {
             name: safeName,
             email: safeEmail,
             phone: normalizedPhone || undefined,
-            status: 'pending_activation',
+            status: 'active',
             type: normalizedPortalType,
             clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
             therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined
@@ -5342,7 +5342,7 @@ async function startServer() {
             name: safeName,
             email: safeEmail,
             phone: normalizedPhone || undefined,
-            status: 'pending_activation',
+            status: 'active',
             clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
             therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined
           });
@@ -5473,6 +5473,9 @@ async function startServer() {
           });
         }
         await ensurePatientLink(existingUser.id);
+        if (isUuid(safeClinicId)) {
+          queueActivePatientSync(safeClinicId, 'patient_create_user_existing');
+        }
         const emailResult = await sendPatientActivationEmail();
         return res.json({
           success: true,
@@ -5508,6 +5511,9 @@ async function startServer() {
           if (foundUser) {
             await upsertPatientProfile(foundUser.id);
             await ensurePatientLink(foundUser.id);
+            if (isUuid(safeClinicId)) {
+              queueActivePatientSync(safeClinicId, 'patient_create_user_auth_exists');
+            }
             const emailResult = await sendPatientActivationEmail();
             return res.json({
               success: true,
@@ -5526,6 +5532,9 @@ async function startServer() {
       if (authUser?.user) {
         await upsertPatientProfile(authUser.user.id);
         await ensurePatientLink(authUser.user.id);
+        if (isUuid(safeClinicId)) {
+          queueActivePatientSync(safeClinicId, 'patient_create_user_new');
+        }
         const emailResult = await sendPatientActivationEmail();
 
         return res.json({
@@ -5956,7 +5965,7 @@ async function startServer() {
         phone: safePhone || sanitizePhone(rawPhone),
         age: asSafeNumber(req.body?.age, 0, 130),
         diagnosis: sanitizeString(req.body?.diagnosis, 2000),
-        status: sanitizeString(req.body?.status, 40) || undefined,
+        status: sanitizeString(req.body?.status, 40) || 'active',
         clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
         therapist_id: isUuid(safeTherapistId) ? safeTherapistId : undefined,
         created_at: sanitizeString(req.body?.created_at, 40) || new Date().toISOString()
@@ -6010,17 +6019,26 @@ async function startServer() {
           cpf: safeBody.cpf,
           phone: safeBody.phone,
           age: safeBody.age,
-          diagnosis: safeBody.diagnosis
+          diagnosis: safeBody.diagnosis,
+          status: safeBody.status || 'active',
+          clinic_id: safeBody.clinic_id,
+          therapist_id: safeBody.therapist_id,
         });
 
-        const fallbackResult = await supabase
-          .from('patients')
-          .upsert([fallbackRow], { onConflict: 'id' })
-          .select()
-          .single();
-
-        data = fallbackResult.data;
-        error = fallbackResult.error;
+        let safeFallbackPayload: Record<string, any> = { ...fallbackRow };
+        while (Object.keys(safeFallbackPayload).length > 0) {
+          const fallbackResult = await supabase
+            .from('patients')
+            .upsert([safeFallbackPayload], { onConflict: 'id' })
+            .select()
+            .single();
+          data = fallbackResult.data;
+          error = fallbackResult.error;
+          if (!error) break;
+          const missingColumn = extractMissingColumnName(error);
+          if (!missingColumn || !(missingColumn in safeFallbackPayload)) break;
+          delete safeFallbackPayload[missingColumn];
+        }
       }
       
       if (error) throw error;
@@ -9880,6 +9898,43 @@ async function startServer() {
       res.status(500).json({ 
         error: error.message || 'Erro ao criar sessão de pagamento',
         details: process.env.NODE_ENV === 'production' ? undefined : error.stack
+      });
+    }
+  });
+
+  app.post('/api/stripe/customer-portal-session', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const stripe = getStripe();
+      const sessionUser = req.session?.user || {};
+      const safeEmail = sanitizeEmail(sessionUser?.email);
+      if (!safeEmail) {
+        return res.status(400).json({ success: false, error: 'E-mail da sessão não encontrado para abrir portal de faturamento.' });
+      }
+
+      const customers = await stripe.customers.list({ email: safeEmail, limit: 10 });
+      const customer = customers.data?.[0];
+      if (!customer?.id) {
+        return res.status(404).json({
+          success: false,
+          error: 'Cliente Stripe não encontrado para este e-mail. Faça o primeiro checkout antes de abrir o portal.'
+        });
+      }
+
+      const origin = req.headers.origin || `${req.protocol}://${req.get('host')}`;
+      const portalSession = await stripe.billingPortal.sessions.create({
+        customer: customer.id,
+        return_url: `${origin}/?billing=return`
+      });
+
+      return res.json({ success: true, url: portalSession.url });
+    } catch (error: any) {
+      console.error('[Stripe] customer-portal-session error:', {
+        message: error?.message || String(error),
+        code: sanitizeString(error?.code, 60) || null
+      });
+      return res.status(500).json({
+        success: false,
+        error: sanitizeString(error?.message || 'Falha ao abrir portal de faturamento.', 500)
       });
     }
   });

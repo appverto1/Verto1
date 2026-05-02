@@ -559,6 +559,9 @@ export function CoordinatorDashboard({
   const [therapistProfilePhotoUrl, setTherapistProfilePhotoUrl] = useState<
     string | null
   >(user?.profilePicture || user?.profile_picture || null);
+  const [clinicLogoDataUrl, setClinicLogoDataUrl] = useState<string | null>(
+    user?.clinicSettings?.clinicLogoUrl || null,
+  );
   const therapistCanRegisterClinicalData = !isTherapist || Boolean(therapistCrp.trim());
   const canManageProtocolLibrary = capabilityStatusForRole("protocol-library") === "full";
   const canManageClinicSettings = capabilityStatusForRole("clinic-settings") !== "none";
@@ -769,6 +772,7 @@ export function CoordinatorDashboard({
       user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null,
     );
     setTherapistProfilePhotoUrl(user?.profilePicture || user?.profile_picture || null);
+    setClinicLogoDataUrl(user?.clinicSettings?.clinicLogoUrl || null);
   }, [
     user?.crp,
     user?.name,
@@ -781,6 +785,7 @@ export function CoordinatorDashboard({
     user?.clinicSettings?.signatureDataUrl,
     user?.profilePicture,
     user?.profile_picture,
+    user?.clinicSettings?.clinicLogoUrl,
   ]);
 
   useEffect(() => {
@@ -1869,6 +1874,28 @@ export function CoordinatorDashboard({
     }
   };
 
+  const handleOpenCustomerPortal = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch("/api/stripe/customer-portal-session", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = await response.json();
+      if (data?.url) {
+        window.location.href = data.url;
+        return;
+      }
+      showToast(data?.error || "Não foi possível abrir o portal de faturamento.", "error");
+    } catch (error) {
+      console.error("Customer portal error:", error);
+      showToast("Erro de conexão ao abrir portal de faturamento.", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleAddRoom = (e: React.FormEvent) => {
     e.preventDefault();
     const specialtiesArray = newRoom.specialties
@@ -1976,12 +2003,19 @@ export function CoordinatorDashboard({
     };
 
     onUpdateProfile({
-      clinicSettings,
+      name: therapistFullName?.trim() || user?.name,
+      profilePicture: therapistProfilePhotoUrl,
+      signatureDataUrl: therapistSignatureDataUrl,
+      clinicSettings: {
+        ...clinicSettings,
+        clinicLogoUrl: clinicLogoDataUrl || undefined,
+        signatureDataUrl: therapistSignatureDataUrl || undefined,
+      },
     });
 
     onAddActivityLog(
       "Configurações atualizadas",
-      "A coordenação atualizou os horários e a duração de sessão por profissional.",
+      "A coordenação atualizou horários, branding (logo/assinatura/foto) e duração de sessão por profissional.",
       "management",
     );
     hideProcessing();
@@ -4415,9 +4449,70 @@ export function CoordinatorDashboard({
                   )}
 
                   <h4 className="text-lg font-bold text-slate-900 mb-6">
-                    Upgrade de Plano
+                    Gestão de Plano
                   </h4>
+                  <div className="mb-6 grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <button
+                      onClick={handleOpenCustomerPortal}
+                      disabled={loading}
+                      className="w-full py-3 rounded-2xl font-bold text-sm bg-slate-100 text-slate-800 hover:bg-slate-200 transition-all"
+                    >
+                      Trocar Cartão / Faturamento
+                    </button>
+                    <button
+                      onClick={() => handleCheckout("Essencial")}
+                      disabled={loading || normalizedPlanName === "Essencial"}
+                      className={`w-full py-3 rounded-2xl font-bold text-sm transition-all ${
+                        normalizedPlanName === "Essencial"
+                          ? "bg-slate-100 text-slate-400 cursor-not-allowed"
+                          : "bg-white border border-[#7a32fc]/30 text-[#7a32fc] hover:bg-[#f6f0ff]"
+                      }`}
+                    >
+                      {normalizedPlanName === "Essencial" ? "Plano atual já é Essencial" : "Migrar para Essencial (downgrade)"}
+                    </button>
+                  </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div
+                      className={`p-8 rounded-[40px] border-2 transition-all ${
+                        normalizedPlanName === "Essencial"
+                          ? "border-[#7a32fc] bg-blue-50/30"
+                          : "border-slate-100 hover:border-blue-200"
+                      }`}
+                    >
+                      <div className="flex justify-between items-start mb-6">
+                        <div>
+                          <h5 className="text-xl font-bold text-slate-900">Essencial</h5>
+                          <p className="text-slate-500 text-sm">Para início da operação</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-2xl font-black text-[#4318FF]">R$ 149,90</p>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase">por mês</p>
+                        </div>
+                      </div>
+                      <ul className="space-y-3 mb-8">
+                        {[
+                          "Até 2 profissionais",
+                          "Prontuário + Agenda",
+                          "Portal paciente e família",
+                          "Histórico clínico centralizado",
+                        ].map((feat) => (
+                          <li key={feat} className="flex items-center gap-2 text-sm text-slate-600 font-medium">
+                            <CheckCircle2 size={16} className="text-emerald-500" /> {feat}
+                          </li>
+                        ))}
+                      </ul>
+                      <button
+                        onClick={() => handleCheckout("Essencial")}
+                        disabled={loading || normalizedPlanName === "Essencial"}
+                        className={`w-full py-4 rounded-2xl font-bold text-sm transition-all ${
+                          normalizedPlanName === "Essencial"
+                            ? "bg-slate-100 text-slate-400 cursor-not-allowed"
+                            : "bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20 hover:scale-[1.02]"
+                        }`}
+                      >
+                        {normalizedPlanName === "Essencial" ? "Plano Atual" : "Escolher Essencial"}
+                      </button>
+                    </div>
                     <div
                       className={`p-8 rounded-[40px] border-2 transition-all ${user.planName === "Crescimento" ? "border-[#7a32fc] bg-blue-50/30" : "border-slate-100 hover:border-blue-200"}`}
                     >
@@ -4696,7 +4791,7 @@ export function CoordinatorDashboard({
               >
                 <div className="flex items-center justify-between mb-8">
                   <h3 className="text-xl font-bold text-slate-900">
-                    {isTherapist ? "Meu Perfil Profissional" : "Configurações da Clínica"}
+                    {isTherapist ? "Meu Perfil Profissional" : "Meu Perfil e Configurações da Clínica"}
                   </h3>
                   <div className="flex items-center gap-3">
                     {canEditAnamnesisTemplate && (
@@ -4850,6 +4945,89 @@ export function CoordinatorDashboard({
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     {canManageClinicSettings ? (
                       <div className="space-y-6">
+                        <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">
+                          Meu Perfil e Branding
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 bg-slate-50 rounded-3xl border border-slate-100">
+                          <div className="md:col-span-2">
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              Nome Completo
+                            </label>
+                            <input
+                              type="text"
+                              value={therapistFullName}
+                              onChange={(e) => setTherapistFullName(e.target.value)}
+                              placeholder="Nome do coordenador responsável"
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              Assinatura Digital
+                            </label>
+                            <label className="w-full min-h-[150px] p-4 bg-white border border-dashed border-slate-300 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#7a32fc] transition-all">
+                              {therapistSignatureDataUrl ? (
+                                <img src={therapistSignatureDataUrl} alt="Assinatura digital" className="max-h-28 object-contain" />
+                              ) : (
+                                <span className="text-xs font-semibold text-slate-500">Clique para enviar assinatura</span>
+                              )}
+                              <input
+                                type="file"
+                                className="hidden"
+                                accept="image/png,image/webp,image/svg+xml,image/jpeg"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  readImageAsDataUrl(file, setTherapistSignatureDataUrl);
+                                }}
+                              />
+                            </label>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              Foto de Perfil
+                            </label>
+                            <label className="w-full min-h-[150px] p-4 bg-white border border-dashed border-slate-300 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#7a32fc] transition-all">
+                              {therapistProfilePhotoUrl ? (
+                                <img src={therapistProfilePhotoUrl} alt="Foto de perfil" className="w-24 h-24 rounded-2xl object-cover" />
+                              ) : (
+                                <span className="text-xs font-semibold text-slate-500">Clique para enviar foto</span>
+                              )}
+                              <input
+                                type="file"
+                                className="hidden"
+                                accept="image/*"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  readImageAsDataUrl(file, setTherapistProfilePhotoUrl);
+                                }}
+                              />
+                            </label>
+                          </div>
+                          <div className="md:col-span-2">
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              Logotipo da Clínica
+                            </label>
+                            <label className="w-full min-h-[150px] p-4 bg-white border border-dashed border-slate-300 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#7a32fc] transition-all">
+                              {clinicLogoDataUrl ? (
+                                <img src={clinicLogoDataUrl} alt="Logo da clínica" className="max-h-28 object-contain" />
+                              ) : (
+                                <span className="text-xs font-semibold text-slate-500">Clique para enviar logotipo</span>
+                              )}
+                              <input
+                                type="file"
+                                className="hidden"
+                                accept="image/png,image/webp,image/svg+xml,image/jpeg"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  readImageAsDataUrl(file, setClinicLogoDataUrl);
+                                }}
+                              />
+                            </label>
+                          </div>
+                        </div>
                         <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">
                           Horários da Clínica
                         </h4>
