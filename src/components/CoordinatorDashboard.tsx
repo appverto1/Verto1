@@ -53,7 +53,6 @@ import { AnamnesisModal } from "./Anamnesis";
 import { RoomReservation } from "./RoomReservation";
 import { ProtocolManagementSystem } from "./Protocols";
 import { CalendarWidget, DayDetailsModal } from "./Calendar";
-import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { LogoVerto } from "./Common";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -456,6 +455,13 @@ export function CoordinatorDashboard({
     const index = seed % professionalDailyMessages.length;
     const firstName = String(user?.name || "Profissional").trim().split(" ")[0] || "Profissional";
     return professionalDailyMessages[index].replace("[nome]", firstName);
+  }, [user?.name]);
+  const dashboardGreetingLabel = useMemo(() => {
+    const hour = new Date().getHours();
+    const firstName = String(user?.name || "colaborador").trim().split(" ")[0] || "colaborador";
+    if (hour < 12) return `Bom dia, ${firstName}`;
+    if (hour < 18) return `Boa tarde, ${firstName}`;
+    return `Boa noite, ${firstName}`;
   }, [user?.name]);
   useEffect(() => {
     if (!dashboardResumeKey || hasRestoredDashboardStateRef.current) return;
@@ -3395,7 +3401,7 @@ export function CoordinatorDashboard({
       <div className="flex-1 overflow-y-auto relative z-10">
         {/* Header */}
         <header
-          className={`px-4 lg:px-8 py-4 flex items-center justify-between sticky top-0 backdrop-blur-md z-30 ${
+          className={`px-4 lg:px-8 ${activeTab === "dashboard" ? "py-5 lg:py-6" : "py-4"} flex items-center justify-between sticky top-0 backdrop-blur-md z-30 ${
             theme === "dark"
               ? "bg-[#0f172a]/85 border-b border-slate-800/80"
               : "bg-[#F4F7FE]/85 border-b border-slate-100/90"
@@ -3415,14 +3421,14 @@ export function CoordinatorDashboard({
               </button>
             )}
             <div>
-              <p className={`text-[10px] font-bold uppercase tracking-widest mb-0.5 ${theme === "dark" ? "text-slate-300" : "text-slate-500"}`}>
+              <p className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${theme === "dark" ? "text-slate-300" : "text-slate-500"}`}>
                 {!isEditingRooms && activeTab === "rooms"
                   ? "Salas"
                   : !isEditingRooms && activeTab === "dashboard"
-                    ? "Frase do Dia"
+                    ? dashboardGreetingLabel
                     : `Páginas / ${tabLabels[activeTab] || "Painel"}`}
               </p>
-              <h1 className={`text-base lg:text-2xl font-semibold tracking-tight ${theme === "dark" ? "text-slate-100" : "text-slate-900"} ${activeTab === "dashboard" ? "" : "capitalize"}`}>
+              <h1 className={`text-base lg:text-2xl font-semibold tracking-tight ${theme === "dark" ? "text-slate-100" : "text-slate-900"} ${activeTab === "dashboard" ? "max-w-[980px] leading-snug" : "capitalize"}`}>
                 {!isEditingRooms && activeTab === "rooms"
                   ? "Reservas de Sala"
                   : !isEditingRooms && activeTab === "dashboard"

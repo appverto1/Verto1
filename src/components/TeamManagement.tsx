@@ -75,18 +75,24 @@ export function TeamManagement({
   const canInvite = totalUsed < inviteLimit;
 
   useEffect(() => {
-    fetchMembers();
-    fetchInvitations();
+    void (async () => {
+      await Promise.allSettled([fetchMembers(), fetchInvitations()]);
+    })();
   }, []);
 
   const fetchMembers = async () => {
     setLoading(true);
     try {
-      const result = await dataService.getClinicMembers();
+      const timeout = new Promise((resolve) =>
+        setTimeout(() => resolve({ success: false, error: 'Tempo limite ao carregar equipe.' }), 12000),
+      );
+      const result: any = await Promise.race([dataService.getClinicMembers(), timeout]);
       if (result.success) {
         setMembers(result.data || []);
+        setError(null);
       } else {
-        setError(result.error);
+        setMembers([]);
+        setError(result.error || 'Não foi possível carregar membros da equipe.');
       }
     } catch (err) {
       setError('Erro ao carregar membros da equipe');

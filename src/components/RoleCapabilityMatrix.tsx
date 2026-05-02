@@ -9,7 +9,7 @@ import {
 const statusStyles: Record<RoleCapabilityStatus, { label: string; className: string; icon: any }> = {
   full: {
     label: 'Completo',
-    className: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+    className: 'bg-emerald-600 text-white border-emerald-500 shadow-sm',
     icon: CheckCircle2,
   },
   limited: {
