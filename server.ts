@@ -2815,13 +2815,19 @@ async function startServer() {
           throw new Error(`Invalid DATABASE_URL format: ${dbUrl.substring(0, 20)}...`);
         }
         
+        const parsedDbUrl = new URL(dbUrl);
         const { Pool } = pg;
         const pool = new Pool({
-          connectionString: dbUrl,
+          host: parsedDbUrl.hostname,
+          port: Number(parsedDbUrl.port || 5432),
+          user: decodeURIComponent(parsedDbUrl.username || ''),
+          password: decodeURIComponent(parsedDbUrl.password || ''),
+          database: (parsedDbUrl.pathname || '').replace(/^\//, ''),
           max: 10,
           idleTimeoutMillis: 30000,
           connectionTimeoutMillis: 8000,
           ssl: isProd ? { rejectUnauthorized: false } : undefined,
+          family: 4
         });
 
         // Test the connection before using it for sessions
