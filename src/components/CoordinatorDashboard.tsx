@@ -4611,9 +4611,10 @@ export function CoordinatorDashboard({
                       <ul className="space-y-3 mb-8">
                         {[
                           "Até 2 profissionais",
-                          "Prontuário + Agenda",
-                          "Portal paciente e família",
-                          "Histórico clínico centralizado",
+                          "Prontuário e histórico clínico centralizados por paciente",
+                          "Agenda clínica completa (dia/semana/mês) com gestão de salas",
+                          "Portal do Paciente com participação ativa no tratamento",
+                          "Portal da Família (Kids) com registro em texto + foto",
                         ].map((feat) => (
                           <li key={feat} className="flex items-center gap-2 text-sm text-slate-600 font-medium">
                             <CheckCircle2 size={16} className="text-emerald-500" /> {feat}
@@ -4656,10 +4657,11 @@ export function CoordinatorDashboard({
                       <ul className="space-y-3 mb-8">
                         {[
                           "3 a 7 Profissionais",
-                          "Dashboard de Evolução Clínica",
-                          "Relatórios Consolidados",
-                          "Gestão Financeira Avançada",
-                          "Suporte Prioritário",
+                          "Plano terapêutico inteligente com evolução por domínio",
+                          "Relatórios visuais de evolução (comparativos por período)",
+                          "Fluxos por perfil profissional (coordenação, terapeuta, assistente)",
+                          "Compartilhamento de anotações com controle de visibilidade",
+                          "Cadastro e ativação digital de pacientes por e-mail",
                         ].map((feat) => (
                           <li
                             key={feat}
@@ -4708,9 +4710,10 @@ export function CoordinatorDashboard({
                       <ul className="space-y-3 mb-8">
                         {[
                           "7 a 12 Profissionais",
-                          "Múltiplos Workspaces de PEI",
-                          "API de Integração de Dados",
-                          "Gerente de Conta Dedicado",
+                          "Fluxo Adulto com tarefas de casa e devolutiva do paciente",
+                          "Estrelinhas e marcos de progresso para engajamento infantil",
+                          "Multi-clínica/workspace para operação organizada",
+                          "LGPD e segurança clínica avançada (HIPAA)",
                         ].map((feat) => (
                           <li
                             key={feat}
@@ -4757,10 +4760,11 @@ export function CoordinatorDashboard({
                       <ul className="space-y-3 mb-8">
                         {[
                           "12+ Profissionais",
-                          "Workspaces Ilimitados",
-                          "Dashboard de Organização",
-                          "Faturamento Centralizado",
-                          "Opções de White-label",
+                          "Tudo dos planos anteriores com expansão operacional",
+                          "Arquitetura pronta para múltiplas unidades",
+                          "Acompanhamento estratégico para implantação",
+                          "Condições comerciais personalizadas por operação",
+                          "Suporte dedicado para escala clínica",
                         ].map((feat) => (
                           <li
                             key={feat}
