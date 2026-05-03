@@ -2,6 +2,7 @@
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import dns from 'dns';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
@@ -27,6 +28,12 @@ import {
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
+}
+
+try {
+  dns.setDefaultResultOrder('ipv4first');
+} catch {
+  // ignore when runtime doesn't support this API
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2809,11 +2816,12 @@ async function startServer() {
         }
         
         const { Pool } = pg;
-        const pool = new Pool({ 
+        const pool = new Pool({
           connectionString: dbUrl,
           max: 10,
           idleTimeoutMillis: 30000,
-          connectionTimeoutMillis: 5000, // 5 seconds timeout
+          connectionTimeoutMillis: 8000,
+          ssl: isProd ? { rejectUnauthorized: false } : undefined,
         });
 
         // Test the connection before using it for sessions
