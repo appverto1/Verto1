@@ -1475,12 +1475,61 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           setProtocols([...protocols, newProtocol]); 
         } 
       } else { if (!selectedSkillId) { alert("Selecione uma tarefa."); return; } } 
-      const saved = (await onAddTask(taskPayload)) !== false;
-      if (!saved) return;
+      if (isKidsProfile) {
+        const saved = (await onAddTask(taskPayload)) !== false;
+        if (!saved) return;
+      } else {
+        const assignedPayload = {
+          patient_id: String(patient.id),
+          patient_email: patient?.email || null,
+          task_type: planType,
+          scheduled_at: scheduledAt,
+          status: 'pending' as const,
+          task_data: {
+            title: taskPayload.title,
+            description: taskPayload.description || '',
+            icon: taskPayload.icon || '📌',
+            color: taskPayload.color || 'bg-blue-100 text-blue-600',
+            linkedTask: planType === 'intervention' ? linkedTask || undefined : undefined,
+            linkedProtocolId: planType === 'task' ? linkedInterventionProtocolId || undefined : undefined,
+            maxScore: resolvedTaskMaxScore,
+            noRealtimeScoring: true
+          }
+        };
+        const saved = await dataService.addAssignedTask(assignedPayload);
+        if (!saved?.success || !saved?.data) {
+          alert(saved?.error || 'Não foi possível agendar a tarefa para o paciente.');
+          return;
+        }
+        setAssignedTasks((prev) => [saved.data, ...(prev || [])]);
+      }
     } else { 
       if (!message) { alert("Escreva uma mensagem."); return; } 
-      const saved = (await onAddTask({ id: Date.now(), patientId: patient.id, title: "Reforço Positivo", icon: "ðŸŒŸ", color: "bg-yellow-100 text-yellow-600", completed: false, type: 'reinforcement', scheduledAt: scheduledAt, description: message })) !== false;
-      if (!saved) return;
+      if (isKidsProfile) {
+        const saved = (await onAddTask({ id: Date.now(), patientId: patient.id, title: "Reforço Positivo", icon: "🌟", color: "bg-yellow-100 text-yellow-600", completed: false, type: 'reinforcement', scheduledAt: scheduledAt, description: message })) !== false;
+        if (!saved) return;
+      } else {
+        const saved = await dataService.addAssignedTask({
+          patient_id: String(patient.id),
+          patient_email: patient?.email || null,
+          task_type: 'reinforcement',
+          scheduled_at: scheduledAt,
+          status: 'pending',
+          task_data: {
+            title: 'Reforço Positivo',
+            description: message,
+            icon: '🌟',
+            color: 'bg-yellow-100 text-yellow-600',
+            maxScore: 1,
+            noRealtimeScoring: true
+          }
+        });
+        if (!saved?.success || !saved?.data) {
+          alert(saved?.error || 'Não foi possível agendar o reforço para o paciente.');
+          return;
+        }
+        setAssignedTasks((prev) => [saved.data, ...(prev || [])]);
+      }
     } 
     setShowConfirmation(true); setMessage(''); setNewTaskName(''); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setNewProtocolName(''); setNewDomainName(''); setNewTaskCode(''); setNewTaskObjective(''); setNewTaskExample(''); setNewTaskCriteria(''); setNewTaskComment(''); setSelectedProtocolId(''); setSelectedDomainId(''); setSelectedSkillId(''); setLinkedTask(''); setLinkedInterventionProtocolId('');
   }; 
