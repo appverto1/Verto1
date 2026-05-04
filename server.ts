@@ -3363,6 +3363,24 @@ async function startServer() {
       return next();
     }
 
+    // Public onboarding/auth endpoints that must work without prior session.
+    // Keep this list explicit and minimal.
+    const publicStateChangingPaths = new Set<string>([
+      '/auth/signup',
+      '/auth/signup-direct',
+      '/auth/login',
+      '/auth/logout',
+      '/auth/resend-confirmation',
+      '/auth/activation/bootstrap',
+      '/auth/password/recovery/bootstrap',
+      '/auth/password/recovery/email/request',
+      '/auth/password/recovery/verify',
+      '/stripe/create-checkout-registration'
+    ]);
+    if (publicStateChangingPaths.has(req.path)) {
+      return next();
+    }
+
     const rawOrigin = sanitizeString(req.headers.origin, 500);
     const rawReferer = sanitizeString(req.headers.referer, 1000);
     const expected = `${req.protocol}://${req.get('host')}`;
