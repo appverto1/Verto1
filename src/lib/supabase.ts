@@ -33,6 +33,23 @@ const fetchConfig = async (retries = 3, delay = 1000) => {
 
 let supabaseClient: any = null;
 let initPromise: Promise<any> | null = null;
+let sessionRetryPromise: Promise<any> | null = null;
+
+const isSupabaseLockContention = (error: any): boolean => {
+  const message = String(error?.message || error || '').toLowerCase();
+  return message.includes('lock "') && message.includes('stole it');
+};
+
+const shouldDetectSessionInUrl = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  const path = window.location.pathname.toLowerCase();
+  const hash = window.location.hash.toLowerCase();
+  const search = window.location.search.toLowerCase();
+  const authSignals = ['access_token=', 'refresh_token=', 'code=', 'token_hash='];
+  const hasAuthSignal = authSignals.some((signal) => hash.includes(signal) || search.includes(signal));
+  if (hasAuthSignal) return true;
+  return path.includes('/auth/callback') || path.includes('/ativar') || path.includes('/reset-password');
+};
 
 export const ensureFreshSession = async () => {
   const client = await getSupabase();
@@ -49,6 +66,23 @@ export const ensureFreshSession = async () => {
     // token can trigger SIGNED_OUT loops in production.
     return data?.session || null;
   } catch (error: any) {
+    if (isSupabaseLockContention(error)) {
+      try {
+        if (!sessionRetryPromise) {
+          sessionRetryPromise = (async () => {
+            await new Promise((resolve) => setTimeout(resolve, 120));
+            return client.auth.getSession();
+          })();
+        }
+        const retried = await sessionRetryPromise;
+        sessionRetryPromise = null;
+        return retried?.data?.session || null;
+      } catch (retryError: any) {
+        sessionRetryPromise = null;
+        console.warn('ensureFreshSession retry failed:', retryError?.message || String(retryError));
+        return null;
+      }
+    }
     console.warn('ensureFreshSession failed:', error?.message || String(error));
     return null;
   }
@@ -74,7 +108,7 @@ export const getSupabase = async () => {
         auth: {
           autoRefreshToken: true,
           persistSession: true,
-          detectSessionInUrl: true
+          detectSessionInUrl: shouldDetectSessionInUrl()
         }
       });
       

@@ -829,7 +829,7 @@ export function CoordinatorDashboard({
   useEffect(() => {
     if (activeTab !== "settings") return;
     let cancelled = false;
-    void (async () => {
+    const refreshSignedMediaUrls = async () => {
       try {
         const profileResult = await dataService.getUserProfile(String(user?.id || ""));
         const professionalProfile = profileResult?.data?.professional_profile;
@@ -848,9 +848,14 @@ export function CoordinatorDashboard({
       } catch (error) {
         console.warn("Falha ao renovar URLs assinadas de mídia no perfil.", error);
       }
-    })();
+    };
+    void refreshSignedMediaUrls();
+    const interval = setInterval(() => {
+      void refreshSignedMediaUrls();
+    }, 1000 * 60 * 4);
     return () => {
       cancelled = true;
+      clearInterval(interval);
     };
   }, [activeTab, user?.id]);
 

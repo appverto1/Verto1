@@ -3291,6 +3291,13 @@ async function startServer() {
       // Check if user is the patient themselves
       if (user.id === rawPatientId || (resolvedPatientId && user.id === resolvedPatientId)) return next();
       if (!resolvedPatientId) {
+        // Allow initial clinical record bootstrap flow to resolve/create mapping inside route handler.
+        const isPatientRecordWrite =
+          req.method?.toUpperCase?.() === 'POST' &&
+          String(req.path || '').startsWith('/api/patient-records/');
+        if (isPatientRecordWrite) {
+          return next();
+        }
         return res.status(404).json({ error: 'Paciente não encontrado' });
       }
 
@@ -8364,32 +8371,60 @@ async function startServer() {
       for (let attempt = 0; attempt < 12; attempt += 1) {
         const { error } = await supabase.from('users').upsert(candidate, { onConflict: 'id' });
         if (!error) {
-          const metadataPatch = cleanObject({
-            profilePicturePath: profilePicturePath || undefined,
-            signaturePath: signaturePath || undefined,
-            clinicLogoPath: clinicLogoPath || undefined
+          const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+          const clinicId = currentClinicId(req.session.user);
+
+          const currentProfilePictureUrl =
+            sanitizeUrl(req.body?.profile_picture) ||
+            sanitizeUrl(req.body?.profilePicture) ||
+            undefined;
+          const currentSignatureUrl =
+            sanitizeUrl(req.body?.signature_url) ||
+            sanitizeUrl(req.body?.signatureUrl) ||
+            undefined;
+          const currentClinicLogoUrl =
+            sanitizeUrl(req.body?.clinic_logo_url) ||
+            sanitizeUrl(req.body?.clinicLogoUrl) ||
+            sanitizeUrl(req.body?.clinicSettings?.clinicLogoUrl) ||
+            undefined;
+
+          // Merge metadata so one partial update does not erase previously persisted media paths.
+          const { data: existingProfile } = await supabase
+            .from('professional_profiles')
+            .select('metadata')
+            .eq('user_id', sanitizeString(req.params.userId, 120))
+            .maybeSingle();
+          const existingMetadata =
+            existingProfile?.metadata && typeof existingProfile.metadata === 'object'
+              ? { ...(existingProfile.metadata as Record<string, any>) }
+              : {};
+
+          const mergedMetadata = cleanObject({
+            ...existingMetadata,
+            profilePicturePath: profilePicturePath || existingMetadata?.profilePicturePath || undefined,
+            signaturePath: signaturePath || existingMetadata?.signaturePath || undefined,
+            clinicLogoPath: clinicLogoPath || existingMetadata?.clinicLogoPath || undefined
           });
 
-          if (Object.keys(metadataPatch).length > 0) {
-            const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
-            const clinicId = currentClinicId(req.session.user);
-            let profileCandidate: Record<string, any> = cleanObject({
-              user_id: sanitizeString(req.params.userId, 120),
-              clinic_id: clinicId || undefined,
-              role: role || undefined,
-              metadata: metadataPatch,
-              updated_at: new Date().toISOString()
-            });
-            for (let profileAttempt = 0; profileAttempt < 8; profileAttempt += 1) {
-              const { error: profileError } = await supabase
-                .from('professional_profiles')
-                .upsert([profileCandidate], { onConflict: 'user_id' });
-              if (!profileError) break;
-              const missingProfileColumn = extractMissingColumnName(profileError);
-              if (!missingProfileColumn || !(missingProfileColumn in profileCandidate)) break;
-              const { [missingProfileColumn]: _removed, ...rest } = profileCandidate as any;
-              profileCandidate = rest;
-            }
+          let profileCandidate: Record<string, any> = cleanObject({
+            user_id: sanitizeString(req.params.userId, 120),
+            clinic_id: clinicId || undefined,
+            role: role || undefined,
+            profile_photo_url: currentProfilePictureUrl,
+            signature_data_url: currentSignatureUrl,
+            clinic_logo_url: currentClinicLogoUrl,
+            metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined,
+            updated_at: new Date().toISOString()
+          });
+          for (let profileAttempt = 0; profileAttempt < 10; profileAttempt += 1) {
+            const { error: profileError } = await supabase
+              .from('professional_profiles')
+              .upsert([profileCandidate], { onConflict: 'user_id' });
+            if (!profileError) break;
+            const missingProfileColumn = extractMissingColumnName(profileError);
+            if (!missingProfileColumn || !(missingProfileColumn in profileCandidate)) break;
+            const { [missingProfileColumn]: _removed, ...rest } = profileCandidate as any;
+            profileCandidate = rest;
           }
 
           return res.json({ success: true });

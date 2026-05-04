@@ -350,50 +350,86 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
-    const initSupabase = async () => {
-      const supabase = await getSupabase();
-      if (!supabase) return;
+    const LOADING_WATCHDOG_MS = 15000;
+    const watchdog = window.setTimeout(() => {
+      setLoading((current) => {
+        if (!current) return current;
+        console.error(
+          'Bootstrap watchdog acionado: liberando loading para evitar tela branca infinita.',
+        );
+        return false;
+      });
+    }, LOADING_WATCHDOG_MS);
 
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-        if (event === 'SIGNED_IN' && session) {
-          const intendedRole = localStorage.getItem('verto_intended_role') || 'therapist';
-          localStorage.removeItem('verto_intended_role');
-          const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
-          const isActivationFlow = /^\/(ativar|reset-password)\/?$/i.test(currentPath);
-          await handleLoginSuccess(session, intendedRole, undefined, {
-            provider: session?.user?.app_metadata?.provider || null,
-            activationFlow: isActivationFlow
-          });
-        } else if (event === 'SIGNED_OUT') {
-          console.log('Supabase SIGNED_OUT event received');
+    return () => window.clearTimeout(watchdog);
+  }, []);
+
+  useEffect(() => {
+    const initSupabase = async () => {
+      try {
+        const supabase = await getSupabase();
+        if (!supabase) {
+          setLoading(false);
+          return;
+        }
+
+        const {
+          data: { subscription },
+        } = supabase.auth.onAuthStateChange(async (event, session) => {
           try {
-            const response = await fetch('/api/auth/me', { credentials: 'include' });
-            if (response.ok) {
-              const data = await response.json();
-              if (data?.user) {
-                await applyResolvedUserState(data.user);
-                return;
+            if (event === 'SIGNED_IN' && session) {
+              const intendedRole = localStorage.getItem('verto_intended_role') || 'therapist';
+              localStorage.removeItem('verto_intended_role');
+              const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
+              const isActivationFlow = /^\/(ativar|reset-password)\/?$/i.test(currentPath);
+              await handleLoginSuccess(session, intendedRole, undefined, {
+                provider: session?.user?.app_metadata?.provider || null,
+                activationFlow: isActivationFlow,
+              });
+            } else if (event === 'SIGNED_OUT') {
+              console.log('Supabase SIGNED_OUT event received');
+              try {
+                const response = await fetch('/api/auth/me', { credentials: 'include' });
+                if (response.ok) {
+                  const data = await response.json();
+                  if (data?.user) {
+                    await applyResolvedUserState(data.user);
+                    return;
+                  }
+                }
+              } catch (error) {
+                console.warn('SIGNED_OUT recovery via /api/auth/me failed:', error);
               }
             }
-          } catch (error) {
-            console.warn('SIGNED_OUT recovery via /api/auth/me failed:', error);
+          } catch (authChangeError) {
+            console.error('Auth state change handler error:', authChangeError);
+          } finally {
+            setLoading(false);
           }
-        }
-      });
+        });
 
-      return () => subscription.unsubscribe();
+        return () => subscription.unsubscribe();
+      } catch (error) {
+        console.error('initSupabase error:', error);
+        setLoading(false);
+      }
     };
     initSupabase();
   }, []);
 
   useEffect(() => {
     const checkSession = async () => {
+      const sessionTimeoutMs = 12000;
+      const timeoutController = new AbortController();
+      const timeoutId = window.setTimeout(() => timeoutController.abort(), sessionTimeoutMs);
+
       try {
         const session = await ensureFreshSession();
         const token = session?.access_token;
 
         const response = await fetch('/api/auth/me', { 
           credentials: 'include',
+          signal: timeoutController.signal,
           headers: {
             'Authorization': token ? `Bearer ${token}` : ''
           }
@@ -425,6 +461,7 @@ export default function App() {
         console.error('Session check error:', error);
         setUser(null);
       } finally {
+        window.clearTimeout(timeoutId);
         setLoading(false);
       }
     };
@@ -1678,13 +1715,18 @@ export default function App() {
     const duplicateConflict =
       !fbResult?.success &&
       Number(fbResult?.status) === 409 &&
-      /jÃ¡ existe um paciente|mesmo e-mail|mesmo cpf|duplicate/i.test(
-        String(fbResult?.error || ""),
+      (
+        String(fbResult?.code || "").trim() === "PATIENT_DUPLICATE_IN_CLINIC" ||
+        /já existe um paciente|mesmo e-mail|mesmo cpf|duplicate/i.test(
+          String(fbResult?.error || ""),
+        )
       );
 
     if (duplicateConflict) {
       const existingIdFromApi = String(
-        fbResult?.details?.details?.patientId || "",
+        fbResult?.details?.patientId ||
+        fbResult?.details?.details?.patientId ||
+        "",
       ).trim();
 
       let matchedPatient: any = null;
@@ -1741,7 +1783,7 @@ export default function App() {
         );
       } else {
         alert(
-          "Paciente jÃ¡ existe na clÃ­nica e foi vinculado, mas nÃ£o foi possÃ­vel reconciliar o registro no painel agora. Atualize a pÃ¡gina para visualizar.",
+          "Paciente já existe na clínica, mas não foi possível reconciliar o ID para concluir o prontuário agora. Atualize a página para sincronizar.",
         );
       }
     }
@@ -1762,7 +1804,12 @@ export default function App() {
       persistedPatientId = realId;
     }
 
-    await dataService.savePatientRecord(String(persistedPatientId), {
+    const canPersistPatientRecord =
+      Boolean(String(persistedPatientId || "").trim()) &&
+      !String(persistedPatientId).startsWith("temp_");
+
+    if (canPersistPatientRecord) {
+      await dataService.savePatientRecord(String(persistedPatientId), {
       workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
       nome: data.name || data.anamnesisData?.nome || "",
       nomeSocial: data.anamnesisData?.nomeSocial || "",
@@ -1801,7 +1848,8 @@ export default function App() {
       interventionTaskLinks:
         data.interventionTaskLinks && typeof data.interventionTaskLinks === 'object' ? data.interventionTaskLinks : {},
       anamnese: data.anamnesisData || {}
-    });
+      });
+    }
   };
   const handleUpdatePatient = async (updatedData: any) => { 
     // Split updates

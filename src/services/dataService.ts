@@ -206,6 +206,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
         offline: false,
         pending: false,
         status: response.status,
+        code: errorPayload?.code || errorPayload?.error_code || undefined,
         error:
           errorPayload?.error ||
           errorPayload?.message ||
@@ -220,6 +221,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
       offline: true,
       pending: true,
       status: response.status,
+      code: errorPayload?.code || errorPayload?.error_code || undefined,
       error:
         errorPayload?.error ||
         errorPayload?.message ||
