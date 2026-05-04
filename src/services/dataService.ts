@@ -55,14 +55,22 @@ async function handleDataError(error: unknown, operationType: OperationType, pat
 }
 
 async function getAuthHeaders(includeBearer = true) {
-  const session = await ensureFreshSession();
-  const token = session?.access_token;
   const headers: any = {
     'Content-Type': 'application/json; charset=utf-8',
     'Accept': 'application/json; charset=utf-8'
   };
-  if (includeBearer && token) {
-    headers['Authorization'] = `Bearer ${token}`;
+  if (!includeBearer) return headers;
+
+  try {
+    const session = await ensureFreshSession();
+    const token = session?.access_token;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+  } catch (error) {
+    // Não bloquear chamadas autenticadas por cookie de sessão quando o refresh de token falhar.
+    // O backend já valida a sessão server-side via `credentials: include`.
+    console.warn('[auth-headers] ensureFreshSession falhou; seguindo com sessão por cookie.');
   }
   return headers;
 }
@@ -977,6 +985,19 @@ export const dataService = {
     }
     const local = await getRecordById(userId);
     return local ? local.data : { success: false };
+  },
+
+  async getUserProfileMedia(userId: string) {
+    try {
+      const response = await fetch(`/api/profile/${userId}/media`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error refreshing user profile media:', error);
+      return { success: false, error: String(error) };
+    }
   },
 
   async uploadFile(bucket: string, path: string, file: File) {

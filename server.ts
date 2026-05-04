@@ -8339,6 +8339,70 @@ async function startServer() {
     }
   });
 
+  app.get('/api/profile/:userId/media', checkAuth, async (req: any, res) => {
+    try {
+      const requesterId = sanitizeString(req.session?.user?.id, 120);
+      const requesterRole = sanitizeString(req.session?.user?.role, 40).toLowerCase();
+      const targetUserId = sanitizeString(req.params.userId, 120);
+      if (!requesterId || !targetUserId) {
+        return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+      }
+      if (requesterId !== targetUserId && requesterRole !== 'admin' && requesterRole !== 'coordinator') {
+        return res.status(403).json({ success: false, error: 'Acesso negado' });
+      }
+
+      const { data: profileExtra, error: profileError } = await supabase
+        .from('professional_profiles')
+        .select('*')
+        .eq('user_id', targetUserId)
+        .maybeSingle();
+      if (profileError) {
+        throw profileError;
+      }
+
+      const profileOut = profileExtra ? { ...profileExtra } : null;
+      const metadata =
+        profileOut?.metadata && typeof profileOut.metadata === 'object'
+          ? { ...(profileOut.metadata as Record<string, any>) }
+          : {};
+
+      const profilePhotoPath = extractPatientPhotosStoragePath(metadata.profilePicturePath || profileOut?.profile_photo_url);
+      const clinicLogoPath = extractPatientPhotosStoragePath(metadata.clinicLogoPath || profileOut?.clinic_logo_url);
+      const signaturePath = extractPatientPhotosStoragePath(metadata.signaturePath || profileOut?.signature_data_url);
+
+      let profilePictureUrl: string | null = null;
+      let clinicLogoUrl: string | null = null;
+      let signatureUrl: string | null = null;
+
+      if (profilePhotoPath) {
+        const { data: signed } = await supabase.storage.from('patient-photos').createSignedUrl(profilePhotoPath, 60 * 10);
+        profilePictureUrl = sanitizeUrl(signed?.signedUrl) || null;
+      }
+      if (clinicLogoPath) {
+        const { data: signed } = await supabase.storage.from('patient-photos').createSignedUrl(clinicLogoPath, 60 * 10);
+        clinicLogoUrl = sanitizeUrl(signed?.signedUrl) || null;
+      }
+      if (signaturePath) {
+        const { data: signed } = await supabase.storage.from('patient-photos').createSignedUrl(signaturePath, 60 * 10);
+        signatureUrl = sanitizeUrl(signed?.signedUrl) || null;
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          profilePictureUrl,
+          clinicLogoUrl,
+          signatureUrl,
+          profilePicturePath: profilePhotoPath || metadata.profilePicturePath || null,
+          clinicLogoPath: clinicLogoPath || metadata.clinicLogoPath || null,
+          signaturePath: signaturePath || metadata.signaturePath || null
+        }
+      });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    }
+  });
+
   app.post('/api/profile/:userId', checkAuth, async (req: any, res) => {
     try {
       // Only allow own profile or admin

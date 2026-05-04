@@ -226,6 +226,7 @@ export const AnamnesisModal = ({
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
   const [draftQuestion, setDraftQuestion] = useState<QuestionDraft | null>(null);
   const [templateDirty, setTemplateDirty] = useState(false);
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
 
   const [scheduleImmediate, setScheduleImmediate] = useState(false);
   const [registerDate, setRegisterDate] = useState('');
@@ -368,6 +369,11 @@ export const AnamnesisModal = ({
 
   if (!isOpen) return null;
 
+  const showFeedback = (type: 'success' | 'error' | 'info', message: string) => {
+    setFeedback({ type, message });
+    window.setTimeout(() => setFeedback(null), 3200);
+  };
+
   const setQuestionValue = (question: AnamnesisQuestion, value: any) => {
     setFormData((prev) => ({
       ...prev,
@@ -381,11 +387,11 @@ export const AnamnesisModal = ({
       if (!question.required) continue;
       const value = formData[question.id];
       if (question.type === 'multipla_selecao' && (!Array.isArray(value) || value.length === 0)) {
-        alert(`Preencha o campo obrigatório: ${question.label}`);
+        showFeedback('error', `Preencha o campo obrigatório: ${question.label}`);
         return;
       }
       if ((question.type === 'sim_nao' && value === '') || (question.type !== 'sim_nao' && String(value ?? '').trim() === '')) {
-        alert(`Preencha o campo obrigatório: ${question.label}`);
+        showFeedback('error', `Preencha o campo obrigatório: ${question.label}`);
         return;
       }
     }
@@ -476,11 +482,11 @@ export const AnamnesisModal = ({
     const options = isChoiceType ? normalizeOptions(draftQuestion.optionsText) : [];
 
     if (!draftQuestion.label.trim()) {
-      alert('Informe o texto da pergunta.');
+      showFeedback('error', 'Informe o texto da pergunta.');
       return;
     }
     if (isChoiceType && options.length === 0) {
-      alert('Perguntas de múltipla escolha precisam de opções.');
+      showFeedback('error', 'Perguntas de múltipla escolha precisam de opções.');
       return;
     }
 
@@ -553,9 +559,9 @@ export const AnamnesisModal = ({
       } catch {
         // noop
       }
-      alert('Template de anamnese atualizado com sucesso.');
+      showFeedback('success', 'Template de anamnese atualizado com sucesso.');
     } catch (error: any) {
-      alert(error?.message || 'Não foi possível salvar o template.');
+      showFeedback('error', error?.message || 'Não foi possível salvar o template.');
     } finally {
       setIsSavingTemplate(false);
     }
@@ -577,7 +583,7 @@ export const AnamnesisModal = ({
         // noop
       }
     } catch (error: any) {
-      alert(error?.message || 'Não foi possível restaurar o template padrão.');
+      showFeedback('error', error?.message || 'Não foi possível restaurar o template padrão.');
     }
   };
 
@@ -603,6 +609,19 @@ export const AnamnesisModal = ({
         </div>
 
         <div className="px-5 sm:px-8 py-5 space-y-4">
+          {feedback && (
+            <div
+              className={`rounded-xl border px-4 py-3 text-sm font-medium ${
+                feedback.type === 'success'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-700/50 dark:bg-emerald-900/20 dark:text-emerald-200'
+                  : feedback.type === 'error'
+                    ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-700/50 dark:bg-red-900/20 dark:text-red-200'
+                    : 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-700/50 dark:bg-blue-900/20 dark:text-blue-200'
+              }`}
+            >
+              {feedback.message}
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <button
               className={`rounded-xl px-4 py-2 text-sm font-semibold ${profileType === 'adult' ? 'bg-[#7a32fc] text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200'}`}

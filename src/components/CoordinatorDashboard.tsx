@@ -1,4 +1,4 @@
-﻿import React, { useState, useMemo, useEffect, useRef } from "react";
+﻿import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -371,16 +371,16 @@ export function CoordinatorDashboard({
     billing: "Assinatura e Cobrança",
   };
   const professionalDailyMessages = [
-    "Olá [nome], cada marco que você registra hoje é um capítulo na história de superação de alguém. 💜",
-    "A ciência é sua base, mas sua escuta é o que transforma vidas. Bom trabalho hoje! ✨",
-    "Lembre-se: para o paciente, você é a ponte entre o desafio e a conquista. 🤝",
-    "O progresso clínico raramente é uma linha reta. Valorize as pequenas vitórias de hoje! 📈",
-    "Olá [nome], grandes mudanças são feitas de pequenos marcos consistentes. 🌱",
-    "Sua dedicação é a bússola que guia o desenvolvimento de quem você atende. 🧭",
-    "Olá [nome], para cuidar do outro com excelência, lembre-se de também cuidar de você. ☕",
-    "Sua saúde mental é tão importante quanto a técnica que você aplica. Respire fundo e bom dia! ✨",
-    "Olá [nome], lembre-se que quem faz o dia bonito é você! 💜",
-    "Transformando dados em sorrisos e evolução. Vamos para mais um dia? 🚀",
+    "Olá [nome], cada marco que você registra hoje é um capítulo na história de superação de alguém. ??",
+    "A ciência é sua base, mas sua escuta é o que transforma vidas. Bom trabalho hoje! ?",
+    "Lembre-se: para o paciente, você é a ponte entre o desafio e a conquista. ??",
+    "O progresso clínico raramente é uma linha reta. Valorize as pequenas vitórias de hoje! ??",
+    "Olá [nome], grandes mudanças são feitas de pequenos marcos consistentes. ??",
+    "Sua dedicação é a bússola que guia o desenvolvimento de quem você atende. ??",
+    "Olá [nome], para cuidar do outro com excelência, lembre-se de também cuidar de você. ?",
+    "Sua saúde mental é tão importante quanto a técnica que você aplica. Respire fundo e bom dia! ?",
+    "Olá [nome], lembre-se que quem faz o dia bonito é você! ??",
+    "Transformando dados em sorrisos e evolução. Vamos para mais um dia? ??",
   ];
 
   const [loading, setLoading] = useState(false);
@@ -594,6 +594,11 @@ export function CoordinatorDashboard({
   const [clinicLogoDataUrl, setClinicLogoDataUrl] = useState<string | null>(
     user?.clinicSettings?.clinicLogoUrl || null,
   );
+  const [mediaRefreshAttempts, setMediaRefreshAttempts] = useState({
+    signature: 0,
+    profile: 0,
+    logo: 0,
+  });
   const therapistCanRegisterClinicalData = !isTherapist || Boolean(therapistCrp.trim());
   const canManageProtocolLibrary = capabilityStatusForRole("protocol-library") === "full";
   const canManageClinicSettings = capabilityStatusForRole("clinic-settings") !== "none";
@@ -825,39 +830,56 @@ export function CoordinatorDashboard({
     user?.clinicSettings?.workEnd,
     user?.clinicSettings?.clinicCnpj,
   ]);
+  const refreshSignedMediaUrls = useCallback(async () => {
+    try {
+      const userId = String(user?.id || "").trim();
+      if (!userId) return;
+
+      const profileResult = await dataService.getUserProfileMedia(userId);
+      if (!profileResult?.success) return;
+
+      const media = profileResult?.data || {};
+      const signedProfilePicture = String(media?.profilePictureUrl || "").trim() || null;
+      const signedClinicLogo = String(media?.clinicLogoUrl || "").trim() || null;
+      const signedSignature = String(media?.signatureUrl || "").trim() || null;
+
+      if (signedProfilePicture) setTherapistProfilePhotoUrl(signedProfilePicture);
+      if (signedClinicLogo) setClinicLogoDataUrl(signedClinicLogo);
+      if (signedSignature) setTherapistSignatureDataUrl(signedSignature);
+    } catch (error) {
+      console.warn("Falha ao renovar URLs assinadas de mídia no perfil.", error);
+    }
+  }, [user?.id]);
 
   useEffect(() => {
     if (activeTab !== "settings") return;
     let cancelled = false;
-    const refreshSignedMediaUrls = async () => {
-      try {
-        const profileResult = await dataService.getUserProfile(String(user?.id || ""));
-        const professionalProfile = profileResult?.data?.professional_profile;
-        if (!professionalProfile || cancelled) return;
-
-        const signedProfilePicture =
-          String(professionalProfile?.profile_photo_url || "").trim() || null;
-        const signedClinicLogo =
-          String(professionalProfile?.clinic_logo_url || "").trim() || null;
-        const signedSignature =
-          String(professionalProfile?.signature_data_url || "").trim() || null;
-
-        if (signedProfilePicture) setTherapistProfilePhotoUrl(signedProfilePicture);
-        if (signedClinicLogo) setClinicLogoDataUrl(signedClinicLogo);
-        if (signedSignature) setTherapistSignatureDataUrl(signedSignature);
-      } catch (error) {
-        console.warn("Falha ao renovar URLs assinadas de mídia no perfil.", error);
-      }
+    const refresh = async () => {
+      if (cancelled) return;
+      await refreshSignedMediaUrls();
     };
-    void refreshSignedMediaUrls();
+    void refresh();
     const interval = setInterval(() => {
-      void refreshSignedMediaUrls();
+      void refresh();
     }, 1000 * 60 * 4);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [activeTab, user?.id]);
+  }, [activeTab, refreshSignedMediaUrls]);
+
+  const retryMediaIfBroken = useCallback(
+    async (mediaType: "signature" | "profile" | "logo") => {
+      if (activeTab !== "settings") return;
+      if ((mediaRefreshAttempts[mediaType] || 0) >= 2) return;
+      setMediaRefreshAttempts((prev) => ({
+        ...prev,
+        [mediaType]: (prev[mediaType] || 0) + 1,
+      }));
+      await refreshSignedMediaUrls();
+    },
+    [activeTab, mediaRefreshAttempts, refreshSignedMediaUrls],
+  );
 
   useEffect(() => {
     const updateTimeline = () => {
@@ -5012,11 +5034,7 @@ export function CoordinatorDashboard({
                           </label>
                           <label className="w-full min-h-[150px] p-4 bg-white border border-dashed border-slate-300 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#7a32fc] transition-all">
                             {therapistSignatureDataUrl ? (
-                              <SecureImage
-                                src={therapistSignatureDataUrl}
-                                alt="Assinatura digital"
-                                className="max-h-28 object-contain"
-                              />
+                              <SecureImage src={therapistSignatureDataUrl} alt="Assinatura digital" className="max-h-28 object-contain" onError={() => { void retryMediaIfBroken("signature"); }} />
                             ) : (
                               <span className="text-xs font-semibold text-slate-500">
                                 Clique para enviar assinatura
@@ -5044,11 +5062,7 @@ export function CoordinatorDashboard({
                           </label>
                           <label className="w-full min-h-[150px] p-4 bg-white border border-dashed border-slate-300 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#7a32fc] transition-all">
                             {therapistProfilePhotoUrl ? (
-                              <SecureImage
-                                src={therapistProfilePhotoUrl}
-                                alt="Foto de perfil"
-                                className="w-24 h-24 rounded-2xl object-cover"
-                              />
+                              <SecureImage src={therapistProfilePhotoUrl} alt="Foto de perfil" className="w-24 h-24 rounded-2xl object-cover" onError={() => { void retryMediaIfBroken("profile"); }} />
                             ) : (
                               <span className="text-xs font-semibold text-slate-500">
                                 Clique para enviar foto
@@ -5095,7 +5109,7 @@ export function CoordinatorDashboard({
                             </label>
                             <label className="w-full min-h-[150px] p-4 bg-white border border-dashed border-slate-300 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#7a32fc] transition-all">
                               {therapistSignatureDataUrl ? (
-                                <SecureImage src={therapistSignatureDataUrl} alt="Assinatura digital" className="max-h-28 object-contain" />
+                                <SecureImage src={therapistSignatureDataUrl} alt="Assinatura digital" className="max-h-28 object-contain" onError={() => { void retryMediaIfBroken("signature"); }} />
                               ) : (
                                 <span className="text-xs font-semibold text-slate-500">Clique para enviar assinatura</span>
                               )}
@@ -5117,7 +5131,7 @@ export function CoordinatorDashboard({
                             </label>
                             <label className="w-full min-h-[150px] p-4 bg-white border border-dashed border-slate-300 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#7a32fc] transition-all">
                               {therapistProfilePhotoUrl ? (
-                                <SecureImage src={therapistProfilePhotoUrl} alt="Foto de perfil" className="w-24 h-24 rounded-2xl object-cover" />
+                                <SecureImage src={therapistProfilePhotoUrl} alt="Foto de perfil" className="w-24 h-24 rounded-2xl object-cover" onError={() => { void retryMediaIfBroken("profile"); }} />
                               ) : (
                                 <span className="text-xs font-semibold text-slate-500">Clique para enviar foto</span>
                               )}
@@ -5139,7 +5153,7 @@ export function CoordinatorDashboard({
                             </label>
                             <label className="w-full min-h-[150px] p-4 bg-white border border-dashed border-slate-300 rounded-2xl flex items-center justify-center cursor-pointer hover:border-[#7a32fc] transition-all">
                               {clinicLogoDataUrl ? (
-                                <SecureImage src={clinicLogoDataUrl} alt="Logo da clínica" className="max-h-28 object-contain" />
+                                <SecureImage src={clinicLogoDataUrl} alt="Logo da clínica" className="max-h-28 object-contain" onError={() => { void retryMediaIfBroken("logo"); }} />
                               ) : (
                                 <span className="text-xs font-semibold text-slate-500">Clique para enviar logotipo</span>
                               )}
@@ -5703,4 +5717,8 @@ export function CoordinatorDashboard({
     </div>
   );
 }
+
+
+
+
 

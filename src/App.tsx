@@ -350,15 +350,9 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
-    const LOADING_WATCHDOG_MS = 15000;
+    const LOADING_WATCHDOG_MS = 12000;
     const watchdog = window.setTimeout(() => {
-      setLoading((current) => {
-        if (!current) return current;
-        console.error(
-          'Bootstrap watchdog acionado: liberando loading para evitar tela branca infinita.',
-        );
-        return false;
-      });
+      setLoading((current) => (current ? false : current));
     }, LOADING_WATCHDOG_MS);
 
     return () => window.clearTimeout(watchdog);
@@ -367,7 +361,7 @@ export default function App() {
   useEffect(() => {
     const initSupabase = async () => {
       try {
-        const supabase = await getSupabase();
+        const supabase = await withTimeout(getSupabase(), 8000, null as any);
         if (!supabase) {
           setLoading(false);
           return;
@@ -424,7 +418,7 @@ export default function App() {
       const timeoutId = window.setTimeout(() => timeoutController.abort(), sessionTimeoutMs);
 
       try {
-        const session = await ensureFreshSession();
+        const session = await withTimeout(ensureFreshSession(), 8000, null as any);
         const token = session?.access_token;
 
         const response = await fetch('/api/auth/me', { 
@@ -952,35 +946,43 @@ export default function App() {
 
     setClinicStateHydrated(false);
     resetWorkspaceScopedState();
-    const result = await dataService.hydrateWorkspaceState(workspaceId);
+    try {
+      const result = await withTimeout(
+        dataService.hydrateWorkspaceState(workspaceId),
+        12000,
+        { success: false } as any,
+      );
 
-    if (!result?.success || !result?.data) {
+      if (!result?.success || !result?.data) {
+        return;
+      }
+
+      const hydrated = result.data;
+      setRooms(Array.isArray(hydrated.clinicState?.rooms) ? hydrated.clinicState.rooms : []);
+      setTherapistAgenda(
+        Array.isArray(hydrated.clinicState?.appointments) ? hydrated.clinicState.appointments : [],
+      );
+      setProtocols(Array.isArray(hydrated.clinicState?.protocols) ? hydrated.clinicState.protocols : []);
+      setSpecialtySettings(
+        hydrated.clinicState?.specialtySettings &&
+          typeof hydrated.clinicState.specialtySettings === 'object'
+          ? hydrated.clinicState.specialtySettings
+          : {},
+      );
+      const hydratedPatients = Array.isArray(hydrated.patients) ? hydrated.patients : [];
+      const scopedPatients = nextUser?.role === 'therapist'
+        ? hydratedPatients.filter((p: any) => String(p?.therapist_id || p?.professional_id || '').trim() === String(nextUser?.id || '').trim())
+        : hydratedPatients;
+      setAllPatients(scopedPatients);
+      setTherapistNotes(normalizeAndDecorateNotes(Array.isArray(hydrated.notes) ? hydrated.notes : []));
+      setHistory(Array.isArray(hydrated.history) ? hydrated.history : []);
+      setTasks(Array.isArray(hydrated.tasks) ? hydrated.tasks : []);
+      setClinicalRecords(Array.isArray(hydrated.clinicalRecords) ? hydrated.clinicalRecords : []);
+    } catch (error) {
+      console.error('hydrateState failed:', error);
+    } finally {
       setClinicStateHydrated(true);
-      return;
     }
-
-    const hydrated = result.data;
-    setRooms(Array.isArray(hydrated.clinicState?.rooms) ? hydrated.clinicState.rooms : []);
-    setTherapistAgenda(
-      Array.isArray(hydrated.clinicState?.appointments) ? hydrated.clinicState.appointments : [],
-    );
-    setProtocols(Array.isArray(hydrated.clinicState?.protocols) ? hydrated.clinicState.protocols : []);
-    setSpecialtySettings(
-      hydrated.clinicState?.specialtySettings &&
-        typeof hydrated.clinicState.specialtySettings === 'object'
-        ? hydrated.clinicState.specialtySettings
-        : {},
-    );
-    const hydratedPatients = Array.isArray(hydrated.patients) ? hydrated.patients : [];
-    const scopedPatients = nextUser?.role === 'therapist'
-      ? hydratedPatients.filter((p: any) => String(p?.therapist_id || p?.professional_id || '').trim() === String(nextUser?.id || '').trim())
-      : hydratedPatients;
-    setAllPatients(scopedPatients);
-    setTherapistNotes(normalizeAndDecorateNotes(Array.isArray(hydrated.notes) ? hydrated.notes : []));
-    setHistory(Array.isArray(hydrated.history) ? hydrated.history : []);
-    setTasks(Array.isArray(hydrated.tasks) ? hydrated.tasks : []);
-    setClinicalRecords(Array.isArray(hydrated.clinicalRecords) ? hydrated.clinicalRecords : []);
-    setClinicStateHydrated(true);
   };
 
   useEffect(() => {
@@ -2819,3 +2821,16 @@ export default function App() {
   };
 
 
+  const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, fallbackValue: T): Promise<T> => {
+    let timeoutId: number | null = null;
+    try {
+      return await Promise.race<T>([
+        promise,
+        new Promise<T>((resolve) => {
+          timeoutId = window.setTimeout(() => resolve(fallbackValue), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+    }
+  };
