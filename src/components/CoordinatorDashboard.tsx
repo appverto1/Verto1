@@ -5043,7 +5043,7 @@ export function CoordinatorDashboard({
                             <input
                               type="file"
                               className="hidden"
-                              accept="image/png,image/webp,image/svg+xml"
+                              accept="image/png,image/webp,image/jpeg"
                               onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (!file) return;
@@ -5116,7 +5116,7 @@ export function CoordinatorDashboard({
                               <input
                                 type="file"
                                 className="hidden"
-                                accept="image/png,image/webp,image/svg+xml,image/jpeg"
+                                accept="image/png,image/webp,image/jpeg"
                                 onChange={(e) => {
                                   const file = e.target.files?.[0];
                                   if (!file) return;
@@ -5160,7 +5160,7 @@ export function CoordinatorDashboard({
                               <input
                                 type="file"
                                 className="hidden"
-                                accept="image/png,image/webp,image/svg+xml,image/jpeg"
+                                accept="image/png,image/webp,image/jpeg"
                                 onChange={(e) => {
                                   const file = e.target.files?.[0];
                                   if (!file) return;

@@ -37,6 +37,21 @@ function maskEmailForLog(email?: string | null): string | null {
   return `${safeLocal}@${domain}`;
 }
 
+function stripEphemeralProfileMedia(result: any) {
+  if (!result?.data?.professional_profile) return result;
+  const professionalProfile = { ...result.data.professional_profile };
+  professionalProfile.profile_photo_url = null;
+  professionalProfile.clinic_logo_url = null;
+  professionalProfile.signature_data_url = null;
+  return {
+    ...result,
+    data: {
+      ...result.data,
+      professional_profile: professionalProfile
+    }
+  };
+}
+
 async function handleDataError(error: unknown, operationType: OperationType, path: string | null) {
   const supabase = await getSupabase();
   const { data: { user } } = await supabase.auth.getUser();
@@ -977,7 +992,15 @@ export const dataService = {
       });
       if (response.ok) {
         const result = await response.json();
-        await saveEncryptedRecord({ id: userId, data: result, type: 'profile', sync_status: 'synced', last_updated: Date.now(), method: 'POST', endpoint: `/api/profile/${userId}` });
+        await saveEncryptedRecord({
+          id: userId,
+          data: stripEphemeralProfileMedia(result),
+          type: 'profile',
+          sync_status: 'synced',
+          last_updated: Date.now(),
+          method: 'POST',
+          endpoint: `/api/profile/${userId}`
+        });
         return result;
       }
     } catch (error) {

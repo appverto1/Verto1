@@ -322,6 +322,73 @@ export default function App() {
       path: uploaded?.path ? `patient-photos/${uploaded.path}` : null,
     };
   };
+
+  useEffect(() => {
+    const currentUserId = String(user?.id || '').trim();
+    if (!currentUserId) return;
+
+    let cancelled = false;
+    let inFlight = false;
+
+    const refreshSignedProfileMedia = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
+        const result = await dataService.getUserProfileMedia(currentUserId);
+        if (cancelled || !result?.success) return;
+
+        const media = result?.data || {};
+        const signedProfilePicture = String(media?.profilePictureUrl || '').trim() || null;
+        const signedClinicLogo = String(media?.clinicLogoUrl || '').trim() || null;
+        const signedSignature = String(media?.signatureUrl || '').trim() || null;
+
+        if (signedProfilePicture) setProfilePicture(signedProfilePicture);
+        setUser((prev: any) => {
+          if (!prev || String(prev?.id || '').trim() !== currentUserId) return prev;
+          const nextProfilePicture = signedProfilePicture || prev.profilePicture || prev.profile_picture || null;
+          const nextSignature = signedSignature || prev.signatureDataUrl || prev?.clinicSettings?.signatureDataUrl || null;
+          const nextClinicLogo = signedClinicLogo || prev?.clinicSettings?.clinicLogoUrl || null;
+          return {
+            ...prev,
+            profilePicture: nextProfilePicture,
+            profile_picture: nextProfilePicture,
+            signatureDataUrl: nextSignature,
+            clinicSettings: {
+              ...(prev?.clinicSettings || {}),
+              ...(nextSignature ? { signatureDataUrl: nextSignature } : {}),
+              ...(nextClinicLogo ? { clinicLogoUrl: nextClinicLogo } : {}),
+            },
+          };
+        });
+      } catch (error) {
+        console.warn('Profile media refresh failed:', error);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void refreshSignedProfileMedia();
+
+    const interval = window.setInterval(() => {
+      void refreshSignedProfileMedia();
+    }, 1000 * 60 * 4);
+
+    const handleVisibilityRefresh = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshSignedProfileMedia();
+      }
+    };
+
+    window.addEventListener('focus', handleVisibilityRefresh);
+    document.addEventListener('visibilitychange', handleVisibilityRefresh);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', handleVisibilityRefresh);
+      document.removeEventListener('visibilitychange', handleVisibilityRefresh);
+    };
+  }, [user?.id]);
   
   useEffect(() => {
     const handleOnline = () => {

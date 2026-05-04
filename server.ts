@@ -8422,7 +8422,12 @@ async function startServer() {
         profile_picture: sanitizeUrl(req.body?.profile_picture) || sanitizeUrl(req.body?.profilePicture) || undefined,
         crp: sanitizeString(req.body?.crp, 80) || undefined,
         phone: sanitizePhoneE164(req.body?.phone || req.body?.whatsappPhone || req.body?.whatsapp) || undefined,
-        signature_url: sanitizeUrl(req.body?.signature_url) || sanitizeUrl(req.body?.signatureUrl) || undefined,
+        signature_url:
+          sanitizeUrl(req.body?.signature_url) ||
+          sanitizeUrl(req.body?.signatureUrl) ||
+          sanitizeUrl(req.body?.signatureDataUrl) ||
+          sanitizeUrl(req.body?.clinicSettings?.signatureDataUrl) ||
+          undefined,
         specialties: sanitizeString(req.body?.specialties, 1000) || undefined,
         mini_curriculum: sanitizeString(req.body?.mini_curriculum || req.body?.miniCurriculum, 4000) || undefined,
         updated_at: new Date().toISOString()
@@ -8445,6 +8450,8 @@ async function startServer() {
           const currentSignatureUrl =
             sanitizeUrl(req.body?.signature_url) ||
             sanitizeUrl(req.body?.signatureUrl) ||
+            sanitizeUrl(req.body?.signatureDataUrl) ||
+            sanitizeUrl(req.body?.clinicSettings?.signatureDataUrl) ||
             undefined;
           const currentClinicLogoUrl =
             sanitizeUrl(req.body?.clinic_logo_url) ||
@@ -8455,13 +8462,29 @@ async function startServer() {
           // Merge metadata so one partial update does not erase previously persisted media paths.
           const { data: existingProfile } = await supabase
             .from('professional_profiles')
-            .select('metadata')
+            .select('metadata, profile_photo_url, signature_data_url, clinic_logo_url')
             .eq('user_id', sanitizeString(req.params.userId, 120))
             .maybeSingle();
           const existingMetadata =
             existingProfile?.metadata && typeof existingProfile.metadata === 'object'
               ? { ...(existingProfile.metadata as Record<string, any>) }
               : {};
+          const resolvedProfilePictureUrl =
+            currentProfilePictureUrl ||
+            sanitizeUrl(existingProfile?.profile_photo_url) ||
+            sanitizeSessionUrl(req.session.user?.profilePicture) ||
+            null;
+          const resolvedSignatureUrl =
+            currentSignatureUrl ||
+            sanitizeUrl(existingProfile?.signature_data_url) ||
+            sanitizeSessionUrl(req.session.user?.signatureDataUrl) ||
+            sanitizeSessionUrl(req.session.user?.clinicSettings?.signatureDataUrl) ||
+            null;
+          const resolvedClinicLogoUrl =
+            currentClinicLogoUrl ||
+            sanitizeUrl(existingProfile?.clinic_logo_url) ||
+            sanitizeSessionUrl(req.session.user?.clinicSettings?.clinicLogoUrl) ||
+            null;
 
           const mergedMetadata = cleanObject({
             ...existingMetadata,
@@ -8474,9 +8497,9 @@ async function startServer() {
             user_id: sanitizeString(req.params.userId, 120),
             clinic_id: clinicId || undefined,
             role: role || undefined,
-            profile_photo_url: currentProfilePictureUrl,
-            signature_data_url: currentSignatureUrl,
-            clinic_logo_url: currentClinicLogoUrl,
+            profile_photo_url: resolvedProfilePictureUrl || undefined,
+            signature_data_url: resolvedSignatureUrl || undefined,
+            clinic_logo_url: resolvedClinicLogoUrl || undefined,
             metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined,
             updated_at: new Date().toISOString()
           });
@@ -8490,6 +8513,73 @@ async function startServer() {
             const { [missingProfileColumn]: _removed, ...rest } = profileCandidate as any;
             profileCandidate = rest;
           }
+
+          const nextClinicSettings = compactClinicSettingsForSession({
+            ...(req.session.user?.clinicSettings || {}),
+            ...(req.body?.clinicSettings && typeof req.body.clinicSettings === 'object' ? req.body.clinicSettings : {}),
+            clinicLogoUrl: resolvedClinicLogoUrl || null,
+            signatureDataUrl: resolvedSignatureUrl || null,
+            therapistSpecialties:
+              sanitizeString(req.body?.specialties || req.body?.clinicSettings?.therapistSpecialties, 240) ||
+              req.session.user?.clinicSettings?.therapistSpecialties ||
+              null,
+            therapistMiniCurriculum:
+              sanitizeString(req.body?.miniCurriculum || req.body?.clinicSettings?.therapistMiniCurriculum, 3000) ||
+              req.session.user?.clinicSettings?.therapistMiniCurriculum ||
+              null,
+          });
+
+          if (clinicId && (role === 'coordinator' || role === 'admin' || role === 'owner')) {
+            await patchTableSafely('clinics', { column: 'id', value: clinicId }, {
+              logo_url: resolvedClinicLogoUrl || undefined,
+              signature_data_url: resolvedSignatureUrl || undefined,
+              updated_at: new Date().toISOString()
+            });
+          }
+
+          if (nextClinicSettings) {
+            await supabase.auth.admin.updateUserById(sanitizeString(req.params.userId, 120), {
+              user_metadata: {
+                clinic_settings: nextClinicSettings,
+                first_login_completed:
+                  typeof req.session.user?.firstLoginCompleted === 'boolean'
+                    ? req.session.user.firstLoginCompleted
+                    : true
+              }
+            });
+          }
+
+          req.session.user.name =
+            sanitizeString(req.body?.name, 180) ||
+            req.session.user?.name ||
+            req.session.user?.email ||
+            'Profissional';
+          req.session.user.profilePicture = resolvedProfilePictureUrl;
+          req.session.user.signatureDataUrl = resolvedSignatureUrl;
+          req.session.user.clinicSettings = nextClinicSettings;
+          req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(req.session.user.id));
+          req.session.user.crp =
+            sanitizeString(req.body?.crp, 80) ||
+            req.session.user?.crp ||
+            null;
+          req.session.user.specialties =
+            sanitizeString(req.body?.specialties, 1000) ||
+            req.session.user?.specialties ||
+            null;
+          req.session.user.miniCurriculum =
+            sanitizeString(req.body?.mini_curriculum || req.body?.miniCurriculum, 4000) ||
+            req.session.user?.miniCurriculum ||
+            null;
+
+          await new Promise<void>((resolve, reject) => {
+            req.session.save((sessionError: any) => {
+              if (sessionError) {
+                reject(sessionError);
+                return;
+              }
+              resolve();
+            });
+          });
 
           return res.json({ success: true });
         }
