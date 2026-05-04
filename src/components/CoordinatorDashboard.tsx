@@ -4835,7 +4835,7 @@ export function CoordinatorDashboard({
                   }}
                   onDeleteProtocol={(id: any) => {
                     if (!canManageProtocolLibrary) return;
-                    setProtocols(protocols.filter((p: any) => p.id !== id));
+                    setProtocols((prev: any[]) => prev.filter((p: any) => p.id !== id));
                   }}
                   onBack={goBackTab}
                 />
@@ -5703,15 +5703,4 @@ export function CoordinatorDashboard({
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
 

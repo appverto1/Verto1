@@ -9,6 +9,7 @@ import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
 import { calculateDomainMastery, normalizeScoreToPercent } from '../utils/clinicalMath';
+import html2canvas from 'html2canvas';
 
 export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole }: any) => { 
   const rawProfileType = String(
@@ -480,24 +481,74 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     });
 
     const orderedEntries = [...priorityEntries, ...extraEntries];
+    const patientIdentityKeys = new Set([
+      "nome",
+      "nomeSocial",
+      "dataNascimento",
+      "idade",
+      "genero",
+      "estadoCivil",
+      "profissao",
+      "religiao",
+      "telefone",
+      "email",
+      "rg",
+      "cpf",
+      "convenioTipo",
+      "convenioNome",
+      "convenioCarteirinha",
+      "grupo",
+      "comoConheceu",
+      "cep",
+      "logradouro",
+      "numero",
+      "complemento",
+      "bairro",
+      "cidade",
+      "endereco",
+      "menorDeIdade",
+      "responsavelNome",
+      "responsavelDataNascimento",
+      "responsavelCpf",
+      "responsavelTelefone",
+      "formType",
+    ]);
+    const professionalKeys = new Set(["profissional", "crp"]);
 
-    const lines = orderedEntries
-      .map(([key, value]) => {
-        const normalized = normalizeValue(key, value);
-        if (!normalized.trim()) return "";
-        const label = dynamicLabelMap[key] || fieldLabelMap[key] || fallbackLabel(key);
-        return `
-          <tr>
-            <td style="padding:8px 10px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;color:#334155;width:35%;">${escapeHtml(label)}</td>
-            <td style="padding:8px 10px;border:1px solid #e2e8f0;color:#0f172a;">${escapeHtml(normalized)}</td>
-          </tr>`;
-      })
-      .filter(Boolean)
-      .join("");
+    const buildRows = (entries: Array<[string, any]>) =>
+      entries
+        .map(([key, value]) => {
+          const normalized = normalizeValue(key, value);
+          if (!normalized.trim()) return "";
+          const label = dynamicLabelMap[key] || fieldLabelMap[key] || fallbackLabel(key);
+          return `
+            <tr>
+              <td style="padding:8px 10px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;color:#334155;width:35%;">${escapeHtml(label)}</td>
+              <td style="padding:8px 10px;border:1px solid #e2e8f0;color:#0f172a;">${escapeHtml(normalized)}</td>
+            </tr>`;
+        })
+        .filter(Boolean)
+        .join("");
+
+    const patientRows = buildRows(orderedEntries.filter(([key]) => patientIdentityKeys.has(key)));
+    const professionalRows = buildRows(orderedEntries.filter(([key]) => professionalKeys.has(key)));
+    const clinicalRows = buildRows(
+      orderedEntries.filter(([key]) => !patientIdentityKeys.has(key) && !professionalKeys.has(key)),
+    );
 
     const fichaDate = fichaDateIso
       ? new Date(`${fichaDateIso}T00:00:00`).toLocaleDateString("pt-BR")
       : new Date().toLocaleDateString("pt-BR");
+
+    const professionalName =
+      String(anamnesis?.profissional || c.professionalName || c.userName || '').trim() ||
+      'Profissional responsável';
+    const professionalCrp = String(anamnesis?.crp || c.crp || c.professionalCrp || '-').trim();
+    const clinicAddress =
+      String(c.address || '').trim() ||
+      [c.street, c.number, c.complement, c.neighborhood, c.city].filter(Boolean).join(', ') ||
+      '-';
+    const fichaType = normalizeValue('formType', anamnesis?.formType || patient?.anamnesisData?.formType || '');
 
     return `<!doctype html>
 <html lang="pt-BR">
@@ -532,13 +583,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         <h1 class="title">Ficha de Anamnese</h1>
         <p class="meta"><strong>Clínica:</strong> ${escapeHtml(c.clinicName || "Clínica Verto")}</p>
         <p class="meta"><strong>CNPJ:</strong> ${escapeHtml(c.cnpj || "-")}</p>
-        <p class="meta"><strong>Endereço:</strong> ${escapeHtml(c.address || "-")}</p>
+        <p class="meta"><strong>Endereço:</strong> ${escapeHtml(clinicAddress)}</p>
+        <p class="meta"><strong>Profissional responsável:</strong> ${escapeHtml(professionalName)} | <strong>Registro:</strong> ${escapeHtml(professionalCrp)}</p>
       </div>
       <img src="${escapeHtml(c.logoUrl || buildInitialAvatarDataUrl(c.professionalName || patient?.name || 'Profissional'))}" class="logo" />
     </div>
     <div class="content">
-      <p class="patient"><strong>Paciente:</strong> ${escapeHtml(patient?.name || "-")} | <strong>Data da ficha:</strong> ${escapeHtml(fichaDate)}</p>
-      <table class="table">${lines || `<tr><td class="td">Sem campos preenchidos.</td></tr>`}</table>
+      <p class="patient"><strong>Paciente:</strong> ${escapeHtml(patient?.name || "-")} | <strong>Data da ficha:</strong> ${escapeHtml(fichaDate)} | <strong>Tipo:</strong> ${escapeHtml(fichaType || '-')}</p>
+      <h3 style="margin:10px 0 8px;font-size:15px;color:#312e81;">1. Informações cadastrais do paciente</h3>
+      <table class="table">${patientRows || `<tr><td class="td">Sem dados cadastrais preenchidos.</td></tr>`}</table>
+      <h3 style="margin:18px 0 8px;font-size:15px;color:#312e81;">2. Perguntas e respostas clínicas</h3>
+      <table class="table">${clinicalRows || `<tr><td class="td">Sem respostas clínicas preenchidas.</td></tr>`}</table>
+      ${professionalRows ? `<h3 style="margin:18px 0 8px;font-size:15px;color:#312e81;">3. Informações do profissional</h3><table class="table">${professionalRows}</table>` : ''}
     </div>
     <div class="footer">
       <div>
@@ -576,6 +632,77 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         setTimeout(cleanupUrl, 1200);
       }
     };
+  };
+
+  const openAnamnesisPreviewWindow = (htmlContent: string) => {
+    const htmlBlob = new Blob([htmlContent], { type: "text/html;charset=utf-8" });
+    const htmlUrl = URL.createObjectURL(htmlBlob);
+    const previewWindow = window.open(
+      htmlUrl,
+      "_blank",
+      "noopener,noreferrer,width=1100,height=900",
+    );
+    if (!previewWindow) {
+      alert("Não foi possível abrir a visualização. Verifique o bloqueador de pop-up.");
+      URL.revokeObjectURL(htmlUrl);
+      return;
+    }
+    previewWindow.onload = () => {
+      setTimeout(() => {
+        try {
+          URL.revokeObjectURL(htmlUrl);
+        } catch {
+          // noop
+        }
+      }, 2000);
+    };
+  };
+
+  const generatePdfBlobFromAnamnesisHtml = async (htmlContent: string) => {
+    const { jsPDF } = await import('jspdf');
+    const sandbox = document.createElement('div');
+    sandbox.style.position = 'fixed';
+    sandbox.style.left = '-10000px';
+    sandbox.style.top = '0';
+    sandbox.style.width = '794px';
+    sandbox.style.zIndex = '-1';
+    sandbox.innerHTML = htmlContent;
+    document.body.appendChild(sandbox);
+    const target = (sandbox.querySelector('.sheet') as HTMLElement) || sandbox;
+
+    try {
+      const canvas = await html2canvas(target, {
+        backgroundColor: '#ffffff',
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        windowWidth: target.scrollWidth || 794,
+      });
+
+      const pdf = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 24;
+      const contentWidth = pageWidth - margin * 2;
+      const imgHeight = (canvas.height * contentWidth) / canvas.width;
+      const imgData = canvas.toDataURL('image/png', 1.0);
+
+      let heightLeft = imgHeight;
+      let positionY = margin;
+      pdf.addImage(imgData, 'PNG', margin, positionY, contentWidth, imgHeight);
+      heightLeft -= (pageHeight - margin * 2);
+
+      while (heightLeft > 0) {
+        pdf.addPage();
+        positionY = margin - (imgHeight - heightLeft);
+        pdf.addImage(imgData, 'PNG', margin, positionY, contentWidth, imgHeight);
+        heightLeft -= (pageHeight - margin * 2);
+      }
+
+      return new Blob([pdf.output('arraybuffer')], { type: 'application/pdf' });
+    } finally {
+      document.body.removeChild(sandbox);
+    }
   };
 
   const availableSnapshots = useMemo(() => {
@@ -1768,18 +1895,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       let uploadResult: any = null;
       let uploadErrorMessage = '';
       try {
-        const { jsPDF } = await import('jspdf');
-        const pdfDoc = new jsPDF({ unit: 'pt', format: 'a4' });
-        const textContent = pendingAnamnesisPayload
-          .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-          .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-          .replace(/<[^>]+>/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim();
-        const renderedText = textContent || 'Ficha de anamnese registrada na Verto.';
-        const lines = pdfDoc.splitTextToSize(renderedText, 520);
-        pdfDoc.text(lines, 36, 48);
-        const pdfBlob = new Blob([pdfDoc.output('arraybuffer')], { type: 'application/pdf' });
+        const pdfBlob = await generatePdfBlobFromAnamnesisHtml(pendingAnamnesisPayload);
 
         uploadResult = await dataService.uploadPatientFile(String(patient.id), {
           fileName: normalizedName,
@@ -3635,6 +3751,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </div>
             </div>
             <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => openAnamnesisPreviewWindow(pendingAnamnesisPayload)}
+                className="px-4 py-2.5 rounded-xl bg-indigo-50 text-indigo-700 font-semibold text-sm"
+              >
+                Visualizar ficha
+              </button>
               <button
                 onClick={() => {
                   setShowAnamnesisFileModal(false);

@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+﻿import React, { useEffect, useState } from 'react';
 import { ChevronDown, Trash2, Plus, ChevronLeft, Save, SearchCode, Boxes, Filter, Search, FileUp, Loader2, ShieldCheck, Info } from 'lucide-react';
 import { SuccessOverlay } from './Common';
 
@@ -26,11 +26,11 @@ export const SkillEditor = ({ skill, onUpdate, onDelete, category }: any) => {
           <div><label className="text-[10px] uppercase font-bold text-gray-400">{isIntervention ? 'Objetivo / Instruções' : 'Objetivo'}</label><textarea className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs resize-none" rows={isIntervention ? 4 : 2} value={skill.objective || ''} onChange={(e) => onUpdate({ ...skill, objective: e.target.value })} placeholder={isIntervention ? "Descreva o que o paciente deve fazer ou escrever..." : "O que se espera do paciente?"}></textarea></div> 
           {!isIntervention && (
             <>
-              <div><label className="text-[10px] uppercase font-bold text-gray-400">Exemplos</label><textarea className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs resize-none" rows={2} value={skill.example || ''} onChange={(e) => onUpdate({ ...skill, example: e.target.value })} placeholder="DÃª exemplos prÃ¡ticos..."></textarea></div> 
-              <div><label className="text-[10px] uppercase font-bold text-gray-400">CritÃ©rios</label><textarea className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs resize-none" rows={2} value={skill.criteria || ''} onChange={(e) => onUpdate({ ...skill, criteria: e.target.value })} placeholder="CritÃ©rios de pontuaÃ§Ã£o..."></textarea></div> 
+              <div><label className="text-[10px] uppercase font-bold text-gray-400">Exemplos</label><textarea className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs resize-none" rows={2} value={skill.example || ''} onChange={(e) => onUpdate({ ...skill, example: e.target.value })} placeholder="Dê exemplos práticos..."></textarea></div> 
+              <div><label className="text-[10px] uppercase font-bold text-gray-400">Critérios</label><textarea className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs resize-none" rows={2} value={skill.criteria || ''} onChange={(e) => onUpdate({ ...skill, criteria: e.target.value })} placeholder="Critérios de pontuação..."></textarea></div> 
             </>
           )}
-          <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">ComentÃ¡rio Interno</label><textarea className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs resize-none" rows={2} value={skill.comment || ''} onChange={(e) => onUpdate({ ...skill, comment: e.target.value })} placeholder="ObservaÃ§Ãµes do profissional..."></textarea></div> 
+          <div><label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Comentário Interno</label><textarea className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs resize-none" rows={2} value={skill.comment || ''} onChange={(e) => onUpdate({ ...skill, comment: e.target.value })} placeholder="Observações do profissional..."></textarea></div> 
         </div> 
       )} 
     </div> 
@@ -50,7 +50,7 @@ export const DomainEditor = ({ domain, onUpdate, onDelete, category }: any) => {
     } 
   }; 
   const addSkill = () => { 
-    const newSkill = { id: Date.now(), name: category === 'intervention' ? "Nova Tarefa de IntervenÃ§Ã£o" : "Nova Tarefa", code: "", maxScore: 2, objective: "", example: "", criteria: "", comment: "" }; 
+    const newSkill = { id: Date.now(), name: category === 'intervention' ? "Nova Tarefa de Intervenção" : "Nova Tarefa", code: "", maxScore: 2, objective: "", example: "", criteria: "", comment: "" }; 
     onUpdate({ ...domain, skills: [...domain.skills, newSkill] }); setIsOpen(true); 
   }; 
   return ( 
@@ -58,7 +58,7 @@ export const DomainEditor = ({ domain, onUpdate, onDelete, category }: any) => {
       <div className="flex items-center justify-between p-4 bg-gray-50"> 
         <div className="flex items-center gap-3 flex-1">
           <button onClick={() => setIsOpen(!isOpen)}><ChevronDown size={20} className={`text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}/></button>
-          <input type="text" className="bg-transparent font-bold text-gray-700 outline-none w-full" value={domain.name} onChange={(e) => onUpdate({ ...domain, name: e.target.value })} placeholder="Nome do DomÃ­nio/Categoria" />
+          <input type="text" className="bg-transparent font-bold text-gray-700 outline-none w-full" value={domain.name} onChange={(e) => onUpdate({ ...domain, name: e.target.value })} placeholder="Nome do Domínio/Categoria" />
         </div> 
         <button onClick={onDelete} className="text-gray-400 hover:text-red-500"><Trash2 size={18}/></button> 
       </div> 
@@ -97,28 +97,89 @@ export const ProtocolEditor = ({ protocol, onSave, onCancel }: any) => {
       : inferredRange.max
   }); 
   const [showSuccess, setShowSuccess] = useState(false); 
+  const [isSaving, setIsSaving] = useState(false);
+  const protocolDraftStorageKey = `verto_protocol_draft_${String(protocol?.id || 'new')}`;
   const updateDomain = (domainId: any, updatedData: any) => { 
     const updatedDomains = localProtocol.data.map((d: any) => d.id === domainId ? updatedData : d); 
     setLocalProtocol({ ...localProtocol, data: updatedDomains }); 
   }; 
   const deleteDomain = (domainId: any) => { 
-    if (confirm("Remover este domÃ­nio inteiro?")) { 
+    if (confirm("Remover este domínio inteiro?")) { 
       const updatedDomains = localProtocol.data.filter((d: any) => d.id !== domainId); 
       setLocalProtocol({ ...localProtocol, data: updatedDomains }); 
     } 
   }; 
   const addDomain = () => { 
-    const newDomain = { id: `dom-${Date.now()}`, name: "Novo DomÃ­nio", skills: [] }; 
+    const newDomain = { id: `dom-${Date.now()}`, name: "Novo Domínio", skills: [] }; 
     setLocalProtocol({ ...localProtocol, data: [...localProtocol.data, newDomain] }); 
   }; 
-  const handleSave = () => { 
-    setShowSuccess(true); 
-    setTimeout(() => { onSave(localProtocol); }, 1500); 
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        protocolDraftStorageKey,
+        JSON.stringify({
+          updatedAt: new Date().toISOString(),
+          protocol: localProtocol,
+        }),
+      );
+    } catch {
+      // noop
+    }
+  }, [localProtocol, protocolDraftStorageKey]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(protocolDraftStorageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      const draftProtocol = parsed?.protocol;
+      if (!draftProtocol || typeof draftProtocol !== 'object') return;
+      const shouldRestore = confirm('Existe um rascunho não salvo deste protocolo. Deseja restaurar o conteúdo?');
+      if (shouldRestore) {
+        setLocalProtocol(draftProtocol);
+      } else {
+        localStorage.removeItem(protocolDraftStorageKey);
+      }
+    } catch {
+      // noop
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleSave = async () => { 
+    if (!String(localProtocol?.title || '').trim()) {
+      alert('Informe o nome do protocolo antes de salvar.');
+      return;
+    }
+    if (!Array.isArray(localProtocol?.data) || localProtocol.data.length === 0) {
+      alert('Adicione pelo menos um domínio antes de salvar.');
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const saveResult = await onSave(localProtocol);
+      if (saveResult?.success === false) {
+        alert(saveResult?.error || 'Não foi possível salvar o protocolo. Tente novamente.');
+        return;
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Não foi possível salvar o protocolo. Tente novamente.');
+      return;
+    } finally {
+      setIsSaving(false);
+    }
+    setShowSuccess(true);
+    try {
+      localStorage.removeItem(protocolDraftStorageKey);
+    } catch {
+      // noop
+    }
+    setTimeout(() => { onCancel(); }, 1200); 
   }; 
   return ( 
-    <div className="fixed inset-0 z-50 bg-white flex flex-col overflow-y-auto"> 
+    <div className="w-full min-h-full bg-white flex flex-col overflow-y-auto rounded-[28px] border border-gray-100 shadow-sm"> 
       {showSuccess && <SuccessOverlay title="Salvo!" message="Protocolo atualizado com sucesso." />} 
-      <div className="px-6 py-4 border-b border-gray-100 bg-white z-10"> 
+      <div className="px-6 py-4 border-b border-gray-100 bg-white sticky top-0 z-10"> 
         <div className="flex justify-between items-center mb-4"> 
           <div className="flex items-center gap-4"> 
             <button onClick={onCancel} className="p-2 -ml-2 hover:bg-gray-100 rounded-full"><ChevronLeft size={24} className="text-gray-500"/></button> 
@@ -127,7 +188,7 @@ export const ProtocolEditor = ({ protocol, onSave, onCancel }: any) => {
               <p className="text-xs text-gray-400">Defina a estrutura e classificação</p> 
             </div> 
           </div> 
-          <button onClick={handleSave} className="bg-green-50/10 text-green-600 px-6 py-2 rounded-xl font-bold hover:bg-green-100 transition-colors flex items-center gap-2"><Save size={18}/> Salvar</button> 
+          <button disabled={isSaving} onClick={handleSave} className="bg-[#7a32fc] text-white px-6 py-2 rounded-xl font-bold hover:opacity-95 transition-colors flex items-center gap-2 disabled:opacity-60"><Save size={18}/> {isSaving ? 'Salvando...' : 'Salvar protocolo'}</button> 
         </div> 
         <div className="bg-gray-50 p-4 rounded-2xl border border-gray-200 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-2"> 
           <div className="md:col-span-2"> 
@@ -208,6 +269,12 @@ export const ProtocolEditor = ({ protocol, onSave, onCancel }: any) => {
         <div className="max-w-3xl mx-auto"> 
           {localProtocol.data.map((domain: any) => (<DomainEditor key={domain.id} domain={domain} onUpdate={(data: any) => updateDomain(domain.id, data)} onDelete={() => deleteDomain(domain.id)} category={localProtocol.category} />))} 
           <button onClick={addDomain} className="w-full py-4 bg-white border border-gray-200 rounded-2xl text-[#7551FF] font-bold shadow-sm hover:shadow-md transition-all flex items-center justify-center gap-2 mt-4"><Plus size={20} /> Adicionar Novo Domínio de Habilidades</button> 
+          <div className="pt-4 flex justify-end">
+            <button disabled={isSaving} onClick={handleSave} className="bg-[#7a32fc] text-white px-6 py-2 rounded-xl font-bold hover:opacity-95 transition-colors flex items-center gap-2 disabled:opacity-60">
+              <Save size={18} />
+              {isSaving ? 'Salvando...' : 'Salvar protocolo'}
+            </button>
+          </div>
         </div> 
       </div> 
     </div> 
@@ -354,7 +421,7 @@ export const ProtocolManagementSystem = ({
   );
 
   return ( 
-    <div className="h-screen bg-gray-50 flex flex-col overflow-hidden relative"> 
+    <div className="w-full min-h-full bg-gray-50 flex flex-col overflow-x-hidden relative"> 
       {/* Import Modal with License Declaration */}
       {showImportModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
@@ -455,7 +522,7 @@ export const ProtocolManagementSystem = ({
         )}
       </div> 
 
-      <div className="flex-1 overflow-y-auto no-scrollbar px-6 pt-6 pb-20"> 
+      <div className="flex-1 overflow-y-auto no-scrollbar px-8 md:px-10 pt-6 pb-24"> 
         <div className="w-full max-w-5xl mx-auto">
           <div className="bg-white p-4 rounded-[24px] shadow-sm border border-gray-100 mb-8 animate-slide-up"> 
             <button onClick={() => setIsFiltersOpen(!isFiltersOpen)} className="w-full flex items-center justify-between group transition-all">

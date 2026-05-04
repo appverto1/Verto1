@@ -225,6 +225,7 @@ export const AnamnesisModal = ({
   const [editorSectionId, setEditorSectionId] = useState<string | null>(null);
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
   const [draftQuestion, setDraftQuestion] = useState<QuestionDraft | null>(null);
+  const [templateDirty, setTemplateDirty] = useState(false);
 
   const [scheduleImmediate, setScheduleImmediate] = useState(false);
   const [registerDate, setRegisterDate] = useState('');
@@ -232,6 +233,7 @@ export const AnamnesisModal = ({
   const [consultationApproach, setConsultationApproach] = useState('');
   const [consultationRoom, setConsultationRoom] = useState('');
   const [consultationProfessional, setConsultationProfessional] = useState('');
+  const templateDraftStorageKey = `verto_anamnesis_template_draft_${profileType}`;
 
   useEffect(() => {
     if (!isOpen) return;
@@ -268,7 +270,45 @@ export const AnamnesisModal = ({
     setConsultationApproach(initialData?.approach || '');
     setConsultationRoom(initialData?.room || '');
     setConsultationProfessional(initialData?.professional || '');
+    setTemplateDirty(false);
   }, [isOpen, initialData, template, canEditTemplate]);
+
+  useEffect(() => {
+    if (!isOpen || !canEditTemplate || view !== 'template') return;
+    try {
+      const raw = localStorage.getItem(templateDraftStorageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      const draftTemplate = parsed?.template;
+      if (!draftTemplate || typeof draftTemplate !== 'object') return;
+      const shouldRestore = confirm('Existe um rascunho não salvo da ficha de anamnese. Deseja restaurar?');
+      if (shouldRestore) {
+        setTemplateState(normalizeAnamnesisTemplate(draftTemplate));
+        setTemplateDirty(true);
+      } else {
+        localStorage.removeItem(templateDraftStorageKey);
+      }
+    } catch {
+      // noop
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, canEditTemplate, view, profileType]);
+
+  useEffect(() => {
+    if (!isOpen || !canEditTemplate || view !== 'template') return;
+    try {
+      localStorage.setItem(
+        templateDraftStorageKey,
+        JSON.stringify({
+          updatedAt: new Date().toISOString(),
+          profileType,
+          template: templateState
+        })
+      );
+    } catch {
+      // noop
+    }
+  }, [templateState, profileType, isOpen, canEditTemplate, view, templateDraftStorageKey]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -384,6 +424,7 @@ export const AnamnesisModal = ({
   };
 
   const updateTemplateProfile = (updater: (profile: typeof profileTemplate) => typeof profileTemplate) => {
+    setTemplateDirty(true);
     setTemplateState((prev) => {
       const copy = normalizeAnamnesisTemplate(prev);
       copy.profiles[profileType] = updater(copy.profiles[profileType]);
@@ -506,6 +547,12 @@ export const AnamnesisModal = ({
       const normalized = normalizeAnamnesisTemplate(templateState);
       const savedTemplate = await onTemplateSave(normalized);
       setTemplateState(normalizeAnamnesisTemplate(savedTemplate || normalized));
+      setTemplateDirty(false);
+      try {
+        localStorage.removeItem(templateDraftStorageKey);
+      } catch {
+        // noop
+      }
       alert('Template de anamnese atualizado com sucesso.');
     } catch (error: any) {
       alert(error?.message || 'Não foi possível salvar o template.');
@@ -523,9 +570,23 @@ export const AnamnesisModal = ({
         throw new Error(result?.error || 'Falha ao buscar o template padrão.');
       }
       setTemplateState(normalizeAnamnesisTemplate(result.data));
+      setTemplateDirty(false);
+      try {
+        localStorage.removeItem(templateDraftStorageKey);
+      } catch {
+        // noop
+      }
     } catch (error: any) {
       alert(error?.message || 'Não foi possível restaurar o template padrão.');
     }
+  };
+
+  const handleCloseModal = () => {
+    if (canEditTemplate && view === 'template' && templateDirty) {
+      const shouldLeave = confirm('Existem mudanças não salvas na ficha de anamnese. Deseja sair sem salvar?');
+      if (!shouldLeave) return;
+    }
+    onClose();
   };
 
   return (
@@ -536,7 +597,7 @@ export const AnamnesisModal = ({
             <h2 className="text-xl sm:text-3xl font-bold text-slate-900 dark:text-slate-100">Ficha de Anamnese</h2>
             <p className="text-sm text-slate-500 dark:text-slate-300">Modelo editável por perfil com versionamento.</p>
           </div>
-          <button onClick={onClose} className="rounded-xl border border-slate-200 dark:border-slate-600 p-2 text-slate-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white">
+          <button onClick={handleCloseModal} className="rounded-xl border border-slate-200 dark:border-slate-600 p-2 text-slate-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white">
             <X size={20} />
           </button>
         </div>
