@@ -528,6 +528,21 @@ export default function App() {
 
         if (authData?.user) {
           await applyResolvedUserState(authData.user, session);
+        } else if (session?.access_token) {
+          // Fallback de recuperação em refresh: refaz o vínculo da sessão server-side.
+          const intendedRole =
+            String(session?.user?.user_metadata?.role || localStorage.getItem('verto_intended_role') || 'therapist')
+              .trim()
+              .toLowerCase();
+          const loginRes = await handleLoginSuccess(session, intendedRole, undefined, {
+            provider: session?.user?.app_metadata?.provider || null,
+            activationFlow: false,
+          });
+          if (!loginRes?.success) {
+            setUser(null);
+            setProfilePicture(null);
+            setShowWorkspacePicker(false);
+          }
         } else if (!authData) {
           console.error('Initial auth check error after retries:', lastError);
           // Mantém estado atual para evitar queda falsa para LP em falha transitória.
