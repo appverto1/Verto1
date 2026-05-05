@@ -462,6 +462,27 @@ function extractSupabaseErrorMessage(error: any): string {
   return sanitizeString(error?.message || error?.details || error?.hint || 'Unexpected error', 1000);
 }
 
+async function withTimeoutOrFallback<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback: T,
+  label: string
+): Promise<T> {
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    const timeoutPromise = new Promise<T>((resolve) => {
+      timer = setTimeout(() => resolve(fallback), timeoutMs);
+    });
+    const result = await Promise.race([promise, timeoutPromise]);
+    if (result === fallback) {
+      console.warn(`[Timeout] ${label} excedeu ${timeoutMs}ms; seguindo com fallback.`);
+    }
+    return result;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 const SENSITIVE_LOG_KEY_REGEX =
   /(password|pass|token|secret|key|authorization|cookie|otp|code|mfa|session|refresh|access|bearer|credential)/i;
 
@@ -1996,7 +2017,13 @@ async function findAuthUserByEmail(email: string): Promise<any | null> {
   let page = 1;
   const perPage = 200;
   for (;;) {
-    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage });
+    const listResult = await withTimeoutOrFallback(
+      supabase.auth.admin.listUsers({ page, perPage }),
+      7000,
+      { data: { users: [] }, error: null } as any,
+      'supabase.auth.admin.listUsers'
+    );
+    const { data, error } = listResult;
     if (error) return null;
     const users = data?.users || [];
     const found = users.find((u: any) => sanitizeEmail(u.email) === target);
@@ -4919,11 +4946,16 @@ async function startServer() {
       }
 
       const activationLink =
-        (await generateSupabaseActionLink({
-          type: 'signup',
-          email,
-          redirectTo: getActivationRedirectUrl('coordinator', email)
-        })) || getActivationRedirectUrl('coordinator', email);
+        (await withTimeoutOrFallback(
+          generateSupabaseActionLink({
+            type: 'signup',
+            email,
+            redirectTo: getActivationRedirectUrl('coordinator', email)
+          }),
+          8000,
+          null,
+          'generateSupabaseActionLink(clinic_invite)'
+        )) || getActivationRedirectUrl('coordinator', email);
 
       const invitedRoleLabel = role === 'receptionist' ? 'Recepcionista' : 'Terapeuta';
       const clinicName = sanitizeString(clinic?.name, 160) || sanitizeString(user.name, 160) || 'Clinica';
@@ -4938,7 +4970,8 @@ async function startServer() {
           `</h1><p style="margin:0 0 16px 0;color:#5b21b6;font-size:15px;line-height:1.55;">Você foi convidado(a) para atuar como <strong>${invitedRoleLabel}</strong> na clínica <strong>${clinicName}</strong>.</p>`
         );
 
-      const emailSent = await sendTransactionalEmailSafe({
+      const emailSent = await withTimeoutOrFallback(
+        sendTransactionalEmailSafe({
         to: email,
         subject: `Convite para ${clinicName} na Verto`,
         html: htmlWithInviteContext,
@@ -4957,7 +4990,11 @@ async function startServer() {
           invitedBy: user.id,
           email: maskEmail(email)
         }
-      });
+        }),
+        12000,
+        false,
+        'sendTransactionalEmailSafe(clinic_invitation)'
+      );
 
       await persistIdentityAuditLog({
         title: 'Convite de colaborador enviado',
