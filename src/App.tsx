@@ -293,6 +293,9 @@ export default function App() {
   const isDataUrl = (value: unknown) =>
     typeof value === 'string' && /^data:/i.test(value.trim());
 
+  const buildAuthHeader = (token?: string | null): Record<string, string> =>
+    token ? { Authorization: `Bearer ${token}` } : {};
+
   const uploadProfileAssetIfNeeded = async (
     maybeDataUrl: unknown,
     kind: 'profile' | 'signature' | 'logo',
@@ -487,32 +490,41 @@ export default function App() {
       try {
         const session = await withTimeout(ensureFreshSession(), 8000, null as any);
         const token = session?.access_token;
+        let authData: any = null;
+        let lastError: any = null;
 
-        const response = await fetch('/api/auth/me', { 
-          credentials: 'include',
-          signal: timeoutController.signal,
-          headers: {
-            'Authorization': token ? `Bearer ${token}` : ''
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            const response = await fetch('/api/auth/me', {
+              credentials: 'include',
+              signal: timeoutController.signal,
+              headers: buildAuthHeader(token || null)
+            });
+
+            if (!response.ok) {
+              const text = await response.text();
+              throw new Error(`Initial auth check failed: HTTP ${response.status} ${text}`);
+            }
+
+            const contentType = response.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+              throw new Error(`Initial auth check returned non-JSON: ${contentType}`);
+            }
+
+            authData = await response.json();
+            break;
+          } catch (error) {
+            lastError = error;
+            // Pequeno backoff para falhas transitórias de rede/proxy no boot.
+            await new Promise((resolve) => window.setTimeout(resolve, 350 * (attempt + 1)));
           }
-        });
-        
-        if (!response.ok) {
-          const text = await response.text();
-          console.error('Initial auth check failed:', response.status, text);
-          setLoading(false);
-          return;
-        }
-        
-        const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.includes('application/json')) {
-          console.error('Initial auth check returned non-JSON:', contentType);
-          setLoading(false);
-          return;
         }
 
-        const data = await response.json();
-        if (data.user) {
-          await applyResolvedUserState(data.user, session);
+        if (authData?.user) {
+          await applyResolvedUserState(authData.user, session);
+        } else if (!authData) {
+          console.error('Initial auth check error after retries:', lastError);
+          // Mantém estado atual para evitar queda falsa para LP em falha transitória.
         } else {
           setUser(null);
           setProfilePicture(null);
@@ -520,7 +532,7 @@ export default function App() {
         }
       } catch (error) {
         console.error('Session check error:', error);
-        setUser(null);
+        // Evita logout visual por erro temporário de rede no refresh.
       } finally {
         window.clearTimeout(timeoutId);
         setLoading(false);
