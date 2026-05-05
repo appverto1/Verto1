@@ -4241,6 +4241,8 @@ async function startServer() {
   app.post('/api/auth/login', authLoginLimiter, async (req, res) => {
     const { intendedRole } = req.body;
     const activationFlow = Boolean(req.body?.activationFlow);
+    const passwordSetupCompleted = Boolean(req.body?.passwordSetupCompleted);
+    const authProvider = sanitizeString(req.body?.provider, 40).toLowerCase();
     let accessToken = sanitizeString(req.body?.accessToken, 8000);
     const credentialEmail = sanitizeEmail(req.body?.email);
     const credentialPassword = typeof req.body?.password === 'string' ? req.body.password : '';
@@ -4569,6 +4571,16 @@ async function startServer() {
         }
 
         if (profileStatus === 'pending_activation' && activationFlow) {
+          const canActivatePendingPatient =
+            authProvider === 'google' ||
+            passwordSetupCompleted ||
+            hasCredentials;
+          if (!canActivatePendingPatient) {
+            return res.status(403).json({
+              error: 'PATIENT_PASSWORD_SETUP_REQUIRED',
+              message: 'Defina sua senha para concluir a ativação, ou entre com Google.'
+            });
+          }
           const safePatientEmail = sanitizeEmail(user.email);
           const userUpdatesBase = cleanObject({
             status: 'active',

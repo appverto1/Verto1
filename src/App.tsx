@@ -653,7 +653,7 @@ export default function App() {
     supabaseSession: any,
     intendedRole?: string,
     credentials?: { email?: string; password?: string },
-    authContext?: { provider?: string | null; activationFlow?: boolean },
+    authContext?: { provider?: string | null; activationFlow?: boolean; passwordSetupCompleted?: boolean },
   ) => {
     try {
       if (!supabaseSession) {
@@ -667,6 +667,7 @@ export default function App() {
               intendedRole,
               provider: authContext?.provider || 'email',
               activationFlow: Boolean(authContext?.activationFlow),
+              passwordSetupCompleted: Boolean(authContext?.passwordSetupCompleted),
               email: credentials.email,
               password: credentials.password,
             })
@@ -724,6 +725,7 @@ export default function App() {
           intendedRole,
           provider,
           activationFlow,
+          passwordSetupCompleted: Boolean(authContext?.passwordSetupCompleted),
           email: credentials?.email || null,
           password: credentials?.password || null,
         })

@@ -6,7 +6,7 @@ type ActivationAccessProps = {
     session: any,
     intendedRole?: string,
     credentials?: { email?: string; password?: string },
-    authContext?: { provider?: string | null },
+    authContext?: { provider?: string | null; passwordSetupCompleted?: boolean },
   ) => Promise<any>;
 };
 
@@ -235,7 +235,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
           null,
           intendedRole,
           { email: recoveryEmail, password: newPassword },
-          { provider: 'email' },
+          { provider: 'email', passwordSetupCompleted: true },
         );
         if (!loginRes?.success) {
           throw new Error(loginRes?.error || 'Senha redefinida, mas nao foi possivel concluir o login.');
@@ -304,7 +304,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         refreshedSession || session,
         intendedRole,
         { email: userEmail },
-        { provider: 'email' },
+        { provider: 'email', passwordSetupCompleted: true },
       );
       if (!loginRes?.success) {
         throw new Error(loginRes?.error || 'Senha definida, mas nao foi possivel concluir o login.');
