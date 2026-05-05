@@ -2936,6 +2936,12 @@ async function startServer() {
   };
 
   const checkAuth = async (req: any, res: any, next: any) => {
+    const isPendingPatientActivation = (candidate: any) => {
+      const role = sanitizeString(candidate?.role, 40).toLowerCase();
+      const status = sanitizeString(candidate?.status, 60).toLowerCase();
+      return role === 'patient' && status === 'pending_activation';
+    };
+
     // 1. Check Session (Cookie-based)
     if (req.session && req.session.user) {
       const sessionUserId = sanitizeString(req.session.user?.id, 120);
@@ -2949,6 +2955,12 @@ async function startServer() {
         });
       }
       syncWorkspaceContextInSession(req, res, () => {});
+      if (isPendingPatientActivation(req.session.user)) {
+        return res.status(403).json({
+          error: 'PATIENT_ACTIVATION_REQUIRED',
+          message: 'Defina sua senha para ativar a conta, ou entre com Google.'
+        });
+      }
       if (mustBlockUnverifiedEmail(req, req.session.user)) {
         return res.status(403).json({
           error: 'EMAIL_NOT_CONFIRMED',
@@ -2990,6 +3002,7 @@ async function startServer() {
               subscriptionStatus: profile.subscription_status,
               planName: profile.plan_name,
               planPrice: profile.plan_price,
+              status: sanitizeString((profile as any)?.status, 60) || null,
               clinicId: selectedWorkspace?.clinicId || profile.clinic_id,
               activeWorkspaceId: selectedWorkspace?.clinicId || profile.clinic_id,
               emailVerified: Boolean((user as any)?.email_confirmed_at || (user as any)?.confirmed_at),
@@ -3002,6 +3015,12 @@ async function startServer() {
               clinicSettings: user.user_metadata?.clinic_settings || null,
               workspaces
             });
+            if (isPendingPatientActivation(req.session.user)) {
+              return res.status(403).json({
+                error: 'PATIENT_ACTIVATION_REQUIRED',
+                message: 'Defina sua senha para ativar a conta, ou entre com Google.'
+              });
+            }
             if (mustBlockUnverifiedEmail(req, req.session.user)) {
               return res.status(403).json({
                 error: 'EMAIL_NOT_CONFIRMED',
@@ -3618,6 +3637,7 @@ async function startServer() {
         subscriptionStatus: profile.subscription_status,
         planName: profile.plan_name,
         planPrice: profile.plan_price,
+        status: sanitizeString((profile as any)?.status, 60) || null,
         treatmentStatus,
         clinicId: clinicForSession,
         activeWorkspaceId: clinicForSession,

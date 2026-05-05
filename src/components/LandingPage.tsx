@@ -159,8 +159,19 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         }
       }
     } catch (err: any) {
-      console.error('Login error:', err);
-      setLoginError(`Erro no login: ${err.message || 'Credenciais inválidas ou erro de conexão'}`);
+      const rawMessage = String(err?.message || '').toLowerCase();
+      const isInvalidCredentials =
+        rawMessage.includes('invalid login credentials') ||
+        rawMessage.includes('credenciais inválidas') ||
+        rawMessage.includes('email or password') ||
+        Number(err?.status || 0) === 400;
+
+      if (isInvalidCredentials) {
+        setLoginError('E-mail ou senha incorretos. Tente novamente.');
+      } else {
+        console.error('Login error:', err);
+        setLoginError(`Erro no login: ${err?.message || 'Erro de conexão. Tente novamente.'}`);
+      }
     } finally {
       setLoading(false);
     }

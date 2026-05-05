@@ -446,6 +446,12 @@ export default function App() {
               localStorage.removeItem('verto_intended_role');
               const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
               const isActivationFlow = /^\/(ativar|reset-password)\/?$/i.test(currentPath);
+              const authProvider = String(session?.user?.app_metadata?.provider || '').toLowerCase();
+              if (isActivationFlow && authProvider !== 'google') {
+                // Em ativação por e-mail, o acesso só pode seguir após definir senha explicitamente.
+                setLoading(false);
+                return;
+              }
               await handleLoginSuccess(session, intendedRole, undefined, {
                 provider: session?.user?.app_metadata?.provider || null,
                 activationFlow: isActivationFlow,
