@@ -1406,6 +1406,11 @@ export function CoordinatorDashboard({
         showToast("Dados salvos com sucesso!");
       } else {
         const addPatientResult = await onAddPatient(newPatient);
+        if (addPatientResult?.success === false) {
+          const errorMessage = String(addPatientResult?.error || "Não foi possível cadastrar paciente.");
+          showToast(errorMessage, "error");
+          return;
+        }
         onAddActivityLog(
           "Paciente cadastrado",
           `Cadastro completo de ${newPatient.name} realizado pela coordenação.`,

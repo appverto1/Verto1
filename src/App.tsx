@@ -1675,6 +1675,7 @@ export default function App() {
   };
 
   const handleAddPatient = async (data: any) => { 
+    try {
     const newId = data.id || Date.now(); 
     let activationEmailSent: boolean | null = null;
     let activationEmailWarning: string | null = null;
@@ -1799,6 +1800,7 @@ export default function App() {
     });
 
     let persistedPatientId: string | number = newId;
+    let resolvedPersistedPatientId = false;
     const duplicateConflict =
       !fbResult?.success &&
       Number(fbResult?.status) === 409 &&
@@ -1853,6 +1855,7 @@ export default function App() {
 
       if (matchedPatient?.id) {
         persistedPatientId = matchedPatient.id;
+        resolvedPersistedPatientId = true;
         setAllPatients((prev) =>
           mergePatients(
             prev.map((p) =>
@@ -1872,6 +1875,11 @@ export default function App() {
         alert(
           "Paciente já existe na clínica, mas não foi possível reconciliar o ID para concluir o prontuário agora. Atualize a página para sincronizar.",
         );
+        rollbackOptimisticPatient();
+        return {
+          success: false,
+          error: "Paciente já existe na clínica (conflito de e-mail/CPF).",
+        };
       }
     }
 
@@ -1889,9 +1897,11 @@ export default function App() {
       ));
       setClinicalRecords(prev => prev.map(r => r.patientId === newId ? { ...r, patientId: realId } : r));
       persistedPatientId = realId;
+      resolvedPersistedPatientId = true;
     }
 
     const canPersistPatientRecord =
+      resolvedPersistedPatientId &&
       Boolean(String(persistedPatientId || "").trim()) &&
       !String(persistedPatientId).startsWith("temp_");
 
@@ -1946,6 +1956,13 @@ export default function App() {
         activationEmailWarning
       }
     };
+    } catch (error: any) {
+      console.error("Falha ao cadastrar paciente:", error);
+      return {
+        success: false,
+        error: toReadableError(error?.message || "Erro inesperado ao cadastrar paciente."),
+      };
+    }
   };
   const handleUpdatePatient = async (updatedData: any) => { 
     // Split updates
