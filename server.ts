@@ -2950,7 +2950,8 @@ async function startServer() {
     const isPendingPatientActivation = (candidate: any) => {
       const role = sanitizeString(candidate?.role, 40).toLowerCase();
       const status = sanitizeString(candidate?.status, 60).toLowerCase();
-      return role === 'patient' && status === 'pending_activation';
+      const firstLoginCompleted = candidate?.firstLoginCompleted;
+      return role === 'patient' && (status === 'pending_activation' || firstLoginCompleted === false);
     };
 
     // 1. Check Session (Cookie-based)
@@ -3018,7 +3019,7 @@ async function startServer() {
               activeWorkspaceId: selectedWorkspace?.clinicId || profile.clinic_id,
               emailVerified: Boolean((user as any)?.email_confirmed_at || (user as any)?.confirmed_at),
               phoneVerified: Boolean((profile as any)?.phone_verified_at),
-              firstLoginCompleted: profile.first_login_completed || user.user_metadata?.first_login_completed,
+              firstLoginCompleted: (profile.first_login_completed ?? user.user_metadata?.first_login_completed) ?? null,
               crp: (profile as any)?.crp || null,
               signatureDataUrl: (profile as any)?.signatureDataUrl || (profile as any)?.signature_data_url || null,
               specialties: (profile as any)?.specialties || null,
@@ -4594,14 +4595,17 @@ async function startServer() {
 
       if (roleForSession === 'patient') {
         const profileStatus = sanitizeString((profile as any)?.status, 60).toLowerCase();
-        if (profileStatus === 'pending_activation' && !activationFlow) {
+        const needsActivation =
+          profileStatus === 'pending_activation' ||
+          (profile as any)?.first_login_completed === false;
+        if (needsActivation && !activationFlow) {
           return res.status(403).json({
             error: 'PATIENT_ACTIVATION_REQUIRED',
             message: 'Ative sua conta pelo link enviado por e-mail antes de acessar o portal.'
           });
         }
 
-        if (profileStatus === 'pending_activation' && activationFlow) {
+        if (needsActivation && activationFlow) {
           const canActivatePendingPatient =
             authProvider === 'google' ||
             passwordSetupCompleted ||
@@ -4680,7 +4684,7 @@ async function startServer() {
         activeWorkspaceId: clinicForSession,
         emailVerified: isEmailVerified,
         phoneVerified: Boolean(profile.phone_verified_at),
-        firstLoginCompleted: profile.first_login_completed || user.user_metadata?.first_login_completed,
+        firstLoginCompleted: (profile.first_login_completed ?? user.user_metadata?.first_login_completed) ?? null,
         crp: (profile as any)?.crp || null,
         signatureDataUrl: (profile as any)?.signatureDataUrl || (profile as any)?.signature_data_url || null,
         specialties: (profile as any)?.specialties || null,
@@ -5833,6 +5837,7 @@ async function startServer() {
           plan_price: 4.90,
           clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
           status: 'pending_activation',
+          first_login_completed: false,
           created_at: new Date().toISOString()
         });
 
@@ -5926,7 +5931,8 @@ async function startServer() {
           role: 'patient',
           type: normalizedPortalType,
           clinic_id: isUuid(safeClinicId) ? safeClinicId : null,
-          status: 'pending_activation'
+          status: 'pending_activation',
+          first_login_completed: false
         });
 
         while (Object.keys(safeUserUpdatePayload).length > 0) {

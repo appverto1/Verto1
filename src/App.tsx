@@ -458,6 +458,12 @@ export default function App() {
               });
             } else if (event === 'SIGNED_OUT') {
               console.log('Supabase SIGNED_OUT event received');
+              if (manualLogoutInProgressRef.current) {
+                setUser(null);
+                setProfilePicture(null);
+                setShowWorkspacePicker(false);
+                return;
+              }
               try {
                 const response = await fetch('/api/auth/me', { credentials: 'include' });
                 if (response.ok) {
@@ -899,6 +905,7 @@ export default function App() {
   const clinicStateSyncTimerRef = useRef<any>(null);
   const inactivityTimerRef = useRef<any>(null);
   const autoLogoutInProgressRef = useRef(false);
+  const manualLogoutInProgressRef = useRef(false);
   const AUTO_LOGOUT_IDLE_MS = 15 * 60 * 1000;
 
   const onAddActivityLog = async (action: string, details: string, category: 'clinical' | 'management' | 'system' = 'clinical') => {
@@ -2660,6 +2667,7 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    manualLogoutInProgressRef.current = true;
     onAddActivityLog("Logout do Sistema", "O profissional encerrou a sessÃ£o com seguranÃ§a.", "system");
     try {
       const supabase = await getSupabase();
@@ -2673,7 +2681,7 @@ export default function App() {
           'Authorization': token ? `Bearer ${token}` : ''
         }
       });
-      if (supabase) await supabase.auth.signOut();
+      if (supabase) await supabase.auth.signOut({ scope: 'local' } as any);
     } catch (error) {
       console.error('Logout error:', error);
     }
@@ -2682,6 +2690,9 @@ export default function App() {
     setClinicStateHydrated(false);
     setUser(null);
     setShowWorkspacePicker(false);
+    window.setTimeout(() => {
+      manualLogoutInProgressRef.current = false;
+    }, 1200);
   };
 
   useEffect(() => {
