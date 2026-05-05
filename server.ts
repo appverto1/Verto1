@@ -595,6 +595,16 @@ async function generateSupabaseActionLink(params: {
   email: string;
   redirectTo: string;
 }): Promise<string | null> {
+  const enforceRedirectTarget = (rawLink: string, redirectTo: string): string => {
+    try {
+      const parsed = new URL(rawLink);
+      parsed.searchParams.set('redirect_to', redirectTo);
+      return parsed.toString();
+    } catch {
+      return rawLink;
+    }
+  };
+
   try {
     const admin = (supabase as any)?.auth?.admin;
     if (!admin?.generateLink) return null;
@@ -608,7 +618,8 @@ async function generateSupabaseActionLink(params: {
       data?.properties?.action_link || data?.action_link || '',
       2000
     );
-    return actionLink || null;
+    if (!actionLink) return null;
+    return enforceRedirectTarget(actionLink, params.redirectTo);
   } catch (error: any) {
     console.warn('[Auth] generate action link warning:', {
       type: params.type,
