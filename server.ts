@@ -5915,16 +5915,7 @@ async function startServer() {
               email: normalizedEmail,
               redirectTo: getRecoveryRedirectUrl()
             });
-        const activationLink = signupLink || fallbackRecoveryLink;
-        if (!activationLink) {
-          const reason = 'Não foi possível gerar link de ativação do paciente.';
-          console.error('[PatientActivation] link generation failed:', {
-            email: maskEmail(normalizedEmail),
-            clinicId: isUuid(safeClinicId) ? safeClinicId : null,
-            reason
-          });
-          return { sent: false, reason };
-        }
+        const activationLink = signupLink || fallbackRecoveryLink || getActivationRedirectUrl('patient', normalizedEmail);
 
         const activationEmail = buildActivationEmailTemplate({
           nome: safeName,
@@ -5932,7 +5923,7 @@ async function startServer() {
           perfil: 'patient'
         });
 
-        const sent = await sendTransactionalEmailSafe({
+        let sent = await sendTransactionalEmailSafe({
           to: normalizedEmail,
           subject: activationEmail.subject,
           html: activationEmail.html,
@@ -5949,6 +5940,28 @@ async function startServer() {
             clinicId: isUuid(safeClinicId) ? safeClinicId : null
           }
         });
+
+        if (!sent) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          sent = await sendTransactionalEmailSafe({
+            to: normalizedEmail,
+            subject: activationEmail.subject,
+            html: activationEmail.html,
+            context: 'patient_create_user_activation_retry',
+            from: OFFICIAL_FROM_NOREPLY,
+            replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+            templateKind: 'welcome_patient',
+            templateData: {
+              nome: safeName,
+              link_ativacao: activationLink
+            },
+            metadata: {
+              email: maskEmail(normalizedEmail),
+              clinicId: isUuid(safeClinicId) ? safeClinicId : null,
+              retry: true
+            }
+          });
+        }
 
         if (!sent) {
           return { sent: false, reason: 'Falha no envio do e-mail de ativação.' };

@@ -1676,6 +1676,8 @@ export default function App() {
 
   const handleAddPatient = async (data: any) => { 
     const newId = data.id || Date.now(); 
+    let activationEmailSent: boolean | null = null;
+    let activationEmailWarning: string | null = null;
     
     // Identity Data (Pseudonymized)
     const resolvedPortalType =
@@ -1738,6 +1740,10 @@ export default function App() {
         console.log(`User account created for patient: ${data.email}`);
         const normalizedMessage = String(userResult?.message || '').toLowerCase();
         const alreadyExists = normalizedMessage.includes('already exists');
+        if (!alreadyExists) {
+          activationEmailSent = userResult.activationEmailSent === false ? false : true;
+          activationEmailWarning = String(userResult.warning || userResult.error || '').trim() || null;
+        }
         if (alreadyExists) {
           // If user already exists, we should inform that history will be linked
           alert(`O paciente com o email ${data.email} jÃ¡ possui uma conta no sistema. Todo o histÃ³rico clÃ­nico anterior serÃ¡ vinculado a este novo prontuÃ¡rio.`);
@@ -1777,7 +1783,7 @@ export default function App() {
       } else if (userResult?.error) {
         alert(`NÃ£o foi possÃ­vel enviar o convite do paciente: ${toReadableError(userResult.error)}`);
         rollbackOptimisticPatient();
-        return;
+        return { success: false, error: userResult.error };
       }
     }
 
@@ -1873,7 +1879,7 @@ export default function App() {
       if (!duplicateConflict) {
         alert(`NÃ£o foi possÃ­vel cadastrar paciente: ${toReadableError(fbResult?.error || 'Erro desconhecido')}`);
         rollbackOptimisticPatient();
-        return;
+        return { success: false, error: fbResult?.error || 'Erro ao cadastrar paciente' };
       }
     } else if (fbResult.success && fbResult.data) {
       const realId = fbResult.data.id;
@@ -1931,6 +1937,15 @@ export default function App() {
       anamnese: data.anamnesisData || {}
       });
     }
+    return {
+      success: true,
+      data: {
+        patientId: persistedPatientId,
+        patientEmail: data.email || null,
+        activationEmailSent,
+        activationEmailWarning
+      }
+    };
   };
   const handleUpdatePatient = async (updatedData: any) => { 
     // Split updates

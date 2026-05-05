@@ -94,7 +94,7 @@ interface CoordinatorDashboardProps {
   onScheduleSession: (session: any) => any;
   onUpdateAppointment: (id: number, updates: any) => void;
   onUpdateAgendaStatus: (id: number, status: string) => void;
-  onAddPatient: (patient: any) => void;
+  onAddPatient: (patient: any) => Promise<any> | any;
   patientsHistory: any[];
   therapistNotes: any[];
   onAddNote: (
@@ -1293,7 +1293,7 @@ export function CoordinatorDashboard({
     return age >= 0 ? age : undefined;
   };
 
-  const handleCreatePatientFromFullForm = () => {
+  const handleCreatePatientFromFullForm = async () => {
     if (!canCreatePatients) {
       showToast("A criação de pacientes é exclusiva da recepção e coordenação.", "error");
       return;
@@ -1391,34 +1391,50 @@ export function CoordinatorDashboard({
       createdAt: new Date().toISOString(),
     };
 
-    if (editingPatientId && onUpdatePatient) {
-      onUpdatePatient(newPatient);
-      onAddActivityLog(
-        "Paciente atualizado",
-        `Cadastro de ${newPatient.name} atualizado pela coordenação.`,
-        "management",
-      );
-      setActionPopup({
-        title: "Paciente editado",
-        message: `As informações de ${newPatient.name} foram atualizadas com sucesso.`,
-      });
-      showToast("Dados salvos com sucesso!");
-    } else {
-      onAddPatient(newPatient);
-      onAddActivityLog(
-        "Paciente cadastrado",
-        `Cadastro completo de ${newPatient.name} realizado pela coordenação.`,
-        "management",
-      );
-      setActionPopup({
-        title: "Paciente adicionado",
-        message: `O paciente ${newPatient.name} foi cadastrado com sucesso.`,
-      });
-      showToast("Dados salvos com sucesso!", "info");
+    try {
+      if (editingPatientId && onUpdatePatient) {
+        onUpdatePatient(newPatient);
+        onAddActivityLog(
+          "Paciente atualizado",
+          `Cadastro de ${newPatient.name} atualizado pela coordenação.`,
+          "management",
+        );
+        setActionPopup({
+          title: "Paciente editado",
+          message: `As informações de ${newPatient.name} foram atualizadas com sucesso.`,
+        });
+        showToast("Dados salvos com sucesso!");
+      } else {
+        const addPatientResult = await onAddPatient(newPatient);
+        onAddActivityLog(
+          "Paciente cadastrado",
+          `Cadastro completo de ${newPatient.name} realizado pela coordenação.`,
+          "management",
+        );
+        const activationEmailSent = addPatientResult?.data?.activationEmailSent;
+        const patientEmail = String(addPatientResult?.data?.patientEmail || newPatient?.email || "").trim();
+        const emailMessage =
+          patientEmail && activationEmailSent === true
+            ? ` E-mail de ativação enviado para ${patientEmail}.`
+            : patientEmail && activationEmailSent === false
+              ? " Cadastro concluído, mas o e-mail de ativação não foi enviado. Use o botão de reenviar ativação."
+              : "";
+        setActionPopup({
+          title: "Paciente adicionado",
+          message: `O paciente ${newPatient.name} foi cadastrado com sucesso.${emailMessage}`,
+        });
+        showToast(
+          activationEmailSent === false
+            ? "Paciente cadastrado. Ativação pendente de envio."
+            : "Dados salvos com sucesso!",
+          activationEmailSent === false ? "error" : "info"
+        );
+      }
+      setIsPatientRegistrationModalOpen(false);
+      resetPatientForm();
+    } finally {
+      hideProcessing();
     }
-    setIsPatientRegistrationModalOpen(false);
-    resetPatientForm();
-    hideProcessing();
   };
 
   const isPatientPendingAnamnesis = (patient: any) => {
