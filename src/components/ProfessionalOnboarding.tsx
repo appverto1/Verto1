@@ -121,13 +121,17 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   );
 
   const [clinicName, setClinicName] = useState('');
-  const [clinicLogoUrl, setClinicLogoUrl] = useState<string | null>(null);
+  const [clinicLogoUrl, setClinicLogoUrl] = useState<string | null>(
+    user?.clinicSettings?.clinicLogoUrl || null,
+  );
   const [clinicCnpj, setClinicCnpj] = useState('');
   const [clinicPhone, setClinicPhone] = useState('');
   const [specialty, setSpecialty] = useState('');
   const [council, setCouncil] = useState('');
   const [councilNumber, setCouncilNumber] = useState('');
-  const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
+  const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(
+    user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null,
+  );
 
   useEffect(() => {
     localStorage.setItem(onboardingStepKey, String(step));
@@ -136,7 +140,12 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   useEffect(() => {
     const loadExistingProfile = async () => {
       try {
-        const draftRaw = localStorage.getItem(onboardingDraftKey);
+        const shouldRestoreDraft = user?.firstLoginCompleted === false;
+        const draftRaw = shouldRestoreDraft ? localStorage.getItem(onboardingDraftKey) : null;
+        if (!shouldRestoreDraft) {
+          localStorage.removeItem(onboardingDraftKey);
+          localStorage.removeItem(onboardingStepKey);
+        }
         if (draftRaw) {
           const draft = JSON.parse(draftRaw);
           setFullName(String(draft.fullName || fullName || ''));
@@ -151,15 +160,15 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
           setSessionDurationMinutes(String(draft.sessionDurationMinutes || '50'));
           setCountryCode(String(draft.countryCode || '+55'));
           setPhone(String(draft.phone || ''));
-          setProfilePicture(draft.profilePicture || null);
+          setProfilePicture(draft.profilePicture || user?.profilePicture || user?.profile_picture || null);
           setClinicName(String(draft.clinicName || ''));
-          setClinicLogoUrl(draft.clinicLogoUrl || null);
+          setClinicLogoUrl(draft.clinicLogoUrl || user?.clinicSettings?.clinicLogoUrl || null);
           setClinicCnpj(String(draft.clinicCnpj || ''));
           setClinicPhone(String(draft.clinicPhone || ''));
           setSpecialty(String(draft.specialty || ''));
           setCouncil(String(draft.council || ''));
           setCouncilNumber(String(draft.councilNumber || ''));
-          setSignatureDataUrl(draft.signatureDataUrl || null);
+          setSignatureDataUrl(draft.signatureDataUrl || user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null);
         }
         if (isTherapist && user?.clinicSettings?.clinicName) {
           setClinicName(String(user.clinicSettings.clinicName));
@@ -173,15 +182,15 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         setGender(profile.gender || "");
         setCountryCode(profile.country_code || "+55");
         setPhone(profile.phone || "");
-        setProfilePicture(profile.profile_photo_url || null);
-        setClinicName(profile.clinic_name || "");
-        setClinicLogoUrl(profile.clinic_logo_url || null);
+        setProfilePicture(profile.profile_photo_url || user?.profilePicture || user?.profile_picture || null);
+        setClinicName(profile.clinic_name || user?.clinicSettings?.clinicName || "");
+        setClinicLogoUrl(profile.clinic_logo_url || user?.clinicSettings?.clinicLogoUrl || null);
         setClinicCnpj(profile.metadata?.clinicCnpj || profile.address?.cnpj || "");
         setClinicPhone(profile.clinic_phone || "");
         setSpecialty(profile.specialty || "");
         setCouncil(profile.council || "");
         setCouncilNumber(profile.council_number || "");
-        setSignatureDataUrl(profile.signature_data_url || null);
+        setSignatureDataUrl(profile.signature_data_url || user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null);
         setSessionDurationMinutes(String(profile.metadata?.sessionDurationMinutes || "50"));
 
         const address = profile.address || {};
@@ -196,7 +205,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
       }
     };
     loadExistingProfile();
-  }, [user.id, user.name]);
+  }, [user.id, user.name, user.firstLoginCompleted, onboardingDraftKey, onboardingStepKey]);
 
   useEffect(() => {
     const draft = {
@@ -222,9 +231,12 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
       councilNumber,
       signatureDataUrl
     };
-    localStorage.setItem(onboardingDraftKey, JSON.stringify(draft));
+    if (user?.firstLoginCompleted === false) {
+      localStorage.setItem(onboardingDraftKey, JSON.stringify(draft));
+    }
   }, [
     onboardingDraftKey,
+    user?.firstLoginCompleted,
     fullName,
     birthDate,
     gender,

@@ -8378,6 +8378,7 @@ async function startServer() {
           name: fullName,
           profile_picture: profilePicture,
           subscription_status: 'active',
+          first_login_completed: true,
           updated_at: new Date().toISOString()
         })
         .eq('id', userId);

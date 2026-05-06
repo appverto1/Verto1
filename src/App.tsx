@@ -252,8 +252,12 @@ export default function App() {
       const profileResult = await dataService.getUserProfile(String(restoredUser?.id || ''));
       const professionalProfile = profileResult?.data?.professional_profile;
       if (professionalProfile) {
+        const professionalProfileCompleted =
+          professionalProfile?.requires_onboarding === false ||
+          Boolean(professionalProfile?.onboarding_completed_at);
         resolvedUser = {
           ...restoredUser,
+          firstLoginCompleted: professionalProfileCompleted ? true : restoredUser?.firstLoginCompleted,
           profilePicture:
             professionalProfile?.profile_photo_url ||
             restoredUser?.profilePicture ||
@@ -2857,7 +2861,7 @@ export default function App() {
             <p className="mt-4 text-sm text-slate-500">Carregando dados da clínica...</p>
           </div>
         </div>
-      ) : ((user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && !user.firstLoginCompleted) || showOnboarding ? (
+      ) : ((user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && user.firstLoginCompleted === false) || showOnboarding ? (
         <ProfessionalOnboarding 
           user={user} 
           onComplete={(data) => {
@@ -3018,7 +3022,7 @@ export default function App() {
           rooms={rooms}
           setRooms={setRooms}
           roomReservations={roomReservations}
-          setRoomReservations={setRoomReservations}
+          setRoomReservations={() => {}}
           specialtySettings={specialtySettings}
           setSpecialtySettings={setSpecialtySettings}
           onUpdateProfile={(data: any) => {
