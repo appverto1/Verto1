@@ -6,7 +6,7 @@ type ActivationAccessProps = {
     session: any,
     intendedRole?: string,
     credentials?: { email?: string; password?: string },
-    authContext?: { provider?: string | null; passwordSetupCompleted?: boolean },
+    authContext?: { provider?: string | null; activationFlow?: boolean; passwordSetupCompleted?: boolean; activationEmail?: string | null },
   ) => Promise<any>;
 };
 
@@ -181,6 +181,10 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     setMessage('');
     try {
       localStorage.setItem('verto_intended_role', intendedRole);
+      const expectedEmail = String(identifiedEmail || email || '').trim().toLowerCase();
+      if (expectedEmail) {
+        localStorage.setItem('verto_activation_email', expectedEmail);
+      }
       const supabase = await getSupabase();
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
@@ -235,7 +239,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
           null,
           intendedRole,
           { email: recoveryEmail, password: newPassword },
-          { provider: 'email', passwordSetupCompleted: true },
+          { provider: 'email', activationFlow: false, passwordSetupCompleted: true, activationEmail: recoveryEmail },
         );
         if (!loginRes?.success) {
           throw new Error(loginRes?.error || 'Senha redefinida, mas nao foi possivel concluir o login.');
@@ -304,7 +308,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         refreshedSession || session,
         intendedRole,
         { email: userEmail },
-        { provider: 'email', passwordSetupCompleted: true },
+        { provider: 'email', activationFlow: true, passwordSetupCompleted: true, activationEmail: userEmail },
       );
       if (!loginRes?.success) {
         throw new Error(loginRes?.error || 'Senha definida, mas nao foi possivel concluir o login.');

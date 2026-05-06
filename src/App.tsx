@@ -448,6 +448,7 @@ export default function App() {
               const isActivationFlow = /^\/(ativar|reset-password)\/?$/i.test(currentPath);
               const authProvider = String(session?.user?.app_metadata?.provider || '').toLowerCase();
               const isPasswordSignIn = authProvider === 'email' || authProvider === '';
+              const activationEmail = String(localStorage.getItem('verto_activation_email') || '').trim().toLowerCase();
               if (isActivationFlow && authProvider !== 'google') {
                 // Em ativação por e-mail, o acesso só pode seguir após definir senha explicitamente.
                 setLoading(false);
@@ -461,6 +462,7 @@ export default function App() {
               await handleLoginSuccess(session, intendedRole, undefined, {
                 provider: session?.user?.app_metadata?.provider || null,
                 activationFlow: isActivationFlow,
+                activationEmail: activationEmail || null,
               });
             } else if (event === 'SIGNED_OUT') {
               console.log('Supabase SIGNED_OUT event received');
@@ -712,7 +714,7 @@ export default function App() {
     supabaseSession: any,
     intendedRole?: string,
     credentials?: { email?: string; password?: string },
-    authContext?: { provider?: string | null; activationFlow?: boolean; passwordSetupCompleted?: boolean },
+    authContext?: { provider?: string | null; activationFlow?: boolean; passwordSetupCompleted?: boolean; activationEmail?: string | null },
   ) => {
     try {
       if (!supabaseSession) {
@@ -727,6 +729,7 @@ export default function App() {
               provider: authContext?.provider || 'email',
               activationFlow: Boolean(authContext?.activationFlow),
               passwordSetupCompleted: Boolean(authContext?.passwordSetupCompleted),
+              activationEmail: authContext?.activationEmail || null,
               email: credentials.email,
               password: credentials.password,
             })
@@ -791,6 +794,7 @@ export default function App() {
           provider,
           activationFlow,
           passwordSetupCompleted: Boolean(authContext?.passwordSetupCompleted),
+          activationEmail: authContext?.activationEmail || null,
           email: credentials?.email || null,
           password: credentials?.password || null,
         })
@@ -2805,14 +2809,17 @@ export default function App() {
       <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#7a32fc]"></div>
     </div>
   );
+  const userNeedsPatientActivation =
+    user?.role === 'patient' &&
+    (user?.activationRequired === true || user?.firstLoginCompleted === false);
 
   return (
     <React.Fragment>
       <GlobalStyles />
       <Suspense fallback={lazyFallback}>
       
-      {!user ? (
-        isAuthActionRoute ? (
+      {!user || userNeedsPatientActivation ? (
+        isAuthActionRoute || userNeedsPatientActivation ? (
           <ActivationAccess onLogin={handleLoginSuccess} />
         ) : (
           <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />

@@ -2126,7 +2126,9 @@ function buildSessionUserPayload(input: any) {
     sessionToken: sanitizeString(input?.sessionToken, 120) || null,
     emailVerified: Boolean(input?.emailVerified),
     phoneVerified: Boolean(input?.phoneVerified),
-    firstLoginCompleted: Boolean(input?.firstLoginCompleted),
+    firstLoginCompleted:
+      typeof input?.firstLoginCompleted === 'boolean' ? input.firstLoginCompleted : null,
+    activationRequired: Boolean(input?.activationRequired),
     crp: sanitizeString(input?.crp || input?.clinicSettings?.councilNumber, 80) || null,
     signatureDataUrl:
       sanitizeSessionUrl(input?.signatureDataUrl) ||
@@ -2951,7 +2953,11 @@ async function startServer() {
       const role = sanitizeString(candidate?.role, 40).toLowerCase();
       const status = sanitizeString(candidate?.status, 60).toLowerCase();
       const firstLoginCompleted = candidate?.firstLoginCompleted;
-      return role === 'patient' && (status === 'pending_activation' || firstLoginCompleted === false);
+      return role === 'patient' && (
+        Boolean(candidate?.activationRequired) ||
+        status === 'pending_activation' ||
+        firstLoginCompleted === false
+      );
     };
 
     // 1. Check Session (Cookie-based)
@@ -3015,6 +3021,7 @@ async function startServer() {
               planName: profile.plan_name,
               planPrice: profile.plan_price,
               status: sanitizeString((profile as any)?.status, 60) || null,
+              activationRequired: Boolean((user as any)?.user_metadata?.patient_activation_required),
               clinicId: selectedWorkspace?.clinicId || profile.clinic_id,
               activeWorkspaceId: selectedWorkspace?.clinicId || profile.clinic_id,
               emailVerified: Boolean((user as any)?.email_confirmed_at || (user as any)?.confirmed_at),
@@ -4023,6 +4030,17 @@ async function startServer() {
       }
 
       const profileRole = role === 'patient' ? 'patient' : 'coordinator';
+      if (profileRole === 'patient') {
+        await supabase.auth.admin.updateUserById(authUser.id, {
+          user_metadata: {
+            ...((authUser as any)?.user_metadata || {}),
+            role: 'patient',
+            invited_email: email,
+            patient_activation_required: true,
+            first_login_completed: false
+          }
+        });
+      }
       const activationLinkFromSignup = await generateSupabaseActionLink({
         type: 'signup',
         email,
@@ -4275,6 +4293,7 @@ async function startServer() {
     const activationFlow = Boolean(req.body?.activationFlow);
     const passwordSetupCompleted = Boolean(req.body?.passwordSetupCompleted);
     const authProvider = sanitizeString(req.body?.provider, 40).toLowerCase();
+    const activationEmail = sanitizeEmail(req.body?.activationEmail);
     let accessToken = sanitizeString(req.body?.accessToken, 8000);
     const credentialEmail = sanitizeEmail(req.body?.email);
     const credentialPassword = typeof req.body?.password === 'string' ? req.body.password : '';
@@ -4362,6 +4381,18 @@ async function startServer() {
       }
 
       console.log('[Auth] User verified successfully:', user.id, user.email);
+      const safeAuthEmail = sanitizeEmail(user.email);
+      if (
+        activationFlow &&
+        normalizeRequestedRole(intendedRole) === 'patient' &&
+        authProvider === 'google' &&
+        (!activationEmail || !safeAuthEmail || activationEmail !== safeAuthEmail)
+      ) {
+        return res.status(403).json({
+          error: 'GOOGLE_EMAIL_MISMATCH',
+          message: 'Entre com a mesma conta Google do e-mail cadastrado para este paciente.'
+        });
+      }
       const isEmailVerified = Boolean((user as any)?.email_confirmed_at || (user as any)?.confirmed_at);
       if (!isEmailVerified) {
         await persistIdentityAuditLog({
@@ -4456,6 +4487,12 @@ async function startServer() {
       // If profile still doesn't exist (first time Google login), create it
       if (!profile) {
         let finalRole: AppRole = normalizeRequestedRole(intendedRole);
+        if (finalRole === 'patient' && authProvider === 'google' && activationFlow) {
+          return res.status(403).json({
+            error: 'PATIENT_INVITE_NOT_FOUND',
+            message: 'Não encontramos convite de paciente para esta conta Google.'
+          });
+        }
         
         // Check for pending invitations for this email
         const { data: invitations, error: inviteError } = await supabase
@@ -4592,10 +4629,12 @@ async function startServer() {
         null;
       const roleForSession = selectedWorkspace?.role || profile.role;
       const clinicForSession = selectedWorkspace?.clinicId || profile.clinic_id;
+      let authActivationRequired = Boolean((user as any)?.user_metadata?.patient_activation_required);
 
       if (roleForSession === 'patient') {
         const profileStatus = sanitizeString((profile as any)?.status, 60).toLowerCase();
         const needsActivation =
+          authActivationRequired ||
           profileStatus === 'pending_activation' ||
           (profile as any)?.first_login_completed === false;
         if (needsActivation && !activationFlow) {
@@ -4657,6 +4696,18 @@ async function startServer() {
             status: 'active',
             first_login_completed: true
           };
+          authActivationRequired = false;
+          try {
+            await supabase.auth.admin.updateUserById(user.id, {
+              user_metadata: {
+                ...((user as any)?.user_metadata || {}),
+                patient_activation_required: false,
+                first_login_completed: true
+              }
+            });
+          } catch (metadataUpdateError: any) {
+            console.warn('[Auth] Patient activation metadata update warning:', metadataUpdateError?.message || String(metadataUpdateError));
+          }
         }
       }
 
@@ -4679,6 +4730,7 @@ async function startServer() {
         subscriptionStatus: profile.subscription_status,
         planName: profile.plan_name,
         planPrice: profile.plan_price,
+        activationRequired: authActivationRequired,
         treatmentStatus,
         clinicId: clinicForSession,
         activeWorkspaceId: clinicForSession,
@@ -5847,7 +5899,20 @@ async function startServer() {
             .from('users')
             .upsert([safeProfilePayload], { onConflict: 'id' });
 
-          if (!profileError) return;
+          if (!profileError) {
+            await supabase.auth.admin.updateUserById(authUserId, {
+              user_metadata: {
+                full_name: safeName,
+                role: 'patient',
+                type: normalizedPortalType,
+                clinic_id: isUuid(safeClinicId) ? safeClinicId : null,
+                invited_email: normalizedEmail,
+                patient_activation_required: true,
+                first_login_completed: false
+              }
+            });
+            return;
+          }
 
           const missingColumn = extractMissingColumnName(profileError);
           if (!missingColumn || !(missingColumn in safeProfilePayload)) {
@@ -6060,7 +6125,15 @@ async function startServer() {
         email: normalizedEmail,
         password: generatedPassword,
         email_confirm: false,
-        user_metadata: { full_name: safeName, role: 'patient', type: normalizedPortalType }
+        user_metadata: {
+          full_name: safeName,
+          role: 'patient',
+          type: normalizedPortalType,
+          clinic_id: isUuid(safeClinicId) ? safeClinicId : null,
+          invited_email: normalizedEmail,
+          patient_activation_required: true,
+          first_login_completed: false
+        }
       });
 
       if (authError) {
@@ -6302,6 +6375,20 @@ async function startServer() {
         }
 
         const profileName = sanitizeString(patient?.name, 180) || patientEmail.split('@')[0];
+        if (authUser?.id) {
+          await supabase.auth.admin.updateUserById(authUser.id, {
+            user_metadata: {
+              ...((authUser as any)?.user_metadata || {}),
+              full_name: profileName,
+              role: 'patient',
+              type: sanitizeString(patient?.type, 80) || 'adult_conventional',
+              clinic_id: isUuid(patient?.clinic_id) ? patient.clinic_id : null,
+              invited_email: patientEmail,
+              patient_activation_required: true,
+              first_login_completed: false
+            }
+          });
+        }
         const activationLink =
           (await generateSupabaseActionLink({
             type: 'signup',
