@@ -3018,7 +3018,7 @@ export default function App() {
           rooms={rooms}
           setRooms={setRooms}
           roomReservations={roomReservations}
-          setRoomReservations={() => {}}
+          setRoomReservations={setRoomReservations}
           specialtySettings={specialtySettings}
           setSpecialtySettings={setSpecialtySettings}
           onUpdateProfile={(data: any) => {
