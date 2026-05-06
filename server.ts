@@ -1288,49 +1288,206 @@ function sanitizeSafePreviewText(input: string, maxLength = 4000): string {
   );
 }
 
-function buildProtocolSafePreview(buffer: Buffer, kind: 'pdf' | 'xlsx' | 'xls' | 'unknown', fileName: string): string {
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function extractProtocolReadableText(buffer: Buffer, kind: 'pdf' | 'xlsx' | 'xls' | 'unknown'): string {
+  if (kind !== 'pdf') return '';
+
+  const rawText = buffer.subarray(0, Math.min(buffer.length, 1_800_000)).toString('latin1');
+  const chunkCandidates = rawText
+    .replace(/\\[rn]/g, '\n')
+    .split(/(?:\r?\n|endstream|endobj|stream|obj|BT|ET)+/i)
+    .map((chunk) => sanitizeSafePreviewText(
+      chunk
+        .replace(/\/[A-Za-z][A-Za-z0-9]+/g, ' ')
+        .replace(/[()[\]{}<>]/g, ' ')
+        .replace(/[^A-Za-zÀ-ÖØ-öø-ÿ0-9.,;:!?+\-_/ ]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim(),
+      240
+    ))
+    .filter(Boolean);
+
+  const filtered = chunkCandidates.filter((chunk) => {
+    const alphaChars = (chunk.match(/[A-Za-zÀ-ÖØ-öø-ÿ]/g) || []).length;
+    const digitChars = (chunk.match(/[0-9]/g) || []).length;
+    const alphaRatio = alphaChars / Math.max(1, chunk.length);
+    const noisyPdfInternals = /(catalog|pages|kids|mediabox|procset|font|resources|filter|length|device(rgb|gray)|xref|startxref)/i.test(chunk);
+    const mostlyNumbers = digitChars > alphaChars * 1.6;
+    return chunk.length >= 20 && alphaRatio >= 0.45 && !noisyPdfInternals && !mostlyNumbers;
+  });
+
+  const unique = Array.from(new Set(filtered));
+  return sanitizeSafePreviewText(unique.slice(0, 12).join(' | '), 1800);
+}
+
+function analyzeProtocolStructure(text: string, kind: 'pdf' | 'xlsx' | 'xls' | 'unknown'): Record<string, any> {
+  const normalizedText = sanitizeSafePreviewText(text, 4000).toLowerCase();
+  const lines = text.split('|').map((line) => sanitizeSafePreviewText(line, 240)).filter(Boolean);
+  const fieldDetectors = [
+    { key: 'task', label: 'Tarefa', regex: /\btarefa\b|\bskill\b|\bitem\b/gi },
+    { key: 'points', label: 'Pontos', regex: /\bpontos?\b|\bpontuacao\b|\bscore\b|\b0\s*-\s*[1-9]\b/gi },
+    { key: 'name', label: 'Nome', regex: /\bnome da tarefa\b|\bnome\b|\btitle\b/gi },
+    { key: 'objective', label: 'Objetivo', regex: /\bobjetivo\b|\bmeta\b|\bgoal\b/gi },
+    { key: 'question', label: 'Pergunta', regex: /\bpergunta\b|\bquestao\b|\bprompt\b/gi },
+    { key: 'example', label: 'Exemplo', regex: /\bexemplo\b|\bexample\b/gi },
+    { key: 'criteria', label: 'Criterios', regex: /\bcriterios?\b|\bcrit[eé]rios?\b|\bmastery\b|\bscoring\b/gi },
+    { key: 'comment', label: 'Comentario', regex: /\bcomentario\b|\bobservacao\b|\bnota\b/gi }
+  ];
+
+  const detectedFields = fieldDetectors
+    .map((field) => ({
+      ...field,
+      hits: (normalizedText.match(field.regex) || []).length
+    }))
+    .filter((field) => field.hits > 0);
+
+  const taskCodeMatches = normalizedText.match(/\b[a-z]{1,4}\d{1,3}(?:[.-]\d+)?\b/gi) || [];
+  const scoringMatches = normalizedText.match(/\b[0-5]\s*(?:-|a)?\s*[0-5]\b/g) || [];
+  const questionMarks = (text.match(/\?/g) || []).length;
+  const lineCount = lines.length;
+  const legibleChars = (text.match(/[A-Za-zÀ-ÖØ-öø-ÿ]/g) || []).length;
+  const weirdChars = (text.match(/[^\x20-\x7EÀ-ÖØ-öø-ÿ]/g) || []).length;
+  const gibberishPenalty = weirdChars > 0 ? Math.min(35, weirdChars / 3) : 0;
+
+  const coverageRatio = detectedFields.length / fieldDetectors.length;
+  const taskSignalScore = Math.min(100, (taskCodeMatches.length * 7) + (lineCount * 4) + (questionMarks * 3));
+  const structureScore = clampScore((coverageRatio * 55) + (taskSignalScore * 0.45));
+  const canonicalReadinessScore = clampScore(
+    (coverageRatio * 70) +
+    Math.min(20, taskCodeMatches.length * 3) +
+    Math.min(10, scoringMatches.length * 2)
+  );
+  const legibilityScore = clampScore(
+    (legibleChars >= 120 ? 72 : legibleChars >= 60 ? 54 : legibleChars >= 20 ? 30 : 12) - gibberishPenalty
+  );
+  const reliabilityScore = clampScore((legibilityScore * 0.4) + (structureScore * 0.35) + (canonicalReadinessScore * 0.25));
+
+  const warnings: string[] = [];
+  const strengths: string[] = [];
+
+  if (!text) warnings.push('Nao foi possivel extrair texto clinico legivel sem abrir o arquivo bruto.');
+  if (legibilityScore < 45) warnings.push('O conteudo extraido esta pouco legivel e pode ter vindo de PDF escaneado ou com texto embaralhado.');
+  if (detectedFields.length < 3) warnings.push('A estrutura minima de protocolo nao apareceu com clareza na amostra segura.');
+  if (taskCodeMatches.length === 0) warnings.push('Nao identifiquei codigos de tarefa de forma confiavel.');
+  if (!detectedFields.some((field) => field.key === 'criteria')) warnings.push('Nao encontrei criterios de pontuacao de forma explicita.');
+  if (!detectedFields.some((field) => field.key === 'objective')) warnings.push('Nao encontrei objetivos clinicos de forma explicita.');
+
+  if (legibilityScore >= 65) strengths.push('A previa segura trouxe texto suficientemente legivel para triagem.');
+  if (detectedFields.length >= 4) strengths.push('A estrutura basica de um protocolo clinico apareceu na amostra.');
+  if (taskCodeMatches.length >= 3) strengths.push('Foram encontrados multiplos possiveis codigos de tarefa.');
+  if (scoringMatches.length > 0 || detectedFields.some((field) => field.key === 'points')) strengths.push('Existem sinais de rubricacao/pontuacao no material.');
+
+  const suggestedNextStep = reliabilityScore >= 75 && canonicalReadinessScore >= 60
+    ? 'Pode seguir para vinculacao com protocolo canonico e montagem estruturada.'
+    : reliabilityScore >= 50
+      ? 'Revisar a previa segura e completar a montagem canonica antes de aprovar.'
+      : 'Nao confiar na estrutura atual. Solicite nova fonte ou reconstrua a partir de tabela limpa.';
+
+  return {
+    detectedFields: detectedFields.map((field) => field.label),
+    detectedFieldCoverage: {
+      found: detectedFields.length,
+      total: fieldDetectors.length
+    },
+    estimatedTaskCodes: taskCodeMatches.slice(0, 12),
+    estimatedRows: lineCount,
+    scores: {
+      legibility: legibilityScore,
+      structure: structureScore,
+      canonicalReadiness: canonicalReadinessScore,
+      reliability: reliabilityScore
+    },
+    strengths,
+    warnings,
+    suggestedNextStep
+  };
+}
+
+function buildProtocolSafePreview(
+  buffer: Buffer,
+  kind: 'pdf' | 'xlsx' | 'xls' | 'unknown',
+  fileName: string
+): { text: string; structureReport: Record<string, any> } {
   const sizeKb = Math.max(1, Math.round(buffer.length / 1024));
+  const readableText = extractProtocolReadableText(buffer, kind);
+  const structureReport = analyzeProtocolStructure(readableText, kind);
+
   if (kind === 'pdf') {
-    const rawText = buffer.subarray(0, Math.min(buffer.length, 1_500_000)).toString('latin1');
-    const readableText = rawText
-      .replace(/\\[rn]/g, ' ')
-      .replace(/[^A-Za-zÀ-ÖØ-öø-ÿ0-9.,;:!?()[\]{}+\-=/\\_\s]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    const excerpt = sanitizeSafePreviewText(readableText, 1600);
-    return [
-      `Arquivo: ${fileName}`,
-      `Tipo detectado: PDF`,
-      `Tamanho: ${sizeKb} KB`,
-      excerpt ? `Trecho textual seguro: ${excerpt}` : 'Trecho textual seguro: nao foi possivel extrair texto legivel sem renderizar o PDF.',
-      'Arquivo bruto permanece bloqueado para abertura/download.'
-    ].join('\n');
+    return {
+      text: [
+        `Arquivo: ${fileName}`,
+        'Tipo detectado: PDF',
+        `Tamanho: ${sizeKb} KB`,
+        `Legibilidade: ${structureReport.scores?.legibility || 0}%`,
+        `Estrutura clinica: ${structureReport.scores?.structure || 0}%`,
+        `Prontidao canonica: ${structureReport.scores?.canonicalReadiness || 0}%`,
+        `Confiabilidade da leitura segura: ${structureReport.scores?.reliability || 0}%`,
+        structureReport.detectedFields?.length
+          ? `Campos detectados: ${structureReport.detectedFields.join(', ')}`
+          : 'Campos detectados: nenhum campo clinico reconhecido com seguranca.',
+        readableText
+          ? `Trecho clinico seguro: ${sanitizeSafePreviewText(readableText, 1400)}`
+          : 'Trecho clinico seguro: nao foi possivel extrair texto clinico legivel sem renderizar o PDF.',
+        'Arquivo bruto permanece bloqueado para abertura/download.'
+      ].join('\n'),
+      structureReport
+    };
   }
   if (kind === 'xlsx') {
-    return [
-      `Arquivo: ${fileName}`,
-      'Tipo detectado: Excel XLSX',
-      `Tamanho: ${sizeKb} KB`,
-      'Previa segura: planilha ZIP Office detectada. A leitura estrutural completa deve ocorrer somente em worker isolado.',
-      'Arquivo bruto permanece bloqueado para abertura/download.'
-    ].join('\n');
+    return {
+      text: [
+        `Arquivo: ${fileName}`,
+        'Tipo detectado: Excel XLSX',
+        `Tamanho: ${sizeKb} KB`,
+        'Previa segura: planilha Office detectada. A estrutura tende a ser melhor, mas a leitura completa deve ocorrer em worker isolado.',
+        'Arquivo bruto permanece bloqueado para abertura/download.'
+      ].join('\n'),
+      structureReport: {
+        ...structureReport,
+        warnings: [
+          'A leitura estrutural detalhada de XLSX ainda nao roda neste scanner seguro.',
+          ...(Array.isArray(structureReport.warnings) ? structureReport.warnings : [])
+        ]
+      }
+    };
   }
   if (kind === 'xls') {
-    return [
-      `Arquivo: ${fileName}`,
-      'Tipo detectado: Excel XLS legado',
-      `Tamanho: ${sizeKb} KB`,
-      'Previa segura indisponivel: formato legado pode conter macros/OLE e exige sandbox dedicada.',
-      'Arquivo bruto permanece bloqueado para abertura/download.'
-    ].join('\n');
+    return {
+      text: [
+        `Arquivo: ${fileName}`,
+        'Tipo detectado: Excel XLS legado',
+        `Tamanho: ${sizeKb} KB`,
+        'Previa segura indisponivel: formato legado pode conter macros/OLE e exige sandbox dedicada.',
+        'Arquivo bruto permanece bloqueado para abertura/download.'
+      ].join('\n'),
+      structureReport: {
+        ...structureReport,
+        warnings: [
+          'Formato XLS legado requer analise externa mais restrita.',
+          ...(Array.isArray(structureReport.warnings) ? structureReport.warnings : [])
+        ]
+      }
+    };
   }
-  return [
-    `Arquivo: ${fileName}`,
-    'Tipo detectado: desconhecido',
-    `Tamanho: ${sizeKb} KB`,
-    'Previa segura indisponivel.',
-    'Arquivo bruto permanece bloqueado para abertura/download.'
-  ].join('\n');
+  return {
+    text: [
+      `Arquivo: ${fileName}`,
+      'Tipo detectado: desconhecido',
+      `Tamanho: ${sizeKb} KB`,
+      'Previa segura indisponivel.',
+      'Arquivo bruto permanece bloqueado para abertura/download.'
+    ].join('\n'),
+    structureReport: {
+      ...structureReport,
+      warnings: [
+        'Nao foi possivel identificar o formato real do arquivo.',
+        ...(Array.isArray(structureReport.warnings) ? structureReport.warnings : [])
+      ]
+    }
+  };
 }
 
 function scanProtocolUpload(dataUrl: string, fileName: string, providedMime: string): {
@@ -1398,13 +1555,13 @@ function scanProtocolUpload(dataUrl: string, fileName: string, providedMime: str
     'pdf_xfa_form'
   ]);
   const blocked = flags.some((flag) => blockedFlags.has(flag));
-  const safePreviewText = buildProtocolSafePreview(decoded.buffer, kind, sanitizeString(fileName, 240) || 'protocolo');
+  const safePreview = buildProtocolSafePreview(decoded.buffer, kind, sanitizeString(fileName, 240) || 'protocolo');
 
   return {
     scanStatus: blocked ? 'blocked' : 'clean',
     quarantineStatus: blocked ? 'blocked' : 'review_ready',
     safePreviewStatus: blocked ? 'blocked' : 'generated',
-    safePreviewText,
+    safePreviewText: safePreview.text,
     scanReport: {
       engine: 'verto-basic-static-scan',
       scannedAt: new Date().toISOString(),
@@ -1412,7 +1569,8 @@ function scanProtocolUpload(dataUrl: string, fileName: string, providedMime: str
       detectedMime: decoded.mime,
       providedMime: normalizedProvidedMime || null,
       sizeBytes: decoded.buffer.length,
-      flags
+      flags,
+      structure: safePreview.structureReport
     }
   };
 }

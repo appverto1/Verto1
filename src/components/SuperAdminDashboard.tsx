@@ -37,6 +37,34 @@ const formatCurrency = (value: number) =>
 
 const formatPercent = (value: number) => `${Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%`;
 
+const clampScore = (value: any) => Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+
+const getReliabilityTone = (score: number) => {
+  if (score >= 75) return { label: 'Alta', chip: 'bg-emerald-50 text-emerald-700', panel: 'bg-emerald-50/70 border-emerald-100' };
+  if (score >= 50) return { label: 'Media', chip: 'bg-amber-50 text-amber-700', panel: 'bg-amber-50/70 border-amber-100' };
+  return { label: 'Baixa', chip: 'bg-rose-50 text-rose-700', panel: 'bg-rose-50/70 border-rose-100' };
+};
+
+const normalizeBuilderHeader = (value: string) =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+const splitProtocolRow = (line: string) => {
+  if (line.includes('\t')) return line.split('\t');
+  if (line.includes(';')) return line.split(';');
+  return line.split(/\s{2,}/);
+};
+
+const inferMaxScore = (points: string) => {
+  const matches = String(points || '').match(/\d+/g) || [];
+  const nums = matches.map(Number).filter((n) => Number.isFinite(n));
+  return nums.length ? Math.max(...nums) : 2;
+};
+
 export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [loading, setLoading] = useState(true);
   const [bootstrapping, setBootstrapping] = useState(false);
@@ -272,26 +300,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     }
   };
 
-  const normalizeBuilderHeader = (value: string) =>
-    String(value || '')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
-      .trim();
-
-  const splitProtocolRow = (line: string) => {
-    if (line.includes('\t')) return line.split('\t');
-    if (line.includes(';')) return line.split(';');
-    return line.split(/\s{2,}/);
-  };
-
-  const inferMaxScore = (points: string) => {
-    const matches = String(points || '').match(/\d+/g) || [];
-    const nums = matches.map(Number).filter((n) => Number.isFinite(n));
-    return nums.length ? Math.max(...nums) : 2;
-  };
-
   const parseProtocolBuilderText = () => {
     const lines = protocolBuilderText
       .split(/\r?\n/)
@@ -321,6 +329,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
       criteria: findIndex('criterios', 'criterio'),
       comment: findIndex('comentario')
     };
+    const requiredColumns = ['code', 'points', 'name', 'objective', 'criteria'] as const;
+    const optionalColumns = ['question', 'example', 'comment'] as const;
 
     const rows = lines.slice((headerIndex >= 0 ? headerIndex : 0) + 1);
     const tasks = rows
@@ -350,6 +360,18 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
       return;
     }
 
+    const missingRequiredColumns = requiredColumns.filter((key) => indexes[key] < 0);
+    const detectedOptionalColumns = optionalColumns.filter((key) => indexes[key] >= 0);
+    const tasksWithObjective = tasks.filter((task: any) => task.objective).length;
+    const tasksWithCriteria = tasks.filter((task: any) => task.criteria).length;
+    const tasksWithQuestion = tasks.filter((task: any) => task.question).length;
+    const readinessScore = clampScore(
+      ((requiredColumns.length - missingRequiredColumns.length) / requiredColumns.length) * 65 +
+      (tasksWithObjective / tasks.length) * 15 +
+      (tasksWithCriteria / tasks.length) * 15 +
+      (tasksWithQuestion / tasks.length) * 5
+    );
+
     const canonicalKey = protocolBuilderTitle
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
@@ -365,6 +387,17 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
       sourceLabel: 'Montagem Verto por tabela',
       versionLabel: protocolBuilderVersion,
       status: 'draft',
+      canonicalMeta: {
+        readinessScore,
+        taskCount: tasks.length,
+        missingRequiredColumns,
+        detectedOptionalColumns,
+        filledFields: {
+          objective: tasksWithObjective,
+          criteria: tasksWithCriteria,
+          question: tasksWithQuestion
+        }
+      },
       ageGroup: 'all',
       age_minima: 0,
       age_maxima: null,
@@ -914,9 +947,9 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               </p>
             </div>
 
-            <div className="rounded-[32px] bg-white border border-slate-100 p-6 shadow-sm">
-              <div className="flex flex-wrap items-start justify-between gap-4 mb-5">
-                <div>
+              <div className="rounded-[32px] bg-white border border-slate-100 p-6 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-4 mb-5">
+                  <div>
                   <p className="text-xs uppercase tracking-[0.18em] text-violet-500 font-black mb-1">Montagem canonica</p>
                   <h3 className="text-xl font-black text-slate-900">Transformar tabela do PDF em protocolo Verto</h3>
                   <p className="text-sm text-slate-500 mt-1 max-w-3xl">
@@ -929,6 +962,24 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                 >
                   Gerar pre-estrutura
                 </button>
+              </div>
+
+              <div className="mb-5 rounded-3xl border border-slate-200 bg-slate-50 p-5">
+                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500 mb-3">Modelo canonico Verto</p>
+                <div className="grid gap-3 lg:grid-cols-3 text-sm">
+                  <div className="rounded-2xl bg-white border border-slate-200 p-4">
+                    <p className="font-black text-slate-900 mb-1">Cabecalho obrigatorio</p>
+                    <p className="text-slate-600">Titulo, chave canonica, versao, categoria e ao menos 1 dominio.</p>
+                  </div>
+                  <div className="rounded-2xl bg-white border border-slate-200 p-4">
+                    <p className="font-black text-slate-900 mb-1">Cada tarefa precisa de</p>
+                    <p className="text-slate-600">Codigo, nome, regra de pontuacao, objetivo clinico e criterios observaveis.</p>
+                  </div>
+                  <div className="rounded-2xl bg-white border border-slate-200 p-4">
+                    <p className="font-black text-slate-900 mb-1">Bom sinal de confianca</p>
+                    <p className="text-slate-600">Tabela limpa, linhas consistentes e criterios repetiveis o suficiente para auditoria.</p>
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
@@ -977,6 +1028,42 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       {savingCanonicalProtocol ? 'Salvando...' : 'Salvar como rascunho Verto'}
                     </button>
                   </div>
+                  <div className="grid gap-3 md:grid-cols-4 mb-4">
+                    <div className="rounded-2xl bg-white border border-violet-100 p-4">
+                      <p className="text-[11px] font-black uppercase tracking-[0.14em] text-violet-500">Prontidao</p>
+                      <p className="text-2xl font-black text-slate-900 mt-2">{protocolBuilderPreview.canonicalMeta?.readinessScore || 0}%</p>
+                    </div>
+                    <div className="rounded-2xl bg-white border border-violet-100 p-4">
+                      <p className="text-[11px] font-black uppercase tracking-[0.14em] text-violet-500">Objetivos</p>
+                      <p className="text-2xl font-black text-slate-900 mt-2">{protocolBuilderPreview.canonicalMeta?.filledFields?.objective || 0}</p>
+                    </div>
+                    <div className="rounded-2xl bg-white border border-violet-100 p-4">
+                      <p className="text-[11px] font-black uppercase tracking-[0.14em] text-violet-500">Criterios</p>
+                      <p className="text-2xl font-black text-slate-900 mt-2">{protocolBuilderPreview.canonicalMeta?.filledFields?.criteria || 0}</p>
+                    </div>
+                    <div className="rounded-2xl bg-white border border-violet-100 p-4">
+                      <p className="text-[11px] font-black uppercase tracking-[0.14em] text-violet-500">Perguntas</p>
+                      <p className="text-2xl font-black text-slate-900 mt-2">{protocolBuilderPreview.canonicalMeta?.filledFields?.question || 0}</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {(protocolBuilderPreview.canonicalMeta?.missingRequiredColumns || []).length > 0 ? (
+                      (protocolBuilderPreview.canonicalMeta?.missingRequiredColumns || []).map((column: string) => (
+                        <span key={column} className="rounded-full bg-rose-50 px-3 py-1 text-[11px] font-black uppercase text-rose-700">
+                          Falta {column}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-black uppercase text-emerald-700">
+                        Colunas essenciais detectadas
+                      </span>
+                    )}
+                    {(protocolBuilderPreview.canonicalMeta?.detectedOptionalColumns || []).map((column: string) => (
+                      <span key={column} className="rounded-full bg-slate-900 px-3 py-1 text-[11px] font-black uppercase text-white">
+                        Extra: {column}
+                      </span>
+                    ))}
+                  </div>
                   <div className="overflow-x-auto rounded-2xl border border-white bg-white">
                     <table className="w-full text-left text-xs">
                       <thead className="bg-slate-50 text-slate-400 uppercase tracking-[0.12em]">
@@ -1011,7 +1098,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
             </div>
 
             <div className="grid gap-4">
-              {protocolRequestsError && (
+                  {protocolRequestsError && (
                 <div className="rounded-[24px] border border-amber-200 bg-amber-50 p-5 text-sm font-bold text-amber-800">
                   A fila de protocolos ainda nao respondeu: {protocolRequestsError}. O restante do painel continua funcionando. Se voce acabou de enviar um protocolo antes da correcao do 500, esse envio provavelmente nao foi salvo e precisa ser reenviado.
                 </div>
@@ -1025,6 +1112,11 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                   const isApproved = request.status === 'approved';
                   const isClean = request.scanStatus === 'clean';
                   const isBlocked = request.scanStatus === 'blocked';
+                  const structure = request.scanReport?.structure || {};
+                  const reliabilityScore = clampScore(structure?.scores?.reliability);
+                  const structureScore = clampScore(structure?.scores?.structure);
+                  const readinessScore = clampScore(structure?.scores?.canonicalReadiness);
+                  const tone = getReliabilityTone(reliabilityScore);
                   return (
                     <div key={request.id} className="rounded-[28px] bg-white border border-slate-100 p-6 shadow-sm flex flex-col lg:flex-row lg:items-center gap-5">
                       <div className="w-12 h-12 rounded-2xl bg-violet-50 text-violet-600 flex items-center justify-center shrink-0">
@@ -1043,6 +1135,56 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         <p className="text-xs text-slate-400 mt-1">
                           Sugestao Verto: <strong>{request.canonicalName || 'Analise manual'}</strong> · confianca {Math.round(Number(request.confidence || 0) * 100)}%
                         </p>
+                        <div className={`mt-3 rounded-2xl border p-4 ${tone.panel}`}>
+                          <div className="flex flex-wrap items-center gap-2 mb-3">
+                            <span className={`rounded-full px-3 py-1 text-[11px] font-black uppercase ${tone.chip}`}>
+                              Confiabilidade estrutural {tone.label}
+                            </span>
+                            <span className="rounded-full bg-white px-3 py-1 text-[11px] font-black uppercase text-slate-700">
+                              Score {reliabilityScore}%
+                            </span>
+                          </div>
+                          <div className="grid gap-2 md:grid-cols-3 text-xs font-bold text-slate-700">
+                            <div className="rounded-2xl bg-white/90 px-3 py-3">
+                              <p className="uppercase tracking-[0.14em] text-slate-400">Estrutura</p>
+                              <p className="text-lg font-black text-slate-900 mt-1">{structureScore}%</p>
+                            </div>
+                            <div className="rounded-2xl bg-white/90 px-3 py-3">
+                              <p className="uppercase tracking-[0.14em] text-slate-400">Prontidao canonica</p>
+                              <p className="text-lg font-black text-slate-900 mt-1">{readinessScore}%</p>
+                            </div>
+                            <div className="rounded-2xl bg-white/90 px-3 py-3">
+                              <p className="uppercase tracking-[0.14em] text-slate-400">Linhas estimadas</p>
+                              <p className="text-lg font-black text-slate-900 mt-1">{structure?.estimatedRows || 0}</p>
+                            </div>
+                          </div>
+                          {(structure?.detectedFields || []).length > 0 && (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {(structure?.detectedFields || []).map((field: string) => (
+                                <span key={field} className="rounded-full bg-white px-3 py-1 text-[11px] font-black uppercase text-slate-700">
+                                  {field}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {structure?.suggestedNextStep && (
+                            <p className="mt-3 text-xs font-bold text-slate-700">
+                              Proximo passo: {structure.suggestedNextStep}
+                            </p>
+                          )}
+                          {(structure?.warnings || []).length > 0 && (
+                            <div className="mt-3 rounded-2xl bg-white/90 p-3">
+                              <p className="text-[11px] font-black uppercase tracking-[0.14em] text-rose-500 mb-2">Alertas</p>
+                              <div className="flex flex-wrap gap-2">
+                                {(structure?.warnings || []).slice(0, 4).map((warning: string) => (
+                                  <span key={warning} className="rounded-full bg-rose-50 px-3 py-1 text-[11px] font-black text-rose-700">
+                                    {warning}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                         <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase">
                           <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">
                             <Shield size={12} />
