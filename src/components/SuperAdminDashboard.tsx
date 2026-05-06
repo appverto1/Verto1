@@ -53,6 +53,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [allCustomers, setAllCustomers] = useState<any[]>([]);
   const [leadRecoveryItems, setLeadRecoveryItems] = useState<any[]>([]);
   const [protocolRequests, setProtocolRequests] = useState<any[]>([]);
+  const [protocolRequestsError, setProtocolRequestsError] = useState<string | null>(null);
   const [approvingProtocolId, setApprovingProtocolId] = useState<string | null>(null);
   const [protocolBuilderText, setProtocolBuilderText] = useState('');
   const [protocolBuilderDomain, setProtocolBuilderDomain] = useState('Mobilidade Basica');
@@ -63,6 +64,22 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [financialFeatureSurveys, setFinancialFeatureSurveys] = useState<any[]>([]);
 
+  const fetchProtocolRequests = async (headers: Record<string, string>) => {
+    try {
+      const response = await fetch('/api/admin/protocol-import-requests', { credentials: 'include', headers });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || `Fila de protocolos indisponivel (${response.status}).`);
+      }
+      setProtocolRequests(data.data || []);
+      setProtocolRequestsError(null);
+    } catch (error: any) {
+      console.warn('Protocol request queue unavailable:', error);
+      setProtocolRequests([]);
+      setProtocolRequestsError(error?.message || 'Fila de protocolos indisponivel.');
+    }
+  };
+
   React.useEffect(() => {
     const fetchData = async () => {
       try {
@@ -71,13 +88,12 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         const token = session?.access_token;
         const headers = { Authorization: token ? `Bearer ${token}` : '' };
 
-        const [statsRes, financialRes, customersRes, surveysRes, leadsRes, protocolRequestsRes] = await Promise.all([
+        const [statsRes, financialRes, customersRes, surveysRes, leadsRes] = await Promise.all([
           fetch('/api/owner/stats', { credentials: 'include', headers }),
           fetch('/api/owner/financial-overview', { credentials: 'include', headers }),
           fetch('/api/owner/clients', { credentials: 'include', headers }),
           fetch('/api/owner/financial-feature-surveys', { credentials: 'include', headers }),
-          fetch('/api/owner/leads/recovery', { credentials: 'include', headers }),
-          fetch('/api/admin/protocol-import-requests', { credentials: 'include', headers })
+          fetch('/api/owner/leads/recovery', { credentials: 'include', headers })
         ]);
 
         const statsData = await statsRes.json();
@@ -85,9 +101,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         const customersData = await customersRes.json();
         const surveysData = await surveysRes.json();
         const leadsData = await leadsRes.json();
-        const protocolRequestsData = await protocolRequestsRes.json();
 
-        if (!statsRes.ok || !financialRes.ok || !customersRes.ok || !leadsRes.ok || !protocolRequestsRes.ok) {
+        if (!statsRes.ok || !financialRes.ok || !customersRes.ok || !leadsRes.ok) {
           throw new Error('Erro ao carregar dados do super admin.');
         }
 
@@ -96,7 +111,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         if (customersData.success) setAllCustomers(customersData.data || []);
         if (surveysData.success) setFinancialFeatureSurveys(surveysData.data || []);
         if (leadsData.success) setLeadRecoveryItems(leadsData.data || []);
-        if (protocolRequestsData.success) setProtocolRequests(protocolRequestsData.data || []);
+        await fetchProtocolRequests(headers);
       } catch (error: any) {
         console.error('Owner dashboard error:', error);
         alert(error.message || 'Nao foi possivel carregar o painel.');
@@ -113,13 +128,12 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     const token = session?.access_token;
     const headers = { Authorization: token ? `Bearer ${token}` : '' };
 
-    const [statsRes, financialRes, customersRes, surveysRes, leadsRes, protocolRequestsRes] = await Promise.all([
+    const [statsRes, financialRes, customersRes, surveysRes, leadsRes] = await Promise.all([
       fetch('/api/owner/stats', { credentials: 'include', headers }),
       fetch('/api/owner/financial-overview', { credentials: 'include', headers }),
       fetch('/api/owner/clients', { credentials: 'include', headers }),
       fetch('/api/owner/financial-feature-surveys', { credentials: 'include', headers }),
-      fetch('/api/owner/leads/recovery', { credentials: 'include', headers }),
-      fetch('/api/admin/protocol-import-requests', { credentials: 'include', headers })
+      fetch('/api/owner/leads/recovery', { credentials: 'include', headers })
     ]);
 
     const statsData = await statsRes.json();
@@ -127,13 +141,12 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     const customersData = await customersRes.json();
     const surveysData = await surveysRes.json();
     const leadsData = await leadsRes.json();
-    const protocolRequestsData = await protocolRequestsRes.json();
     if (statsData.success) setStats(statsData.stats);
     if (financialData.success) setFinancial(financialData.data);
     if (customersData.success) setAllCustomers(customersData.data || []);
     if (surveysData.success) setFinancialFeatureSurveys(surveysData.data || []);
     if (leadsData.success) setLeadRecoveryItems(leadsData.data || []);
-    if (protocolRequestsData.success) setProtocolRequests(protocolRequestsData.data || []);
+    await fetchProtocolRequests(headers);
   };
 
   const handleApproveProtocolRequest = async (request: any) => {
@@ -863,7 +876,12 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
             </div>
 
             <div className="grid gap-4">
-              {protocolRequests.length === 0 ? (
+              {protocolRequestsError && (
+                <div className="rounded-[24px] border border-amber-200 bg-amber-50 p-5 text-sm font-bold text-amber-800">
+                  A fila de protocolos ainda nao respondeu: {protocolRequestsError}. O restante do painel continua funcionando. Se voce acabou de enviar um protocolo antes da correcao do 500, esse envio provavelmente nao foi salvo e precisa ser reenviado.
+                </div>
+              )}
+              {!protocolRequestsError && protocolRequests.length === 0 ? (
                 <div className="rounded-[28px] border border-dashed border-slate-200 bg-white p-10 text-center text-sm font-bold text-slate-400">
                   Nenhuma solicitacao de protocolo pendente.
                 </div>
