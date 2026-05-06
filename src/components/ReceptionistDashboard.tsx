@@ -1302,6 +1302,7 @@ export const ReceptionistDashboard = ({
                   onDeleteHistoryItem={onDeleteHistoryItem}
                   anamnesisTemplate={anamnesisTemplate}
                   clinicContext={{
+                    userId: user?.id || "",
                     clinicName:
                       user?.clinicSettings?.clinicName ||
                       user?.name ||

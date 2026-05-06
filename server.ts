@@ -7240,7 +7240,9 @@ async function startServer() {
       const { data: signedData, error: signedError } = await supabase.storage
         .from(bucketName)
         .createSignedUrl(storagePath, 60 * 10);
-      if (signedError) throw signedError;
+      if (signedError) {
+        console.warn('[PatientFiles] Falha ao assinar URL após upload:', signedError.message);
+      }
 
       try {
         void persistActivityLog({
@@ -7267,7 +7269,7 @@ async function startServer() {
           source: inserted.source || 'upload',
           createdAt: inserted.created_at,
           metadata: inserted.metadata || {},
-          signedUrl: signedData.signedUrl
+          signedUrl: signedData?.signedUrl || null
         }
       });
     } catch (error: any) {

@@ -3248,6 +3248,7 @@ export function CoordinatorDashboard({
               onBack={() => setView("home")}
               hideBackButton={true}
               clinicContext={{
+                userId: user?.id || "",
                 clinicName:
                   user?.clinicSettings?.clinicName ||
                   user?.name ||

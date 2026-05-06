@@ -242,6 +242,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [anamnesisFileName, setAnamnesisFileName] = useState("");
   const [anamnesisFileDate, setAnamnesisFileDate] = useState(new Date().toISOString().slice(0, 10));
   const [isPreparingAnamnesisSave, setIsPreparingAnamnesisSave] = useState(false);
+  const [resolvedClinicContext, setResolvedClinicContext] = useState<any>(clinicContext || {});
   const [previewFile, setPreviewFile] = useState<any>(null);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -254,6 +255,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [showTrialConfirmation, setShowTrialConfirmation] = useState(false);
   const [trialObservation, setTrialObservation] = useState("");
   const [isSavingObservation, setIsSavingObservation] = useState(false);
+
+  useEffect(() => {
+    setResolvedClinicContext(clinicContext || {});
+  }, [clinicContext]);
 
   const [reportStartDate, setReportStartDate] = useState("");
   const [reportEndDate, setReportEndDate] = useState("");
@@ -366,8 +371,37 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
 
-  const buildAnamnesisDocumentHtml = (anamnesis: any, fichaDateIso: string) => {
-    const c = clinicContext || {};
+  const refreshClinicDocumentMedia = async () => {
+    const baseContext = clinicContext || {};
+    const currentUserId = String(baseContext?.userId || "").trim();
+    if (!currentUserId) return baseContext;
+
+    try {
+      const result = await dataService.getUserProfileMedia(currentUserId);
+      if (!result?.success) return baseContext;
+
+      const media = result?.data || {};
+      const nextContext = {
+        ...baseContext,
+        logoUrl:
+          String(media?.clinicLogoUrl || media?.profilePictureUrl || baseContext?.logoUrl || "").trim() ||
+          baseContext?.logoUrl ||
+          null,
+        signatureUrl:
+          String(media?.signatureUrl || baseContext?.signatureUrl || "").trim() ||
+          baseContext?.signatureUrl ||
+          null,
+      };
+      setResolvedClinicContext(nextContext);
+      return nextContext;
+    } catch (error) {
+      console.warn("Falha ao renovar mídia da clínica para o documento.", error);
+      return baseContext;
+    }
+  };
+
+  const buildAnamnesisDocumentHtml = (anamnesis: any, fichaDateIso: string, contextOverride?: any) => {
+    const c = contextOverride || resolvedClinicContext || clinicContext || {};
     const fieldLabelMap: Record<string, string> = {
       nome: "Nome completo",
       nomeSocial: "Nome social",
@@ -1895,7 +1929,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       let uploadResult: any = null;
       let uploadErrorMessage = '';
       try {
-        const pdfBlob = await generatePdfBlobFromAnamnesisHtml(pendingAnamnesisPayload);
+        const freshClinicContext = await refreshClinicDocumentMedia();
+        const documentHtml = buildAnamnesisDocumentHtml(
+          pendingAnamnesisData || patient?.anamnesisData || {},
+          anamnesisFileDate,
+          freshClinicContext,
+        );
+        setPendingAnamnesisPayload(documentHtml);
+        const pdfBlob = await generatePdfBlobFromAnamnesisHtml(documentHtml);
 
         uploadResult = await dataService.uploadPatientFile(String(patient.id), {
           fileName: normalizedName,
@@ -3831,5 +3872,3 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     </div> 
   ); 
 };
-
-

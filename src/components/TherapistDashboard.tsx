@@ -1359,6 +1359,7 @@ export const TherapistDashboard = ({
                   onDeleteHistoryItem={onDeleteHistoryItem}
                   anamnesisTemplate={anamnesisTemplate}
                   clinicContext={{
+                    userId: user?.id || "",
                     clinicName:
                       user?.clinicSettings?.clinicName ||
                       user?.name ||
