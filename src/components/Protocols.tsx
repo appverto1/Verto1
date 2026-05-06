@@ -461,6 +461,9 @@ export const ProtocolManagementSystem = ({
   const evaluationProtocols = filteredProtocols.filter((p: any) => p.category === 'evaluation' || !p.category);
   const interventionProtocols = filteredProtocols.filter((p: any) => p.category === 'intervention');
   const recentImportedProtocols = importedProtocolStatuses.slice(0, 6);
+  const pendingImportedProtocols = recentImportedProtocols.filter((item: any) => String(item.status || '').toLowerCase() === 'pending').length;
+  const approvedImportedProtocols = recentImportedProtocols.filter((item: any) => String(item.status || '').toLowerCase() === 'approved').length;
+  const rejectedImportedProtocols = recentImportedProtocols.filter((item: any) => String(item.status || '').toLowerCase() === 'rejected').length;
 
   if (editingProtocol) { 
     return (<ProtocolEditor protocol={editingProtocol} onSave={(updated: any) => { onSaveProtocol(updated); setEditingProtocol(null); }} onCancel={() => setEditingProtocol(null)} />); 
@@ -723,22 +726,49 @@ export const ProtocolManagementSystem = ({
           </div>
 
           {canManageLibrary && recentImportedProtocols.length > 0 && (
-            <div className="mb-6 flex flex-wrap items-center gap-2 animate-slide-up">
-              <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Solicitacoes enviadas</span>
-              {recentImportedProtocols.map((item: any) => {
-                const status = String(item.status || 'pending').toLowerCase();
-                const statusLabel = status === 'approved' ? 'Aprovado' : status === 'rejected' ? 'Recusado' : 'Pendente';
-                const statusClass = status === 'approved'
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : status === 'rejected'
-                    ? 'bg-rose-50 text-rose-700 border-rose-200'
-                    : 'bg-amber-50 text-amber-700 border-amber-200';
-                return (
-                  <div key={item.id} className={`rounded-full border px-3 py-1.5 text-[11px] font-black ${statusClass}`}>
-                    {(item.protocolName || 'Protocolo').slice(0, 28)} · {statusLabel}
+            <div className="mb-6 rounded-[24px] border border-white/10 bg-[#11192c] px-4 py-4 shadow-xl shadow-black/10 animate-slide-up">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">Solicitacoes enviadas</p>
+                  <p className="text-sm font-bold text-white mt-1">Acompanhe rapidamente o andamento dos seus ultimos envios.</p>
+                </div>
+                <div className="grid grid-cols-3 gap-2 sm:gap-3 lg:w-[320px]">
+                  <div className="rounded-2xl bg-amber-50 px-3 py-3 text-center">
+                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-700">Pendentes</p>
+                    <p className="text-xl font-black text-amber-900 mt-1">{pendingImportedProtocols}</p>
                   </div>
-                );
-              })}
+                  <div className="rounded-2xl bg-emerald-50 px-3 py-3 text-center">
+                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700">Aprovados</p>
+                    <p className="text-xl font-black text-emerald-900 mt-1">{approvedImportedProtocols}</p>
+                  </div>
+                  <div className="rounded-2xl bg-rose-50 px-3 py-3 text-center">
+                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-rose-700">Recusados</p>
+                    <p className="text-xl font-black text-rose-900 mt-1">{rejectedImportedProtocols}</p>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-2">
+                {recentImportedProtocols.slice(0, 4).map((item: any) => {
+                  const status = String(item.status || 'pending').toLowerCase();
+                  const statusLabel = status === 'approved' ? 'Aprovado' : status === 'rejected' ? 'Recusado' : 'Pendente';
+                  const statusClass = status === 'approved'
+                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/20'
+                    : status === 'rejected'
+                      ? 'bg-rose-500/15 text-rose-300 border-rose-400/20'
+                      : 'bg-amber-500/15 text-amber-300 border-amber-400/20';
+                  return (
+                    <div key={item.id} className="flex items-center gap-3 rounded-2xl border border-white/8 bg-[#0b1220] px-3 py-3">
+                      <div className={`h-2.5 w-2.5 rounded-full ${status === 'approved' ? 'bg-emerald-400' : status === 'rejected' ? 'bg-rose-400' : 'bg-amber-400'}`} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-bold text-white">{item.protocolName || 'Protocolo importado'}</p>
+                      </div>
+                      <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${statusClass}`}>
+                        {statusLabel}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 

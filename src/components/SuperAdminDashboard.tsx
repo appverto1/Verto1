@@ -1167,6 +1167,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                     ? (request.scanReport?.evidence?.screenshots || [])
                     : [];
                   const isScreenshotFlow = screenshotEvidence.length > 0;
+                  const quickPreviewShot = screenshotEvidence.find((shot: any) => typeof shot?.dataUrl === 'string' && shot.dataUrl.startsWith('data:image/')) || null;
                   const applicableAgeLabel = request.scanReport?.evidence?.applicableAgeGroup === 'child'
                     ? 'Criancas'
                     : request.scanReport?.evidence?.applicableAgeGroup === 'teen'
@@ -1213,54 +1214,18 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                           </div>
                         )}
                         {isScreenshotFlow ? (
-                          <div className="mt-3 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+                          <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                             <div className="flex flex-wrap items-center gap-2 mb-3">
-                              <span className="rounded-full px-3 py-1 text-[11px] font-black uppercase bg-emerald-100 text-emerald-700">
-                                Validacao por screenshots
+                              <span className="rounded-full px-3 py-1 text-[11px] font-black uppercase bg-violet-100 text-violet-700">
+                                Visual enviado pelo profissional
                               </span>
                               <span className="rounded-full bg-white px-3 py-1 text-[11px] font-black uppercase text-slate-700">
-                                {screenshotEvidence.length} capturas
+                                {screenshotEvidence.length} imagem{Number(screenshotEvidence.length) > 1 ? 'ns' : ''}
                               </span>
                             </div>
-                            <div className="grid gap-2 md:grid-cols-3 text-xs font-bold text-slate-700">
-                              <div className="rounded-2xl bg-white/90 px-3 py-3">
-                                <p className="uppercase tracking-[0.14em] text-slate-400">Paginas totais</p>
-                                <p className="text-lg font-black text-slate-900 mt-1">{request.scanReport?.evidence?.totalPages || '-'}</p>
-                              </div>
-                              <div className="rounded-2xl bg-white/90 px-3 py-3">
-                                <p className="uppercase tracking-[0.14em] text-slate-400">Janela sorteada</p>
-                                <p className="text-lg font-black text-slate-900 mt-1">1-{request.scanReport?.evidence?.coverageMaxPage || '-'}</p>
-                              </div>
-                              <div className="rounded-2xl bg-white/90 px-3 py-3">
-                                <p className="uppercase tracking-[0.14em] text-slate-400">Fluxo seguro</p>
-                                <p className="text-lg font-black text-slate-900 mt-1">Sem PDF bruto</p>
-                              </div>
-                            </div>
-                            <p className="mt-3 text-xs font-bold text-slate-700">
-                              Revise as miniaturas abaixo e confirme se as paginas batem com o protocolo informado pelo cliente.
+                            <p className="text-sm font-bold text-slate-800">
+                              Veja a miniatura e valide se o material parece coerente com o protocolo informado.
                             </p>
-                            <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                              {screenshotEvidence.map((shot: any) => (
-                                <div key={`${request.id}-${shot.pageNumber}`} className="rounded-2xl border border-emerald-100 bg-white p-3">
-                                  <div className="flex items-center justify-between gap-2 mb-2">
-                                    <p className="text-xs font-black text-slate-900">Pagina {shot.pageNumber}</p>
-                                    <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-black uppercase text-slate-500">
-                                      Screenshot
-                                    </span>
-                                  </div>
-                                  {shot.dataUrl && (
-                                    <img
-                                      src={shot.dataUrl}
-                                      alt={`Screenshot da pagina ${shot.pageNumber}`}
-                                      className="w-full h-40 object-cover rounded-xl border border-slate-200 bg-slate-50"
-                                    />
-                                  )}
-                                  {shot.prompt && (
-                                    <p className="mt-2 text-[11px] font-bold text-slate-600 leading-relaxed">{shot.prompt}</p>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
                           </div>
                         ) : (
                           <div className={`mt-3 rounded-2xl border p-4 ${tone.panel}`}>
@@ -1314,30 +1279,10 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                             )}
                           </div>
                         )}
-                        <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                          <p className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-500 mb-2">Jeito seguro e rapido</p>
-                          <p className="text-sm font-bold text-slate-800">
-                            {isScreenshotFlow ? 'Use as miniaturas como comprovante visual e decida por uma das duas trilhas:' : 'Use o PDF como comprovante em quarentena e decida por uma das duas trilhas:'}
-                          </p>
-                          <div className="mt-3 grid gap-2 md:grid-cols-2">
-                            <div className="rounded-2xl bg-white border border-slate-200 p-3">
-                              <p className="text-xs font-black text-slate-900">1. Liberar o protocolo canonico sugerido</p>
-                              <p className="text-xs text-slate-600 mt-1">
-                                Melhor quando a sugestao Verto esta alta e o arquivo serve apenas para comprovar posse/uso.
-                              </p>
-                            </div>
-                            <div className="rounded-2xl bg-white border border-slate-200 p-3">
-                              <p className="text-xs font-black text-slate-900">2. Montar pela tabela limpa</p>
-                              <p className="text-xs text-slate-600 mt-1">
-                                Melhor quando voces precisam transformar o conteudo em estrutura auditavel dentro da biblioteca Verto.
-                              </p>
-                            </div>
-                          </div>
-                        </div>
                         <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase">
                           <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">
                             <Shield size={12} />
-                            {isScreenshotFlow ? 'Evidencia por screenshot' : 'Arquivo em quarentena'}
+                            {isScreenshotFlow ? 'Imagem visivel' : 'Arquivo em quarentena'}
                           </span>
                           <span className={`rounded-full px-2.5 py-1 ${isClean ? 'bg-emerald-50 text-emerald-700' : isBlocked ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
                             Varredura: {isClean ? 'limpa' : isBlocked ? 'bloqueada' : 'pendente'}
@@ -1352,20 +1297,20 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                           </div>
                         )}
                       </div>
-                      <div className="xl:w-[280px] shrink-0">
+                      <div className="xl:w-[320px] shrink-0">
                         <div className={`rounded-[24px] border p-4 h-full ${request.status === 'pending' ? 'border-amber-200 bg-white' : 'border-slate-200 bg-slate-50'}`}>
                           <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500 mb-3">Visualizacao rapida</p>
-                          {previewShot?.dataUrl ? (
+                          {quickPreviewShot?.dataUrl ? (
                             <>
                               <img
-                                src={previewShot.dataUrl}
-                                alt={`Miniatura da pagina ${previewShot.pageNumber}`}
-                                className="w-full h-52 object-cover rounded-2xl border border-slate-200 bg-white"
+                                src={quickPreviewShot.dataUrl}
+                                alt={`Miniatura da pagina ${quickPreviewShot.pageNumber}`}
+                                className="w-full h-64 object-contain rounded-2xl border border-slate-200 bg-white"
                               />
                               <div className="mt-3 rounded-2xl bg-slate-100 px-3 py-2">
-                                <p className="text-xs font-black text-slate-900">Pagina {previewShot.pageNumber}</p>
+                                <p className="text-xs font-black text-slate-900">Pagina {quickPreviewShot.pageNumber}</p>
                                 <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
-                                  Se voce consegue ler essa miniatura, o envio passou no criterio visual basico.
+                                  Miniatura recebida com sucesso. Se fizer sentido visualmente, voce ja consegue validar o envio com muito mais seguranca.
                                 </p>
                               </div>
                             </>
@@ -1373,7 +1318,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                             <div className="rounded-2xl border border-dashed border-rose-200 bg-rose-50 px-4 py-6 text-center">
                               <p className="text-sm font-black text-rose-700">Sem miniatura visivel</p>
                               <p className="text-[11px] text-rose-600 mt-2">
-                                Se nao houver imagem visivel aqui, trate o envio com mais desconfiança.
+                                Se a imagem nao aparecer aqui, trate esse envio com mais desconfiança.
                               </p>
                             </div>
                           )}
