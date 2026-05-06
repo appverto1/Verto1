@@ -386,16 +386,16 @@ export function CoordinatorDashboard({
     billing: "Assinatura e Cobrança",
   };
   const professionalDailyMessages = [
-    "Olá [nome], cada marco que você registra hoje é um capítulo na história de superação de alguém. ??",
-    "A ciência é sua base, mas sua escuta é o que transforma vidas. Bom trabalho hoje! ?",
-    "Lembre-se: para o paciente, você é a ponte entre o desafio e a conquista. ??",
-    "O progresso clínico raramente é uma linha reta. Valorize as pequenas vitórias de hoje! ??",
-    "Olá [nome], grandes mudanças são feitas de pequenos marcos consistentes. ??",
-    "Sua dedicação é a bússola que guia o desenvolvimento de quem você atende. ??",
-    "Olá [nome], para cuidar do outro com excelência, lembre-se de também cuidar de você. ?",
-    "Sua saúde mental é tão importante quanto a técnica que você aplica. Respire fundo e bom dia! ?",
-    "Olá [nome], lembre-se que quem faz o dia bonito é você! ??",
-    "Transformando dados em sorrisos e evolução. Vamos para mais um dia? ??",
+    "Olá [nome], cada marco que você registra hoje é um capítulo na história de superação de alguém.",
+    "A ciência é sua base, mas sua escuta é o que transforma vidas. Bom trabalho hoje!",
+    "Lembre-se: para o paciente, você é a ponte entre o desafio e a conquista.",
+    "O progresso clínico raramente é uma linha reta. Valorize as pequenas vitórias de hoje!",
+    "Olá [nome], grandes mudanças são feitas de pequenos marcos consistentes.",
+    "Sua dedicação é a bússola que guia o desenvolvimento de quem você atende.",
+    "Olá [nome], para cuidar do outro com excelência, lembre-se de também cuidar de você.",
+    "Sua saúde mental é tão importante quanto a técnica que você aplica. Respire fundo e bom dia!",
+    "Olá [nome], lembre-se que quem faz o dia bonito é você!",
+    "Transformando dados em sorrisos e evolução. Vamos para mais um dia?",
   ];
 
   const [loading, setLoading] = useState(false);
