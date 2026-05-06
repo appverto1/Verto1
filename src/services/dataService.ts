@@ -141,6 +141,32 @@ function ensureArray(value: any) {
   return Array.isArray(value) ? value : [];
 }
 
+async function getLocalRecordsData(type: OfflineType) {
+  try {
+    const local = await getRecordsByType(type);
+    return local.map((r) => r.data).filter(Boolean);
+  } catch (error) {
+    console.warn(`[offline-cache] failed to read local ${type} cache:`, error);
+    return [];
+  }
+}
+
+function mergeRecordsById(remote: any[], local: any[]) {
+  const merged = new Map<string, any>();
+  const getId = (item: any) => String(item?.id || item?.idempotencyKey || item?.idempotency_key || '').trim();
+  for (const item of [...local, ...remote]) {
+    const id = getId(item);
+    if (!id) continue;
+    const existing = merged.get(id) || {};
+    merged.set(id, { ...existing, ...item });
+  }
+  return Array.from(merged.values()).sort((a, b) => {
+    const ta = new Date(a?.timestamp || a?.created_at || a?.updated_at || 0).getTime();
+    const tb = new Date(b?.timestamp || b?.created_at || b?.updated_at || 0).getTime();
+    return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
+  });
+}
+
 function normalizeNoteVisibility(value: any): 'private' | 'shared_patient' | 'shared_clinic' {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw) return 'private';
@@ -178,7 +204,7 @@ function createIdempotencyKey(scope: string, entityId?: string) {
 }
 
 // Helper to handle offline-first saving
-async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' = 'POST') {
+async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'DELETE' = 'POST') {
   const idempotencyKey = createIdempotencyKey(`${method}:${endpoint}`, id);
   const payloadWithIdempotency = {
     ...(data || {}),
@@ -518,20 +544,21 @@ export const dataService = {
   },
 
   async getActivityLogs() {
-    const endpoint = '/api/logs';
+    const endpoint = '/api/logs?limit=2000';
     try {
+      const localLogs = await getLocalRecordsData('log');
       const response = await fetch(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'log'),
         credentials: 'include'
       });
       if (response.status === 304) {
-        const local304 = await getRecordsByType('log');
-        return { success: true, data: local304.map((r) => r.data) };
+        return { success: true, data: mergeRecordsById([], localLogs) };
       }
       if (response.ok) {
         const result = await response.json();
+        const remoteLogs = ensureArray(result.data);
         let latest = 0;
-        for (const l of result.data || []) {
+        for (const l of remoteLogs) {
           const timestampMs = l?.timestamp ? new Date(l.timestamp).getTime() : Date.now();
           latest = Math.max(latest, Number.isFinite(timestampMs) ? timestampMs : Date.now());
           await saveEncryptedRecord({
@@ -545,13 +572,20 @@ export const dataService = {
           });
         }
         await cacheResponseMetadata(endpoint, response, latest || null);
-        return result;
+        return { ...result, success: true, data: mergeRecordsById(remoteLogs, localLogs) };
       }
     } catch (error) {
       console.log('Fetching logs from local storage...');
     }
-    const local = await getRecordsByType('log');
-    return { success: true, data: local.map(r => r.data) };
+    return { success: true, data: mergeRecordsById([], await getLocalRecordsData('log')) };
+  },
+
+  async updateActivityLog(id: string, updates: any) {
+    return await saveOfflineFirst(id, updates, 'log', `/api/logs/${id}`, 'PATCH');
+  },
+
+  async archiveActivityLog(id: string) {
+    return await saveOfflineFirst(id, { id, status: 'archived' }, 'log', `/api/logs/${id}`, 'DELETE');
   },
 
   async getNotes(patientId: string) {

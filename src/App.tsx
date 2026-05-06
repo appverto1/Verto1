@@ -963,9 +963,13 @@ export default function App() {
       timestamp: new Date().toISOString(),
       professional: user?.name || "Profissional",
       actor_name: user?.name || "Profissional",
+      title: action,
+      content: details,
+      type: category,
       action,
       details,
-      category
+      category,
+      source: 'client'
     });
     
     setActivityLogs(prev => [newLog, ...prev]);

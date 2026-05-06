@@ -3092,14 +3092,16 @@ async function startServer() {
         clinic_id: sanitizeString(clinicId, 120) || null,
         actor_name: sanitizeString(actorName, 180) || null,
         action_type: sanitizeString(actionType || title, 180) || null,
-        payload_details: sanitizeString(payloadDetails || content, 4000) || null
+        payload_details: sanitizeString(payloadDetails || content, 4000) || null,
+        source: 'server',
+        status: 'active',
+        created_at: basePayload.timestamp,
+        updated_at: basePayload.timestamp
       };
 
-      const insert = await supabase.from('activity_logs').insert([extendedPayload]);
+      const insert = await writeActivityLogWithFallback(extendedPayload);
       if (!insert.error) return;
-
-      // Backward compatibility if clinic_id/actor_name columns don't exist yet.
-      await supabase.from('activity_logs').insert([basePayload]);
+      logRouteDbError('persistActivityLog', insert.error, { title, userId, clinicId });
     } catch (error) {
       console.warn('[ActivityLog] Failed to persist audit event:', String(error));
     }
@@ -3127,6 +3129,92 @@ async function startServer() {
     } catch {
       return '';
     }
+  };
+
+  const isActivityLogOptionalColumn = (column: string | null) =>
+    Boolean(
+      column &&
+        [
+          'clinic_id',
+          'actor_name',
+          'action_type',
+          'payload_details',
+          'idempotency_key',
+          'source',
+          'request_path',
+          'request_method',
+          'ip_address',
+          'user_agent',
+          'created_at',
+          'updated_at',
+          'status',
+          'deleted_at'
+        ].includes(column)
+    );
+
+  const writeActivityLogWithFallback = async (
+    payload: Record<string, any>,
+    options: { upsert?: boolean; select?: boolean } = {}
+  ) => {
+    let safePayload: Record<string, any> = cleanObject({ ...payload });
+    const removedColumns = new Set<string>();
+    let lastError: any = null;
+
+    for (let attempt = 0; attempt < 16 && Object.keys(safePayload).length > 0; attempt += 1) {
+      const query = options.upsert
+        ? supabase.from('activity_logs').upsert([safePayload], { onConflict: 'id' })
+        : supabase.from('activity_logs').insert([safePayload]);
+      const result = options.select ? await query.select().single() : await query;
+      if (!result.error) return { data: (result as any).data || safePayload, error: null };
+
+      lastError = result.error;
+      const missingColumn = extractMissingColumnName(result.error);
+      if (!missingColumn || removedColumns.has(missingColumn) || !isActivityLogOptionalColumn(missingColumn)) {
+        break;
+      }
+      removedColumns.add(missingColumn);
+      delete safePayload[missingColumn];
+    }
+
+    return { data: null, error: lastError };
+  };
+
+  const buildActivityLogPayload = (currentUser: any, body: any, req?: any) => {
+    const nowIso = new Date().toISOString();
+    const title =
+      sanitizeString(body?.title || body?.action || body?.action_type, 180) ||
+      'Atividade registrada';
+    const content =
+      sanitizeString(body?.content || body?.details || body?.description || body?.message, 4000) ||
+      'Ação registrada no sistema.';
+    const idFromBody = sanitizeString(body?.id, 120);
+    const idempotencyKey = sanitizeString(
+      body?.idempotencyKey || body?.idempotency_key || req?.headers?.['x-idempotency-key'],
+      240
+    );
+
+    return cleanObject({
+      id: isUuid(idFromBody) ? idFromBody : crypto.randomUUID(),
+      user_id: sanitizeString(currentUser?.id, 120),
+      clinic_id: sanitizeString(currentClinicId(currentUser), 120) || null,
+      actor_name: sanitizeString(currentUser?.name || currentUser?.email || body?.actor_name || body?.professional, 180) || null,
+      title,
+      content,
+      type: sanitizeString(body?.type || body?.category, 40) || 'management',
+      action_type: sanitizeString(body?.action_type || body?.action || title, 180) || title,
+      payload_details:
+        sanitizeString(body?.payload_details || body?.payloadDetails || body?.details || content, 4000) || content,
+      timestamp: sanitizeString(body?.timestamp, 40) || nowIso,
+      idempotency_key: idempotencyKey || null,
+      source: sanitizeString(body?.source, 40) || 'app',
+      request_path: sanitizeString(req?.path, 240) || null,
+      request_method: sanitizeString(req?.method, 20) || null,
+      ip_address: sanitizeString(req?.ip || req?.headers?.['x-forwarded-for'], 120) || null,
+      user_agent: sanitizeString(req?.headers?.['user-agent'], 500) || null,
+      status: sanitizeString(body?.status, 40) || 'active',
+      created_at: nowIso,
+      updated_at: nowIso
+    });
   };
 
   const trackProfessionalSignupCheckoutCancellation = async ({
@@ -5103,6 +5191,21 @@ async function startServer() {
         userId: authUser?.id || null,
         request: req,
         status: emailSent ? 'sent' : 'warning'
+      });
+      await persistActivityLog({
+        userId: sanitizeString(user.id, 120),
+        clinicId: sanitizeString(clinicId, 120),
+        actorName: sanitizeString(user.name || user.email || 'Coordenador', 180),
+        title: reusedExistingInvitation ? 'Convite de colaborador reenviado' : 'Convite de colaborador enviado',
+        content: `Convite para ${maskEmail(email)} como ${invitedRoleLabel} em ${clinicName}. E-mail ${emailSent ? 'enviado' : 'com falha de envio'}.`,
+        type: 'management',
+        actionType: reusedExistingInvitation ? 'clinic_invite_resent' : 'clinic_invite_created',
+        payloadDetails: JSON.stringify({
+          invitationId: data?.id || null,
+          invitedRole: role,
+          email: maskEmail(email),
+          emailSent
+        })
       });
 
       res.json({
@@ -8131,27 +8234,31 @@ async function startServer() {
 
       const role = currentUser.role as AppRole;
       const clinicId = currentClinicId(currentUser);
+      const requestedLimit = asSafeNumber(req.query?.limit, 1, 2000) || 1000;
+      const limit = Math.min(Math.max(requestedLimit, 1), 2000);
       let data: any[] = [];
       let error: any = null;
       const isManager = role === 'coordinator' || role === 'admin' || role === 'owner';
 
       if (isManager && clinicId) {
         try {
-          const [byClinicRes, memberRes] = await Promise.all([
-            supabase
-              .from('activity_logs')
-              .select('*')
-              .eq('clinic_id', clinicId)
-              .order('timestamp', { ascending: false })
-              .limit(500),
-            supabase
-              .from('clinic_memberships')
-              .select('user_id')
-              .eq('clinic_id', clinicId),
-          ]);
+          const byClinicRes = await supabase
+            .from('activity_logs')
+            .select('*')
+            .eq('clinic_id', clinicId)
+            .order('timestamp', { ascending: false })
+            .limit(limit);
 
-          const byClinic = byClinicRes.data || [];
-          if (byClinicRes.error) error = byClinicRes.error;
+          let byClinic = byClinicRes.data || [];
+          if (byClinicRes.error && !isMissingColumnError(byClinicRes.error, 'clinic_id')) {
+            error = byClinicRes.error;
+          }
+
+          const memberRes = await supabase
+            .from('clinic_memberships')
+            .select('user_id')
+            .eq('clinic_id', clinicId);
+          if (memberRes.error && !error) error = memberRes.error;
 
           const memberIds = Array.from(
             new Set(
@@ -8164,13 +8271,13 @@ async function startServer() {
           if (currentId) memberIds.push(currentId);
 
           let byMembers: any[] = [];
-          if (memberIds.length > 0) {
+          if (!error && memberIds.length > 0) {
             const memberLogsRes = await supabase
               .from('activity_logs')
               .select('*')
               .in('user_id', Array.from(new Set(memberIds)))
               .order('timestamp', { ascending: false })
-              .limit(1000);
+              .limit(limit);
             byMembers = memberLogsRes.data || [];
             if (memberLogsRes.error && !error) error = memberLogsRes.error;
           }
@@ -8190,7 +8297,8 @@ async function startServer() {
               const tb = new Date(b?.timestamp || b?.created_at || 0).getTime();
               return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
             })
-            .slice(0, 500);
+            .filter((row: any) => sanitizeString(row?.status, 40).toLowerCase() !== 'archived')
+            .slice(0, limit);
         } catch (queryError: any) {
           error = queryError;
         }
@@ -8201,8 +8309,8 @@ async function startServer() {
             .select('*')
             .eq('user_id', currentUser.id)
             .order('timestamp', { ascending: false })
-            .limit(500);
-          data = result.data || [];
+            .limit(limit);
+          data = (result.data || []).filter((row: any) => sanitizeString(row?.status, 40).toLowerCase() !== 'archived');
           error = result.error;
         } catch (queryError: any) {
           error = queryError;
@@ -8258,70 +8366,172 @@ async function startServer() {
       }
 
       if (!currentUser?.id) {
-        return res.status(200).json({
-          success: true,
+        return res.status(401).json({
+          success: false,
           queued: true,
           warning: 'activity_logs_missing_auth'
         });
       }
 
-      const actorName = sanitizeString(currentUser?.name || currentUser?.email || 'Usuário', 180);
-      let data: any = null;
-      let error: any = null;
-      try {
-        const result = await supabase
-          .from('activity_logs')
-          .upsert([{
-            ...req.body,
-            user_id: currentUser.id,
-            actor_name: actorName,
-            clinic_id: currentClinicId(currentUser),
-            timestamp: req.body?.timestamp || new Date().toISOString()
-          }], { onConflict: 'id' })
-          .select()
-          .single();
-        data = result.data;
-        error = result.error;
-      } catch (upsertError: any) {
-        error = upsertError;
-      }
-      
-      if (error && /actor_name|clinic_id/i.test(String(error?.message || ''))) {
-        try {
-          const fallback = await supabase
-            .from('activity_logs')
-            .upsert([{
-              ...req.body,
-              user_id: currentUser.id,
-              timestamp: req.body?.timestamp || new Date().toISOString()
-            }], { onConflict: 'id' })
-            .select()
-            .single();
-          data = fallback.data;
-          error = fallback.error;
-        } catch (fallbackError: any) {
-          error = fallbackError;
-        }
-      }
+      const payload = buildActivityLogPayload(currentUser, req.body, req);
+      const { data, error } = await writeActivityLogWithFallback(payload, { upsert: true, select: true });
 
       if (error) {
         logRouteDbError('/api/logs', error, { userId: currentUser.id });
-        return res.status(200).json({
-          success: true,
+        return res.status(503).json({
+          success: false,
           queued: true,
           warning: 'activity_logs_write_unavailable',
           details: sanitizeString(error?.message || String(error), 400)
         });
       }
-      return res.json({ success: true, id: data?.id || null });
+      return res.json({ success: true, id: data?.id || payload.id, data: data || payload });
     } catch (error: any) {
       logRouteDbError('/api/logs', error, { route: 'post' });
-      return res.status(200).json({
-        success: true,
+      return res.status(503).json({
+        success: false,
         queued: true,
         warning: 'activity_logs_route_error',
         details: sanitizeString(error?.message || String(error), 400)
       });
+    }
+  });
+
+  app.get('/api/logs/:logId', checkAuth, async (req: any, res) => {
+    try {
+      const logId = sanitizeString(req.params.logId, 120);
+      if (!logId) return res.status(400).json({ success: false, error: 'ID do log é obrigatório.' });
+
+      const { data, error } = await supabase
+        .from('activity_logs')
+        .select('*')
+        .eq('id', logId)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return res.status(404).json({ success: false, error: 'Log não encontrado.' });
+
+      const user = req.session.user;
+      const isManager = user.role === 'coordinator' || user.role === 'admin' || user.role === 'owner';
+      const sameUser = sanitizeString(data?.user_id, 120) === sanitizeString(user.id, 120);
+      const sameClinic =
+        sanitizeString(data?.clinic_id, 120) &&
+        sanitizeString(data?.clinic_id, 120) === sanitizeString(currentClinicId(user), 120);
+      if (!sameUser && !(isManager && sameClinic)) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      logRouteDbError('/api/logs/:logId [GET]', error, { logId: sanitizeString(req.params.logId, 120) });
+      return res.status(500).json({ success: false, error: 'Falha ao consultar log.' });
+    }
+  });
+
+  app.patch('/api/logs/:logId', checkAuth, async (req: any, res) => {
+    try {
+      const logId = sanitizeString(req.params.logId, 120);
+      if (!logId) return res.status(400).json({ success: false, error: 'ID do log é obrigatório.' });
+
+      const { data: existing, error: findError } = await supabase
+        .from('activity_logs')
+        .select('*')
+        .eq('id', logId)
+        .maybeSingle();
+      if (findError) throw findError;
+      if (!existing) return res.status(404).json({ success: false, error: 'Log não encontrado.' });
+
+      const user = req.session.user;
+      const isManager = user.role === 'coordinator' || user.role === 'admin' || user.role === 'owner';
+      const sameUser = sanitizeString(existing?.user_id, 120) === sanitizeString(user.id, 120);
+      const sameClinic =
+        sanitizeString(existing?.clinic_id, 120) &&
+        sanitizeString(existing?.clinic_id, 120) === sanitizeString(currentClinicId(user), 120);
+      if (!sameUser && !(isManager && sameClinic)) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+
+      let updatePayload: Record<string, any> = cleanObject({
+        title: req.body?.title !== undefined ? sanitizeString(req.body.title, 180) : undefined,
+        content: req.body?.content !== undefined ? sanitizeString(req.body.content, 4000) : undefined,
+        type: req.body?.type !== undefined ? sanitizeString(req.body.type, 40) : undefined,
+        action_type: req.body?.action_type !== undefined ? sanitizeString(req.body.action_type, 180) : undefined,
+        payload_details:
+          req.body?.payload_details !== undefined ? sanitizeString(req.body.payload_details, 4000) : undefined,
+        status: req.body?.status !== undefined ? sanitizeString(req.body.status, 40) : undefined,
+        updated_at: new Date().toISOString()
+      });
+
+      let updated: any = null;
+      let updateError: any = null;
+      const removedColumns = new Set<string>();
+      for (let attempt = 0; attempt < 12 && Object.keys(updatePayload).length > 0; attempt += 1) {
+        const result = await supabase
+          .from('activity_logs')
+          .update(updatePayload)
+          .eq('id', logId)
+          .select()
+          .maybeSingle();
+        updated = result.data;
+        updateError = result.error;
+        if (!updateError) break;
+        const missingColumn = extractMissingColumnName(updateError);
+        if (!missingColumn || removedColumns.has(missingColumn) || !isActivityLogOptionalColumn(missingColumn)) break;
+        removedColumns.add(missingColumn);
+        delete updatePayload[missingColumn];
+      }
+      if (updateError) throw updateError;
+
+      return res.json({ success: true, data: updated || { ...existing, ...updatePayload } });
+    } catch (error: any) {
+      logRouteDbError('/api/logs/:logId [PATCH]', error, { logId: sanitizeString(req.params.logId, 120) });
+      return res.status(500).json({ success: false, error: 'Falha ao atualizar log.' });
+    }
+  });
+
+  app.delete('/api/logs/:logId', checkAuth, async (req: any, res) => {
+    try {
+      const logId = sanitizeString(req.params.logId, 120);
+      if (!logId) return res.status(400).json({ success: false, error: 'ID do log é obrigatório.' });
+
+      const { data: existing, error: findError } = await supabase
+        .from('activity_logs')
+        .select('*')
+        .eq('id', logId)
+        .maybeSingle();
+      if (findError) throw findError;
+      if (!existing) return res.status(404).json({ success: false, error: 'Log não encontrado.' });
+
+      const user = req.session.user;
+      const isManager = user.role === 'coordinator' || user.role === 'admin' || user.role === 'owner';
+      const sameClinic =
+        sanitizeString(existing?.clinic_id, 120) &&
+        sanitizeString(existing?.clinic_id, 120) === sanitizeString(currentClinicId(user), 120);
+      if (!(isManager && sameClinic)) {
+        return res.status(403).json({ success: false, error: 'Apenas coordenação pode arquivar logs da clínica.' });
+      }
+
+      let archivePayload: Record<string, any> = {
+        status: 'archived',
+        deleted_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      let archiveError: any = null;
+      const removedColumns = new Set<string>();
+      for (let attempt = 0; attempt < 8 && Object.keys(archivePayload).length > 0; attempt += 1) {
+        const result = await supabase.from('activity_logs').update(archivePayload).eq('id', logId);
+        archiveError = result.error;
+        if (!archiveError) break;
+        const missingColumn = extractMissingColumnName(archiveError);
+        if (!missingColumn || removedColumns.has(missingColumn) || !isActivityLogOptionalColumn(missingColumn)) break;
+        removedColumns.add(missingColumn);
+        delete archivePayload[missingColumn];
+      }
+      if (archiveError) throw archiveError;
+
+      return res.json({ success: true, archivedId: logId });
+    } catch (error: any) {
+      logRouteDbError('/api/logs/:logId [DELETE]', error, { logId: sanitizeString(req.params.logId, 120) });
+      return res.status(500).json({ success: false, error: 'Falha ao arquivar log.' });
     }
   });
 
