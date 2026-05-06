@@ -288,7 +288,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const safeType = String(file?.type || file?.mimeType || 'application/octet-stream');
     const safeContent = typeof file?.content === 'string' ? file.content : '';
     const safeUrl = typeof file?.url === 'string' ? file.url : (typeof file?.signedUrl === 'string' ? file.signedUrl : '');
-    const objectUrl = safeUrl || (safeContent ? safeContent : undefined);
+    const contentDataUrl = safeContent.startsWith('data:') ? safeContent : '';
+    const sourceUrl = safeUrl || contentDataUrl || undefined;
+    const objectUrl =
+      contentDataUrl && safeType.includes('pdf')
+        ? createObjectUrlFromDataUrl(contentDataUrl, safeType)
+        : sourceUrl;
     return {
       id: String(file?.id || Date.now()),
       name: safeName,
@@ -300,6 +305,35 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       url: safeUrl || undefined,
       objectUrl
     };
+  };
+
+  const createObjectUrlFromDataUrl = (dataUrl: string, fallbackType = 'application/octet-stream') => {
+    try {
+      const [header, base64Payload = ''] = dataUrl.split(',');
+      const mime = header.match(/^data:([^;]+);base64$/i)?.[1] || fallbackType;
+      const binary = atob(base64Payload);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return URL.createObjectURL(new Blob([bytes], { type: mime }));
+    } catch {
+      return dataUrl;
+    }
+  };
+
+  const resolveFileViewUrl = (file: any) => {
+    const content = typeof file?.content === 'string' ? file.content : '';
+    if (typeof file?.objectUrl === 'string' && file.objectUrl.startsWith('blob:')) {
+      return file.objectUrl;
+    }
+    if (file?.objectUrl || file?.url) {
+      return file.objectUrl || file.url;
+    }
+    if (content.startsWith('data:application/pdf')) {
+      return createObjectUrlFromDataUrl(content, 'application/pdf');
+    }
+    return content || '';
   };
 
   useEffect(() => {
@@ -2162,6 +2196,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   };
 
   const handleDownloadPatientFile = (file: any) => {
+    const content = typeof file?.content === 'string' ? file.content : '';
+    if (content.startsWith('data:application/pdf')) {
+      const href = createObjectUrlFromDataUrl(content, 'application/pdf');
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = file.name || "arquivo.pdf";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.setTimeout(() => {
+        try {
+          if (href.startsWith('blob:')) URL.revokeObjectURL(href);
+        } catch {}
+      }, 1500);
+      return;
+    }
+
     if (file?.source === "anamnesis" && file?.content) {
       openPrintWindowForPdf(file.content);
       return;
@@ -2179,8 +2230,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       return;
     }
 
-    if (file.content) {
-      const blob = new Blob([file.content], { type: file.type || "application/json" });
+    if (content) {
+      const blob = new Blob([content], { type: file.type || "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -4016,28 +4067,28 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </button>
             </div>
 
-            {previewFile.type?.includes("image") && (previewFile.objectUrl || previewFile.url) ? (
+            {previewFile.type?.includes("image") && resolveFileViewUrl(previewFile) ? (
               <SecureImage
-                src={previewFile.objectUrl || previewFile.url}
+                src={resolveFileViewUrl(previewFile)}
                 alt={previewFile.name}
                 className="w-full rounded-xl border border-slate-200"
                 fallback={<p className="text-sm text-red-500">Pré-visualização bloqueada por segurança de mídia.</p>}
               />
-            ) : previewFile.type?.includes("pdf") && (previewFile.objectUrl || previewFile.url) ? (
+            ) : previewFile.type?.includes("pdf") && resolveFileViewUrl(previewFile) ? (
               <SecureIframe
-                src={previewFile.objectUrl || previewFile.url}
+                src={resolveFileViewUrl(previewFile)}
                 title={previewFile.name}
                 className="w-full h-[65vh] rounded-xl border border-slate-200"
                 fallback={<p className="text-sm text-red-500">Preview de PDF bloqueado por segurança de mídia.</p>}
               />
-            ) : previewFile.type?.includes("html") && (previewFile.objectUrl || previewFile.url) ? (
+            ) : previewFile.type?.includes("html") && resolveFileViewUrl(previewFile) ? (
               <SecureIframe
-                src={previewFile.objectUrl || previewFile.url}
+                src={resolveFileViewUrl(previewFile)}
                 title={previewFile.name}
                 className="w-full h-[70vh] rounded-xl border border-slate-200 bg-white"
                 fallback={<p className="text-sm text-red-500">Preview HTML bloqueado por segurança de mídia.</p>}
               />
-            ) : previewFile.content ? (
+            ) : previewFile.content && !String(previewFile.content).startsWith('data:application/pdf') ? (
               <pre className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs overflow-auto whitespace-pre-wrap">
                 {previewFile.content}
               </pre>
