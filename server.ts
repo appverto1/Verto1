@@ -1017,6 +1017,15 @@ function sanitizeClinicalPayload(input: any, depth = 0): any {
   for (const [rawKey, value] of entries) {
     const key = sanitizeString(rawKey, 120);
     if (!key || DANGEROUS_OBJECT_KEYS.has(key)) continue;
+    if (
+      (key === 'content' || key === 'dataUrl') &&
+      typeof value === 'string' &&
+      /^data:application\/pdf;base64,[a-z0-9+/=\s]+$/i.test(value) &&
+      value.length <= 14_000_000
+    ) {
+      safe[key] = sanitizeString(value, 14_000_000);
+      continue;
+    }
     safe[key] = sanitizeClinicalPayload(value, depth + 1);
   }
   return safe;
@@ -4985,7 +4994,7 @@ async function startServer() {
   // Clinic Management & Invitations
   app.get('/api/clinic/members', checkAuth, async (req: any, res) => {
     const user = req.session.user;
-    if (user.role !== 'coordinator' && user.role !== 'admin') {
+    if (user.role !== 'coordinator' && user.role !== 'admin' && user.role !== 'owner') {
       return res.status(403).json({ error: 'Apenas coordenadores podem gerenciar a equipe' });
     }
 
@@ -7344,26 +7353,89 @@ async function startServer() {
       }
 
       const bucketName = 'patient-files-private';
-      const { data: buckets, error: listError } = await supabase.storage.listBuckets();
-      if (listError) throw listError;
-      const exists = (buckets || []).find((b: any) => b.name === bucketName);
-      if (!exists) {
-        const { error: createError } = await supabase.storage.createBucket(bucketName, {
-          public: false,
-          fileSizeLimit: 10 * 1024 * 1024
-        });
-        if (createError) throw createError;
-      }
-
       const storagePath = `${clinicId}/${patientId}/${Date.now()}_${safeName}`;
-      const { error: uploadError } = await supabase.storage
-        .from(bucketName)
-        .upload(storagePath, fileBuffer, {
-          cacheControl: '3600',
-          upsert: false,
-          contentType: resolvedMime
+
+      const persistInlineFallback = async (reason: string) => {
+        const fallbackId = crypto.randomUUID();
+        const createdAt = new Date().toISOString();
+        const inlineContent =
+          resolvedMime === 'application/pdf'
+            ? `data:application/pdf;base64,${fileBuffer.toString('base64')}`
+            : null;
+        const fallbackEntry = {
+          id: fallbackId,
+          fileName: safeName,
+          name: safeName,
+          path: null,
+          bucket: null,
+          mimeType: resolvedMime,
+          type: resolvedMime,
+          sizeBytes: fileBuffer.length,
+          size: fileBuffer.length,
+          source,
+          createdAt,
+          metadata: {
+            ...metadata,
+            storageFallbackReason: reason
+          },
+          ...(inlineContent ? { content: inlineContent, dataUrl: inlineContent } : {})
+        };
+
+        try {
+          await persistPatientFileFallback({
+            patientId,
+            clinicId,
+            sessionUser: req.session.user,
+            fileEntry: fallbackEntry
+          });
+        } catch (fallbackError: any) {
+          console.warn('[PatientFiles] Falha ao persistir fallback em patient_records:', fallbackError?.message || String(fallbackError));
+        }
+
+        return res.status(200).json({
+          success: true,
+          warning: reason,
+          data: {
+            id: fallbackId,
+            patientId,
+            fileName: safeName,
+            path: null,
+            mimeType: resolvedMime,
+            sizeBytes: fileBuffer.length,
+            source,
+            createdAt,
+            metadata: fallbackEntry.metadata,
+            signedUrl: null,
+            url: inlineContent,
+            content: inlineContent
+          }
         });
-      if (uploadError) throw uploadError;
+      };
+
+      try {
+        const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+        if (listError) throw listError;
+        const exists = (buckets || []).find((b: any) => b.name === bucketName);
+        if (!exists) {
+          const { error: createError } = await supabase.storage.createBucket(bucketName, {
+            public: false,
+            fileSizeLimit: 10 * 1024 * 1024
+          });
+          if (createError) throw createError;
+        }
+
+        const { error: uploadError } = await supabase.storage
+          .from(bucketName)
+          .upload(storagePath, fileBuffer, {
+            cacheControl: '3600',
+            upsert: false,
+            contentType: resolvedMime
+          });
+        if (uploadError) throw uploadError;
+      } catch (storageError: any) {
+        console.warn('[PatientFiles] Storage indisponível; salvando fallback inline:', storageError?.message || String(storageError));
+        return await persistInlineFallback('Storage indisponível. Arquivo salvo como fallback no prontuário.');
+      }
 
       const insertPayload = {
         patient_id: patientId,
@@ -7384,55 +7456,56 @@ async function startServer() {
         .single();
 
       if (insertError) {
-        if (String(insertError?.message || '').toLowerCase().includes('patient_files')) {
-          const fallbackId = crypto.randomUUID();
-          const { data: signedDataFallback, error: signedErrorFallback } = await supabase.storage
-            .from(bucketName)
-            .createSignedUrl(storagePath, 60 * 10);
-          if (signedErrorFallback) {
-            console.warn('[PatientFiles] Falha ao assinar URL no fallback:', signedErrorFallback.message);
-          }
+        const fallbackId = crypto.randomUUID();
+        const { data: signedDataFallback, error: signedErrorFallback } = await supabase.storage
+          .from(bucketName)
+          .createSignedUrl(storagePath, 60 * 10);
+        if (signedErrorFallback) {
+          console.warn('[PatientFiles] Falha ao assinar URL no fallback:', signedErrorFallback.message);
+        }
 
-          const fallbackEntry = {
-            id: fallbackId,
-            fileName: safeName,
-            name: safeName,
-            path: storagePath,
-            bucket: bucketName,
-            mimeType: resolvedMime,
-            type: resolvedMime,
-            sizeBytes: fileBuffer.length,
-            size: fileBuffer.length,
-            source,
-            createdAt: new Date().toISOString(),
-            metadata
-          };
+        const fallbackEntry = {
+          id: fallbackId,
+          fileName: safeName,
+          name: safeName,
+          path: storagePath,
+          bucket: bucketName,
+          mimeType: resolvedMime,
+          type: resolvedMime,
+          sizeBytes: fileBuffer.length,
+          size: fileBuffer.length,
+          source,
+          createdAt: new Date().toISOString(),
+          metadata
+        };
 
+        try {
           await persistPatientFileFallback({
             patientId,
             clinicId,
             sessionUser: req.session.user,
             fileEntry: fallbackEntry
           });
-
-          return res.status(200).json({
-            success: true,
-            warning: 'Tabela patient_files não existe. Arquivo salvo via fallback no prontuário.',
-            data: {
-              id: fallbackId,
-              patientId,
-              fileName: safeName,
-              path: storagePath,
-              mimeType: resolvedMime,
-              sizeBytes: fileBuffer.length,
-              source,
-              createdAt: fallbackEntry.createdAt,
-              metadata,
-              signedUrl: signedDataFallback?.signedUrl || null
-            }
-          });
+        } catch (fallbackError: any) {
+          console.warn('[PatientFiles] Falha ao persistir fallback após erro de tabela:', fallbackError?.message || String(fallbackError));
         }
-        throw insertError;
+
+        return res.status(200).json({
+          success: true,
+          warning: `Falha em patient_files. Arquivo salvo via fallback no prontuário: ${insertError.message || 'erro desconhecido'}`,
+          data: {
+            id: fallbackId,
+            patientId,
+            fileName: safeName,
+            path: storagePath,
+            mimeType: resolvedMime,
+            sizeBytes: fileBuffer.length,
+            source,
+            createdAt: fallbackEntry.createdAt,
+            metadata,
+            signedUrl: signedDataFallback?.signedUrl || null
+          }
+        });
       }
 
       const { data: signedData, error: signedError } = await supabase.storage
