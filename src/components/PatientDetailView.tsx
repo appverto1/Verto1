@@ -1904,7 +1904,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         guardian: normalizedGuardian,
         diagnosis: updatedData.motivoConsulta,
         anamnesisData: updatedData,
-        peiGeneratedAt: new Date().toISOString()
+        anamnesisPending: false,
+        lastAnamnesisAt: new Date().toISOString()
       });
     }
 
@@ -2047,6 +2048,53 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const persist = async () => {
       let uploadResult: any = null;
       let uploadErrorMessage = '';
+      let generatedPdfBlob: Blob | null = null;
+      const buildInlineFallbackFile = async (pdfBlob: Blob, documentHtml: string) => {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(new Error('Falha ao preparar fallback local do PDF.'));
+          reader.readAsDataURL(pdfBlob);
+        });
+        const fallbackFile = {
+          id: `anamnesis_fallback_${Date.now()}`,
+          patientId: String(patient.id),
+          fileName: normalizedName,
+          name: normalizedName,
+          mimeType: 'application/pdf',
+          type: 'application/pdf',
+          sizeBytes: pdfBlob.size || Math.max(1, Math.round(documentHtml.length / 1024)),
+          size: pdfBlob.size || Math.max(1, Math.round(documentHtml.length / 1024)),
+          source: 'anamnesis',
+          createdAt: new Date().toISOString(),
+          metadata: {
+            referenceDate: payloadDate,
+            patientName: patient?.name || null,
+            storageFallbackReason: uploadErrorMessage || 'Falha temporária em /api/patient-files.'
+          },
+          content: dataUrl,
+          url: dataUrl,
+          signedUrl: null
+        };
+        try {
+          const existingRecord = await dataService.getPatientRecord(String(patient.id));
+          const existingPayload =
+            existingRecord?.data?.payload && typeof existingRecord.data.payload === 'object'
+              ? existingRecord.data.payload
+              : {};
+          const existingFiles = Array.isArray(existingPayload?.files) ? existingPayload.files : [];
+          await dataService.savePatientRecord(String(patient.id), {
+            ...existingPayload,
+            files: [
+              fallbackFile,
+              ...existingFiles.filter((file: any) => String(file?.id) !== fallbackFile.id)
+            ]
+          });
+        } catch (fallbackError) {
+          console.warn('Falha ao persistir fallback local da anamnese:', fallbackError);
+        }
+        return fallbackFile;
+      };
       try {
         const freshClinicContext = await refreshClinicDocumentMedia();
         const documentHtml = buildAnamnesisDocumentHtml(
@@ -2056,6 +2104,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         );
         setPendingAnamnesisPayload(documentHtml);
         const pdfBlob = await generatePdfBlobFromAnamnesisHtml(documentHtml);
+        generatedPdfBlob = pdfBlob;
 
         uploadResult = await dataService.uploadPatientFile(String(patient.id), {
           fileName: normalizedName,
@@ -2066,9 +2115,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         });
         if (!uploadResult?.success || !uploadResult?.data) {
           uploadErrorMessage = uploadResult?.warning || uploadResult?.error || 'Falha ao salvar a ficha em Arquivos.';
+          uploadResult = {
+            success: true,
+            data: await buildInlineFallbackFile(pdfBlob, documentHtml),
+            warning: uploadErrorMessage
+          };
         }
       } catch (uploadError: any) {
         uploadErrorMessage = uploadError?.message || String(uploadError);
+        if (generatedPdfBlob) {
+          uploadResult = {
+            success: true,
+            data: await buildInlineFallbackFile(generatedPdfBlob, pendingAnamnesisPayload),
+            warning: uploadErrorMessage
+          };
+        }
       }
 
       try {
@@ -2088,7 +2149,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         setPendingAnamnesisData(null);
         setIsPreparingAnamnesisSave(false);
         setActiveTab(uploadResult?.success ? "files" : "history");
-        if (uploadErrorMessage) {
+        if (uploadErrorMessage && !uploadResult?.success) {
           alert('Anamnese salva no banco de dados. Falha apenas no arquivo em Arquivos; você pode tentar novamente depois.');
         }
       } catch (error) {

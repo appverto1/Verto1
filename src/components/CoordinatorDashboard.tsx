@@ -1318,7 +1318,6 @@ export function CoordinatorDashboard({
       patient?.lastAnamnesisAt ||
       patient?.anamnesisLastFilledAt ||
       patient?.anamnesisUpdatedAt ||
-      patient?.peiGeneratedAt ||
       null;
     if (!candidate) return null;
     const parsed = new Date(candidate);
@@ -1498,7 +1497,7 @@ export function CoordinatorDashboard({
     if (!hasAnamnesis) return true;
 
     const lastFilledAt = resolveLastAnamnesisDate(patient);
-    if (!lastFilledAt) return false;
+    if (!lastFilledAt) return true;
 
     const renewalMonths = normalizeAnamnesisRenewalMonths(
       patient?.anamnesisRenewalMonths,
