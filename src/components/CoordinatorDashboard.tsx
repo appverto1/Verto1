@@ -199,8 +199,13 @@ export function CoordinatorDashboard({
     rooms: "rooms",
   };
 
+  const capabilityForTab = (tabId: string) => {
+    if (tabId === "patients" && isTherapist) return "medical-records";
+    return tabCapabilityMap[tabId];
+  };
+
   const canAccessTab = (tabId: string) => {
-    const capability = tabCapabilityMap[tabId];
+    const capability = capabilityForTab(tabId);
     if (!capability) return true;
     const status = capabilityStatusForRole(capability);
     if (status === "none") return false;
@@ -209,7 +214,7 @@ export function CoordinatorDashboard({
 
   const filterTabsByRole = <T extends { id: string }>(items: T[]) =>
     items.filter((item) => {
-      const capability = tabCapabilityMap[item.id];
+      const capability = capabilityForTab(item.id);
       if (!capability) return true;
       const capabilityStatus = capabilityStatusForRole(capability);
       if (capabilityStatus === "none") return false;
@@ -314,22 +319,32 @@ export function CoordinatorDashboard({
   }, [therapistMembersById]);
 
   const visiblePatients = useMemo(() => {
-    if (patientTherapistFilter === "all") return allPatients;
+    const currentTherapistId = String(user?.id || "").trim();
+    const patientsAllowedForRole = isTherapist
+      ? allPatients.filter((patient: any) => {
+          const therapistId = String(
+            patient?.therapist_id || patient?.professional_id || "",
+          ).trim();
+          return Boolean(currentTherapistId) && therapistId === currentTherapistId;
+        })
+      : allPatients;
+
+    if (patientTherapistFilter === "all" || isTherapist) return patientsAllowedForRole;
     if (patientTherapistFilter === "unassigned") {
-      return allPatients.filter((patient: any) => {
+      return patientsAllowedForRole.filter((patient: any) => {
         const therapistId = String(
           patient?.therapist_id || patient?.professional_id || "",
         ).trim();
         return !therapistId;
       });
     }
-    return allPatients.filter((patient: any) => {
+    return patientsAllowedForRole.filter((patient: any) => {
       const therapistId = String(
         patient?.therapist_id || patient?.professional_id || "",
       ).trim();
       return therapistId === patientTherapistFilter;
     });
-  }, [allPatients, patientTherapistFilter]);
+  }, [allPatients, isTherapist, patientTherapistFilter, user?.id]);
 
   const billingHistory = [
     {
