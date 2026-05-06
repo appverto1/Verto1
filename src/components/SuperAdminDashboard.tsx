@@ -2,8 +2,12 @@
 import {
   AlertCircle,
   BarChart3,
+  ClipboardCheck,
+  CheckCircle2,
   DollarSign,
+  FileText,
   LayoutDashboard,
+  Loader2,
   LogOut,
   MessageCircle,
   Phone,
@@ -36,7 +40,7 @@ const formatPercent = (value: number) => `${Number(value || 0).toLocaleString('p
 export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [loading, setLoading] = useState(true);
   const [bootstrapping, setBootstrapping] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'financial' | 'customers' | 'leads'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'financial' | 'customers' | 'leads' | 'protocols'>('overview');
   const [stats, setStats] = useState<any>(null);
   const [financial, setFinancial] = useState<any>({
     summary: {},
@@ -48,6 +52,14 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   });
   const [allCustomers, setAllCustomers] = useState<any[]>([]);
   const [leadRecoveryItems, setLeadRecoveryItems] = useState<any[]>([]);
+  const [protocolRequests, setProtocolRequests] = useState<any[]>([]);
+  const [approvingProtocolId, setApprovingProtocolId] = useState<string | null>(null);
+  const [protocolBuilderText, setProtocolBuilderText] = useState('');
+  const [protocolBuilderDomain, setProtocolBuilderDomain] = useState('Mobilidade Basica');
+  const [protocolBuilderTitle, setProtocolBuilderTitle] = useState('AFLS - Protocolo de Vida Diaria');
+  const [protocolBuilderVersion, setProtocolBuilderVersion] = useState('Base Verto');
+  const [protocolBuilderPreview, setProtocolBuilderPreview] = useState<any | null>(null);
+  const [savingCanonicalProtocol, setSavingCanonicalProtocol] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [financialFeatureSurveys, setFinancialFeatureSurveys] = useState<any[]>([]);
 
@@ -59,12 +71,13 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         const token = session?.access_token;
         const headers = { Authorization: token ? `Bearer ${token}` : '' };
 
-        const [statsRes, financialRes, customersRes, surveysRes, leadsRes] = await Promise.all([
+        const [statsRes, financialRes, customersRes, surveysRes, leadsRes, protocolRequestsRes] = await Promise.all([
           fetch('/api/owner/stats', { credentials: 'include', headers }),
           fetch('/api/owner/financial-overview', { credentials: 'include', headers }),
           fetch('/api/owner/clients', { credentials: 'include', headers }),
           fetch('/api/owner/financial-feature-surveys', { credentials: 'include', headers }),
-          fetch('/api/owner/leads/recovery', { credentials: 'include', headers })
+          fetch('/api/owner/leads/recovery', { credentials: 'include', headers }),
+          fetch('/api/admin/protocol-import-requests', { credentials: 'include', headers })
         ]);
 
         const statsData = await statsRes.json();
@@ -72,8 +85,9 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         const customersData = await customersRes.json();
         const surveysData = await surveysRes.json();
         const leadsData = await leadsRes.json();
+        const protocolRequestsData = await protocolRequestsRes.json();
 
-        if (!statsRes.ok || !financialRes.ok || !customersRes.ok || !leadsRes.ok) {
+        if (!statsRes.ok || !financialRes.ok || !customersRes.ok || !leadsRes.ok || !protocolRequestsRes.ok) {
           throw new Error('Erro ao carregar dados do super admin.');
         }
 
@@ -82,6 +96,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         if (customersData.success) setAllCustomers(customersData.data || []);
         if (surveysData.success) setFinancialFeatureSurveys(surveysData.data || []);
         if (leadsData.success) setLeadRecoveryItems(leadsData.data || []);
+        if (protocolRequestsData.success) setProtocolRequests(protocolRequestsData.data || []);
       } catch (error: any) {
         console.error('Owner dashboard error:', error);
         alert(error.message || 'Nao foi possivel carregar o painel.');
@@ -98,12 +113,13 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     const token = session?.access_token;
     const headers = { Authorization: token ? `Bearer ${token}` : '' };
 
-    const [statsRes, financialRes, customersRes, surveysRes, leadsRes] = await Promise.all([
+    const [statsRes, financialRes, customersRes, surveysRes, leadsRes, protocolRequestsRes] = await Promise.all([
       fetch('/api/owner/stats', { credentials: 'include', headers }),
       fetch('/api/owner/financial-overview', { credentials: 'include', headers }),
       fetch('/api/owner/clients', { credentials: 'include', headers }),
       fetch('/api/owner/financial-feature-surveys', { credentials: 'include', headers }),
-      fetch('/api/owner/leads/recovery', { credentials: 'include', headers })
+      fetch('/api/owner/leads/recovery', { credentials: 'include', headers }),
+      fetch('/api/admin/protocol-import-requests', { credentials: 'include', headers })
     ]);
 
     const statsData = await statsRes.json();
@@ -111,11 +127,194 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     const customersData = await customersRes.json();
     const surveysData = await surveysRes.json();
     const leadsData = await leadsRes.json();
+    const protocolRequestsData = await protocolRequestsRes.json();
     if (statsData.success) setStats(statsData.stats);
     if (financialData.success) setFinancial(financialData.data);
     if (customersData.success) setAllCustomers(customersData.data || []);
     if (surveysData.success) setFinancialFeatureSurveys(surveysData.data || []);
     if (leadsData.success) setLeadRecoveryItems(leadsData.data || []);
+    if (protocolRequestsData.success) setProtocolRequests(protocolRequestsData.data || []);
+  };
+
+  const handleApproveProtocolRequest = async (request: any) => {
+    const suggested = request.canonicalName || request.suggestedCanonicalName || request.protocolName || '';
+    const canonicalName = window.prompt('Qual protocolo da biblioteca Verto deve ser liberado?', suggested);
+    if (!canonicalName) return;
+
+    try {
+      setApprovingProtocolId(request.id);
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      const response = await fetch(`/api/admin/protocol-import-requests/${request.id}/approve`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: token ? `Bearer ${token}` : ''
+        },
+        body: JSON.stringify({
+          canonicalName,
+          canonicalKey: request.canonicalKey
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Nao foi possivel aprovar o protocolo.');
+      }
+      setProtocolRequests((current) => current.map((item) => (
+        item.id === request.id
+          ? { ...item, status: 'approved', canonicalName, reviewedAt: new Date().toISOString() }
+          : item
+      )));
+    } catch (error: any) {
+      alert(error.message || 'Nao foi possivel aprovar o protocolo.');
+    } finally {
+      setApprovingProtocolId(null);
+    }
+  };
+
+  const normalizeBuilderHeader = (value: string) =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+
+  const splitProtocolRow = (line: string) => {
+    if (line.includes('\t')) return line.split('\t');
+    if (line.includes(';')) return line.split(';');
+    return line.split(/\s{2,}/);
+  };
+
+  const inferMaxScore = (points: string) => {
+    const matches = String(points || '').match(/\d+/g) || [];
+    const nums = matches.map(Number).filter((n) => Number.isFinite(n));
+    return nums.length ? Math.max(...nums) : 2;
+  };
+
+  const parseProtocolBuilderText = () => {
+    const lines = protocolBuilderText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length < 2) {
+      alert('Cole a tabela com cabecalho e ao menos uma tarefa.');
+      return;
+    }
+
+    const headerIndex = lines.findIndex((line) => {
+      const key = normalizeBuilderHeader(line);
+      return key.includes('tarefa') && key.includes('pontos') && key.includes('criterios');
+    });
+    const headerLine = headerIndex >= 0 ? lines[headerIndex] : lines[0];
+    const headers = splitProtocolRow(headerLine).map(normalizeBuilderHeader);
+    const findIndex = (...needles: string[]) =>
+      headers.findIndex((header) => needles.some((needle) => header.includes(needle)));
+
+    const indexes = {
+      code: findIndex('tarefa'),
+      points: findIndex('pontos', 'pontuacao'),
+      name: findIndex('nome da tarefa', 'nome'),
+      objective: findIndex('objetivo'),
+      question: findIndex('pergunta'),
+      example: findIndex('exemplo'),
+      criteria: findIndex('criterios', 'criterio'),
+      comment: findIndex('comentario')
+    };
+
+    const rows = lines.slice((headerIndex >= 0 ? headerIndex : 0) + 1);
+    const tasks = rows
+      .map((line, index) => {
+        const cells = splitProtocolRow(line).map((cell) => cell.trim());
+        const code = cells[indexes.code] || '';
+        const name = cells[indexes.name] || '';
+        if (!code && !name) return null;
+        return {
+          id: `${protocolBuilderDomain.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${index + 1}`,
+          code,
+          name,
+          maxScore: inferMaxScore(cells[indexes.points] || ''),
+          pointsLabel: cells[indexes.points] || '',
+          objective: cells[indexes.objective] || '',
+          question: cells[indexes.question] || '',
+          example: cells[indexes.example] || '',
+          criteria: cells[indexes.criteria] || '',
+          comment: cells[indexes.comment] || '',
+          sourceRow: index + 1
+        };
+      })
+      .filter(Boolean);
+
+    if (tasks.length === 0) {
+      alert('Nao consegui detectar tarefas. Confira se as colunas estao separadas por tab, ponto e virgula ou espacos largos.');
+      return;
+    }
+
+    const canonicalKey = protocolBuilderTitle
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
+
+    setProtocolBuilderPreview({
+      id: canonicalKey,
+      canonicalKey,
+      title: protocolBuilderTitle,
+      category: 'evaluation',
+      sourceLabel: 'Montagem Verto por tabela',
+      versionLabel: protocolBuilderVersion,
+      status: 'draft',
+      ageGroup: 'all',
+      age_minima: 0,
+      age_maxima: null,
+      min_age: 0,
+      max_age: null,
+      type: /afls/i.test(protocolBuilderTitle) ? 'neurodevelopment' : 'conventional',
+      domain: protocolBuilderDomain,
+      data: [
+        {
+          id: protocolBuilderDomain.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+          name: protocolBuilderDomain,
+          skills: tasks
+        }
+      ]
+    });
+  };
+
+  const handleSaveCanonicalProtocol = async () => {
+    if (!protocolBuilderPreview) return;
+    try {
+      setSavingCanonicalProtocol(true);
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      const response = await fetch('/api/admin/verto-protocols', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: token ? `Bearer ${token}` : ''
+        },
+        body: JSON.stringify({
+          canonicalKey: protocolBuilderPreview.canonicalKey,
+          versionLabel: protocolBuilderVersion,
+          status: 'draft',
+          protocol: protocolBuilderPreview
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Nao foi possivel salvar protocolo canonico.');
+      }
+      alert('Protocolo canonico salvo como rascunho da biblioteca Verto.');
+    } catch (error: any) {
+      alert(error.message || 'Nao foi possivel salvar protocolo canonico.');
+    } finally {
+      setSavingCanonicalProtocol(false);
+    }
   };
 
   const handleBootstrapFinance = async () => {
@@ -182,6 +381,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           <SidebarItem icon={<BarChart3 size={18} />} label="DRE e EBITDA" active={activeTab === 'financial'} onClick={() => setActiveTab('financial')} />
           <SidebarItem icon={<Users size={18} />} label="Clientes e Lucro" active={activeTab === 'customers'} onClick={() => setActiveTab('customers')} />
           <SidebarItem icon={<MessageCircle size={18} />} label="Recuperação de Leads" active={activeTab === 'leads'} onClick={() => setActiveTab('leads')} />
+          <SidebarItem icon={<ClipboardCheck size={18} />} label="Protocolos" active={activeTab === 'protocols'} onClick={() => setActiveTab('protocols')} />
         </nav>
 
         <div className="mt-auto p-6 border-t border-slate-100">
@@ -205,7 +405,9 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                   ? 'DRE Completo'
                   : activeTab === 'customers'
                     ? 'Clientes e Performance'
-                    : 'Recuperacao de Leads'}
+                    : activeTab === 'leads'
+                      ? 'Recuperacao de Leads'
+                      : 'Governanca de Protocolos'}
             </h1>
           </div>
           <div className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">
@@ -549,6 +751,165 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                     );
                   })}
                 </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'protocols' && (
+          <div className="space-y-6">
+            <div className="rounded-[32px] bg-slate-900 text-white p-8 shadow-xl">
+              <p className="text-xs uppercase tracking-[0.18em] text-violet-200 font-bold mb-2">Checkpoint Verto Protocol Engine</p>
+              <h2 className="text-2xl font-black">Solicitacoes de protocolos importados</h2>
+              <p className="text-sm text-slate-300 mt-2 max-w-3xl">
+                O arquivo enviado pela clinica serve como comprovacao/base. A liberacao final aponta para o protocolo canonico da biblioteca Verto, evitando duplicidade entre clientes.
+              </p>
+            </div>
+
+            <div className="rounded-[32px] bg-white border border-slate-100 p-6 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-4 mb-5">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-violet-500 font-black mb-1">Montagem canonica</p>
+                  <h3 className="text-xl font-black text-slate-900">Transformar tabela do PDF em protocolo Verto</h3>
+                  <p className="text-sm text-slate-500 mt-1 max-w-3xl">
+                    Cole dados extraidos do PDF/Excel com as colunas Tarefa, Pontos, Nome da tarefa, Objetivo, Pergunta, Exemplo, Criterios e Comentario.
+                  </p>
+                </div>
+                <button
+                  onClick={parseProtocolBuilderText}
+                  className="px-5 py-3 rounded-2xl bg-slate-900 text-white text-xs font-black hover:bg-violet-700 transition-all"
+                >
+                  Gerar pre-estrutura
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+                <input
+                  value={protocolBuilderTitle}
+                  onChange={(e) => setProtocolBuilderTitle(e.target.value)}
+                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-violet-200"
+                  placeholder="Nome do protocolo"
+                />
+                <input
+                  value={protocolBuilderDomain}
+                  onChange={(e) => setProtocolBuilderDomain(e.target.value)}
+                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-violet-200"
+                  placeholder="Dominio / Assunto"
+                />
+                <input
+                  value={protocolBuilderVersion}
+                  onChange={(e) => setProtocolBuilderVersion(e.target.value)}
+                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-violet-200"
+                  placeholder="Versao"
+                />
+              </div>
+
+              <textarea
+                value={protocolBuilderText}
+                onChange={(e) => setProtocolBuilderText(e.target.value)}
+                rows={8}
+                className="w-full rounded-3xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-mono outline-none focus:ring-2 focus:ring-violet-200"
+                placeholder={'Cole aqui a tabela. Exemplo:\\nTAREFA\\tPONTOS\\tNOME DA TAREFA\\tOBJETIVO DA TAREFA\\tPERGUNTA\\tEXEMPLO\\tCRITERIOS\\tCOMENTARIO\\nMB11\\t0 1 2 3 4\\tOlha para ambos os lados...\\tO aprendiz sempre...\\tO aprendiz olha...\\tOlha para esquerda...\\t4=... 3=...\\tPrecisa de supervisao'}
+              />
+
+              {protocolBuilderPreview && (
+                <div className="mt-5 rounded-3xl border border-violet-100 bg-violet-50/40 p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                    <div>
+                      <h4 className="font-black text-slate-900">{protocolBuilderPreview.title}</h4>
+                      <p className="text-xs font-bold text-slate-500">
+                        {protocolBuilderPreview.data?.[0]?.name} · {protocolBuilderPreview.data?.[0]?.skills?.length || 0} tarefas detectadas
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleSaveCanonicalProtocol}
+                      disabled={savingCanonicalProtocol}
+                      className="px-5 py-3 rounded-2xl bg-violet-600 text-white text-xs font-black hover:bg-violet-700 disabled:opacity-60 transition-all"
+                    >
+                      {savingCanonicalProtocol ? 'Salvando...' : 'Salvar como rascunho Verto'}
+                    </button>
+                  </div>
+                  <div className="overflow-x-auto rounded-2xl border border-white bg-white">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 text-slate-400 uppercase tracking-[0.12em]">
+                        <tr>
+                          <th className="p-3">Codigo</th>
+                          <th className="p-3">Tarefa</th>
+                          <th className="p-3">Max</th>
+                          <th className="p-3">Objetivo</th>
+                          <th className="p-3">Criterios</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(protocolBuilderPreview.data?.[0]?.skills || []).slice(0, 8).map((skill: any) => (
+                          <tr key={skill.id} className="border-t border-slate-100">
+                            <td className="p-3 font-black text-violet-600">{skill.code || '-'}</td>
+                            <td className="p-3 font-bold text-slate-800 max-w-xs">{skill.name || '-'}</td>
+                            <td className="p-3 font-bold">{skill.maxScore}</td>
+                            <td className="p-3 text-slate-500 max-w-sm">{skill.objective || '-'}</td>
+                            <td className="p-3 text-slate-500 max-w-sm">{skill.criteria || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {(protocolBuilderPreview.data?.[0]?.skills?.length || 0) > 8 && (
+                    <p className="text-[11px] font-bold text-slate-400 mt-3">
+                      Mostrando 8 primeiras tarefas. O salvamento inclui todas.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="grid gap-4">
+              {protocolRequests.length === 0 ? (
+                <div className="rounded-[28px] border border-dashed border-slate-200 bg-white p-10 text-center text-sm font-bold text-slate-400">
+                  Nenhuma solicitacao de protocolo pendente.
+                </div>
+              ) : (
+                protocolRequests.map((request) => {
+                  const isApproved = request.status === 'approved';
+                  return (
+                    <div key={request.id} className="rounded-[28px] bg-white border border-slate-100 p-6 shadow-sm flex flex-col lg:flex-row lg:items-center gap-5">
+                      <div className="w-12 h-12 rounded-2xl bg-violet-50 text-violet-600 flex items-center justify-center shrink-0">
+                        <FileText size={22} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                          <h3 className="font-black text-slate-900">{request.protocolName || request.fileName}</h3>
+                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase ${isApproved ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
+                            {isApproved ? 'Aprovado' : 'Pendente'}
+                          </span>
+                        </div>
+                        <p className="text-xs font-bold text-slate-500">
+                          {request.requesterName || 'Profissional'} · {request.requesterEmail || 'sem e-mail'} · {request.fileName}
+                        </p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          Sugestao Verto: <strong>{request.canonicalName || 'Analise manual'}</strong> · confianca {Math.round(Number(request.confidence || 0) * 100)}%
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {request.dataUrl && (
+                          <button
+                            onClick={() => window.open(request.dataUrl, '_blank', 'noopener,noreferrer')}
+                            className="px-4 py-2 rounded-2xl bg-slate-100 text-slate-600 text-xs font-black hover:bg-slate-200 transition-all"
+                          >
+                            Ver arquivo
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleApproveProtocolRequest(request)}
+                          disabled={isApproved || approvingProtocolId === request.id}
+                          className="px-4 py-2 rounded-2xl bg-violet-600 text-white text-xs font-black hover:bg-violet-700 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
+                        >
+                          {approvingProtocolId === request.id ? <Loader2 size={14} className="animate-spin" /> : isApproved ? <CheckCircle2 size={14} /> : <ClipboardCheck size={14} />}
+                          {isApproved ? 'Liberado' : 'Aprovar e vincular'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>

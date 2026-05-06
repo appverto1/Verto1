@@ -297,8 +297,10 @@ export const ProtocolManagementSystem = ({
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [hasLicense, setHasLicense] = useState(false);
+  const [isCompleteProtocol, setIsCompleteProtocol] = useState(false);
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
   const [pendingProtocolName, setPendingProtocolName] = useState("");
+  const [importStatusMessage, setImportStatusMessage] = useState("");
 
   const handleCreateNew = () => { 
     if (!canManageLibrary) return;
@@ -318,61 +320,69 @@ export const ProtocolManagementSystem = ({
     setPendingImportFile(file);
     setPendingProtocolName(file.name.replace(/\.[^.]+$/, ""));
     setHasLicense(false);
+    setIsCompleteProtocol(false);
+    setImportStatusMessage("");
     setShowImportModal(true);
     e.target.value = "";
   };
 
-  const handleConfirmFileImport = () => {
-    if (!pendingImportFile || !hasLicense || !pendingProtocolName.trim()) return;
+  const readFileAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Nao foi possivel ler o arquivo."));
+    reader.readAsDataURL(file);
+  });
+
+  const handleConfirmFileImport = async () => {
+    if (!pendingImportFile || !hasLicense || !isCompleteProtocol || !pendingProtocolName.trim()) return;
 
     const file = pendingImportFile;
     const protocolTitle = pendingProtocolName.trim();
-    setShowImportModal(false);
     setIsImporting(true);
     setImportProgress(10);
-    
-    const timer = setInterval(() => {
-      setImportProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(timer);
-          setTimeout(() => {
-            setIsImporting(false);
-            setImportProgress(0);
-            
-            const newProtocol = {
-              id: Date.now(),
-              title: protocolTitle,
-              category: 'evaluation',
-              ageGroup: 'all',
-              age_minima: 0,
-              age_maxima: null,
-              min_age: 0,
-              max_age: null,
-              type: 'conventional',
-              domain: 'Importado, IA',
-              data: [
-                {
-                  id: 'dom-1',
-                  name: 'Domínio Mapeado 1',
-                  skills: [
-                    { id: 's1', name: 'Tarefa Extraída 1', maxScore: 2, objective: 'Objetivo mapeado automaticamente', criteria: 'Critérios extraídos do documento' },
-                    { id: 's2', name: 'Tarefa Extraída 2', maxScore: 2, objective: 'Objetivo mapeado automaticamente', criteria: 'Critérios extraídos do documento' }
-                  ]
-                }
-              ]
-            };
-            
-            onSaveProtocol(newProtocol);
-            setPendingImportFile(null);
-            setPendingProtocolName("");
-            setHasLicense(false);
-            alert(`Arquivo "${file.name}" importado com sucesso! O protocolo "${protocolTitle}" já está disponível na biblioteca.`);
-          }, 500);
-          return 100;
-        }
-        return prev + 15;
+    setImportStatusMessage("Enviando protocolo para validacao da Verto...");
+
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      setImportProgress(45);
+      const response = await fetch("/api/protocol-import-requests", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          protocolName: protocolTitle,
+          fileName: file.name,
+          fileType: file.type,
+          fileSize: file.size,
+          dataUrl,
+          rightsAccepted: hasLicense,
+          fullProtocolConfirmed: isCompleteProtocol
+        })
       });
-    }, 200);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Nao foi possivel enviar o protocolo.");
+      }
+
+      setImportProgress(100);
+      setImportStatusMessage(`Solicitacao criada. Sugestao Verto: ${data.data?.suggestedCanonicalName || "analise manual"}.`);
+      setTimeout(() => {
+        setShowImportModal(false);
+        setIsImporting(false);
+        setImportProgress(0);
+        setPendingImportFile(null);
+        setPendingProtocolName("");
+        setHasLicense(false);
+        setIsCompleteProtocol(false);
+        setImportStatusMessage("");
+        alert(`Protocolo "${protocolTitle}" enviado para validacao. A Verto vai liberar o protocolo canonico correspondente para uso.`);
+      }, 650);
+    } catch (error: any) {
+      setIsImporting(false);
+      setImportProgress(0);
+      setImportStatusMessage("");
+      alert(error?.message || "Nao foi possivel enviar o protocolo para validacao.");
+    }
   };
 
   const filteredProtocols = protocols.filter((p: any) => { 
@@ -390,25 +400,25 @@ export const ProtocolManagementSystem = ({
   } 
 
   const ProtocolCard = ({ proto }: any) => (
-    <div onClick={() => handleEdit(proto)} className={`bg-white p-6 rounded-[32px] shadow-sm border border-gray-100 transition-all group relative overflow-hidden flex flex-col h-full ${canManageLibrary ? "hover:shadow-xl hover:border-[#7a32fc]/20 cursor-pointer active:scale-95" : ""}`}>
-      <div className="absolute top-0 right-0 w-24 h-24 bg-gray-50 rounded-bl-full opacity-50 -z-0 group-hover:scale-125 transition-transform"></div>
+    <div onClick={() => handleEdit(proto)} className={`bg-[#101a2d] p-6 rounded-[32px] shadow-2xl shadow-black/20 border border-white/10 transition-all group relative overflow-hidden flex flex-col h-full ${canManageLibrary ? "hover:shadow-[#7a32fc]/10 hover:border-[#7a32fc]/40 cursor-pointer active:scale-95" : ""}`}>
+      <div className="absolute top-0 right-0 w-24 h-24 bg-slate-400/20 rounded-bl-full opacity-70 -z-0 group-hover:scale-125 transition-transform"></div>
       <div className="flex justify-between items-start mb-4 relative z-10">
         <div className={`p-3 rounded-2xl ${proto.type === 'neurodevelopment' ? 'bg-purple-100 text-purple-600' : proto.type === 'occupational' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'} shadow-sm group-hover:scale-110 transition-transform`}>
           {proto.category === 'intervention' ? <Boxes size={24} /> : <SearchCode size={24} />}
         </div>
         <div className="flex flex-col items-end gap-1">
-          <span className="text-[9px] font-bold uppercase bg-gray-100 text-gray-400 px-2 py-1 rounded-full">{proto.ageGroup === 'all' ? 'Livre' : proto.ageGroup}</span>
+          <span className="text-[9px] font-bold uppercase bg-white/10 text-slate-200 px-2 py-1 rounded-full">{proto.ageGroup === 'all' ? 'Livre' : proto.ageGroup}</span>
           <span className={`text-[9px] font-bold uppercase px-2 py-1 rounded-full ${proto.type === 'neurodevelopment' ? 'bg-purple-50 text-purple-400' : 'bg-blue-50 text-blue-400'}`}>{proto.type === 'neurodevelopment' ? 'Neuro' : 'Conv.'}</span>
         </div>
       </div>
       <div className="relative z-10 flex-1">
-        <h3 className="font-bold text-gray-800 text-lg leading-tight group-hover:text-[#7a32fc] transition-colors">{proto.title}</h3>
-        <p className="text-[10px] text-gray-400 font-bold uppercase mt-2 tracking-widest">{proto.data?.length || 0} Domínios • {proto.data?.reduce((acc: any, d: any) => acc + d.skills.length, 0) || 0} Tarefas</p>
+        <h3 className="font-bold text-white text-lg leading-tight group-hover:text-[#b794ff] transition-colors">{proto.title}</h3>
+        <p className="text-[10px] text-slate-400 font-bold uppercase mt-2 tracking-widest">{proto.data?.length || 0} Domínios • {proto.data?.reduce((acc: any, d: any) => acc + d.skills.length, 0) || 0} Tarefas</p>
       </div>
-      <div className="mt-4 pt-4 border-t border-gray-50 flex items-center justify-between relative z-10">
+      <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between relative z-10">
         <div className="flex gap-1 overflow-hidden">
           {proto.domain?.split(',').slice(0,2).map((d: any, i: number) => (
-            <span key={i} className="text-[8px] bg-gray-50 text-gray-500 px-2 py-0.5 rounded-md font-bold whitespace-nowrap">{d.trim()}</span>
+            <span key={i} className="text-[8px] bg-white/10 text-slate-300 px-2 py-0.5 rounded-md font-bold whitespace-nowrap">{d.trim()}</span>
           ))}
         </div>
         {canManageLibrary && (
@@ -421,12 +431,12 @@ export const ProtocolManagementSystem = ({
   );
 
   return ( 
-    <div className="w-full min-h-full bg-gray-50 flex flex-col overflow-x-hidden relative"> 
+    <div className="w-full min-h-full bg-[#0b1220] flex flex-col overflow-x-hidden relative text-slate-100"> 
       {/* Import Modal with License Declaration */}
       {showImportModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-white rounded-[40px] w-full max-w-lg overflow-hidden shadow-2xl animate-pop">
-            <div className="bg-[#7a32fc] p-8 text-white relative overflow-hidden">
+          <div className="bg-[#101a2d] border border-white/10 rounded-[40px] w-full max-w-lg overflow-hidden shadow-2xl animate-pop">
+            <div className="bg-gradient-to-br from-[#7a32fc] to-[#2f7df4] p-8 text-white relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-bl-full -mr-8 -mt-8"></div>
               <ShieldCheck size={48} className="mb-4 relative z-10" />
               <h2 className="text-2xl font-bold relative z-10">Importar Protocolo</h2>
@@ -442,15 +452,15 @@ export const ProtocolManagementSystem = ({
                   type="text"
                   value={pendingProtocolName}
                   onChange={(e) => setPendingProtocolName(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm outline-none"
+                  className="w-full bg-[#0b1220] border border-white/10 rounded-xl p-3 text-sm outline-none text-white"
                   placeholder="Ex: Protocolo de Comunicação Funcional"
                 />
               </div>
 
-              <div className="bg-blue-50 border border-blue-100 p-4 rounded-2xl mb-6 flex gap-3">
+              <div className="bg-blue-500/10 border border-blue-400/20 p-4 rounded-2xl mb-6 flex gap-3">
                 <Info size={20} className="text-blue-500 shrink-0 mt-0.5" />
-                <p className="text-xs text-blue-700 leading-relaxed font-medium">
-                  Protocolos clínicos podem ter direitos autorais e regras específicas de uso. Ao importar, você declara que possui autorização para utilização no ambiente da clínica.
+                <p className="text-xs text-blue-100 leading-relaxed font-medium">
+                  Protocolos clínicos podem ter direitos autorais e regras específicas de uso. Ao importar, você declara que possui autorização para utilização no ambiente da clínica. A Verto aceita apenas protocolos completos e libera para uso o protocolo canônico correspondente da biblioteca Verto.
                 </p>
               </div>
 
@@ -459,34 +469,54 @@ export const ProtocolManagementSystem = ({
                   <div className="relative flex items-center mt-1">
                     <input 
                       type="checkbox" 
-                      className="peer h-5 w-5 cursor-pointer appearance-none rounded-md border border-gray-300 transition-all checked:border-[#7a32fc] checked:bg-[#7a32fc]"
+                      className="peer h-5 w-5 cursor-pointer appearance-none rounded-md border border-slate-500 transition-all checked:border-[#05CD99] checked:bg-[#05CD99]"
+                      checked={isCompleteProtocol}
+                      onChange={(e) => setIsCompleteProtocol(e.target.checked)}
+                    />
+                    <ShieldCheck className="absolute h-3.5 w-3.5 text-white opacity-0 peer-checked:opacity-100 left-0.5" strokeWidth={3} />
+                  </div>
+                  <span className="text-sm font-bold text-slate-200 group-hover:text-white transition-colors">
+                    Confirmo que estou enviando o protocolo completo, sem páginas faltantes, recortes ou versões parciais.
+                  </span>
+                </label>
+                <label className="flex items-start gap-3 cursor-pointer group">
+                  <div className="relative flex items-center mt-1">
+                    <input 
+                      type="checkbox" 
+                      className="peer h-5 w-5 cursor-pointer appearance-none rounded-md border border-slate-500 transition-all checked:border-[#7a32fc] checked:bg-[#7a32fc]"
                       checked={hasLicense}
                       onChange={(e) => setHasLicense(e.target.checked)}
                     />
                     <ShieldCheck className="absolute h-3.5 w-3.5 text-white opacity-0 peer-checked:opacity-100 left-0.5" strokeWidth={3} />
                   </div>
-                  <span className="text-sm font-bold text-gray-700 group-hover:text-[#7a32fc] transition-colors">
+                  <span className="text-sm font-bold text-slate-200 group-hover:text-white transition-colors">
                     Li e aceito os termos de responsabilidade e direitos de uso do protocolo importado.
                   </span>
                 </label>
               </div>
+              {importStatusMessage && (
+                <p className="mt-5 text-xs font-bold text-blue-100 bg-blue-500/10 border border-blue-400/20 rounded-2xl px-4 py-3">
+                  {importStatusMessage}
+                </p>
+              )}
 
               <div className="grid grid-cols-2 gap-4 mt-8">
                 <button 
                   onClick={() => {
                     setShowImportModal(false);
                     setHasLicense(false);
+                    setIsCompleteProtocol(false);
                     setPendingImportFile(null);
                     setPendingProtocolName("");
                   }}
-                  className="py-4 rounded-2xl font-bold text-gray-500 hover:bg-gray-50 transition-all border border-gray-100"
+                  className="py-4 rounded-2xl font-bold text-slate-300 hover:bg-white/5 transition-all border border-white/10"
                 >
                   Cancelar
                 </button>
                 <button 
                   onClick={handleConfirmFileImport}
-                  disabled={!hasLicense || !pendingProtocolName.trim() || isImporting}
-                  className={`py-4 rounded-2xl font-bold text-white shadow-lg transition-all flex items-center justify-center gap-2 ${hasLicense && pendingProtocolName.trim() ? 'bg-[#7a32fc] shadow-blue-200 hover:opacity-90 active:scale-95' : 'bg-gray-300 cursor-not-allowed shadow-none'}`}
+                  disabled={!hasLicense || !isCompleteProtocol || !pendingProtocolName.trim() || isImporting}
+                  className={`py-4 rounded-2xl font-bold text-white shadow-lg transition-all flex items-center justify-center gap-2 ${hasLicense && isCompleteProtocol && pendingProtocolName.trim() ? 'bg-[#7a32fc] shadow-blue-950 hover:opacity-90 active:scale-95' : 'bg-slate-700 cursor-not-allowed shadow-none'}`}
                 >
                   {isImporting ? (
                     <>
@@ -506,10 +536,10 @@ export const ProtocolManagementSystem = ({
         </div>
       )}
 
-      <div className="bg-white px-6 py-6 shadow-sm flex items-center justify-between shrink-0"> 
+      <div className="bg-[#101a2d] border-b border-white/10 px-6 py-6 shadow-[0_20px_60px_rgba(0,0,0,0.28)] flex items-center justify-between shrink-0"> 
         <div className="flex items-center gap-4">
-          <button onClick={onBack} className="p-2 -ml-2 text-gray-500 hover:bg-gray-100 rounded-full"><ChevronLeft size={24}/></button> 
-          <h1 className="text-xl font-bold text-gray-800 tracking-tight">Biblioteca de Protocolos</h1> 
+          <button onClick={onBack} className="p-2 -ml-2 text-slate-300 hover:bg-white/10 rounded-full"><ChevronLeft size={24}/></button> 
+          <h1 className="text-xl font-bold text-white tracking-tight">Biblioteca de Protocolos</h1> 
         </div>
         {canManageLibrary ? (
           <button onClick={handleCreateNew} className="bg-[#7a32fc] text-white px-5 py-2.5 rounded-2xl text-xs font-bold shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 active:scale-95 transition-all flex items-center gap-2">
@@ -522,22 +552,22 @@ export const ProtocolManagementSystem = ({
         )}
       </div> 
 
-      <div className="flex-1 overflow-y-auto no-scrollbar px-8 md:px-10 pt-6 pb-24"> 
+      <div className="flex-1 overflow-y-auto no-scrollbar px-8 md:px-10 pt-6 pb-24 bg-[radial-gradient(circle_at_top_left,rgba(122,50,252,0.16),transparent_32%),linear-gradient(180deg,#0b1220,#111827)]"> 
         <div className="w-full max-w-5xl mx-auto">
-          <div className="bg-white p-4 rounded-[24px] shadow-sm border border-gray-100 mb-8 animate-slide-up"> 
+          <div className="bg-[#101a2d] p-4 rounded-[24px] shadow-2xl shadow-black/20 border border-white/10 mb-8 animate-slide-up"> 
             <button onClick={() => setIsFiltersOpen(!isFiltersOpen)} className="w-full flex items-center justify-between group transition-all">
               <div className="flex items-center gap-2 text-[#7a32fc]"> 
                 <Filter size={18} /> 
                 <h3 className="font-bold text-xs uppercase tracking-wider">Filtrar Vitrine</h3> 
               </div> 
-              <ChevronDown size={20} className={`text-gray-300 transition-transform duration-300 ${isFiltersOpen ? 'rotate-180 text-[#7a32fc]' : ''}`} />
+              <ChevronDown size={20} className={`text-slate-300 transition-transform duration-300 ${isFiltersOpen ? 'rotate-180 text-[#b794ff]' : ''}`} />
             </button>
 
             {isFiltersOpen && (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4 pt-4 border-t border-gray-50 animate-fade-in"> 
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4 pt-4 border-t border-white/10 animate-fade-in"> 
                 <div> 
                   <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">Idade</label> 
-                  <select className="w-full bg-gray-50 border border-gray-100 rounded-xl p-2 text-sm outline-none font-bold text-gray-700" value={filterAge} onChange={(e) => setFilterAge(e.target.value)}> 
+                  <select className="w-full bg-[#0b1220] border border-white/10 rounded-xl p-2 text-sm outline-none font-bold text-slate-100" value={filterAge} onChange={(e) => setFilterAge(e.target.value)}> 
                     <option value="">Todas</option> 
                     <option value="child">0-12 anos</option> 
                     <option value="teen">13-18 anos</option> 
@@ -547,7 +577,7 @@ export const ProtocolManagementSystem = ({
                 </div> 
                 <div> 
                   <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">Abordagem</label> 
-                  <select className="w-full bg-gray-50 border border-gray-100 rounded-xl p-2 text-sm outline-none font-bold text-gray-700" value={filterType} onChange={(e) => setFilterType(e.target.value)}> 
+                  <select className="w-full bg-[#0b1220] border border-white/10 rounded-xl p-2 text-sm outline-none font-bold text-slate-100" value={filterType} onChange={(e) => setFilterType(e.target.value)}> 
                     <option value="">Todas</option> 
                     <option value="conventional">Convencional</option> 
                     <option value="neurodevelopment">Neurodesenvolvimento</option> 
@@ -558,7 +588,7 @@ export const ProtocolManagementSystem = ({
                   <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">Assunto</label> 
                   <div className="relative"> 
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300" size={14} /> 
-                    <input type="text" className="w-full bg-gray-50 border border-gray-100 rounded-xl p-2 pl-9 text-sm outline-none font-bold text-gray-700" placeholder="Ex: Vida Diária..." value={filterDomain} onChange={(e) => setFilterDomain(e.target.value)} /> 
+                    <input type="text" className="w-full bg-[#0b1220] border border-white/10 rounded-xl p-2 pl-9 text-sm outline-none font-bold text-slate-100" placeholder="Ex: Vida Diária..." value={filterDomain} onChange={(e) => setFilterDomain(e.target.value)} /> 
                   </div> 
                 </div> 
               </div> 
@@ -570,17 +600,17 @@ export const ProtocolManagementSystem = ({
               <div className="flex items-center gap-3 mb-6 ml-2">
                 <div className="w-10 h-10 rounded-2xl bg-blue-500 text-white flex items-center justify-center shadow-lg shadow-blue-200"><SearchCode size={20}/></div>
                 <div>
-                  <h2 className="text-lg font-bold text-gray-800 tracking-tight">Protocolos de Avaliação</h2>
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Ferramentas de diagnóstico e marcos</p>
+                  <h2 className="text-lg font-bold text-white tracking-tight">Protocolos de Avaliação</h2>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ferramentas de diagnóstico e marcos</p>
                 </div>
-                <div className="ml-auto bg-gray-100 px-3 py-1 rounded-full text-[10px] font-bold text-gray-400 uppercase">{evaluationProtocols.length}</div>
+                <div className="ml-auto bg-white/10 px-3 py-1 rounded-full text-[10px] font-bold text-slate-300 uppercase">{evaluationProtocols.length}</div>
               </div>
               {evaluationProtocols.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {evaluationProtocols.map((p: any) => <ProtocolCard key={p.id} proto={p} />)}
                 </div>
               ) : (
-                <div className="py-10 text-center border-2 border-dashed border-gray-100 rounded-[32px] text-gray-300 font-bold text-sm italic">Nenhum protocolo de avaliação nesta busca.</div>
+                <div className="py-10 text-center border-2 border-dashed border-white/10 rounded-[32px] text-slate-500 font-bold text-sm italic">Nenhum protocolo de avaliação nesta busca.</div>
               )}
             </div>
 
@@ -588,17 +618,17 @@ export const ProtocolManagementSystem = ({
               <div className="flex items-center gap-3 mb-6 ml-2">
                 <div className="w-10 h-10 rounded-2xl bg-[#05CD99] text-white flex items-center justify-center shadow-lg shadow-green-100"><Boxes size={20}/></div>
                 <div>
-                  <h2 className="text-lg font-bold text-gray-800 tracking-tight">Protocolos de Intervenção</h2>
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Treinos de habilidades e programas</p>
+                  <h2 className="text-lg font-bold text-white tracking-tight">Protocolos de Intervenção</h2>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Treinos de habilidades e programas</p>
                 </div>
-                <div className="ml-auto bg-gray-100 px-3 py-1 rounded-full text-[10px] font-bold text-gray-400 uppercase">{interventionProtocols.length}</div>
+                <div className="ml-auto bg-white/10 px-3 py-1 rounded-full text-[10px] font-bold text-slate-300 uppercase">{interventionProtocols.length}</div>
               </div>
               {interventionProtocols.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {interventionProtocols.map((p: any) => <ProtocolCard key={p.id} proto={p} />)}
                 </div>
               ) : (
-                <div className="py-10 text-center border-2 border-dashed border-gray-100 rounded-[32px] text-gray-300 font-bold text-sm italic">Crie programas de treino clicando em "Criar Novo".</div>
+                <div className="py-10 text-center border-2 border-dashed border-white/10 rounded-[32px] text-slate-500 font-bold text-sm italic">Crie programas de treino clicando em "Criar Novo".</div>
               )}
             </div>
           </div>
@@ -608,10 +638,10 @@ export const ProtocolManagementSystem = ({
       {canManageLibrary && (
         <div className="fixed bottom-8 right-8 z-[60] flex flex-col items-end gap-3">
           {isImporting && (
-            <div className="bg-white p-4 rounded-2xl shadow-2xl border border-gray-100 mb-2 animate-slide-up w-64">
+            <div className="bg-[#101a2d] p-4 rounded-2xl shadow-2xl border border-white/10 mb-2 animate-slide-up w-64">
               <div className="flex items-center gap-3 mb-2">
                 <Loader2 size={18} className="text-[#7a32fc] animate-spin" />
-                <span className="text-xs font-bold text-gray-700 uppercase tracking-tight">Importando Protocolo...</span>
+                <span className="text-xs font-bold text-slate-100 uppercase tracking-tight">Enviando Protocolo...</span>
               </div>
               <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
                 <div 
@@ -619,11 +649,11 @@ export const ProtocolManagementSystem = ({
                   style={{ width: `${importProgress}%` }}
                 ></div>
               </div>
-              <p className="text-[9px] font-bold text-gray-400 mt-2 uppercase tracking-widest">Mapeando domínios e tarefas via IA...</p>
+              <p className="text-[9px] font-bold text-slate-400 mt-2 uppercase tracking-widest">Solicitando validação e match Verto...</p>
             </div>
           )}
           
-          <label className={`flex items-center gap-3 bg-white text-[#7a32fc] px-6 py-4 rounded-full shadow-2xl border border-gray-100 cursor-pointer hover:scale-105 active:scale-95 transition-all group ${isImporting ? 'opacity-50 pointer-events-none' : ''}`}>
+          <label className={`flex items-center gap-3 bg-[#101a2d] text-[#b794ff] px-6 py-4 rounded-full shadow-2xl border border-white/10 cursor-pointer hover:scale-105 active:scale-95 transition-all group ${isImporting ? 'opacity-50 pointer-events-none' : ''}`}>
             <input type="file" className="hidden" accept=".pdf,.xlsx,.xls,.csv" onChange={handleFileUpload} disabled={isImporting} />
             <div className="p-2 bg-blue-50 rounded-xl group-hover:bg-[#7a32fc] group-hover:text-white transition-colors">
               <FileUp size={20} />

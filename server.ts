@@ -341,6 +341,32 @@ async function resolvePersistedStripeCustomerId(params: {
   return null;
 }
 
+function normalizeProtocolKey(input?: string | null): string {
+  return sanitizeString(input || '', 180)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function identifyVertoProtocolCandidate(input?: string | null): { canonicalKey: string; canonicalName: string; confidence: number } {
+  const key = normalizeProtocolKey(input);
+  if (/\bafls\b|assessment functional living skills|functional living skills/.test(key)) {
+    return { canonicalKey: 'afls', canonicalName: 'AFLS - Protocolo de Vida Diaria', confidence: 0.94 };
+  }
+  if (/\bvb\s*mapp\b|\bvbmapp\b|verbal behavior milestones/.test(key)) {
+    return { canonicalKey: 'vb-mapp', canonicalName: 'VB-MAPP - Nivel 1', confidence: 0.9 };
+  }
+  if (/\bablls\b|\bablls r\b|basic language learning skills/.test(key)) {
+    return { canonicalKey: 'ablls-r', canonicalName: 'ABLLS-R', confidence: 0.86 };
+  }
+  if (/\bvineland\b/.test(key)) {
+    return { canonicalKey: 'vineland', canonicalName: 'Vineland', confidence: 0.82 };
+  }
+  return { canonicalKey: 'manual-review', canonicalName: 'Analise manual necessaria', confidence: 0.35 };
+}
+
 function normalizeBrazilMobilePhone(value: unknown): string | null {
   const digits = sanitizeString(value, 40).replace(/\D/g, '');
   if (!digits) return null;
@@ -1020,7 +1046,7 @@ function sanitizeClinicalPayload(input: any, depth = 0): any {
     if (
       (key === 'content' || key === 'dataUrl') &&
       typeof value === 'string' &&
-      /^data:application\/pdf;base64,[a-z0-9+/=\s]+$/i.test(value) &&
+      /^data:(application\/pdf|application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet|application\/vnd\.ms-excel);base64,[a-z0-9+/=\s]+$/i.test(value) &&
       value.length <= 14_000_000
     ) {
       safe[key] = sanitizeString(value, 14_000_000);
@@ -10942,6 +10968,328 @@ async function startServer() {
         success: false,
         error: error?.message || 'Nao foi possivel conceder o acesso gratuito.'
       });
+    }
+  });
+
+  app.post('/api/protocol-import-requests', checkAuth, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024 * 1024, 'Arquivo de protocolo')) return;
+
+      const user = req.session.user;
+      const protocolName = sanitizeString(req.body?.protocolName, 180);
+      const fileName = sanitizeString(req.body?.fileName, 240);
+      const fileType = sanitizeString(req.body?.fileType, 120);
+      const fileSize = asSafeNumber(req.body?.fileSize, 0, 20_000_000) || 0;
+      const fullProtocolConfirmed = Boolean(req.body?.fullProtocolConfirmed);
+      const rightsAccepted = Boolean(req.body?.rightsAccepted);
+      const dataUrl = sanitizeClinicalPayload({ dataUrl: req.body?.dataUrl })?.dataUrl || null;
+
+      if (!protocolName || !fileName || !dataUrl) {
+        return res.status(400).json({ success: false, error: 'Informe o nome e envie o arquivo completo do protocolo.' });
+      }
+      if (!fullProtocolConfirmed || !rightsAccepted) {
+        return res.status(400).json({ success: false, error: 'Confirme que o protocolo esta completo e que possui direito de uso.' });
+      }
+      if (!/^data:application\/pdf;base64,/i.test(dataUrl) && !/^data:application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet;base64,/i.test(dataUrl) && !/^data:application\/vnd\.ms-excel;base64,/i.test(dataUrl)) {
+        return res.status(400).json({ success: false, error: 'Envie PDF ou Excel completo.' });
+      }
+
+      const candidate = identifyVertoProtocolCandidate(`${protocolName} ${fileName}`);
+      const clinicId = currentClinicId(user);
+      const requestId = randomUUID();
+      const nowIso = new Date().toISOString();
+      const payload = sanitizeClinicalPayload({
+        id: requestId,
+        clinicId,
+        requesterUserId: user?.id,
+        requesterName: user?.name || user?.email,
+        requesterEmail: user?.email,
+        protocolName,
+        fileName,
+        fileType,
+        fileSize,
+        dataUrl,
+        status: 'pending',
+        canonicalKey: candidate.canonicalKey,
+        canonicalName: candidate.canonicalName,
+        confidence: candidate.confidence,
+        fullProtocolConfirmed,
+        rightsAccepted,
+        createdAt: nowIso
+      });
+
+      let storedInTable = false;
+      try {
+        const { error: insertError } = await supabase.from('protocol_import_requests').insert([{
+          id: requestId,
+          clinic_id: isUuid(clinicId) ? clinicId : null,
+          requester_user_id: sanitizeString(user?.id, 120) || null,
+          requester_name: sanitizeString(user?.name || user?.email, 180),
+          requester_email: sanitizeEmail(user?.email),
+          protocol_name: protocolName,
+          file_name: fileName,
+          file_type: fileType,
+          file_size: fileSize,
+          file_data_url: dataUrl,
+          status: 'pending',
+          suggested_canonical_key: candidate.canonicalKey,
+          suggested_canonical_name: candidate.canonicalName,
+          suggested_confidence: candidate.confidence,
+          rights_accepted: rightsAccepted,
+          full_protocol_confirmed: fullProtocolConfirmed,
+          created_at: nowIso,
+          updated_at: nowIso
+        }]);
+        storedInTable = !insertError;
+        if (insertError) {
+          console.warn('[Protocol Import] table insert fallback:', insertError.message || insertError);
+        }
+      } catch (tableError: any) {
+        console.warn('[Protocol Import] table unavailable fallback:', tableError?.message || String(tableError));
+      }
+
+      await persistActivityLog({
+        userId: sanitizeString(user?.id, 120),
+        clinicId: sanitizeString(clinicId, 120),
+        actorName: sanitizeString(user?.name || user?.email || 'Profissional', 180),
+        title: 'Solicitacao de protocolo importado',
+        content: `Protocolo ${protocolName} enviado para validacao. Sugestao Verto: ${candidate.canonicalName}.`,
+        type: 'protocol_import_request',
+        actionType: 'protocol_import_requested',
+        payloadDetails: JSON.stringify(payload)
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          id: requestId,
+          status: 'pending',
+          suggestedCanonicalName: candidate.canonicalName,
+          suggestedConfidence: candidate.confidence,
+          storedInTable
+        }
+      });
+    } catch (error: any) {
+      console.error('[Protocol Import] request error:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Nao foi possivel enviar o protocolo para validacao.' });
+    }
+  });
+
+  app.get('/api/admin/protocol-import-requests', checkAuth, checkPlatformAdmin, async (_req: any, res) => {
+    try {
+      let requests: any[] = [];
+      try {
+        const { data, error } = await supabase
+          .from('protocol_import_requests')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(200);
+        if (!error && Array.isArray(data)) {
+          requests = data.map((row: any) => ({
+            id: sanitizeString(row.id, 120),
+            clinicId: sanitizeString(row.clinic_id, 120) || null,
+            requesterUserId: sanitizeString(row.requester_user_id, 120) || null,
+            requesterName: sanitizeString(row.requester_name, 180),
+            requesterEmail: sanitizeEmail(row.requester_email),
+            protocolName: sanitizeString(row.protocol_name, 180),
+            fileName: sanitizeString(row.file_name, 240),
+            fileType: sanitizeString(row.file_type, 120),
+            fileSize: Number(row.file_size || 0),
+            status: sanitizeString(row.status, 40) || 'pending',
+            canonicalKey: sanitizeString(row.approved_canonical_key || row.suggested_canonical_key, 180),
+            canonicalName: sanitizeString(row.approved_canonical_name || row.suggested_canonical_name, 180),
+            confidence: Number(row.suggested_confidence || 0),
+            dataUrl: sanitizeString(row.file_data_url, 14_000_000) || null,
+            createdAt: sanitizeString(row.created_at, 80),
+            reviewedAt: sanitizeString(row.reviewed_at, 80) || null
+          }));
+        }
+      } catch {
+        // fallback below
+      }
+
+      if (requests.length === 0) {
+        const { data: logs } = await supabase
+          .from('activity_logs')
+          .select('id, payload_details, timestamp')
+          .eq('type', 'protocol_import_request')
+          .order('timestamp', { ascending: false })
+          .limit(200);
+        requests = (logs || []).map((log: any) => {
+          try {
+            const payload = JSON.parse(String(log.payload_details || '{}'));
+            return {
+              ...payload,
+              id: sanitizeString(payload.id || log.id, 120),
+              createdAt: sanitizeString(payload.createdAt || log.timestamp, 80),
+              status: sanitizeString(payload.status, 40) || 'pending',
+              canonicalKey: sanitizeString(payload.canonicalKey, 180),
+              canonicalName: sanitizeString(payload.canonicalName, 180),
+              confidence: Number(payload.confidence || 0)
+            };
+          } catch {
+            return null;
+          }
+        }).filter(Boolean);
+      }
+
+      return res.json({ success: true, data: requests });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Nao foi possivel listar solicitacoes de protocolos.' });
+    }
+  });
+
+  app.post('/api/admin/protocol-import-requests/:requestId/approve', checkAuth, checkPlatformAdmin, async (req: any, res) => {
+    try {
+      const requestId = sanitizeString(req.params.requestId, 120);
+      const canonicalKey = sanitizeString(req.body?.canonicalKey, 180) || identifyVertoProtocolCandidate(req.body?.canonicalName).canonicalKey;
+      const canonicalName = sanitizeString(req.body?.canonicalName, 180);
+      if (!requestId || !canonicalName) {
+        return res.status(400).json({ success: false, error: 'Informe a solicitacao e o protocolo Verto aprovado.' });
+      }
+
+      let updatedTable = false;
+      try {
+        const { error } = await supabase
+          .from('protocol_import_requests')
+          .update({
+            status: 'approved',
+            approved_canonical_key: canonicalKey,
+            approved_canonical_name: canonicalName,
+            reviewed_by: sanitizeString(req.session.user?.id, 120) || null,
+            reviewed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', requestId);
+        updatedTable = !error;
+      } catch {
+        updatedTable = false;
+      }
+
+      await persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(currentClinicId(req.session.user), 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
+        title: 'Protocolo aprovado para uso',
+        content: `Solicitacao ${requestId} aprovada e vinculada ao protocolo Verto ${canonicalName}.`,
+        type: 'protocol_import_review',
+        actionType: 'protocol_import_approved',
+        payloadDetails: JSON.stringify({ requestId, canonicalKey, canonicalName, updatedTable })
+      });
+
+      return res.json({ success: true, data: { requestId, status: 'approved', canonicalKey, canonicalName } });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Nao foi possivel aprovar o protocolo.' });
+    }
+  });
+
+  app.get('/api/admin/verto-protocols', checkAuth, checkPlatformAdmin, async (_req: any, res) => {
+    try {
+      let protocols: any[] = [];
+      try {
+        const { data, error } = await supabase
+          .from('verto_canonical_protocols')
+          .select('*')
+          .order('updated_at', { ascending: false })
+          .limit(500);
+        if (!error && Array.isArray(data)) {
+          protocols = data.map((row: any) => ({
+            id: sanitizeString(row.id, 120),
+            canonicalKey: sanitizeString(row.canonical_key, 180),
+            title: sanitizeString(row.title, 180),
+            category: sanitizeString(row.category, 80) || 'evaluation',
+            sourceLabel: sanitizeString(row.source_label, 180) || null,
+            versionLabel: sanitizeString(row.version_label, 120) || null,
+            status: sanitizeString(row.status, 40) || 'draft',
+            protocol: sanitizeClinicalPayload(row.protocol_json),
+            createdAt: sanitizeString(row.created_at, 80),
+            updatedAt: sanitizeString(row.updated_at, 80)
+          }));
+        }
+      } catch {
+        protocols = [];
+      }
+      return res.json({ success: true, data: protocols });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Nao foi possivel listar protocolos Verto.' });
+    }
+  });
+
+  app.post('/api/admin/verto-protocols', checkAuth, checkPlatformAdmin, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 6 * 1024 * 1024, 'Protocolo estruturado')) return;
+      const rawProtocol = req.body?.protocol || {};
+      const title = sanitizeString(rawProtocol?.title || req.body?.title, 180);
+      const canonicalKey = sanitizeString(
+        req.body?.canonicalKey || rawProtocol?.canonicalKey || normalizeProtocolKey(title),
+        180
+      );
+      const category = sanitizeString(rawProtocol?.category || req.body?.category || 'evaluation', 80) || 'evaluation';
+      const sourceLabel = sanitizeString(req.body?.sourceLabel || rawProtocol?.sourceLabel, 180);
+      const versionLabel = sanitizeString(req.body?.versionLabel || rawProtocol?.versionLabel, 120);
+      const status = sanitizeString(req.body?.status || rawProtocol?.status || 'draft', 40) || 'draft';
+      const protocolJson = sanitizeClinicalPayload({
+        ...rawProtocol,
+        title,
+        canonicalKey,
+        category,
+        sourceLabel,
+        versionLabel,
+        status
+      });
+
+      if (!title || !canonicalKey || !Array.isArray(protocolJson?.data) || protocolJson.data.length === 0) {
+        return res.status(400).json({ success: false, error: 'Protocolo precisa de titulo, chave canonica e ao menos um dominio.' });
+      }
+
+      const protocolId = sanitizeString(req.body?.id || rawProtocol?.id, 120) || randomUUID();
+      const nowIso = new Date().toISOString();
+      let storedInTable = false;
+      try {
+        const { error } = await supabase
+          .from('verto_canonical_protocols')
+          .upsert([{
+            id: protocolId,
+            canonical_key: canonicalKey,
+            title,
+            category,
+            source_label: sourceLabel || null,
+            version_label: versionLabel || null,
+            status,
+            protocol_json: protocolJson,
+            created_by: sanitizeString(req.session.user?.id, 120) || null,
+            updated_at: nowIso,
+            created_at: nowIso
+          }], { onConflict: 'canonical_key' });
+        storedInTable = !error;
+        if (error) console.warn('[Verto Protocols] table upsert fallback:', error.message || error);
+      } catch (tableError: any) {
+        console.warn('[Verto Protocols] table unavailable fallback:', tableError?.message || String(tableError));
+      }
+
+      await persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(currentClinicId(req.session.user), 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
+        title: 'Protocolo canonico Verto salvo',
+        content: `Protocolo ${title} salvo como ${canonicalKey} com ${protocolJson.data.length} dominios.`,
+        type: 'verto_protocol_library',
+        actionType: 'verto_protocol_saved',
+        payloadDetails: JSON.stringify({
+          id: protocolId,
+          canonicalKey,
+          title,
+          category,
+          status,
+          domains: protocolJson.data.length,
+          storedInTable
+        })
+      });
+
+      return res.json({ success: true, data: { id: protocolId, canonicalKey, title, storedInTable } });
+    } catch (error: any) {
+      console.error('[Verto Protocols] save error:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Nao foi possivel salvar o protocolo canonico.' });
     }
   });
 
