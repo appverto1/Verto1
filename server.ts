@@ -1073,19 +1073,28 @@ function isAllowedScreenshotDataUrl(value: unknown): value is string {
 }
 
 function buildScreenshotEvidenceSummary(params: {
-  totalPages: number;
-  coverageMaxPage: number;
+  totalPages?: number | null;
+  coverageMaxPage?: number | null;
+  applicableAgeGroup?: string | null;
   screenshots: Array<{ pageNumber: number; prompt?: string | null }>;
 }): string {
   const pages = params.screenshots.map((shot) => shot.pageNumber).filter((page) => Number.isFinite(page));
+  const ageLabel = params.applicableAgeGroup === 'child'
+    ? 'Criancas'
+    : params.applicableAgeGroup === 'teen'
+      ? 'Adolescentes'
+      : params.applicableAgeGroup === 'adult'
+        ? 'Adultos'
+        : 'Todas as idades';
   return [
     `Modo de validacao: screenshots enviados pelo cliente`,
-    `Paginas totais declaradas: ${params.totalPages}`,
-    `Janela de amostragem: 1 ate ${params.coverageMaxPage}`,
+    `Faixa etaria declarada: ${ageLabel}`,
+    params.totalPages ? `Paginas totais declaradas: ${params.totalPages}` : null,
+    params.coverageMaxPage ? `Janela de amostragem: 1 ate ${params.coverageMaxPage}` : null,
     `Capturas recebidas: ${pages.length}`,
     pages.length ? `Paginas conferidas: ${pages.join(', ')}` : 'Paginas conferidas: nenhuma',
     'Arquivo bruto nao foi aberto. A revisao deve ocorrer pelas miniaturas e pela correspondencia com o protocolo canonico.'
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 function getTrustedMediaHosts(): Set<string> {
@@ -11340,8 +11349,9 @@ async function startServer() {
       const user = req.session.user;
       const evidenceMode = sanitizeString(req.body?.evidenceMode, 40) || 'screenshots';
       const protocolName = sanitizeString(req.body?.protocolName, 180);
+      const applicableAgeGroup = sanitizeString(req.body?.applicableAgeGroup, 40) || 'all';
       const totalPages = asSafeNumber(req.body?.totalPages, 1, 5000) || 0;
-      const coverageMaxPage = asSafeNumber(req.body?.coverageMaxPage, 1, 5000) || 0;
+      const requestedCoverageMaxPage = asSafeNumber(req.body?.coverageMaxPage, 1, 5000) || 0;
       const fullProtocolConfirmed = Boolean(req.body?.fullProtocolConfirmed);
       const rightsAccepted = Boolean(req.body?.rightsAccepted);
       const rawScreenshotChallenges = Array.isArray(req.body?.screenshotChallenges) ? req.body.screenshotChallenges : [];
@@ -11350,15 +11360,16 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'A Verto agora aceita somente validacao por screenshots neste fluxo.' });
       }
 
-      if (!protocolName || !totalPages) {
-        return res.status(400).json({ success: false, error: 'Informe o nome do protocolo e a quantidade total de paginas.' });
+      if (!protocolName) {
+        return res.status(400).json({ success: false, error: 'Informe o nome do protocolo.' });
       }
       if (!fullProtocolConfirmed || !rightsAccepted) {
         return res.status(400).json({ success: false, error: 'Confirme que o protocolo esta completo e que possui direito de uso.' });
       }
 
-      const maxAllowedCoveragePage = Math.max(1, Math.ceil(totalPages * 0.3));
-      if (!coverageMaxPage || coverageMaxPage > maxAllowedCoveragePage + 1) {
+      const maxAllowedCoveragePage = totalPages ? Math.max(1, Math.ceil(totalPages * 0.3)) : 100;
+      const coverageMaxPage = requestedCoverageMaxPage || maxAllowedCoveragePage;
+      if (coverageMaxPage > maxAllowedCoveragePage + 1) {
         return res.status(400).json({ success: false, error: 'A janela de paginas solicitadas nao confere com a regra de amostragem.' });
       }
 
@@ -11410,13 +11421,15 @@ async function startServer() {
       const requestId = crypto.randomUUID();
       const nowIso = new Date().toISOString();
       const evidenceSummary = buildScreenshotEvidenceSummary({
-        totalPages,
-        coverageMaxPage,
+        totalPages: totalPages || null,
+        coverageMaxPage: coverageMaxPage || null,
+        applicableAgeGroup,
         screenshots: screenshotChallenges
       });
       const screenshotEvidence = {
         mode: 'screenshots',
-        totalPages,
+        applicableAgeGroup,
+        totalPages: totalPages || null,
         coverageMaxPage,
         screenshots: screenshotChallenges
       };
@@ -11428,6 +11441,7 @@ async function startServer() {
         requesterName: user?.name || user?.email,
         requesterEmail: user?.email,
         evidenceMode: 'screenshots',
+        applicableAgeGroup,
         protocolName,
         fileName: `${protocolName}.screenshots`,
         fileType: 'screenshots',
@@ -11457,9 +11471,10 @@ async function startServer() {
         scanReport: {
           engine: 'verto-screenshot-intake',
           scannedAt: nowIso,
-          evidence: {
-            mode: 'screenshots',
-            totalPages,
+            evidence: {
+              mode: 'screenshots',
+            applicableAgeGroup,
+            totalPages: totalPages || null,
             coverageMaxPage,
             screenshots: screenshotChallenges.map((item) => ({
               pageNumber: item.pageNumber,

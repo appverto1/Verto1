@@ -1130,6 +1130,13 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                     ? (request.scanReport?.evidence?.screenshots || [])
                     : [];
                   const isScreenshotFlow = screenshotEvidence.length > 0;
+                  const applicableAgeLabel = request.scanReport?.evidence?.applicableAgeGroup === 'child'
+                    ? 'Criancas'
+                    : request.scanReport?.evidence?.applicableAgeGroup === 'teen'
+                      ? 'Adolescentes'
+                      : request.scanReport?.evidence?.applicableAgeGroup === 'adult'
+                        ? 'Adultos'
+                        : 'Todas as idades';
                   const structure = request.scanReport?.structure || {};
                   const reliabilityScore = clampScore(structure?.scores?.reliability);
                   const structureScore = clampScore(structure?.scores?.structure);
@@ -1154,6 +1161,11 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         <p className="text-xs text-slate-400 mt-1">
                           Sugestao Verto: <strong>{request.canonicalName || 'Analise manual'}</strong> · confianca {Math.round(Number(request.confidence || 0) * 100)}%
                         </p>
+                        {isScreenshotFlow && (
+                          <p className="text-xs text-slate-400 mt-1">
+                            Aplicacao declarada: <strong>{applicableAgeLabel}</strong>
+                          </p>
+                        )}
                         {isScreenshotFlow ? (
                           <div className="mt-3 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
                             <div className="flex flex-wrap items-center gap-2 mb-3">
