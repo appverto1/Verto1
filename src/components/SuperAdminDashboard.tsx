@@ -63,6 +63,26 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [savingCanonicalProtocol, setSavingCanonicalProtocol] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [financialFeatureSurveys, setFinancialFeatureSurveys] = useState<any[]>([]);
+  const [dashboardWarning, setDashboardWarning] = useState<string | null>(null);
+  const [complimentaryEmail, setComplimentaryEmail] = useState('');
+  const [complimentaryPlan, setComplimentaryPlan] = useState<'Essencial' | 'Crescimento' | 'Avançado'>('Essencial');
+  const [complimentaryNote, setComplimentaryNote] = useState('');
+  const [grantingComplimentaryPlan, setGrantingComplimentaryPlan] = useState(false);
+
+  const fetchJsonSoft = async (url: string, headers: Record<string, string>, label: string) => {
+    try {
+      const response = await fetch(url, { credentials: 'include', headers });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data?.success === false) {
+        throw new Error(data?.error || `${label} indisponivel (${response.status}).`);
+      }
+      return data;
+    } catch (error: any) {
+      console.warn(`${label} unavailable:`, error);
+      setDashboardWarning((prev) => prev || `${label} nao carregou agora. O painel abriu com os demais dados.`);
+      return null;
+    }
+  };
 
   const fetchProtocolRequests = async (headers: Record<string, string>) => {
     try {
@@ -88,33 +108,24 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         const token = session?.access_token;
         const headers = { Authorization: token ? `Bearer ${token}` : '' };
 
-        const [statsRes, financialRes, customersRes, surveysRes, leadsRes] = await Promise.all([
-          fetch('/api/owner/stats', { credentials: 'include', headers }),
-          fetch('/api/owner/financial-overview', { credentials: 'include', headers }),
-          fetch('/api/owner/clients', { credentials: 'include', headers }),
-          fetch('/api/owner/financial-feature-surveys', { credentials: 'include', headers }),
-          fetch('/api/owner/leads/recovery', { credentials: 'include', headers })
+        setDashboardWarning(null);
+        const [statsData, financialData, customersData, surveysData, leadsData] = await Promise.all([
+          fetchJsonSoft('/api/owner/stats', headers, 'Resumo'),
+          fetchJsonSoft('/api/owner/financial-overview', headers, 'Financeiro'),
+          fetchJsonSoft('/api/owner/clients', headers, 'Clientes'),
+          fetchJsonSoft('/api/owner/financial-feature-surveys', headers, 'Pesquisa financeira'),
+          fetchJsonSoft('/api/owner/leads/recovery', headers, 'Recuperacao de leads')
         ]);
 
-        const statsData = await statsRes.json();
-        const financialData = await financialRes.json();
-        const customersData = await customersRes.json();
-        const surveysData = await surveysRes.json();
-        const leadsData = await leadsRes.json();
-
-        if (!statsRes.ok || !financialRes.ok || !customersRes.ok || !leadsRes.ok) {
-          throw new Error('Erro ao carregar dados do super admin.');
-        }
-
-        if (statsData.success) setStats(statsData.stats);
-        if (financialData.success) setFinancial(financialData.data);
-        if (customersData.success) setAllCustomers(customersData.data || []);
-        if (surveysData.success) setFinancialFeatureSurveys(surveysData.data || []);
-        if (leadsData.success) setLeadRecoveryItems(leadsData.data || []);
+        if (statsData?.success) setStats(statsData.stats);
+        if (financialData?.success) setFinancial(financialData.data);
+        if (customersData?.success) setAllCustomers(customersData.data || []);
+        if (surveysData?.success) setFinancialFeatureSurveys(surveysData.data || []);
+        if (leadsData?.success) setLeadRecoveryItems(leadsData.data || []);
         await fetchProtocolRequests(headers);
       } catch (error: any) {
         console.error('Owner dashboard error:', error);
-        alert(error.message || 'Nao foi possivel carregar o painel.');
+        setDashboardWarning(error.message || 'Nao foi possivel carregar todos os dados do painel.');
       } finally {
         setLoading(false);
       }
@@ -128,25 +139,66 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     const token = session?.access_token;
     const headers = { Authorization: token ? `Bearer ${token}` : '' };
 
-    const [statsRes, financialRes, customersRes, surveysRes, leadsRes] = await Promise.all([
-      fetch('/api/owner/stats', { credentials: 'include', headers }),
-      fetch('/api/owner/financial-overview', { credentials: 'include', headers }),
-      fetch('/api/owner/clients', { credentials: 'include', headers }),
-      fetch('/api/owner/financial-feature-surveys', { credentials: 'include', headers }),
-      fetch('/api/owner/leads/recovery', { credentials: 'include', headers })
+    setDashboardWarning(null);
+    const [statsData, financialData, customersData, surveysData, leadsData] = await Promise.all([
+      fetchJsonSoft('/api/owner/stats', headers, 'Resumo'),
+      fetchJsonSoft('/api/owner/financial-overview', headers, 'Financeiro'),
+      fetchJsonSoft('/api/owner/clients', headers, 'Clientes'),
+      fetchJsonSoft('/api/owner/financial-feature-surveys', headers, 'Pesquisa financeira'),
+      fetchJsonSoft('/api/owner/leads/recovery', headers, 'Recuperacao de leads')
     ]);
 
-    const statsData = await statsRes.json();
-    const financialData = await financialRes.json();
-    const customersData = await customersRes.json();
-    const surveysData = await surveysRes.json();
-    const leadsData = await leadsRes.json();
-    if (statsData.success) setStats(statsData.stats);
-    if (financialData.success) setFinancial(financialData.data);
-    if (customersData.success) setAllCustomers(customersData.data || []);
-    if (surveysData.success) setFinancialFeatureSurveys(surveysData.data || []);
-    if (leadsData.success) setLeadRecoveryItems(leadsData.data || []);
+    if (statsData?.success) setStats(statsData.stats);
+    if (financialData?.success) setFinancial(financialData.data);
+    if (customersData?.success) setAllCustomers(customersData.data || []);
+    if (surveysData?.success) setFinancialFeatureSurveys(surveysData.data || []);
+    if (leadsData?.success) setLeadRecoveryItems(leadsData.data || []);
     await fetchProtocolRequests(headers);
+  };
+
+  const handleGrantComplimentaryPlan = async () => {
+    const email = complimentaryEmail.trim();
+    if (!email) {
+      alert('Informe o e-mail cadastrado antes de conceder o acesso.');
+      return;
+    }
+    if (!window.confirm(`Conceder plano ${complimentaryPlan} sem cobranca para ${email}?`)) return;
+
+    try {
+      setGrantingComplimentaryPlan(true);
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      const response = await fetch('/api/admin/grant-complimentary-plan', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: token ? `Bearer ${token}` : ''
+        },
+        body: JSON.stringify({
+          email,
+          planName: complimentaryPlan,
+          note: complimentaryNote
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Nao foi possivel conceder o acesso.');
+      }
+      setAllCustomers((current) => current.map((customer) => (
+        String(customer.email || '').toLowerCase() === email.toLowerCase()
+          ? { ...customer, role: 'coordinator', subscription_status: 'active', plan_name: data.data?.planName || complimentaryPlan, plan_price: 0 }
+          : customer
+      )));
+      setComplimentaryEmail('');
+      setComplimentaryNote('');
+      alert(`Acesso gratuito liberado no plano ${data.data?.planName || complimentaryPlan}.${data.data?.activationEmailSent ? ' E-mail de ativacao enviado.' : ''}`);
+    } catch (error: any) {
+      alert(error.message || 'Erro ao conceder acesso gratuito.');
+    } finally {
+      setGrantingComplimentaryPlan(false);
+    }
   };
 
   const handleApproveProtocolRequest = async (request: any) => {
@@ -443,6 +495,12 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           </div>
         )}
 
+        {dashboardWarning && (
+          <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">
+            {dashboardWarning}
+          </div>
+        )}
+
         {activeTab === 'overview' && (
           <div className="space-y-7">
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-5">
@@ -581,6 +639,50 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
 
         {activeTab === 'customers' && (
           <div className="space-y-6">
+            <div className="bg-white rounded-[28px] border border-emerald-100 p-6 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-4 mb-5">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-emerald-500 font-black mb-1">Acesso cortesia</p>
+                  <h3 className="text-xl font-black text-slate-900">Liberar plano sem cobranca</h3>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Use depois que a pessoa criou o cadastro e chegou na etapa de pagamento. O acesso fica ativo com valor R$ 0,00.
+                  </p>
+                </div>
+                <button
+                  onClick={handleGrantComplimentaryPlan}
+                  disabled={grantingComplimentaryPlan}
+                  className="px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-black hover:bg-emerald-600 disabled:opacity-60 transition-all"
+                >
+                  {grantingComplimentaryPlan ? 'Liberando...' : 'Liberar sem cobrar'}
+                </button>
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+                <input
+                  type="email"
+                  value={complimentaryEmail}
+                  onChange={(event) => setComplimentaryEmail(event.target.value)}
+                  placeholder="email@clinica.com.br"
+                  className="lg:col-span-2 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-200"
+                />
+                <select
+                  value={complimentaryPlan}
+                  onChange={(event) => setComplimentaryPlan(event.target.value as 'Essencial' | 'Crescimento' | 'Avançado')}
+                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-200"
+                >
+                  <option value="Essencial">Essencial</option>
+                  <option value="Crescimento">Crescimento</option>
+                  <option value="Avançado">Avançado</option>
+                </select>
+                <input
+                  type="text"
+                  value={complimentaryNote}
+                  onChange={(event) => setComplimentaryNote(event.target.value)}
+                  placeholder="Observacao interna"
+                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-200"
+                />
+              </div>
+            </div>
+
             <div className="bg-white rounded-[24px] border border-slate-100 p-5 flex flex-wrap gap-4 items-center justify-between">
               <div className="flex items-center gap-2">
                 <Shield size={17} className="text-slate-500" />

@@ -10690,6 +10690,13 @@ async function startServer() {
             .schema('finance')
             .from('revenue_entries')
             .insert(revenueRows);
+          if (revenueInsertError && hasMissingFinancialSchema(revenueInsertError)) {
+            return res.json({
+              success: true,
+              skipped: true,
+              message: 'Schema financeiro ainda nao aplicado. Painel usando fallback automatico.'
+            });
+          }
           if (revenueInsertError) throw revenueInsertError;
         }
       }
@@ -10746,6 +10753,13 @@ async function startServer() {
           .schema('finance')
           .from('cost_entries')
           .insert([...fixedCostRows, ...variableCostRows]);
+        if (costsInsertError && hasMissingFinancialSchema(costsInsertError)) {
+          return res.json({
+            success: true,
+            skipped: true,
+            message: 'Schema financeiro ainda nao aplicado. Painel usando fallback automatico.'
+          });
+        }
         if (costsInsertError) throw costsInsertError;
       }
 
