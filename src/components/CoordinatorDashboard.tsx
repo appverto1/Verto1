@@ -1514,32 +1514,39 @@ export function CoordinatorDashboard({
   const handleDeletePatient = (patient: any) => {
     if (!patient?.id) return;
     const patientName = normalizeUtf8Text(patient?.name || "Paciente");
+    const isUnlinkOnly = isTherapist;
     const shouldDelete = window.confirm(
-      `Deseja excluir o paciente ${patientName}? Esta ação removerá o paciente da clínica.`,
+      isUnlinkOnly
+        ? `Deseja desvincular o paciente ${patientName} da clínica?`
+        : `Deseja excluir o paciente ${patientName}? Esta ação removerá o paciente da clínica.`,
     );
     if (!shouldDelete) return;
-    showProcessing("Excluindo paciente...");
+    showProcessing(isUnlinkOnly ? "Desvinculando paciente..." : "Excluindo paciente...");
 
     if (onUpdatePatient) {
       onUpdatePatient({
         id: patient.id,
         clinic_id: null,
         status: "deleted",
-        deletedAt: new Date().toISOString(),
+        [isUnlinkOnly ? "unlinkedAt" : "deletedAt"]: new Date().toISOString(),
       });
     }
 
     onAddActivityLog(
-      "Paciente excluído",
-      `Paciente ${patientName} foi excluído da clínica.`,
+      isUnlinkOnly ? "Paciente desvinculado" : "Paciente excluído",
+      isUnlinkOnly
+        ? `Paciente ${patientName} foi desvinculado da clínica.`
+        : `Paciente ${patientName} foi excluído da clínica.`,
       "management",
     );
     setActionPopup({
-      title: "Paciente excluído",
-      message: `O paciente ${patientName} foi excluído com sucesso.`,
+      title: isUnlinkOnly ? "Paciente desvinculado" : "Paciente excluído",
+      message: isUnlinkOnly
+        ? `O paciente ${patientName} foi desvinculado da clínica.`
+        : `O paciente ${patientName} foi excluído com sucesso.`,
     });
     hideProcessing();
-    showToast("Paciente excluído com sucesso!");
+    showToast(isUnlinkOnly ? "Paciente desvinculado da clínica." : "Paciente excluído com sucesso!");
     setOpenMenuId(null);
   };
 
@@ -4325,41 +4332,43 @@ export function CoordinatorDashboard({
                             <MoreVertical size={16} />
                           </button>
                           {openMenuId === patient.id && (
-                            <div className="absolute right-0 top-full mt-2 w-40 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 py-2 animate-in fade-in zoom-in duration-200">
+                            <div className="absolute right-0 top-full mt-2 w-60 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 py-2 animate-in fade-in zoom-in duration-200">
                               {!isReceptionist && (
                                 <button
                                   onClick={() => {
                                     onPatientClick(patient.id, { tab: "history" });
                                     setOpenMenuId(null);
                                   }}
-                                  className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                                  className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all whitespace-nowrap text-left"
                                 >
-                                  <FileText size={14} className="text-blue-500" />{" "}
+                                  <FileText size={14} className="text-blue-500 shrink-0" />{" "}
                                   Prontuário
                                 </button>
                               )}
-                              <button
-                                onClick={() => {
-                                  openPatientProfileModal(patient);
-                                  setOpenMenuId(null);
-                                }}
-                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
-                              >
-                                <Search size={14} className="text-[#7a32fc]" />{" "}
-                                Ver mais (cadastro)
-                              </button>
+                              {!isTherapist && (
+                                <button
+                                  onClick={() => {
+                                    openPatientProfileModal(patient);
+                                    setOpenMenuId(null);
+                                  }}
+                                  className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all whitespace-nowrap text-left"
+                                >
+                                  <Search size={14} className="text-[#7a32fc] shrink-0" />{" "}
+                                  Ver cadastro
+                                </button>
+                              )}
                               <button
                                 onClick={() => handleResendPatientActivationEmail(patient)}
-                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all whitespace-nowrap text-left"
                               >
-                                <Mail size={14} className="text-emerald-600" />
+                                <Mail size={14} className="text-emerald-600 shrink-0" />
                                 Reenviar ativação
                               </button>
                               <button
                                 onClick={() => handleResendPatientRecoveryEmail(patient)}
-                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all whitespace-nowrap text-left"
                               >
-                                <KeyRound size={14} className="text-indigo-500" />
+                                <KeyRound size={14} className="text-indigo-500 shrink-0" />
                                 Reenviar recuperação
                               </button>
                               {!isReceptionist && (
@@ -4371,27 +4380,37 @@ export function CoordinatorDashboard({
                                     });
                                     setOpenMenuId(null);
                                   }}
-                                  className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                                  className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all whitespace-nowrap text-left"
                                 >
-                                  <ClipboardCheck size={14} className="text-purple-500" />
+                                  <ClipboardCheck size={14} className="text-purple-500 shrink-0" />
                                   Ficha Anamnese
                                 </button>
                               )}
-                              <button
-                                onClick={() => {
-                                  handleEditPatient(patient);
-                                  setOpenMenuId(null);
-                                }}
-                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
-                              >
-                                <Edit2 size={14} className="text-slate-400" />{" "}
-                                Editar
-                              </button>
+                              {!isTherapist && (
+                                <button
+                                  onClick={() => {
+                                    handleEditPatient(patient);
+                                    setOpenMenuId(null);
+                                  }}
+                                  className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all whitespace-nowrap text-left"
+                                >
+                                  <Edit2 size={14} className="text-slate-400 shrink-0" />{" "}
+                                  Editar
+                                </button>
+                              )}
                               <button
                                 onClick={() => handleDeletePatient(patient)}
-                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-red-500 hover:bg-red-50 transition-all"
+                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-red-500 hover:bg-red-50 transition-all whitespace-nowrap text-left"
                               >
-                                <Trash2 size={14} /> Excluir
+                                {isTherapist ? (
+                                  <>
+                                    <XCircle size={14} className="shrink-0" /> Desvincular da clínica
+                                  </>
+                                ) : (
+                                  <>
+                                    <Trash2 size={14} className="shrink-0" /> Excluir
+                                  </>
+                                )}
                               </button>
                             </div>
                           )}
