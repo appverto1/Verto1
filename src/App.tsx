@@ -447,8 +447,14 @@ export default function App() {
               const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
               const isActivationFlow = /^\/(ativar|reset-password)\/?$/i.test(currentPath);
               const authProvider = String(session?.user?.app_metadata?.provider || '').toLowerCase();
+              const isPasswordSignIn = authProvider === 'email' || authProvider === '';
               if (isActivationFlow && authProvider !== 'google') {
                 // Em ativação por e-mail, o acesso só pode seguir após definir senha explicitamente.
+                setLoading(false);
+                return;
+              }
+              if (!isActivationFlow && isPasswordSignIn) {
+                // Login por senha é finalizado pelo formulário; evita emissão duplicada de sessão.
                 setLoading(false);
                 return;
               }
@@ -500,8 +506,8 @@ export default function App() {
       const timeoutId = window.setTimeout(() => timeoutController.abort(), sessionTimeoutMs);
 
       try {
-        const session = await withTimeout(ensureFreshSession(), 8000, null as any);
-        const token = session?.access_token;
+        let session = await withTimeout(ensureFreshSession(), 8000, null as any);
+        let token = session?.access_token;
         let authData: any = null;
         let lastError: any = null;
 
@@ -545,6 +551,32 @@ export default function App() {
             activationFlow: false,
           });
           if (!loginRes?.success) {
+            setUser(null);
+            setProfilePicture(null);
+            setShowWorkspacePicker(false);
+          }
+        } else if (authData && !authData?.user) {
+          for (let attempt = 0; attempt < 3 && !session?.access_token; attempt += 1) {
+            await new Promise((resolve) => window.setTimeout(resolve, 300 * (attempt + 1)));
+            session = await withTimeout(ensureFreshSession(), 5000, null as any);
+            token = session?.access_token;
+          }
+
+          if (session?.access_token) {
+            const intendedRole =
+              String(session?.user?.user_metadata?.role || localStorage.getItem('verto_intended_role') || 'therapist')
+                .trim()
+                .toLowerCase();
+            const loginRes = await handleLoginSuccess(session, intendedRole, undefined, {
+              provider: session?.user?.app_metadata?.provider || null,
+              activationFlow: false,
+            });
+            if (!loginRes?.success) {
+              setUser(null);
+              setProfilePicture(null);
+              setShowWorkspacePicker(false);
+            }
+          } else {
             setUser(null);
             setProfilePicture(null);
             setShowWorkspacePicker(false);
@@ -685,7 +717,7 @@ export default function App() {
     try {
       if (!supabaseSession) {
         if (credentials?.email && credentials?.password) {
-          const response = await fetch('/api/auth/login', {
+          const response = await withTimeout(fetch('/api/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
@@ -698,7 +730,10 @@ export default function App() {
               email: credentials.email,
               password: credentials.password,
             })
-          });
+          }), 12000, null as any);
+          if (!response) {
+            return { success: false, error: 'Tempo esgotado ao entrar. Tente novamente.' };
+          }
           const result = await response.json().catch(() => ({}));
           if (!response.ok || !result?.success) {
             return { success: false, error: result?.error || 'Erro no login' };
@@ -713,12 +748,15 @@ export default function App() {
         const { data: { session } } = await supabase.auth.getSession();
         const token = session?.access_token;
 
-        const response = await fetch('/api/auth/me', { 
+        const response = await withTimeout(fetch('/api/auth/me', { 
           credentials: 'include',
           headers: {
             'Authorization': token ? `Bearer ${token}` : ''
           }
-        });
+        }), 12000, null as any);
+        if (!response) {
+          return { success: false, error: 'Tempo esgotado ao restaurar sessão.' };
+        }
         
         if (!response.ok) {
           const text = await response.text();
@@ -743,7 +781,7 @@ export default function App() {
       const provider = authContext?.provider || supabaseSession?.user?.app_metadata?.provider || null;
       const activationFlow = Boolean(authContext?.activationFlow);
       const accessToken = supabaseSession.access_token;
-      const response = await fetch('/api/auth/login', {
+      const response = await withTimeout(fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -756,7 +794,10 @@ export default function App() {
           email: credentials?.email || null,
           password: credentials?.password || null,
         })
-      });
+      }), 12000, null as any);
+      if (!response) {
+        return { success: false, error: 'Tempo esgotado ao entrar. Tente novamente.' };
+      }
 
       if (!response.ok) {
         const text = await response.text();
