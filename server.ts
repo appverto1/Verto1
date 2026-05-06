@@ -10996,7 +10996,7 @@ async function startServer() {
 
       const candidate = identifyVertoProtocolCandidate(`${protocolName} ${fileName}`);
       const clinicId = currentClinicId(user);
-      const requestId = randomUUID();
+      const requestId = crypto.randomUUID();
       const nowIso = new Date().toISOString();
       const payload = sanitizeClinicalPayload({
         id: requestId,
@@ -11016,6 +11016,11 @@ async function startServer() {
         fullProtocolConfirmed,
         rightsAccepted,
         createdAt: nowIso
+      });
+      const auditPayload = sanitizeClinicalPayload({
+        ...payload,
+        dataUrl: undefined,
+        hasFileData: Boolean(dataUrl)
       });
 
       let storedInTable = false;
@@ -11056,7 +11061,7 @@ async function startServer() {
         content: `Protocolo ${protocolName} enviado para validacao. Sugestao Verto: ${candidate.canonicalName}.`,
         type: 'protocol_import_request',
         actionType: 'protocol_import_requested',
-        payloadDetails: JSON.stringify(payload)
+        payloadDetails: JSON.stringify(auditPayload)
       });
 
       return res.json({
@@ -11242,7 +11247,7 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'Protocolo precisa de titulo, chave canonica e ao menos um dominio.' });
       }
 
-      const protocolId = sanitizeString(req.body?.id || rawProtocol?.id, 120) || randomUUID();
+      const protocolId = sanitizeString(req.body?.id || rawProtocol?.id, 120) || crypto.randomUUID();
       const nowIso = new Date().toISOString();
       let storedInTable = false;
       try {
