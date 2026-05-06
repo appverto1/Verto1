@@ -21,6 +21,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     }
     return '';
   };
+  const calculateAgeFromBirthDate = (birthDate: string) => {
+    const normalized = String(birthDate || '').trim();
+    if (!normalized) return null;
+    const birth = new Date(normalized);
+    if (Number.isNaN(birth.getTime())) return null;
+    const today = new Date();
+    let age = today.getFullYear() - birth.getFullYear();
+    const monthDiff = today.getMonth() - birth.getMonth();
+    const dayDiff = today.getDate() - birth.getDate();
+    if (monthDiff < 0 || (monthDiff === 0 && dayDiff < 0)) {
+      age -= 1;
+    }
+    return age >= 0 ? age : null;
+  };
   const buildAnamnesisInitialData = (patientRecord: any) => {
     const existing = patientRecord?.anamnesisData && typeof patientRecord.anamnesisData === 'object'
       ? patientRecord.anamnesisData
@@ -31,10 +45,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const guardian = patientRecord?.guardian && typeof patientRecord.guardian === 'object'
       ? patientRecord.guardian
       : {};
+    const resolvedBirthDate = coalescePatientText(
+      patientRecord?.dataNascimento,
+      patientRecord?.birthDate,
+      patientRecord?.birth_date,
+      existing?.dataNascimento,
+    );
     const logradouro = coalescePatientText(patientRecord?.logradouro, address?.logradouro, existing?.logradouro);
     const numero = coalescePatientText(patientRecord?.numero, address?.numero, existing?.numero);
     const bairro = coalescePatientText(patientRecord?.bairro, address?.bairro, existing?.bairro);
     const cidade = coalescePatientText(patientRecord?.cidade, address?.cidade, existing?.cidade);
+    const derivedAgeFromBirthDate = calculateAgeFromBirthDate(resolvedBirthDate);
 
     return {
       ...existing,
@@ -43,12 +64,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       telefone: coalescePatientText(patientRecord?.phone, existing?.telefone),
       email: coalescePatientText(patientRecord?.email, existing?.email),
       cpf: coalescePatientText(patientRecord?.cpf, existing?.cpf),
-      dataNascimento: coalescePatientText(
-        patientRecord?.dataNascimento,
-        patientRecord?.birthDate,
-        patientRecord?.birth_date,
-        existing?.dataNascimento,
-      ),
+      dataNascimento: resolvedBirthDate,
       genero: coalescePatientText(patientRecord?.gender, existing?.genero),
       convenioTipo: coalescePatientText(patientRecord?.insuranceType, existing?.convenioTipo) || 'particular',
       convenioNome: coalescePatientText(patientRecord?.insuranceName, existing?.convenioNome),
@@ -78,8 +94,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       responsavelCpf: coalescePatientText(guardian?.cpf, existing?.responsavelCpf),
       responsavelTelefone: coalescePatientText(guardian?.telefone, existing?.responsavelTelefone),
       idade:
-        typeof patientRecord?.age === 'number'
-          ? patientRecord.age
+        typeof derivedAgeFromBirthDate === 'number'
+          ? derivedAgeFromBirthDate
+          : typeof patientRecord?.age === 'number'
+            ? patientRecord.age
           : existing?.idade ?? '',
     };
   };
@@ -1849,12 +1867,41 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const handleUpdateAnamnesis = (updatedData: any) => {
     if (isPreparingAnamnesisSave || showAnamnesisFileModal) return;
     setIsPreparingAnamnesisSave(true);
+    const normalizedBirthDate = String(updatedData?.dataNascimento || '').trim();
+    const normalizedCep = String(updatedData?.cep || '').trim();
+    const normalizedAddress = {
+      logradouro: String(updatedData?.logradouro || '').trim() || null,
+      numero: String(updatedData?.numero || '').trim() || null,
+      complemento: String(updatedData?.complemento || '').trim() || null,
+      bairro: String(updatedData?.bairro || '').trim() || null,
+      cidade: String(updatedData?.cidade || '').trim() || null,
+    };
+    const normalizedGuardian = Boolean(updatedData?.menorDeIdade)
+      ? {
+          nome: String(updatedData?.responsavelNome || '').trim() || null,
+          dataNascimento: String(updatedData?.responsavelDataNascimento || '').trim() || null,
+          cpf: String(updatedData?.responsavelCpf || '').trim() || null,
+          telefone: String(updatedData?.responsavelTelefone || '').trim() || null,
+        }
+      : null;
+    const recalculatedAge = calculateAgeFromBirthDate(normalizedBirthDate);
     if (onUpdatePatient) {
       onUpdatePatient({
         id: patient.id,
-        name: updatedData.nome,
-        phone: updatedData.telefone,
-        address: updatedData.endereco,
+        name: String(updatedData?.nome || '').trim() || patient?.name,
+        socialName: String(updatedData?.nomeSocial || '').trim() || null,
+        phone: String(updatedData?.telefone || '').trim() || null,
+        email: String(updatedData?.email || '').trim().toLowerCase() || null,
+        cpf: String(updatedData?.cpf || '').trim() || null,
+        age: typeof recalculatedAge === 'number' ? recalculatedAge : patient?.age,
+        gender: String(updatedData?.genero || '').trim() || null,
+        dataNascimento: normalizedBirthDate || null,
+        birthDate: normalizedBirthDate || null,
+        cep: normalizedCep || null,
+        address: normalizedAddress,
+        notes: String(updatedData?.outrasInformacoes || '').trim() || null,
+        isMinor: Boolean(updatedData?.menorDeIdade),
+        guardian: normalizedGuardian,
         diagnosis: updatedData.motivoConsulta,
         anamnesisData: updatedData,
         peiGeneratedAt: new Date().toISOString()

@@ -224,6 +224,21 @@ export default function App() {
     return '';
   };
 
+  const calculateAgeFromBirthDate = (birthDate: string) => {
+    const normalized = String(birthDate || '').trim();
+    if (!normalized) return null;
+    const birth = new Date(normalized);
+    if (Number.isNaN(birth.getTime())) return null;
+    const today = new Date();
+    let age = today.getFullYear() - birth.getFullYear();
+    const monthDiff = today.getMonth() - birth.getMonth();
+    const dayDiff = today.getDate() - birth.getDate();
+    if (monthDiff < 0 || (monthDiff === 0 && dayDiff < 0)) {
+      age -= 1;
+    }
+    return age >= 0 ? age : null;
+  };
+
   const buildPatientAnamnesisSnapshot = (patientLike: any, baseAnamnesisData?: any) => {
     const source = patientLike || {};
     const existing = baseAnamnesisData && typeof baseAnamnesisData === 'object' ? baseAnamnesisData : {};
@@ -235,6 +250,7 @@ export default function App() {
       source?.birth_date,
       existing?.dataNascimento,
     );
+    const derivedAgeFromBirthDate = calculateAgeFromBirthDate(resolvedBirthDate);
     const resolvedPhone = coalescePatientText(source?.phone, existing?.telefone);
     const resolvedEmail = coalescePatientText(source?.email, existing?.email);
     const resolvedCpf = coalescePatientText(source?.cpf, existing?.cpf);
@@ -284,8 +300,10 @@ export default function App() {
       responsavelCpf: coalescePatientText(guardian?.cpf, existing?.responsavelCpf),
       responsavelTelefone: coalescePatientText(guardian?.telefone, existing?.responsavelTelefone),
       idade:
-        typeof source?.age === 'number'
-          ? source.age
+        typeof derivedAgeFromBirthDate === 'number'
+          ? derivedAgeFromBirthDate
+          : typeof source?.age === 'number'
+            ? source.age
           : typeof existing?.idade === 'number'
             ? existing.idade
             : existing?.idade || '',
