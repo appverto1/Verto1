@@ -240,6 +240,17 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
 
     if (response.ok) {
       const result = await safeJson(response);
+      if (result?.queued === true) {
+        return {
+          success: false,
+          offline: true,
+          pending: true,
+          status: response.status,
+          warning: result?.warning,
+          details: result,
+          data: payloadWithIdempotency
+        };
+      }
       // 3. Mark as synced if successful
       await markRecordSyncStatus(id, 'synced');
       return result;

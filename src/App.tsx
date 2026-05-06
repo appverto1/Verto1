@@ -2721,8 +2721,13 @@ export default function App() {
 
   const handleLogout = async () => {
     manualLogoutInProgressRef.current = true;
-    onAddActivityLog("Logout do Sistema", "O profissional encerrou a sessÃ£o com seguranÃ§a.", "system");
     try {
+      await onAddActivityLog("Logout do Sistema", "O profissional encerrou a sessÃ£o com seguranÃ§a.", "system");
+      await Promise.race([
+        syncOfflineData(),
+        new Promise((resolve) => setTimeout(resolve, 2500))
+      ]);
+
       const supabase = await getSupabase();
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;

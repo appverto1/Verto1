@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useRef, useState } from 'react';
+﻿import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Camera, CheckCircle2, UploadCloud, X } from 'lucide-react';
 import { dataService } from '../services/dataService';
@@ -8,87 +8,6 @@ interface ProfessionalOnboardingProps {
   user: any;
   onComplete: (data: any) => void;
   onClose?: () => void;
-}
-
-function SignaturePad({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [drawing, setDrawing] = useState(false);
-
-  const getPoint = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    if ('touches' in e) {
-      return { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
-    }
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-  };
-
-  const start = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    setDrawing(true);
-    const p = getPoint(e);
-    ctx.beginPath();
-    ctx.moveTo(p.x, p.y);
-  };
-
-  const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    if (!drawing) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const p = getPoint(e);
-    ctx.lineWidth = 2;
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = '#0f172a';
-    ctx.lineTo(p.x, p.y);
-    ctx.stroke();
-  };
-
-  const end = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    if (!drawing) return;
-    setDrawing(false);
-    const data = canvas.toDataURL('image/png');
-    onChange(data);
-  };
-
-  const clear = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    onChange(null);
-  };
-
-  return (
-    <div className="space-y-2">
-      <canvas
-        ref={canvasRef}
-        width={540}
-        height={160}
-        onMouseDown={start}
-        onMouseMove={draw}
-        onMouseUp={end}
-        onMouseLeave={end}
-        onTouchStart={start}
-        onTouchMove={draw}
-        onTouchEnd={end}
-        className="w-full bg-white border border-slate-200 rounded-2xl touch-none"
-      />
-      <div className="flex justify-between items-center">
-        <p className="text-xs text-slate-500">Assine com o mouse ou toque.</p>
-        <button type="button" onClick={clear} className="text-xs text-slate-600 hover:text-slate-900">Limpar</button>
-      </div>
-      {value && <SecureImage src={value} alt="Assinatura" className="h-12 object-contain" />}
-    </div>
-  );
 }
 
 export function ProfessionalOnboarding({ user, onComplete, onClose }: ProfessionalOnboardingProps) {
@@ -539,8 +458,8 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                           {signatureDataUrl ? <SecureImage src={signatureDataUrl} alt="Assinatura" className="w-full h-full object-contain" /> : <UploadCloud size={20} className="text-slate-400" />}
                         </div>
                         <div>
-                          <p className="text-sm font-semibold text-slate-800">Enviar assinatura pronta</p>
-                          <p className="text-xs text-slate-500">Opcional. Você também pode assinar no campo abaixo.</p>
+                          <p className="text-sm font-semibold text-slate-800">Enviar foto da assinatura</p>
+                          <p className="text-xs text-slate-500">Use apenas uma imagem pronta da assinatura, preferencialmente PNG com fundo transparente.</p>
                         </div>
                       </div>
                       <input
@@ -553,7 +472,6 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                         }}
                       />
                     </label>
-                    <SignaturePad value={signatureDataUrl} onChange={setSignatureDataUrl} />
                   </div>
                 )}
 
@@ -572,6 +490,8 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
     </div>
   );
 }
+
+
 
 
 

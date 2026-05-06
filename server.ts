@@ -7065,6 +7065,121 @@ async function startServer() {
     }
   });
 
+  const readPatientRecordPayloadForFiles = async (patientId: string, clinicId: string, sessionUser: any) => {
+    let query = supabase
+      .from('patient_records')
+      .select('payload_encrypted, pseudonym_id')
+      .eq('patient_id', patientId);
+    if (!hasGlobalClinicAccess(sessionUser)) {
+      query = query.eq('clinic_id', clinicId);
+    }
+
+    const { data, error } = await query.maybeSingle();
+    if (error) throw error;
+    const encryptedPayload = sanitizeString(data?.payload_encrypted, 2_000_000);
+    const payload = decryptJsonPayload(encryptedPayload) || {};
+    return {
+      payload,
+      pseudonymId: sanitizeString(data?.pseudonym_id, 160) || null
+    };
+  };
+
+  const buildPatientFilesFromPayload = async (patientId: string, payloadFiles: any[]) => {
+    const mapped: any[] = [];
+    for (const rawFile of payloadFiles || []) {
+      const path = sanitizeString(rawFile?.path, 500);
+      const bucket = sanitizeString(rawFile?.bucket, 120) || 'patient-files-private';
+      let signedUrl = sanitizeUrl(rawFile?.signedUrl || rawFile?.url) || null;
+
+      if (path) {
+        const { data: signed, error: signedError } = await supabase.storage
+          .from(bucket)
+          .createSignedUrl(path, 60 * 10);
+        if (!signedError && signed?.signedUrl) {
+          signedUrl = signed.signedUrl;
+        }
+      }
+
+      mapped.push({
+        id: sanitizeString(rawFile?.id, 120) || crypto.randomUUID(),
+        patientId,
+        fileName: sanitizeString(rawFile?.fileName || rawFile?.name, 220) || `arquivo_${Date.now()}`,
+        path: path || null,
+        mimeType: sanitizeString(rawFile?.mimeType || rawFile?.type, 120) || 'application/octet-stream',
+        sizeBytes: Number(rawFile?.sizeBytes || rawFile?.size || 0) || 0,
+        source: sanitizeString(rawFile?.source, 40) || 'upload',
+        createdAt: sanitizeString(rawFile?.createdAt || rawFile?.date, 80) || new Date().toISOString(),
+        metadata: rawFile?.metadata && typeof rawFile.metadata === 'object' ? rawFile.metadata : {},
+        signedUrl
+      });
+    }
+    return mapped;
+  };
+
+  const persistPatientFileFallback = async (params: {
+    patientId: string;
+    clinicId: string;
+    sessionUser: any;
+    fileEntry: Record<string, any>;
+  }) => {
+    const { payload, pseudonymId } = await readPatientRecordPayloadForFiles(params.patientId, params.clinicId, params.sessionUser);
+    const existingFiles = Array.isArray(payload?.files) ? payload.files : [];
+    const nextFiles = [
+      params.fileEntry,
+      ...existingFiles.filter((item: any) => sanitizeString(item?.id, 120) !== sanitizeString(params.fileEntry?.id, 120))
+    ];
+    return await persistPatientFileFallbackList({
+      patientId: params.patientId,
+      clinicId: params.clinicId,
+      sessionUser: params.sessionUser,
+      pseudonymId,
+      payload,
+      files: nextFiles
+    });
+  };
+
+  const persistPatientFileFallbackList = async (params: {
+    patientId: string;
+    clinicId: string;
+    sessionUser: any;
+    pseudonymId?: string | null;
+    payload?: Record<string, any>;
+    files: any[];
+  }) => {
+    const basePayload = params.payload || (await readPatientRecordPayloadForFiles(params.patientId, params.clinicId, params.sessionUser)).payload || {};
+    const mergedPayload = sanitizeClinicalPayload(cleanObject({
+      ...basePayload,
+      files: params.files
+    })) || {};
+
+    const encrypted = encryptJsonPayload(mergedPayload);
+    const pseudonymSeed = [
+      sanitizeString(mergedPayload?.cpf, 30),
+      sanitizeString(mergedPayload?.email, 320),
+      sanitizePhone(mergedPayload?.telefone) || ''
+    ].filter(Boolean).join('|') || params.patientId;
+
+    const row = cleanObject({
+      patient_id: params.patientId,
+      clinic_id: params.clinicId,
+      therapist_id: sanitizeString(params.sessionUser?.id, 100),
+      pseudonym_id: params.pseudonymId || `pt_${pseudonymizeValue(pseudonymSeed)}`,
+      payload_encrypted: encrypted || null,
+      payload_preview: cleanObject({
+        nome: sanitizeString(mergedPayload?.nome, 120),
+        nomeSocial: sanitizeString(mergedPayload?.nomeSocial, 120),
+        grupo: sanitizeString(mergedPayload?.grupo, 60),
+        convenioNome: sanitizeString(mergedPayload?.convenioNome, 120)
+      }),
+      updated_at: new Date().toISOString()
+    });
+
+    const { error } = await supabase
+      .from('patient_records')
+      .upsert([row], { onConflict: 'patient_id' });
+    if (error) throw error;
+  };
+
   app.get('/api/patient-files/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
@@ -7072,6 +7187,11 @@ async function startServer() {
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
 
       const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      const fallbackPayload = await readPatientRecordPayloadForFiles(patientId, clinicId, req.session.user);
+      const fallbackFiles = await buildPatientFilesFromPayload(
+        patientId,
+        Array.isArray(fallbackPayload?.payload?.files) ? fallbackPayload.payload.files : []
+      );
       const { data, error } = await supabase
         .from('patient_files')
         .select('id, patient_id, clinic_id, file_name, storage_path, mime_type, file_size_bytes, source, created_at, metadata')
@@ -7081,7 +7201,7 @@ async function startServer() {
 
       if (error) {
         if (String(error?.message || '').toLowerCase().includes('patient_files')) {
-          return res.status(200).json({ success: true, data: [], warning: 'Tabela patient_files não criada.' });
+          return res.status(200).json({ success: true, data: fallbackFiles, warning: 'Tabela patient_files não criada; usando fallback do prontuário.' });
         }
         throw error;
       }
@@ -7108,7 +7228,14 @@ async function startServer() {
         });
       }
 
-      return res.json({ success: true, data: withUrls });
+      const merged = new Map<string, any>();
+      [...withUrls, ...fallbackFiles].forEach((row: any) => {
+        const key = sanitizeString(row?.id, 120) || sanitizeString(row?.path, 500);
+        if (!key || merged.has(key)) return;
+        merged.set(key, row);
+      });
+
+      return res.json({ success: true, data: Array.from(merged.values()) });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error.message || String(error) });
     }
@@ -7244,9 +7371,51 @@ async function startServer() {
 
       if (insertError) {
         if (String(insertError?.message || '').toLowerCase().includes('patient_files')) {
+          const fallbackId = crypto.randomUUID();
+          const { data: signedDataFallback, error: signedErrorFallback } = await supabase.storage
+            .from(bucketName)
+            .createSignedUrl(storagePath, 60 * 10);
+          if (signedErrorFallback) {
+            console.warn('[PatientFiles] Falha ao assinar URL no fallback:', signedErrorFallback.message);
+          }
+
+          const fallbackEntry = {
+            id: fallbackId,
+            fileName: safeName,
+            name: safeName,
+            path: storagePath,
+            bucket: bucketName,
+            mimeType: resolvedMime,
+            type: resolvedMime,
+            sizeBytes: fileBuffer.length,
+            size: fileBuffer.length,
+            source,
+            createdAt: new Date().toISOString(),
+            metadata
+          };
+
+          await persistPatientFileFallback({
+            patientId,
+            clinicId,
+            sessionUser: req.session.user,
+            fileEntry: fallbackEntry
+          });
+
           return res.status(200).json({
-            success: false,
-            warning: 'Tabela patient_files não existe. Rode a migração de arquivos.'
+            success: true,
+            warning: 'Tabela patient_files não existe. Arquivo salvo via fallback no prontuário.',
+            data: {
+              id: fallbackId,
+              patientId,
+              fileName: safeName,
+              path: storagePath,
+              mimeType: resolvedMime,
+              sizeBytes: fileBuffer.length,
+              source,
+              createdAt: fallbackEntry.createdAt,
+              metadata,
+              signedUrl: signedDataFallback?.signedUrl || null
+            }
           });
         }
         throw insertError;
@@ -7309,7 +7478,34 @@ async function startServer() {
         .eq('patient_id', patientId)
         .eq('clinic_id', clinicId)
         .maybeSingle();
-      if (existingError) throw existingError;
+      if (existingError && !String(existingError?.message || '').toLowerCase().includes('patient_files')) throw existingError;
+      if (existingError && String(existingError?.message || '').toLowerCase().includes('patient_files')) {
+        const fallbackPayload = await readPatientRecordPayloadForFiles(patientId, clinicId, req.session.user);
+        const existingFiles = Array.isArray(fallbackPayload?.payload?.files) ? fallbackPayload.payload.files : [];
+        const existingFallback = existingFiles.find((item: any) => sanitizeString(item?.id, 120) === fileId);
+        if (!existingFallback) return res.status(404).json({ success: false, error: 'Arquivo não encontrado.' });
+
+        const storagePath = sanitizeString(existingFallback?.path, 500);
+        if (storagePath) {
+          const { error: removeStorageError } = await supabase.storage
+            .from(sanitizeString(existingFallback?.bucket, 120) || 'patient-files-private')
+            .remove([storagePath]);
+          if (removeStorageError) {
+            console.warn('[PatientFiles] Falha ao remover do storage (fallback):', removeStorageError.message);
+          }
+        }
+
+        const nextFiles = existingFiles.filter((item: any) => sanitizeString(item?.id, 120) !== fileId);
+        await persistPatientFileFallbackList({
+          patientId,
+          clinicId,
+          sessionUser: req.session.user,
+          pseudonymId: fallbackPayload?.pseudonymId || null,
+          payload: fallbackPayload?.payload || {},
+          files: nextFiles
+        });
+        return res.json({ success: true });
+      }
       if (!existing) return res.status(404).json({ success: false, error: 'Arquivo não encontrado.' });
 
       const { error: removeStorageError } = await supabase.storage

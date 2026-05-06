@@ -1,4 +1,4 @@
-import Dexie, { Table } from 'dexie';
+﻿import Dexie, { Table } from 'dexie';
 import { ensureFreshSession, getSupabase } from '../lib/supabase';
 
 export interface OfflineRecord {
@@ -34,6 +34,10 @@ export class MyDatabase extends Dexie {
       records: 'id, type, sync_status, last_updated, [type+last_updated], user_id',
       cache_meta: 'endpoint, updated_at'
     });
+    this.version(3).stores({
+      records: 'id, type, sync_status, last_updated, [type+last_updated], user_id',
+      cache_meta: 'endpoint, updated_at'
+    });
   }
 }
 
@@ -41,6 +45,8 @@ export const db = new MyDatabase();
 export const generateId = () => crypto.randomUUID();
 
 const SESSION_SEED_KEY = 'verto.offline.crypto.seed';
+const PERSISTENT_SEED_PREFIX = 'verto.offline.crypto.seed.persisted';
+const LOG_BACKUP_PREFIX = 'verto.offline.log.backup';
 const SEED_VERSION = 'v1';
 const PBKDF2_ITERATIONS = 210_000;
 const BASE_SALT = `verto-offline-aes-gcm-${SEED_VERSION}`;
@@ -48,7 +54,6 @@ const IV_LENGTH = 12;
 
 let derivedKeyCache: { cacheId: string; key: CryptoKey } | null = null;
 let seedInFlight: Promise<void> | null = null;
-let unloadListenerRegistered = false;
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -71,25 +76,52 @@ async function sha256Base64(value: string): Promise<string> {
   return toBase64(new Uint8Array(hash));
 }
 
-function registerUnloadCleanup() {
-  if (unloadListenerRegistered || typeof window === 'undefined') return;
-  window.addEventListener('beforeunload', () => {
-    try {
-      sessionStorage.removeItem(SESSION_SEED_KEY);
-    } catch {
-      // no-op
-    }
-    derivedKeyCache = null;
-  });
-  unloadListenerRegistered = true;
+function persistentSeedKeyForUser(userId: string) {
+  return `${PERSISTENT_SEED_PREFIX}:${userId}:${SEED_VERSION}`;
+}
+
+function logBackupKeyForUser(userId: string) {
+  return `${LOG_BACKUP_PREFIX}:${userId}`;
+}
+
+function readLogBackups(userId: string): Record<string, OfflineRecordStored> {
+  try {
+    const raw = localStorage.getItem(logBackupKeyForUser(userId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeLogBackups(userId: string, backups: Record<string, OfflineRecordStored>) {
+  try {
+    localStorage.setItem(logBackupKeyForUser(userId), JSON.stringify(backups));
+  } catch (error) {
+    console.warn('[offline-cache] failed to persist log backup:', error);
+  }
+}
+
+function persistLogBackup(row: OfflineRecordStored) {
+  if (row.type !== 'log') return;
+  const backups = readLogBackups(row.user_id);
+  if (row.sync_status === 'pending') {
+    backups[row.id] = row;
+  } else {
+    delete backups[row.id];
+  }
+  writeLogBackups(row.user_id, backups);
+}
+
+function removeLogBackup(userId: string, id: string) {
+  const backups = readLogBackups(userId);
+  if (!backups[id]) return;
+  delete backups[id];
+  writeLogBackups(userId, backups);
 }
 
 async function ensureSessionSeed() {
-  registerUnloadCleanup();
-
-  const existing = sessionStorage.getItem(SESSION_SEED_KEY);
-  if (existing) return;
-
   if (seedInFlight) {
     await seedInFlight;
     return;
@@ -99,12 +131,27 @@ async function ensureSessionSeed() {
     const supabase = await getSupabase();
     const { data: { session } } = await supabase.auth.getSession();
     const userId = session?.user?.id;
-    const accessToken = session?.access_token;
-    if (!userId || !accessToken) {
-      throw new Error('Sessão ausente para criptografia offline.');
+    if (!userId) {
+      throw new Error('Sessao ausente para criptografia offline.');
     }
-    const seedSource = `${userId}:${accessToken}:${session.expires_at || Date.now()}:${SEED_VERSION}`;
-    const seed = await sha256Base64(seedSource);
+
+    const persistentKey = persistentSeedKeyForUser(userId);
+    const existingPersistent = localStorage.getItem(persistentKey);
+    if (existingPersistent) {
+      sessionStorage.setItem(SESSION_SEED_KEY, existingPersistent);
+      return;
+    }
+
+    const existingSession = sessionStorage.getItem(SESSION_SEED_KEY);
+    if (existingSession) {
+      localStorage.setItem(persistentKey, existingSession);
+      return;
+    }
+
+    const randomSeedBytes = crypto.getRandomValues(new Uint8Array(32));
+    const randomSeed = toBase64(randomSeedBytes);
+    const seed = await sha256Base64(`${userId}:${randomSeed}:${SEED_VERSION}`);
+    localStorage.setItem(persistentKey, seed);
     sessionStorage.setItem(SESSION_SEED_KEY, seed);
   })();
 
@@ -119,14 +166,14 @@ async function getCurrentUserId(): Promise<string> {
   const supabase = await getSupabase();
   const { data: { session } } = await supabase.auth.getSession();
   const userId = session?.user?.id;
-  if (!userId) throw new Error('Usuário não autenticado para cache criptografado.');
+  if (!userId) throw new Error('Usuario nao autenticado para cache criptografado.');
   return userId;
 }
 
 async function deriveSessionKey(userId: string): Promise<CryptoKey> {
   await ensureSessionSeed();
-  const seed = sessionStorage.getItem(SESSION_SEED_KEY);
-  if (!seed) throw new Error('Falha ao obter seed criptográfica da sessão.');
+  const seed = sessionStorage.getItem(SESSION_SEED_KEY) || localStorage.getItem(persistentSeedKeyForUser(userId));
+  if (!seed) throw new Error('Falha ao obter seed criptografica da sessao.');
 
   const cacheId = `${userId}:${seed}`;
   if (derivedKeyCache?.cacheId === cacheId) return derivedKeyCache.key;
@@ -201,7 +248,7 @@ async function mapStoredToOfflineRecord(row: OfflineRecordStored): Promise<Offli
 export async function saveEncryptedRecord(record: OfflineRecord) {
   const userId = await getCurrentUserId();
   const dataEncrypted = await encryptPayload(userId, record.data);
-  await db.records.put({
+  const row: OfflineRecordStored = {
     id: record.id,
     data_encrypted: dataEncrypted,
     type: record.type,
@@ -210,11 +257,22 @@ export async function saveEncryptedRecord(record: OfflineRecord) {
     method: record.method,
     endpoint: record.endpoint,
     user_id: userId
-  });
+  };
+  persistLogBackup(row);
+  await db.records.put(row);
 }
 
 export async function markRecordSyncStatus(id: string, status: 'synced' | 'pending') {
-  await db.records.update(id, { sync_status: status, last_updated: Date.now() });
+  const row = await db.records.get(id);
+  const nextLastUpdated = Date.now();
+  await db.records.update(id, { sync_status: status, last_updated: nextLastUpdated });
+  if (row?.type === 'log' && row?.user_id) {
+    if (status === 'synced') {
+      removeLogBackup(row.user_id, id);
+    } else {
+      persistLogBackup({ ...row, sync_status: status, last_updated: nextLastUpdated });
+    }
+  }
 }
 
 export async function getRecordById(id: string): Promise<OfflineRecord | null> {
@@ -231,7 +289,14 @@ export async function getRecordsByType(type: OfflineRecord['type']): Promise<Off
 
 export async function getPendingRecords(): Promise<OfflineRecord[]> {
   const rows = await db.records.where('sync_status').equals('pending').toArray();
-  const decoded = await Promise.all(rows.map(mapStoredToOfflineRecord));
+  const currentUserId = await getCurrentUserId().catch(() => '');
+  const backupRows = currentUserId
+    ? Object.values(readLogBackups(currentUserId)).filter((row) => row.sync_status === 'pending')
+    : [];
+  const mergedRows = Array.from(
+    new Map([...rows, ...backupRows].map((row) => [row.id, row])).values()
+  );
+  const decoded = await Promise.all(mergedRows.map(mapStoredToOfflineRecord));
   return decoded.filter(Boolean) as OfflineRecord[];
 }
 
@@ -298,13 +363,16 @@ export const syncOfflineData = async () => {
             body: JSON.stringify(record.data)
           });
 
-          if (response.ok) {
+          const responsePayload = await response.json().catch(() => ({ error: 'Unknown error' }));
+
+          if (response.ok && responsePayload?.queued !== true) {
             await markRecordSyncStatus(record.id, 'synced');
             console.log(`Synced ${record.type}: ${record.id}`);
             success = true;
+          } else if (response.ok && responsePayload?.queued === true) {
+            console.warn(`Server queued ${record.type} sync for later: ${record.id}`);
+            success = true;
           } else {
-            const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-
             if (response.status === 429 && retries > 0) {
               console.warn(`Rate limit hit during sync of ${record.type}. Retrying in ${delay}ms...`);
               await new Promise((resolve) => setTimeout(resolve, delay));
@@ -313,10 +381,10 @@ export const syncOfflineData = async () => {
               continue;
             }
 
-            console.error(`Server rejected ${record.type} sync:`, errorData);
+            console.error(`Server rejected ${record.type} sync:`, responsePayload);
 
             if (response.status === 404 || response.status === 400) {
-              console.warn(`Marking ${record.type} ${record.id} as "synced" (failed) to prevent retry loop.`);
+              console.warn(`Marking ${record.type} ${record.id} as synced (failed permanently) to prevent retry loop.`);
               await markRecordSyncStatus(record.id, 'synced');
               success = true;
             } else {
@@ -332,10 +400,8 @@ export const syncOfflineData = async () => {
             continue;
           }
           console.error(`Failed to sync ${record.type}:`, error);
-          // Keep as pending for future retries; continue processing next records.
           success = true;
         } finally {
-          // reduce decrypted payload lifetime in memory
           (record as any).data = null;
         }
       }
