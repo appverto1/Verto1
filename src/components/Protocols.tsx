@@ -723,47 +723,22 @@ export const ProtocolManagementSystem = ({
           </div>
 
           {canManageLibrary && recentImportedProtocols.length > 0 && (
-            <div className="bg-[#101a2d] p-4 rounded-[24px] shadow-2xl shadow-black/20 border border-white/10 mb-8 animate-slide-up">
-              <div className="flex items-center justify-between gap-3 mb-4">
-                <div>
-                  <h3 className="text-sm font-bold text-white uppercase tracking-widest">Importacoes inteligentes</h3>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.18em] mt-1">Acompanhe o status dos seus envios</p>
-                </div>
-                <div className="rounded-full bg-white/10 px-3 py-1 text-[10px] font-bold uppercase text-slate-300">
-                  {recentImportedProtocols.length}
-                </div>
-              </div>
-              <div className="grid gap-3">
-                {recentImportedProtocols.map((item: any) => {
-                  const status = String(item.status || 'pending').toLowerCase();
-                  const statusLabel = status === 'approved' ? 'Aprovado' : status === 'rejected' ? 'Recusado' : 'Pendente';
-                  const statusClass = status === 'approved'
-                    ? 'bg-emerald-50 text-emerald-700'
-                    : status === 'rejected'
-                      ? 'bg-rose-50 text-rose-700'
-                      : 'bg-amber-50 text-amber-700';
-                  const ageLabel = item.applicableAgeGroup === 'child'
-                    ? 'Criancas'
-                    : item.applicableAgeGroup === 'teen'
-                      ? 'Adolescentes'
-                      : item.applicableAgeGroup === 'adult'
-                        ? 'Adultos'
-                        : 'Todas as idades';
-                  return (
-                    <div key={item.id} className="rounded-2xl border border-white/10 bg-[#0b1220] px-4 py-3 flex flex-wrap items-center gap-3">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-bold text-white truncate">{item.protocolName || 'Protocolo importado'}</p>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.16em] mt-1">
-                          {ageLabel} {item.canonicalName ? `· sugestao ${item.canonicalName}` : ''}
-                        </p>
-                      </div>
-                      <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase ${statusClass}`}>
-                        {statusLabel}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
+            <div className="mb-6 flex flex-wrap items-center gap-2 animate-slide-up">
+              <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Solicitacoes enviadas</span>
+              {recentImportedProtocols.map((item: any) => {
+                const status = String(item.status || 'pending').toLowerCase();
+                const statusLabel = status === 'approved' ? 'Aprovado' : status === 'rejected' ? 'Recusado' : 'Pendente';
+                const statusClass = status === 'approved'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : status === 'rejected'
+                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200';
+                return (
+                  <div key={item.id} className={`rounded-full border px-3 py-1.5 text-[11px] font-black ${statusClass}`}>
+                    {(item.protocolName || 'Protocolo').slice(0, 28)} · {statusLabel}
+                  </div>
+                );
+              })}
             </div>
           )}
 

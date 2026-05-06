@@ -1154,7 +1154,11 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                   Nenhuma solicitacao de protocolo pendente.
                 </div>
               ) : (
-                protocolRequests.map((request) => {
+                (() => {
+                  const pendingRequests = protocolRequests.filter((request: any) => request.status === 'pending');
+                  const reviewedRequests = protocolRequests.filter((request: any) => request.status !== 'pending');
+                  const orderedRequests = [...pendingRequests, ...reviewedRequests];
+                  return orderedRequests.map((request) => {
                   const isApproved = request.status === 'approved';
                   const isRejected = request.status === 'rejected';
                   const isClean = request.scanStatus === 'clean';
@@ -1176,9 +1180,10 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                   const readinessScore = clampScore(structure?.scores?.canonicalReadiness);
                   const tone = getReliabilityTone(reliabilityScore);
                   const canFastTrackCanonical = isClean && !isApproved && Number(request.confidence || 0) >= 0.9;
+                  const previewShot = screenshotEvidence[0] || null;
                   return (
-                    <div key={request.id} className="rounded-[28px] bg-white border border-slate-100 p-6 shadow-sm flex flex-col lg:flex-row lg:items-center gap-5">
-                      <div className="w-12 h-12 rounded-2xl bg-violet-50 text-violet-600 flex items-center justify-center shrink-0">
+                    <div key={request.id} className={`rounded-[28px] p-6 shadow-sm flex flex-col xl:flex-row gap-5 border ${request.status === 'pending' ? 'bg-gradient-to-br from-white to-amber-50 border-amber-200 shadow-amber-100/50' : 'bg-white border-slate-100'}`}>
+                      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${request.status === 'pending' ? 'bg-amber-100 text-amber-700' : isApproved ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
                         <FileText size={22} />
                       </div>
                       <div className="flex-1 min-w-0">
@@ -1198,6 +1203,14 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                           <p className="text-xs text-slate-400 mt-1">
                             Aplicacao declarada: <strong>{applicableAgeLabel}</strong>
                           </p>
+                        )}
+                        {request.status === 'pending' && (
+                          <div className="mt-3 rounded-2xl bg-amber-100/80 border border-amber-200 px-4 py-3">
+                            <p className="text-[11px] font-black uppercase tracking-[0.14em] text-amber-700">Nova solicitacao</p>
+                            <p className="text-sm font-bold text-amber-900 mt-1">
+                              Se a miniatura aparecer e fizer sentido visualmente, voce pode confiar mais no envio e liberar o protocolo correspondente.
+                            </p>
+                          </div>
                         )}
                         {isScreenshotFlow ? (
                           <div className="mt-3 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
@@ -1339,6 +1352,33 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                           </div>
                         )}
                       </div>
+                      <div className="xl:w-[280px] shrink-0">
+                        <div className={`rounded-[24px] border p-4 h-full ${request.status === 'pending' ? 'border-amber-200 bg-white' : 'border-slate-200 bg-slate-50'}`}>
+                          <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500 mb-3">Visualizacao rapida</p>
+                          {previewShot?.dataUrl ? (
+                            <>
+                              <img
+                                src={previewShot.dataUrl}
+                                alt={`Miniatura da pagina ${previewShot.pageNumber}`}
+                                className="w-full h-52 object-cover rounded-2xl border border-slate-200 bg-white"
+                              />
+                              <div className="mt-3 rounded-2xl bg-slate-100 px-3 py-2">
+                                <p className="text-xs font-black text-slate-900">Pagina {previewShot.pageNumber}</p>
+                                <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                                  Se voce consegue ler essa miniatura, o envio passou no criterio visual basico.
+                                </p>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="rounded-2xl border border-dashed border-rose-200 bg-rose-50 px-4 py-6 text-center">
+                              <p className="text-sm font-black text-rose-700">Sem miniatura visivel</p>
+                              <p className="text-[11px] text-rose-600 mt-2">
+                                Se nao houver imagem visivel aqui, trate o envio com mais desconfiança.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                       <div className="flex flex-wrap gap-2">
                         {canFastTrackCanonical && (
                           <button
@@ -1402,7 +1442,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       </div>
                     </div>
                   );
-                })
+                });
+                })()
               )}
             </div>
           </div>
