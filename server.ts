@@ -1052,9 +1052,40 @@ function sanitizeClinicalPayload(input: any, depth = 0): any {
       safe[key] = sanitizeString(value, 14_000_000);
       continue;
     }
+    if (
+      key === 'dataUrl' &&
+      typeof value === 'string' &&
+      /^data:image\/(png|jpeg|jpg|webp);base64,[a-z0-9+/=\s]+$/i.test(value) &&
+      value.length <= 8_000_000
+    ) {
+      safe[key] = sanitizeString(value, 8_000_000);
+      continue;
+    }
     safe[key] = sanitizeClinicalPayload(value, depth + 1);
   }
   return safe;
+}
+
+function isAllowedScreenshotDataUrl(value: unknown): value is string {
+  return typeof value === 'string'
+    && /^data:image\/(png|jpeg|jpg|webp);base64,[a-z0-9+/=\s]+$/i.test(value)
+    && value.length <= 8_000_000;
+}
+
+function buildScreenshotEvidenceSummary(params: {
+  totalPages: number;
+  coverageMaxPage: number;
+  screenshots: Array<{ pageNumber: number; prompt?: string | null }>;
+}): string {
+  const pages = params.screenshots.map((shot) => shot.pageNumber).filter((page) => Number.isFinite(page));
+  return [
+    `Modo de validacao: screenshots enviados pelo cliente`,
+    `Paginas totais declaradas: ${params.totalPages}`,
+    `Janela de amostragem: 1 ate ${params.coverageMaxPage}`,
+    `Capturas recebidas: ${pages.length}`,
+    pages.length ? `Paginas conferidas: ${pages.join(', ')}` : 'Paginas conferidas: nenhuma',
+    'Arquivo bruto nao foi aberto. A revisao deve ocorrer pelas miniaturas e pela correspondencia com o protocolo canonico.'
+  ].join('\n');
 }
 
 function getTrustedMediaHosts(): Set<string> {
@@ -1416,6 +1447,7 @@ function buildProtocolSafePreview(
   const structureReport = analyzeProtocolStructure(readableText, kind);
 
   if (kind === 'pdf') {
+    const canShowExcerpt = (structureReport.scores?.reliability || 0) >= 55 || (structureReport.detectedFields?.length || 0) >= 2;
     return {
       text: [
         `Arquivo: ${fileName}`,
@@ -1428,9 +1460,9 @@ function buildProtocolSafePreview(
         structureReport.detectedFields?.length
           ? `Campos detectados: ${structureReport.detectedFields.join(', ')}`
           : 'Campos detectados: nenhum campo clinico reconhecido com seguranca.',
-        readableText
+        readableText && canShowExcerpt
           ? `Trecho clinico seguro: ${sanitizeSafePreviewText(readableText, 1400)}`
-          : 'Trecho clinico seguro: nao foi possivel extrair texto clinico legivel sem renderizar o PDF.',
+          : 'Trecho clinico seguro: leitura textual insuficiente para confiar na estrutura. Use o PDF apenas como comprovante e monte a estrutura a partir de tabela limpa.',
         'Arquivo bruto permanece bloqueado para abertura/download.'
       ].join('\n'),
       structureReport
@@ -11303,58 +11335,145 @@ async function startServer() {
 
   app.post('/api/protocol-import-requests', checkAuth, async (req: any, res) => {
     try {
-      if (!enforcePayloadLimit(req, res, 16 * 1024 * 1024, 'Arquivo de protocolo')) return;
+      if (!enforcePayloadLimit(req, res, 28 * 1024 * 1024, 'Evidencias do protocolo')) return;
 
       const user = req.session.user;
+      const evidenceMode = sanitizeString(req.body?.evidenceMode, 40) || 'screenshots';
       const protocolName = sanitizeString(req.body?.protocolName, 180);
-      const fileName = sanitizeString(req.body?.fileName, 240);
-      const fileType = sanitizeString(req.body?.fileType, 120);
-      const fileSize = asSafeNumber(req.body?.fileSize, 0, 20_000_000) || 0;
+      const totalPages = asSafeNumber(req.body?.totalPages, 1, 5000) || 0;
+      const coverageMaxPage = asSafeNumber(req.body?.coverageMaxPage, 1, 5000) || 0;
       const fullProtocolConfirmed = Boolean(req.body?.fullProtocolConfirmed);
       const rightsAccepted = Boolean(req.body?.rightsAccepted);
-      const dataUrl = sanitizeClinicalPayload({ dataUrl: req.body?.dataUrl })?.dataUrl || null;
+      const rawScreenshotChallenges = Array.isArray(req.body?.screenshotChallenges) ? req.body.screenshotChallenges : [];
 
-      if (!protocolName || !fileName || !dataUrl) {
-        return res.status(400).json({ success: false, error: 'Informe o nome e envie o arquivo completo do protocolo.' });
+      if (evidenceMode !== 'screenshots') {
+        return res.status(400).json({ success: false, error: 'A Verto agora aceita somente validacao por screenshots neste fluxo.' });
+      }
+
+      if (!protocolName || !totalPages) {
+        return res.status(400).json({ success: false, error: 'Informe o nome do protocolo e a quantidade total de paginas.' });
       }
       if (!fullProtocolConfirmed || !rightsAccepted) {
         return res.status(400).json({ success: false, error: 'Confirme que o protocolo esta completo e que possui direito de uso.' });
       }
-      if (!/^data:application\/pdf;base64,/i.test(dataUrl) && !/^data:application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet;base64,/i.test(dataUrl) && !/^data:application\/vnd\.ms-excel;base64,/i.test(dataUrl)) {
-        return res.status(400).json({ success: false, error: 'Envie PDF ou Excel completo.' });
+
+      const maxAllowedCoveragePage = Math.max(1, Math.ceil(totalPages * 0.3));
+      if (!coverageMaxPage || coverageMaxPage > maxAllowedCoveragePage + 1) {
+        return res.status(400).json({ success: false, error: 'A janela de paginas solicitadas nao confere com a regra de amostragem.' });
       }
 
-      const candidate = identifyVertoProtocolCandidate(`${protocolName} ${fileName}`);
+      const screenshotChallenges = rawScreenshotChallenges
+        .slice(0, 6)
+        .map((item: any, index: number) => {
+          const pageNumber = asSafeNumber(item?.pageNumber, 1, maxAllowedCoveragePage) || 0;
+          const prompt = sanitizeString(item?.prompt, 240) || `Envie um print da pagina ${pageNumber}.`;
+          const fileName = sanitizeString(item?.fileName, 240) || `pagina-${pageNumber}.png`;
+          const fileType = sanitizeString(item?.fileType, 120) || 'image/png';
+          const fileSize = asSafeNumber(item?.fileSize, 0, 8_000_000) || 0;
+          const dataUrl = isAllowedScreenshotDataUrl(item?.dataUrl)
+            ? sanitizeString(item.dataUrl, 8_000_000)
+            : null;
+          return pageNumber && dataUrl ? {
+            id: `shot-${index + 1}`,
+            pageNumber,
+            prompt,
+            fileName,
+            fileType,
+            fileSize,
+            dataUrl
+          } : null;
+        })
+        .filter(Boolean) as Array<{
+          id: string;
+          pageNumber: number;
+          prompt: string;
+          fileName: string;
+          fileType: string;
+          fileSize: number;
+          dataUrl: string;
+        }>;
+
+      if (screenshotChallenges.length === 0) {
+        return res.status(400).json({ success: false, error: 'Envie ao menos um screenshot valido em PNG, JPG ou WEBP.' });
+      }
+
+      const declaredPages = new Set<number>();
+      for (const challenge of screenshotChallenges) {
+        if (declaredPages.has(challenge.pageNumber)) {
+          return res.status(400).json({ success: false, error: 'As paginas solicitadas precisam ser unicas.' });
+        }
+        declaredPages.add(challenge.pageNumber);
+      }
+
+      const candidate = identifyVertoProtocolCandidate(protocolName);
       const clinicId = currentClinicId(user);
       const requestId = crypto.randomUUID();
       const nowIso = new Date().toISOString();
+      const evidenceSummary = buildScreenshotEvidenceSummary({
+        totalPages,
+        coverageMaxPage,
+        screenshots: screenshotChallenges
+      });
+      const screenshotEvidence = {
+        mode: 'screenshots',
+        totalPages,
+        coverageMaxPage,
+        screenshots: screenshotChallenges
+      };
+      const totalEvidenceBytes = screenshotChallenges.reduce((sum, item) => sum + (item.fileSize || 0), 0);
       const payload = sanitizeClinicalPayload({
         id: requestId,
         clinicId,
         requesterUserId: user?.id,
         requesterName: user?.name || user?.email,
         requesterEmail: user?.email,
+        evidenceMode: 'screenshots',
         protocolName,
-        fileName,
-        fileType,
-        fileSize,
-        dataUrl,
+        fileName: `${protocolName}.screenshots`,
+        fileType: 'screenshots',
+        fileSize: totalEvidenceBytes,
         status: 'pending',
-        quarantineStatus: 'quarantined',
-        scanStatus: 'pending',
-        safePreviewStatus: 'not_generated',
+        quarantineStatus: 'review_ready',
+        scanStatus: 'clean',
+        safePreviewStatus: 'generated',
         rawFileAccess: 'blocked',
         canonicalKey: candidate.canonicalKey,
         canonicalName: candidate.canonicalName,
         confidence: candidate.confidence,
         fullProtocolConfirmed,
         rightsAccepted,
+        safePreviewText: evidenceSummary,
+        scanReport: {
+          engine: 'verto-screenshot-intake',
+          scannedAt: nowIso,
+          evidence: screenshotEvidence,
+          flags: [],
+          riskNote: 'Imagens raster reduzem bastante o risco em relacao ao PDF bruto, mas ainda exigem revisao humana.'
+        },
         createdAt: nowIso
       });
       const auditPayload = sanitizeClinicalPayload({
         ...payload,
-        dataUrl: undefined,
-        hasFileData: Boolean(dataUrl)
+        scanReport: {
+          engine: 'verto-screenshot-intake',
+          scannedAt: nowIso,
+          evidence: {
+            mode: 'screenshots',
+            totalPages,
+            coverageMaxPage,
+            screenshots: screenshotChallenges.map((item) => ({
+              pageNumber: item.pageNumber,
+              prompt: item.prompt,
+              fileName: item.fileName,
+              fileType: item.fileType,
+              fileSize: item.fileSize
+            }))
+          },
+          flags: [],
+          riskNote: 'Imagens raster reduzem bastante o risco em relacao ao PDF bruto, mas ainda exigem revisao humana.'
+        },
+        hasFileData: false,
+        hasScreenshotEvidence: screenshotChallenges.length > 0
       });
 
       let storedInTable = false;
@@ -11366,17 +11485,23 @@ async function startServer() {
           requester_name: sanitizeString(user?.name || user?.email, 180),
           requester_email: sanitizeEmail(user?.email),
           protocol_name: protocolName,
-          file_name: fileName,
-          file_type: fileType,
-          file_size: fileSize,
-          file_data_url: dataUrl,
+          file_name: `${protocolName}.screenshots`,
+          file_type: 'screenshots',
+          file_size: totalEvidenceBytes,
+          file_data_url: null,
           status: 'pending',
-          quarantine_status: 'quarantined',
-          scan_status: 'pending',
-          safe_preview_status: 'not_generated',
+          quarantine_status: 'review_ready',
+          scan_status: 'clean',
+          safe_preview_status: 'generated',
           raw_file_access: 'blocked',
-          safe_preview_text: null,
-          scan_report: null,
+          safe_preview_text: evidenceSummary,
+          scan_report: {
+            engine: 'verto-screenshot-intake',
+            scannedAt: nowIso,
+            evidence: screenshotEvidence,
+            flags: [],
+            riskNote: 'Imagens raster reduzem bastante o risco em relacao ao PDF bruto, mas ainda exigem revisao humana.'
+          },
           suggested_canonical_key: candidate.canonicalKey,
           suggested_canonical_name: candidate.canonicalName,
           suggested_confidence: candidate.confidence,
@@ -11424,6 +11549,7 @@ async function startServer() {
           status: 'pending',
           suggestedCanonicalName: candidate.canonicalName,
           suggestedConfidence: candidate.confidence,
+          screenshotCount: screenshotChallenges.length,
           storedInTable
         }
       });

@@ -45,6 +45,11 @@ const getReliabilityTone = (score: number) => {
   return { label: 'Baixa', chip: 'bg-rose-50 text-rose-700', panel: 'bg-rose-50/70 border-rose-100' };
 };
 
+const extractSuggestedDomain = (protocolName: string) => {
+  const parts = String(protocolName || '').split('-').map((part) => part.trim()).filter(Boolean);
+  return parts.length > 1 ? parts.slice(1).join(' - ') : 'Dominio principal';
+};
+
 const normalizeBuilderHeader = (value: string) =>
   String(value || '')
     .normalize('NFD')
@@ -230,13 +235,13 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     }
   };
 
-  const handleApproveProtocolRequest = async (request: any) => {
+  const handleApproveProtocolRequest = async (request: any, forcedCanonicalName?: string) => {
     if (request.scanStatus && request.scanStatus !== 'clean') {
       alert('Antes de aprovar, rode o processamento seguro e confirme que a varredura ficou limpa.');
       return;
     }
     const suggested = request.canonicalName || request.suggestedCanonicalName || request.protocolName || '';
-    const canonicalName = window.prompt('Qual protocolo da biblioteca Verto deve ser liberado?', suggested);
+    const canonicalName = forcedCanonicalName || window.prompt('Qual protocolo da biblioteca Verto deve ser liberado?', suggested);
     if (!canonicalName) return;
 
     try {
@@ -270,6 +275,15 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     } finally {
       setApprovingProtocolId(null);
     }
+  };
+
+  const seedCanonicalBuilderFromRequest = (request: any) => {
+    setProtocolBuilderTitle(request.canonicalName || request.protocolName || 'Protocolo Verto');
+    setProtocolBuilderDomain(extractSuggestedDomain(request.protocolName || request.fileName || 'Dominio principal'));
+    setProtocolBuilderVersion('Base Verto');
+    setProtocolBuilderText('');
+    setProtocolBuilderPreview(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleScanProtocolRequest = async (request: any) => {
@@ -1112,11 +1126,16 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                   const isApproved = request.status === 'approved';
                   const isClean = request.scanStatus === 'clean';
                   const isBlocked = request.scanStatus === 'blocked';
+                  const screenshotEvidence = request.scanReport?.evidence?.mode === 'screenshots'
+                    ? (request.scanReport?.evidence?.screenshots || [])
+                    : [];
+                  const isScreenshotFlow = screenshotEvidence.length > 0;
                   const structure = request.scanReport?.structure || {};
                   const reliabilityScore = clampScore(structure?.scores?.reliability);
                   const structureScore = clampScore(structure?.scores?.structure);
                   const readinessScore = clampScore(structure?.scores?.canonicalReadiness);
                   const tone = getReliabilityTone(reliabilityScore);
+                  const canFastTrackCanonical = isClean && !isApproved && Number(request.confidence || 0) >= 0.9;
                   return (
                     <div key={request.id} className="rounded-[28px] bg-white border border-slate-100 p-6 shadow-sm flex flex-col lg:flex-row lg:items-center gap-5">
                       <div className="w-12 h-12 rounded-2xl bg-violet-50 text-violet-600 flex items-center justify-center shrink-0">
@@ -1135,60 +1154,132 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         <p className="text-xs text-slate-400 mt-1">
                           Sugestao Verto: <strong>{request.canonicalName || 'Analise manual'}</strong> · confianca {Math.round(Number(request.confidence || 0) * 100)}%
                         </p>
-                        <div className={`mt-3 rounded-2xl border p-4 ${tone.panel}`}>
-                          <div className="flex flex-wrap items-center gap-2 mb-3">
-                            <span className={`rounded-full px-3 py-1 text-[11px] font-black uppercase ${tone.chip}`}>
-                              Confiabilidade estrutural {tone.label}
-                            </span>
-                            <span className="rounded-full bg-white px-3 py-1 text-[11px] font-black uppercase text-slate-700">
-                              Score {reliabilityScore}%
-                            </span>
-                          </div>
-                          <div className="grid gap-2 md:grid-cols-3 text-xs font-bold text-slate-700">
-                            <div className="rounded-2xl bg-white/90 px-3 py-3">
-                              <p className="uppercase tracking-[0.14em] text-slate-400">Estrutura</p>
-                              <p className="text-lg font-black text-slate-900 mt-1">{structureScore}%</p>
+                        {isScreenshotFlow ? (
+                          <div className="mt-3 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+                            <div className="flex flex-wrap items-center gap-2 mb-3">
+                              <span className="rounded-full px-3 py-1 text-[11px] font-black uppercase bg-emerald-100 text-emerald-700">
+                                Validacao por screenshots
+                              </span>
+                              <span className="rounded-full bg-white px-3 py-1 text-[11px] font-black uppercase text-slate-700">
+                                {screenshotEvidence.length} capturas
+                              </span>
                             </div>
-                            <div className="rounded-2xl bg-white/90 px-3 py-3">
-                              <p className="uppercase tracking-[0.14em] text-slate-400">Prontidao canonica</p>
-                              <p className="text-lg font-black text-slate-900 mt-1">{readinessScore}%</p>
+                            <div className="grid gap-2 md:grid-cols-3 text-xs font-bold text-slate-700">
+                              <div className="rounded-2xl bg-white/90 px-3 py-3">
+                                <p className="uppercase tracking-[0.14em] text-slate-400">Paginas totais</p>
+                                <p className="text-lg font-black text-slate-900 mt-1">{request.scanReport?.evidence?.totalPages || '-'}</p>
+                              </div>
+                              <div className="rounded-2xl bg-white/90 px-3 py-3">
+                                <p className="uppercase tracking-[0.14em] text-slate-400">Janela sorteada</p>
+                                <p className="text-lg font-black text-slate-900 mt-1">1-{request.scanReport?.evidence?.coverageMaxPage || '-'}</p>
+                              </div>
+                              <div className="rounded-2xl bg-white/90 px-3 py-3">
+                                <p className="uppercase tracking-[0.14em] text-slate-400">Fluxo seguro</p>
+                                <p className="text-lg font-black text-slate-900 mt-1">Sem PDF bruto</p>
+                              </div>
                             </div>
-                            <div className="rounded-2xl bg-white/90 px-3 py-3">
-                              <p className="uppercase tracking-[0.14em] text-slate-400">Linhas estimadas</p>
-                              <p className="text-lg font-black text-slate-900 mt-1">{structure?.estimatedRows || 0}</p>
-                            </div>
-                          </div>
-                          {(structure?.detectedFields || []).length > 0 && (
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              {(structure?.detectedFields || []).map((field: string) => (
-                                <span key={field} className="rounded-full bg-white px-3 py-1 text-[11px] font-black uppercase text-slate-700">
-                                  {field}
-                                </span>
+                            <p className="mt-3 text-xs font-bold text-slate-700">
+                              Revise as miniaturas abaixo e confirme se as paginas batem com o protocolo informado pelo cliente.
+                            </p>
+                            <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                              {screenshotEvidence.map((shot: any) => (
+                                <div key={`${request.id}-${shot.pageNumber}`} className="rounded-2xl border border-emerald-100 bg-white p-3">
+                                  <div className="flex items-center justify-between gap-2 mb-2">
+                                    <p className="text-xs font-black text-slate-900">Pagina {shot.pageNumber}</p>
+                                    <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-black uppercase text-slate-500">
+                                      Screenshot
+                                    </span>
+                                  </div>
+                                  {shot.dataUrl && (
+                                    <img
+                                      src={shot.dataUrl}
+                                      alt={`Screenshot da pagina ${shot.pageNumber}`}
+                                      className="w-full h-40 object-cover rounded-xl border border-slate-200 bg-slate-50"
+                                    />
+                                  )}
+                                  {shot.prompt && (
+                                    <p className="mt-2 text-[11px] font-bold text-slate-600 leading-relaxed">{shot.prompt}</p>
+                                  )}
+                                </div>
                               ))}
                             </div>
-                          )}
-                          {structure?.suggestedNextStep && (
-                            <p className="mt-3 text-xs font-bold text-slate-700">
-                              Proximo passo: {structure.suggestedNextStep}
-                            </p>
-                          )}
-                          {(structure?.warnings || []).length > 0 && (
-                            <div className="mt-3 rounded-2xl bg-white/90 p-3">
-                              <p className="text-[11px] font-black uppercase tracking-[0.14em] text-rose-500 mb-2">Alertas</p>
-                              <div className="flex flex-wrap gap-2">
-                                {(structure?.warnings || []).slice(0, 4).map((warning: string) => (
-                                  <span key={warning} className="rounded-full bg-rose-50 px-3 py-1 text-[11px] font-black text-rose-700">
-                                    {warning}
+                          </div>
+                        ) : (
+                          <div className={`mt-3 rounded-2xl border p-4 ${tone.panel}`}>
+                            <div className="flex flex-wrap items-center gap-2 mb-3">
+                              <span className={`rounded-full px-3 py-1 text-[11px] font-black uppercase ${tone.chip}`}>
+                                Confiabilidade estrutural {tone.label}
+                              </span>
+                              <span className="rounded-full bg-white px-3 py-1 text-[11px] font-black uppercase text-slate-700">
+                                Score {reliabilityScore}%
+                              </span>
+                            </div>
+                            <div className="grid gap-2 md:grid-cols-3 text-xs font-bold text-slate-700">
+                              <div className="rounded-2xl bg-white/90 px-3 py-3">
+                                <p className="uppercase tracking-[0.14em] text-slate-400">Estrutura</p>
+                                <p className="text-lg font-black text-slate-900 mt-1">{structureScore}%</p>
+                              </div>
+                              <div className="rounded-2xl bg-white/90 px-3 py-3">
+                                <p className="uppercase tracking-[0.14em] text-slate-400">Prontidao canonica</p>
+                                <p className="text-lg font-black text-slate-900 mt-1">{readinessScore}%</p>
+                              </div>
+                              <div className="rounded-2xl bg-white/90 px-3 py-3">
+                                <p className="uppercase tracking-[0.14em] text-slate-400">Linhas estimadas</p>
+                                <p className="text-lg font-black text-slate-900 mt-1">{structure?.estimatedRows || 0}</p>
+                              </div>
+                            </div>
+                            {(structure?.detectedFields || []).length > 0 && (
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                {(structure?.detectedFields || []).map((field: string) => (
+                                  <span key={field} className="rounded-full bg-white px-3 py-1 text-[11px] font-black uppercase text-slate-700">
+                                    {field}
                                   </span>
                                 ))}
                               </div>
+                            )}
+                            {structure?.suggestedNextStep && (
+                              <p className="mt-3 text-xs font-bold text-slate-700">
+                                Proximo passo: {structure.suggestedNextStep}
+                              </p>
+                            )}
+                            {(structure?.warnings || []).length > 0 && (
+                              <div className="mt-3 rounded-2xl bg-white/90 p-3">
+                                <p className="text-[11px] font-black uppercase tracking-[0.14em] text-rose-500 mb-2">Alertas</p>
+                                <div className="flex flex-wrap gap-2">
+                                  {(structure?.warnings || []).slice(0, 4).map((warning: string) => (
+                                    <span key={warning} className="rounded-full bg-rose-50 px-3 py-1 text-[11px] font-black text-rose-700">
+                                      {warning}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                          <p className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-500 mb-2">Jeito seguro e rapido</p>
+                          <p className="text-sm font-bold text-slate-800">
+                            {isScreenshotFlow ? 'Use as miniaturas como comprovante visual e decida por uma das duas trilhas:' : 'Use o PDF como comprovante em quarentena e decida por uma das duas trilhas:'}
+                          </p>
+                          <div className="mt-3 grid gap-2 md:grid-cols-2">
+                            <div className="rounded-2xl bg-white border border-slate-200 p-3">
+                              <p className="text-xs font-black text-slate-900">1. Liberar o protocolo canonico sugerido</p>
+                              <p className="text-xs text-slate-600 mt-1">
+                                Melhor quando a sugestao Verto esta alta e o arquivo serve apenas para comprovar posse/uso.
+                              </p>
                             </div>
-                          )}
+                            <div className="rounded-2xl bg-white border border-slate-200 p-3">
+                              <p className="text-xs font-black text-slate-900">2. Montar pela tabela limpa</p>
+                              <p className="text-xs text-slate-600 mt-1">
+                                Melhor quando voces precisam transformar o conteudo em estrutura auditavel dentro da biblioteca Verto.
+                              </p>
+                            </div>
+                          </div>
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase">
                           <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">
                             <Shield size={12} />
-                            Arquivo em quarentena
+                            {isScreenshotFlow ? 'Evidencia por screenshot' : 'Arquivo em quarentena'}
                           </span>
                           <span className={`rounded-full px-2.5 py-1 ${isClean ? 'bg-emerald-50 text-emerald-700' : isBlocked ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
                             Varredura: {isClean ? 'limpa' : isBlocked ? 'bloqueada' : 'pendente'}
@@ -1204,6 +1295,25 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         )}
                       </div>
                       <div className="flex flex-wrap gap-2">
+                        {canFastTrackCanonical && (
+                          <button
+                            onClick={() => handleApproveProtocolRequest(request, request.canonicalName)}
+                            disabled={approvingProtocolId === request.id}
+                            className="px-4 py-2 rounded-2xl bg-emerald-600 text-white text-xs font-black hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
+                          >
+                            {approvingProtocolId === request.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                            Liberar sugestao Verto
+                          </button>
+                        )}
+                        {!isApproved && (
+                          <button
+                            type="button"
+                            onClick={() => seedCanonicalBuilderFromRequest(request)}
+                            className="px-4 py-2 rounded-2xl bg-white border border-slate-200 text-slate-700 text-xs font-black hover:bg-slate-50 transition-all"
+                          >
+                            Montar por tabela
+                          </button>
+                        )}
                         {request.hasFileData && (
                           <button
                             type="button"

@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useState } from 'react';
-import { ChevronDown, Trash2, Plus, ChevronLeft, Save, SearchCode, Boxes, Filter, Search, FileUp, Loader2, ShieldCheck, Info } from 'lucide-react';
+import { ChevronDown, Trash2, Plus, ChevronLeft, Save, SearchCode, Boxes, Filter, Search, FileUp, Loader2, ShieldCheck, Info, Camera, Smartphone, Shuffle } from 'lucide-react';
 import { SuccessOverlay } from './Common';
 
 export const SkillEditor = ({ skill, onUpdate, onDelete, category }: any) => { 
@@ -298,9 +298,60 @@ export const ProtocolManagementSystem = ({
   const [showImportModal, setShowImportModal] = useState(false);
   const [hasLicense, setHasLicense] = useState(false);
   const [isCompleteProtocol, setIsCompleteProtocol] = useState(false);
-  const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
   const [pendingProtocolName, setPendingProtocolName] = useState("");
+  const [pendingProtocolPageCount, setPendingProtocolPageCount] = useState("");
+  const [requestedScreenshotChallenges, setRequestedScreenshotChallenges] = useState<any[]>([]);
+  const [screenshotFilesByPage, setScreenshotFilesByPage] = useState<Record<string, File | null>>({});
   const [importStatusMessage, setImportStatusMessage] = useState("");
+
+  const buildRandomScreenshotChallenges = (totalPages: number) => {
+    const coverageMaxPage = Math.max(1, Math.ceil(totalPages * 0.3));
+    const challengeCount = Math.min(
+      coverageMaxPage,
+      totalPages <= 20 ? 1 : totalPages <= 60 ? 2 : totalPages <= 120 ? 3 : totalPages <= 220 ? 4 : 5
+    );
+    const selectedPages = new Set<number>();
+    while (selectedPages.size < challengeCount) {
+      selectedPages.add(Math.floor(Math.random() * coverageMaxPage) + 1);
+    }
+    const promptTemplates = [
+      'Abra o protocolo e envie um print nitido desta pagina com o cabecalho visivel.',
+      'Envie um print desta pagina mostrando titulo, tabela e criterios dessa secao.',
+      'Capture esta pagina inteira, sem cortar o topo, para conferencia da estrutura.',
+      'Se estiver no celular, pode enviar um print ou foto da tela dessa pagina, desde que o texto fique legivel.',
+      'Mostre essa pagina com a numeracao visivel para validar o trecho solicitado.'
+    ];
+    return Array.from(selectedPages)
+      .sort((a, b) => a - b)
+      .map((pageNumber, index) => ({
+        pageNumber,
+        prompt: promptTemplates[index % promptTemplates.length],
+        coverageMaxPage
+      }));
+  };
+
+  const resetImportState = () => {
+    setShowImportModal(false);
+    setHasLicense(false);
+    setIsCompleteProtocol(false);
+    setPendingProtocolName("");
+    setPendingProtocolPageCount("");
+    setRequestedScreenshotChallenges([]);
+    setScreenshotFilesByPage({});
+    setImportStatusMessage("");
+  };
+
+  const openImportModal = () => {
+    if (!canManageLibrary) return;
+    setPendingProtocolName("");
+    setPendingProtocolPageCount("");
+    setRequestedScreenshotChallenges([]);
+    setScreenshotFilesByPage({});
+    setHasLicense(false);
+    setIsCompleteProtocol(false);
+    setImportStatusMessage("");
+    setShowImportModal(true);
+  };
 
   const handleCreateNew = () => { 
     if (!canManageLibrary) return;
@@ -313,17 +364,31 @@ export const ProtocolManagementSystem = ({
     setEditingProtocol(proto); 
   }; 
 
-  const handleFileUpload = (e: any) => {
-    if (!canManageLibrary) return;
-    const file = e.target.files?.[0];
+  const handleGenerateScreenshotChallenges = () => {
+    const totalPages = Math.max(1, Number(pendingProtocolPageCount || 0));
+    if (!pendingProtocolName.trim()) {
+      alert("Informe o nome do protocolo antes de gerar as paginas aleatorias.");
+      return;
+    }
+    if (!Number.isFinite(totalPages) || totalPages <= 0) {
+      alert("Informe a quantidade total de paginas do protocolo.");
+      return;
+    }
+    setRequestedScreenshotChallenges(buildRandomScreenshotChallenges(totalPages));
+    setScreenshotFilesByPage({});
+  };
+
+  const handleScreenshotFileChange = (pageNumber: number, file: File | null) => {
     if (!file) return;
-    setPendingImportFile(file);
-    setPendingProtocolName(file.name.replace(/\.[^.]+$/, ""));
-    setHasLicense(false);
-    setIsCompleteProtocol(false);
-    setImportStatusMessage("");
-    setShowImportModal(true);
-    e.target.value = "";
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      alert("Envie screenshots em PNG, JPG ou WEBP.");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      alert("Cada screenshot deve ter no maximo 8 MB.");
+      return;
+    }
+    setScreenshotFilesByPage((current) => ({ ...current, [String(pageNumber)]: file }));
   };
 
   const readFileAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
@@ -334,27 +399,48 @@ export const ProtocolManagementSystem = ({
   });
 
   const handleConfirmFileImport = async () => {
-    if (!pendingImportFile || !hasLicense || !isCompleteProtocol || !pendingProtocolName.trim()) return;
-
-    const file = pendingImportFile;
     const protocolTitle = pendingProtocolName.trim();
+    const totalPages = Math.max(1, Number(pendingProtocolPageCount || 0));
+    if (!protocolTitle || !hasLicense || !isCompleteProtocol || totalPages <= 0 || requestedScreenshotChallenges.length === 0) return;
+
+    const missingPages = requestedScreenshotChallenges
+      .filter((challenge) => !screenshotFilesByPage[String(challenge.pageNumber)])
+      .map((challenge) => challenge.pageNumber);
+    if (missingPages.length > 0) {
+      alert(`Envie os screenshots de todas as paginas solicitadas. Faltam: ${missingPages.join(', ')}.`);
+      return;
+    }
+
     setIsImporting(true);
     setImportProgress(10);
-    setImportStatusMessage("Enviando protocolo para validacao da Verto...");
+    setImportStatusMessage("Enviando screenshots para validacao segura da Verto...");
 
     try {
-      const dataUrl = await readFileAsDataUrl(file);
+      const screenshotChallenges = await Promise.all(
+        requestedScreenshotChallenges.map(async (challenge) => {
+          const file = screenshotFilesByPage[String(challenge.pageNumber)] as File;
+          const dataUrl = await readFileAsDataUrl(file);
+          return {
+            pageNumber: challenge.pageNumber,
+            prompt: challenge.prompt,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            dataUrl
+          };
+        })
+      );
       setImportProgress(45);
       const response = await fetch("/api/protocol-import-requests", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          evidenceMode: "screenshots",
           protocolName: protocolTitle,
-          fileName: file.name,
-          fileType: file.type,
-          fileSize: file.size,
-          dataUrl,
+          totalPages,
+          coverageMaxPage: Math.max(1, Math.ceil(totalPages * 0.3)),
+          screenshotChallenges,
           rightsAccepted: hasLicense,
           fullProtocolConfirmed: isCompleteProtocol
         })
@@ -365,17 +451,12 @@ export const ProtocolManagementSystem = ({
       }
 
       setImportProgress(100);
-      setImportStatusMessage(`Solicitacao criada. Sugestao Verto: ${data.data?.suggestedCanonicalName || "analise manual"}.`);
+      setImportStatusMessage(`Solicitacao criada com ${data.data?.screenshotCount || screenshotChallenges.length} screenshots. Sugestao Verto: ${data.data?.suggestedCanonicalName || "analise manual"}.`);
       setTimeout(() => {
-        setShowImportModal(false);
         setIsImporting(false);
         setImportProgress(0);
-        setPendingImportFile(null);
-        setPendingProtocolName("");
-        setHasLicense(false);
-        setIsCompleteProtocol(false);
-        setImportStatusMessage("");
-        alert(`Protocolo "${protocolTitle}" enviado para validacao. A Verto vai liberar o protocolo canonico correspondente para uso.`);
+        resetImportState();
+        alert(`Protocolo "${protocolTitle}" enviado com evidencias por screenshot. A Verto vai revisar as paginas solicitadas e liberar o protocolo canonico correspondente.`);
       }, 650);
     } catch (error: any) {
       setIsImporting(false);
@@ -440,7 +521,7 @@ export const ProtocolManagementSystem = ({
               <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-bl-full -mr-8 -mt-8"></div>
               <ShieldCheck size={48} className="mb-4 relative z-10" />
               <h2 className="text-2xl font-bold relative z-10">Importar Protocolo</h2>
-              <p className="text-white/80 text-sm mt-2 relative z-10">Confirme os termos de uso e responsabilidade antes de continuar.</p>
+              <p className="text-white/80 text-sm mt-2 relative z-10">Envie screenshots solicitados pela Verto. O arquivo bruto nao sera aberto aqui.</p>
             </div>
             
             <div className="p-8">
@@ -457,12 +538,102 @@ export const ProtocolManagementSystem = ({
                 />
               </div>
 
+              <div className="mb-6">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">
+                  Total de paginas do protocolo
+                </label>
+                <div className="flex gap-3">
+                  <input
+                    type="number"
+                    min={1}
+                    value={pendingProtocolPageCount}
+                    onChange={(e) => {
+                      setPendingProtocolPageCount(e.target.value);
+                      setRequestedScreenshotChallenges([]);
+                      setScreenshotFilesByPage({});
+                    }}
+                    className="w-full bg-[#0b1220] border border-white/10 rounded-xl p-3 text-sm outline-none text-white"
+                    placeholder="Ex: 300"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleGenerateScreenshotChallenges}
+                    className="px-4 rounded-xl bg-white text-slate-900 text-xs font-black hover:bg-slate-100 transition-all flex items-center gap-2"
+                  >
+                    <Shuffle size={16} />
+                    Gerar paginas
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-2">
+                  A Verto sorteia paginas dentro dos 30% iniciais do documento. Exemplo: 300 paginas geram paginas aleatorias entre 1 e 90.
+                </p>
+              </div>
+
               <div className="bg-blue-500/10 border border-blue-400/20 p-4 rounded-2xl mb-6 flex gap-3">
                 <Info size={20} className="text-blue-500 shrink-0 mt-0.5" />
                 <p className="text-xs text-blue-100 leading-relaxed font-medium">
-                  Protocolos clínicos podem ter direitos autorais e regras específicas de uso. Ao importar, você declara que possui autorização para utilização no ambiente da clínica. A Verto aceita apenas protocolos completos e libera para uso o protocolo canônico correspondente da biblioteca Verto.
+                  Protocolos clinicos podem ter direitos autorais e regras especificas de uso. Ao enviar screenshots, voce declara que possui autorizacao para utilizacao no ambiente da clinica. A Verto usa essas imagens apenas como evidencia visual e referencia de montagem.
                 </p>
               </div>
+
+              <div className="mb-6 rounded-2xl border border-white/10 bg-white/5 p-4">
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-300 mb-3">Como tirar o print</p>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="rounded-2xl bg-[#0b1220] p-4 border border-white/10">
+                    <div className="flex items-center gap-2 mb-2 text-white font-black text-sm">
+                      <Camera size={16} />
+                      Windows
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      Abra o protocolo, va ate a pagina pedida e pressione <strong>Windows + Shift + S</strong>. Recorte a pagina inteira e salve em PNG ou JPG.
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-[#0b1220] p-4 border border-white/10">
+                    <div className="flex items-center gap-2 mb-2 text-white font-black text-sm">
+                      <Smartphone size={16} />
+                      Celular
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      Voce pode fazer screenshot no celular ou tirar foto da tela, desde que a numeracao da pagina e o conteudo fiquem legiveis.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {requestedScreenshotChallenges.length > 0 && (
+                <div className="mb-6 space-y-3">
+                  <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-300">
+                    Paginas solicitadas pela Verto
+                  </p>
+                  {requestedScreenshotChallenges.map((challenge) => (
+                    <div key={challenge.pageNumber} className="rounded-2xl border border-white/10 bg-[#0b1220] p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                        <p className="text-sm font-black text-white">Pagina {challenge.pageNumber}</p>
+                        <span className="rounded-full bg-white/10 px-3 py-1 text-[10px] font-black uppercase text-slate-300">
+                          Janela 1-{challenge.coverageMaxPage}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-300 leading-relaxed mb-3">{challenge.prompt}</p>
+                      <label className="flex items-center justify-between gap-3 rounded-2xl border border-dashed border-white/15 px-4 py-3 cursor-pointer hover:border-[#7a32fc] transition-all">
+                        <div>
+                          <p className="text-xs font-black text-[#b794ff] uppercase">Enviar screenshot</p>
+                          <p className="text-[11px] text-slate-400 mt-1">
+                            {screenshotFilesByPage[String(challenge.pageNumber)]?.name || "PNG, JPG ou WEBP"}
+                          </p>
+                        </div>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          capture="environment"
+                          className="hidden"
+                          onChange={(e) => handleScreenshotFileChange(challenge.pageNumber, e.target.files?.[0] || null)}
+                        />
+                        <FileUp size={18} className="text-slate-300" />
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div className="space-y-4">
                 <label className="flex items-start gap-3 cursor-pointer group">
@@ -476,7 +647,7 @@ export const ProtocolManagementSystem = ({
                     <ShieldCheck className="absolute h-3.5 w-3.5 text-white opacity-0 peer-checked:opacity-100 left-0.5" strokeWidth={3} />
                   </div>
                   <span className="text-sm font-bold text-slate-200 group-hover:text-white transition-colors">
-                    Confirmo que estou enviando o protocolo completo, sem páginas faltantes, recortes ou versões parciais.
+                    Confirmo que os screenshots enviados correspondem as paginas solicitadas e que o protocolo completo existe na clinica, sem paginas faltantes ou versoes parciais.
                   </span>
                 </label>
                 <label className="flex items-start gap-3 cursor-pointer group">
@@ -490,7 +661,7 @@ export const ProtocolManagementSystem = ({
                     <ShieldCheck className="absolute h-3.5 w-3.5 text-white opacity-0 peer-checked:opacity-100 left-0.5" strokeWidth={3} />
                   </div>
                   <span className="text-sm font-bold text-slate-200 group-hover:text-white transition-colors">
-                    Li e aceito os termos de responsabilidade e direitos de uso do protocolo importado.
+                    Li e aceito os termos de responsabilidade e direitos de uso do protocolo evidenciado por screenshots.
                   </span>
                 </label>
               </div>
@@ -502,31 +673,25 @@ export const ProtocolManagementSystem = ({
 
               <div className="grid grid-cols-2 gap-4 mt-8">
                 <button 
-                  onClick={() => {
-                    setShowImportModal(false);
-                    setHasLicense(false);
-                    setIsCompleteProtocol(false);
-                    setPendingImportFile(null);
-                    setPendingProtocolName("");
-                  }}
+                  onClick={resetImportState}
                   className="py-4 rounded-2xl font-bold text-slate-300 hover:bg-white/5 transition-all border border-white/10"
                 >
                   Cancelar
                 </button>
                 <button 
                   onClick={handleConfirmFileImport}
-                  disabled={!hasLicense || !isCompleteProtocol || !pendingProtocolName.trim() || isImporting}
-                  className={`py-4 rounded-2xl font-bold text-white shadow-lg transition-all flex items-center justify-center gap-2 ${hasLicense && isCompleteProtocol && pendingProtocolName.trim() ? 'bg-[#7a32fc] shadow-blue-950 hover:opacity-90 active:scale-95' : 'bg-slate-700 cursor-not-allowed shadow-none'}`}
+                  disabled={!hasLicense || !isCompleteProtocol || !pendingProtocolName.trim() || !pendingProtocolPageCount.trim() || requestedScreenshotChallenges.length === 0 || isImporting}
+                  className={`py-4 rounded-2xl font-bold text-white shadow-lg transition-all flex items-center justify-center gap-2 ${hasLicense && isCompleteProtocol && pendingProtocolName.trim() && pendingProtocolPageCount.trim() && requestedScreenshotChallenges.length > 0 ? 'bg-[#7a32fc] shadow-blue-950 hover:opacity-90 active:scale-95' : 'bg-slate-700 cursor-not-allowed shadow-none'}`}
                 >
                   {isImporting ? (
                     <>
                       <Loader2 size={18} className="animate-spin" />
-                      Importando...
+                      Enviando...
                     </>
                   ) : (
                     <>
                       <FileUp size={18} />
-                      Confirmar Importação
+                      Confirmar evidencias
                     </>
                   )}
                 </button>
@@ -653,16 +818,15 @@ export const ProtocolManagementSystem = ({
             </div>
           )}
           
-          <label className={`flex items-center gap-3 bg-[#101a2d] text-[#b794ff] px-6 py-4 rounded-full shadow-2xl border border-white/10 cursor-pointer hover:scale-105 active:scale-95 transition-all group ${isImporting ? 'opacity-50 pointer-events-none' : ''}`}>
-            <input type="file" className="hidden" accept=".pdf,.xlsx,.xls,.csv" onChange={handleFileUpload} disabled={isImporting} />
+          <button type="button" onClick={openImportModal} className={`flex items-center gap-3 bg-[#101a2d] text-[#b794ff] px-6 py-4 rounded-full shadow-2xl border border-white/10 hover:scale-105 active:scale-95 transition-all group ${isImporting ? 'opacity-50 pointer-events-none' : ''}`}>
             <div className="p-2 bg-blue-50 rounded-xl group-hover:bg-[#7a32fc] group-hover:text-white transition-colors">
               <FileUp size={20} />
             </div>
             <div className="flex flex-col text-left">
-              <span className="text-xs font-bold uppercase tracking-tight">Importar Protocolo</span>
-              <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">PDF ou Excel</span>
+              <span className="text-xs font-bold uppercase tracking-tight">Solicitar por screenshots</span>
+              <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">PNG, JPG ou WEBP</span>
             </div>
-          </label>
+          </button>
         </div>
       )}
 
