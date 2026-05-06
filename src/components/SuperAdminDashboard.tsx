@@ -55,6 +55,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [protocolRequests, setProtocolRequests] = useState<any[]>([]);
   const [protocolRequestsError, setProtocolRequestsError] = useState<string | null>(null);
   const [approvingProtocolId, setApprovingProtocolId] = useState<string | null>(null);
+  const [scanningProtocolId, setScanningProtocolId] = useState<string | null>(null);
   const [protocolBuilderText, setProtocolBuilderText] = useState('');
   const [protocolBuilderDomain, setProtocolBuilderDomain] = useState('Mobilidade Basica');
   const [protocolBuilderTitle, setProtocolBuilderTitle] = useState('AFLS - Protocolo de Vida Diaria');
@@ -202,6 +203,10 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   };
 
   const handleApproveProtocolRequest = async (request: any) => {
+    if (request.scanStatus && request.scanStatus !== 'clean') {
+      alert('Antes de aprovar, rode o processamento seguro e confirme que a varredura ficou limpa.');
+      return;
+    }
     const suggested = request.canonicalName || request.suggestedCanonicalName || request.protocolName || '';
     const canonicalName = window.prompt('Qual protocolo da biblioteca Verto deve ser liberado?', suggested);
     if (!canonicalName) return;
@@ -236,6 +241,34 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
       alert(error.message || 'Nao foi possivel aprovar o protocolo.');
     } finally {
       setApprovingProtocolId(null);
+    }
+  };
+
+  const handleScanProtocolRequest = async (request: any) => {
+    try {
+      setScanningProtocolId(request.id);
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      const response = await fetch(`/api/admin/protocol-import-requests/${request.id}/scan`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: token ? `Bearer ${token}` : ''
+        }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Nao foi possivel processar a varredura segura.');
+      }
+      setProtocolRequests((current) => current.map((item) => (
+        item.id === request.id ? { ...item, ...data.data } : item
+      )));
+    } catch (error: any) {
+      alert(error.message || 'Nao foi possivel processar a varredura segura.');
+    } finally {
+      setScanningProtocolId(null);
     }
   };
 
@@ -990,6 +1023,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               ) : (
                 protocolRequests.map((request) => {
                   const isApproved = request.status === 'approved';
+                  const isClean = request.scanStatus === 'clean';
+                  const isBlocked = request.scanStatus === 'blocked';
                   return (
                     <div key={request.id} className="rounded-[28px] bg-white border border-slate-100 p-6 shadow-sm flex flex-col lg:flex-row lg:items-center gap-5">
                       <div className="w-12 h-12 rounded-2xl bg-violet-50 text-violet-600 flex items-center justify-center shrink-0">
@@ -1008,19 +1043,49 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         <p className="text-xs text-slate-400 mt-1">
                           Sugestao Verto: <strong>{request.canonicalName || 'Analise manual'}</strong> · confianca {Math.round(Number(request.confidence || 0) * 100)}%
                         </p>
+                        <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase">
+                          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">
+                            <Shield size={12} />
+                            Arquivo em quarentena
+                          </span>
+                          <span className={`rounded-full px-2.5 py-1 ${isClean ? 'bg-emerald-50 text-emerald-700' : isBlocked ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
+                            Varredura: {isClean ? 'limpa' : isBlocked ? 'bloqueada' : 'pendente'}
+                          </span>
+                          <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700">
+                            Acesso bruto bloqueado
+                          </span>
+                        </div>
+                        {request.safePreviewText && (
+                          <div className="mt-3 rounded-2xl border border-slate-100 bg-slate-50 p-3 text-xs text-slate-600 whitespace-pre-wrap">
+                            {request.safePreviewText}
+                          </div>
+                        )}
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        {request.dataUrl && (
+                        {request.hasFileData && (
                           <button
-                            onClick={() => window.open(request.dataUrl, '_blank', 'noopener,noreferrer')}
-                            className="px-4 py-2 rounded-2xl bg-slate-100 text-slate-600 text-xs font-black hover:bg-slate-200 transition-all"
+                            type="button"
+                            disabled
+                            title="Por seguranca, a Verto nao abre arquivos brutos enviados por terceiros. Use somente previa segura apos varredura."
+                            className="px-4 py-2 rounded-2xl bg-slate-100 text-slate-400 text-xs font-black cursor-not-allowed"
                           >
-                            Ver arquivo
+                            Arquivo bloqueado
+                          </button>
+                        )}
+                        {request.hasFileData && !isApproved && (
+                          <button
+                            type="button"
+                            onClick={() => handleScanProtocolRequest(request)}
+                            disabled={scanningProtocolId === request.id}
+                            className="px-4 py-2 rounded-2xl bg-slate-900 text-white text-xs font-black hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
+                          >
+                            {scanningProtocolId === request.id ? <Loader2 size={14} className="animate-spin" /> : <Shield size={14} />}
+                            {scanningProtocolId === request.id ? 'Processando...' : 'Processar seguro'}
                           </button>
                         )}
                         <button
                           onClick={() => handleApproveProtocolRequest(request)}
-                          disabled={isApproved || approvingProtocolId === request.id}
+                          disabled={isApproved || approvingProtocolId === request.id || (!!request.scanStatus && !isClean)}
                           className="px-4 py-2 rounded-2xl bg-violet-600 text-white text-xs font-black hover:bg-violet-700 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
                         >
                           {approvingProtocolId === request.id ? <Loader2 size={14} className="animate-spin" /> : isApproved ? <CheckCircle2 size={14} /> : <ClipboardCheck size={14} />}

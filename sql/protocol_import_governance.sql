@@ -10,6 +10,12 @@ create table if not exists public.protocol_import_requests (
   file_size bigint null,
   file_data_url text null,
   status text not null default 'pending',
+  quarantine_status text not null default 'quarantined',
+  scan_status text not null default 'pending',
+  safe_preview_status text not null default 'not_generated',
+  raw_file_access text not null default 'blocked',
+  safe_preview_text text null,
+  scan_report jsonb null,
   suggested_canonical_key text null,
   suggested_canonical_name text null,
   suggested_confidence numeric null,
@@ -22,6 +28,14 @@ create table if not exists public.protocol_import_requests (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.protocol_import_requests
+  add column if not exists quarantine_status text not null default 'quarantined',
+  add column if not exists scan_status text not null default 'pending',
+  add column if not exists safe_preview_status text not null default 'not_generated',
+  add column if not exists raw_file_access text not null default 'blocked',
+  add column if not exists safe_preview_text text null,
+  add column if not exists scan_report jsonb null;
 
 create index if not exists idx_protocol_import_requests_status_created
   on public.protocol_import_requests (status, created_at desc);

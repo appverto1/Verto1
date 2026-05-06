@@ -1155,6 +1155,7 @@ type DetectedUploadMime =
   | 'text/html'
   | 'application/json';
 type UploadContext = 'image-only' | 'image-or-pdf' | 'anamnesis-document';
+type ProtocolScanStatus = 'clean' | 'blocked';
 
 function normalizeMime(input?: string | null): string {
   const lower = sanitizeString(input, 120).toLowerCase().split(';')[0].trim();
@@ -1257,6 +1258,163 @@ function validateBinaryUpload(
   }
 
   return { ok: true, detectedMime };
+}
+
+function decodeSafeDataUrl(input: string): { buffer: Buffer; mime: string } | null {
+  const match = String(input || '').match(/^data:([^;]+);base64,([a-z0-9+/=\s]+)$/i);
+  if (!match) return null;
+  try {
+    const buffer = Buffer.from(match[2].replace(/\s/g, ''), 'base64');
+    return buffer.length ? { buffer, mime: normalizeMime(match[1]) } : null;
+  } catch {
+    return null;
+  }
+}
+
+function detectProtocolFileKind(buffer: Buffer): 'pdf' | 'xlsx' | 'xls' | 'unknown' {
+  if (buffer.subarray(0, 5).toString('ascii') === '%PDF-') return 'pdf';
+  if (buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04) return 'xlsx';
+  if (buffer.length >= 8 && buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 && buffer[3] === 0xe0) return 'xls';
+  return 'unknown';
+}
+
+function sanitizeSafePreviewText(input: string, maxLength = 4000): string {
+  return sanitizeString(
+    String(input || '')
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim(),
+    maxLength
+  );
+}
+
+function buildProtocolSafePreview(buffer: Buffer, kind: 'pdf' | 'xlsx' | 'xls' | 'unknown', fileName: string): string {
+  const sizeKb = Math.max(1, Math.round(buffer.length / 1024));
+  if (kind === 'pdf') {
+    const rawText = buffer.subarray(0, Math.min(buffer.length, 1_500_000)).toString('latin1');
+    const readableText = rawText
+      .replace(/\\[rn]/g, ' ')
+      .replace(/[^A-Za-zÀ-ÖØ-öø-ÿ0-9.,;:!?()[\]{}+\-=/\\_\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const excerpt = sanitizeSafePreviewText(readableText, 1600);
+    return [
+      `Arquivo: ${fileName}`,
+      `Tipo detectado: PDF`,
+      `Tamanho: ${sizeKb} KB`,
+      excerpt ? `Trecho textual seguro: ${excerpt}` : 'Trecho textual seguro: nao foi possivel extrair texto legivel sem renderizar o PDF.',
+      'Arquivo bruto permanece bloqueado para abertura/download.'
+    ].join('\n');
+  }
+  if (kind === 'xlsx') {
+    return [
+      `Arquivo: ${fileName}`,
+      'Tipo detectado: Excel XLSX',
+      `Tamanho: ${sizeKb} KB`,
+      'Previa segura: planilha ZIP Office detectada. A leitura estrutural completa deve ocorrer somente em worker isolado.',
+      'Arquivo bruto permanece bloqueado para abertura/download.'
+    ].join('\n');
+  }
+  if (kind === 'xls') {
+    return [
+      `Arquivo: ${fileName}`,
+      'Tipo detectado: Excel XLS legado',
+      `Tamanho: ${sizeKb} KB`,
+      'Previa segura indisponivel: formato legado pode conter macros/OLE e exige sandbox dedicada.',
+      'Arquivo bruto permanece bloqueado para abertura/download.'
+    ].join('\n');
+  }
+  return [
+    `Arquivo: ${fileName}`,
+    'Tipo detectado: desconhecido',
+    `Tamanho: ${sizeKb} KB`,
+    'Previa segura indisponivel.',
+    'Arquivo bruto permanece bloqueado para abertura/download.'
+  ].join('\n');
+}
+
+function scanProtocolUpload(dataUrl: string, fileName: string, providedMime: string): {
+  scanStatus: ProtocolScanStatus;
+  quarantineStatus: 'review_ready' | 'blocked';
+  safePreviewStatus: 'generated' | 'blocked';
+  safePreviewText: string;
+  scanReport: Record<string, any>;
+} {
+  const decoded = decodeSafeDataUrl(dataUrl);
+  if (!decoded) {
+    return {
+      scanStatus: 'blocked',
+      quarantineStatus: 'blocked',
+      safePreviewStatus: 'blocked',
+      safePreviewText: 'Arquivo bloqueado: conteudo base64 invalido.',
+      scanReport: { engine: 'verto-basic-static-scan', blockedReason: 'invalid_data_url', flags: ['invalid_data_url'] }
+    };
+  }
+
+  const kind = detectProtocolFileKind(decoded.buffer);
+  const normalizedProvidedMime = normalizeMime(providedMime || decoded.mime);
+  const flags: string[] = [];
+  const lowerFileName = sanitizeString(fileName, 240).toLowerCase();
+  const lowerPdfProbe = kind === 'pdf' ? decoded.buffer.toString('latin1').toLowerCase() : '';
+  const pdfIndicators = [
+    ['/javascript', 'pdf_javascript'],
+    ['/js', 'pdf_js_action'],
+    ['/openaction', 'pdf_open_action'],
+    ['/aa', 'pdf_additional_action'],
+    ['/launch', 'pdf_launch_action'],
+    ['/embeddedfile', 'pdf_embedded_file'],
+    ['/richmedia', 'pdf_rich_media'],
+    ['/xfa', 'pdf_xfa_form']
+  ];
+
+  if (kind === 'unknown') flags.push('unknown_magic_bytes');
+  if (kind === 'xls') flags.push('legacy_excel_ole_requires_external_sandbox');
+  if (lowerFileName.endsWith('.xlsm') || lowerFileName.endsWith('.xltm')) flags.push('macro_enabled_excel_extension');
+  if (kind === 'xlsx' && normalizedProvidedMime && !['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/octet-stream'].includes(normalizedProvidedMime)) {
+    flags.push('provided_mime_mismatch');
+  }
+  if (kind === 'xls' && normalizedProvidedMime && !['application/vnd.ms-excel', 'application/octet-stream'].includes(normalizedProvidedMime)) {
+    flags.push('provided_mime_mismatch');
+  }
+  if (kind === 'pdf' && normalizedProvidedMime && !['application/pdf', 'application/octet-stream'].includes(normalizedProvidedMime)) {
+    flags.push('provided_mime_mismatch');
+  }
+  for (const [indicator, flag] of pdfIndicators) {
+    if (lowerPdfProbe.includes(indicator)) flags.push(flag);
+  }
+
+  const blockedFlags = new Set([
+    'unknown_magic_bytes',
+    'legacy_excel_ole_requires_external_sandbox',
+    'macro_enabled_excel_extension',
+    'provided_mime_mismatch',
+    'pdf_javascript',
+    'pdf_js_action',
+    'pdf_open_action',
+    'pdf_additional_action',
+    'pdf_launch_action',
+    'pdf_embedded_file',
+    'pdf_rich_media',
+    'pdf_xfa_form'
+  ]);
+  const blocked = flags.some((flag) => blockedFlags.has(flag));
+  const safePreviewText = buildProtocolSafePreview(decoded.buffer, kind, sanitizeString(fileName, 240) || 'protocolo');
+
+  return {
+    scanStatus: blocked ? 'blocked' : 'clean',
+    quarantineStatus: blocked ? 'blocked' : 'review_ready',
+    safePreviewStatus: blocked ? 'blocked' : 'generated',
+    safePreviewText,
+    scanReport: {
+      engine: 'verto-basic-static-scan',
+      scannedAt: new Date().toISOString(),
+      detectedKind: kind,
+      detectedMime: decoded.mime,
+      providedMime: normalizedProvidedMime || null,
+      sizeBytes: decoded.buffer.length,
+      flags
+    }
+  };
 }
 
 async function parseMultipartFormData(req: any): Promise<{
@@ -11024,6 +11182,10 @@ async function startServer() {
         fileSize,
         dataUrl,
         status: 'pending',
+        quarantineStatus: 'quarantined',
+        scanStatus: 'pending',
+        safePreviewStatus: 'not_generated',
+        rawFileAccess: 'blocked',
         canonicalKey: candidate.canonicalKey,
         canonicalName: candidate.canonicalName,
         confidence: candidate.confidence,
@@ -11039,7 +11201,7 @@ async function startServer() {
 
       let storedInTable = false;
       try {
-        const { error: insertError } = await supabase.from('protocol_import_requests').insert([{
+        const insertPayload: Record<string, any> = {
           id: requestId,
           clinic_id: isUuid(clinicId) ? clinicId : null,
           requester_user_id: sanitizeString(user?.id, 120) || null,
@@ -11051,6 +11213,12 @@ async function startServer() {
           file_size: fileSize,
           file_data_url: dataUrl,
           status: 'pending',
+          quarantine_status: 'quarantined',
+          scan_status: 'pending',
+          safe_preview_status: 'not_generated',
+          raw_file_access: 'blocked',
+          safe_preview_text: null,
+          scan_report: null,
           suggested_canonical_key: candidate.canonicalKey,
           suggested_canonical_name: candidate.canonicalName,
           suggested_confidence: candidate.confidence,
@@ -11058,7 +11226,17 @@ async function startServer() {
           full_protocol_confirmed: fullProtocolConfirmed,
           created_at: nowIso,
           updated_at: nowIso
-        }]);
+        };
+        let { error: insertError } = await supabase.from('protocol_import_requests').insert([insertPayload]);
+        if (insertError && /(quarantine_status|scan_status|safe_preview_status|raw_file_access|safe_preview_text)/i.test(insertError.message || '')) {
+          delete insertPayload.quarantine_status;
+          delete insertPayload.scan_status;
+          delete insertPayload.safe_preview_status;
+          delete insertPayload.raw_file_access;
+          delete insertPayload.safe_preview_text;
+          delete insertPayload.scan_report;
+          ({ error: insertError } = await supabase.from('protocol_import_requests').insert([insertPayload]));
+        }
         storedInTable = !insertError;
         if (insertError) {
           console.warn('[Protocol Import] table insert fallback:', insertError.message || insertError);
@@ -11118,7 +11296,13 @@ async function startServer() {
             canonicalKey: sanitizeString(row.approved_canonical_key || row.suggested_canonical_key, 180),
             canonicalName: sanitizeString(row.approved_canonical_name || row.suggested_canonical_name, 180),
             confidence: Number(row.suggested_confidence || 0),
-            dataUrl: sanitizeString(row.file_data_url, 14_000_000) || null,
+            hasFileData: Boolean(row.file_data_url),
+            quarantineStatus: sanitizeString(row.quarantine_status, 40) || 'quarantined',
+            scanStatus: sanitizeString(row.scan_status, 40) || 'pending',
+            safePreviewStatus: sanitizeString(row.safe_preview_status, 40) || 'not_generated',
+            rawFileAccess: sanitizeString(row.raw_file_access, 40) || 'blocked',
+            safePreviewText: sanitizeSafePreviewText(row.safe_preview_text || '', 4000) || null,
+            scanReport: sanitizeClinicalPayload(row.scan_report || {}),
             createdAt: sanitizeString(row.created_at, 80),
             reviewedAt: sanitizeString(row.reviewed_at, 80) || null
           }));
@@ -11138,13 +11322,27 @@ async function startServer() {
           try {
             const payload = JSON.parse(String(log.payload_details || '{}'));
             return {
-              ...payload,
               id: sanitizeString(payload.id || log.id, 120),
+              clinicId: sanitizeString(payload.clinicId, 120) || null,
+              requesterUserId: sanitizeString(payload.requesterUserId, 120) || null,
+              requesterName: sanitizeString(payload.requesterName, 180),
+              requesterEmail: sanitizeEmail(payload.requesterEmail),
+              protocolName: sanitizeString(payload.protocolName, 180),
+              fileName: sanitizeString(payload.fileName, 240),
+              fileType: sanitizeString(payload.fileType, 120),
+              fileSize: Number(payload.fileSize || 0),
               createdAt: sanitizeString(payload.createdAt || log.timestamp, 80),
               status: sanitizeString(payload.status, 40) || 'pending',
               canonicalKey: sanitizeString(payload.canonicalKey, 180),
               canonicalName: sanitizeString(payload.canonicalName, 180),
-              confidence: Number(payload.confidence || 0)
+              confidence: Number(payload.confidence || 0),
+              hasFileData: Boolean(payload.hasFileData),
+              quarantineStatus: sanitizeString(payload.quarantineStatus, 40) || 'quarantined',
+              scanStatus: sanitizeString(payload.scanStatus, 40) || 'pending',
+              safePreviewStatus: sanitizeString(payload.safePreviewStatus, 40) || 'not_generated',
+              rawFileAccess: 'blocked',
+              safePreviewText: sanitizeSafePreviewText(payload.safePreviewText || '', 4000) || null,
+              scanReport: sanitizeClinicalPayload(payload.scanReport || {})
             };
           } catch {
             return null;
@@ -11169,6 +11367,17 @@ async function startServer() {
 
       let updatedTable = false;
       try {
+        const { data: currentRequest } = await supabase
+          .from('protocol_import_requests')
+          .select('scan_status, quarantine_status')
+          .eq('id', requestId)
+          .maybeSingle();
+        if ((currentRequest as any)?.scan_status && (currentRequest as any)?.scan_status !== 'clean') {
+          return res.status(409).json({
+            success: false,
+            error: 'Este protocolo ainda nao passou por uma varredura segura limpa.'
+          });
+        }
         const { error } = await supabase
           .from('protocol_import_requests')
           .update({
@@ -11199,6 +11408,92 @@ async function startServer() {
       return res.json({ success: true, data: { requestId, status: 'approved', canonicalKey, canonicalName } });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Nao foi possivel aprovar o protocolo.' });
+    }
+  });
+
+  app.post('/api/admin/protocol-import-requests/:requestId/scan', checkAuth, checkPlatformAdmin, async (req: any, res) => {
+    try {
+      const requestId = sanitizeString(req.params.requestId, 120);
+      if (!requestId) {
+        return res.status(400).json({ success: false, error: 'Informe a solicitacao de protocolo.' });
+      }
+
+      const { data: requestRow, error: fetchError } = await supabase
+        .from('protocol_import_requests')
+        .select('id, protocol_name, file_name, file_type, file_size, file_data_url')
+        .eq('id', requestId)
+        .maybeSingle();
+      if (fetchError || !requestRow) {
+        return res.status(404).json({ success: false, error: 'Solicitacao de protocolo nao encontrada.' });
+      }
+
+      const dataUrl = sanitizeString((requestRow as any).file_data_url, 14_000_000);
+      if (!dataUrl) {
+        return res.status(409).json({ success: false, error: 'Arquivo bruto nao esta disponivel para varredura.' });
+      }
+
+      const scan = scanProtocolUpload(
+        dataUrl,
+        sanitizeString((requestRow as any).file_name || (requestRow as any).protocol_name, 240),
+        sanitizeString((requestRow as any).file_type, 120)
+      );
+      const nowIso = new Date().toISOString();
+      const updatePayload: Record<string, any> = {
+        scan_status: scan.scanStatus,
+        quarantine_status: scan.quarantineStatus,
+        safe_preview_status: scan.safePreviewStatus,
+        raw_file_access: 'blocked',
+        safe_preview_text: scan.safePreviewText,
+        scan_report: scan.scanReport,
+        updated_at: nowIso
+      };
+      let { error: updateError } = await supabase
+        .from('protocol_import_requests')
+        .update(updatePayload)
+        .eq('id', requestId);
+      if (updateError && /scan_report/i.test(updateError.message || '')) {
+        delete updatePayload.scan_report;
+        ({ error: updateError } = await supabase
+          .from('protocol_import_requests')
+          .update(updatePayload)
+          .eq('id', requestId));
+      }
+      if (updateError) {
+        throw updateError;
+      }
+
+      await persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(currentClinicId(req.session.user), 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
+        title: 'Varredura segura de protocolo',
+        content: `Solicitacao ${requestId} processada com status ${scan.scanStatus}.`,
+        type: 'protocol_import_review',
+        actionType: 'protocol_import_scanned',
+        payloadDetails: JSON.stringify({
+          requestId,
+          scanStatus: scan.scanStatus,
+          quarantineStatus: scan.quarantineStatus,
+          safePreviewStatus: scan.safePreviewStatus,
+          scanReport: scan.scanReport
+        })
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          id: requestId,
+          scanStatus: scan.scanStatus,
+          quarantineStatus: scan.quarantineStatus,
+          safePreviewStatus: scan.safePreviewStatus,
+          rawFileAccess: 'blocked',
+          safePreviewText: sanitizeSafePreviewText(scan.safePreviewText, 4000),
+          scanReport: sanitizeClinicalPayload(scan.scanReport)
+        }
+      });
+    } catch (error: any) {
+      console.error('[Protocol Import] scan error:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Nao foi possivel processar a varredura segura do protocolo.' });
     }
   });
 
