@@ -17,6 +17,9 @@ const PatientDashboard = React.lazy(() =>
 const CoordinatorDashboard = React.lazy(() =>
   import('./components/CoordinatorDashboard').then((m) => ({ default: m.CoordinatorDashboard }))
 );
+const TherapistDashboard = React.lazy(() =>
+  import('./components/TherapistDashboard').then((m) => ({ default: m.TherapistDashboard }))
+);
 const AdminDashboard = React.lazy(() =>
   import('./components/AdminDashboard').then((m) => ({ default: m.AdminDashboard }))
 );
@@ -2898,7 +2901,7 @@ export default function App() {
           onAddFamilyNote={handleAddFamilyNote}
           isReadOnlyMode={patientIsReadOnlyMode}
           />
-      ) : user.role === 'coordinator' || user.role === 'receptionist' || user.role === 'therapist' ? (
+      ) : user.role === 'coordinator' || user.role === 'receptionist' ? (
         <CoordinatorDashboard 
           user={{ ...user, profilePicture, crp }}
           onLogout={handleLogout}
@@ -2985,6 +2988,95 @@ export default function App() {
           onAddTask={handleAddTask}
           onUpdateTask={handleUpdateTask}
           allTasks={tasks}
+        />
+      ) : user.role === 'therapist' ? (
+        <TherapistDashboard
+          user={{ ...user, profilePicture, crp }}
+          onLogout={handleLogout}
+          protocols={protocols}
+          setProtocols={setProtocols}
+          therapistAgenda={therapistAgenda}
+          patientsHistory={history}
+          therapistNotes={therapistNotes}
+          onAddNote={handleAddNote}
+          allTasks={tasks}
+          onAddTask={handleAddTask}
+          onUpdateTask={handleUpdateTask}
+          onUpdateHistoryItem={handleUpdateHistoryItem}
+          onAddPatient={handleAddPatient}
+          allPatients={allPatients}
+          clinicalRecords={clinicalRecords}
+          onScheduleSession={handleScheduleSession}
+          onUpdatePatient={handleUpdatePatient}
+          onRecordTrial={handleRecordTrial}
+          onDeleteHistoryItem={handleDeleteHistoryItem}
+          activityLogs={activityLogs}
+          onAddActivityLog={onAddActivityLog}
+          onViewTeam={() => {}}
+          onUpdateAgendaStatus={handleUpdateAgendaStatus}
+          onUpdateAppointment={handleUpdateAppointment}
+          rooms={rooms}
+          setRooms={setRooms}
+          roomReservations={roomReservations}
+          setRoomReservations={() => {}}
+          specialtySettings={specialtySettings}
+          setSpecialtySettings={setSpecialtySettings}
+          onUpdateProfile={(data: any) => {
+            void (async () => {
+              const baseUser = { ...user, ...data };
+              try {
+                const profileUpload = await uploadProfileAssetIfNeeded(
+                  data?.profilePicture ?? data?.profile_picture,
+                  'profile',
+                  user.id,
+                );
+                const signatureUpload = await uploadProfileAssetIfNeeded(
+                  data?.signatureDataUrl ?? data?.signature_url ?? data?.signatureUrl,
+                  'signature',
+                  user.id,
+                );
+                const clinicLogoUpload = await uploadProfileAssetIfNeeded(
+                  data?.clinicSettings?.clinicLogoUrl,
+                  'logo',
+                  user.id,
+                );
+
+                const nextUser = {
+                  ...baseUser,
+                  profilePicture: profileUpload.url || baseUser.profilePicture || baseUser.profile_picture || null,
+                  profile_picture: profileUpload.url || baseUser.profile_picture || baseUser.profilePicture || null,
+                  signatureDataUrl: signatureUpload.url || baseUser.signatureDataUrl || null,
+                  clinicSettings: {
+                    ...(baseUser?.clinicSettings || {}),
+                    ...(clinicLogoUpload.url ? { clinicLogoUrl: clinicLogoUpload.url } : {}),
+                    ...(signatureUpload.url ? { signatureDataUrl: signatureUpload.url } : {}),
+                  },
+                };
+
+                if (nextUser.profilePicture !== undefined) setProfilePicture(nextUser.profilePicture);
+                if (nextUser.crp !== undefined) setCrp(nextUser.crp);
+                setUser(nextUser);
+
+                await dataService.saveUserProfile(user.id, {
+                  ...nextUser,
+                  profilePicturePath: profileUpload.path,
+                  signaturePath: signatureUpload.path,
+                  clinicLogoPath: clinicLogoUpload.path,
+                  workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+                });
+              } catch (error) {
+                console.error('Profile asset upload error:', error);
+                if (baseUser.profilePicture !== undefined) setProfilePicture(baseUser.profilePicture);
+                if (baseUser.crp !== undefined) setCrp(baseUser.crp);
+                setUser(baseUser);
+                await dataService.saveUserProfile(user.id, {
+                  ...baseUser,
+                  workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+                });
+              }
+            })();
+          }}
+          onOpenOnboarding={() => setShowOnboarding(true)}
         />
       ) : user.role === 'owner' ? (
         <SuperAdminDashboard onLogout={handleLogout} />
