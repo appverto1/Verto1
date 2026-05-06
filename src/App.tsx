@@ -214,6 +214,84 @@ export default function App() {
     };
   };
 
+  const coalescePatientText = (...values: any[]) => {
+    for (const value of values) {
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed) return trimmed;
+      }
+    }
+    return '';
+  };
+
+  const buildPatientAnamnesisSnapshot = (patientLike: any, baseAnamnesisData?: any) => {
+    const source = patientLike || {};
+    const existing = baseAnamnesisData && typeof baseAnamnesisData === 'object' ? baseAnamnesisData : {};
+    const address = source?.address && typeof source.address === 'object' ? source.address : {};
+    const guardian = source?.guardian && typeof source.guardian === 'object' ? source.guardian : {};
+    const resolvedBirthDate = coalescePatientText(
+      source?.dataNascimento,
+      source?.birthDate,
+      source?.birth_date,
+      existing?.dataNascimento,
+    );
+    const resolvedPhone = coalescePatientText(source?.phone, existing?.telefone);
+    const resolvedEmail = coalescePatientText(source?.email, existing?.email);
+    const resolvedCpf = coalescePatientText(source?.cpf, existing?.cpf);
+    const resolvedStreet = coalescePatientText(source?.logradouro, address?.logradouro, existing?.logradouro);
+    const resolvedNumber = coalescePatientText(source?.numero, address?.numero, existing?.numero);
+    const resolvedComplement = coalescePatientText(source?.complemento, address?.complemento, existing?.complemento);
+    const resolvedDistrict = coalescePatientText(source?.bairro, address?.bairro, existing?.bairro);
+    const resolvedCity = coalescePatientText(source?.cidade, address?.cidade, existing?.cidade);
+
+    return {
+      ...existing,
+      nome: coalescePatientText(source?.name, existing?.nome),
+      nomeSocial: coalescePatientText(source?.socialName, source?.nomeSocial, existing?.nomeSocial),
+      telefone: resolvedPhone,
+      email: resolvedEmail,
+      cpf: resolvedCpf,
+      dataNascimento: resolvedBirthDate,
+      genero: coalescePatientText(source?.gender, source?.genero, existing?.genero),
+      convenioTipo: coalescePatientText(source?.insuranceType, existing?.convenioTipo) || 'particular',
+      convenioNome: coalescePatientText(source?.insuranceName, existing?.convenioNome),
+      convenioCarteirinha: coalescePatientText(source?.cardNumber, existing?.convenioCarteirinha),
+      grupo: coalescePatientText(source?.group, existing?.grupo),
+      comoConheceu: coalescePatientText(source?.source, existing?.comoConheceu),
+      rg: coalescePatientText(source?.rg, existing?.rg),
+      cep: coalescePatientText(source?.cep, existing?.cep),
+      logradouro: resolvedStreet,
+      numero: resolvedNumber,
+      complemento: resolvedComplement,
+      bairro: resolvedDistrict,
+      cidade: resolvedCity,
+      endereco:
+        [resolvedStreet, resolvedNumber, resolvedDistrict, resolvedCity]
+          .filter(Boolean)
+          .join(', ') || coalescePatientText(source?.addressText, existing?.endereco),
+      outrasInformacoes: coalescePatientText(source?.notes, existing?.outrasInformacoes),
+      menorDeIdade:
+        typeof source?.isMinor === 'boolean'
+          ? source.isMinor
+          : typeof existing?.menorDeIdade === 'boolean'
+            ? existing.menorDeIdade
+            : false,
+      responsavelNome: coalescePatientText(guardian?.nome, existing?.responsavelNome),
+      responsavelDataNascimento: coalescePatientText(
+        guardian?.dataNascimento,
+        existing?.responsavelDataNascimento,
+      ),
+      responsavelCpf: coalescePatientText(guardian?.cpf, existing?.responsavelCpf),
+      responsavelTelefone: coalescePatientText(guardian?.telefone, existing?.responsavelTelefone),
+      idade:
+        typeof source?.age === 'number'
+          ? source.age
+          : typeof existing?.idade === 'number'
+            ? existing.idade
+            : existing?.idade || '',
+    };
+  };
+
   const enrichUserFromSessionMetadata = (candidateUser: any, supabaseSession?: any) => {
     const metadata = supabaseSession?.user?.user_metadata || {};
     const fullName = String(metadata?.full_name || '').trim();
@@ -269,6 +347,11 @@ export default function App() {
             professionalProfile?.signature_data_url ||
             restoredUser?.signatureDataUrl ||
             null,
+          crp:
+            professionalProfile?.crp ||
+            professionalProfile?.council_number ||
+            restoredUser?.crp ||
+            null,
           clinicSettings: {
             ...(restoredUser?.clinicSettings || {}),
             ...(professionalProfile?.clinic_logo_url
@@ -276,6 +359,12 @@ export default function App() {
               : {}),
             ...(professionalProfile?.signature_data_url
               ? { signatureDataUrl: professionalProfile.signature_data_url }
+              : {}),
+            ...(professionalProfile?.council
+              ? { council: professionalProfile.council }
+              : {}),
+            ...(professionalProfile?.council_number
+              ? { councilNumber: professionalProfile.council_number }
               : {}),
           },
         };
@@ -286,6 +375,7 @@ export default function App() {
 
     setUser(resolvedUser);
     setProfilePicture(resolvedUser?.profilePicture || resolvedUser?.profile_picture || null);
+    setCrp(String(resolvedUser?.crp || ''));
     if (hasValidWorkspaceContext(resolvedUser)) {
       setLastActiveWorkspaceId(resolvedUser?.activeWorkspaceId || resolvedUser?.clinicId);
     }
@@ -1781,7 +1871,7 @@ export default function App() {
       age: data.anamnesisData?.idade || data.age || 0, 
       approach: data.approach, 
       type: resolvedPortalType,
-      anamnesisData: data.anamnesisData || null,
+      anamnesisData: buildPatientAnamnesisSnapshot(data, data.anamnesisData),
       anamnesisRenewalMonths: [2, 3, 6, 12].includes(Number(data.anamnesisRenewalMonths))
         ? Number(data.anamnesisRenewalMonths)
         : 6,
@@ -1991,31 +2081,7 @@ export default function App() {
     if (canPersistPatientRecord) {
       await dataService.savePatientRecord(String(persistedPatientId), {
       workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
-      nome: data.name || data.anamnesisData?.nome || "",
-      nomeSocial: data.anamnesisData?.nomeSocial || "",
-      telefone: data.phone || data.anamnesisData?.telefone || "",
-      dataNascimento: data.anamnesisData?.dataNascimento || "",
-      genero: data.anamnesisData?.genero || "",
-      convenioTipo: data.anamnesisData?.convenioTipo || "particular",
-      convenioNome: data.anamnesisData?.convenioNome || "",
-      convenioCarteirinha: data.anamnesisData?.convenioCarteirinha || "",
-      grupo: data.anamnesisData?.grupo || "",
-      comoConheceu: data.anamnesisData?.comoConheceu || "",
-      rg: data.anamnesisData?.rg || "",
-      cpf: data.cpf || data.anamnesisData?.cpf || "",
-      cep: data.anamnesisData?.cep || "",
-      email: data.email || data.anamnesisData?.email || "",
-      logradouro: data.anamnesisData?.logradouro || "",
-      numero: data.anamnesisData?.numero || "",
-      complemento: data.anamnesisData?.complemento || "",
-      bairro: data.anamnesisData?.bairro || "",
-      cidade: data.anamnesisData?.cidade || "",
-      outrasInformacoes: data.anamnesisData?.outrasInformacoes || "",
-      menorDeIdade: Boolean(data.anamnesisData?.menorDeIdade),
-      responsavelNome: data.anamnesisData?.responsavelNome || "",
-      responsavelDataNascimento: data.anamnesisData?.responsavelDataNascimento || "",
-      responsavelCpf: data.anamnesisData?.responsavelCpf || "",
-      responsavelTelefone: data.anamnesisData?.responsavelTelefone || "",
+      ...buildPatientAnamnesisSnapshot(data, data.anamnesisData),
       anamnesisRenewalMonths: [2, 3, 6, 12].includes(Number(data.anamnesisRenewalMonths))
         ? Number(data.anamnesisRenewalMonths)
         : 6,
@@ -2027,7 +2093,7 @@ export default function App() {
         data.evaluationLinks && typeof data.evaluationLinks === 'object' ? data.evaluationLinks : {},
       interventionTaskLinks:
         data.interventionTaskLinks && typeof data.interventionTaskLinks === 'object' ? data.interventionTaskLinks : {},
-      anamnese: data.anamnesisData || {}
+      anamnese: buildPatientAnamnesisSnapshot(data, data.anamnesisData)
       });
     }
     return {
@@ -2050,6 +2116,14 @@ export default function App() {
   const handleUpdatePatient = async (updatedData: any) => { 
     // Split updates
     const { diagnosis, anamnesisData, pei, evaluationLinks, interventionTaskLinks, ...identityData } = updatedData;
+    const currentPatient = allPatients.find((p) => String(p?.id) === String(updatedData?.id));
+    const mergedIdentityPatient = { ...(currentPatient || {}), ...updatedData };
+    const syncedAnamnesisData =
+      anamnesisData !== undefined
+        ? buildPatientAnamnesisSnapshot(mergedIdentityPatient, anamnesisData)
+        : currentPatient?.anamnesisData
+          ? buildPatientAnamnesisSnapshot(mergedIdentityPatient, currentPatient.anamnesisData)
+          : undefined;
     const isDeleteOrUnlink = updatedData?.clinic_id === null || String(updatedData?.status || '').toLowerCase() === 'deleted';
 
     // If unlinking (clinic_id is null), remove from local state
@@ -2060,13 +2134,17 @@ export default function App() {
       onAddActivityLog("Desvinculação de Paciente", `Paciente ID ${updatedData.id} foi desvinculado.`, 'management');
     } else {
       if (Object.keys(identityData).length > 1) { // More than just 'id'
-        setAllPatients(prev => prev.map(p => p.id === updatedData.id ? { ...p, ...identityData } : p)); 
+        setAllPatients(prev => prev.map(p => p.id === updatedData.id ? {
+          ...p,
+          ...identityData,
+          ...(syncedAnamnesisData !== undefined ? { anamnesisData: syncedAnamnesisData } : {})
+        } : p)); 
       }
 
-      if (diagnosis !== undefined || anamnesisData !== undefined || pei !== undefined || evaluationLinks !== undefined || interventionTaskLinks !== undefined) {
+      if (diagnosis !== undefined || anamnesisData !== undefined || pei !== undefined || evaluationLinks !== undefined || interventionTaskLinks !== undefined || syncedAnamnesisData !== undefined) {
         const clinicalPatch: any = {
           ...(diagnosis !== undefined && { diagnosis }),
-          ...(anamnesisData !== undefined && { anamnesisData }),
+          ...(syncedAnamnesisData !== undefined && { anamnesisData: syncedAnamnesisData }),
           ...(pei !== undefined && { pei }),
           ...(evaluationLinks !== undefined && { evaluationLinks }),
           ...(interventionTaskLinks !== undefined && { interventionTaskLinks })
@@ -2077,7 +2155,7 @@ export default function App() {
         setClinicalRecords(prev => prev.map(r => r.patientId === updatedData.id ? { 
           ...r, 
           ...(diagnosis !== undefined && { diagnosis }),
-          ...(anamnesisData !== undefined && { anamnesisData }),
+          ...(syncedAnamnesisData !== undefined && { anamnesisData: syncedAnamnesisData }),
           ...(pei !== undefined && { pei }),
           ...(evaluationLinks !== undefined && { evaluationLinks }),
           ...(interventionTaskLinks !== undefined && { interventionTaskLinks })
@@ -2116,6 +2194,7 @@ export default function App() {
       if (
         !isDeleteOrUnlink &&
         (
+          syncedAnamnesisData !== undefined ||
           anamnesisData !== undefined ||
           diagnosis !== undefined ||
           updatedData?.type !== undefined ||
@@ -2141,34 +2220,10 @@ export default function App() {
           ...(interventionTaskLinks !== undefined && { interventionTaskLinks }),
         };
 
-        if (anamnesisData !== undefined) {
+        if (syncedAnamnesisData !== undefined) {
           Object.assign(recordPayload, {
-            nome: updatedData.name || anamnesisData?.nome || "",
-            nomeSocial: anamnesisData?.nomeSocial || "",
-            telefone: updatedData.phone || anamnesisData?.telefone || "",
-            dataNascimento: anamnesisData?.dataNascimento || "",
-            genero: anamnesisData?.genero || "",
-            convenioTipo: anamnesisData?.convenioTipo || "particular",
-            convenioNome: anamnesisData?.convenioNome || "",
-            convenioCarteirinha: anamnesisData?.convenioCarteirinha || "",
-            grupo: anamnesisData?.grupo || "",
-            comoConheceu: anamnesisData?.comoConheceu || "",
-            rg: anamnesisData?.rg || "",
-            cpf: anamnesisData?.cpf || "",
-            cep: anamnesisData?.cep || "",
-            email: updatedData.email || anamnesisData?.email || "",
-            logradouro: anamnesisData?.logradouro || "",
-            numero: anamnesisData?.numero || "",
-            complemento: anamnesisData?.complemento || "",
-            bairro: anamnesisData?.bairro || "",
-            cidade: anamnesisData?.cidade || "",
-            outrasInformacoes: anamnesisData?.outrasInformacoes || "",
-            menorDeIdade: Boolean(anamnesisData?.menorDeIdade),
-            responsavelNome: anamnesisData?.responsavelNome || "",
-            responsavelDataNascimento: anamnesisData?.responsavelDataNascimento || "",
-            responsavelCpf: anamnesisData?.responsavelCpf || "",
-            responsavelTelefone: anamnesisData?.responsavelTelefone || "",
-            anamnese: anamnesisData || {},
+            ...buildPatientAnamnesisSnapshot(mergedIdentityPatient, syncedAnamnesisData),
+            anamnese: syncedAnamnesisData || {},
           });
         }
 

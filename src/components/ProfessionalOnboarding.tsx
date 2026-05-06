@@ -293,6 +293,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
 
       onComplete({
         name: fullName,
+        crp: councilNumber || null,
         profilePicture: profileUpload.url,
         signatureDataUrl: signatureUpload.url,
         clinicSettings: {

@@ -374,6 +374,20 @@ function sanitizePhoneE164(value: unknown): string | null {
   return digits;
 }
 
+function resolveStoredCrp(input: any): string | null {
+  return (
+    sanitizeString(input?.crp, 80) ||
+    sanitizeString(input?.council_number, 80) ||
+    sanitizeString(input?.councilNumber, 80) ||
+    sanitizeString(input?.clinicSettings?.councilNumber, 80) ||
+    null
+  );
+}
+
+function resolveStoredCouncil(input: any): string | null {
+  return sanitizeString(input?.council, 80) || null;
+}
+
 function maskEmail(email: string): string {
   const [local, domain] = email.split('@');
   if (!local || !domain) return '***';
@@ -2129,7 +2143,7 @@ function buildSessionUserPayload(input: any) {
     firstLoginCompleted:
       typeof input?.firstLoginCompleted === 'boolean' ? input.firstLoginCompleted : null,
     activationRequired: Boolean(input?.activationRequired),
-    crp: sanitizeString(input?.crp || input?.clinicSettings?.councilNumber, 80) || null,
+    crp: resolveStoredCrp(input),
     signatureDataUrl:
       sanitizeSessionUrl(input?.signatureDataUrl) ||
       sanitizeSessionUrl(input?.clinicSettings?.signatureDataUrl) ||
@@ -3027,7 +3041,7 @@ async function startServer() {
               emailVerified: Boolean((user as any)?.email_confirmed_at || (user as any)?.confirmed_at),
               phoneVerified: Boolean((profile as any)?.phone_verified_at),
               firstLoginCompleted: (profile.first_login_completed ?? user.user_metadata?.first_login_completed) ?? null,
-              crp: (profile as any)?.crp || null,
+              crp: resolveStoredCrp(profile),
               signatureDataUrl: (profile as any)?.signatureDataUrl || (profile as any)?.signature_data_url || null,
               specialties: (profile as any)?.specialties || null,
               miniCurriculum: (profile as any)?.miniCurriculum || (profile as any)?.mini_curriculum || null,
@@ -3765,7 +3779,7 @@ async function startServer() {
         activeWorkspaceId: clinicForSession,
         emailVerified: isEmailVerified,
         phoneVerified: Boolean(profile.phone_verified_at),
-        crp: (profile as any)?.crp || null,
+        crp: resolveStoredCrp(profile),
         signatureDataUrl: (profile as any)?.signatureDataUrl || (profile as any)?.signature_data_url || null,
         specialties: (profile as any)?.specialties || null,
         miniCurriculum: (profile as any)?.miniCurriculum || (profile as any)?.mini_curriculum || null,
@@ -4840,7 +4854,7 @@ async function startServer() {
         emailVerified: isEmailVerified,
         phoneVerified: Boolean(profile.phone_verified_at),
         firstLoginCompleted: (profile.first_login_completed ?? user.user_metadata?.first_login_completed) ?? null,
-        crp: (profile as any)?.crp || null,
+        crp: resolveStoredCrp(profile),
         signatureDataUrl: (profile as any)?.signatureDataUrl || (profile as any)?.signature_data_url || null,
         specialties: (profile as any)?.specialties || null,
         miniCurriculum: (profile as any)?.miniCurriculum || (profile as any)?.mini_curriculum || null,
@@ -8884,6 +8898,7 @@ async function startServer() {
       req.session.user.name = fullName;
       req.session.user.firstLoginCompleted = true;
       req.session.user.subscriptionStatus = 'active';
+      req.session.user.crp = councilNumber || req.session.user?.crp || null;
       req.session.user.profilePicture = sanitizeSessionUrl(profilePicture) || req.session.user.profilePicture || null;
       req.session.user.clinicSettings = compactClinicSettingsForSession(nextClinicSettings);
       req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(userId));
@@ -8919,6 +8934,9 @@ async function startServer() {
         .maybeSingle();
       const profileOut = profileExtra ? { ...profileExtra } : null;
       if (profileOut) {
+        profileOut.crp = resolveStoredCrp(profileOut);
+        profileOut.council = resolveStoredCouncil(profileOut);
+        profileOut.council_number = resolveStoredCrp(profileOut);
         const metadata = (profileOut.metadata && typeof profileOut.metadata === 'object') ? { ...profileOut.metadata } : {};
         const profilePhotoPath = extractPatientPhotosStoragePath(metadata.profilePicturePath || profileOut.profile_photo_url);
         const clinicLogoPath = extractPatientPhotosStoragePath(metadata.clinicLogoPath || profileOut.clinic_logo_url);
@@ -8971,6 +8989,11 @@ async function startServer() {
       }
 
       const profileOut = profileExtra ? { ...profileExtra } : null;
+      if (profileOut) {
+        profileOut.crp = resolveStoredCrp(profileOut);
+        profileOut.council = resolveStoredCouncil(profileOut);
+        profileOut.council_number = resolveStoredCrp(profileOut);
+      }
       const metadata =
         profileOut?.metadata && typeof profileOut.metadata === 'object'
           ? { ...(profileOut.metadata as Record<string, any>) }
@@ -9023,6 +9046,11 @@ async function startServer() {
       const profilePicturePath = sanitizeString(req.body?.profilePicturePath || req.body?.profile_picture_path, 260);
       const signaturePath = sanitizeString(req.body?.signaturePath || req.body?.signature_path, 260);
       const clinicLogoPath = sanitizeString(req.body?.clinicLogoPath || req.body?.clinic_logo_path, 260);
+      const resolvedCrp = sanitizeString(req.body?.crp, 80);
+      const resolvedCouncil = sanitizeString(req.body?.council || req.body?.clinicSettings?.council, 80);
+      const resolvedCouncilNumber =
+        sanitizeString(req.body?.councilNumber || req.body?.clinicSettings?.councilNumber, 80) ||
+        resolvedCrp;
 
       const safePayload = cleanObject({
         id: sanitizeString(req.params.userId, 120),
@@ -9030,7 +9058,7 @@ async function startServer() {
         email: sanitizeEmail(req.body?.email) || undefined,
         role: sanitizeString(req.body?.role, 40) || undefined,
         profile_picture: sanitizeUrl(req.body?.profile_picture) || sanitizeUrl(req.body?.profilePicture) || undefined,
-        crp: sanitizeString(req.body?.crp, 80) || undefined,
+        crp: resolvedCrp || undefined,
         phone: sanitizePhoneE164(req.body?.phone || req.body?.whatsappPhone || req.body?.whatsapp) || undefined,
         signature_url:
           sanitizeUrl(req.body?.signature_url) ||
@@ -9107,6 +9135,9 @@ async function startServer() {
             user_id: sanitizeString(req.params.userId, 120),
             clinic_id: clinicId || undefined,
             role: role || undefined,
+            council: resolvedCouncil || undefined,
+            council_number: resolvedCouncilNumber || undefined,
+            crp: resolvedCrp || resolvedCouncilNumber || undefined,
             profile_photo_url: resolvedProfilePictureUrl || undefined,
             signature_data_url: resolvedSignatureUrl || undefined,
             clinic_logo_url: resolvedClinicLogoUrl || undefined,
@@ -9127,6 +9158,8 @@ async function startServer() {
           const nextClinicSettings = compactClinicSettingsForSession({
             ...(req.session.user?.clinicSettings || {}),
             ...(req.body?.clinicSettings && typeof req.body.clinicSettings === 'object' ? req.body.clinicSettings : {}),
+            ...(resolvedCouncil ? { council: resolvedCouncil } : {}),
+            ...(resolvedCouncilNumber ? { councilNumber: resolvedCouncilNumber } : {}),
             clinicLogoUrl: resolvedClinicLogoUrl || null,
             signatureDataUrl: resolvedSignatureUrl || null,
             therapistSpecialties:
@@ -9169,7 +9202,8 @@ async function startServer() {
           req.session.user.clinicSettings = nextClinicSettings;
           req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(req.session.user.id));
           req.session.user.crp =
-            sanitizeString(req.body?.crp, 80) ||
+            resolvedCrp ||
+            resolvedCouncilNumber ||
             req.session.user?.crp ||
             null;
           req.session.user.specialties =

@@ -12,6 +12,78 @@ import { calculateDomainMastery, normalizeScoreToPercent } from '../utils/clinic
 import html2canvas from 'html2canvas';
 
 export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole }: any) => { 
+  const coalescePatientText = (...values: any[]) => {
+    for (const value of values) {
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed) return trimmed;
+      }
+    }
+    return '';
+  };
+  const buildAnamnesisInitialData = (patientRecord: any) => {
+    const existing = patientRecord?.anamnesisData && typeof patientRecord.anamnesisData === 'object'
+      ? patientRecord.anamnesisData
+      : {};
+    const address = patientRecord?.address && typeof patientRecord.address === 'object'
+      ? patientRecord.address
+      : {};
+    const guardian = patientRecord?.guardian && typeof patientRecord.guardian === 'object'
+      ? patientRecord.guardian
+      : {};
+    const logradouro = coalescePatientText(patientRecord?.logradouro, address?.logradouro, existing?.logradouro);
+    const numero = coalescePatientText(patientRecord?.numero, address?.numero, existing?.numero);
+    const bairro = coalescePatientText(patientRecord?.bairro, address?.bairro, existing?.bairro);
+    const cidade = coalescePatientText(patientRecord?.cidade, address?.cidade, existing?.cidade);
+
+    return {
+      ...existing,
+      nome: coalescePatientText(patientRecord?.name, existing?.nome),
+      nomeSocial: coalescePatientText(patientRecord?.socialName, existing?.nomeSocial),
+      telefone: coalescePatientText(patientRecord?.phone, existing?.telefone),
+      email: coalescePatientText(patientRecord?.email, existing?.email),
+      cpf: coalescePatientText(patientRecord?.cpf, existing?.cpf),
+      dataNascimento: coalescePatientText(
+        patientRecord?.dataNascimento,
+        patientRecord?.birthDate,
+        patientRecord?.birth_date,
+        existing?.dataNascimento,
+      ),
+      genero: coalescePatientText(patientRecord?.gender, existing?.genero),
+      convenioTipo: coalescePatientText(patientRecord?.insuranceType, existing?.convenioTipo) || 'particular',
+      convenioNome: coalescePatientText(patientRecord?.insuranceName, existing?.convenioNome),
+      convenioCarteirinha: coalescePatientText(patientRecord?.cardNumber, existing?.convenioCarteirinha),
+      grupo: coalescePatientText(patientRecord?.group, existing?.grupo),
+      comoConheceu: coalescePatientText(patientRecord?.source, existing?.comoConheceu),
+      rg: coalescePatientText(patientRecord?.rg, existing?.rg),
+      cep: coalescePatientText(patientRecord?.cep, existing?.cep),
+      logradouro,
+      numero,
+      complemento: coalescePatientText(patientRecord?.complemento, address?.complemento, existing?.complemento),
+      bairro,
+      cidade,
+      endereco:
+        [logradouro, numero, bairro, cidade].filter(Boolean).join(', ') ||
+        coalescePatientText(existing?.endereco),
+      outrasInformacoes: coalescePatientText(patientRecord?.notes, existing?.outrasInformacoes),
+      menorDeIdade:
+        typeof patientRecord?.isMinor === 'boolean'
+          ? patientRecord.isMinor
+          : Boolean(existing?.menorDeIdade),
+      responsavelNome: coalescePatientText(guardian?.nome, existing?.responsavelNome),
+      responsavelDataNascimento: coalescePatientText(
+        guardian?.dataNascimento,
+        existing?.responsavelDataNascimento,
+      ),
+      responsavelCpf: coalescePatientText(guardian?.cpf, existing?.responsavelCpf),
+      responsavelTelefone: coalescePatientText(guardian?.telefone, existing?.responsavelTelefone),
+      idade:
+        typeof patientRecord?.age === 'number'
+          ? patientRecord.age
+          : existing?.idade ?? '',
+    };
+  };
+  const anamnesisInitialData = useMemo(() => buildAnamnesisInitialData(patient), [patient]);
   const rawProfileType = String(
     patient?.type ||
     patient?.profileType ||
@@ -2238,7 +2310,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       <AnamnesisModal
         isOpen={showAnamnesis}
         onClose={() => setShowAnamnesis(false)}
-        initialData={patient.anamnesisData || { nome: patient.name }}
+        initialData={anamnesisInitialData}
         onSave={handleUpdateAnamnesis}
         mode="edit"
         template={anamnesisTemplate}

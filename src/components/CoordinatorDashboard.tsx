@@ -681,6 +681,9 @@ export function CoordinatorDashboard({
     reader.readAsDataURL(file);
   };
 
+  const isUnsavedLocalMediaPreview = (value: string | null | undefined) =>
+    typeof value === "string" && value.trim().startsWith("data:image/");
+
   const showProcessing = (message = "Processando...") => {
     setProcessingState({ active: true, message });
   };
@@ -820,11 +823,21 @@ export function CoordinatorDashboard({
           "",
       ),
     );
-    setTherapistSignatureDataUrl(
-      user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null,
+    setTherapistSignatureDataUrl((prev) =>
+      isUnsavedLocalMediaPreview(prev)
+        ? prev
+        : user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null,
     );
-    setTherapistProfilePhotoUrl(user?.profilePicture || user?.profile_picture || null);
-    setClinicLogoDataUrl(user?.clinicSettings?.clinicLogoUrl || null);
+    setTherapistProfilePhotoUrl((prev) =>
+      isUnsavedLocalMediaPreview(prev)
+        ? prev
+        : user?.profilePicture || user?.profile_picture || null,
+    );
+    setClinicLogoDataUrl((prev) =>
+      isUnsavedLocalMediaPreview(prev)
+        ? prev
+        : user?.clinicSettings?.clinicLogoUrl || null,
+    );
     setWorkStart(String(user?.clinicSettings?.workStart || "08:00"));
     setWorkEnd(String(user?.clinicSettings?.workEnd || "18:00"));
     setClinicCnpj(String(user?.clinicSettings?.clinicCnpj || ""));
@@ -858,9 +871,15 @@ export function CoordinatorDashboard({
       const signedClinicLogo = String(media?.clinicLogoUrl || "").trim() || null;
       const signedSignature = String(media?.signatureUrl || "").trim() || null;
 
-      if (signedProfilePicture) setTherapistProfilePhotoUrl(signedProfilePicture);
-      if (signedClinicLogo) setClinicLogoDataUrl(signedClinicLogo);
-      if (signedSignature) setTherapistSignatureDataUrl(signedSignature);
+      setTherapistProfilePhotoUrl((prev) =>
+        isUnsavedLocalMediaPreview(prev) ? prev : signedProfilePicture || prev,
+      );
+      setClinicLogoDataUrl((prev) =>
+        isUnsavedLocalMediaPreview(prev) ? prev : signedClinicLogo || prev,
+      );
+      setTherapistSignatureDataUrl((prev) =>
+        isUnsavedLocalMediaPreview(prev) ? prev : signedSignature || prev,
+      );
     } catch (error) {
       console.warn("Falha ao renovar URLs assinadas de mídia no perfil.", error);
     }
@@ -886,6 +905,13 @@ export function CoordinatorDashboard({
   const retryMediaIfBroken = useCallback(
     async (mediaType: "signature" | "profile" | "logo") => {
       if (activeTab !== "settings") return;
+      if (
+        (mediaType === "signature" && isUnsavedLocalMediaPreview(therapistSignatureDataUrl)) ||
+        (mediaType === "profile" && isUnsavedLocalMediaPreview(therapistProfilePhotoUrl)) ||
+        (mediaType === "logo" && isUnsavedLocalMediaPreview(clinicLogoDataUrl))
+      ) {
+        return;
+      }
       if ((mediaRefreshAttempts[mediaType] || 0) >= 2) return;
       setMediaRefreshAttempts((prev) => ({
         ...prev,
@@ -893,7 +919,14 @@ export function CoordinatorDashboard({
       }));
       await refreshSignedMediaUrls();
     },
-    [activeTab, mediaRefreshAttempts, refreshSignedMediaUrls],
+    [
+      activeTab,
+      clinicLogoDataUrl,
+      mediaRefreshAttempts,
+      refreshSignedMediaUrls,
+      therapistProfilePhotoUrl,
+      therapistSignatureDataUrl,
+    ],
   );
 
   useEffect(() => {
