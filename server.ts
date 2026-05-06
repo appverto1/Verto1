@@ -11227,15 +11227,18 @@ async function startServer() {
           created_at: nowIso,
           updated_at: nowIso
         };
-        let { error: insertError } = await supabase.from('protocol_import_requests').insert([insertPayload]);
-        if (insertError && /(quarantine_status|scan_status|safe_preview_status|raw_file_access|safe_preview_text)/i.test(insertError.message || '')) {
-          delete insertPayload.quarantine_status;
-          delete insertPayload.scan_status;
-          delete insertPayload.safe_preview_status;
-          delete insertPayload.raw_file_access;
-          delete insertPayload.safe_preview_text;
-          delete insertPayload.scan_report;
+        let insertError: any = null;
+        const removedProtocolColumns = new Set<string>();
+        for (let attempt = 0; attempt < 10; attempt += 1) {
           ({ error: insertError } = await supabase.from('protocol_import_requests').insert([insertPayload]));
+          if (!insertError) break;
+
+          const missingColumn = extractMissingColumnName(insertError);
+          if (!missingColumn || removedProtocolColumns.has(missingColumn) || !(missingColumn in insertPayload)) {
+            break;
+          }
+          removedProtocolColumns.add(missingColumn);
+          delete insertPayload[missingColumn];
         }
         storedInTable = !insertError;
         if (insertError) {
@@ -11350,6 +11353,42 @@ async function startServer() {
         }).filter(Boolean);
       }
 
+      try {
+        const { data: scanLogs } = await supabase
+          .from('activity_logs')
+          .select('payload_details, timestamp')
+          .eq('type', 'protocol_import_review')
+          .order('timestamp', { ascending: false })
+          .limit(300);
+        const scansByRequestId = new Map<string, any>();
+        for (const log of scanLogs || []) {
+          try {
+            const payload = JSON.parse(String((log as any).payload_details || '{}'));
+            const requestId = sanitizeString(payload.requestId, 120);
+            if (!requestId || scansByRequestId.has(requestId) || !payload.scanStatus) continue;
+            scansByRequestId.set(requestId, {
+              scanStatus: sanitizeString(payload.scanStatus, 40) || 'pending',
+              quarantineStatus: sanitizeString(payload.quarantineStatus, 40) || 'quarantined',
+              safePreviewStatus: sanitizeString(payload.safePreviewStatus, 40) || 'not_generated',
+              rawFileAccess: 'blocked',
+              safePreviewText: sanitizeSafePreviewText(payload.safePreviewText || '', 4000) || null,
+              scanReport: sanitizeClinicalPayload(payload.scanReport || {}),
+              scannedAt: sanitizeString((log as any).timestamp, 80)
+            });
+          } catch {
+            // ignore malformed log payload
+          }
+        }
+        if (scansByRequestId.size) {
+          requests = requests.map((request) => {
+            const scan = scansByRequestId.get(sanitizeString(request.id, 120));
+            return scan ? { ...request, ...scan } : request;
+          });
+        }
+      } catch {
+        // The queue must remain visible even if scan log hydration is unavailable.
+      }
+
       return res.json({ success: true, data: requests });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Nao foi possivel listar solicitacoes de protocolos.' });
@@ -11447,19 +11486,28 @@ async function startServer() {
         scan_report: scan.scanReport,
         updated_at: nowIso
       };
-      let { error: updateError } = await supabase
-        .from('protocol_import_requests')
-        .update(updatePayload)
-        .eq('id', requestId);
-      if (updateError && /scan_report/i.test(updateError.message || '')) {
-        delete updatePayload.scan_report;
+      let updateError: any = null;
+      let updatedTable = false;
+      const removedProtocolColumns = new Set<string>();
+      for (let attempt = 0; attempt < 10; attempt += 1) {
         ({ error: updateError } = await supabase
           .from('protocol_import_requests')
           .update(updatePayload)
           .eq('id', requestId));
+        if (!updateError) {
+          updatedTable = true;
+          break;
+        }
+
+        const missingColumn = extractMissingColumnName(updateError);
+        if (!missingColumn || removedProtocolColumns.has(missingColumn) || !(missingColumn in updatePayload)) {
+          break;
+        }
+        removedProtocolColumns.add(missingColumn);
+        delete updatePayload[missingColumn];
       }
       if (updateError) {
-        throw updateError;
+        console.warn('[Protocol Import] scan table update fallback:', updateError.message || updateError);
       }
 
       await persistActivityLog({
@@ -11475,6 +11523,8 @@ async function startServer() {
           scanStatus: scan.scanStatus,
           quarantineStatus: scan.quarantineStatus,
           safePreviewStatus: scan.safePreviewStatus,
+          safePreviewText: sanitizeSafePreviewText(scan.safePreviewText, 4000),
+          updatedTable,
           scanReport: scan.scanReport
         })
       });
