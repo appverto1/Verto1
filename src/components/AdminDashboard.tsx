@@ -79,6 +79,10 @@ export const AdminDashboard = ({ onLogout }: any) => {
   const [twoFactorToken, setTwoFactorToken] = useState('');
   const [is2FAEnabled, setIs2FAEnabled] = useState(false);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
+  const [complimentaryEmail, setComplimentaryEmail] = useState('');
+  const [complimentaryPlan, setComplimentaryPlan] = useState<'Essencial' | 'Crescimento' | 'Avançado'>('Essencial');
+  const [complimentaryNote, setComplimentaryNote] = useState('');
+  const [grantingComplimentaryPlan, setGrantingComplimentaryPlan] = useState(false);
 
   React.useEffect(() => {
     const fetchData = async () => {
@@ -198,6 +202,58 @@ export const AdminDashboard = ({ onLogout }: any) => {
       if (data.success) alert(data.message);
     } catch (err) {
       alert('Erro ao processar cobranÃ§a');
+    }
+  };
+
+  const handleGrantComplimentaryPlan = async () => {
+    const email = complimentaryEmail.trim();
+    if (!email) {
+      alert('Informe o e-mail cadastrado antes de conceder o acesso.');
+      return;
+    }
+    if (!window.confirm(`Conceder plano ${complimentaryPlan} sem cobranca para ${email}?`)) return;
+
+    setGrantingComplimentaryPlan(true);
+    try {
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      const response = await fetch('/api/admin/grant-complimentary-plan', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        body: JSON.stringify({
+          email,
+          planName: complimentaryPlan,
+          note: complimentaryNote
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Nao foi possivel conceder o acesso.');
+      }
+
+      setClients((current) => current.map((client) => (
+        String(client.email || '').toLowerCase() === email.toLowerCase()
+          ? {
+              ...client,
+              role: 'coordinator',
+              subscription_status: 'active',
+              plan_name: data.data?.planName || complimentaryPlan,
+              plan_price: 0
+            }
+          : client
+      )));
+      setComplimentaryEmail('');
+      setComplimentaryNote('');
+      alert(`Acesso gratuito liberado no plano ${data.data?.planName || complimentaryPlan}.${data.data?.activationEmailSent ? ' E-mail de ativacao enviado.' : ''}`);
+    } catch (err: any) {
+      alert(err.message || 'Erro ao conceder acesso gratuito.');
+    } finally {
+      setGrantingComplimentaryPlan(false);
     }
   };
 
@@ -441,6 +497,53 @@ export const AdminDashboard = ({ onLogout }: any) => {
                   <UserPlus size={18} />
                   Novo Cliente
                 </button>
+              </div>
+              <div className="mx-8 mt-8 mb-2 rounded-[28px] border border-blue-100 bg-blue-50/40 p-5">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
+                  <div className="flex-1">
+                    <p className="text-[10px] font-bold text-[#7a32fc] uppercase tracking-widest mb-2">Acesso cortesia</p>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">E-mail cadastrado</label>
+                    <input
+                      type="email"
+                      value={complimentaryEmail}
+                      onChange={(event) => setComplimentaryEmail(event.target.value)}
+                      placeholder="socia@clinica.com.br"
+                      className="mt-2 w-full bg-white border border-blue-100 rounded-2xl py-3 px-4 text-sm font-bold text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
+                    />
+                  </div>
+                  <div className="w-full lg:w-56">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Plano liberado</label>
+                    <select
+                      value={complimentaryPlan}
+                      onChange={(event) => setComplimentaryPlan(event.target.value as 'Essencial' | 'Crescimento' | 'Avançado')}
+                      className="mt-2 w-full bg-white border border-blue-100 rounded-2xl py-3 px-4 text-sm font-bold text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
+                    >
+                      <option value="Essencial">Essencial</option>
+                      <option value="Crescimento">Crescimento</option>
+                      <option value="Avançado">Avançado</option>
+                    </select>
+                  </div>
+                  <div className="flex-[1.2]">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Observacao interna</label>
+                    <input
+                      type="text"
+                      value={complimentaryNote}
+                      onChange={(event) => setComplimentaryNote(event.target.value)}
+                      placeholder="Ex.: socia fundadora, sem cobranca"
+                      className="mt-2 w-full bg-white border border-blue-100 rounded-2xl py-3 px-4 text-sm font-bold text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
+                    />
+                  </div>
+                  <button
+                    onClick={handleGrantComplimentaryPlan}
+                    disabled={grantingComplimentaryPlan}
+                    className="bg-[#05CD99] text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-emerald-500/20 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                  >
+                    {grantingComplimentaryPlan ? 'Liberando...' : 'Liberar sem cobrar'}
+                  </button>
+                </div>
+                <p className="mt-3 text-xs font-semibold text-gray-500">
+                  Use depois que a pessoa criou o cadastro e chegou na etapa de pagamento. O plano fica ativo com valor R$ 0,00 e registro de auditoria.
+                </p>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left">

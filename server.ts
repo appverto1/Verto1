@@ -10741,6 +10741,14 @@ async function startServer() {
     }
   };
 
+  const checkPlatformAdmin = (req: any, res: any, next: any) => {
+    const role = sanitizeString(req.session.user?.role, 40);
+    if (role === 'admin' || role === 'owner') {
+      return next();
+    }
+    return res.status(403).json({ error: 'Acesso negado. Apenas administradores podem acessar esta rota.' });
+  };
+
   app.get('/api/admin/stats', checkAuth, checkAdmin, async (req, res) => {
     try {
       // Get total users
@@ -10791,6 +10799,149 @@ async function startServer() {
       res.json({ success: true, data });
     } catch (error) {
       res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+  });
+
+  app.post('/api/admin/grant-complimentary-plan', checkAuth, checkPlatformAdmin, async (req: any, res) => {
+    try {
+      const email = sanitizeEmail(req.body?.email);
+      const requestedPlan = normalizeProfessionalPlan(req.body?.planName || 'Essencial');
+      const note = sanitizeString(req.body?.note, 500);
+
+      if (!email) {
+        return res.status(400).json({ success: false, error: 'Informe um e-mail valido.' });
+      }
+      if (!requestedPlan) {
+        return res.status(400).json({ success: false, error: 'Plano profissional invalido.' });
+      }
+
+      const { data: existingUser, error: findError } = await supabase
+        .from('users')
+        .select('id, email, name, role, clinic_id, subscription_status, plan_name')
+        .eq('email', email)
+        .maybeSingle();
+      if (findError) throw findError;
+      if (!existingUser?.id) {
+        return res.status(404).json({
+          success: false,
+          error: 'Cadastro nao encontrado. Primeiro faca o cadastro dela na landing page ate a etapa de pagamento; depois conceda o acesso gratuito aqui.'
+        });
+      }
+
+      if (sanitizeString(existingUser.role, 40).toLowerCase() === 'patient') {
+        return res.status(409).json({ success: false, error: 'Este e-mail esta cadastrado como paciente.' });
+      }
+
+      const userId = sanitizeString(existingUser.id, 120);
+      const actor = req.session.user;
+      let updatePayload: Record<string, any> = cleanObject({
+        role: 'coordinator',
+        clinic_id: userId,
+        subscription_status: 'active',
+        plan_name: requestedPlan,
+        plan_price: 0,
+        billing_source: 'complimentary',
+        complimentary_plan_granted_at: new Date().toISOString(),
+        complimentary_plan_granted_by: sanitizeString(actor?.id, 120) || null,
+        complimentary_plan_note: note || `Acesso gratuito concedido no plano ${requestedPlan}.`,
+        updated_at: new Date().toISOString()
+      });
+
+      const removedColumns = new Set<string>();
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const { error: updateError } = await supabase
+          .from('users')
+          .update(updatePayload)
+          .eq('id', userId);
+        if (!updateError) break;
+
+        const missingColumn = extractMissingColumnName(updateError);
+        if (!missingColumn || removedColumns.has(missingColumn) || !(missingColumn in updatePayload)) {
+          throw updateError;
+        }
+        removedColumns.add(missingColumn);
+        delete updatePayload[missingColumn];
+      }
+
+      await ensureClinicAndMembershipForCoordinator(userId, existingUser.name || null);
+
+      let activationEmailSent = false;
+      try {
+        const { data: authData, error: authError } = await supabase.auth.admin.getUserById(userId);
+        if (!authError) {
+          const authUser = authData?.user;
+          const isEmailConfirmed = Boolean((authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at);
+          const targetEmail = sanitizeEmail(authUser?.email) || email;
+
+          if (!isEmailConfirmed && targetEmail) {
+            const activationLink =
+              (await generateSupabaseActionLink({
+                type: 'signup',
+                email: targetEmail,
+                redirectTo: getActivationRedirectUrl('coordinator', targetEmail)
+              })) || getActivationRedirectUrl('coordinator', targetEmail);
+
+            const activationEmail = buildActivationEmailTemplate({
+              nome: sanitizeString(existingUser.name || authUser?.user_metadata?.full_name || targetEmail.split('@')[0], 180),
+              link_ativacao: activationLink,
+              perfil: 'professional'
+            });
+
+            activationEmailSent = await sendTransactionalEmailSafe({
+              to: targetEmail,
+              subject: activationEmail.subject,
+              html: activationEmail.html,
+              context: 'complimentary_professional_activation',
+              from: OFFICIAL_FROM_CONTACT,
+              replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+              templateKind: 'welcome_professional',
+              templateData: {
+                nome: sanitizeString(existingUser.name || authUser?.user_metadata?.full_name || targetEmail.split('@')[0], 180),
+                link_ativacao: activationLink
+              },
+              metadata: {
+                userId,
+                email: maskEmail(targetEmail),
+                planName: requestedPlan,
+                billingSource: 'complimentary'
+              }
+            });
+          }
+        }
+      } catch (activationError: any) {
+        console.warn('[Admin] complimentary activation email failed:', activationError?.message || String(activationError));
+      }
+
+      await persistIdentityAuditLog({
+        title: 'Plano gratuito concedido',
+        content: `Acesso gratuito ${requestedPlan} concedido para ${maskEmail(email)} por ${maskEmail(actor?.email)}. E-mail de ativacao ${activationEmailSent ? 'enviado' : 'nao enviado ou ja confirmado'}.${note ? ` Observacao: ${note}` : ''}`,
+        identifier: email,
+        channel: 'admin',
+        userId,
+        status: 'active'
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          userId,
+          email,
+          planName: requestedPlan,
+          subscriptionStatus: 'active',
+          planPrice: 0,
+          activationEmailSent
+        }
+      });
+    } catch (error: any) {
+      console.error('[Admin] grant complimentary plan error:', {
+        message: error?.message || String(error),
+        code: error?.code || null,
+        details: error?.details || null
+      });
+      return res.status(500).json({
+        success: false,
+        error: error?.message || 'Nao foi possivel conceder o acesso gratuito.'
+      });
     }
   });
 
