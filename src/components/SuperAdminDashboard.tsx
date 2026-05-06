@@ -89,6 +89,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [protocolRequestsError, setProtocolRequestsError] = useState<string | null>(null);
   const [approvingProtocolId, setApprovingProtocolId] = useState<string | null>(null);
   const [scanningProtocolId, setScanningProtocolId] = useState<string | null>(null);
+  const [rejectingProtocolId, setRejectingProtocolId] = useState<string | null>(null);
   const [protocolBuilderText, setProtocolBuilderText] = useState('');
   const [protocolBuilderDomain, setProtocolBuilderDomain] = useState('Mobilidade Basica');
   const [protocolBuilderTitle, setProtocolBuilderTitle] = useState('AFLS - Protocolo de Vida Diaria');
@@ -311,6 +312,37 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
       alert(error.message || 'Nao foi possivel processar a varredura segura.');
     } finally {
       setScanningProtocolId(null);
+    }
+  };
+
+  const handleRejectProtocolRequest = async (request: any) => {
+    if (!window.confirm('Recusar esta solicitacao de protocolo?')) return;
+    try {
+      setRejectingProtocolId(request.id);
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      const response = await fetch(`/api/admin/protocol-import-requests/${request.id}/reject`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: token ? `Bearer ${token}` : ''
+        }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Nao foi possivel recusar o protocolo.');
+      }
+      setProtocolRequests((current) => current.map((item) => (
+        item.id === request.id
+          ? { ...item, status: 'rejected', reviewedAt: new Date().toISOString() }
+          : item
+      )));
+    } catch (error: any) {
+      alert(error.message || 'Nao foi possivel recusar o protocolo.');
+    } finally {
+      setRejectingProtocolId(null);
     }
   };
 
@@ -1124,6 +1156,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               ) : (
                 protocolRequests.map((request) => {
                   const isApproved = request.status === 'approved';
+                  const isRejected = request.status === 'rejected';
                   const isClean = request.scanStatus === 'clean';
                   const isBlocked = request.scanStatus === 'blocked';
                   const screenshotEvidence = request.scanReport?.evidence?.mode === 'screenshots'
@@ -1151,8 +1184,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       <div className="flex-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-2 mb-2">
                           <h3 className="font-black text-slate-900">{request.protocolName || request.fileName}</h3>
-                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase ${isApproved ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
-                            {isApproved ? 'Aprovado' : 'Pendente'}
+                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase ${isApproved ? 'bg-emerald-50 text-emerald-600' : isRejected ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-600'}`}>
+                            {isApproved ? 'Aprovado' : isRejected ? 'Recusado' : 'Pendente'}
                           </span>
                         </div>
                         <p className="text-xs font-bold text-slate-500">
@@ -1320,6 +1353,17 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         {!isApproved && (
                           <button
                             type="button"
+                            onClick={() => handleRejectProtocolRequest(request)}
+                            disabled={rejectingProtocolId === request.id}
+                            className="px-4 py-2 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-black hover:bg-rose-100 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
+                          >
+                            {rejectingProtocolId === request.id ? <Loader2 size={14} className="animate-spin" /> : <AlertCircle size={14} />}
+                            Recusar
+                          </button>
+                        )}
+                        {!isApproved && !isRejected && (
+                          <button
+                            type="button"
                             onClick={() => seedCanonicalBuilderFromRequest(request)}
                             className="px-4 py-2 rounded-2xl bg-white border border-slate-200 text-slate-700 text-xs font-black hover:bg-slate-50 transition-all"
                           >
@@ -1340,7 +1384,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                           <button
                             type="button"
                             onClick={() => handleScanProtocolRequest(request)}
-                            disabled={scanningProtocolId === request.id}
+                            disabled={scanningProtocolId === request.id || isRejected}
                             className="px-4 py-2 rounded-2xl bg-slate-900 text-white text-xs font-black hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
                           >
                             {scanningProtocolId === request.id ? <Loader2 size={14} className="animate-spin" /> : <Shield size={14} />}
@@ -1349,7 +1393,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         )}
                         <button
                           onClick={() => handleApproveProtocolRequest(request)}
-                          disabled={isApproved || approvingProtocolId === request.id || (!!request.scanStatus && !isClean)}
+                          disabled={isApproved || isRejected || approvingProtocolId === request.id || (!!request.scanStatus && !isClean)}
                           className="px-4 py-2 rounded-2xl bg-violet-600 text-white text-xs font-black hover:bg-violet-700 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
                         >
                           {approvingProtocolId === request.id ? <Loader2 size={14} className="animate-spin" /> : isApproved ? <CheckCircle2 size={14} /> : <ClipboardCheck size={14} />}

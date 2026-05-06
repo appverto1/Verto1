@@ -11574,6 +11574,83 @@ async function startServer() {
     }
   });
 
+  app.get('/api/protocol-import-requests', checkAuth, async (req: any, res) => {
+    try {
+      const user = req.session.user;
+      const userId = sanitizeString(user?.id, 120);
+      const clinicId = sanitizeString(currentClinicId(user), 120);
+      let requests: any[] = [];
+
+      try {
+        let query = supabase
+          .from('protocol_import_requests')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(50);
+
+        if (isUuid(clinicId)) {
+          query = query.eq('clinic_id', clinicId);
+        } else if (userId) {
+          query = query.eq('requester_user_id', userId);
+        }
+
+        const { data, error } = await query;
+        if (!error && Array.isArray(data)) {
+          requests = data.map((row: any) => ({
+            id: sanitizeString(row.id, 120),
+            protocolName: sanitizeString(row.protocol_name, 180),
+            fileName: sanitizeString(row.file_name, 240),
+            status: sanitizeString(row.status, 40) || 'pending',
+            canonicalName: sanitizeString(row.approved_canonical_name || row.suggested_canonical_name, 180),
+            confidence: Number(row.suggested_confidence || 0),
+            applicableAgeGroup: sanitizeString((row.scan_report || {})?.evidence?.applicableAgeGroup, 40) || 'all',
+            createdAt: sanitizeString(row.created_at, 80),
+            reviewedAt: sanitizeString(row.reviewed_at, 80) || null
+          }));
+        }
+      } catch {
+        requests = [];
+      }
+
+      if (requests.length === 0) {
+        const { data: logs } = await supabase
+          .from('activity_logs')
+          .select('payload_details, timestamp')
+          .eq('type', 'protocol_import_request')
+          .order('timestamp', { ascending: false })
+          .limit(50);
+
+        requests = (logs || []).map((log: any) => {
+          try {
+            const payload = JSON.parse(String(log.payload_details || '{}'));
+            const requesterUserId = sanitizeString(payload.requesterUserId, 120);
+            const payloadClinicId = sanitizeString(payload.clinicId, 120);
+            if ((userId && requesterUserId === userId) || (clinicId && payloadClinicId === clinicId)) {
+              return {
+                id: sanitizeString(payload.id, 120),
+                protocolName: sanitizeString(payload.protocolName, 180),
+                fileName: sanitizeString(payload.fileName, 240),
+                status: sanitizeString(payload.status, 40) || 'pending',
+                canonicalName: sanitizeString(payload.canonicalName, 180),
+                confidence: Number(payload.confidence || 0),
+                applicableAgeGroup: sanitizeString(payload.applicableAgeGroup, 40) || 'all',
+                createdAt: sanitizeString(payload.createdAt || log.timestamp, 80),
+                reviewedAt: null
+              };
+            }
+            return null;
+          } catch {
+            return null;
+          }
+        }).filter(Boolean);
+      }
+
+      return res.json({ success: true, data: requests });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Nao foi possivel listar seus protocolos importados.' });
+    }
+  });
+
   app.get('/api/admin/protocol-import-requests', checkAuth, checkPlatformAdmin, async (_req: any, res) => {
     try {
       let requests: any[] = [];
@@ -11746,6 +11823,46 @@ async function startServer() {
       return res.json({ success: true, data: { requestId, status: 'approved', canonicalKey, canonicalName } });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Nao foi possivel aprovar o protocolo.' });
+    }
+  });
+
+  app.post('/api/admin/protocol-import-requests/:requestId/reject', checkAuth, checkPlatformAdmin, async (req: any, res) => {
+    try {
+      const requestId = sanitizeString(req.params.requestId, 120);
+      if (!requestId) {
+        return res.status(400).json({ success: false, error: 'Informe a solicitacao de protocolo.' });
+      }
+
+      let updatedTable = false;
+      try {
+        const { error } = await supabase
+          .from('protocol_import_requests')
+          .update({
+            status: 'rejected',
+            reviewed_by: sanitizeString(req.session.user?.id, 120) || null,
+            reviewed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', requestId);
+        updatedTable = !error;
+      } catch {
+        updatedTable = false;
+      }
+
+      await persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(currentClinicId(req.session.user), 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
+        title: 'Protocolo recusado',
+        content: `Solicitacao ${requestId} foi recusada pela Verto.`,
+        type: 'protocol_import_review',
+        actionType: 'protocol_import_rejected',
+        payloadDetails: JSON.stringify({ requestId, status: 'rejected', updatedTable })
+      });
+
+      return res.json({ success: true, data: { requestId, status: 'rejected' } });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Nao foi possivel recusar o protocolo.' });
     }
   });
 

@@ -303,6 +303,7 @@ export const ProtocolManagementSystem = ({
   const [requestedScreenshotPage, setRequestedScreenshotPage] = useState(4);
   const [selectedScreenshotFile, setSelectedScreenshotFile] = useState<File | null>(null);
   const [importStatusMessage, setImportStatusMessage] = useState("");
+  const [importedProtocolStatuses, setImportedProtocolStatuses] = useState<any[]>([]);
 
   const nextRandomScreenshotPage = () => Math.floor(Math.random() * 11) + 2;
 
@@ -328,6 +329,29 @@ export const ProtocolManagementSystem = ({
     setImportStatusMessage("");
     setShowImportModal(true);
   };
+
+  useEffect(() => {
+    if (!canManageLibrary) return;
+    let cancelled = false;
+
+    const loadImportedStatuses = async () => {
+      try {
+        const response = await fetch('/api/protocol-import-requests', { credentials: 'include' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success) return;
+        if (!cancelled) {
+          setImportedProtocolStatuses(Array.isArray(data.data) ? data.data : []);
+        }
+      } catch {
+        if (!cancelled) setImportedProtocolStatuses([]);
+      }
+    };
+
+    loadImportedStatuses();
+    return () => {
+      cancelled = true;
+    };
+  }, [canManageLibrary]);
 
   const handleCreateNew = () => { 
     if (!canManageLibrary) return;
@@ -400,6 +424,19 @@ export const ProtocolManagementSystem = ({
 
       setImportProgress(100);
       setImportStatusMessage(`Solicitacao criada. Sugestao Verto: ${data.data?.suggestedCanonicalName || "analise manual"}.`);
+      setImportedProtocolStatuses((current) => ([
+        {
+          id: data.data?.id || `local-${Date.now()}`,
+          protocolName: protocolTitle,
+          status: 'pending',
+          canonicalName: data.data?.suggestedCanonicalName || 'Analise manual',
+          confidence: Number(data.data?.suggestedConfidence || 0),
+          applicableAgeGroup: pendingApplicableAge,
+          createdAt: new Date().toISOString(),
+          reviewedAt: null
+        },
+        ...current
+      ]));
       setTimeout(() => {
         setIsImporting(false);
         setImportProgress(0);
@@ -423,6 +460,7 @@ export const ProtocolManagementSystem = ({
 
   const evaluationProtocols = filteredProtocols.filter((p: any) => p.category === 'evaluation' || !p.category);
   const interventionProtocols = filteredProtocols.filter((p: any) => p.category === 'intervention');
+  const recentImportedProtocols = importedProtocolStatuses.slice(0, 6);
 
   if (editingProtocol) { 
     return (<ProtocolEditor protocol={editingProtocol} onSave={(updated: any) => { onSaveProtocol(updated); setEditingProtocol(null); }} onCancel={() => setEditingProtocol(null)} />); 
@@ -463,17 +501,17 @@ export const ProtocolManagementSystem = ({
     <div className="w-full min-h-full bg-[#0b1220] flex flex-col overflow-x-hidden relative text-slate-100"> 
       {/* Import Modal with License Declaration */}
       {showImportModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-[#101a2d] border border-white/10 rounded-[40px] w-full max-w-lg overflow-hidden shadow-2xl animate-pop">
-            <div className="bg-gradient-to-br from-[#7a32fc] to-[#2f7df4] p-8 text-white relative overflow-hidden">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-4 animate-fade-in">
+          <div className="bg-[#101a2d] border border-white/10 rounded-[28px] w-full max-w-md max-h-[92vh] overflow-hidden shadow-2xl animate-pop">
+            <div className="bg-gradient-to-br from-[#7a32fc] to-[#2f7df4] p-6 text-white relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-bl-full -mr-8 -mt-8"></div>
-              <ShieldCheck size={48} className="mb-4 relative z-10" />
-              <h2 className="text-2xl font-bold relative z-10">Importar Protocolo Inteligente</h2>
-              <p className="text-white/80 text-sm mt-2 relative z-10">Preencha os dados e envie 1 print da pagina pedida pela Verto.</p>
+              <ShieldCheck size={40} className="mb-3 relative z-10" />
+              <h2 className="text-xl font-bold relative z-10">Importar Protocolo Inteligente</h2>
+              <p className="text-white/80 text-xs mt-2 relative z-10">Preencha os dados e envie 1 print da pagina pedida pela Verto.</p>
             </div>
             
-            <div className="p-8">
-              <div className="mb-6">
+            <div className="p-5 sm:p-6 overflow-y-auto max-h-[calc(92vh-132px)]">
+              <div className="mb-4">
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">
                   Nome do protocolo
                 </label>
@@ -486,7 +524,7 @@ export const ProtocolManagementSystem = ({
                 />
               </div>
 
-              <div className="mb-6">
+              <div className="mb-4">
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">
                   Faixa etaria
                 </label>
@@ -502,10 +540,10 @@ export const ProtocolManagementSystem = ({
                 </select>
               </div>
 
-              <div className="mb-6 rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="mb-4 rounded-2xl border border-white/10 bg-white/5 p-3.5">
                 <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-300 mb-3">Como tirar o print</p>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="rounded-2xl bg-[#0b1220] p-4 border border-white/10">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl bg-[#0b1220] p-3 border border-white/10">
                     <div className="flex items-center gap-2 mb-2 text-white font-black text-sm">
                       <Camera size={16} />
                       Windows
@@ -514,7 +552,7 @@ export const ProtocolManagementSystem = ({
                       Abra o protocolo, va ate a pagina pedida e pressione <strong>Windows + Shift + S</strong>. Recorte a pagina inteira e salve em PNG ou JPG.
                     </p>
                   </div>
-                  <div className="rounded-2xl bg-[#0b1220] p-4 border border-white/10">
+                  <div className="rounded-2xl bg-[#0b1220] p-3 border border-white/10">
                     <div className="flex items-center gap-2 mb-2 text-white font-black text-sm">
                       <Smartphone size={16} />
                       Celular
@@ -526,12 +564,12 @@ export const ProtocolManagementSystem = ({
                 </div>
               </div>
 
-              <div className="mb-6 rounded-2xl border border-violet-400/30 bg-violet-500/10 p-4">
+              <div className="mb-4 rounded-2xl border border-violet-400/30 bg-violet-500/10 p-3.5">
                 <p className="text-xs font-black uppercase tracking-[0.16em] text-violet-200 mb-2">Pagina pedida pela Verto</p>
-                <p className="text-lg font-black text-white">Envie um print da pagina {requestedScreenshotPage} do seu protocolo.</p>
+                <p className="text-base font-black text-white">Envie um print da pagina {requestedScreenshotPage} do seu protocolo.</p>
               </div>
 
-              <label className="flex items-center justify-between gap-3 rounded-2xl border border-dashed border-white/15 px-4 py-4 cursor-pointer hover:border-[#7a32fc] transition-all mb-6">
+              <label className="flex items-center justify-between gap-3 rounded-2xl border border-dashed border-white/15 px-4 py-3.5 cursor-pointer hover:border-[#7a32fc] transition-all mb-4">
                 <div>
                   <p className="text-xs font-black text-[#b794ff] uppercase">Enviar print</p>
                   <p className="text-[11px] text-slate-400 mt-1">
@@ -550,14 +588,14 @@ export const ProtocolManagementSystem = ({
 
               {selectedScreenshotFile && (
                 <>
-                  <div className="bg-blue-500/10 border border-blue-400/20 p-4 rounded-2xl mb-6 flex gap-3">
+                  <div className="bg-blue-500/10 border border-blue-400/20 p-3.5 rounded-2xl mb-4 flex gap-3">
                     <Info size={20} className="text-blue-500 shrink-0 mt-0.5" />
                     <p className="text-xs text-blue-100 leading-relaxed font-medium">
                       Protocolos clinicos podem ter direitos autorais e regras especificas de uso. Ao enviar esse print, voce declara que possui autorizacao para utilizacao no ambiente da clinica.
                     </p>
                   </div>
 
-                  <div className="space-y-4">
+                  <div className="space-y-3">
                     <label className="flex items-start gap-3 cursor-pointer group">
                       <div className="relative flex items-center mt-1">
                         <input 
@@ -595,17 +633,17 @@ export const ProtocolManagementSystem = ({
                 </p>
               )}
 
-              <div className="grid grid-cols-2 gap-4 mt-8">
+              <div className="grid grid-cols-2 gap-3 mt-6">
                 <button 
                   onClick={resetImportState}
-                  className="py-4 rounded-2xl font-bold text-slate-300 hover:bg-white/5 transition-all border border-white/10"
+                  className="py-3.5 rounded-2xl font-bold text-slate-300 hover:bg-white/5 transition-all border border-white/10"
                 >
                   Cancelar
                 </button>
                 <button 
                   onClick={handleConfirmFileImport}
                   disabled={!hasLicense || !isCompleteProtocol || !pendingProtocolName.trim() || !selectedScreenshotFile || isImporting}
-                  className={`py-4 rounded-2xl font-bold text-white shadow-lg transition-all flex items-center justify-center gap-2 ${hasLicense && isCompleteProtocol && pendingProtocolName.trim() && selectedScreenshotFile ? 'bg-[#7a32fc] shadow-blue-950 hover:opacity-90 active:scale-95' : 'bg-slate-700 cursor-not-allowed shadow-none'}`}
+                  className={`py-3.5 rounded-2xl font-bold text-white shadow-lg transition-all flex items-center justify-center gap-2 ${hasLicense && isCompleteProtocol && pendingProtocolName.trim() && selectedScreenshotFile ? 'bg-[#7a32fc] shadow-blue-950 hover:opacity-90 active:scale-95' : 'bg-slate-700 cursor-not-allowed shadow-none'}`}
                 >
                   {isImporting ? (
                     <>
@@ -683,6 +721,51 @@ export const ProtocolManagementSystem = ({
               </div> 
             )}
           </div>
+
+          {canManageLibrary && recentImportedProtocols.length > 0 && (
+            <div className="bg-[#101a2d] p-4 rounded-[24px] shadow-2xl shadow-black/20 border border-white/10 mb-8 animate-slide-up">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-widest">Importacoes inteligentes</h3>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.18em] mt-1">Acompanhe o status dos seus envios</p>
+                </div>
+                <div className="rounded-full bg-white/10 px-3 py-1 text-[10px] font-bold uppercase text-slate-300">
+                  {recentImportedProtocols.length}
+                </div>
+              </div>
+              <div className="grid gap-3">
+                {recentImportedProtocols.map((item: any) => {
+                  const status = String(item.status || 'pending').toLowerCase();
+                  const statusLabel = status === 'approved' ? 'Aprovado' : status === 'rejected' ? 'Recusado' : 'Pendente';
+                  const statusClass = status === 'approved'
+                    ? 'bg-emerald-50 text-emerald-700'
+                    : status === 'rejected'
+                      ? 'bg-rose-50 text-rose-700'
+                      : 'bg-amber-50 text-amber-700';
+                  const ageLabel = item.applicableAgeGroup === 'child'
+                    ? 'Criancas'
+                    : item.applicableAgeGroup === 'teen'
+                      ? 'Adolescentes'
+                      : item.applicableAgeGroup === 'adult'
+                        ? 'Adultos'
+                        : 'Todas as idades';
+                  return (
+                    <div key={item.id} className="rounded-2xl border border-white/10 bg-[#0b1220] px-4 py-3 flex flex-wrap items-center gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-bold text-white truncate">{item.protocolName || 'Protocolo importado'}</p>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.16em] mt-1">
+                          {ageLabel} {item.canonicalName ? `· sugestao ${item.canonicalName}` : ''}
+                        </p>
+                      </div>
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase ${statusClass}`}>
+                        {statusLabel}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="space-y-12 animate-fade-in">
             <div>
