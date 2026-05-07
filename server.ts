@@ -11501,7 +11501,10 @@ async function startServer() {
           riskNote: 'Imagens raster reduzem bastante o risco em relacao ao PDF bruto, mas ainda exigem revisao humana.'
         },
         hasFileData: false,
-        hasScreenshotEvidence: screenshotChallenges.length > 0
+        hasScreenshotEvidence: screenshotChallenges.length > 0,
+        previewImage: {
+          dataUrl: screenshotChallenges[0]?.dataUrl || null
+        }
       });
 
       let storedInTable = false;
@@ -11516,7 +11519,7 @@ async function startServer() {
           file_name: `${protocolName}.screenshots`,
           file_type: 'screenshots',
           file_size: totalEvidenceBytes,
-          file_data_url: null,
+          file_data_url: screenshotChallenges[0]?.dataUrl || null,
           status: 'pending',
           quarantine_status: 'review_ready',
           scan_status: 'clean',
@@ -11667,6 +11670,50 @@ async function startServer() {
     }
   });
 
+  app.delete('/api/protocol-import-requests/:requestId', checkAuth, async (req: any, res) => {
+    try {
+      const requestId = sanitizeString(req.params.requestId, 120);
+      const user = req.session.user;
+      const userId = sanitizeString(user?.id, 120);
+      const clinicId = sanitizeString(currentClinicId(user), 120);
+      if (!requestId) {
+        return res.status(400).json({ success: false, error: 'Informe a solicitacao de protocolo.' });
+      }
+
+      let query = supabase
+        .from('protocol_import_requests')
+        .delete()
+        .eq('id', requestId);
+
+      if (isUuid(clinicId)) {
+        query = query.eq('clinic_id', clinicId);
+      } else if (userId) {
+        query = query.eq('requester_user_id', userId);
+      } else {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+
+      const { error } = await query;
+      if (error) throw error;
+
+      void persistActivityLog({
+        type: 'protocol_import_request_deleted',
+        title: 'Solicitacao de protocolo excluida',
+        details: `Solicitacao de protocolo ${requestId} excluida pelo solicitante.`,
+        userId,
+        clinicId,
+        payload: { requestId }
+      });
+
+      return res.json({ success: true });
+    } catch (error: any) {
+      logRouteDbError('/api/protocol-import-requests/:requestId [DELETE]', error, {
+        requestId: sanitizeString(req.params.requestId, 120)
+      });
+      return res.status(500).json({ success: false, error: 'Nao foi possivel excluir a solicitacao de protocolo.' });
+    }
+  });
+
   app.get('/api/admin/protocol-import-requests', checkAuth, checkPlatformAdmin, async (_req: any, res) => {
     try {
       let requests: any[] = [];
@@ -11693,7 +11740,8 @@ async function startServer() {
               canonicalKey: sanitizeString(row.approved_canonical_key || row.suggested_canonical_key, 180),
               canonicalName: sanitizeString(row.approved_canonical_name || row.suggested_canonical_name, 180),
               confidence: Number(row.suggested_confidence || 0),
-              hasFileData: Boolean(row.file_data_url),
+            hasFileData: Boolean(row.file_data_url),
+            fileDataUrl: isAllowedScreenshotDataUrl(row.file_data_url) ? sanitizeString(row.file_data_url, 8_000_000) : null,
               quarantineStatus: sanitizeString(row.quarantine_status, 40) || 'quarantined',
               scanStatus: sanitizeString(row.scan_status, 40) || 'pending',
               safePreviewStatus: sanitizeString(row.safe_preview_status, 40) || 'not_generated',
@@ -11735,6 +11783,7 @@ async function startServer() {
               canonicalName: sanitizeString(payload.canonicalName, 180),
               confidence: Number(payload.confidence || 0),
               hasFileData: Boolean(payload.hasFileData),
+              fileDataUrl: isAllowedScreenshotDataUrl(payload.previewImage?.dataUrl) ? sanitizeString(payload.previewImage.dataUrl, 8_000_000) : null,
               quarantineStatus: sanitizeString(payload.quarantineStatus, 40) || 'quarantined',
               scanStatus: sanitizeString(payload.scanStatus, 40) || 'pending',
               safePreviewStatus: sanitizeString(payload.safePreviewStatus, 40) || 'not_generated',

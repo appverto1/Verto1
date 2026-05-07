@@ -451,6 +451,45 @@ export const ProtocolManagementSystem = ({
     }
   };
 
+  const handleDeleteImportedRequest = async (proto: any) => {
+    const requestId = proto?.importRequestId;
+    if (!requestId) return;
+    const status = String(proto?.requestStatus || 'pending').toLowerCase();
+    const message = status === 'approved'
+      ? `Excluir "${proto.title}" dos protocolos liberados? Isso remove esta liberacao da sua lista.`
+      : `Excluir a solicitacao de "${proto.title}"? Ela sera removida da analise e nao aparecera mais na biblioteca.`;
+    if (!confirm(message)) return;
+
+    setImportedProtocolStatuses((current) => current.filter((item: any) => String(item.id) !== String(requestId)));
+    if (String(requestId).startsWith('local-')) return;
+
+    try {
+      const response = await fetch(`/api/protocol-import-requests/${encodeURIComponent(requestId)}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Nao foi possivel excluir a solicitacao.');
+      }
+    } catch (error: any) {
+      alert(error?.message || 'Nao foi possivel excluir a solicitacao.');
+      setImportedProtocolStatuses((current) => {
+        if (current.some((item: any) => String(item.id) === String(requestId))) return current;
+        return [{
+          id: requestId,
+          protocolName: proto.title,
+          status: proto.requestStatus || 'pending',
+          canonicalName: proto.domain || 'Em validacao',
+          confidence: 0,
+          applicableAgeGroup: proto.ageGroup || 'all',
+          createdAt: proto.requestCreatedAt || new Date().toISOString(),
+          reviewedAt: proto.requestReviewedAt || null
+        }, ...current];
+      });
+    }
+  };
+
   const filteredProtocols = protocols.filter((p: any) => { 
     const matchAge = filterAge ? (p.ageGroup === filterAge || p.ageGroup === 'all') : true; 
     const matchType = filterType ? p.type === filterType : true; 
@@ -477,6 +516,7 @@ export const ProtocolManagementSystem = ({
       category: 'evaluation',
       data: [],
       isTemporaryRequest: true,
+      importRequestId: item.id,
       requestStatus: String(item.status || 'pending').toLowerCase(),
       requestCreatedAt: item.createdAt || null,
       requestReviewedAt: item.reviewedAt || null
@@ -500,6 +540,7 @@ export const ProtocolManagementSystem = ({
       category: 'evaluation',
       data: [],
       isApprovedImport: true,
+      importRequestId: item.id,
       requestStatus: 'approved',
       requestCreatedAt: item.createdAt || null,
       requestReviewedAt: item.reviewedAt || null
@@ -587,7 +628,24 @@ export const ProtocolManagementSystem = ({
           <button
             type="button"
             title="Excluir protocolo"
-            onClick={(e) => { e.stopPropagation(); if(confirm("Remover este protocolo?")) onDeleteProtocol(proto.id); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              if(confirm(`Excluir o protocolo "${proto.title}" da biblioteca? Essa acao remove o protocolo para a equipe.`)) onDeleteProtocol(proto.id);
+            }}
+            className="inline-flex items-center gap-1 rounded-xl bg-red-500/10 px-3 py-2 text-[10px] font-black uppercase text-red-300 hover:bg-red-500 hover:text-white transition-all"
+          >
+            <Trash2 size={16} />
+            Excluir
+          </button>
+        )}
+        {canManageLibrary && (isTemporaryRequest || isApprovedImport) && (
+          <button
+            type="button"
+            title="Excluir solicitação"
+            onClick={(e) => {
+              e.stopPropagation();
+              void handleDeleteImportedRequest(proto);
+            }}
             className="inline-flex items-center gap-1 rounded-xl bg-red-500/10 px-3 py-2 text-[10px] font-black uppercase text-red-300 hover:bg-red-500 hover:text-white transition-all"
           >
             <Trash2 size={16} />

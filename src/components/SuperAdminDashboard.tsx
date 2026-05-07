@@ -1161,7 +1161,13 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                     ? (request.scanReport?.evidence?.screenshots || [])
                     : [];
                   const isScreenshotFlow = screenshotEvidence.length > 0;
-                  const quickPreviewShot = screenshotEvidence.find((shot: any) => typeof shot?.dataUrl === 'string' && shot.dataUrl.startsWith('data:image/')) || null;
+                  const quickPreviewShot = screenshotEvidence.find((shot: any) => typeof shot?.dataUrl === 'string' && shot.dataUrl.startsWith('data:image/'))
+                    || (typeof request.fileDataUrl === 'string' && request.fileDataUrl.startsWith('data:image/')
+                      ? {
+                          pageNumber: request.scanReport?.evidence?.screenshots?.[0]?.pageNumber || null,
+                          dataUrl: request.fileDataUrl
+                        }
+                      : null);
                   const applicableAgeLabel = request.scanReport?.evidence?.applicableAgeGroup === 'child'
                     ? 'Criancas'
                     : request.scanReport?.evidence?.applicableAgeGroup === 'teen'
