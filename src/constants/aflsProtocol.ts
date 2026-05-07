@@ -19,7 +19,9 @@ export const AFLS_COMMUNITY_PROTOCOL = {
     "taskCount": 259,
     "domainCount": 8,
     "sourcePages": 52,
-    "extractionMethod": "pypdf-coordinate-table-extraction"
+    "extractionMethod": "pypdf-coordinate-table-extraction",
+    "completionPercent": 100,
+    "completionStatus": "Completo"
   },
   "data": [
     {

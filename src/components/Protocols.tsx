@@ -304,24 +304,55 @@ export const ProtocolManagementSystem = ({
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
+  const [isDarkTheme, setIsDarkTheme] = useState(() => document.body.classList.contains('theme-dark'));
   const [showImportModal, setShowImportModal] = useState(false);
   const [hasLicense, setHasLicense] = useState(false);
   const [isCompleteProtocol, setIsCompleteProtocol] = useState(false);
   const [pendingProtocolName, setPendingProtocolName] = useState("");
-  const [pendingApplicableAge, setPendingApplicableAge] = useState("child");
+  const [pendingAgeFrom, setPendingAgeFrom] = useState("18");
+  const [pendingAgeTo, setPendingAgeTo] = useState("");
   const [requestedScreenshotPage, setRequestedScreenshotPage] = useState(4);
   const [selectedScreenshotFile, setSelectedScreenshotFile] = useState<File | null>(null);
   const [importStatusMessage, setImportStatusMessage] = useState("");
   const [importedProtocolStatuses, setImportedProtocolStatuses] = useState<any[]>([]);
 
+  useEffect(() => {
+    const syncTheme = () => setIsDarkTheme(document.body.classList.contains('theme-dark'));
+    syncTheme();
+    const observer = new MutationObserver(syncTheme);
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
+
   const nextRandomScreenshotPage = () => Math.floor(Math.random() * 11) + 2;
+  const ageOptions = Array.from({ length: 121 }, (_, age) => age);
+  const deriveApplicableAgeGroup = (ageFromValue: string, ageToValue: string) => {
+    const from = Number(ageFromValue || 0);
+    const to = ageToValue === "" ? null : Number(ageToValue);
+    if (from >= 18) return "adult";
+    if (to !== null && to <= 12) return "child";
+    if (from >= 13 && to !== null && to <= 17) return "teen";
+    return "all";
+  };
+  const formatAgeRange = (ageFrom?: any, ageTo?: any, fallbackGroup?: string) => {
+    const from = Number(ageFrom);
+    const hasFrom = Number.isFinite(from);
+    const hasTo = ageTo !== null && ageTo !== undefined && ageTo !== "";
+    const to = hasTo ? Number(ageTo) : null;
+    if (hasFrom) return `${from} ate ${Number.isFinite(to as number) ? to : "+"} anos`;
+    if (fallbackGroup === "child") return "0 ate 12 anos";
+    if (fallbackGroup === "teen") return "13 ate 17 anos";
+    if (fallbackGroup === "adult") return "18+ anos";
+    return "Livre";
+  };
 
   const resetImportState = () => {
     setShowImportModal(false);
     setHasLicense(false);
     setIsCompleteProtocol(false);
     setPendingProtocolName("");
-    setPendingApplicableAge("child");
+    setPendingAgeFrom("18");
+    setPendingAgeTo("");
     setRequestedScreenshotPage(nextRandomScreenshotPage());
     setSelectedScreenshotFile(null);
     setImportStatusMessage("");
@@ -330,7 +361,8 @@ export const ProtocolManagementSystem = ({
   const openImportModal = () => {
     if (!canManageLibrary) return;
     setPendingProtocolName("");
-    setPendingApplicableAge("child");
+    setPendingAgeFrom("18");
+    setPendingAgeTo("");
     setRequestedScreenshotPage(nextRandomScreenshotPage());
     setSelectedScreenshotFile(null);
     setHasLicense(false);
@@ -398,6 +430,13 @@ export const ProtocolManagementSystem = ({
   const handleConfirmFileImport = async () => {
     const protocolTitle = pendingProtocolName.trim();
     if (!protocolTitle || !hasLicense || !isCompleteProtocol || !selectedScreenshotFile) return;
+    const ageMin = Number(pendingAgeFrom || 0);
+    const ageMax = pendingAgeTo === "" ? null : Number(pendingAgeTo);
+    if (!Number.isFinite(ageMin) || ageMin < 0 || ageMin > 120 || (ageMax !== null && (!Number.isFinite(ageMax) || ageMax < ageMin))) {
+      alert("Confira a idade do protocolo. O campo 'ate' precisa ser maior ou igual ao campo 'de'.");
+      return;
+    }
+    const applicableAgeGroup = deriveApplicableAgeGroup(pendingAgeFrom, pendingAgeTo);
 
     setIsImporting(true);
     setImportProgress(10);
@@ -413,7 +452,9 @@ export const ProtocolManagementSystem = ({
         body: JSON.stringify({
           evidenceMode: "screenshots",
           protocolName: protocolTitle,
-          applicableAgeGroup: pendingApplicableAge,
+          applicableAgeGroup,
+          ageMin,
+          ageMax,
           screenshotChallenges: [{
             pageNumber: requestedScreenshotPage,
             prompt: `Envie um print nitido da pagina ${requestedScreenshotPage} do protocolo.`,
@@ -440,7 +481,9 @@ export const ProtocolManagementSystem = ({
           status: 'pending',
           canonicalName: data.data?.suggestedCanonicalName || 'Analise manual',
           confidence: Number(data.data?.suggestedConfidence || 0),
-          applicableAgeGroup: pendingApplicableAge,
+          applicableAgeGroup,
+          ageMin,
+          ageMax,
           createdAt: new Date().toISOString(),
           reviewedAt: null
         },
@@ -492,6 +535,8 @@ export const ProtocolManagementSystem = ({
           canonicalName: proto.domain || 'Em validacao',
           confidence: 0,
           applicableAgeGroup: proto.ageGroup || 'all',
+          ageMin: proto.ageMin ?? null,
+          ageMax: proto.ageMax ?? null,
           createdAt: proto.requestCreatedAt || new Date().toISOString(),
           reviewedAt: proto.requestReviewedAt || null
         }, ...current];
@@ -520,6 +565,8 @@ export const ProtocolManagementSystem = ({
       id: `temporary-request-${item.id}`,
       title: item.protocolName || 'Protocolo importado',
       ageGroup: item.applicableAgeGroup || 'all',
+      ageMin: item.ageMin ?? null,
+      ageMax: item.ageMax ?? null,
       type: 'conventional',
       domain: item.canonicalName || 'Em validacao',
       category: 'evaluation',
@@ -541,12 +588,14 @@ export const ProtocolManagementSystem = ({
   const approvedImportedProtocols = importedProtocolStatuses
     .filter((item: any) => String(item.status || 'pending').toLowerCase() === 'approved')
     .map((item: any) => {
-      const canonicalProtocol = getLicensedCanonicalProtocolForRequest(item);
+      const canonicalProtocol: any = getLicensedCanonicalProtocolForRequest(item);
       return {
         ...(canonicalProtocol || {}),
         id: `approved-request-${item.id}`,
         title: canonicalProtocol?.title || item.protocolName || 'Protocolo liberado',
         ageGroup: canonicalProtocol?.ageGroup || item.applicableAgeGroup || 'all',
+        ageMin: canonicalProtocol?.age_minima ?? canonicalProtocol?.min_age ?? item.ageMin ?? null,
+        ageMax: canonicalProtocol?.age_maxima ?? canonicalProtocol?.max_age ?? item.ageMax ?? null,
         type: canonicalProtocol?.type || 'conventional',
         domain: canonicalProtocol?.domain || item.canonicalName || 'Liberado pela Verto',
         category: canonicalProtocol?.category || 'evaluation',
@@ -597,7 +646,7 @@ export const ProtocolManagementSystem = ({
         if (isApprovedImport && !(proto.data?.length)) return;
         handleEdit(proto);
       }}
-      className={`bg-[#101a2d] p-6 rounded-[32px] shadow-2xl shadow-black/20 border transition-all group relative overflow-hidden flex flex-col h-full ${isTemporaryRequest || isApprovedImport ? 'border-white/15' : 'border-white/10'} ${canManageLibrary && !isTemporaryRequest && (!isApprovedImport || proto.data?.length) ? "hover:shadow-[#7a32fc]/10 hover:border-[#7a32fc]/40 cursor-pointer active:scale-95" : ""}`}
+      className={`${isDarkTheme ? 'bg-[#101a2d] shadow-black/20 text-slate-100' : 'bg-white shadow-slate-200/70 text-slate-900'} p-6 rounded-[32px] shadow-2xl border transition-all group relative overflow-hidden flex flex-col h-full ${isDarkTheme ? (isTemporaryRequest || isApprovedImport ? 'border-white/15' : 'border-white/10') : 'border-slate-200'} ${canManageLibrary && !isTemporaryRequest && (!isApprovedImport || proto.data?.length) ? "hover:shadow-[#7a32fc]/10 hover:border-[#7a32fc]/40 cursor-pointer active:scale-95" : ""}`}
     >
       <div className="absolute top-0 right-0 w-24 h-24 bg-slate-400/20 rounded-bl-full opacity-70 -z-0 group-hover:scale-125 transition-transform"></div>
       <div className="flex justify-between items-start mb-4 relative z-10">
@@ -605,12 +654,12 @@ export const ProtocolManagementSystem = ({
           {proto.category === 'intervention' ? <Boxes size={24} /> : <SearchCode size={24} />}
         </div>
         <div className="flex flex-col items-end gap-1">
-          <span className="text-[9px] font-bold uppercase bg-white/10 text-slate-200 px-2 py-1 rounded-full">{proto.ageGroup === 'all' ? 'Livre' : proto.ageGroup}</span>
+          <span className={`text-[9px] font-bold uppercase px-2 py-1 rounded-full ${isDarkTheme ? 'bg-white/10 text-slate-200' : 'bg-slate-100 text-slate-700'}`}>{formatAgeRange(proto.ageMin ?? proto.age_minima ?? proto.min_age, proto.ageMax ?? proto.age_maxima ?? proto.max_age, proto.ageGroup)}</span>
           <span className={`text-[9px] font-bold uppercase px-2 py-1 rounded-full ${proto.type === 'neurodevelopment' ? 'bg-purple-50 text-purple-400' : 'bg-blue-50 text-blue-400'}`}>{proto.type === 'neurodevelopment' ? 'Neuro' : 'Conv.'}</span>
         </div>
       </div>
       <div className="relative z-10 flex-1">
-        <h3 className="font-bold text-white text-lg leading-tight group-hover:text-[#b794ff] transition-colors">{proto.title}</h3>
+        <h3 className={`font-bold text-lg leading-tight group-hover:text-[#b794ff] transition-colors ${isDarkTheme ? 'text-white' : 'text-slate-900'}`}>{proto.title}</h3>
         {(isTemporaryRequest || isApprovedImport) ? (
           <div className="mt-3 flex items-center gap-2">
             <span className={`h-2.5 w-2.5 rounded-full ${statusDotClass}`} />
@@ -619,10 +668,10 @@ export const ProtocolManagementSystem = ({
             </span>
           </div>
         ) : (
-          <p className="text-[10px] text-slate-400 font-bold uppercase mt-2 tracking-widest">{proto.data?.length || 0} Domínios • {proto.data?.reduce((acc: any, d: any) => acc + d.skills.length, 0) || 0} Tarefas</p>
+          <p className={`text-[10px] font-bold uppercase mt-2 tracking-widest ${isDarkTheme ? 'text-slate-400' : 'text-slate-500'}`}>{proto.data?.length || 0} Domínios • {proto.data?.reduce((acc: any, d: any) => acc + d.skills.length, 0) || 0} Tarefas</p>
         )}
       </div>
-      <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between relative z-10">
+      <div className={`mt-4 pt-4 flex items-center justify-between relative z-10 ${isDarkTheme ? 'border-t border-white/10' : 'border-t border-slate-200'}`}>
         <div className="flex gap-1 overflow-hidden">
           {isTemporaryRequest ? (
             <span className="text-[9px] bg-white/10 text-slate-300 px-2 py-1 rounded-md font-bold whitespace-nowrap">
@@ -634,7 +683,7 @@ export const ProtocolManagementSystem = ({
             </span>
           ) : (
             proto.domain?.split(',').slice(0,2).map((d: any, i: number) => (
-              <span key={i} className="text-[8px] bg-white/10 text-slate-300 px-2 py-0.5 rounded-md font-bold whitespace-nowrap">{d.trim()}</span>
+              <span key={i} className={`text-[8px] px-2 py-0.5 rounded-md font-bold whitespace-nowrap ${isDarkTheme ? 'bg-white/10 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{d.trim()}</span>
             ))
           )}
         </div>
@@ -671,7 +720,7 @@ export const ProtocolManagementSystem = ({
   )};
 
   return ( 
-    <div className="w-full min-h-full bg-[#0b1220] flex flex-col overflow-x-hidden relative text-slate-100"> 
+    <div className={`w-full min-h-full flex flex-col overflow-x-hidden relative ${isDarkTheme ? 'bg-[#0b1220] text-slate-100' : 'bg-[#f3f6fb] text-slate-900'}`}> 
       {/* Import Modal with License Declaration */}
       {showImportModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-4 animate-fade-in">
@@ -699,18 +748,41 @@ export const ProtocolManagementSystem = ({
 
               <div className="mb-4">
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">
-                  Faixa etaria
+                  Idade do protocolo
                 </label>
-                <select
-                  value={pendingApplicableAge}
-                  onChange={(e) => setPendingApplicableAge(e.target.value)}
-                  className="w-full bg-[#0b1220] border border-white/10 rounded-xl p-3 text-sm outline-none text-white"
-                >
-                  <option value="child">Criancas</option>
-                  <option value="teen">Adolescentes</option>
-                  <option value="adult">Adultos</option>
-                  <option value="all">Todas as idades</option>
-                </select>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <span className="mb-1 block text-[10px] font-black uppercase tracking-widest text-slate-500">De</span>
+                    <select
+                      value={pendingAgeFrom}
+                      onChange={(e) => {
+                        const nextFrom = e.target.value;
+                        setPendingAgeFrom(nextFrom);
+                        if (pendingAgeTo !== "" && Number(pendingAgeTo) < Number(nextFrom)) setPendingAgeTo(nextFrom);
+                      }}
+                      className="w-full bg-[#0b1220] border border-white/10 rounded-xl p-3 text-sm outline-none text-white"
+                    >
+                      {ageOptions.map((age) => (
+                        <option key={age} value={age}>{age} anos</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <span className="mb-1 block text-[10px] font-black uppercase tracking-widest text-slate-500">Ate</span>
+                    <select
+                      value={pendingAgeTo}
+                      onChange={(e) => setPendingAgeTo(e.target.value)}
+                      className="w-full bg-[#0b1220] border border-white/10 rounded-xl p-3 text-sm outline-none text-white"
+                    >
+                      <option value="">Sem limite</option>
+                      {ageOptions
+                        .filter((age) => age >= Number(pendingAgeFrom || 0))
+                        .map((age) => (
+                          <option key={age} value={age}>{age} anos</option>
+                        ))}
+                    </select>
+                  </div>
+                </div>
               </div>
 
               <div className="mb-4 rounded-2xl border border-white/10 bg-white/5 p-3.5">
@@ -836,38 +908,38 @@ export const ProtocolManagementSystem = ({
         </div>
       )}
 
-      <div className="bg-[#101a2d] border-b border-white/10 px-6 py-6 shadow-[0_20px_60px_rgba(0,0,0,0.28)] flex items-center justify-between shrink-0"> 
+      <div className={`${isDarkTheme ? 'bg-[#101a2d] border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.28)]' : 'bg-white border-slate-200 shadow-sm'} border-b px-6 py-6 flex items-center justify-between shrink-0`}> 
         <div className="flex items-center gap-4">
-          <button onClick={onBack} className="p-2 -ml-2 text-slate-300 hover:bg-white/10 rounded-full"><ChevronLeft size={24}/></button> 
-          <h1 className="text-xl font-bold text-white tracking-tight">Biblioteca de Protocolos</h1> 
+          <button onClick={onBack} className={`p-2 -ml-2 rounded-full ${isDarkTheme ? 'text-slate-300 hover:bg-white/10' : 'text-slate-500 hover:bg-slate-100'}`}><ChevronLeft size={24}/></button> 
+          <h1 className={`text-xl font-bold tracking-tight ${isDarkTheme ? 'text-white' : 'text-slate-900'}`}>Biblioteca de Protocolos</h1> 
         </div>
         {canManageLibrary ? (
           <button onClick={handleCreateNew} className="bg-[#7a32fc] text-white px-5 py-2.5 rounded-2xl text-xs font-bold shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 active:scale-95 transition-all flex items-center gap-2">
             <Plus size={18} /> Criar Novo
           </button>
         ) : (
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+          <span className={`text-[10px] font-bold uppercase tracking-widest ${isDarkTheme ? 'text-slate-400' : 'text-slate-500'}`}>
             Visualização de biblioteca
           </span>
         )}
       </div> 
 
-      <div className="flex-1 overflow-y-auto no-scrollbar px-8 md:px-10 pt-6 pb-24 bg-[radial-gradient(circle_at_top_left,rgba(122,50,252,0.16),transparent_32%),linear-gradient(180deg,#0b1220,#111827)]"> 
+      <div className={`flex-1 overflow-y-auto no-scrollbar px-8 md:px-10 pt-6 pb-24 ${isDarkTheme ? 'bg-[radial-gradient(circle_at_top_left,rgba(122,50,252,0.16),transparent_32%),linear-gradient(180deg,#0b1220,#111827)]' : 'bg-[radial-gradient(circle_at_top_left,rgba(122,50,252,0.08),transparent_36%),linear-gradient(180deg,#f8fafc,#eef2f7)]'}`}> 
         <div className="w-full max-w-5xl mx-auto">
-          <div className="bg-[#101a2d] p-4 rounded-[24px] shadow-2xl shadow-black/20 border border-white/10 mb-8 animate-slide-up"> 
+          <div className={`${isDarkTheme ? 'bg-[#101a2d] shadow-black/20 border-white/10' : 'bg-white shadow-slate-200/70 border-slate-200'} p-4 rounded-[24px] shadow-2xl border mb-8 animate-slide-up`}> 
             <button onClick={() => setIsFiltersOpen(!isFiltersOpen)} className="w-full flex items-center justify-between group transition-all">
               <div className="flex items-center gap-2 text-[#7a32fc]"> 
                 <Filter size={18} /> 
                 <h3 className="font-bold text-xs uppercase tracking-wider">Filtrar Vitrine</h3> 
               </div> 
-              <ChevronDown size={20} className={`text-slate-300 transition-transform duration-300 ${isFiltersOpen ? 'rotate-180 text-[#b794ff]' : ''}`} />
+              <ChevronDown size={20} className={`transition-transform duration-300 ${isDarkTheme ? 'text-slate-300' : 'text-slate-500'} ${isFiltersOpen ? 'rotate-180 text-[#b794ff]' : ''}`} />
             </button>
 
             {isFiltersOpen && (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4 pt-4 border-t border-white/10 animate-fade-in"> 
+              <div className={`grid grid-cols-1 md:grid-cols-3 gap-4 mt-4 pt-4 animate-fade-in ${isDarkTheme ? 'border-t border-white/10' : 'border-t border-slate-200'}`}> 
                 <div> 
-                  <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">Idade</label> 
-                  <select className="w-full bg-[#0b1220] border border-white/10 rounded-xl p-2 text-sm outline-none font-bold text-slate-100" value={filterAge} onChange={(e) => setFilterAge(e.target.value)}> 
+                  <label className={`block text-[10px] font-bold uppercase mb-1 ml-1 ${isDarkTheme ? 'text-gray-400' : 'text-slate-500'}`}>Idade</label> 
+                  <select className={`w-full rounded-xl p-2 text-sm outline-none font-bold ${isDarkTheme ? 'bg-[#0b1220] border border-white/10 text-slate-100' : 'bg-white border border-slate-300 text-slate-700'}`} value={filterAge} onChange={(e) => setFilterAge(e.target.value)}> 
                     <option value="">Todas</option> 
                     <option value="child">0-12 anos</option> 
                     <option value="teen">13-18 anos</option> 
@@ -876,8 +948,8 @@ export const ProtocolManagementSystem = ({
                   </select> 
                 </div> 
                 <div> 
-                  <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">Abordagem</label> 
-                  <select className="w-full bg-[#0b1220] border border-white/10 rounded-xl p-2 text-sm outline-none font-bold text-slate-100" value={filterType} onChange={(e) => setFilterType(e.target.value)}> 
+                  <label className={`block text-[10px] font-bold uppercase mb-1 ml-1 ${isDarkTheme ? 'text-gray-400' : 'text-slate-500'}`}>Abordagem</label> 
+                  <select className={`w-full rounded-xl p-2 text-sm outline-none font-bold ${isDarkTheme ? 'bg-[#0b1220] border border-white/10 text-slate-100' : 'bg-white border border-slate-300 text-slate-700'}`} value={filterType} onChange={(e) => setFilterType(e.target.value)}> 
                     <option value="">Todas</option> 
                     <option value="conventional">Convencional</option> 
                     <option value="neurodevelopment">Neurodesenvolvimento</option> 
@@ -885,10 +957,10 @@ export const ProtocolManagementSystem = ({
                   </select> 
                 </div> 
                 <div> 
-                  <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">Assunto</label> 
+                  <label className={`block text-[10px] font-bold uppercase mb-1 ml-1 ${isDarkTheme ? 'text-gray-400' : 'text-slate-500'}`}>Assunto</label> 
                   <div className="relative"> 
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300" size={14} /> 
-                    <input type="text" className="w-full bg-[#0b1220] border border-white/10 rounded-xl p-2 pl-9 text-sm outline-none font-bold text-slate-100" placeholder="Ex: Vida Diária..." value={filterDomain} onChange={(e) => setFilterDomain(e.target.value)} /> 
+                    <Search className={`absolute left-3 top-1/2 -translate-y-1/2 ${isDarkTheme ? 'text-gray-300' : 'text-slate-400'}`} size={14} /> 
+                    <input type="text" className={`w-full rounded-xl p-2 pl-9 text-sm outline-none font-bold ${isDarkTheme ? 'bg-[#0b1220] border border-white/10 text-slate-100' : 'bg-white border border-slate-300 text-slate-700'}`} placeholder="Ex: Vida Diária..." value={filterDomain} onChange={(e) => setFilterDomain(e.target.value)} /> 
                   </div> 
                 </div> 
               </div> 
@@ -901,8 +973,8 @@ export const ProtocolManagementSystem = ({
                 <div className="flex items-center gap-3 mb-6 ml-2">
                   <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-lg shadow-amber-900/20"><Clock size={20}/></div>
                   <div>
-                    <h2 className="text-lg font-bold text-white tracking-tight">Solicitações em análise</h2>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Envios temporários, recusados somem em 48 horas</p>
+                    <h2 className={`text-lg font-bold tracking-tight ${isDarkTheme ? 'text-white' : 'text-slate-900'}`}>Solicitações em análise</h2>
+                    <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkTheme ? 'text-slate-400' : 'text-slate-500'}`}>Envios temporários, recusados somem em 48 horas</p>
                   </div>
                   <div className="ml-auto bg-amber-500/15 px-3 py-1 rounded-full text-[10px] font-bold text-amber-300 uppercase">{temporaryImportedProtocols.length}</div>
                 </div>
@@ -917,8 +989,8 @@ export const ProtocolManagementSystem = ({
                 <div className="flex items-center gap-3 mb-6 ml-2">
                   <div className="w-10 h-10 rounded-2xl bg-emerald-500 text-white flex items-center justify-center shadow-lg shadow-emerald-900/20"><CheckCircle2 size={20}/></div>
                   <div>
-                    <h2 className="text-lg font-bold text-white tracking-tight">Protocolos liberados</h2>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Aprovados pela Verto, separados das solicitações</p>
+                    <h2 className={`text-lg font-bold tracking-tight ${isDarkTheme ? 'text-white' : 'text-slate-900'}`}>Protocolos liberados</h2>
+                    <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkTheme ? 'text-slate-400' : 'text-slate-500'}`}>Aprovados pela Verto, separados das solicitações</p>
                   </div>
                   <div className="ml-auto bg-emerald-500/15 px-3 py-1 rounded-full text-[10px] font-bold text-emerald-300 uppercase">{approvedImportedProtocols.length}</div>
                 </div>
@@ -932,17 +1004,17 @@ export const ProtocolManagementSystem = ({
               <div className="flex items-center gap-3 mb-6 ml-2">
                 <div className="w-10 h-10 rounded-2xl bg-blue-500 text-white flex items-center justify-center shadow-lg shadow-blue-200"><SearchCode size={20}/></div>
                 <div>
-                  <h2 className="text-lg font-bold text-white tracking-tight">Protocolos de Avaliação</h2>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ferramentas de diagnóstico e marcos</p>
+                  <h2 className={`text-lg font-bold tracking-tight ${isDarkTheme ? 'text-white' : 'text-slate-900'}`}>Protocolos de Avaliação</h2>
+                  <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkTheme ? 'text-slate-400' : 'text-slate-500'}`}>Ferramentas de diagnóstico e marcos</p>
                 </div>
-                <div className="ml-auto bg-white/10 px-3 py-1 rounded-full text-[10px] font-bold text-slate-300 uppercase">{evaluationProtocols.length}</div>
+                <div className={`ml-auto px-3 py-1 rounded-full text-[10px] font-bold uppercase ${isDarkTheme ? 'bg-white/10 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{evaluationProtocols.length}</div>
               </div>
               {evaluationProtocols.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {evaluationProtocols.map((p: any) => <ProtocolCard key={p.id} proto={p} />)}
                 </div>
               ) : (
-                <div className="py-10 text-center border-2 border-dashed border-white/10 rounded-[32px] text-slate-500 font-bold text-sm italic">Nenhum protocolo de avaliação nesta busca.</div>
+                <div className={`py-10 text-center border-2 border-dashed rounded-[32px] font-bold text-sm italic ${isDarkTheme ? 'border-white/10 text-slate-500' : 'border-slate-300 text-slate-500 bg-white/60'}`}>Nenhum protocolo de avaliação nesta busca.</div>
               )}
             </div>
 
@@ -950,17 +1022,17 @@ export const ProtocolManagementSystem = ({
               <div className="flex items-center gap-3 mb-6 ml-2">
                 <div className="w-10 h-10 rounded-2xl bg-[#05CD99] text-white flex items-center justify-center shadow-lg shadow-green-100"><Boxes size={20}/></div>
                 <div>
-                  <h2 className="text-lg font-bold text-white tracking-tight">Protocolos de Intervenção</h2>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Treinos de habilidades e programas</p>
+                  <h2 className={`text-lg font-bold tracking-tight ${isDarkTheme ? 'text-white' : 'text-slate-900'}`}>Protocolos de Intervenção</h2>
+                  <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkTheme ? 'text-slate-400' : 'text-slate-500'}`}>Treinos de habilidades e programas</p>
                 </div>
-                <div className="ml-auto bg-white/10 px-3 py-1 rounded-full text-[10px] font-bold text-slate-300 uppercase">{interventionProtocols.length}</div>
+                <div className={`ml-auto px-3 py-1 rounded-full text-[10px] font-bold uppercase ${isDarkTheme ? 'bg-white/10 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{interventionProtocols.length}</div>
               </div>
               {interventionProtocols.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {interventionProtocols.map((p: any) => <ProtocolCard key={p.id} proto={p} />)}
                 </div>
               ) : (
-                <div className="py-10 text-center border-2 border-dashed border-white/10 rounded-[32px] text-slate-500 font-bold text-sm italic">Crie programas de treino clicando em "Criar Novo".</div>
+                <div className={`py-10 text-center border-2 border-dashed rounded-[32px] font-bold text-sm italic ${isDarkTheme ? 'border-white/10 text-slate-500' : 'border-slate-300 text-slate-500 bg-white/60'}`}>Crie programas de treino clicando em "Criar Novo".</div>
               )}
             </div>
           </div>
@@ -970,10 +1042,10 @@ export const ProtocolManagementSystem = ({
       {canManageLibrary && (
         <div className="fixed bottom-8 right-8 z-[60] flex flex-col items-end gap-3">
           {isImporting && (
-            <div className="bg-[#101a2d] p-4 rounded-2xl shadow-2xl border border-white/10 mb-2 animate-slide-up w-64">
+            <div className={`${isDarkTheme ? 'bg-[#101a2d] border-white/10' : 'bg-white border-slate-200'} p-4 rounded-2xl shadow-2xl border mb-2 animate-slide-up w-64`}>
               <div className="flex items-center gap-3 mb-2">
                 <Loader2 size={18} className="text-[#7a32fc] animate-spin" />
-                <span className="text-xs font-bold text-slate-100 uppercase tracking-tight">Enviando Protocolo...</span>
+                <span className={`text-xs font-bold uppercase tracking-tight ${isDarkTheme ? 'text-slate-100' : 'text-slate-800'}`}>Enviando Protocolo...</span>
               </div>
               <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
                 <div 
@@ -981,17 +1053,17 @@ export const ProtocolManagementSystem = ({
                   style={{ width: `${importProgress}%` }}
                 ></div>
               </div>
-              <p className="text-[9px] font-bold text-slate-400 mt-2 uppercase tracking-widest">Solicitando validação e match Verto...</p>
+              <p className={`text-[9px] font-bold mt-2 uppercase tracking-widest ${isDarkTheme ? 'text-slate-400' : 'text-slate-500'}`}>Solicitando validação e match Verto...</p>
             </div>
           )}
           
-          <button type="button" onClick={openImportModal} className={`flex items-center gap-3 bg-[#101a2d] text-[#b794ff] px-6 py-4 rounded-full shadow-2xl border border-white/10 hover:scale-105 active:scale-95 transition-all group ${isImporting ? 'opacity-50 pointer-events-none' : ''}`}>
+          <button type="button" onClick={openImportModal} className={`flex items-center gap-3 text-[#7a32fc] px-6 py-4 rounded-full shadow-2xl border hover:scale-105 active:scale-95 transition-all group ${isDarkTheme ? 'bg-[#101a2d] border-white/10' : 'bg-white border-slate-200'} ${isImporting ? 'opacity-50 pointer-events-none' : ''}`}>
             <div className="p-2 bg-blue-50 rounded-xl group-hover:bg-[#7a32fc] group-hover:text-white transition-colors">
               <FileUp size={20} />
             </div>
             <div className="flex flex-col text-left">
               <span className="text-xs font-bold uppercase tracking-tight">Importar Protocolo Inteligente</span>
-              <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">1 print seguro</span>
+              <span className={`text-[9px] font-bold uppercase tracking-widest ${isDarkTheme ? 'text-gray-400' : 'text-slate-500'}`}>1 print seguro</span>
             </div>
           </button>
         </div>

@@ -29,6 +29,7 @@ import {
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { LogoVerto } from './Common';
 import { getSupabase } from '../lib/supabase';
+import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
 
 const COLORS = ['#0EA5E9', '#10B981', '#F59E0B', '#EF4444', '#6366F1', '#EC4899'];
 
@@ -64,10 +65,17 @@ const isAflsRequest = (request: any) => (
 );
 
 const VERTO_PROTOCOL_OPTIONS = [
-  { key: 'afls-social-participation-adult', name: 'AFLS - Habilidades de Participação Social', hint: 'Adultos' },
-  { key: 'vb-mapp', name: 'VB-MAPP - Nivel 1', hint: 'Marcos verbais' },
-  { key: 'ablls-r', name: 'ABLLS-R', hint: 'Linguagem e aprendizagem' },
-  { key: 'vineland', name: 'Vineland', hint: 'Comportamento adaptativo' }
+  {
+    key: 'afls-social-participation-adult',
+    name: 'AFLS - Habilidades de Participação Social',
+    hint: 'Adultos',
+    completionPercent: 100,
+    statusLabel: 'Completo'
+  }
+];
+
+const VERTO_PROTOCOL_EDITOR_CATALOG = [
+  { ...VERTO_PROTOCOL_OPTIONS[0], protocol: AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL }
 ];
 
 const normalizeBuilderHeader = (value: string) =>
@@ -117,6 +125,9 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [protocolBuilderVersion, setProtocolBuilderVersion] = useState('Base Verto');
   const [protocolBuilderPreview, setProtocolBuilderPreview] = useState<any | null>(null);
   const [savingCanonicalProtocol, setSavingCanonicalProtocol] = useState(false);
+  const [selectedCatalogProtocolKey, setSelectedCatalogProtocolKey] = useState('afls-social-participation-adult');
+  const [protocolEditorSearch, setProtocolEditorSearch] = useState('');
+  const [selectedCatalogDomainId, setSelectedCatalogDomainId] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [financialFeatureSurveys, setFinancialFeatureSurveys] = useState<any[]>([]);
   const [dashboardWarning, setDashboardWarning] = useState<string | null>(null);
@@ -124,6 +135,24 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [complimentaryPlan, setComplimentaryPlan] = useState<'Essencial' | 'Crescimento' | 'Avançado'>('Essencial');
   const [complimentaryNote, setComplimentaryNote] = useState('');
   const [grantingComplimentaryPlan, setGrantingComplimentaryPlan] = useState(false);
+
+  const selectedCatalogEntry = useMemo(
+    () => VERTO_PROTOCOL_EDITOR_CATALOG.find((entry) => entry.key === selectedCatalogProtocolKey) || VERTO_PROTOCOL_EDITOR_CATALOG[0],
+    [selectedCatalogProtocolKey]
+  );
+  const selectedCatalogProtocol: any = selectedCatalogEntry?.protocol || null;
+  const selectedCatalogDomains = Array.isArray(selectedCatalogProtocol?.data) ? selectedCatalogProtocol.data : [];
+  const activeCatalogDomain = selectedCatalogDomains.find((domain: any) => domain.id === selectedCatalogDomainId) || selectedCatalogDomains[0] || null;
+  const visibleCatalogSkills = useMemo(() => {
+    const skills = Array.isArray(activeCatalogDomain?.skills) ? activeCatalogDomain.skills : [];
+    const query = protocolEditorSearch.trim().toLowerCase();
+    if (!query) return skills.slice(0, 80);
+    return skills.filter((skill: any) => (
+      `${skill.code || ''} ${skill.name || ''} ${skill.objective || ''} ${skill.criteria || ''}`
+        .toLowerCase()
+        .includes(query)
+    )).slice(0, 120);
+  }, [activeCatalogDomain, protocolEditorSearch]);
 
   const fetchJsonSoft = async (url: string, headers: Record<string, string>, label: string) => {
     try {
@@ -337,7 +366,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           'Content-Type': 'application/json',
           Authorization: token ? `Bearer ${token}` : ''
         },
-        body: JSON.stringify({ scopeKey, protocolKey, enabled })
+        body: JSON.stringify({ scopeKey, protocolKey, enabled, requestId: request.id })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success) {
@@ -346,7 +375,16 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
       const savedKeys = Array.isArray(data.data?.protocolKeys) ? data.data.protocolKeys : [];
       setProtocolRequests((current) => current.map((item) => (
         item.accessScopeKey === scopeKey
-          ? { ...item, authorizedProtocolKeys: savedKeys }
+          ? {
+              ...item,
+              authorizedProtocolKeys: savedKeys,
+              ...(item.id === request.id && enabled ? {
+                status: 'approved',
+                canonicalKey: data.data?.canonicalKey || protocolKey,
+                canonicalName: data.data?.canonicalName || item.canonicalName,
+                reviewedAt: new Date().toISOString()
+              } : {})
+            }
           : item
       )));
     } catch (error: any) {
@@ -1072,6 +1110,121 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               </p>
             </div>
 
+            <div className="rounded-[32px] bg-white border border-slate-100 p-6 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-4 mb-5">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-emerald-600 font-black mb-1">Editor de protocolos Verto</p>
+                  <h3 className="text-xl font-black text-slate-900">Revisar modelos canônicos</h3>
+                  <p className="text-sm text-slate-500 mt-1 max-w-3xl">
+                    Use este painel para conferir os protocolos que formos adicionando: domínios, tarefas, pontuação, objetivos e critérios.
+                  </p>
+                </div>
+                <select
+                  value={selectedCatalogProtocolKey}
+                  onChange={(event) => {
+                    setSelectedCatalogProtocolKey(event.target.value);
+                    setSelectedCatalogDomainId('');
+                    setProtocolEditorSearch('');
+                  }}
+                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-black outline-none focus:ring-2 focus:ring-emerald-100"
+                >
+                  {VERTO_PROTOCOL_EDITOR_CATALOG.map((entry) => (
+                    <option key={entry.key} value={entry.key}>{entry.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {selectedCatalogProtocol ? (
+                <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
+                  <div className="rounded-3xl border border-emerald-100 bg-emerald-50/50 p-4">
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-emerald-700">Resumo</p>
+                    <h4 className="mt-2 text-lg font-black text-slate-900">{selectedCatalogProtocol.title}</h4>
+                    <div className="mt-4 grid grid-cols-2 gap-2 text-center">
+                      <div className="rounded-2xl bg-white p-3 border border-emerald-100">
+                        <p className="text-xl font-black text-slate-900">{selectedCatalogProtocol.canonicalMeta?.domainCount || selectedCatalogDomains.length}</p>
+                        <p className="text-[10px] font-black uppercase text-slate-400">Domínios</p>
+                      </div>
+                      <div className="rounded-2xl bg-white p-3 border border-emerald-100">
+                        <p className="text-xl font-black text-slate-900">{selectedCatalogProtocol.canonicalMeta?.taskCount || 0}</p>
+                        <p className="text-[10px] font-black uppercase text-slate-400">Tarefas</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 rounded-2xl bg-white p-3 border border-emerald-100 text-center">
+                      <p className="text-xl font-black text-emerald-700">{selectedCatalogProtocol.canonicalMeta?.completionPercent || 0}%</p>
+                      <p className="text-[10px] font-black uppercase text-slate-400">Inclusão Verto</p>
+                    </div>
+                    <p className="mt-4 text-xs font-bold text-slate-600">
+                      {selectedCatalogProtocol.licenseScope || 'Modelo canônico Verto.'}
+                    </p>
+                    <div className="mt-4 space-y-2">
+                      {selectedCatalogDomains.map((domain: any) => (
+                        <button
+                          key={domain.id}
+                          type="button"
+                          onClick={() => setSelectedCatalogDomainId(domain.id)}
+                          className={`w-full rounded-2xl px-3 py-2 text-left text-xs font-black transition-all ${activeCatalogDomain?.id === domain.id ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 hover:bg-slate-100'}`}
+                        >
+                          {domain.name}
+                          <span className="ml-2 text-[10px] opacity-70">{domain.skills?.length || 0}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                      <div>
+                        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Domínio aberto</p>
+                        <h4 className="text-lg font-black text-slate-900">{activeCatalogDomain?.name || 'Sem domínio'}</h4>
+                      </div>
+                      <input
+                        value={protocolEditorSearch}
+                        onChange={(event) => setProtocolEditorSearch(event.target.value)}
+                        className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-100"
+                        placeholder="Buscar tarefa, código ou critério"
+                      />
+                    </div>
+                    <div className="max-h-[520px] overflow-y-auto pr-2 space-y-3">
+                      {visibleCatalogSkills.map((skill: any) => (
+                        <div key={skill.id || skill.code} className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-emerald-600">{skill.code} · 0-{skill.maxScore || 2}</p>
+                              <h5 className="text-base font-black text-slate-900">{skill.name}</h5>
+                            </div>
+                            {skill.sourcePage && (
+                              <span className="rounded-full bg-white px-3 py-1 text-[10px] font-black uppercase text-slate-500">
+                                pág. {skill.sourcePage}
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-3 grid gap-3 md:grid-cols-2">
+                            <div className="rounded-2xl bg-white p-3 border border-slate-100">
+                              <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Objetivo</p>
+                              <p className="mt-1 text-xs font-bold text-slate-700">{skill.objective || 'Sem objetivo preenchido.'}</p>
+                            </div>
+                            <div className="rounded-2xl bg-white p-3 border border-slate-100">
+                              <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Pergunta</p>
+                              <p className="mt-1 text-xs font-bold text-slate-700">{skill.question || 'Sem pergunta preenchida.'}</p>
+                            </div>
+                          </div>
+                          <div className="mt-3 rounded-2xl bg-white p-3 border border-slate-100">
+                            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Critérios</p>
+                            <p className="mt-1 text-xs font-bold text-slate-700">{skill.criteria || 'Sem critérios preenchidos.'}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center">
+                  <p className="font-black text-slate-700">Modelo ainda não estruturado</p>
+                  <p className="mt-1 text-sm text-slate-500">Quando adicionarmos este protocolo, ele aparecerá aqui para revisão.</p>
+                </div>
+              )}
+            </div>
+
               <div className="rounded-[32px] bg-white border border-slate-100 p-6 shadow-sm">
                 <div className="flex flex-wrap items-start justify-between gap-4 mb-5">
                   <div>
@@ -1249,7 +1402,12 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                   const quickPreviewShot = getProtocolRequestPreviewImage(request);
                   const canApproveWithImageEvidence = Boolean(quickPreviewShot?.dataUrl);
                   const effectiveClean = isClean || canApproveWithImageEvidence;
-                  const applicableAgeLabel = request.scanReport?.evidence?.applicableAgeGroup === 'child'
+                  const declaredAgeMin = request.scanReport?.evidence?.ageMin;
+                  const declaredAgeMax = request.scanReport?.evidence?.ageMax;
+                  const hasDeclaredAgeRange = Number.isFinite(Number(declaredAgeMin));
+                  const applicableAgeLabel = hasDeclaredAgeRange
+                    ? `${Number(declaredAgeMin)} ate ${Number.isFinite(Number(declaredAgeMax)) ? Number(declaredAgeMax) : '+'} anos`
+                    : request.scanReport?.evidence?.applicableAgeGroup === 'child'
                     ? 'Criancas'
                     : request.scanReport?.evidence?.applicableAgeGroup === 'teen'
                       ? 'Adolescentes'
@@ -1378,7 +1536,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                                       {protocol.name}
                                     </span>
                                     <span className="mt-0.5 block text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
-                                      {saving ? 'Salvando...' : protocol.hint}
+                                      {saving ? 'Salvando...' : `${protocol.hint} · ${protocol.completionPercent}% ${protocol.statusLabel}`}
                                     </span>
                                   </span>
                                 </label>

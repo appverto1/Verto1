@@ -376,10 +376,15 @@ function normalizeApprovedProtocolKey(input?: string | null): string {
 }
 
 const VERTO_PROTOCOL_CATALOG = [
-  { key: 'afls-social-participation-adult', name: 'AFLS - Habilidades de Participação Social' },
-  { key: 'vb-mapp', name: 'VB-MAPP - Nivel 1' },
-  { key: 'ablls-r', name: 'ABLLS-R' },
-  { key: 'vineland', name: 'Vineland' }
+  {
+    key: 'afls-social-participation-adult',
+    name: 'AFLS - Habilidades de Participação Social',
+    ageMin: 18,
+    ageMax: null,
+    applicableAgeGroup: 'adult',
+    completionPercent: 100,
+    statusLabel: 'Completo'
+  }
 ];
 
 const VERTO_PROTOCOL_BY_KEY = new Map(VERTO_PROTOCOL_CATALOG.map((protocol) => [protocol.key, protocol]));
@@ -1145,10 +1150,15 @@ function buildScreenshotEvidenceSummary(params: {
   totalPages?: number | null;
   coverageMaxPage?: number | null;
   applicableAgeGroup?: string | null;
+  ageMin?: number | null;
+  ageMax?: number | null;
   screenshots: Array<{ pageNumber: number; prompt?: string | null }>;
 }): string {
   const pages = params.screenshots.map((shot) => shot.pageNumber).filter((page) => Number.isFinite(page));
-  const ageLabel = params.applicableAgeGroup === 'child'
+  const hasAgeRange = Number.isFinite(Number(params.ageMin));
+  const ageLabel = hasAgeRange
+    ? `${Number(params.ageMin)} ate ${Number.isFinite(Number(params.ageMax)) ? Number(params.ageMax) : '+'} anos`
+    : params.applicableAgeGroup === 'child'
     ? 'Criancas'
     : params.applicableAgeGroup === 'teen'
       ? 'Adolescentes'
@@ -10623,9 +10633,11 @@ async function startServer() {
 
       const existingTaskData = existing.task_data && typeof existing.task_data === 'object' ? existing.task_data : {};
       const isVbMapp = isVbMappTask(existingTaskData) || isVbMappTask(existing);
-      const clinicCriterion = await resolveVbMappMasteryCriterionByClinicId(
-        sanitizeString(existing?.clinic_id, 120) || sanitizeString(req.session.user?.clinicId, 120)
-      );
+      const taskMasteryCriterion = asSafeNumber(
+        existingTaskData?.meta_sucessos ?? existingTaskData?.metaSucessos ?? req.body?.meta_sucessos,
+        1,
+        1000
+      ) || 5;
       const maxScoreFromTask =
         asSafeNumber(
           existingTaskData?.maxScore ??
@@ -11419,6 +11431,11 @@ async function startServer() {
       const evidenceMode = sanitizeString(req.body?.evidenceMode, 40) || 'screenshots';
       const protocolName = sanitizeString(req.body?.protocolName, 180);
       const applicableAgeGroup = sanitizeString(req.body?.applicableAgeGroup, 40) || 'all';
+      const ageMin = asSafeNumber(req.body?.ageMin, 0, 120);
+      const rawAgeMax = req.body?.ageMax;
+      const ageMax = rawAgeMax === null || rawAgeMax === undefined || rawAgeMax === ''
+        ? null
+        : asSafeNumber(rawAgeMax, 0, 120);
       const totalPages = asSafeNumber(req.body?.totalPages, 1, 5000) || 0;
       const requestedCoverageMaxPage = asSafeNumber(req.body?.coverageMaxPage, 1, 5000) || 0;
       const fullProtocolConfirmed = Boolean(req.body?.fullProtocolConfirmed);
@@ -11434,6 +11451,9 @@ async function startServer() {
       }
       if (!fullProtocolConfirmed || !rightsAccepted) {
         return res.status(400).json({ success: false, error: 'Confirme que o protocolo esta completo e que possui direito de uso.' });
+      }
+      if (ageMin === null || (ageMax !== null && ageMax < ageMin)) {
+        return res.status(400).json({ success: false, error: 'Informe uma idade valida para o protocolo.' });
       }
 
       const maxAllowedCoveragePage = totalPages ? Math.max(1, Math.ceil(totalPages * 0.3)) : 100;
@@ -11493,11 +11513,15 @@ async function startServer() {
         totalPages: totalPages || null,
         coverageMaxPage: coverageMaxPage || null,
         applicableAgeGroup,
+        ageMin,
+        ageMax,
         screenshots: screenshotChallenges
       });
       const screenshotEvidence = {
         mode: 'screenshots',
         applicableAgeGroup,
+        ageMin,
+        ageMax,
         totalPages: totalPages || null,
         coverageMaxPage,
         screenshots: screenshotChallenges
@@ -11511,6 +11535,8 @@ async function startServer() {
         requesterEmail: user?.email,
         evidenceMode: 'screenshots',
         applicableAgeGroup,
+        ageMin,
+        ageMax,
         protocolName,
         fileName: `${protocolName}.screenshots`,
         fileType: 'screenshots',
@@ -11543,6 +11569,8 @@ async function startServer() {
             evidence: {
               mode: 'screenshots',
             applicableAgeGroup,
+            ageMin,
+            ageMax,
             totalPages: totalPages || null,
             coverageMaxPage,
             screenshots: screenshotChallenges.map((item) => ({
@@ -11678,6 +11706,10 @@ async function startServer() {
               canonicalName: sanitizeString(row.approved_canonical_name || row.suggested_canonical_name, 180),
               confidence: Number(row.suggested_confidence || 0),
               applicableAgeGroup: sanitizeString(scanReport?.evidence?.applicableAgeGroup, 40) || 'all',
+              ageMin: asSafeNumber(scanReport?.evidence?.ageMin, 0, 120),
+              ageMax: scanReport?.evidence?.ageMax === null || scanReport?.evidence?.ageMax === undefined
+                ? null
+                : asSafeNumber(scanReport?.evidence?.ageMax, 0, 120),
               createdAt: sanitizeString(row.created_at, 80),
               reviewedAt: sanitizeString(row.reviewed_at, 80) || null
             };
@@ -11709,6 +11741,8 @@ async function startServer() {
                 canonicalName: sanitizeString(payload.canonicalName, 180),
                 confidence: Number(payload.confidence || 0),
                 applicableAgeGroup: sanitizeString(payload.applicableAgeGroup, 40) || 'all',
+                ageMin: asSafeNumber(payload.ageMin, 0, 120),
+                ageMax: payload.ageMax === null || payload.ageMax === undefined ? null : asSafeNumber(payload.ageMax, 0, 120),
                 createdAt: sanitizeString(payload.createdAt || log.timestamp, 80),
                 reviewedAt: null
               };
@@ -11740,7 +11774,11 @@ async function startServer() {
           canonicalKey: protocol.key,
           canonicalName: protocol.name,
           confidence: 1,
-          applicableAgeGroup: protocol.key === 'afls-social-participation-adult' ? 'adult' : 'all',
+          applicableAgeGroup: protocol.applicableAgeGroup,
+          ageMin: protocol.ageMin,
+          ageMax: protocol.ageMax,
+          completionPercent: protocol.completionPercent,
+          statusLabel: protocol.statusLabel,
           createdAt: new Date().toISOString(),
           reviewedAt: new Date().toISOString(),
           fromProtocolAccess: true
@@ -11941,6 +11979,7 @@ async function startServer() {
       const scopeKey = sanitizeString(req.body?.scopeKey, 220);
       const protocolKey = normalizeApprovedProtocolKey(req.body?.protocolKey);
       const enabled = Boolean(req.body?.enabled);
+      const requestId = sanitizeString(req.body?.requestId, 120);
       if (!scopeKey || !VERTO_PROTOCOL_BY_KEY.has(protocolKey)) {
         return res.status(400).json({ success: false, error: 'Informe o acervo e o protocolo Verto.' });
       }
@@ -11950,6 +11989,25 @@ async function startServer() {
       if (enabled) currentKeys.add(protocolKey);
       else currentKeys.delete(protocolKey);
       const protocolKeys = Array.from(currentKeys).filter((key) => VERTO_PROTOCOL_BY_KEY.has(key));
+      const changedProtocol = VERTO_PROTOCOL_BY_KEY.get(protocolKey);
+
+      if (enabled && requestId && changedProtocol) {
+        try {
+          await supabase
+            .from('protocol_import_requests')
+            .update({
+              status: 'approved',
+              approved_canonical_key: changedProtocol.key,
+              approved_canonical_name: changedProtocol.name,
+              reviewed_by: sanitizeString(req.session.user?.id, 120) || null,
+              reviewed_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', requestId);
+        } catch {
+          // The acervo is the source of truth; keep it updated even if the legacy request row is unavailable.
+        }
+      }
 
       await persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
@@ -11963,12 +12021,22 @@ async function startServer() {
           scopeKey,
           protocolKeys,
           changedProtocolKey: protocolKey,
+          requestId: requestId || null,
           enabled,
           updatedAt: new Date().toISOString()
         })
       });
 
-      return res.json({ success: true, data: { scopeKey, protocolKeys } });
+      return res.json({
+        success: true,
+        data: {
+          scopeKey,
+          protocolKeys,
+          requestStatus: enabled ? 'approved' : undefined,
+          canonicalKey: changedProtocol?.key || protocolKey,
+          canonicalName: changedProtocol?.name || protocolKey
+        }
+      });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Nao foi possivel atualizar o acervo de protocolos.' });
     }
@@ -12612,8 +12680,8 @@ async function startServer() {
           ? {
               protocol: 'VB-MAPP',
               consecutive_successes: nextConsecutive,
-              criterion: clinicCriterion,
-              progress_text: `Sucesso consecutivo: ${Math.min(nextConsecutive, clinicCriterion)} de ${clinicCriterion}`
+              criterion: taskMasteryCriterion,
+              progress_text: `Sucesso consecutivo: ${Math.min(nextConsecutive, taskMasteryCriterion)} de ${taskMasteryCriterion}`
             }
           : null
       });

@@ -4,6 +4,8 @@ type ProtocolTaskLike = {
   title?: string;
   maxScore?: number;
   max_score?: number;
+  meta_sucessos?: number;
+  metaSucessos?: number;
 };
 
 type ClinicalTaskLike = {
@@ -78,10 +80,12 @@ export function calculateDomainMastery(
       const label = String(task?.name || task?.title || '').trim();
       const key = normalizeText(label);
       const maxFromTask = toNumber(task?.maxScore ?? task?.max_score);
+      const metaSucessos = toNumber(task?.meta_sucessos ?? task?.metaSucessos);
       return {
         label,
         key,
-        maxScore: Math.max(1, Number(maxFromTask ?? 1))
+        maxScore: Math.max(1, Number(maxFromTask ?? 1)),
+        metaSucessos: Math.max(1, Math.floor(Number(metaSucessos ?? criterion)))
       };
     })
     .filter((task) => task.key);
@@ -148,13 +152,11 @@ export function calculateDomainMastery(
     const upto = selectedIdx >= 0 ? timeline.slice(0, selectedIdx + 1) : timeline;
 
     let streak = 0;
-    let lastBaseScore = 0;
     for (const row of upto) {
       if (row.score >= 1) {
         streak += 1;
       } else {
         streak = 0;
-        lastBaseScore = row.score >= 0.5 ? 0.5 : 0;
       }
     }
     const last = upto[upto.length - 1];
@@ -165,8 +167,8 @@ export function calculateDomainMastery(
       streak = Math.max(0, Math.floor(last.consecutive));
     }
 
-    const basePercent = last.score >= 1 ? lastBaseScore * 100 : last.score >= 0.5 ? 50 : 0;
-    const increment = (100 - basePercent) / criterion;
+    const basePercent = last.score >= 0.5 ? 50 : 0;
+    const increment = (100 - basePercent) / task.metaSucessos;
     const progressPercent = last.score >= 1
       ? Math.min(100, basePercent + streak * increment)
       : basePercent;
