@@ -1177,7 +1177,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         : 'Todas as idades';
                   const canFastTrackCanonical = isClean && !isApproved && Number(request.confidence || 0) >= 0.9;
                   return (
-                    <div key={request.id} className={`rounded-[28px] p-6 shadow-sm flex flex-col xl:flex-row gap-5 border ${request.status === 'pending' ? 'bg-gradient-to-br from-white to-amber-50 border-amber-200 shadow-amber-100/50' : 'bg-white border-slate-100'}`}>
+                    <div key={request.id} className={`rounded-[28px] p-5 shadow-sm grid grid-cols-1 xl:grid-cols-[minmax(340px,1fr)_260px_190px] gap-5 items-start border ${request.status === 'pending' ? 'bg-gradient-to-br from-white to-amber-50 border-amber-200 shadow-amber-100/50' : 'bg-white border-slate-100'}`}>
+                      <div className="flex min-w-0 gap-4">
                       <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${request.status === 'pending' ? 'bg-amber-100 text-amber-700' : isApproved ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
                         <FileText size={22} />
                       </div>
@@ -1240,19 +1241,20 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                           </div>
                         )}
                       </div>
-                      <div className="xl:w-[320px] shrink-0">
-                        <div className={`rounded-[24px] border p-4 h-full ${request.status === 'pending' ? 'border-amber-200 bg-white' : 'border-slate-200 bg-slate-50'}`}>
+                      </div>
+                      <div className="w-full min-w-0">
+                        <div className={`rounded-[22px] border p-3 h-full ${request.status === 'pending' ? 'border-amber-200 bg-white' : 'border-slate-200 bg-slate-50'}`}>
                           <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500 mb-3">Visualizacao rapida</p>
                           {quickPreviewShot?.dataUrl ? (
                             <>
                               <img
                                 src={quickPreviewShot.dataUrl}
                                 alt={`Imagem enviada pagina ${quickPreviewShot.pageNumber || '-'}`}
-                                className="w-full h-64 object-contain rounded-2xl border border-slate-200 bg-white"
+                                className="w-full h-44 object-contain rounded-2xl border border-slate-200 bg-white"
                               />
                               <div className="mt-3 rounded-2xl bg-slate-100 px-3 py-2">
                                 <p className="text-xs font-black text-slate-900">Imagem enviada{quickPreviewShot.pageNumber ? ` · pagina ${quickPreviewShot.pageNumber}` : ''}</p>
-                                <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                                <p className="text-[11px] text-slate-600 mt-1 leading-snug">
                                   Miniatura recebida com sucesso. Valide visualmente antes de aprovar.
                                 </p>
                               </div>
@@ -1267,12 +1269,12 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                           )}
                         </div>
                       </div>
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-col gap-2 w-full">
                         {canFastTrackCanonical && (
                           <button
                             onClick={() => handleApproveProtocolRequest(request, request.canonicalName)}
                             disabled={approvingProtocolId === request.id}
-                            className="px-4 py-2 rounded-2xl bg-emerald-600 text-white text-xs font-black hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
+                            className="w-full justify-center px-4 py-3 rounded-2xl bg-emerald-600 text-white text-xs font-black hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
                           >
                             {approvingProtocolId === request.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
                             Liberar sugestao Verto
@@ -1283,7 +1285,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                             type="button"
                             onClick={() => handleRejectProtocolRequest(request)}
                             disabled={rejectingProtocolId === request.id}
-                            className="px-4 py-2 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-black hover:bg-rose-100 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
+                            className="w-full justify-center px-4 py-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-black hover:bg-rose-100 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
                           >
                             {rejectingProtocolId === request.id ? <Loader2 size={14} className="animate-spin" /> : <AlertCircle size={14} />}
                             Recusar
@@ -1293,7 +1295,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                           <button
                             type="button"
                             onClick={() => seedCanonicalBuilderFromRequest(request)}
-                            className="px-4 py-2 rounded-2xl bg-white border border-slate-200 text-slate-700 text-xs font-black hover:bg-slate-50 transition-all"
+                            className="w-full px-4 py-3 rounded-2xl bg-white border border-slate-200 text-slate-700 text-xs font-black hover:bg-slate-50 transition-all"
                           >
                             Montar por tabela
                           </button>
@@ -1303,7 +1305,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                             type="button"
                             disabled
                             title="Por seguranca, a Verto nao abre arquivos brutos enviados por terceiros. Use somente previa segura apos varredura."
-                            className="px-4 py-2 rounded-2xl bg-slate-100 text-slate-400 text-xs font-black cursor-not-allowed"
+                            className="w-full px-4 py-3 rounded-2xl bg-slate-100 text-slate-400 text-xs font-black cursor-not-allowed"
                           >
                             Arquivo bloqueado
                           </button>
@@ -1313,7 +1315,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                             type="button"
                             onClick={() => handleScanProtocolRequest(request)}
                             disabled={scanningProtocolId === request.id || isRejected}
-                            className="px-4 py-2 rounded-2xl bg-slate-900 text-white text-xs font-black hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
+                            className="w-full justify-center px-4 py-3 rounded-2xl bg-slate-900 text-white text-xs font-black hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
                           >
                             {scanningProtocolId === request.id ? <Loader2 size={14} className="animate-spin" /> : <Shield size={14} />}
                             {scanningProtocolId === request.id ? 'Processando...' : 'Processar seguro'}
@@ -1322,7 +1324,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         <button
                           onClick={() => handleApproveProtocolRequest(request)}
                           disabled={isApproved || isRejected || approvingProtocolId === request.id || (!!request.scanStatus && !isClean)}
-                          className="px-4 py-2 rounded-2xl bg-violet-600 text-white text-xs font-black hover:bg-violet-700 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
+                          className="w-full justify-center px-4 py-3 rounded-2xl bg-violet-600 text-white text-xs font-black hover:bg-violet-700 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
                         >
                           {approvingProtocolId === request.id ? <Loader2 size={14} className="animate-spin" /> : isApproved ? <CheckCircle2 size={14} /> : <ClipboardCheck size={14} />}
                           {isApproved ? 'Liberado' : 'Aprovar e vincular'}
