@@ -375,6 +375,54 @@ function normalizeApprovedProtocolKey(input?: string | null): string {
   return key;
 }
 
+const VERTO_PROTOCOL_CATALOG = [
+  { key: 'afls-social-participation-adult', name: 'AFLS - Habilidades de Participação Social' },
+  { key: 'vb-mapp', name: 'VB-MAPP - Nivel 1' },
+  { key: 'ablls-r', name: 'ABLLS-R' },
+  { key: 'vineland', name: 'Vineland' }
+];
+
+const VERTO_PROTOCOL_BY_KEY = new Map(VERTO_PROTOCOL_CATALOG.map((protocol) => [protocol.key, protocol]));
+
+function buildProtocolAccessScopeKey(params: { clinicId?: any; requesterUserId?: any; requesterEmail?: any }): string {
+  const clinicId = sanitizeString(params.clinicId, 120);
+  if (clinicId) return `clinic:${clinicId}`;
+  const requesterUserId = sanitizeString(params.requesterUserId, 120);
+  if (requesterUserId) return `user:${requesterUserId}`;
+  const requesterEmail = sanitizeEmail(params.requesterEmail);
+  if (requesterEmail) return `email:${requesterEmail}`;
+  return 'unknown';
+}
+
+async function loadProtocolAccessMap(): Promise<Map<string, string[]>> {
+  const accessMap = new Map<string, string[]>();
+  try {
+    const { data } = await supabase
+      .from('activity_logs')
+      .select('payload_details, timestamp')
+      .eq('type', 'protocol_access_updated')
+      .order('timestamp', { ascending: true })
+      .limit(1000);
+
+    for (const log of data || []) {
+      try {
+        const payload = JSON.parse(String((log as any).payload_details || '{}'));
+        const scopeKey = sanitizeString(payload.scopeKey, 220);
+        if (!scopeKey) continue;
+        const protocolKeys = Array.isArray(payload.protocolKeys)
+          ? payload.protocolKeys.map((key: any) => normalizeApprovedProtocolKey(key)).filter((key: string) => VERTO_PROTOCOL_BY_KEY.has(key))
+          : [];
+        accessMap.set(scopeKey, Array.from(new Set(protocolKeys)));
+      } catch {
+        // Ignore malformed access history entries.
+      }
+    }
+  } catch {
+    // Access history is additive; if it is unavailable, callers fall back to no assignments.
+  }
+  return accessMap;
+}
+
 function normalizeBrazilMobilePhone(value: unknown): string | null {
   const digits = sanitizeString(value, 40).replace(/\D/g, '');
   if (!digits) return null;
@@ -11672,6 +11720,33 @@ async function startServer() {
         }).filter(Boolean);
       }
 
+      const accessMap = await loadProtocolAccessMap();
+      const scopeKey = buildProtocolAccessScopeKey({ clinicId, requesterUserId: userId, requesterEmail: user?.email });
+      const authorizedProtocolKeys = accessMap.get(scopeKey) || [];
+      const existingAuthorizedKeys = new Set(
+        requests
+          .filter((request) => String(request.status || '').toLowerCase() === 'approved')
+          .map((request) => normalizeApprovedProtocolKey(request.canonicalKey || identifyVertoProtocolCandidate(request.canonicalName).canonicalKey))
+      );
+      for (const protocolKey of authorizedProtocolKeys) {
+        if (existingAuthorizedKeys.has(protocolKey)) continue;
+        const protocol = VERTO_PROTOCOL_BY_KEY.get(protocolKey);
+        if (!protocol) continue;
+        requests.unshift({
+          id: `access-${scopeKey}-${protocolKey}`,
+          protocolName: protocol.name,
+          fileName: 'Acervo Verto',
+          status: 'approved',
+          canonicalKey: protocol.key,
+          canonicalName: protocol.name,
+          confidence: 1,
+          applicableAgeGroup: protocol.key === 'afls-social-participation-adult' ? 'adult' : 'all',
+          createdAt: new Date().toISOString(),
+          reviewedAt: new Date().toISOString(),
+          fromProtocolAccess: true
+        });
+      }
+
       return res.json({ success: true, data: requests });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Nao foi possivel listar seus protocolos importados.' });
@@ -11841,9 +11916,61 @@ async function startServer() {
         // The queue must remain visible even if scan log hydration is unavailable.
       }
 
+      const protocolAccessMap = await loadProtocolAccessMap();
+      requests = requests.map((request) => {
+        const scopeKey = buildProtocolAccessScopeKey({
+          clinicId: request.clinicId,
+          requesterUserId: request.requesterUserId,
+          requesterEmail: request.requesterEmail
+        });
+        return {
+          ...request,
+          accessScopeKey: scopeKey,
+          authorizedProtocolKeys: protocolAccessMap.get(scopeKey) || []
+        };
+      });
+
       return res.json({ success: true, data: requests });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Nao foi possivel listar solicitacoes de protocolos.' });
+    }
+  });
+
+  app.post('/api/admin/protocol-access', checkAuth, checkPlatformAdmin, async (req: any, res) => {
+    try {
+      const scopeKey = sanitizeString(req.body?.scopeKey, 220);
+      const protocolKey = normalizeApprovedProtocolKey(req.body?.protocolKey);
+      const enabled = Boolean(req.body?.enabled);
+      if (!scopeKey || !VERTO_PROTOCOL_BY_KEY.has(protocolKey)) {
+        return res.status(400).json({ success: false, error: 'Informe o acervo e o protocolo Verto.' });
+      }
+
+      const accessMap = await loadProtocolAccessMap();
+      const currentKeys = new Set(accessMap.get(scopeKey) || []);
+      if (enabled) currentKeys.add(protocolKey);
+      else currentKeys.delete(protocolKey);
+      const protocolKeys = Array.from(currentKeys).filter((key) => VERTO_PROTOCOL_BY_KEY.has(key));
+
+      await persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(currentClinicId(req.session.user), 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
+        title: 'Acervo de protocolos atualizado',
+        content: `Acervo ${scopeKey} atualizado com ${protocolKeys.length} protocolo(s).`,
+        type: 'protocol_access_updated',
+        actionType: 'protocol_access_updated',
+        payloadDetails: JSON.stringify({
+          scopeKey,
+          protocolKeys,
+          changedProtocolKey: protocolKey,
+          enabled,
+          updatedAt: new Date().toISOString()
+        })
+      });
+
+      return res.json({ success: true, data: { scopeKey, protocolKeys } });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Nao foi possivel atualizar o acervo de protocolos.' });
     }
   });
 

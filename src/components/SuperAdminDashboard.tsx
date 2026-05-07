@@ -63,6 +63,13 @@ const isAflsRequest = (request: any) => (
     .includes('afls')
 );
 
+const VERTO_PROTOCOL_OPTIONS = [
+  { key: 'afls-social-participation-adult', name: 'AFLS - Habilidades de Participação Social', hint: 'Adultos' },
+  { key: 'vb-mapp', name: 'VB-MAPP - Nivel 1', hint: 'Marcos verbais' },
+  { key: 'ablls-r', name: 'ABLLS-R', hint: 'Linguagem e aprendizagem' },
+  { key: 'vineland', name: 'Vineland', hint: 'Comportamento adaptativo' }
+];
+
 const normalizeBuilderHeader = (value: string) =>
   String(value || '')
     .normalize('NFD')
@@ -103,6 +110,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [approvingProtocolId, setApprovingProtocolId] = useState<string | null>(null);
   const [scanningProtocolId, setScanningProtocolId] = useState<string | null>(null);
   const [rejectingProtocolId, setRejectingProtocolId] = useState<string | null>(null);
+  const [savingProtocolAccess, setSavingProtocolAccess] = useState<string | null>(null);
   const [protocolBuilderText, setProtocolBuilderText] = useState('');
   const [protocolBuilderDomain, setProtocolBuilderDomain] = useState('Mobilidade Basica');
   const [protocolBuilderTitle, setProtocolBuilderTitle] = useState('AFLS - Protocolo de Vida Diaria');
@@ -292,6 +300,60 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
       alert(error.message || 'Nao foi possivel aprovar o protocolo.');
     } finally {
       setApprovingProtocolId(null);
+    }
+  };
+
+  const handleToggleProtocolAccess = async (request: any, protocolKey: string, enabled: boolean) => {
+    const scopeKey = request.accessScopeKey;
+    if (!scopeKey) {
+      alert('Nao consegui identificar o acervo desta clinica/profissional.');
+      return;
+    }
+
+    const saveKey = `${scopeKey}:${protocolKey}`;
+    const previousRequests = protocolRequests;
+    const nextKeys = (keys: any[]) => {
+      const set = new Set((Array.isArray(keys) ? keys : []).map(String));
+      if (enabled) set.add(protocolKey);
+      else set.delete(protocolKey);
+      return Array.from(set);
+    };
+
+    setSavingProtocolAccess(saveKey);
+    setProtocolRequests((current) => current.map((item) => (
+      item.accessScopeKey === scopeKey
+        ? { ...item, authorizedProtocolKeys: nextKeys(item.authorizedProtocolKeys) }
+        : item
+    )));
+
+    try {
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      const response = await fetch('/api/admin/protocol-access', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: token ? `Bearer ${token}` : ''
+        },
+        body: JSON.stringify({ scopeKey, protocolKey, enabled })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Nao foi possivel atualizar o acervo.');
+      }
+      const savedKeys = Array.isArray(data.data?.protocolKeys) ? data.data.protocolKeys : [];
+      setProtocolRequests((current) => current.map((item) => (
+        item.accessScopeKey === scopeKey
+          ? { ...item, authorizedProtocolKeys: savedKeys }
+          : item
+      )));
+    } catch (error: any) {
+      setProtocolRequests(previousRequests);
+      alert(error.message || 'Nao foi possivel atualizar o acervo.');
+    } finally {
+      setSavingProtocolAccess(null);
     }
   };
 
@@ -1196,7 +1258,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         : 'Todas as idades';
                   const canFastTrackCanonical = effectiveClean && !isApproved && Number(request.confidence || 0) >= 0.9;
                   return (
-                    <div key={request.id} className={`rounded-[28px] p-5 shadow-sm grid grid-cols-1 xl:grid-cols-[minmax(340px,1fr)_260px_190px] gap-5 items-start border ${request.status === 'pending' ? 'bg-gradient-to-br from-white to-amber-50 border-amber-200 shadow-amber-100/50' : 'bg-white border-slate-100'}`}>
+                    <div key={request.id} className={`rounded-[28px] p-5 shadow-sm grid grid-cols-1 xl:grid-cols-[minmax(340px,1fr)_260px_320px] gap-5 items-start border ${request.status === 'pending' ? 'bg-gradient-to-br from-white to-amber-50 border-amber-200 shadow-amber-100/50' : 'bg-white border-slate-100'}`}>
                       <div className="flex min-w-0 gap-4">
                       <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${request.status === 'pending' ? 'bg-amber-100 text-amber-700' : isApproved ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
                         <FileText size={22} />
@@ -1288,17 +1350,42 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                           )}
                         </div>
                       </div>
-                      <div className="flex flex-col gap-2 w-full">
-                        {canFastTrackCanonical && (
-                          <button
-                            onClick={() => handleApproveProtocolRequest(request, request.canonicalName)}
-                            disabled={approvingProtocolId === request.id}
-                            className="w-full justify-center px-4 py-3 rounded-2xl bg-emerald-600 text-white text-xs font-black hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
-                          >
-                            {approvingProtocolId === request.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                            Liberar sugestao Verto
-                          </button>
-                        )}
+                      <div className="flex flex-col gap-3 w-full">
+                        <div className="rounded-[22px] border border-slate-200 bg-white p-4">
+                          <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Acervo desta clínica</p>
+                          <p className="mt-1 text-xs font-bold text-slate-700">
+                            Marque os protocolos Verto que este profissional pode usar. As próximas solicitações já virão com essas caixas marcadas.
+                          </p>
+                          <div className="mt-3 space-y-2">
+                            {VERTO_PROTOCOL_OPTIONS.map((protocol) => {
+                              const checked = Array.isArray(request.authorizedProtocolKeys) && request.authorizedProtocolKeys.includes(protocol.key);
+                              const saveKey = `${request.accessScopeKey}:${protocol.key}`;
+                              const saving = savingProtocolAccess === saveKey;
+                              return (
+                                <label
+                                  key={protocol.key}
+                                  className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-3 py-3 transition-all ${checked ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50 hover:bg-white'}`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    disabled={saving || isRejected}
+                                    onChange={(event) => handleToggleProtocolAccess(request, protocol.key, event.target.checked)}
+                                    className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600"
+                                  />
+                                  <span className="min-w-0">
+                                    <span className={`block text-xs font-black ${checked ? 'text-emerald-800' : 'text-slate-800'}`}>
+                                      {protocol.name}
+                                    </span>
+                                    <span className="mt-0.5 block text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
+                                      {saving ? 'Salvando...' : protocol.hint}
+                                    </span>
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
                         {!isApproved && (
                           <button
                             type="button"
@@ -1319,16 +1406,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                             Montar por tabela
                           </button>
                         )}
-                        {request.hasFileData && (
-                          <button
-                            type="button"
-                            disabled
-                            title="Por seguranca, a Verto nao abre arquivos brutos enviados por terceiros. Use somente previa segura apos varredura."
-                            className="w-full px-4 py-3 rounded-2xl bg-slate-100 text-slate-400 text-xs font-black cursor-not-allowed"
-                          >
-                            Arquivo bloqueado
-                          </button>
-                        )}
                         {request.hasFileData && !canApproveWithImageEvidence && !isApproved && (
                           <button
                             type="button"
@@ -1340,14 +1417,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                             {scanningProtocolId === request.id ? 'Processando...' : 'Processar seguro'}
                           </button>
                         )}
-                        <button
-                          onClick={() => handleApproveProtocolRequest(request)}
-                          disabled={isApproved || isRejected || approvingProtocolId === request.id || (!!request.scanStatus && !effectiveClean)}
-                          className="w-full justify-center px-4 py-3 rounded-2xl bg-violet-600 text-white text-xs font-black hover:bg-violet-700 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
-                        >
-                          {approvingProtocolId === request.id ? <Loader2 size={14} className="animate-spin" /> : isApproved ? <CheckCircle2 size={14} /> : <ClipboardCheck size={14} />}
-                          {isApproved ? 'Liberado' : 'Aprovar e vincular'}
-                        </button>
                       </div>
                     </div>
                   );
