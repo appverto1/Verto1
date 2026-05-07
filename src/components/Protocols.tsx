@@ -349,6 +349,18 @@ export const ProtocolManagementSystem = ({
     if (fallbackGroup === "adult") return "18+ anos";
     return "Livre";
   };
+  const formatProtocolRequestDateTime = (value: any) => {
+    if (!value) return "data nao informada";
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return "data nao informada";
+    return date.toLocaleString("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  };
 
   const resetImportState = () => {
     setShowImportModal(false);
@@ -665,11 +677,16 @@ export const ProtocolManagementSystem = ({
       <div className="relative z-10 flex-1">
         <h3 className={`font-bold text-lg leading-tight group-hover:text-[#b794ff] transition-colors ${isDarkTheme ? 'text-white' : 'text-slate-900'}`}>{proto.title}</h3>
         {(isTemporaryRequest || isApprovedImport) ? (
-          <div className="mt-3 flex items-center gap-2">
-            <span className={`h-2.5 w-2.5 rounded-full ${statusDotClass}`} />
-            <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${statusChipClass}`}>
-              {statusLabel}
-            </span>
+          <div className="mt-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className={`h-2.5 w-2.5 rounded-full ${statusDotClass}`} />
+              <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${statusChipClass}`}>
+                {statusLabel}
+              </span>
+            </div>
+            <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkTheme ? 'text-slate-400' : 'text-slate-500'}`}>
+              Enviado em {formatProtocolRequestDateTime(proto.requestCreatedAt)}
+            </p>
           </div>
         ) : (
           <p className={`text-[10px] font-bold uppercase mt-2 tracking-widest ${isDarkTheme ? 'text-slate-400' : 'text-slate-500'}`}>{proto.data?.length || 0} Domínios • {proto.data?.reduce((acc: any, d: any) => acc + d.skills.length, 0) || 0} Tarefas</p>
@@ -813,9 +830,21 @@ export const ProtocolManagementSystem = ({
                 </div>
               </div>
 
-              <div className="mb-4 rounded-2xl border border-violet-400/30 bg-violet-500/10 p-3.5">
-                <p className="text-xs font-black uppercase tracking-[0.16em] text-violet-200 mb-2">Pagina pedida pela Verto</p>
-                <p className="text-base font-black text-white">Envie um print da pagina {requestedScreenshotPage} do seu protocolo.</p>
+              <div className="mb-4 overflow-hidden rounded-3xl border border-amber-300/60 bg-gradient-to-br from-amber-400/20 via-violet-500/20 to-[#111a33] shadow-lg shadow-amber-950/20">
+                <div className="flex items-start gap-3 p-4">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-300 text-[#1a2140] shadow-lg shadow-amber-950/20">
+                    <Camera size={22} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-amber-100">Atencao: print obrigatorio</p>
+                    <p className="mt-1 text-xl font-black leading-tight text-white">
+                      Envie a pagina <span className="text-amber-200">{requestedScreenshotPage}</span> do protocolo.
+                    </p>
+                    <p className="mt-2 text-xs font-semibold leading-relaxed text-amber-50/90">
+                      Esse print ajuda a Verto a validar que sua clinica possui autorizacao para usar esse material. Sem uma imagem legivel da pagina pedida, a solicitacao pode ser recusada.
+                    </p>
+                  </div>
+                </div>
               </div>
 
               <label className="flex items-center justify-between gap-3 rounded-2xl border border-dashed border-white/15 px-4 py-3.5 cursor-pointer hover:border-[#7a32fc] transition-all mb-4">
@@ -840,7 +869,7 @@ export const ProtocolManagementSystem = ({
                   <div className="bg-blue-500/10 border border-blue-400/20 p-3.5 rounded-2xl mb-4 flex gap-3">
                     <Info size={20} className="text-blue-500 shrink-0 mt-0.5" />
                     <p className="text-xs text-blue-100 leading-relaxed font-medium">
-                      Protocolos clinicos podem ter direitos autorais e regras especificas de uso. Ao enviar esse print, voce declara que possui autorizacao para utilizacao no ambiente da clinica.
+                      Protocolos clinicos podem ter direitos autorais e regras especificas de uso. Ao enviar esse print, voce confirma que a clinica tem permissao para utilizar este protocolo dentro da Verto.
                     </p>
                   </div>
 

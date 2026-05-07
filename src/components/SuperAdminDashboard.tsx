@@ -39,11 +39,17 @@ const formatCurrency = (value: number) =>
 
 const formatPercent = (value: number) => `${Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%`;
 
-const clampScore = (value: any) => Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
-
-const extractSuggestedDomain = (protocolName: string) => {
-  const parts = String(protocolName || '').split('-').map((part) => part.trim()).filter(Boolean);
-  return parts.length > 1 ? parts.slice(1).join(' - ') : 'Dominio principal';
+const formatProtocolRequestDateTime = (value: any) => {
+  if (!value) return 'data nao informada';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return 'data nao informada';
+  return date.toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
 };
 
 const getProtocolRequestPreviewImage = (request: any) => {
@@ -87,26 +93,6 @@ const VERTO_PROTOCOL_EDITOR_CATALOG = [
   { ...VERTO_PROTOCOL_OPTIONS[1], protocol: VBMAPP_LEVEL_1_CANONICAL_PROTOCOL }
 ];
 
-const normalizeBuilderHeader = (value: string) =>
-  String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-
-const splitProtocolRow = (line: string) => {
-  if (line.includes('\t')) return line.split('\t');
-  if (line.includes(';')) return line.split(';');
-  return line.split(/\s{2,}/);
-};
-
-const inferMaxScore = (points: string) => {
-  const matches = String(points || '').match(/\d+/g) || [];
-  const nums = matches.map(Number).filter((n) => Number.isFinite(n));
-  return nums.length ? Math.max(...nums) : 2;
-};
-
 export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [loading, setLoading] = useState(true);
   const [bootstrapping, setBootstrapping] = useState(false);
@@ -128,12 +114,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [scanningProtocolId, setScanningProtocolId] = useState<string | null>(null);
   const [rejectingProtocolId, setRejectingProtocolId] = useState<string | null>(null);
   const [savingProtocolAccess, setSavingProtocolAccess] = useState<string | null>(null);
-  const [protocolBuilderText, setProtocolBuilderText] = useState('');
-  const [protocolBuilderDomain, setProtocolBuilderDomain] = useState('Mobilidade Basica');
-  const [protocolBuilderTitle, setProtocolBuilderTitle] = useState('AFLS - Protocolo de Vida Diaria');
-  const [protocolBuilderVersion, setProtocolBuilderVersion] = useState('Base Verto');
-  const [protocolBuilderPreview, setProtocolBuilderPreview] = useState<any | null>(null);
-  const [savingCanonicalProtocol, setSavingCanonicalProtocol] = useState(false);
   const [selectedCatalogProtocolKey, setSelectedCatalogProtocolKey] = useState('afls-social-participation-adult');
   const [protocolEditorSearch, setProtocolEditorSearch] = useState('');
   const [selectedCatalogDomainId, setSelectedCatalogDomainId] = useState('');
@@ -404,15 +384,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     }
   };
 
-  const seedCanonicalBuilderFromRequest = (request: any) => {
-    setProtocolBuilderTitle(request.canonicalName || request.protocolName || 'Protocolo Verto');
-    setProtocolBuilderDomain(extractSuggestedDomain(request.protocolName || request.fileName || 'Dominio principal'));
-    setProtocolBuilderVersion('Base Verto');
-    setProtocolBuilderText('');
-    setProtocolBuilderPreview(null);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
   const handleScanProtocolRequest = async (request: any) => {
     try {
       setScanningProtocolId(request.id);
@@ -469,154 +440,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
       alert(error.message || 'Nao foi possivel recusar o protocolo.');
     } finally {
       setRejectingProtocolId(null);
-    }
-  };
-
-  const parseProtocolBuilderText = () => {
-    const lines = protocolBuilderText
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (lines.length < 2) {
-      alert('Cole a tabela com cabecalho e ao menos uma tarefa.');
-      return;
-    }
-
-    const headerIndex = lines.findIndex((line) => {
-      const key = normalizeBuilderHeader(line);
-      return key.includes('tarefa') && key.includes('pontos') && key.includes('criterios');
-    });
-    const headerLine = headerIndex >= 0 ? lines[headerIndex] : lines[0];
-    const headers = splitProtocolRow(headerLine).map(normalizeBuilderHeader);
-    const findIndex = (...needles: string[]) =>
-      headers.findIndex((header) => needles.some((needle) => header.includes(needle)));
-
-    const indexes = {
-      code: findIndex('tarefa'),
-      points: findIndex('pontos', 'pontuacao'),
-      name: findIndex('nome da tarefa', 'nome'),
-      objective: findIndex('objetivo'),
-      question: findIndex('pergunta'),
-      example: findIndex('exemplo'),
-      criteria: findIndex('criterios', 'criterio'),
-      comment: findIndex('comentario')
-    };
-    const requiredColumns = ['code', 'points', 'name', 'objective', 'criteria'] as const;
-    const optionalColumns = ['question', 'example', 'comment'] as const;
-
-    const rows = lines.slice((headerIndex >= 0 ? headerIndex : 0) + 1);
-    const tasks = rows
-      .map((line, index) => {
-        const cells = splitProtocolRow(line).map((cell) => cell.trim());
-        const code = cells[indexes.code] || '';
-        const name = cells[indexes.name] || '';
-        if (!code && !name) return null;
-        return {
-          id: `${protocolBuilderDomain.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${index + 1}`,
-          code,
-          name,
-          maxScore: inferMaxScore(cells[indexes.points] || ''),
-          pointsLabel: cells[indexes.points] || '',
-          objective: cells[indexes.objective] || '',
-          question: cells[indexes.question] || '',
-          example: cells[indexes.example] || '',
-          criteria: cells[indexes.criteria] || '',
-          comment: cells[indexes.comment] || '',
-          sourceRow: index + 1
-        };
-      })
-      .filter(Boolean);
-
-    if (tasks.length === 0) {
-      alert('Nao consegui detectar tarefas. Confira se as colunas estao separadas por tab, ponto e virgula ou espacos largos.');
-      return;
-    }
-
-    const missingRequiredColumns = requiredColumns.filter((key) => indexes[key] < 0);
-    const detectedOptionalColumns = optionalColumns.filter((key) => indexes[key] >= 0);
-    const tasksWithObjective = tasks.filter((task: any) => task.objective).length;
-    const tasksWithCriteria = tasks.filter((task: any) => task.criteria).length;
-    const tasksWithQuestion = tasks.filter((task: any) => task.question).length;
-    const readinessScore = clampScore(
-      ((requiredColumns.length - missingRequiredColumns.length) / requiredColumns.length) * 65 +
-      (tasksWithObjective / tasks.length) * 15 +
-      (tasksWithCriteria / tasks.length) * 15 +
-      (tasksWithQuestion / tasks.length) * 5
-    );
-
-    const canonicalKey = protocolBuilderTitle
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '');
-
-    setProtocolBuilderPreview({
-      id: canonicalKey,
-      canonicalKey,
-      title: protocolBuilderTitle,
-      category: 'evaluation',
-      sourceLabel: 'Montagem Verto por tabela',
-      versionLabel: protocolBuilderVersion,
-      status: 'draft',
-      canonicalMeta: {
-        readinessScore,
-        taskCount: tasks.length,
-        missingRequiredColumns,
-        detectedOptionalColumns,
-        filledFields: {
-          objective: tasksWithObjective,
-          criteria: tasksWithCriteria,
-          question: tasksWithQuestion
-        }
-      },
-      ageGroup: 'all',
-      age_minima: 0,
-      age_maxima: null,
-      min_age: 0,
-      max_age: null,
-      type: /afls/i.test(protocolBuilderTitle) ? 'neurodevelopment' : 'conventional',
-      domain: protocolBuilderDomain,
-      data: [
-        {
-          id: protocolBuilderDomain.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-          name: protocolBuilderDomain,
-          skills: tasks
-        }
-      ]
-    });
-  };
-
-  const handleSaveCanonicalProtocol = async () => {
-    if (!protocolBuilderPreview) return;
-    try {
-      setSavingCanonicalProtocol(true);
-      const supabase = await getSupabase();
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-      const response = await fetch('/api/admin/verto-protocols', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: token ? `Bearer ${token}` : ''
-        },
-        body: JSON.stringify({
-          canonicalKey: protocolBuilderPreview.canonicalKey,
-          versionLabel: protocolBuilderVersion,
-          status: 'draft',
-          protocol: protocolBuilderPreview
-        })
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Nao foi possivel salvar protocolo canonico.');
-      }
-      alert('Protocolo canonico salvo como rascunho da biblioteca Verto.');
-    } catch (error: any) {
-      alert(error.message || 'Nao foi possivel salvar protocolo canonico.');
-    } finally {
-      setSavingCanonicalProtocol(false);
     }
   };
 
@@ -1234,156 +1057,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               )}
             </div>
 
-              <div className="rounded-[32px] bg-white border border-slate-100 p-6 shadow-sm">
-                <div className="flex flex-wrap items-start justify-between gap-4 mb-5">
-                  <div>
-                  <p className="text-xs uppercase tracking-[0.18em] text-violet-500 font-black mb-1">Montagem canonica</p>
-                  <h3 className="text-xl font-black text-slate-900">Transformar tabela do PDF em protocolo Verto</h3>
-                  <p className="text-sm text-slate-500 mt-1 max-w-3xl">
-                    Cole dados extraidos do PDF/Excel com as colunas Tarefa, Pontos, Nome da tarefa, Objetivo, Pergunta, Exemplo, Criterios e Comentario.
-                  </p>
-                </div>
-                <button
-                  onClick={parseProtocolBuilderText}
-                  className="px-5 py-3 rounded-2xl bg-slate-900 text-white text-xs font-black hover:bg-violet-700 transition-all"
-                >
-                  Gerar pre-estrutura
-                </button>
-              </div>
-
-              <div className="mb-5 rounded-3xl border border-slate-200 bg-slate-50 p-5">
-                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500 mb-3">Modelo canonico Verto</p>
-                <div className="grid gap-3 lg:grid-cols-3 text-sm">
-                  <div className="rounded-2xl bg-white border border-slate-200 p-4">
-                    <p className="font-black text-slate-900 mb-1">Cabecalho obrigatorio</p>
-                    <p className="text-slate-600">Titulo, chave canonica, versao, categoria e ao menos 1 dominio.</p>
-                  </div>
-                  <div className="rounded-2xl bg-white border border-slate-200 p-4">
-                    <p className="font-black text-slate-900 mb-1">Cada tarefa precisa de</p>
-                    <p className="text-slate-600">Codigo, nome, regra de pontuacao, objetivo clinico e criterios observaveis.</p>
-                  </div>
-                  <div className="rounded-2xl bg-white border border-slate-200 p-4">
-                    <p className="font-black text-slate-900 mb-1">Bom sinal de confianca</p>
-                    <p className="text-slate-600">Tabela limpa, linhas consistentes e criterios repetiveis o suficiente para auditoria.</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-                <input
-                  value={protocolBuilderTitle}
-                  onChange={(e) => setProtocolBuilderTitle(e.target.value)}
-                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-violet-200"
-                  placeholder="Nome do protocolo"
-                />
-                <input
-                  value={protocolBuilderDomain}
-                  onChange={(e) => setProtocolBuilderDomain(e.target.value)}
-                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-violet-200"
-                  placeholder="Dominio / Assunto"
-                />
-                <input
-                  value={protocolBuilderVersion}
-                  onChange={(e) => setProtocolBuilderVersion(e.target.value)}
-                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-violet-200"
-                  placeholder="Versao"
-                />
-              </div>
-
-              <textarea
-                value={protocolBuilderText}
-                onChange={(e) => setProtocolBuilderText(e.target.value)}
-                rows={8}
-                className="w-full rounded-3xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-mono outline-none focus:ring-2 focus:ring-violet-200"
-                placeholder={'Cole aqui a tabela. Exemplo:\\nTAREFA\\tPONTOS\\tNOME DA TAREFA\\tOBJETIVO DA TAREFA\\tPERGUNTA\\tEXEMPLO\\tCRITERIOS\\tCOMENTARIO\\nMB11\\t0 1 2 3 4\\tOlha para ambos os lados...\\tO aprendiz sempre...\\tO aprendiz olha...\\tOlha para esquerda...\\t4=... 3=...\\tPrecisa de supervisao'}
-              />
-
-              {protocolBuilderPreview && (
-                <div className="mt-5 rounded-3xl border border-violet-100 bg-violet-50/40 p-5">
-                  <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-                    <div>
-                      <h4 className="font-black text-slate-900">{protocolBuilderPreview.title}</h4>
-                      <p className="text-xs font-bold text-slate-500">
-                        {protocolBuilderPreview.data?.[0]?.name} · {protocolBuilderPreview.data?.[0]?.skills?.length || 0} tarefas detectadas
-                      </p>
-                    </div>
-                    <button
-                      onClick={handleSaveCanonicalProtocol}
-                      disabled={savingCanonicalProtocol}
-                      className="px-5 py-3 rounded-2xl bg-violet-600 text-white text-xs font-black hover:bg-violet-700 disabled:opacity-60 transition-all"
-                    >
-                      {savingCanonicalProtocol ? 'Salvando...' : 'Salvar como rascunho Verto'}
-                    </button>
-                  </div>
-                  <div className="grid gap-3 md:grid-cols-4 mb-4">
-                    <div className="rounded-2xl bg-white border border-violet-100 p-4">
-                      <p className="text-[11px] font-black uppercase tracking-[0.14em] text-violet-500">Prontidao</p>
-                      <p className="text-2xl font-black text-slate-900 mt-2">{protocolBuilderPreview.canonicalMeta?.readinessScore || 0}%</p>
-                    </div>
-                    <div className="rounded-2xl bg-white border border-violet-100 p-4">
-                      <p className="text-[11px] font-black uppercase tracking-[0.14em] text-violet-500">Objetivos</p>
-                      <p className="text-2xl font-black text-slate-900 mt-2">{protocolBuilderPreview.canonicalMeta?.filledFields?.objective || 0}</p>
-                    </div>
-                    <div className="rounded-2xl bg-white border border-violet-100 p-4">
-                      <p className="text-[11px] font-black uppercase tracking-[0.14em] text-violet-500">Criterios</p>
-                      <p className="text-2xl font-black text-slate-900 mt-2">{protocolBuilderPreview.canonicalMeta?.filledFields?.criteria || 0}</p>
-                    </div>
-                    <div className="rounded-2xl bg-white border border-violet-100 p-4">
-                      <p className="text-[11px] font-black uppercase tracking-[0.14em] text-violet-500">Perguntas</p>
-                      <p className="text-2xl font-black text-slate-900 mt-2">{protocolBuilderPreview.canonicalMeta?.filledFields?.question || 0}</p>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2 mb-4">
-                    {(protocolBuilderPreview.canonicalMeta?.missingRequiredColumns || []).length > 0 ? (
-                      (protocolBuilderPreview.canonicalMeta?.missingRequiredColumns || []).map((column: string) => (
-                        <span key={column} className="rounded-full bg-rose-50 px-3 py-1 text-[11px] font-black uppercase text-rose-700">
-                          Falta {column}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-black uppercase text-emerald-700">
-                        Colunas essenciais detectadas
-                      </span>
-                    )}
-                    {(protocolBuilderPreview.canonicalMeta?.detectedOptionalColumns || []).map((column: string) => (
-                      <span key={column} className="rounded-full bg-slate-900 px-3 py-1 text-[11px] font-black uppercase text-white">
-                        Extra: {column}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="overflow-x-auto rounded-2xl border border-white bg-white">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 text-slate-400 uppercase tracking-[0.12em]">
-                        <tr>
-                          <th className="p-3">Codigo</th>
-                          <th className="p-3">Tarefa</th>
-                          <th className="p-3">Max</th>
-                          <th className="p-3">Objetivo</th>
-                          <th className="p-3">Criterios</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(protocolBuilderPreview.data?.[0]?.skills || []).slice(0, 8).map((skill: any) => (
-                          <tr key={skill.id} className="border-t border-slate-100">
-                            <td className="p-3 font-black text-violet-600">{skill.code || '-'}</td>
-                            <td className="p-3 font-bold text-slate-800 max-w-xs">{skill.name || '-'}</td>
-                            <td className="p-3 font-bold">{skill.maxScore}</td>
-                            <td className="p-3 text-slate-500 max-w-sm">{skill.objective || '-'}</td>
-                            <td className="p-3 text-slate-500 max-w-sm">{skill.criteria || '-'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  {(protocolBuilderPreview.data?.[0]?.skills?.length || 0) > 8 && (
-                    <p className="text-[11px] font-bold text-slate-400 mt-3">
-                      Mostrando 8 primeiras tarefas. O salvamento inclui todas.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
             <div className="grid gap-4">
                   {protocolRequestsError && (
                 <div className="rounded-[24px] border border-amber-200 bg-amber-50 p-5 text-sm font-bold text-amber-800">
@@ -1442,6 +1115,9 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         </p>
                         <p className="text-xs text-slate-400 mt-1">
                           Sugestao Verto: <strong>{request.canonicalName || 'Analise manual'}</strong> · confianca {Math.round(Number(request.confidence || 0) * 100)}%
+                        </p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          Solicitacao enviada em <strong>{formatProtocolRequestDateTime(request.createdAt)}</strong>
                         </p>
                         {isScreenshotFlow && (
                           <p className="text-xs text-slate-400 mt-1">
@@ -1562,15 +1238,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                           >
                             {rejectingProtocolId === request.id ? <Loader2 size={14} className="animate-spin" /> : <AlertCircle size={14} />}
                             Recusar
-                          </button>
-                        )}
-                        {!isApproved && !isRejected && (
-                          <button
-                            type="button"
-                            onClick={() => seedCanonicalBuilderFromRequest(request)}
-                            className="w-full px-4 py-3 rounded-2xl bg-white border border-slate-200 text-slate-700 text-xs font-black hover:bg-slate-50 transition-all"
-                          >
-                            Montar por tabela
                           </button>
                         )}
                         {request.hasFileData && !canApproveWithImageEvidence && !isApproved && (
