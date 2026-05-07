@@ -1023,6 +1023,19 @@ function enforcePayloadLimit(req: any, res: any, maxBytes: number, label: string
 
 const DANGEROUS_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
+function parseStoredJsonObject(input: any): Record<string, any> {
+  if (!input) return {};
+  if (typeof input === 'object' && !Array.isArray(input)) return input;
+  if (typeof input !== 'string') return {};
+
+  try {
+    const parsed = JSON.parse(input);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function sanitizeClinicalPayload(input: any, depth = 0): any {
   if (depth > 8) return null;
   if (input === null || input === undefined) return null;
@@ -11596,17 +11609,20 @@ async function startServer() {
 
         const { data, error } = await query;
         if (!error && Array.isArray(data)) {
-          requests = data.map((row: any) => ({
-            id: sanitizeString(row.id, 120),
-            protocolName: sanitizeString(row.protocol_name, 180),
-            fileName: sanitizeString(row.file_name, 240),
-            status: sanitizeString(row.status, 40) || 'pending',
-            canonicalName: sanitizeString(row.approved_canonical_name || row.suggested_canonical_name, 180),
-            confidence: Number(row.suggested_confidence || 0),
-            applicableAgeGroup: sanitizeString((row.scan_report || {})?.evidence?.applicableAgeGroup, 40) || 'all',
-            createdAt: sanitizeString(row.created_at, 80),
-            reviewedAt: sanitizeString(row.reviewed_at, 80) || null
-          }));
+          requests = data.map((row: any) => {
+            const scanReport = parseStoredJsonObject(row.scan_report);
+            return {
+              id: sanitizeString(row.id, 120),
+              protocolName: sanitizeString(row.protocol_name, 180),
+              fileName: sanitizeString(row.file_name, 240),
+              status: sanitizeString(row.status, 40) || 'pending',
+              canonicalName: sanitizeString(row.approved_canonical_name || row.suggested_canonical_name, 180),
+              confidence: Number(row.suggested_confidence || 0),
+              applicableAgeGroup: sanitizeString(scanReport?.evidence?.applicableAgeGroup, 40) || 'all',
+              createdAt: sanitizeString(row.created_at, 80),
+              reviewedAt: sanitizeString(row.reviewed_at, 80) || null
+            };
+          });
         }
       } catch {
         requests = [];
@@ -11661,30 +11677,33 @@ async function startServer() {
           .order('created_at', { ascending: false })
           .limit(200);
         if (!error && Array.isArray(data)) {
-          requests = data.map((row: any) => ({
-            id: sanitizeString(row.id, 120),
-            clinicId: sanitizeString(row.clinic_id, 120) || null,
-            requesterUserId: sanitizeString(row.requester_user_id, 120) || null,
-            requesterName: sanitizeString(row.requester_name, 180),
-            requesterEmail: sanitizeEmail(row.requester_email),
-            protocolName: sanitizeString(row.protocol_name, 180),
-            fileName: sanitizeString(row.file_name, 240),
-            fileType: sanitizeString(row.file_type, 120),
-            fileSize: Number(row.file_size || 0),
-            status: sanitizeString(row.status, 40) || 'pending',
-            canonicalKey: sanitizeString(row.approved_canonical_key || row.suggested_canonical_key, 180),
-            canonicalName: sanitizeString(row.approved_canonical_name || row.suggested_canonical_name, 180),
-            confidence: Number(row.suggested_confidence || 0),
-            hasFileData: Boolean(row.file_data_url),
-            quarantineStatus: sanitizeString(row.quarantine_status, 40) || 'quarantined',
-            scanStatus: sanitizeString(row.scan_status, 40) || 'pending',
-            safePreviewStatus: sanitizeString(row.safe_preview_status, 40) || 'not_generated',
-            rawFileAccess: sanitizeString(row.raw_file_access, 40) || 'blocked',
-            safePreviewText: sanitizeSafePreviewText(row.safe_preview_text || '', 4000) || null,
-            scanReport: sanitizeClinicalPayload(row.scan_report || {}),
-            createdAt: sanitizeString(row.created_at, 80),
-            reviewedAt: sanitizeString(row.reviewed_at, 80) || null
-          }));
+          requests = data.map((row: any) => {
+            const scanReport = parseStoredJsonObject(row.scan_report);
+            return {
+              id: sanitizeString(row.id, 120),
+              clinicId: sanitizeString(row.clinic_id, 120) || null,
+              requesterUserId: sanitizeString(row.requester_user_id, 120) || null,
+              requesterName: sanitizeString(row.requester_name, 180),
+              requesterEmail: sanitizeEmail(row.requester_email),
+              protocolName: sanitizeString(row.protocol_name, 180),
+              fileName: sanitizeString(row.file_name, 240),
+              fileType: sanitizeString(row.file_type, 120),
+              fileSize: Number(row.file_size || 0),
+              status: sanitizeString(row.status, 40) || 'pending',
+              canonicalKey: sanitizeString(row.approved_canonical_key || row.suggested_canonical_key, 180),
+              canonicalName: sanitizeString(row.approved_canonical_name || row.suggested_canonical_name, 180),
+              confidence: Number(row.suggested_confidence || 0),
+              hasFileData: Boolean(row.file_data_url),
+              quarantineStatus: sanitizeString(row.quarantine_status, 40) || 'quarantined',
+              scanStatus: sanitizeString(row.scan_status, 40) || 'pending',
+              safePreviewStatus: sanitizeString(row.safe_preview_status, 40) || 'not_generated',
+              rawFileAccess: sanitizeString(row.raw_file_access, 40) || 'blocked',
+              safePreviewText: sanitizeSafePreviewText(row.safe_preview_text || '', 4000) || null,
+              scanReport: sanitizeClinicalPayload(scanReport),
+              createdAt: sanitizeString(row.created_at, 80),
+              reviewedAt: sanitizeString(row.reviewed_at, 80) || null
+            };
+          });
         }
       } catch {
         // fallback below
@@ -11721,7 +11740,7 @@ async function startServer() {
               safePreviewStatus: sanitizeString(payload.safePreviewStatus, 40) || 'not_generated',
               rawFileAccess: 'blocked',
               safePreviewText: sanitizeSafePreviewText(payload.safePreviewText || '', 4000) || null,
-              scanReport: sanitizeClinicalPayload(payload.scanReport || {})
+              scanReport: sanitizeClinicalPayload(parseStoredJsonObject(payload.scanReport))
             };
           } catch {
             return null;
@@ -11748,7 +11767,7 @@ async function startServer() {
               safePreviewStatus: sanitizeString(payload.safePreviewStatus, 40) || 'not_generated',
               rawFileAccess: 'blocked',
               safePreviewText: sanitizeSafePreviewText(payload.safePreviewText || '', 4000) || null,
-              scanReport: sanitizeClinicalPayload(payload.scanReport || {}),
+              scanReport: sanitizeClinicalPayload(parseStoredJsonObject(payload.scanReport)),
               scannedAt: sanitizeString((log as any).timestamp, 80)
             });
           } catch {

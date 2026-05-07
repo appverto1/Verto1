@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useState } from 'react';
-import { ChevronDown, Trash2, Plus, ChevronLeft, Save, SearchCode, Boxes, Filter, Search, FileUp, Loader2, ShieldCheck, Info, Camera, Smartphone } from 'lucide-react';
+import { ChevronDown, Trash2, Plus, ChevronLeft, Save, SearchCode, Boxes, Filter, Search, FileUp, Loader2, ShieldCheck, Info, Camera, Smartphone, Clock, CheckCircle2 } from 'lucide-react';
 import { SuccessOverlay } from './Common';
 
 export const SkillEditor = ({ skill, onUpdate, onDelete, category }: any) => { 
@@ -462,6 +462,7 @@ export const ProtocolManagementSystem = ({
   const temporaryImportedProtocols = importedProtocolStatuses
     .filter((item: any) => {
       const status = String(item.status || 'pending').toLowerCase();
+      if (status === 'approved') return false;
       if (status !== 'rejected') return true;
       const baseDate = item.reviewedAt || item.createdAt;
       const expiry = new Date(baseDate || Date.now()).getTime() + (48 * 60 * 60 * 1000);
@@ -488,8 +489,31 @@ export const ProtocolManagementSystem = ({
       return matchAge && matchType && matchDomain;
     });
 
+  const approvedImportedProtocols = importedProtocolStatuses
+    .filter((item: any) => String(item.status || 'pending').toLowerCase() === 'approved')
+    .map((item: any) => ({
+      id: `approved-request-${item.id}`,
+      title: item.protocolName || 'Protocolo liberado',
+      ageGroup: item.applicableAgeGroup || 'all',
+      type: 'conventional',
+      domain: item.canonicalName || 'Liberado pela Verto',
+      category: 'evaluation',
+      data: [],
+      isApprovedImport: true,
+      requestStatus: 'approved',
+      requestCreatedAt: item.createdAt || null,
+      requestReviewedAt: item.reviewedAt || null
+    }))
+    .filter((item: any) => {
+      const matchAge = filterAge ? (item.ageGroup === filterAge || item.ageGroup === 'all') : true;
+      const matchType = filterType ? item.type === filterType : true;
+      const domainSource = `${item.title} ${item.domain}`.toLowerCase();
+      const matchDomain = filterDomain ? domainSource.includes(filterDomain.toLowerCase()) : true;
+      return matchAge && matchType && matchDomain;
+    });
+
   const baseEvaluationProtocols = filteredProtocols.filter((p: any) => p.category === 'evaluation' || !p.category);
-  const evaluationProtocols = [...temporaryImportedProtocols, ...baseEvaluationProtocols];
+  const evaluationProtocols = baseEvaluationProtocols;
   const interventionProtocols = filteredProtocols.filter((p: any) => p.category === 'intervention');
 
   if (editingProtocol) { 
@@ -498,6 +522,7 @@ export const ProtocolManagementSystem = ({
 
   const ProtocolCard = ({ proto }: any) => {
     const isTemporaryRequest = Boolean(proto?.isTemporaryRequest);
+    const isApprovedImport = Boolean(proto?.isApprovedImport);
     const requestStatus = String(proto?.requestStatus || 'pending').toLowerCase();
     const statusLabel = requestStatus === 'approved' ? 'Aprovado' : requestStatus === 'rejected' ? 'Recusado' : 'Em analise';
     const statusDotClass = requestStatus === 'approved'
@@ -514,10 +539,10 @@ export const ProtocolManagementSystem = ({
     return (
     <div
       onClick={() => {
-        if (isTemporaryRequest) return;
+        if (isTemporaryRequest || isApprovedImport) return;
         handleEdit(proto);
       }}
-      className={`bg-[#101a2d] p-6 rounded-[32px] shadow-2xl shadow-black/20 border transition-all group relative overflow-hidden flex flex-col h-full ${isTemporaryRequest ? 'border-white/15' : 'border-white/10'} ${canManageLibrary && !isTemporaryRequest ? "hover:shadow-[#7a32fc]/10 hover:border-[#7a32fc]/40 cursor-pointer active:scale-95" : ""}`}
+      className={`bg-[#101a2d] p-6 rounded-[32px] shadow-2xl shadow-black/20 border transition-all group relative overflow-hidden flex flex-col h-full ${isTemporaryRequest || isApprovedImport ? 'border-white/15' : 'border-white/10'} ${canManageLibrary && !isTemporaryRequest && !isApprovedImport ? "hover:shadow-[#7a32fc]/10 hover:border-[#7a32fc]/40 cursor-pointer active:scale-95" : ""}`}
     >
       <div className="absolute top-0 right-0 w-24 h-24 bg-slate-400/20 rounded-bl-full opacity-70 -z-0 group-hover:scale-125 transition-transform"></div>
       <div className="flex justify-between items-start mb-4 relative z-10">
@@ -531,7 +556,7 @@ export const ProtocolManagementSystem = ({
       </div>
       <div className="relative z-10 flex-1">
         <h3 className="font-bold text-white text-lg leading-tight group-hover:text-[#b794ff] transition-colors">{proto.title}</h3>
-        {isTemporaryRequest ? (
+        {(isTemporaryRequest || isApprovedImport) ? (
           <div className="mt-3 flex items-center gap-2">
             <span className={`h-2.5 w-2.5 rounded-full ${statusDotClass}`} />
             <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${statusChipClass}`}>
@@ -548,15 +573,25 @@ export const ProtocolManagementSystem = ({
             <span className="text-[9px] bg-white/10 text-slate-300 px-2 py-1 rounded-md font-bold whitespace-nowrap">
               Solicitacao temporaria
             </span>
+          ) : isApprovedImport ? (
+            <span className="text-[9px] bg-emerald-500/15 text-emerald-300 px-2 py-1 rounded-md font-bold whitespace-nowrap">
+              Liberado pela Verto
+            </span>
           ) : (
             proto.domain?.split(',').slice(0,2).map((d: any, i: number) => (
               <span key={i} className="text-[8px] bg-white/10 text-slate-300 px-2 py-0.5 rounded-md font-bold whitespace-nowrap">{d.trim()}</span>
             ))
           )}
         </div>
-        {canManageLibrary && !isTemporaryRequest && (
-          <button onClick={(e) => { e.stopPropagation(); if(confirm("Remover este protocolo?")) onDeleteProtocol(proto.id); }} className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all opacity-0 group-hover:opacity-100">
+        {canManageLibrary && !isTemporaryRequest && !isApprovedImport && (
+          <button
+            type="button"
+            title="Excluir protocolo"
+            onClick={(e) => { e.stopPropagation(); if(confirm("Remover este protocolo?")) onDeleteProtocol(proto.id); }}
+            className="inline-flex items-center gap-1 rounded-xl bg-red-500/10 px-3 py-2 text-[10px] font-black uppercase text-red-300 hover:bg-red-500 hover:text-white transition-all"
+          >
             <Trash2 size={16} />
+            Excluir
           </button>
         )}
       </div>
@@ -789,6 +824,38 @@ export const ProtocolManagementSystem = ({
           </div>
 
           <div className="space-y-12 animate-fade-in">
+            {temporaryImportedProtocols.length > 0 && (
+              <div>
+                <div className="flex items-center gap-3 mb-6 ml-2">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-lg shadow-amber-900/20"><Clock size={20}/></div>
+                  <div>
+                    <h2 className="text-lg font-bold text-white tracking-tight">Solicitações em análise</h2>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Envios temporários, recusados somem em 48 horas</p>
+                  </div>
+                  <div className="ml-auto bg-amber-500/15 px-3 py-1 rounded-full text-[10px] font-bold text-amber-300 uppercase">{temporaryImportedProtocols.length}</div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {temporaryImportedProtocols.map((p: any) => <ProtocolCard key={p.id} proto={p} />)}
+                </div>
+              </div>
+            )}
+
+            {approvedImportedProtocols.length > 0 && (
+              <div>
+                <div className="flex items-center gap-3 mb-6 ml-2">
+                  <div className="w-10 h-10 rounded-2xl bg-emerald-500 text-white flex items-center justify-center shadow-lg shadow-emerald-900/20"><CheckCircle2 size={20}/></div>
+                  <div>
+                    <h2 className="text-lg font-bold text-white tracking-tight">Protocolos liberados</h2>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Aprovados pela Verto, separados das solicitações</p>
+                  </div>
+                  <div className="ml-auto bg-emerald-500/15 px-3 py-1 rounded-full text-[10px] font-bold text-emerald-300 uppercase">{approvedImportedProtocols.length}</div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {approvedImportedProtocols.map((p: any) => <ProtocolCard key={p.id} proto={p} />)}
+                </div>
+              </div>
+            )}
+
             <div>
               <div className="flex items-center gap-3 mb-6 ml-2">
                 <div className="w-10 h-10 rounded-2xl bg-blue-500 text-white flex items-center justify-center shadow-lg shadow-blue-200"><SearchCode size={20}/></div>

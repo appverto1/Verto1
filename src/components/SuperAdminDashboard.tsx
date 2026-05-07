@@ -39,12 +39,6 @@ const formatPercent = (value: number) => `${Number(value || 0).toLocaleString('p
 
 const clampScore = (value: any) => Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
 
-const getReliabilityTone = (score: number) => {
-  if (score >= 75) return { label: 'Alta', chip: 'bg-emerald-50 text-emerald-700', panel: 'bg-emerald-50/70 border-emerald-100' };
-  if (score >= 50) return { label: 'Media', chip: 'bg-amber-50 text-amber-700', panel: 'bg-amber-50/70 border-amber-100' };
-  return { label: 'Baixa', chip: 'bg-rose-50 text-rose-700', panel: 'bg-rose-50/70 border-rose-100' };
-};
-
 const extractSuggestedDomain = (protocolName: string) => {
   const parts = String(protocolName || '').split('-').map((part) => part.trim()).filter(Boolean);
   return parts.length > 1 ? parts.slice(1).join(' - ') : 'Dominio principal';
@@ -1175,13 +1169,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       : request.scanReport?.evidence?.applicableAgeGroup === 'adult'
                         ? 'Adultos'
                         : 'Todas as idades';
-                  const structure = request.scanReport?.structure || {};
-                  const reliabilityScore = clampScore(structure?.scores?.reliability);
-                  const structureScore = clampScore(structure?.scores?.structure);
-                  const readinessScore = clampScore(structure?.scores?.canonicalReadiness);
-                  const tone = getReliabilityTone(reliabilityScore);
                   const canFastTrackCanonical = isClean && !isApproved && Number(request.confidence || 0) >= 0.9;
-                  const previewShot = screenshotEvidence[0] || null;
                   return (
                     <div key={request.id} className={`rounded-[28px] p-6 shadow-sm flex flex-col xl:flex-row gap-5 border ${request.status === 'pending' ? 'bg-gradient-to-br from-white to-amber-50 border-amber-200 shadow-amber-100/50' : 'bg-white border-slate-100'}`}>
                       <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${request.status === 'pending' ? 'bg-amber-100 text-amber-700' : isApproved ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
@@ -1213,7 +1201,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                             </p>
                           </div>
                         )}
-                        {isScreenshotFlow ? (
+                        {isScreenshotFlow && (
                           <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                             <div className="flex flex-wrap items-center gap-2 mb-3">
                               <span className="rounded-full px-3 py-1 text-[11px] font-black uppercase bg-violet-100 text-violet-700">
@@ -1227,62 +1215,11 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                               Veja a miniatura e valide se o material parece coerente com o protocolo informado.
                             </p>
                           </div>
-                        ) : (
-                          <div className={`mt-3 rounded-2xl border p-4 ${tone.panel}`}>
-                            <div className="flex flex-wrap items-center gap-2 mb-3">
-                              <span className={`rounded-full px-3 py-1 text-[11px] font-black uppercase ${tone.chip}`}>
-                                Confiabilidade estrutural {tone.label}
-                              </span>
-                              <span className="rounded-full bg-white px-3 py-1 text-[11px] font-black uppercase text-slate-700">
-                                Score {reliabilityScore}%
-                              </span>
-                            </div>
-                            <div className="grid gap-2 md:grid-cols-3 text-xs font-bold text-slate-700">
-                              <div className="rounded-2xl bg-white/90 px-3 py-3">
-                                <p className="uppercase tracking-[0.14em] text-slate-400">Estrutura</p>
-                                <p className="text-lg font-black text-slate-900 mt-1">{structureScore}%</p>
-                              </div>
-                              <div className="rounded-2xl bg-white/90 px-3 py-3">
-                                <p className="uppercase tracking-[0.14em] text-slate-400">Prontidao canonica</p>
-                                <p className="text-lg font-black text-slate-900 mt-1">{readinessScore}%</p>
-                              </div>
-                              <div className="rounded-2xl bg-white/90 px-3 py-3">
-                                <p className="uppercase tracking-[0.14em] text-slate-400">Linhas estimadas</p>
-                                <p className="text-lg font-black text-slate-900 mt-1">{structure?.estimatedRows || 0}</p>
-                              </div>
-                            </div>
-                            {(structure?.detectedFields || []).length > 0 && (
-                              <div className="mt-3 flex flex-wrap gap-2">
-                                {(structure?.detectedFields || []).map((field: string) => (
-                                  <span key={field} className="rounded-full bg-white px-3 py-1 text-[11px] font-black uppercase text-slate-700">
-                                    {field}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                            {structure?.suggestedNextStep && (
-                              <p className="mt-3 text-xs font-bold text-slate-700">
-                                Proximo passo: {structure.suggestedNextStep}
-                              </p>
-                            )}
-                            {(structure?.warnings || []).length > 0 && (
-                              <div className="mt-3 rounded-2xl bg-white/90 p-3">
-                                <p className="text-[11px] font-black uppercase tracking-[0.14em] text-rose-500 mb-2">Alertas</p>
-                                <div className="flex flex-wrap gap-2">
-                                  {(structure?.warnings || []).slice(0, 4).map((warning: string) => (
-                                    <span key={warning} className="rounded-full bg-rose-50 px-3 py-1 text-[11px] font-black text-rose-700">
-                                      {warning}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
                         )}
                         <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase">
                           <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">
                             <Shield size={12} />
-                            {isScreenshotFlow ? 'Imagem visivel' : 'Arquivo em quarentena'}
+                            {quickPreviewShot?.dataUrl ? 'Imagem recebida' : 'Sem imagem validavel'}
                           </span>
                           <span className={`rounded-full px-2.5 py-1 ${isClean ? 'bg-emerald-50 text-emerald-700' : isBlocked ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
                             Varredura: {isClean ? 'limpa' : isBlocked ? 'bloqueada' : 'pendente'}
@@ -1304,13 +1241,13 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                             <>
                               <img
                                 src={quickPreviewShot.dataUrl}
-                                alt={`Miniatura da pagina ${quickPreviewShot.pageNumber}`}
+                                alt={`Imagem enviada pagina ${quickPreviewShot.pageNumber || '-'}`}
                                 className="w-full h-64 object-contain rounded-2xl border border-slate-200 bg-white"
                               />
                               <div className="mt-3 rounded-2xl bg-slate-100 px-3 py-2">
-                                <p className="text-xs font-black text-slate-900">Pagina {quickPreviewShot.pageNumber}</p>
+                                <p className="text-xs font-black text-slate-900">Imagem enviada{quickPreviewShot.pageNumber ? ` · pagina ${quickPreviewShot.pageNumber}` : ''}</p>
                                 <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
-                                  Miniatura recebida com sucesso. Se fizer sentido visualmente, voce ja consegue validar o envio com muito mais seguranca.
+                                  Miniatura recebida com sucesso. Valide visualmente antes de aprovar.
                                 </p>
                               </div>
                             </>
@@ -1318,7 +1255,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                             <div className="rounded-2xl border border-dashed border-rose-200 bg-rose-50 px-4 py-6 text-center">
                               <p className="text-sm font-black text-rose-700">Sem miniatura visivel</p>
                               <p className="text-[11px] text-rose-600 mt-2">
-                                Se a imagem nao aparecer aqui, trate esse envio com mais desconfiança.
+                                O envio nao trouxe uma imagem valida para preview. Nesse caso, trate com mais desconfiança.
                               </p>
                             </div>
                           )}
