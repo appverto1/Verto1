@@ -1,6 +1,15 @@
 ﻿import React, { useEffect, useState } from 'react';
 import { ChevronDown, Trash2, Plus, ChevronLeft, Save, SearchCode, Boxes, Filter, Search, FileUp, Loader2, ShieldCheck, Info, Camera, Smartphone, Clock, CheckCircle2 } from 'lucide-react';
 import { SuccessOverlay } from './Common';
+import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
+
+const getLicensedCanonicalProtocolForRequest = (request: any) => {
+  const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
+  if (source.includes('afls') || source.includes('participacao-social') || source.includes('participação social')) {
+    return AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL;
+  }
+  return null;
+};
 
 export const SkillEditor = ({ skill, onUpdate, onDelete, category }: any) => { 
   const [isOpen, setIsOpen] = useState(false); 
@@ -531,20 +540,24 @@ export const ProtocolManagementSystem = ({
 
   const approvedImportedProtocols = importedProtocolStatuses
     .filter((item: any) => String(item.status || 'pending').toLowerCase() === 'approved')
-    .map((item: any) => ({
-      id: `approved-request-${item.id}`,
-      title: item.protocolName || 'Protocolo liberado',
-      ageGroup: item.applicableAgeGroup || 'all',
-      type: 'conventional',
-      domain: item.canonicalName || 'Liberado pela Verto',
-      category: 'evaluation',
-      data: [],
-      isApprovedImport: true,
-      importRequestId: item.id,
-      requestStatus: 'approved',
-      requestCreatedAt: item.createdAt || null,
-      requestReviewedAt: item.reviewedAt || null
-    }))
+    .map((item: any) => {
+      const canonicalProtocol = getLicensedCanonicalProtocolForRequest(item);
+      return {
+        ...(canonicalProtocol || {}),
+        id: `approved-request-${item.id}`,
+        title: canonicalProtocol?.title || item.protocolName || 'Protocolo liberado',
+        ageGroup: canonicalProtocol?.ageGroup || item.applicableAgeGroup || 'all',
+        type: canonicalProtocol?.type || 'conventional',
+        domain: canonicalProtocol?.domain || item.canonicalName || 'Liberado pela Verto',
+        category: canonicalProtocol?.category || 'evaluation',
+        data: canonicalProtocol?.data || [],
+        isApprovedImport: true,
+        importRequestId: item.id,
+        requestStatus: 'approved',
+        requestCreatedAt: item.createdAt || null,
+        requestReviewedAt: item.reviewedAt || null
+      };
+    })
     .filter((item: any) => {
       const matchAge = filterAge ? (item.ageGroup === filterAge || item.ageGroup === 'all') : true;
       const matchType = filterType ? item.type === filterType : true;
@@ -580,10 +593,11 @@ export const ProtocolManagementSystem = ({
     return (
     <div
       onClick={() => {
-        if (isTemporaryRequest || isApprovedImport) return;
+        if (isTemporaryRequest) return;
+        if (isApprovedImport && !(proto.data?.length)) return;
         handleEdit(proto);
       }}
-      className={`bg-[#101a2d] p-6 rounded-[32px] shadow-2xl shadow-black/20 border transition-all group relative overflow-hidden flex flex-col h-full ${isTemporaryRequest || isApprovedImport ? 'border-white/15' : 'border-white/10'} ${canManageLibrary && !isTemporaryRequest && !isApprovedImport ? "hover:shadow-[#7a32fc]/10 hover:border-[#7a32fc]/40 cursor-pointer active:scale-95" : ""}`}
+      className={`bg-[#101a2d] p-6 rounded-[32px] shadow-2xl shadow-black/20 border transition-all group relative overflow-hidden flex flex-col h-full ${isTemporaryRequest || isApprovedImport ? 'border-white/15' : 'border-white/10'} ${canManageLibrary && !isTemporaryRequest && (!isApprovedImport || proto.data?.length) ? "hover:shadow-[#7a32fc]/10 hover:border-[#7a32fc]/40 cursor-pointer active:scale-95" : ""}`}
     >
       <div className="absolute top-0 right-0 w-24 h-24 bg-slate-400/20 rounded-bl-full opacity-70 -z-0 group-hover:scale-125 transition-transform"></div>
       <div className="flex justify-between items-start mb-4 relative z-10">

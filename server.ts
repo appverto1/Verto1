@@ -353,7 +353,7 @@ function normalizeProtocolKey(input?: string | null): string {
 function identifyVertoProtocolCandidate(input?: string | null): { canonicalKey: string; canonicalName: string; confidence: number } {
   const key = normalizeProtocolKey(input);
   if (/\bafls\b|assessment functional living skills|functional living skills/.test(key)) {
-    return { canonicalKey: 'afls', canonicalName: 'AFLS - Protocolo de Vida Diaria', confidence: 0.94 };
+    return { canonicalKey: 'afls-social-participation-adult', canonicalName: 'AFLS - Habilidades de Participação Social', confidence: 0.94 };
   }
   if (/\bvb\s*mapp\b|\bvbmapp\b|verbal behavior milestones/.test(key)) {
     return { canonicalKey: 'vb-mapp', canonicalName: 'VB-MAPP - Nivel 1', confidence: 0.9 };
