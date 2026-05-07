@@ -356,7 +356,7 @@ function identifyVertoProtocolCandidate(input?: string | null): { canonicalKey: 
     return { canonicalKey: 'afls-social-participation-adult', canonicalName: 'AFLS - Habilidades de Participação Social', confidence: 0.94 };
   }
   if (/\bvb\s*mapp\b|\bvbmapp\b|verbal behavior milestones/.test(key)) {
-    return { canonicalKey: 'vb-mapp', canonicalName: 'VB-MAPP - Nivel 1', confidence: 0.9 };
+    return { canonicalKey: 'vb-mapp-level-1', canonicalName: 'VB-MAPP - Nivel 1', confidence: 0.9 };
   }
   if (/\bablls\b|\bablls r\b|basic language learning skills/.test(key)) {
     return { canonicalKey: 'ablls-r', canonicalName: 'ABLLS-R', confidence: 0.86 };
@@ -372,6 +372,9 @@ function normalizeApprovedProtocolKey(input?: string | null): string {
   if (key === 'afls' || key === 'afls-social-participation' || key === 'afls-community') {
     return 'afls-social-participation-adult';
   }
+  if (key === 'vb-mapp' || key === 'vbmapp' || key === 'vb mapp' || key === 'vb-mapp-nivel-1') {
+    return 'vb-mapp-level-1';
+  }
   return key;
 }
 
@@ -384,10 +387,20 @@ const VERTO_PROTOCOL_CATALOG = [
     applicableAgeGroup: 'adult',
     completionPercent: 100,
     statusLabel: 'Completo'
+  },
+  {
+    key: 'vb-mapp-level-1',
+    name: 'VB-MAPP - Nivel 1',
+    ageMin: 0,
+    ageMax: 1.5,
+    applicableAgeGroup: 'child',
+    completionPercent: 100,
+    statusLabel: 'Completo'
   }
 ];
 
 const VERTO_PROTOCOL_BY_KEY = new Map(VERTO_PROTOCOL_CATALOG.map((protocol) => [protocol.key, protocol]));
+const VERTO_PROTOCOL_PANEL_RESET_AT = '2026-05-07T15:38:23.081Z';
 
 function buildProtocolAccessScopeKey(params: { clinicId?: any; requesterUserId?: any; requesterEmail?: any }): string {
   const clinicId = sanitizeString(params.clinicId, 120);
@@ -406,6 +419,7 @@ async function loadProtocolAccessMap(): Promise<Map<string, string[]>> {
       .from('activity_logs')
       .select('payload_details, timestamp')
       .eq('type', 'protocol_access_updated')
+      .gte('timestamp', VERTO_PROTOCOL_PANEL_RESET_AT)
       .order('timestamp', { ascending: true })
       .limit(1000);
 
@@ -11685,6 +11699,7 @@ async function startServer() {
         let query = supabase
           .from('protocol_import_requests')
           .select('*')
+          .gte('created_at', VERTO_PROTOCOL_PANEL_RESET_AT)
           .order('created_at', { ascending: false })
           .limit(50);
 
@@ -11724,6 +11739,7 @@ async function startServer() {
           .from('activity_logs')
           .select('payload_details, timestamp')
           .eq('type', 'protocol_import_request')
+          .gte('timestamp', VERTO_PROTOCOL_PANEL_RESET_AT)
           .order('timestamp', { ascending: false })
           .limit(50);
 
@@ -11842,6 +11858,7 @@ async function startServer() {
         const { data, error } = await supabase
           .from('protocol_import_requests')
           .select('*')
+          .gte('created_at', VERTO_PROTOCOL_PANEL_RESET_AT)
           .order('created_at', { ascending: false })
           .limit(200);
         if (!error && Array.isArray(data)) {
@@ -11883,6 +11900,7 @@ async function startServer() {
           .from('activity_logs')
           .select('id, payload_details, timestamp')
           .eq('type', 'protocol_import_request')
+          .gte('timestamp', VERTO_PROTOCOL_PANEL_RESET_AT)
           .order('timestamp', { ascending: false })
           .limit(200);
         requests = (logs || []).map((log: any) => {
@@ -11923,6 +11941,7 @@ async function startServer() {
           .from('activity_logs')
           .select('payload_details, timestamp')
           .eq('type', 'protocol_import_review')
+          .gte('timestamp', VERTO_PROTOCOL_PANEL_RESET_AT)
           .order('timestamp', { ascending: false })
           .limit(300);
         const scansByRequestId = new Map<string, any>();

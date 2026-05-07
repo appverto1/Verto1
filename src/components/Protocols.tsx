@@ -2,11 +2,15 @@
 import { ChevronDown, Trash2, Plus, ChevronLeft, Save, SearchCode, Boxes, Filter, Search, FileUp, Loader2, ShieldCheck, Info, Camera, Smartphone, Clock, CheckCircle2 } from 'lucide-react';
 import { SuccessOverlay } from './Common';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
+import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
 
 const getLicensedCanonicalProtocolForRequest = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
   if (source.includes('afls') || source.includes('participacao-social') || source.includes('participação social')) {
     return AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL;
+  }
+  if (source.includes('vb-mapp') || source.includes('vbmapp') || source.includes('vb mapp')) {
+    return VBMAPP_LEVEL_1_CANONICAL_PROTOCOL;
   }
   return null;
 };

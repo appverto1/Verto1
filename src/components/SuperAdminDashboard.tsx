@@ -30,6 +30,7 @@ import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { LogoVerto } from './Common';
 import { getSupabase } from '../lib/supabase';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
+import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
 
 const COLORS = ['#0EA5E9', '#10B981', '#F59E0B', '#EF4444', '#6366F1', '#EC4899'];
 
@@ -71,11 +72,19 @@ const VERTO_PROTOCOL_OPTIONS = [
     hint: 'Adultos',
     completionPercent: 100,
     statusLabel: 'Completo'
+  },
+  {
+    key: 'vb-mapp-level-1',
+    name: 'VB-MAPP - Nivel 1',
+    hint: '0 a 18 meses',
+    completionPercent: 100,
+    statusLabel: 'Completo'
   }
 ];
 
 const VERTO_PROTOCOL_EDITOR_CATALOG = [
-  { ...VERTO_PROTOCOL_OPTIONS[0], protocol: AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL }
+  { ...VERTO_PROTOCOL_OPTIONS[0], protocol: AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL },
+  { ...VERTO_PROTOCOL_OPTIONS[1], protocol: VBMAPP_LEVEL_1_CANONICAL_PROTOCOL }
 ];
 
 const normalizeBuilderHeader = (value: string) =>
