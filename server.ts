@@ -367,6 +367,14 @@ function identifyVertoProtocolCandidate(input?: string | null): { canonicalKey: 
   return { canonicalKey: 'manual-review', canonicalName: 'Analise manual necessaria', confidence: 0.35 };
 }
 
+function normalizeApprovedProtocolKey(input?: string | null): string {
+  const key = sanitizeString(input, 180);
+  if (key === 'afls' || key === 'afls-social-participation' || key === 'afls-community') {
+    return 'afls-social-participation-adult';
+  }
+  return key;
+}
+
 function normalizeBrazilMobilePhone(value: unknown): string | null {
   const digits = sanitizeString(value, 40).replace(/\D/g, '');
   if (!digits) return null;
@@ -11842,7 +11850,7 @@ async function startServer() {
   app.post('/api/admin/protocol-import-requests/:requestId/approve', checkAuth, checkPlatformAdmin, async (req: any, res) => {
     try {
       const requestId = sanitizeString(req.params.requestId, 120);
-      const canonicalKey = sanitizeString(req.body?.canonicalKey, 180) || identifyVertoProtocolCandidate(req.body?.canonicalName).canonicalKey;
+      const canonicalKey = normalizeApprovedProtocolKey(req.body?.canonicalKey) || identifyVertoProtocolCandidate(req.body?.canonicalName).canonicalKey;
       const canonicalName = sanitizeString(req.body?.canonicalName, 180);
       if (!requestId || !canonicalName) {
         return res.status(400).json({ success: false, error: 'Informe a solicitacao e o protocolo Verto aprovado.' });
@@ -11852,10 +11860,17 @@ async function startServer() {
       try {
         const { data: currentRequest } = await supabase
           .from('protocol_import_requests')
-          .select('scan_status, quarantine_status')
+          .select('scan_status, quarantine_status, file_type, file_data_url, scan_report')
           .eq('id', requestId)
           .maybeSingle();
-        if ((currentRequest as any)?.scan_status && (currentRequest as any)?.scan_status !== 'clean') {
+        const currentScanReport = parseStoredJsonObject((currentRequest as any)?.scan_report);
+        const screenshotEvidence = currentScanReport?.evidence?.mode === 'screenshots'
+          ? (currentScanReport?.evidence?.screenshots || [])
+          : [];
+        const hasScreenshotImage = screenshotEvidence.some((shot: any) => isAllowedScreenshotDataUrl(shot?.dataUrl))
+          || isAllowedScreenshotDataUrl((currentRequest as any)?.file_data_url);
+        const canApproveScreenshotEvidence = sanitizeString((currentRequest as any)?.file_type, 80) === 'screenshots' && hasScreenshotImage;
+        if ((currentRequest as any)?.scan_status && (currentRequest as any)?.scan_status !== 'clean' && !canApproveScreenshotEvidence) {
           return res.status(409).json({
             success: false,
             error: 'Este protocolo ainda nao passou por uma varredura segura limpa.'

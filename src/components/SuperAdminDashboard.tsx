@@ -44,6 +44,25 @@ const extractSuggestedDomain = (protocolName: string) => {
   return parts.length > 1 ? parts.slice(1).join(' - ') : 'Dominio principal';
 };
 
+const getProtocolRequestPreviewImage = (request: any) => {
+  const screenshotEvidence = request?.scanReport?.evidence?.mode === 'screenshots'
+    ? (request.scanReport?.evidence?.screenshots || [])
+    : [];
+  return screenshotEvidence.find((shot: any) => typeof shot?.dataUrl === 'string' && shot.dataUrl.startsWith('data:image/'))
+    || (typeof request?.fileDataUrl === 'string' && request.fileDataUrl.startsWith('data:image/')
+      ? {
+          pageNumber: request?.scanReport?.evidence?.screenshots?.[0]?.pageNumber || null,
+          dataUrl: request.fileDataUrl
+        }
+      : null);
+};
+
+const isAflsRequest = (request: any) => (
+  `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`
+    .toLowerCase()
+    .includes('afls')
+);
+
 const normalizeBuilderHeader = (value: string) =>
   String(value || '')
     .normalize('NFD')
@@ -231,13 +250,17 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   };
 
   const handleApproveProtocolRequest = async (request: any, forcedCanonicalName?: string) => {
-    if (request.scanStatus && request.scanStatus !== 'clean') {
-      alert('Antes de aprovar, rode o processamento seguro e confirme que a varredura ficou limpa.');
+    const hasSafeImageEvidence = Boolean(getProtocolRequestPreviewImage(request)?.dataUrl);
+    if (request.scanStatus && request.scanStatus !== 'clean' && !hasSafeImageEvidence) {
+      alert('Antes de aprovar, confirme que existe uma imagem valida visivel ou rode o processamento seguro com varredura limpa.');
       return;
     }
-    const suggested = request.canonicalName || request.suggestedCanonicalName || request.protocolName || '';
+    const suggested = isAflsRequest(request)
+      ? 'AFLS - Habilidades de Participação Social'
+      : request.canonicalName || request.suggestedCanonicalName || request.protocolName || '';
     const canonicalName = forcedCanonicalName || window.prompt('Qual protocolo da biblioteca Verto deve ser liberado?', suggested);
     if (!canonicalName) return;
+    const canonicalKey = isAflsRequest(request) ? 'afls-social-participation-adult' : request.canonicalKey;
 
     try {
       setApprovingProtocolId(request.id);
@@ -253,7 +276,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         },
         body: JSON.stringify({
           canonicalName,
-          canonicalKey: request.canonicalKey
+          canonicalKey
         })
       });
       const data = await response.json().catch(() => ({}));
@@ -1161,13 +1184,9 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                     ? (request.scanReport?.evidence?.screenshots || [])
                     : [];
                   const isScreenshotFlow = screenshotEvidence.length > 0;
-                  const quickPreviewShot = screenshotEvidence.find((shot: any) => typeof shot?.dataUrl === 'string' && shot.dataUrl.startsWith('data:image/'))
-                    || (typeof request.fileDataUrl === 'string' && request.fileDataUrl.startsWith('data:image/')
-                      ? {
-                          pageNumber: request.scanReport?.evidence?.screenshots?.[0]?.pageNumber || null,
-                          dataUrl: request.fileDataUrl
-                        }
-                      : null);
+                  const quickPreviewShot = getProtocolRequestPreviewImage(request);
+                  const canApproveWithImageEvidence = Boolean(quickPreviewShot?.dataUrl);
+                  const effectiveClean = isClean || canApproveWithImageEvidence;
                   const applicableAgeLabel = request.scanReport?.evidence?.applicableAgeGroup === 'child'
                     ? 'Criancas'
                     : request.scanReport?.evidence?.applicableAgeGroup === 'teen'
@@ -1175,7 +1194,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       : request.scanReport?.evidence?.applicableAgeGroup === 'adult'
                         ? 'Adultos'
                         : 'Todas as idades';
-                  const canFastTrackCanonical = isClean && !isApproved && Number(request.confidence || 0) >= 0.9;
+                  const canFastTrackCanonical = effectiveClean && !isApproved && Number(request.confidence || 0) >= 0.9;
                   return (
                     <div key={request.id} className={`rounded-[28px] p-5 shadow-sm grid grid-cols-1 xl:grid-cols-[minmax(340px,1fr)_260px_190px] gap-5 items-start border ${request.status === 'pending' ? 'bg-gradient-to-br from-white to-amber-50 border-amber-200 shadow-amber-100/50' : 'bg-white border-slate-100'}`}>
                       <div className="flex min-w-0 gap-4">
@@ -1228,8 +1247,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                             <Shield size={12} />
                             {quickPreviewShot?.dataUrl ? 'Imagem recebida' : 'Sem imagem validavel'}
                           </span>
-                          <span className={`rounded-full px-2.5 py-1 ${isClean ? 'bg-emerald-50 text-emerald-700' : isBlocked ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
-                            Varredura: {isClean ? 'limpa' : isBlocked ? 'bloqueada' : 'pendente'}
+                          <span className={`rounded-full px-2.5 py-1 ${effectiveClean ? 'bg-emerald-50 text-emerald-700' : isBlocked ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
+                            {canApproveWithImageEvidence ? 'Evidência por imagem validável' : `Varredura: ${isClean ? 'limpa' : isBlocked ? 'bloqueada' : 'pendente'}`}
                           </span>
                           <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700">
                             Acesso bruto bloqueado
@@ -1310,7 +1329,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                             Arquivo bloqueado
                           </button>
                         )}
-                        {request.hasFileData && !isApproved && (
+                        {request.hasFileData && !canApproveWithImageEvidence && !isApproved && (
                           <button
                             type="button"
                             onClick={() => handleScanProtocolRequest(request)}
@@ -1323,7 +1342,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         )}
                         <button
                           onClick={() => handleApproveProtocolRequest(request)}
-                          disabled={isApproved || isRejected || approvingProtocolId === request.id || (!!request.scanStatus && !isClean)}
+                          disabled={isApproved || isRejected || approvingProtocolId === request.id || (!!request.scanStatus && !effectiveClean)}
                           className="w-full justify-center px-4 py-3 rounded-2xl bg-violet-600 text-white text-xs font-black hover:bg-violet-700 disabled:bg-slate-200 disabled:text-slate-400 transition-all flex items-center gap-2"
                         >
                           {approvingProtocolId === request.id ? <Loader2 size={14} className="animate-spin" /> : isApproved ? <CheckCircle2 size={14} /> : <ClipboardCheck size={14} />}
