@@ -458,19 +458,67 @@ export const ProtocolManagementSystem = ({
     return matchAge && matchType && matchDomain; 
   }); 
 
-  const evaluationProtocols = filteredProtocols.filter((p: any) => p.category === 'evaluation' || !p.category);
+  const now = Date.now();
+  const temporaryImportedProtocols = importedProtocolStatuses
+    .filter((item: any) => {
+      const status = String(item.status || 'pending').toLowerCase();
+      if (status !== 'rejected') return true;
+      const baseDate = item.reviewedAt || item.createdAt;
+      const expiry = new Date(baseDate || Date.now()).getTime() + (48 * 60 * 60 * 1000);
+      return Number.isFinite(expiry) && expiry > now;
+    })
+    .map((item: any) => ({
+      id: `temporary-request-${item.id}`,
+      title: item.protocolName || 'Protocolo importado',
+      ageGroup: item.applicableAgeGroup || 'all',
+      type: 'conventional',
+      domain: item.canonicalName || 'Em validacao',
+      category: 'evaluation',
+      data: [],
+      isTemporaryRequest: true,
+      requestStatus: String(item.status || 'pending').toLowerCase(),
+      requestCreatedAt: item.createdAt || null,
+      requestReviewedAt: item.reviewedAt || null
+    }))
+    .filter((item: any) => {
+      const matchAge = filterAge ? (item.ageGroup === filterAge || item.ageGroup === 'all') : true;
+      const matchType = filterType ? item.type === filterType : true;
+      const domainSource = `${item.title} ${item.domain}`.toLowerCase();
+      const matchDomain = filterDomain ? domainSource.includes(filterDomain.toLowerCase()) : true;
+      return matchAge && matchType && matchDomain;
+    });
+
+  const baseEvaluationProtocols = filteredProtocols.filter((p: any) => p.category === 'evaluation' || !p.category);
+  const evaluationProtocols = [...temporaryImportedProtocols, ...baseEvaluationProtocols];
   const interventionProtocols = filteredProtocols.filter((p: any) => p.category === 'intervention');
-  const recentImportedProtocols = importedProtocolStatuses.slice(0, 6);
-  const pendingImportedProtocols = recentImportedProtocols.filter((item: any) => String(item.status || '').toLowerCase() === 'pending').length;
-  const approvedImportedProtocols = recentImportedProtocols.filter((item: any) => String(item.status || '').toLowerCase() === 'approved').length;
-  const rejectedImportedProtocols = recentImportedProtocols.filter((item: any) => String(item.status || '').toLowerCase() === 'rejected').length;
 
   if (editingProtocol) { 
     return (<ProtocolEditor protocol={editingProtocol} onSave={(updated: any) => { onSaveProtocol(updated); setEditingProtocol(null); }} onCancel={() => setEditingProtocol(null)} />); 
   } 
 
-  const ProtocolCard = ({ proto }: any) => (
-    <div onClick={() => handleEdit(proto)} className={`bg-[#101a2d] p-6 rounded-[32px] shadow-2xl shadow-black/20 border border-white/10 transition-all group relative overflow-hidden flex flex-col h-full ${canManageLibrary ? "hover:shadow-[#7a32fc]/10 hover:border-[#7a32fc]/40 cursor-pointer active:scale-95" : ""}`}>
+  const ProtocolCard = ({ proto }: any) => {
+    const isTemporaryRequest = Boolean(proto?.isTemporaryRequest);
+    const requestStatus = String(proto?.requestStatus || 'pending').toLowerCase();
+    const statusLabel = requestStatus === 'approved' ? 'Aprovado' : requestStatus === 'rejected' ? 'Recusado' : 'Em analise';
+    const statusDotClass = requestStatus === 'approved'
+      ? 'bg-emerald-400'
+      : requestStatus === 'rejected'
+        ? 'bg-rose-400'
+        : 'bg-amber-400';
+    const statusChipClass = requestStatus === 'approved'
+      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/20'
+      : requestStatus === 'rejected'
+        ? 'bg-rose-500/15 text-rose-300 border-rose-400/20'
+        : 'bg-amber-500/15 text-amber-300 border-amber-400/20';
+
+    return (
+    <div
+      onClick={() => {
+        if (isTemporaryRequest) return;
+        handleEdit(proto);
+      }}
+      className={`bg-[#101a2d] p-6 rounded-[32px] shadow-2xl shadow-black/20 border transition-all group relative overflow-hidden flex flex-col h-full ${isTemporaryRequest ? 'border-white/15' : 'border-white/10'} ${canManageLibrary && !isTemporaryRequest ? "hover:shadow-[#7a32fc]/10 hover:border-[#7a32fc]/40 cursor-pointer active:scale-95" : ""}`}
+    >
       <div className="absolute top-0 right-0 w-24 h-24 bg-slate-400/20 rounded-bl-full opacity-70 -z-0 group-hover:scale-125 transition-transform"></div>
       <div className="flex justify-between items-start mb-4 relative z-10">
         <div className={`p-3 rounded-2xl ${proto.type === 'neurodevelopment' ? 'bg-purple-100 text-purple-600' : proto.type === 'occupational' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'} shadow-sm group-hover:scale-110 transition-transform`}>
@@ -483,22 +531,37 @@ export const ProtocolManagementSystem = ({
       </div>
       <div className="relative z-10 flex-1">
         <h3 className="font-bold text-white text-lg leading-tight group-hover:text-[#b794ff] transition-colors">{proto.title}</h3>
-        <p className="text-[10px] text-slate-400 font-bold uppercase mt-2 tracking-widest">{proto.data?.length || 0} Domínios • {proto.data?.reduce((acc: any, d: any) => acc + d.skills.length, 0) || 0} Tarefas</p>
+        {isTemporaryRequest ? (
+          <div className="mt-3 flex items-center gap-2">
+            <span className={`h-2.5 w-2.5 rounded-full ${statusDotClass}`} />
+            <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${statusChipClass}`}>
+              {statusLabel}
+            </span>
+          </div>
+        ) : (
+          <p className="text-[10px] text-slate-400 font-bold uppercase mt-2 tracking-widest">{proto.data?.length || 0} Domínios • {proto.data?.reduce((acc: any, d: any) => acc + d.skills.length, 0) || 0} Tarefas</p>
+        )}
       </div>
       <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between relative z-10">
         <div className="flex gap-1 overflow-hidden">
-          {proto.domain?.split(',').slice(0,2).map((d: any, i: number) => (
-            <span key={i} className="text-[8px] bg-white/10 text-slate-300 px-2 py-0.5 rounded-md font-bold whitespace-nowrap">{d.trim()}</span>
-          ))}
+          {isTemporaryRequest ? (
+            <span className="text-[9px] bg-white/10 text-slate-300 px-2 py-1 rounded-md font-bold whitespace-nowrap">
+              Solicitacao temporaria
+            </span>
+          ) : (
+            proto.domain?.split(',').slice(0,2).map((d: any, i: number) => (
+              <span key={i} className="text-[8px] bg-white/10 text-slate-300 px-2 py-0.5 rounded-md font-bold whitespace-nowrap">{d.trim()}</span>
+            ))
+          )}
         </div>
-        {canManageLibrary && (
+        {canManageLibrary && !isTemporaryRequest && (
           <button onClick={(e) => { e.stopPropagation(); if(confirm("Remover este protocolo?")) onDeleteProtocol(proto.id); }} className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all opacity-0 group-hover:opacity-100">
             <Trash2 size={16} />
           </button>
         )}
       </div>
     </div>
-  );
+  )};
 
   return ( 
     <div className="w-full min-h-full bg-[#0b1220] flex flex-col overflow-x-hidden relative text-slate-100"> 
@@ -724,53 +787,6 @@ export const ProtocolManagementSystem = ({
               </div> 
             )}
           </div>
-
-          {canManageLibrary && recentImportedProtocols.length > 0 && (
-            <div className="mb-6 rounded-[24px] border border-white/10 bg-[#11192c] px-4 py-4 shadow-xl shadow-black/10 animate-slide-up">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div className="min-w-0">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">Solicitacoes enviadas</p>
-                  <p className="text-sm font-bold text-white mt-1">Acompanhe rapidamente o andamento dos seus ultimos envios.</p>
-                </div>
-                <div className="grid grid-cols-3 gap-2 sm:gap-3 lg:w-[320px]">
-                  <div className="rounded-2xl bg-amber-50 px-3 py-3 text-center">
-                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-700">Pendentes</p>
-                    <p className="text-xl font-black text-amber-900 mt-1">{pendingImportedProtocols}</p>
-                  </div>
-                  <div className="rounded-2xl bg-emerald-50 px-3 py-3 text-center">
-                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700">Aprovados</p>
-                    <p className="text-xl font-black text-emerald-900 mt-1">{approvedImportedProtocols}</p>
-                  </div>
-                  <div className="rounded-2xl bg-rose-50 px-3 py-3 text-center">
-                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-rose-700">Recusados</p>
-                    <p className="text-xl font-black text-rose-900 mt-1">{rejectedImportedProtocols}</p>
-                  </div>
-                </div>
-              </div>
-              <div className="mt-4 grid gap-2">
-                {recentImportedProtocols.slice(0, 4).map((item: any) => {
-                  const status = String(item.status || 'pending').toLowerCase();
-                  const statusLabel = status === 'approved' ? 'Aprovado' : status === 'rejected' ? 'Recusado' : 'Pendente';
-                  const statusClass = status === 'approved'
-                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/20'
-                    : status === 'rejected'
-                      ? 'bg-rose-500/15 text-rose-300 border-rose-400/20'
-                      : 'bg-amber-500/15 text-amber-300 border-amber-400/20';
-                  return (
-                    <div key={item.id} className="flex items-center gap-3 rounded-2xl border border-white/8 bg-[#0b1220] px-3 py-3">
-                      <div className={`h-2.5 w-2.5 rounded-full ${status === 'approved' ? 'bg-emerald-400' : status === 'rejected' ? 'bg-rose-400' : 'bg-amber-400'}`} />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-bold text-white">{item.protocolName || 'Protocolo importado'}</p>
-                      </div>
-                      <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${statusClass}`}>
-                        {statusLabel}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
 
           <div className="space-y-12 animate-fade-in">
             <div>
