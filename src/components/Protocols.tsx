@@ -163,25 +163,6 @@ export const ProtocolEditor = ({ protocol, onSave, onCancel }: any) => {
     }
   }, [localProtocol, protocolDraftStorageKey]);
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(protocolDraftStorageKey);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      const draftProtocol = parsed?.protocol;
-      if (!draftProtocol || typeof draftProtocol !== 'object') return;
-      const shouldRestore = confirm('Existe um rascunho não salvo deste protocolo. Deseja restaurar o conteúdo?');
-      if (shouldRestore) {
-        setLocalProtocol(draftProtocol);
-      } else {
-        localStorage.removeItem(protocolDraftStorageKey);
-      }
-    } catch {
-      // noop
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const handleSave = async () => { 
     if (!String(localProtocol?.title || '').trim()) {
       alert('Informe o nome do protocolo antes de salvar.');
@@ -688,6 +669,36 @@ export const ProtocolManagementSystem = ({
       const matchDomain = filterDomain ? domainSource.includes(filterDomain.toLowerCase()) : true;
       return matchAge && matchType && matchDomain;
     });
+
+  useEffect(() => {
+    if (!canManageLibrary || approvedImportedProtocols.length === 0) return;
+    const materializedProtocols = approvedImportedProtocols.filter((protocol: any) => Array.isArray(protocol.data) && protocol.data.length > 0);
+    if (materializedProtocols.length === 0) return;
+
+    const existingKeys = new Set(
+      protocols.map((protocol: any) => String(protocol.canonicalKey || protocol.id || protocol.title || '').trim()).filter(Boolean)
+    );
+    const missingProtocols = materializedProtocols.filter((protocol: any) => {
+      const key = String(protocol.canonicalKey || protocol.id || protocol.title || '').trim();
+      return key && !existingKeys.has(key);
+    });
+    if (missingProtocols.length === 0) return;
+
+    const nextProtocols = [
+      ...protocols,
+      ...missingProtocols.map((protocol: any) => ({
+        ...protocol,
+        id: protocol.canonicalKey || protocol.id,
+        origin: 'verto_approved_import',
+        isApprovedImport: true,
+        isManualProtocol: false,
+        requestStatus: 'approved'
+      }))
+    ];
+
+    void onSaveProtocol(missingProtocols[0], nextProtocols);
+    void persistProtocolListImmediately(nextProtocols);
+  }, [approvedImportedProtocols, canManageLibrary, protocols, onSaveProtocol]);
 
   const baseEvaluationProtocols = filteredProtocols.filter((p: any) => p.category === 'evaluation' || !p.category);
   const evaluationProtocols = baseEvaluationProtocols;

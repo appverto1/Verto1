@@ -483,7 +483,11 @@ export const ReceptionistDashboard = ({
     },
   ];
 
-  const handleSaveProtocol = (updatedProtocol: any) => {
+  const handleSaveProtocol = (updatedProtocol: any, nextProtocols?: any[]) => {
+    if (Array.isArray(nextProtocols)) {
+      setProtocols(nextProtocols);
+      return;
+    }
     const exists = protocols.find((p: any) => p.id === updatedProtocol.id);
     if (exists) {
       setProtocols((prev: any) =>

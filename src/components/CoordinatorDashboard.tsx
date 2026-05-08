@@ -4938,8 +4938,12 @@ export function CoordinatorDashboard({
                 <ProtocolManagementSystem
                   protocols={protocols}
                   canManageLibrary={canManageProtocolLibrary}
-                  onSaveProtocol={(p: any) => {
+                  onSaveProtocol={(p: any, nextProtocols?: any[]) => {
                     if (!canManageProtocolLibrary) return;
+                    if (Array.isArray(nextProtocols)) {
+                      setProtocols(nextProtocols);
+                      return;
+                    }
                     const exists = protocols.find(
                       (old: any) => old.id === p.id,
                     );

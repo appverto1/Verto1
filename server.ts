@@ -11748,6 +11748,7 @@ async function startServer() {
               protocolName: sanitizeString(row.protocol_name, 180),
               fileName: sanitizeString(row.file_name, 240),
               status: sanitizeString(row.status, 40) || 'pending',
+              canonicalKey: sanitizeString(row.approved_canonical_key || row.suggested_canonical_key, 180),
               canonicalName: sanitizeString(row.approved_canonical_name || row.suggested_canonical_name, 180),
               confidence: Number(row.suggested_confidence || 0),
               applicableAgeGroup: sanitizeString(scanReport?.evidence?.applicableAgeGroup, 40) || 'all',
