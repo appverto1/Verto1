@@ -3866,9 +3866,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                     pei: [...(patient.pei || []), peiGoal]
                                   };
                                   onUpdatePatient(updatedPatient);
-                                  setIsAddingPEIGoal(false);
-                                  setSelectedPEIProtocolId("");
-                                  setSelectedPEIDomainId("");
+                                  setSelectedPEISkillId("");
                                 }}
                                 className="text-left p-4 bg-white border border-gray-100 rounded-2xl hover:border-[#05CD99] hover:bg-[#05CD99]/5 transition-all group"
                               >
