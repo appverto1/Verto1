@@ -784,6 +784,66 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'history', '/api/history');
   },
 
+  async addPatientLog(log: {
+    id?: string;
+    patient_id: string;
+    professional_id?: string | null;
+    type: 'task' | 'mood' | 'energy' | string;
+    value: any;
+    timestamp?: string;
+  }) {
+    const id = log.id || generateId();
+    const data = {
+      ...log,
+      id,
+      timestamp: log.timestamp || new Date().toISOString()
+    };
+    return await saveOfflineFirst(id, data, 'log', '/api/patient-logs');
+  },
+
+  async getPatientLogs(patientId: string) {
+    try {
+      const response = await fetch(`/api/patient-logs/${patientId}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient logs:', error);
+      const local = await getRecordsByType('log');
+      return {
+        success: true,
+        data: local
+          .map(r => r.data)
+          .filter((row: any) => String(row?.patient_id || row?.patientId || '') === String(patientId))
+      };
+    }
+  },
+
+  async subscribeToPatientLogs(patientId: string, onChange: () => void) {
+    try {
+      const supabase = await getSupabase();
+      if (!supabase?.channel) return () => {};
+      const channel = supabase
+        .channel(`patient-logs-${patientId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'patient_logs', filter: `patient_id=eq.${patientId}` },
+          () => onChange()
+        )
+        .subscribe();
+      return () => {
+        try {
+          supabase.removeChannel(channel);
+        } catch {
+          // no-op
+        }
+      };
+    } catch {
+      return () => {};
+    }
+  },
+
   async updateHistoryItem(historyId: string, updates: any) {
     try {
       const response = await fetch(`/api/history/${historyId}`, {

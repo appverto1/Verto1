@@ -1308,6 +1308,17 @@ export default function App() {
           user?.name ||
           'Paciente',
       ).trim(),
+      professionalId: String(
+        byId?.therapist_id ||
+          byId?.professional_id ||
+          byEmail?.therapist_id ||
+          byEmail?.professional_id ||
+          byUserEmail?.therapist_id ||
+          byUserEmail?.professional_id ||
+          candidate?.professional_id ||
+          candidate?.professionalId ||
+          ''
+      ).trim() || null,
     };
   };
 
@@ -1397,12 +1408,9 @@ export default function App() {
           : [];
         const assignedPending = Array.isArray(safeAssignedTasksRes?.data)
           ? safeAssignedTasksRes.data
-              .filter((t: any) => {
-                if (String(t?.status || '').toLowerCase() === 'completed') return false;
-                return true;
-              })
               .map((t: any) => {
                 const taskData = t?.task_data && typeof t.task_data === 'object' ? t.task_data : {};
+                const status = String(t?.status || 'pending').toLowerCase();
                 return {
                   id: `assigned-${t.id}`,
                   assignedTaskId: t.id,
@@ -1413,7 +1421,12 @@ export default function App() {
                   color: taskData.color || 'bg-blue-100 text-blue-600',
                   type: t?.task_type || 'task',
                   maxScore: Number(taskData?.maxScore || taskData?.max_score || 4),
-                  scheduledAt: t?.scheduled_at || null
+                  scheduledAt: t?.scheduled_at || null,
+                  scheduled_at: t?.scheduled_at || null,
+                  status: t?.status || 'pending',
+                  completed: status === 'completed',
+                  professional_id: t?.professional_id || null,
+                  professionalId: t?.professional_id || null
                 };
               })
           : [];
@@ -2358,6 +2371,31 @@ export default function App() {
         note: n,
         icon: i
       });
+      await dataService.addPatientLog({
+        patient_id: String(identity.patientId || user.id),
+        professional_id: identity.professionalId || user?.professional_id || user?.therapist_id || null,
+        type: 'mood',
+        value: {
+          score: normalizedEnergy,
+          note: n,
+          icon: i,
+          tag: t?.label || t?.id || null
+        },
+        timestamp: new Date().toISOString()
+      });
+      if (!isConventionalAdult && normalizedEnergy !== null) {
+        await dataService.addPatientLog({
+          patient_id: String(identity.patientId || user.id),
+          professional_id: identity.professionalId || user?.professional_id || user?.therapist_id || null,
+          type: 'energy',
+          value: {
+            value: normalizedEnergy,
+            note: n,
+            tag: t?.label || t?.id || null
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
     } catch (error) {
       console.error('Falha ao persistir check-in do paciente:', error);
     }
@@ -2388,7 +2426,7 @@ export default function App() {
       linkedTask: t.linkedTask
     };
     setHistory(prev => [newHistoryItem, ...prev]); 
-    setTasks(prev => prev.filter(x => x.id !== t.id)); 
+    setTasks(prev => prev.map(x => String(x.id) === String(t.id) ? { ...x, completed: true, status: 'completed' } : x)); 
     
     // Add a note about the patient completing the task
     const noteText = `? TAREFA CONCLUÃDA PELO PACIENTE\nAtividade: ${t.title}\n${isKid ? `PontuaÃ§Ã£o: ${e}\n` : ''}AnotaÃ§Ãµes do Paciente: ${n || "Nenhuma observaÃ§Ã£o."}`;
@@ -2406,6 +2444,22 @@ export default function App() {
       energy: energyValue,
       note: n,
       icon: t.icon
+    });
+
+    await dataService.addPatientLog({
+      patient_id: targetPatientId,
+      professional_id: t?.professional_id || t?.professionalId || identity.professionalId || user?.professional_id || user?.therapist_id || null,
+      type: 'task',
+      value: {
+        task_id: t?.assignedTaskId || t?.id || null,
+        title: t.title,
+        completed: true,
+        effort: normalizedEffort,
+        energy: energyValue,
+        note: n,
+        icon: t.icon
+      },
+      timestamp: new Date().toISOString()
     });
 
     const assignedTaskId = String(t?.assignedTaskId || '');

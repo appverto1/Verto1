@@ -39,6 +39,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showStarCelebration, setShowStarCelebration] = useState(false);
   const [celebrationKey, setCelebrationKey] = useState(0);
+  const [currentTime, setCurrentTime] = useState(() => new Date());
   const previousStarsRef = useRef<number>(0);
   const userType = typeof user.type === 'string' ? user.type.toLowerCase() : '';
   const hasExplicitPatientType = Boolean(userType);
@@ -53,6 +54,28 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     (!hasExplicitPatientType && ((userAge !== null && userAge <= 12) || user.anamnesisData?.formType === 'child'));
   const isConventionalAdult = (userType === 'conventional' || userType === 'adult_conventional') && !isKidsProfile;
   const readOnlyNotice = "Você não possui um tratamento ativo no momento. Entre em contato com sua clínica para retomar o acompanhamento.";
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setCurrentTime(new Date()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const visiblePatientTasks = useMemo(() => {
+    const list = Array.isArray(tasks) ? tasks : [];
+    if (isKidsProfile) return list;
+    const startOfToday = new Date(currentTime);
+    startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = new Date(startOfToday);
+    endOfToday.setDate(endOfToday.getDate() + 1);
+
+    return list.filter((task: any) => {
+      const scheduledRaw = task?.scheduledAt || task?.scheduled_at;
+      if (!scheduledRaw) return false;
+      const scheduledAt = new Date(scheduledRaw);
+      if (Number.isNaN(scheduledAt.getTime())) return false;
+      return scheduledAt >= startOfToday && scheduledAt < endOfToday && scheduledAt <= currentTime;
+    });
+  }, [tasks, isKidsProfile, currentTime]);
 
   const conventionalMoodTags = [
     { id: 'family', label: 'Família', icon: '👨‍👩‍👧‍👦', color: 'bg-blue-100 text-blue-600' },
@@ -828,7 +851,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (isReadOnlyMode) return;
     if (selectedMood) { 
       setShowMoodSuccess(true); 
-      const moodValue = isConventionalAdult ? null : selectedMood.value;
+      const moodValue = selectedMood.value;
       setTimeout(() => { onMoodCheckin(moodValue, moodNote, selectedMood.emoji, selectedTag); setIsMoodModalOpen(false); setShowMoodSuccess(false); setMoodNote(""); setSelectedMood(null); setSelectedTag(null); setDailyCheckinDone(true); }, 2000); 
     } 
   }; 
@@ -989,15 +1012,23 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       <div className="flex-1 overflow-y-auto no-scrollbar"> 
         <div className="mb-8"> 
           <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2"> <Zap size={16} /> Suas Atividades </h2> 
-          {tasks && tasks.length > 0 ? ( 
+          {visiblePatientTasks && visiblePatientTasks.length > 0 ? ( 
             <div className="grid gap-3"> 
-              {tasks.map((task: any) => ( 
+              {visiblePatientTasks.map((task: any) => ( 
                 <div key={task.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between group hover:shadow-md transition-all"> 
                   <div className="flex items-center gap-4"> 
-                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl ${task.color || 'bg-blue-100 text-blue-600'}`}> {task.icon || '📋'} </div> 
-                    <div> <h3 className="font-semibold text-gray-800 tracking-tight">{task.title}</h3> {task.description && <p className="text-xs text-gray-400 line-clamp-1">{task.description}</p>} </div> 
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl ${task.completed ? 'bg-emerald-100 text-emerald-700' : (task.color || 'bg-[#7a32fc]/10 text-[#7a32fc]')}`}> {task.icon || '📋'} </div> 
+                    <div>
+                      <h3 className="font-semibold text-gray-800 tracking-tight">{task.title}</h3>
+                      {task.description && <p className="text-xs text-gray-400 line-clamp-1">{task.description}</p>}
+                      {(task.scheduledAt || task.scheduled_at) && (
+                        <p className="text-[10px] text-[#7a32fc] font-semibold uppercase tracking-widest mt-1">
+                          Hoje às {new Date(task.scheduledAt || task.scheduled_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      )}
+                    </div> 
                   </div> 
-                  <button disabled={isReadOnlyMode} onClick={() => openTaskModal(task)} className="p-3 bg-gray-50 text-gray-400 rounded-xl hover:bg-green-500 hover:text-white transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed" > <Check size={20} /> </button> 
+                  <button disabled={isReadOnlyMode || task.completed || String(task.status || '').toLowerCase() === 'completed'} onClick={() => openTaskModal(task)} className={`p-3 rounded-xl transition-all active:scale-95 disabled:cursor-not-allowed ${task.completed || String(task.status || '').toLowerCase() === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-50 text-gray-400 hover:bg-green-500 hover:text-white disabled:opacity-50'}`} > <Check size={20} /> </button> 
                 </div> 
               ))} 
             </div> 

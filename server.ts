@@ -9006,6 +9006,131 @@ async function startServer() {
     }
   });
 
+  app.get('/api/patient-logs/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      if (!patientId) return res.status(400).json({ success: false, error: 'patient_id inválido.' });
+
+      const { data, error } = await supabase
+        .from('patient_logs')
+        .select('*')
+        .eq('patient_id', patientId)
+        .order('timestamp', { ascending: false });
+
+      if (!error) {
+        return res.json({ success: true, data: Array.isArray(data) ? data : [] });
+      }
+
+      const { data: historyRows, error: historyError } = await supabase
+        .from('history')
+        .select('*')
+        .eq('patient_id', patientId)
+        .order('created_at', { ascending: false });
+      if (historyError) throw historyError;
+
+      const mapped = (Array.isArray(historyRows) ? historyRows : [])
+        .filter((row: any) => ['task', 'intervention', 'reinforcement', 'checkin', 'mood', 'energy'].includes(String(row?.type || '').toLowerCase()))
+        .map((row: any) => ({
+          id: row.id,
+          patient_id: row.patient_id,
+          professional_id: row.therapist_id || null,
+          type: row.type === 'checkin' ? 'mood' : row.type,
+          value: {
+            title: row.title,
+            score: row.score,
+            energy: row.energy,
+            note: row.note,
+            icon: row.icon
+          },
+          timestamp: row.created_at,
+          created_at: row.created_at,
+          source: 'history'
+        }));
+
+      return res.json({ success: true, data: mapped, fallback: 'history' });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.post('/api/patient-logs', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de log do paciente')) return;
+      const resolvedPatientId = await resolvePatientIdForRequest(
+        sanitizeString(req.body?.patient_id, 120),
+        req.session.user,
+        { createIfMissing: true }
+      );
+      const safeType = sanitizeString(req.body?.type, 40).toLowerCase();
+      if (!resolvedPatientId || !['task', 'mood', 'energy'].includes(safeType)) {
+        return res.status(400).json({ success: false, error: 'patient_id e type válido são obrigatórios.' });
+      }
+
+      const timestamp = sanitizeString(req.body?.timestamp, 40) || new Date().toISOString();
+      const rawValue = req.body?.value ?? null;
+      const safeValue = typeof rawValue === 'string'
+        ? sanitizeTextField(rawValue, 4000)
+        : JSON.parse(JSON.stringify(rawValue)).valueOf();
+      const professionalId = sanitizeString(
+        req.body?.professional_id ||
+        req.body?.professionalId ||
+        req.session.user?.professional_id ||
+        req.session.user?.therapist_id ||
+        req.session.user?.id,
+        120
+      );
+
+      const logData = cleanObject({
+        id: sanitizeString(req.body?.id, 120) || crypto.randomUUID(),
+        patient_id: resolvedPatientId,
+        professional_id: professionalId || null,
+        type: safeType,
+        value: safeValue,
+        timestamp,
+        created_at: timestamp
+      });
+
+      const { data, error } = await supabase
+        .from('patient_logs')
+        .upsert([logData], { onConflict: 'id' })
+        .select('*')
+        .single();
+
+      if (!error) return res.json({ success: true, data });
+
+      const fallbackValue = typeof safeValue === 'object' && safeValue !== null ? safeValue : { value: safeValue };
+      const fallbackTitle =
+        safeType === 'task'
+          ? sanitizeTextField(fallbackValue?.title || 'Tarefa concluída', 180)
+          : safeType === 'energy'
+            ? 'Registro de energia'
+            : 'Registro de humor';
+      const fallback = cleanObject({
+        id: sanitizeString(req.body?.id, 120) || crypto.randomUUID(),
+        patient_id: resolvedPatientId,
+        patient_email: sanitizeEmail(req.session.user?.email),
+        type: safeType,
+        title: fallbackTitle,
+        score: asSafeNumber(fallbackValue?.score, 0, 100),
+        energy: asSafeNumber(fallbackValue?.energy ?? fallbackValue?.value, 0, 100),
+        note: sanitizeTextField(fallbackValue?.note || fallbackValue?.comment || '', 12000),
+        icon: sanitizeString(fallbackValue?.icon, 40),
+        therapist_id: professionalId || null,
+        created_at: timestamp
+      });
+
+      const retry = await supabase
+        .from('history')
+        .upsert([fallback], { onConflict: 'id' })
+        .select('*')
+        .single();
+      if (retry.error) throw retry.error;
+      return res.json({ success: true, data: { ...logData, source: 'history' }, fallback: 'history' });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
   // Activity Logs
   app.get('/api/logs', async (req: any, res) => {
     try {

@@ -410,6 +410,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [uploadProgress, setUploadProgress] = useState(0);
   const [assignedTasks, setAssignedTasks] = useState<any[]>([]);
   const [isLoadingAssignedTasks, setIsLoadingAssignedTasks] = useState(false);
+  const [patientActivityLogs, setPatientActivityLogs] = useState<any[]>([]);
+  const [isLoadingPatientActivityLogs, setIsLoadingPatientActivityLogs] = useState(false);
+  const [activityLogDateFilter, setActivityLogDateFilter] = useState('');
   const [assignedReviewDrafts, setAssignedReviewDrafts] = useState<Record<string, { score: string; note: string }>>({});
   const [lastRecordedTrialId, setLastRecordedTrialId] = useState<any>(null);
   const [lastRecordedGoalId, setLastRecordedGoalId] = useState<any>(null);
@@ -645,6 +648,41 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     };
     loadAssignedTasks();
   }, [patient?.id, patientAgeYears]);
+
+  useEffect(() => {
+    if (!patient?.id || isKidsProfile) {
+      setPatientActivityLogs([]);
+      return;
+    }
+    let cancelled = false;
+    let unsubscribe = () => {};
+    const loadPatientLogs = async () => {
+      setIsLoadingPatientActivityLogs(true);
+      try {
+        const result = await dataService.getPatientLogs(String(patient.id));
+        if (!cancelled && result?.success && Array.isArray(result?.data)) {
+          setPatientActivityLogs(result.data);
+        }
+      } catch (error) {
+        console.error('Erro ao carregar logs do paciente:', error);
+        if (!cancelled) setPatientActivityLogs([]);
+      } finally {
+        if (!cancelled) setIsLoadingPatientActivityLogs(false);
+      }
+    };
+
+    loadPatientLogs();
+    const interval = window.setInterval(loadPatientLogs, 15000);
+    dataService.subscribeToPatientLogs(String(patient.id), loadPatientLogs).then((cleanup) => {
+      unsubscribe = typeof cleanup === 'function' ? cleanup : () => {};
+    });
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      unsubscribe();
+    };
+  }, [patient?.id, isKidsProfile]);
 
   const resolveProtocolAgeRange = (protocol: any): { min: number; max: number | null } => {
     const explicitMin = Number(
@@ -1673,6 +1711,71 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
     return Array.from(mergedMap.values()).sort((a: any, b: any) => a.eventDate.getTime() - b.eventDate.getTime());
   }, [patientTasks, assignedTasks, isKidsProfile]);
+
+  const parsePatientLogValue = (log: any) => {
+    if (log?.value && typeof log.value === 'object') return log.value;
+    if (typeof log?.value === 'string') {
+      try {
+        return JSON.parse(log.value);
+      } catch {
+        return { value: log.value };
+      }
+    }
+    return {
+      title: log?.title,
+      score: log?.score,
+      energy: log?.energy,
+      note: log?.note,
+      icon: log?.icon
+    };
+  };
+
+  const filteredPatientActivityLogs = useMemo(() => {
+    const rows = Array.isArray(patientActivityLogs) ? patientActivityLogs : [];
+    return rows
+      .filter((log: any) => {
+        if (!activityLogDateFilter) return true;
+        const timestamp = log?.timestamp || log?.created_at;
+        const date = new Date(timestamp || 0);
+        if (Number.isNaN(date.getTime())) return false;
+        const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        return key === activityLogDateFilter;
+      })
+      .sort((a: any, b: any) => new Date(b?.timestamp || b?.created_at || 0).getTime() - new Date(a?.timestamp || a?.created_at || 0).getTime());
+  }, [patientActivityLogs, activityLogDateFilter]);
+
+  const describePatientLog = (log: any) => {
+    const value = parsePatientLogValue(log);
+    const type = String(log?.type || '').toLowerCase();
+    if (type === 'energy') {
+      return {
+        icon: <Zap size={18} />,
+        label: 'Energia',
+        title: `${value?.value ?? value?.energy ?? '-'}% registrado`,
+        detail: value?.note || 'Registro de energia feito pelo paciente.',
+        badgeClass: 'bg-blue-100 text-blue-700',
+        dotClass: 'bg-blue-500'
+      };
+    }
+    if (type === 'task' || type === 'intervention' || type === 'reinforcement') {
+      return {
+        icon: <CheckCircle2 size={18} />,
+        label: 'Tarefa',
+        title: value?.title || log?.title || 'Tarefa concluída',
+        detail: value?.note || 'Paciente marcou a atividade como concluída.',
+        badgeClass: 'bg-emerald-100 text-emerald-700',
+        dotClass: 'bg-emerald-500'
+      };
+    }
+    return {
+      icon: <Activity size={18} />,
+      label: 'Humor',
+      title: value?.icon ? `${value.icon} Registro de humor` : 'Registro de humor',
+      detail: value?.note || 'Check-in emocional feito pelo paciente.',
+      badgeClass: 'bg-[#7a32fc]/10 text-[#7a32fc]',
+      dotClass: 'bg-[#7a32fc]'
+    };
+  };
 
   const selectedChartProtocol = useMemo(
     () => protocols.find((p: any) => String(p.id) === String(selectedChartProtocolId)),
@@ -3060,6 +3163,66 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   </div>
                 ) : (
                   <p className="text-sm text-gray-400 italic">Nenhuma atividade de casa cadastrada no momento.</p>
+                )}
+              </div>
+            )}
+            {!isKidsProfile && (
+              <div className="bg-white border border-gray-100 p-5 rounded-3xl shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-5">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-800 tracking-tight">Histórico de Atividades</h3>
+                    <p className="text-xs text-gray-500 mt-1">Registros enviados pelo portal adulto em tempo real para apoio à decisão clínica.</p>
+                  </div>
+                  <div className="w-full sm:w-56">
+                    <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-1">Filtrar por data</label>
+                    <input
+                      type="date"
+                      value={activityLogDateFilter}
+                      onChange={(e) => setActivityLogDateFilter(e.target.value)}
+                      className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#7a32fc]"
+                    />
+                  </div>
+                </div>
+                {isLoadingPatientActivityLogs && filteredPatientActivityLogs.length === 0 ? (
+                  <p className="text-sm text-gray-400 italic">Carregando histórico do paciente...</p>
+                ) : filteredPatientActivityLogs.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-6 text-center">
+                    <p className="text-sm font-semibold text-gray-500">Nenhum registro encontrado para este filtro.</p>
+                    <p className="text-xs text-gray-400 mt-1">Quando o paciente registrar humor, energia ou tarefas, os eventos aparecerão aqui.</p>
+                  </div>
+                ) : (
+                  <div className="relative pl-8 border-l-2 border-slate-100 ml-2 space-y-4">
+                    {filteredPatientActivityLogs.map((log: any) => {
+                      const meta = describePatientLog(log);
+                      const timestamp = new Date(log?.timestamp || log?.created_at || 0);
+                      return (
+                        <div key={`patient-activity-${log.id}`} className="relative">
+                          <div className={`absolute -left-[39px] top-5 w-5 h-5 rounded-full ${meta.dotClass} border-4 border-white ring-2 ring-slate-100`}></div>
+                          <div className="bg-gradient-to-br from-white to-slate-50 border border-gray-100 rounded-2xl p-4 shadow-sm">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="flex items-start gap-3">
+                                <span className={`w-10 h-10 rounded-2xl flex items-center justify-center ${meta.badgeClass}`}>
+                                  {meta.icon}
+                                </span>
+                                <div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-sm font-semibold text-gray-800">{meta.title}</p>
+                                    <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase tracking-wide ${meta.badgeClass}`}>{meta.label}</span>
+                                  </div>
+                                  <p className="text-xs text-gray-500 mt-1 whitespace-pre-wrap">{meta.detail}</p>
+                                </div>
+                              </div>
+                              <span className="text-[11px] font-semibold text-gray-400">
+                                {Number.isNaN(timestamp.getTime())
+                                  ? 'Sem horário'
+                                  : `${timestamp.toLocaleDateString('pt-BR')} às ${timestamp.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
             )}
