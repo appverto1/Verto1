@@ -2250,92 +2250,9 @@ export function CoordinatorDashboard({
     return normalizedSavedTemplate;
   };
 
-  // Mock data for DRE
-  const dreData = [
-    {
-      label: "Receita Bruta",
-      value: 45250,
-      type: "income",
-      info: "Total de faturamento no mês",
-    },
-    {
-      label: "Impostos (6%)",
-      value: -2715,
-      type: "expense",
-      info: "Simples Nacional",
-    },
-    {
-      label: "Receita Líquida",
-      value: 42535,
-      type: "total",
-      info: "Faturamento após impostos",
-    },
-    {
-      label: "Custos Variáveis (Repasses)",
-      value: -18100,
-      type: "expense",
-      info: "Pagamento de profissionais",
-    },
-    {
-      label: "Margem de Contribuição",
-      value: 24435,
-      type: "total",
-      info: "Sobra para custos fixos",
-    },
-    {
-      label: "Custos Fixos (Aluguel, Luz, etc)",
-      value: -8500,
-      type: "expense",
-      info: "Custos operacionais",
-    },
-    {
-      label: "Lucro Líquido",
-      value: 15935,
-      type: "profit",
-      info: "Resultado final do mês",
-    },
-  ];
-
-  const revenueHistory = [
-    { month: "Jan", revenue: 38000, profit: 12000 },
-    { month: "Fev", revenue: 42000, profit: 14500 },
-    { month: "Mar", revenue: 45250, profit: 15935 },
-    { month: "Abr", revenue: 48000, profit: 17200 },
-  ];
-
-  const teamPerformance = [
-    { name: "Dr. Ricardo", patients: 12, revenue: 8400 },
-    { name: "Dra. Ana", patients: 15, revenue: 10500 },
-    { name: "Dr. Marcos", patients: 8, revenue: 5600 },
-    { name: "Dra. Julia", patients: 10, revenue: 7000 },
-  ];
-
-  const compensationForecast = [
-    {
-      name: "Dra. Ana Silva",
-      crp: "06/123456",
-      model: "R$ 120 por paciente",
-      forecast: 1800,
-      payDate: "25/04/2026",
-      patients: 15,
-    },
-    {
-      name: "Dr. Ricardo Souza",
-      crp: "06/654321",
-      model: "Salário fixo R$ 4.500",
-      forecast: 4500,
-      payDate: "25/04/2026",
-      patients: 12,
-    },
-    {
-      name: "Dra. Julia Lima",
-      crp: "06/998877",
-      model: "R$ 95 por paciente",
-      forecast: 950,
-      payDate: "25/04/2026",
-      patients: 10,
-    },
-  ];
+  const dreData: any[] = [];
+  const revenueHistory: any[] = [];
+  const compensationForecast: any[] = [];
 
   const COLORS = ["#7a32fc", "#6AD2FF", "#EFF4FB", "#A3AED0"];
 

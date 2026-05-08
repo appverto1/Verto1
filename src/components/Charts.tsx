@@ -236,23 +236,18 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1, title, description,
         </div>
       )}
       
-      <div className="relative z-10 grid grid-cols-[52px_minmax(0,1fr)] gap-2">
-        <div style={{ height: '430px', minHeight: '390px' }} className="bg-white/80 rounded-l-2xl">
-          {isMounted ? (
-            <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={330}>
-              <BarChart data={data} margin={{ top: 16, right: 0, left: 0, bottom: 96 }}>
-                <XAxis dataKey="name" hide />
-                <YAxis
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: '#A3AED0', fontSize: 10, fontWeight: 'bold' }}
-                  domain={[0, safeMaxScore]}
-                  ticks={yTicks}
-                  width={48}
-                />
-              </BarChart>
-            </SafeResponsiveContainer>
-          ) : null}
+      <div className="relative z-10 grid grid-cols-[72px_minmax(0,1fr)] gap-2">
+        <div style={{ height: '430px', minHeight: '390px' }} className="relative rounded-l-2xl border-r border-slate-100 bg-white/95 shadow-sm">
+          <div className="absolute inset-0 flex flex-col justify-between pb-[96px] pl-2 pr-3 pt-4 text-right">
+            {[...yTicks].reverse().map((tick) => (
+              <span key={tick} className="text-[11px] font-black text-slate-400">
+                {safeMaxScore === 100 ? `${tick}%` : tick}
+              </span>
+            ))}
+          </div>
+          <div className="absolute left-2 top-1/2 -translate-y-1/2 -rotate-90 whitespace-nowrap text-[9px] font-black uppercase tracking-[0.18em] text-slate-300">
+            {safeMaxScore === 100 ? 'Maestria' : 'Pontuação'}
+          </div>
         </div>
         <div className="overflow-x-auto pb-3 no-scrollbar cursor-grab active:cursor-grabbing">
           <div style={{ minWidth: `${minWidth}px`, height: '430px', minHeight: '390px' }} className="relative min-w-0 min-h-0">

@@ -54,18 +54,6 @@ const formatFullDate = (timestamp: number, fallbackIndex: number) => {
   return new Date(timestamp).toLocaleDateString('pt-BR');
 };
 
-const mockCumulativeData = (currentScore: number): CumulativePoint[] => {
-  const safeScore = Math.max(1, Math.round(Number(currentScore) || 1));
-  return Array.from({ length: 5 }, (_, index) => {
-    const total = Math.round((safeScore * index) / 4);
-    return {
-      label: `Sessao ${index + 1}`,
-      date: `Estimativa MVP ${index + 1}`,
-      total
-    };
-  });
-};
-
 const CustomTooltip = ({ active, payload }: any) => {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload as CumulativePoint;
@@ -118,11 +106,7 @@ export const CumulativeGrowthChart = ({ patientId, history = [] }: CumulativeGro
       });
     });
 
-    const points = Array.from(pointsByDate.values());
-    const currentTotal = points[points.length - 1]?.total || 0;
-    if (points.length <= 1 && currentTotal > 0) return mockCumulativeData(currentTotal);
-
-    return points;
+    return Array.from(pointsByDate.values());
   }, [history, patientId]);
 
   if (!chartData.length) {

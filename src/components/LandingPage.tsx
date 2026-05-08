@@ -587,8 +587,8 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 	  const handleSelectPlan = async (planName: string) => {
     try {
       setSelectedPlan(planName);
-      const fakeEvent = { preventDefault: () => {} } as React.FormEvent;
-      await handleRegister(fakeEvent);
+      const syntheticSubmitEvent = { preventDefault: () => {} } as React.FormEvent;
+      await handleRegister(syntheticSubmitEvent);
     } catch (err: any) {
       console.error('Select plan error:', err);
       setRegisterError('Erro ao processar checkout: ' + err.message);

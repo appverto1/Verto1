@@ -42,31 +42,6 @@ import { LogoVerto } from './Common';
 import { SecureImage } from './SecureMedia';
 import { getSupabase } from '../lib/supabase';
 
-// Mock Data for Admin Dashboard (Removed as we use real data now)
-const DRE_DATA_MOCK = [
-  { month: 'Jan', revenue: 45000, costs: 12000, expenses: 8000, profit: 25000 },
-  { month: 'Fev', revenue: 52000, costs: 14000, expenses: 8500, profit: 29500 },
-  { month: 'Mar', revenue: 61000, costs: 15500, expenses: 9000, profit: 36500 },
-  { month: 'Abr', revenue: 58000, costs: 15000, expenses: 9200, profit: 33800 },
-  { month: 'Mai', revenue: 68000, costs: 18000, expenses: 10000, profit: 40000 },
-  { month: 'Jun', revenue: 75000, costs: 20000, expenses: 11000, profit: 44000 },
-];
-
-const CLIENT_PLANS = [
-  { name: 'Profissional', count: 145, price: 79, color: '#7a32fc' },
-  { name: 'Equipe', count: 82, price: 69, color: '#05CD99' },
-  { name: 'ClÃ­nico', count: 34, price: 59, color: '#FFB547' },
-  { name: 'Enterprise', count: 12, price: 450, color: '#7000FF' },
-];
-
-const RECENT_CLIENTS = [
-  { id: 1, name: 'ClÃ­nica NeuroViver', email: 'contato@neuroviver.com.br', plan: 'Equipe', value: 828, status: 'active', date: '2026-03-20' },
-  { id: 2, name: 'Dr. Marcos Silva', email: 'marcos.silva@gmail.com', plan: 'Profissional', value: 79, status: 'active', date: '2026-03-18' },
-  { id: 3, name: 'EspaÃ§o Evoluir', email: 'financeiro@evoluir.com', plan: 'ClÃ­nico', value: 1475, status: 'delinquent', date: '2026-03-15' },
-  { id: 4, name: 'Centro ABA CrianÃ§a', email: 'adm@abacrianca.com', plan: 'Enterprise', value: 2500, status: 'active', date: '2026-03-10' },
-  { id: 5, name: 'Dra. Ana Paula', email: 'ana.paula@to.com.br', plan: 'Profissional', value: 79, status: 'active', date: '2026-03-05' },
-];
-
 export const AdminDashboard = ({ onLogout }: any) => {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [searchTerm, setSearchTerm] = useState('');
@@ -263,6 +238,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
       (c.email?.toLowerCase() || '').includes(searchTerm.toLowerCase())
     );
   }, [clients, searchTerm]);
+  const dreChartData = Array.isArray(dreData?.history) ? dreData.history : [];
 
   if (loading) {
     return (
@@ -423,7 +399,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
                 <div className="overflow-x-auto no-scrollbar -mx-8 px-8">
                   <div className="h-80 min-h-[300px] min-w-[600px]">
               <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
-                      <AreaChart data={DRE_DATA_MOCK} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                      <AreaChart data={dreChartData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
                         <defs>
                           <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor="#7a32fc" stopOpacity={0.1}/>
