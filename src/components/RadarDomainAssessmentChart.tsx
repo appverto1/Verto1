@@ -92,7 +92,8 @@ export const RadarDomainAssessmentChart = ({
       }
     });
 
-    const domains = new Map<string, { subject: string; obtained: number; total: number }>();
+    const domains = new Map<string, { subject: string; obtained: number; total: number; order: number }>();
+    let domainOrder = 0;
     (Array.isArray(protocols) ? protocols : [])
       .filter((protocol) => protocol?.category === 'evaluation' || !protocol?.category)
       .forEach((protocol) => {
@@ -101,7 +102,7 @@ export const RadarDomainAssessmentChart = ({
           const domainKey = normalizeText(`${protocol?.id || protocol?.title || ''}:${subject}`);
           if (!domainKey) return;
 
-          const current = domains.get(domainKey) || { subject, obtained: 0, total: 0 };
+          const current = domains.get(domainKey) || { subject, obtained: 0, total: 0, order: domainOrder++ };
           (Array.isArray(domain?.skills) ? domain.skills : []).forEach((skill: any) => {
             const skillKey = normalizeText(skill?.name || skill?.title);
             if (!skillKey) return;
@@ -120,14 +121,13 @@ export const RadarDomainAssessmentChart = ({
 
     return Array.from(domains.values())
       .filter((domain) => domain.total > 0)
+      .sort((a, b) => a.order - b.order)
       .map((domain) => ({
         subject: domain.subject,
         obtained: domain.obtained,
         total: domain.total,
         score: Number(Math.max(0, Math.min(100, (domain.obtained / domain.total) * 100)).toFixed(2))
-      }))
-      .filter((domain) => domain.score > 0)
-      .sort((a, b) => b.score - a.score);
+      }));
   }, [history, patientId, protocols]);
 
   if (!chartData.length) {
