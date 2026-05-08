@@ -4320,7 +4320,16 @@ export function CoordinatorDashboard({
                   {visiblePatients.map((patient, i) => (
                     <div
                       key={i}
-                      className="p-4 sm:p-6 bg-slate-50 rounded-3xl border border-slate-100 hover:border-blue-500/30 transition-all group relative"
+                      onClick={() => onPatientClick(patient.id, { tab: "history" })}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onPatientClick(patient.id, { tab: "history" });
+                        }
+                      }}
+                      className="p-4 sm:p-6 bg-slate-50 rounded-3xl border border-slate-100 hover:border-blue-500/30 transition-all group relative cursor-pointer focus:outline-none focus:ring-4 focus:ring-[#7a32fc]/15"
                     >
                       <div className="flex items-center gap-4 mb-4">
                         <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white rounded-2xl flex items-center justify-center font-bold text-slate-900 shadow-sm group-hover:scale-110 transition-transform">
@@ -4375,7 +4384,10 @@ export function CoordinatorDashboard({
                             <MoreVertical size={16} />
                           </button>
                           {openMenuId === patient.id && (
-                            <div className="absolute right-0 top-full mt-2 w-60 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 py-2 animate-in fade-in zoom-in duration-200">
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              className="absolute right-0 top-full mt-2 w-60 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 py-2 animate-in fade-in zoom-in duration-200"
+                            >
                               {!isReceptionist && (
                                 <button
                                   onClick={() => {
@@ -4401,14 +4413,20 @@ export function CoordinatorDashboard({
                                 </button>
                               )}
                               <button
-                                onClick={() => handleResendPatientActivationEmail(patient)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleResendPatientActivationEmail(patient);
+                                }}
                                 className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all whitespace-nowrap text-left"
                               >
                                 <Mail size={14} className="text-emerald-600 shrink-0" />
                                 Reenviar ativação
                               </button>
                               <button
-                                onClick={() => handleResendPatientRecoveryEmail(patient)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleResendPatientRecoveryEmail(patient);
+                                }}
                                 className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all whitespace-nowrap text-left"
                               >
                                 <KeyRound size={14} className="text-indigo-500 shrink-0" />
@@ -4442,7 +4460,10 @@ export function CoordinatorDashboard({
                                 </button>
                               )}
                               <button
-                                onClick={() => handleDeletePatient(patient)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeletePatient(patient);
+                                }}
                                 className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-red-500 hover:bg-red-50 transition-all whitespace-nowrap text-left"
                               >
                                 {isTherapist ? (
@@ -4483,13 +4504,19 @@ export function CoordinatorDashboard({
                       {isReceptionist ? (
                         <div className="mt-3 grid grid-cols-2 gap-2">
                           <button
-                            onClick={() => openPatientProfileModal(patient)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openPatientProfileModal(patient);
+                            }}
                             className="px-3 py-2 rounded-xl bg-blue-50 text-blue-700 text-[10px] font-bold uppercase tracking-wider hover:bg-blue-100 transition-all"
                           >
                             Ver cadastro
                           </button>
                           <button
-                            onClick={() => handleEditPatient(patient)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleEditPatient(patient);
+                            }}
                             className="px-3 py-2 rounded-xl bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider hover:bg-slate-200 transition-all"
                           >
                             Editar cadastro
@@ -4498,18 +4525,22 @@ export function CoordinatorDashboard({
                       ) : (
                         <div className="mt-3 grid grid-cols-2 gap-2">
                           <button
-                            onClick={() =>
+                            onClick={(e) => {
+                              e.stopPropagation();
                               onPatientClick(patient.id, {
                                 tab: "history",
                                 openAnamnesis: true,
-                              })
-                            }
+                              });
+                            }}
                             className="px-3 py-2 rounded-xl bg-purple-50 text-purple-700 text-[10px] font-bold uppercase tracking-wider hover:bg-purple-100 transition-all"
                           >
                             Ficha Anamnese
                           </button>
                           <button
-                            onClick={() => onPatientClick(patient.id, { tab: "files" })}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onPatientClick(patient.id, { tab: "files" });
+                            }}
                             className="px-3 py-2 rounded-xl bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider hover:bg-slate-200 transition-all"
                           >
                             Arquivos

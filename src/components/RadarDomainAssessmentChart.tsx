@@ -68,7 +68,32 @@ export const RadarDomainAssessmentChart = ({
   history = []
 }: RadarDomainAssessmentChartProps) => {
   const [isMounted, setIsMounted] = useState(false);
+  const [selectedProtocolId, setSelectedProtocolId] = useState('all');
   useEffect(() => setIsMounted(true), []);
+
+  const protocolOptions = useMemo(() => {
+    return (Array.isArray(protocols) ? protocols : [])
+      .filter((protocol) => (protocol?.category === 'evaluation' || !protocol?.category) && Array.isArray(protocol?.data) && protocol.data.length > 0)
+      .map((protocol, index) => ({
+        id: String(protocol?.id ?? protocol?.title ?? index),
+        title: String(protocol?.title || `Protocolo ${index + 1}`),
+        protocol
+      }));
+  }, [protocols]);
+
+  useEffect(() => {
+    if (selectedProtocolId === 'all') return;
+    if (!protocolOptions.some((option) => option.id === selectedProtocolId)) {
+      setSelectedProtocolId('all');
+    }
+  }, [protocolOptions, selectedProtocolId]);
+
+  const visibleProtocols = useMemo(() => {
+    if (selectedProtocolId === 'all') return protocolOptions.map((option) => option.protocol);
+    return protocolOptions
+      .filter((option) => option.id === selectedProtocolId)
+      .map((option) => option.protocol);
+  }, [protocolOptions, selectedProtocolId]);
 
   const chartData = useMemo<RadarDomainRow[]>(() => {
     const targetPatientId = String(patientId || '').trim();
@@ -94,7 +119,7 @@ export const RadarDomainAssessmentChart = ({
 
     const domains = new Map<string, { subject: string; obtained: number; total: number; order: number }>();
     let domainOrder = 0;
-    (Array.isArray(protocols) ? protocols : [])
+    visibleProtocols
       .filter((protocol) => protocol?.category === 'evaluation' || !protocol?.category)
       .forEach((protocol) => {
         (Array.isArray(protocol?.data) ? protocol.data : []).forEach((domain: any) => {
@@ -128,7 +153,7 @@ export const RadarDomainAssessmentChart = ({
         total: domain.total,
         score: Number(Math.max(0, Math.min(100, (domain.obtained / domain.total) * 100)).toFixed(2))
       }));
-  }, [history, patientId, protocols]);
+  }, [history, patientId, visibleProtocols]);
 
   if (!chartData.length) {
     return (
@@ -143,14 +168,35 @@ export const RadarDomainAssessmentChart = ({
 
   return (
     <div className="rounded-[36px] border border-slate-100 bg-white p-5 shadow-sm sm:p-7">
-      <div className="mb-5">
-        <h3 className="flex items-center gap-2 text-lg font-black tracking-tight text-slate-900">
-          <Activity size={20} className="text-[#8B5CF6]" />
-          Radar individual por dominio
-        </h3>
-        <p className="mt-1 text-xs font-semibold uppercase tracking-widest text-slate-400">
-          Visao 360 do equilibrio de desenvolvimento do paciente
-        </p>
+      <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <h3 className="flex items-center gap-2 text-lg font-black tracking-tight text-slate-900">
+            <Activity size={20} className="text-[#8B5CF6]" />
+            Radar individual por dominio
+          </h3>
+          <p className="mt-1 text-xs font-semibold uppercase tracking-widest text-slate-400">
+            Visao 360 do equilibrio de desenvolvimento do paciente
+          </p>
+        </div>
+        {protocolOptions.length > 1 && (
+          <div className="min-w-[240px]">
+            <label className="mb-1 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+              Filtrar protocolo
+            </label>
+            <select
+              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-700 outline-none transition-all focus:border-[#8B5CF6] focus:ring-4 focus:ring-[#8B5CF6]/10"
+              value={selectedProtocolId}
+              onChange={(event) => setSelectedProtocolId(event.target.value)}
+            >
+              <option value="all">Todos os protocolos</option>
+              {protocolOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.title}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       <div className="h-[420px]">
