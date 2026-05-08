@@ -176,7 +176,7 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
   );
 };
 
-export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
+export const EvolutionBarChart = ({ chartData, maxScore = 1, title, description, headerAction }: any) => {
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => setIsMounted(true), []);
   const labels = Array.isArray(chartData?.labels) ? chartData.labels : [];
@@ -217,6 +217,24 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
   return (
     <div className="bg-white/70 backdrop-blur-md p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-white/50 mb-8 animate-fade-in relative overflow-hidden chart-glow">
       <div className="absolute top-0 right-0 w-32 sm:w-48 h-32 sm:h-48 bg-indigo-50/50 rounded-bl-full -z-0"></div>
+      {(title || description || headerAction) && (
+        <div className="relative z-10 mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            {title && (
+              <h3 className="flex items-center gap-2 text-lg font-black tracking-tight text-slate-900">
+                <BarChart2 size={20} className="text-[#7a32fc]" />
+                {title}
+              </h3>
+            )}
+            {description && (
+              <p className="mt-1 max-w-2xl text-xs font-semibold uppercase tracking-widest text-slate-400">
+                {description}
+              </p>
+            )}
+          </div>
+          {headerAction && <div className="w-full lg:w-auto">{headerAction}</div>}
+        </div>
+      )}
       
       <div className="relative z-10 grid grid-cols-[52px_minmax(0,1fr)] gap-2">
         <div style={{ height: '430px', minHeight: '390px' }} className="bg-white/80 rounded-l-2xl">

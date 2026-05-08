@@ -1160,7 +1160,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         labels,
         datasets: [
           {
-            label: 'Intervenção Atual',
+            label: 'Último registro',
             data: currentData,
             backgroundColor: 'rgba(67, 24, 255, 0.25)',
             borderColor: '#7a32fc',
@@ -1176,7 +1176,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       labels,
       datasets: [
         {
-          label: `Avaliação ${selectedSnapshotDate}`,
+          label: 'Primeira avaliação registrada',
           data: baselineData,
           backgroundColor: 'rgba(5, 205, 153, 0.35)',
           borderColor: '#05CD99',
@@ -1184,7 +1184,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           borderWidth: 4
         },
         {
-          label: 'Intervenção Atual',
+          label: 'Último registro',
           data: currentData,
           backgroundColor: 'rgba(122, 50, 252, 0.25)',
           borderColor: '#7a32fc',
@@ -3098,49 +3098,54 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             )}
             {isKidsProfile ? (
               <React.Fragment>
-                <div id="history-filters" className="bg-white/80 border border-gray-100 p-4 rounded-3xl shadow-sm mb-6 animate-fade-in">
-                  <div className="flex flex-col sm:flex-row items-center gap-4">
-                    <div className="flex-1 w-full">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-2 ml-1">
-                        <SlidersHorizontal size={12} className="text-[#7a32fc]"/> Protocolo Ativo
-                      </label>
-                      <div className="relative">
-                        <select 
-                          id="protocol-selector"
-                          className="w-full bg-gray-50 border border-gray-100 text-sm font-semibold text-gray-700 px-4 py-3 rounded-2xl outline-none focus:border-[#7a32fc]/30 transition-all appearance-none"
-                          value={selectedChartProtocolId}
-                          onChange={(e) => setSelectedChartProtocolId(e.target.value)}
-                        >
-                          {protocols.map((p: any) => (
-                            <option key={p.id} value={p.id}>{p.title}</option>
-                          ))}
-                        </select>
-                        <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={16} />
-                      </div>
-                    </div>
-                    <div className="flex-1 w-full">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-2 ml-1">
-                        <Calendar size={12} className="text-[#05CD99]"/> Ponto no Tempo
-                      </label>
-                      <div className="relative">
-                        <select 
-                          id="snapshot-selector"
-                          className="w-full bg-gray-50 border border-gray-100 text-sm font-semibold text-gray-700 px-4 py-3 rounded-2xl outline-none focus:border-[#05CD99]/30 transition-all appearance-none"
-                          value={selectedSnapshotDate}
-                          onChange={(e) => setSelectedSnapshotDate(e.target.value)}
-                        >
-                          <option value="all">Visão Geral (Últimas Notas)</option>
-                          {availableSnapshots.map((date: any) => (
-                            <option key={date} value={date}>Avaliação de {date}</option>
-                          ))}
-                        </select>
-                        <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={16} />
-                      </div>
-                    </div>
-                  </div>
-                </div>
                 <div id="evolution-chart-container" className="min-h-[320px] min-w-0">
-                  <EvolutionBarChart chartData={radarChartData} maxScore={100} />
+                  <EvolutionBarChart
+                    chartData={radarChartData}
+                    maxScore={100}
+                    title="Evolução por domínio"
+                    description="Compare a primeira avaliação registrada com o registro mais recente do protocolo selecionado."
+                    headerAction={(
+                      <div id="history-filters" className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2 lg:w-[620px]">
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-2 ml-1">
+                            <SlidersHorizontal size={12} className="text-[#7a32fc]"/> Protocolo
+                          </label>
+                          <div className="relative">
+                            <select 
+                              id="protocol-selector"
+                              className="w-full bg-white border border-slate-200 text-sm font-semibold text-slate-700 px-4 py-3 rounded-2xl outline-none focus:border-[#7a32fc] focus:ring-4 focus:ring-[#7a32fc]/10 transition-all appearance-none"
+                              value={selectedChartProtocolId}
+                              onChange={(e) => setSelectedChartProtocolId(e.target.value)}
+                            >
+                              {protocols.map((p: any) => (
+                                <option key={p.id} value={p.id}>{p.title}</option>
+                              ))}
+                            </select>
+                            <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={16} />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-2 ml-1">
+                            <Calendar size={12} className="text-[#05CD99]"/> Recorte
+                          </label>
+                          <div className="relative">
+                            <select 
+                              id="snapshot-selector"
+                              className="w-full bg-white border border-slate-200 text-sm font-semibold text-slate-700 px-4 py-3 rounded-2xl outline-none focus:border-[#05CD99] focus:ring-4 focus:ring-[#05CD99]/10 transition-all appearance-none"
+                              value={selectedSnapshotDate}
+                              onChange={(e) => setSelectedSnapshotDate(e.target.value)}
+                            >
+                              <option value="all">Último registro por domínio</option>
+                              {availableSnapshots.map((date: any) => (
+                                <option key={date} value={date}>Comparar com {date}</option>
+                              ))}
+                            </select>
+                            <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={16} />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  />
                 </div>
               </React.Fragment>
             ) : null}
