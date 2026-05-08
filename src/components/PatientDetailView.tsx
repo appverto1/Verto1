@@ -32,6 +32,11 @@ const getApprovedVertoCanonicalProtocol = (request: any) => {
   return null;
 };
 
+const isVbMappProtocol = (protocol: any) => {
+  const source = `${protocol?.canonicalKey || ''} ${protocol?.id || ''} ${protocol?.title || ''} ${protocol?.domain || ''}`.toLowerCase();
+  return source.includes('vb-mapp') || source.includes('vbmapp') || source.includes('vb mapp');
+};
+
 export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole }: any) => { 
   const coalescePatientText = (...values: any[]) => {
     for (const value of values) {
@@ -1232,8 +1237,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   }, [safeProtocols, approvedVertoProtocolStatuses]);
 
   const ageCompatibleProtocols = useMemo(() => {
-    return planProtocolCatalog.filter((p: any) => p?.isApprovedImport || isProtocolCompatibleWithPatient(p));
-  }, [planProtocolCatalog, patientAgeYears]);
+    return planProtocolCatalog.filter((p: any) => {
+      if (isKidsProfile && isVbMappProtocol(p)) return true;
+      return p?.isApprovedImport || isProtocolCompatibleWithPatient(p);
+    });
+  }, [planProtocolCatalog, patientAgeYears, isKidsProfile]);
 
   const filteredProtocols = useMemo(() => { 
     return ageCompatibleProtocols.filter((p: any) => { 
@@ -1253,7 +1261,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     if (!selectedProtocolId || selectedProtocolId === 'pei-goals') return;
     const selected = planProtocolCatalog.find((p: any) => String(p.id) === String(selectedProtocolId));
     if (!selected) return;
-    if (!selected?.isApprovedImport && !isProtocolCompatibleWithPatient(selected)) {
+    if (!(isKidsProfile && isVbMappProtocol(selected)) && !selected?.isApprovedImport && !isProtocolCompatibleWithPatient(selected)) {
       alert('Este protocolo não é recomendado para a faixa etária do paciente');
       setSelectedProtocolId('');
       setSelectedDomainId('');
@@ -1882,7 +1890,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     if (planType === 'task' || planType === 'intervention') { 
       if (selectedProtocolId && selectedProtocolId !== 'pei-goals') {
         const selected = planProtocolCatalog.find((p: any) => String(p.id) === String(selectedProtocolId));
-        if (selected && !selected?.isApprovedImport && !isProtocolCompatibleWithPatient(selected)) {
+        if (selected && !(isKidsProfile && isVbMappProtocol(selected)) && !selected?.isApprovedImport && !isProtocolCompatibleWithPatient(selected)) {
           alert('Este protocolo não é recomendado para a faixa etária do paciente');
           return;
         }
