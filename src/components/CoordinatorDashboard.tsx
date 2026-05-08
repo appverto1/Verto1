@@ -52,6 +52,7 @@ import { PatientDetailView } from "./PatientDetailView";
 import { AnamnesisModal } from "./Anamnesis";
 import { RoomReservation } from "./RoomReservation";
 import { ProtocolManagementSystem } from "./Protocols";
+import { StackedDomainStatusChart } from "./StackedDomainStatusChart";
 import { CalendarWidget, DayDetailsModal } from "./Calendar";
 import { LogoVerto } from "./Common";
 import { SecureImage } from "./SecureMedia";
@@ -2675,6 +2676,14 @@ export function CoordinatorDashboard({
           </div>
         ))}
       </div>
+
+      <section className="space-y-4 sm:space-y-6">
+        <StackedDomainStatusChart
+          protocols={protocols}
+          history={patientsHistory}
+          patients={allPatients}
+        />
+      </section>
 
       {/* Agenda Global Section */}
       <section className="space-y-4 sm:space-y-6">
