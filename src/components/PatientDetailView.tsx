@@ -6,6 +6,7 @@ import { ComparisonBarChart, EvolutionBarChart } from './Charts';
 import { HistoryCard } from './History';
 import { SessionMode } from './SessionMode';
 import { RadarDomainAssessmentChart } from './RadarDomainAssessmentChart';
+import { CumulativeGrowthChart } from './CumulativeGrowthChart';
 import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
@@ -2946,11 +2947,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         {activeTab === 'history' ? ( 
           <div className="space-y-6"> 
             {showCoordinatorPatientRadar && (
-              <RadarDomainAssessmentChart
-                patientId={patient.id}
-                protocols={ageCompatibleProtocols}
-                history={history}
-              />
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                <RadarDomainAssessmentChart
+                  patientId={patient.id}
+                  protocols={ageCompatibleProtocols}
+                  history={history}
+                />
+                <CumulativeGrowthChart
+                  patientId={patient.id}
+                  history={history}
+                />
+              </div>
             )}
             {isKidsProfile && (
               <div className="bg-white border border-amber-100 rounded-3xl p-5 shadow-sm">
