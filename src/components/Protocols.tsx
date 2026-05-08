@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useState } from 'react';
-import { ChevronDown, Trash2, Plus, ChevronLeft, Save, SearchCode, Boxes, Filter, Search, FileUp, Loader2, ShieldCheck, Info, Camera, Smartphone, Clock, CheckCircle2 } from 'lucide-react';
+import { ChevronDown, Trash2, Plus, ChevronLeft, Save, SearchCode, Boxes, Filter, Search, FileUp, Loader2, ShieldCheck, Info, Camera, Smartphone, Clock } from 'lucide-react';
 import { SuccessOverlay } from './Common';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
 import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
@@ -599,7 +599,18 @@ export const ProtocolManagementSystem = ({
     }
   };
 
-  const filteredProtocols = protocols.filter((p: any) => { 
+  const libraryProtocols = protocols.map((protocol: any) => {
+    if (!protocol?.isApprovedImport) return protocol;
+    const { requestStatus, importRequestId, requestCreatedAt, requestReviewedAt, ...libraryProtocol } = protocol;
+    return {
+      ...libraryProtocol,
+      isApprovedImport: false,
+      isManualProtocol: false,
+      origin: protocol.origin || 'verto_approved_import',
+    };
+  });
+
+  const filteredProtocols = libraryProtocols.filter((p: any) => { 
     const matchAge = filterAge ? (p.ageGroup === filterAge || p.ageGroup === 'all') : true; 
     const matchType = filterType ? p.type === filterType : true; 
     const matchDomain = filterDomain ? (p.domain && p.domain.toLowerCase().includes(filterDomain.toLowerCase())) : true; 
@@ -690,9 +701,12 @@ export const ProtocolManagementSystem = ({
         ...protocol,
         id: protocol.canonicalKey || protocol.id,
         origin: 'verto_approved_import',
-        isApprovedImport: true,
+        isApprovedImport: false,
         isManualProtocol: false,
-        requestStatus: 'approved'
+        requestStatus: undefined,
+        importRequestId: undefined,
+        requestCreatedAt: undefined,
+        requestReviewedAt: undefined
       }))
     ];
 
@@ -1103,22 +1117,6 @@ export const ProtocolManagementSystem = ({
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {temporaryImportedProtocols.map((p: any) => <ProtocolCard key={p.id} proto={p} />)}
-                </div>
-              </div>
-            )}
-
-            {approvedImportedProtocols.length > 0 && (
-              <div>
-                <div className="flex items-center gap-3 mb-6 ml-2">
-                  <div className="w-10 h-10 rounded-2xl bg-emerald-500 text-white flex items-center justify-center shadow-lg shadow-emerald-900/20"><CheckCircle2 size={20}/></div>
-                  <div>
-                    <h2 className={`text-lg font-bold tracking-tight ${isDarkTheme ? 'text-white' : 'text-slate-900'}`}>Protocolos liberados</h2>
-                    <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkTheme ? 'text-slate-400' : 'text-slate-500'}`}>Aprovados pela Verto, separados das solicitações</p>
-                  </div>
-                  <div className="ml-auto bg-emerald-500/15 px-3 py-1 rounded-full text-[10px] font-bold text-emerald-300 uppercase">{approvedImportedProtocols.length}</div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {approvedImportedProtocols.map((p: any) => <ProtocolCard key={p.id} proto={p} />)}
                 </div>
               </div>
             )}

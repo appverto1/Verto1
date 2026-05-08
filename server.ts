@@ -12,6 +12,7 @@ import pgSession from 'connect-pg-simple';
 import pg from 'pg';
 import dotenv from 'dotenv';
 import Stripe from 'stripe';
+import { Resend } from 'resend';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { generateSecret, verifySync, generateURI } from 'otplib';
@@ -86,6 +87,18 @@ function getStripe() {
     stripeClient = new Stripe(key);
   }
   return stripeClient;
+}
+
+let resendClient: Resend | null = null;
+function getResend() {
+  if (!resendClient) {
+    const key = process.env.RESEND_API_KEY;
+    if (!key) {
+      throw new Error('RESEND_API_KEY environment variable is required');
+    }
+    resendClient = new Resend(key);
+  }
+  return resendClient;
 }
 
 function normalizeSubscriptionStatusFromStripe(status: string): 'active' | 'pending' | 'delinquent' | 'canceled' {
@@ -1097,6 +1110,42 @@ const HTML_ESCAPE_MAP: Record<string, string> = {
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"'`]/g, (char) => HTML_ESCAPE_MAP[char] || char);
+}
+
+function buildPostPaymentActivationEmail(token: string): string {
+  const activationUrl = `https://appverto.com.br/register?token=${encodeURIComponent(token)}`;
+  return `
+    <div style="margin:0;padding:0;background:#f6f8ff;font-family:Inter,Segoe UI,Arial,sans-serif;color:#111827;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f8ff;padding:32px 16px;">
+        <tr>
+          <td align="center">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:28px;overflow:hidden;border:1px solid #e5e7eb;box-shadow:0 18px 45px rgba(17,24,39,0.08);">
+              <tr>
+                <td style="padding:32px;background:linear-gradient(135deg,#7a32fc 0%,#10b981 100%);color:#ffffff;">
+                  <p style="margin:0 0 10px;font-size:12px;letter-spacing:0.22em;text-transform:uppercase;font-weight:800;">Verto</p>
+                  <h1 style="margin:0;font-size:28px;line-height:1.15;font-weight:900;">Bem-vindo à Verto!</h1>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:32px;">
+                  <p style="margin:0 0 18px;font-size:16px;line-height:1.65;color:#374151;">
+                    Seu pagamento foi confirmado. Clique no botão abaixo para criar sua conta e acessar seu painel.
+                  </p>
+                  <a href="${activationUrl}" style="display:inline-block;background:#7a32fc;color:#ffffff;text-decoration:none;font-size:15px;font-weight:800;padding:15px 22px;border-radius:16px;box-shadow:0 12px 28px rgba(122,50,252,0.25);">
+                    Criar minha conta
+                  </a>
+                  <p style="margin:24px 0 0;font-size:13px;line-height:1.6;color:#6b7280;">
+                    Se o botão não funcionar, copie e cole este link no navegador:<br>
+                    <a href="${activationUrl}" style="color:#7a32fc;word-break:break-all;">${activationUrl}</a>
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </div>
+  `;
 }
 
 function sanitizeTextField(value: unknown, maxLength = 5000): string {
@@ -3070,6 +3119,74 @@ async function startServer() {
     legacyHeaders: false,
     validate: false,
     message: { success: false, error: 'Limite de reenvios de recuperação atingido. Tente novamente mais tarde.' }
+  });
+
+  // Stripe Payment Link activation webhook - MUST BE BEFORE express.json()
+  app.post('/api/webhook/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    let event: Stripe.Event;
+
+    try {
+      const stripe = getStripe();
+      if (!process.env.STRIPE_WEBHOOK_SECRET) {
+        throw new Error('STRIPE_WEBHOOK_SECRET is required');
+      }
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig as string,
+        process.env.STRIPE_WEBHOOK_SECRET
+      );
+    } catch (err: any) {
+      console.error('[Stripe Activation Webhook] Signature verification failed:', err?.message || String(err));
+      return res.status(400).send(`Webhook Error: ${err?.message || String(err)}`);
+    }
+
+    if (event.type !== 'checkout.session.completed') {
+      return res.json({ received: true, ignored: true });
+    }
+
+    try {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const customerEmail = sanitizeEmail(session.customer_details?.email || session.customer_email);
+      if (!customerEmail) {
+        console.error('[Stripe Activation Webhook] checkout.session.completed sem e-mail de cliente.', {
+          sessionId: sanitizeString(session.id, 200)
+        });
+        return res.status(400).json({ success: false, error: 'E-mail do cliente não encontrado na sessão.' });
+      }
+
+      const token = crypto.randomUUID();
+      const { error } = await supabase
+        .from('pending_activations')
+        .insert([{ email: customerEmail, token, used: false }]);
+      if (error) throw error;
+
+      try {
+        const resend = getResend();
+        const from = sanitizeString(process.env.RESEND_FROM_EMAIL || '', 320) || OFFICIAL_FROM_NOREPLY;
+        const emailResult = await resend.emails.send({
+          from,
+          to: customerEmail,
+          subject: 'Bem-vindo à Verto: crie sua conta',
+          html: buildPostPaymentActivationEmail(token)
+        });
+        if (emailResult.error) {
+          throw new Error(String(emailResult.error.message || JSON.stringify(emailResult.error)));
+        }
+      } catch (emailError: any) {
+        console.error('[Stripe Activation Webhook] Falha ao enviar e-mail de ativação via Resend:', {
+          email: maskEmail(customerEmail),
+          message: emailError?.message || String(emailError)
+        });
+      }
+
+      return res.json({ success: true, received: true });
+    } catch (webhookError: any) {
+      console.error('[Stripe Activation Webhook] Erro ao processar ativação:', {
+        message: webhookError?.message || String(webhookError)
+      });
+      return res.status(500).json({ success: false, error: 'Erro ao processar webhook.' });
+    }
   });
 
   // Stripe Webhook - MUST BE BEFORE express.json()

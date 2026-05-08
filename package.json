@@ -45,6 +45,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^3.7.0",
+    "resend": "^6.12.3",
     "stripe": "^21.0.1",
     "tailwind-merge": "^3.5.0",
     "tsx": "^4.21.0",
