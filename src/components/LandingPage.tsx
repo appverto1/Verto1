@@ -994,91 +994,29 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       <section id="precos" className="py-24 bg-white">
         <div className="max-w-7xl mx-auto px-6">
           <div className="text-center mb-20">
-            <h2 className="text-5xl font-semibold tracking-tighter mb-6">Configurações para cada fase da clínica.</h2>
+            <h2 className="text-5xl font-semibold tracking-tighter mb-6">Uma plataforma para organizar a evolução clínica.</h2>
             <p className="text-xl text-gray-500 font-medium max-w-3xl mx-auto">
-              Os recursos centrais são os mesmos. O que muda é o porte da operação, a forma de implantação e o nível de acompanhamento necessário.
+              A Verto se adapta ao contexto da sua clínica, mantendo a mesma qualidade de suporte em qualquer porte. Converse com nossa equipe para estruturar prontuário, protocolos, agenda, relatórios e gestão em um fluxo único.
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-16">
-            {[
-              {
-                name: 'Essencial',
-                profile: 'Profissional solo ou clínica boutique',
-                team: 'Até 2 profissionais',
-                focus: 'Organizar agenda, prontuário, pacientes e evolução clínica sem aumentar complexidade.',
-                setup: 'Implantação enxuta, com estrutura pronta para crescer.'
-              },
-              {
-                name: 'Crescimento',
-                profile: 'Clínica com equipe em expansão',
-                team: '3 a 7 profissionais',
-                focus: 'Padronizar atendimentos, acompanhar indicadores e reduzir retrabalho administrativo.',
-                setup: 'Boa opção quando a operação já precisa de rotina e governança.',
-                highlight: true
-              },
-              {
-                name: 'Avançado',
-                profile: 'Clínica estabelecida',
-                team: '8 a 12 profissionais',
-                focus: 'Consolidar dados clínicos, gerenciais e financeiros com mais previsibilidade.',
-                setup: 'Indicado para coordenação ativa, múltiplas agendas e tomada de decisão por dados.'
-              },
-              {
-                name: 'Enterprise',
-                profile: 'Redes, franquias e operações multiunidade',
-                team: '13+ profissionais',
-                focus: 'Unificar protocolos, painéis e governança entre unidades sem perder rastreabilidade.',
-                setup: 'Desenho assistido para operações com regras, integrações ou implantação dedicada.'
-              }
-            ].map((plan) => (
-              <div
-                key={plan.name}
-                className={`relative rounded-[40px] p-8 shadow-sm hover:shadow-xl transition-all flex flex-col border ${
-                  plan.highlight
-                    ? 'bg-[#7a32fc]/5 border-2 border-[#7a32fc] lg:-translate-y-4'
-                    : 'bg-white border-gray-100'
-                }`}
-              >
-                {plan.highlight && (
-                  <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-[#7a32fc] text-white px-4 py-1 rounded-full text-[10px] font-semibold uppercase tracking-widest">
-                    Mais comum
-                  </div>
-                )}
-                <div className="mb-6">
-                  <p className={`text-[10px] font-semibold uppercase tracking-widest mb-3 ${plan.highlight ? 'text-[#7a32fc]' : 'text-gray-400'}`}>
-                    Perfil operacional
-                  </p>
-                  <h3 className="text-2xl font-semibold mb-3">{plan.name}</h3>
-                  <p className="text-sm text-gray-500 font-medium leading-relaxed">{plan.profile}</p>
-                </div>
-
-                <div className="space-y-3 flex-1 mb-8">
-                  {[
-                    { label: 'Equipe sugerida', value: plan.team },
-                    { label: 'Foco principal', value: plan.focus },
-                    { label: 'Implantação', value: plan.setup }
-                  ].map((item) => (
-                    <div key={item.label} className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
-                      <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-1">{item.label}</p>
-                      <p className="text-sm font-semibold text-gray-700 leading-relaxed">{item.value}</p>
-                    </div>
-                  ))}
-                </div>
-
-                <button
-                  onClick={() => window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer')}
-                  className={`w-full py-4 rounded-2xl font-semibold text-sm transition-all flex items-center justify-center gap-2 ${
-                    plan.highlight
-                      ? 'bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20 hover:opacity-90'
-                      : 'bg-gray-900 text-white hover:bg-black'
-                  }`}
-                >
-                  <MessageCircle size={16} />
-                  Falar com especialista
-                </button>
-              </div>
-            ))}
+          <div className="mb-16 rounded-[56px] border border-purple-100 bg-gradient-to-br from-[#7a32fc]/10 via-white to-emerald-50 p-8 text-center shadow-sm sm:p-14">
+            <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-3xl bg-white text-[#7a32fc] shadow-lg shadow-purple-500/10">
+              <MessageCircle size={30} />
+            </div>
+            <h3 className="mx-auto max-w-3xl text-3xl font-semibold tracking-tight text-gray-900 sm:text-4xl">
+              Vamos desenhar a melhor forma da Verto entrar na sua operação.
+            </h3>
+            <p className="mx-auto mt-5 max-w-2xl text-lg font-medium leading-relaxed text-gray-500">
+              Em uma conversa rápida, entendemos o tamanho da equipe, os protocolos usados, o fluxo de pacientes e o tipo de acompanhamento que sua clínica precisa.
+            </p>
+            <button
+              onClick={() => window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer')}
+              className="mt-8 inline-flex items-center justify-center gap-3 rounded-3xl bg-[#7a32fc] px-10 py-5 text-lg font-semibold text-white shadow-2xl shadow-purple-500/25 transition-all hover:scale-105 hover:opacity-95"
+            >
+              Falar com especialista
+              <ArrowRight size={20} />
+            </button>
           </div>
 
           {/* ROI Callout */}

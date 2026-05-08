@@ -73,43 +73,42 @@ const isAflsRequest = (request: any) => (
     .includes('afls')
 );
 
-const VERTO_PROTOCOL_OPTIONS = [
+const VERTO_PROTOCOL_EDITOR_CATALOG = [
   {
-    key: 'afls-social-participation-adult',
+    key: AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL.canonicalKey || 'afls-social-participation-adult',
     name: 'AFLS - Habilidades de Participação Social',
     hint: 'Adultos',
-    completionPercent: 100,
-    statusLabel: 'Completo'
+    completionPercent: AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL.canonicalMeta?.completionPercent || 100,
+    statusLabel: AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL.canonicalMeta?.completionStatus || 'Completo',
+    protocol: AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL
   },
   {
-    key: 'vb-mapp-level-1',
-    name: 'VB-MAPP - Nivel 1',
+    key: VBMAPP_LEVEL_1_CANONICAL_PROTOCOL.canonicalKey || 'vb-mapp-level-1',
+    name: VBMAPP_LEVEL_1_CANONICAL_PROTOCOL.title || 'VB-MAPP - Nivel 1',
     hint: '0 a 18 meses',
-    completionPercent: 100,
-    statusLabel: 'Completo'
+    completionPercent: VBMAPP_LEVEL_1_CANONICAL_PROTOCOL.canonicalMeta?.completionPercent || 100,
+    statusLabel: VBMAPP_LEVEL_1_CANONICAL_PROTOCOL.canonicalMeta?.completionStatus || 'Completo',
+    protocol: VBMAPP_LEVEL_1_CANONICAL_PROTOCOL
   },
   {
-    key: 'vb-mapp-level-2',
-    name: 'VB-MAPP - Nivel 2',
+    key: VBMAPP_LEVEL_2_CANONICAL_PROTOCOL.canonicalKey || 'vb-mapp-level-2',
+    name: VBMAPP_LEVEL_2_CANONICAL_PROTOCOL.title || 'VB-MAPP - Nivel 2',
     hint: '18 a 30 meses',
-    completionPercent: 100,
-    statusLabel: 'Completo'
+    completionPercent: VBMAPP_LEVEL_2_CANONICAL_PROTOCOL.canonicalMeta?.completionPercent || 100,
+    statusLabel: VBMAPP_LEVEL_2_CANONICAL_PROTOCOL.canonicalMeta?.completionStatus || 'Completo',
+    protocol: VBMAPP_LEVEL_2_CANONICAL_PROTOCOL
   },
   {
-    key: 'vb-mapp-level-3',
-    name: 'VB-MAPP - Nivel 3',
+    key: VBMAPP_LEVEL_3_CANONICAL_PROTOCOL.canonicalKey || 'vb-mapp-level-3',
+    name: VBMAPP_LEVEL_3_CANONICAL_PROTOCOL.title || 'VB-MAPP - Nivel 3',
     hint: '30 a 48 meses',
-    completionPercent: 100,
-    statusLabel: 'Completo'
+    completionPercent: VBMAPP_LEVEL_3_CANONICAL_PROTOCOL.canonicalMeta?.completionPercent || 100,
+    statusLabel: VBMAPP_LEVEL_3_CANONICAL_PROTOCOL.canonicalMeta?.completionStatus || 'Completo',
+    protocol: VBMAPP_LEVEL_3_CANONICAL_PROTOCOL
   }
 ];
 
-const VERTO_PROTOCOL_EDITOR_CATALOG = [
-  { ...VERTO_PROTOCOL_OPTIONS[0], protocol: AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL },
-  { ...VERTO_PROTOCOL_OPTIONS[1], protocol: VBMAPP_LEVEL_1_CANONICAL_PROTOCOL },
-  { ...VERTO_PROTOCOL_OPTIONS[2], protocol: VBMAPP_LEVEL_2_CANONICAL_PROTOCOL },
-  { ...VERTO_PROTOCOL_OPTIONS[3], protocol: VBMAPP_LEVEL_3_CANONICAL_PROTOCOL }
-];
+const VERTO_PROTOCOL_OPTIONS = VERTO_PROTOCOL_EDITOR_CATALOG.map(({ protocol, ...option }) => option);
 
 export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [loading, setLoading] = useState(true);

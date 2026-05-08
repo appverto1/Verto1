@@ -9,7 +9,28 @@ import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
 import { calculateDomainMastery, normalizeScoreToPercent } from '../utils/clinicalMath';
+import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
+import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
+import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
+import { VBMAPP_LEVEL_3_CANONICAL_PROTOCOL } from '../constants/vbmappLevel3Protocol';
 import html2canvas from 'html2canvas';
+
+const getApprovedVertoCanonicalProtocol = (request: any) => {
+  const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
+  if (source.includes('afls') || source.includes('participacao-social') || source.includes('participação social')) {
+    return AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL;
+  }
+  if (source.includes('vb-mapp-level-3') || source.includes('vb-mapp-nivel-3') || source.includes('vbmapp3') || source.includes('vb-mapp3') || source.includes('nivel 3') || source.includes('30 a 48')) {
+    return VBMAPP_LEVEL_3_CANONICAL_PROTOCOL;
+  }
+  if (source.includes('vb-mapp-level-2') || source.includes('vb-mapp-nivel-2') || source.includes('vbmapp2') || source.includes('vb-mapp2') || source.includes('nivel 2') || source.includes('18 a 30')) {
+    return VBMAPP_LEVEL_2_CANONICAL_PROTOCOL;
+  }
+  if (source.includes('vb-mapp') || source.includes('vbmapp') || source.includes('vb mapp')) {
+    return VBMAPP_LEVEL_1_CANONICAL_PROTOCOL;
+  }
+  return null;
+};
 
 export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole }: any) => { 
   const coalescePatientText = (...values: any[]) => {
@@ -180,6 +201,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [selectedPEISkillId, setSelectedPEISkillId] = useState("");
   const [isSessionModeOpen, setIsSessionModeOpen] = useState(false);
   const [isUnlinkingModalOpen, setIsUnlinkingModalOpen] = useState(false);
+  const [approvedVertoProtocolStatuses, setApprovedVertoProtocolStatuses] = useState<any[]>([]);
   const [clinicTherapists, setClinicTherapists] = useState<any[]>([]);
   const [isLoadingTherapists, setIsLoadingTherapists] = useState(false);
   const [selectedTherapistId, setSelectedTherapistId] = useState<string>(
@@ -1159,9 +1181,59 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   }, [history, protocols, patient.id, selectedChartProtocolId, selectedSnapshotDate]);
 
   const safeProtocols = protocols || []; 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadApprovedVertoProtocols = async () => {
+      try {
+        const response = await fetch('/api/protocol-import-requests', { credentials: 'include' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success) return;
+        if (!cancelled) {
+          setApprovedVertoProtocolStatuses(
+            (Array.isArray(data.data) ? data.data : [])
+              .filter((item: any) => String(item.status || '').toLowerCase() === 'approved')
+          );
+        }
+      } catch {
+        if (!cancelled) setApprovedVertoProtocolStatuses([]);
+      }
+    };
+
+    loadApprovedVertoProtocols();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const planProtocolCatalog = useMemo(() => {
+    const catalog = new Map<string, any>();
+    const addProtocol = (protocol: any) => {
+      if (!protocol || !Array.isArray(protocol.data) || protocol.data.length === 0) return;
+      const key = String(protocol.canonicalKey || protocol.id || protocol.title || '').trim();
+      if (!key || catalog.has(key)) return;
+      catalog.set(key, protocol);
+    };
+
+    safeProtocols.forEach(addProtocol);
+    approvedVertoProtocolStatuses.forEach((request: any) => {
+      const canonicalProtocol: any = getApprovedVertoCanonicalProtocol(request);
+      if (!canonicalProtocol) return;
+      addProtocol({
+        ...canonicalProtocol,
+        id: canonicalProtocol.id || canonicalProtocol.canonicalKey || `approved-verto-${request.id}`,
+        isApprovedImport: true,
+        importRequestId: request.id,
+        requestStatus: 'approved'
+      });
+    });
+
+    return Array.from(catalog.values());
+  }, [safeProtocols, approvedVertoProtocolStatuses]);
+
   const ageCompatibleProtocols = useMemo(() => {
-    return safeProtocols.filter((p: any) => isProtocolCompatibleWithPatient(p));
-  }, [safeProtocols, patientAgeYears]);
+    return planProtocolCatalog.filter((p: any) => p?.isApprovedImport || isProtocolCompatibleWithPatient(p));
+  }, [planProtocolCatalog, patientAgeYears]);
 
   const filteredProtocols = useMemo(() => { 
     return ageCompatibleProtocols.filter((p: any) => { 
@@ -1172,22 +1244,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     }); 
   }, [ageCompatibleProtocols, filterAge, filterType, filterDomain]); 
 
-  const selectedProtocol = safeProtocols.find((p: any) => String(p.id) === String(selectedProtocolId)); 
+  const selectedProtocol = planProtocolCatalog.find((p: any) => String(p.id) === String(selectedProtocolId)); 
   const selectedDomain = selectedProtocol?.data.find((d: any) => String(d.id) === String(selectedDomainId)); 
-  const targetProtocol = safeProtocols.find((p: any) => String(p.id) === String(targetProtocolId)); 
+  const targetProtocol = planProtocolCatalog.find((p: any) => String(p.id) === String(targetProtocolId)); 
   const targetDomain = targetProtocol?.data.find((d: any) => String(d.id) === String(targetDomainId)); 
 
   useEffect(() => {
     if (!selectedProtocolId || selectedProtocolId === 'pei-goals') return;
-    const selected = safeProtocols.find((p: any) => String(p.id) === String(selectedProtocolId));
+    const selected = planProtocolCatalog.find((p: any) => String(p.id) === String(selectedProtocolId));
     if (!selected) return;
-    if (!isProtocolCompatibleWithPatient(selected)) {
+    if (!selected?.isApprovedImport && !isProtocolCompatibleWithPatient(selected)) {
       alert('Este protocolo não é recomendado para a faixa etária do paciente');
       setSelectedProtocolId('');
       setSelectedDomainId('');
       setSelectedSkillId('');
     }
-  }, [selectedProtocolId, safeProtocols, patientAgeYears]);
+  }, [selectedProtocolId, planProtocolCatalog, patientAgeYears]);
 
   useEffect(() => { 
     if (!isCreatingNewTask && selectedSkillId && selectedDomain) { 
@@ -1809,8 +1881,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     let scheduledAt; try { scheduledAt = new Date(`${scheduleDate}T${scheduleTime}`).toISOString(); } catch (e) { alert("Data inválida"); return; } 
     if (planType === 'task' || planType === 'intervention') { 
       if (selectedProtocolId && selectedProtocolId !== 'pei-goals') {
-        const selected = safeProtocols.find((p: any) => String(p.id) === String(selectedProtocolId));
-        if (selected && !isProtocolCompatibleWithPatient(selected)) {
+        const selected = planProtocolCatalog.find((p: any) => String(p.id) === String(selectedProtocolId));
+        if (selected && !selected?.isApprovedImport && !isProtocolCompatibleWithPatient(selected)) {
           alert('Este protocolo não é recomendado para a faixa etária do paciente');
           return;
         }
@@ -3766,7 +3838,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                             <div><label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Protocolo ({filteredProtocols.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).length})</label>
                               {patientAgeYears !== null && (
                                 <p className="text-[10px] text-amber-600 font-semibold mb-2">
-                                  Faixa etária do paciente: {patientAgeYears} anos. Somente protocolos compatíveis são exibidos.
+                                  Faixa etária do paciente: {patientAgeYears} anos. Protocolos aceitos pela Verto aparecem quando liberados pelo superadmin.
                                 </p>
                               )}
                               <select 
