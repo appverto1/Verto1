@@ -14,6 +14,41 @@ const parseDateFromLabel = (label: string): number => {
   return new Date(Number(yyyy), Number(mm) - 1, Number(dd)).getTime();
 };
 
+const wrapAxisLabel = (value: any, maxCharsPerLine = 18) => {
+  const words = String(value ?? '').split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = '';
+
+  words.forEach((word) => {
+    const next = current ? `${current} ${word}` : word;
+    if (next.length <= maxCharsPerLine || !current) {
+      current = next;
+      return;
+    }
+    lines.push(current);
+    current = word;
+  });
+
+  if (current) lines.push(current);
+  return lines.length ? lines : [''];
+};
+
+const WrappedXAxisTick = ({ x, y, payload }: any) => {
+  const lines = wrapAxisLabel(payload?.value, 20);
+
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text textAnchor="middle" fill="#A3AED0" fontSize={10} fontWeight={700}>
+        {lines.map((line, index) => (
+          <tspan key={`${line}-${index}`} x={0} dy={index === 0 ? 14 : 13}>
+            {line}
+          </tspan>
+        ))}
+      </text>
+    </g>
+  );
+};
+
 export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => setIsMounted(true), []);
@@ -43,7 +78,7 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
     safeMaxScore === 100
       ? [0, 20, 40, 60, 80, 100]
       : safeMaxScore <= 10
-        ? Array.from({ length: safeMaxScore + 1 }, (_, i) => i)
+        ? Array.from({ length: Math.floor(safeMaxScore) + 1 }, (_, i) => i)
         : Array.from({ length: 6 }, (_, i) => Math.round((safeMaxScore * i) / 5));
   
   // Calculate dynamic width based on number of labels to prevent crowding
@@ -168,75 +203,95 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1 }: any) => {
     return entry;
   });
 
-  const yTicks = Array.from({ length: Math.floor(maxScore) + 1 }, (_, i) => i);
+  const safeMaxScore = Math.max(1, Number(maxScore) || 1);
+  const yTicks =
+    safeMaxScore === 100
+      ? [0, 20, 40, 60, 80, 100]
+      : safeMaxScore <= 10
+        ? Array.from({ length: Math.floor(safeMaxScore) + 1 }, (_, i) => i)
+        : Array.from({ length: 6 }, (_, i) => Math.round((safeMaxScore * i) / 5));
   
   // Calculate dynamic width based on number of labels to prevent crowding
-  const minWidth = Math.max(980, data.length * 180);
+  const minWidth = Math.max(980, data.length * 210);
 
   return (
     <div className="bg-white/70 backdrop-blur-md p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-white/50 mb-8 animate-fade-in relative overflow-hidden chart-glow">
       <div className="absolute top-0 right-0 w-32 sm:w-48 h-32 sm:h-48 bg-indigo-50/50 rounded-bl-full -z-0"></div>
       
-      <div className="overflow-x-auto pb-3 no-scrollbar cursor-grab active:cursor-grabbing">
-        <div style={{ minWidth: `${minWidth}px`, height: '390px', minHeight: '360px' }} className="relative z-10 min-w-0 min-h-0">
+      <div className="relative z-10 grid grid-cols-[52px_minmax(0,1fr)] gap-2">
+        <div style={{ height: '430px', minHeight: '390px' }} className="bg-white/80 rounded-l-2xl">
           {isMounted ? (
-          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
-            <BarChart
-              data={data}
-              margin={{ top: 16, right: 28, left: 4, bottom: 56 }}
-              barGap={12}
-              barCategoryGap="35%"
-            >
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-              <XAxis 
-                dataKey="name" 
-                axisLine={false} 
-                tickLine={false} 
-                interval={0}
-                angle={-30}
-                textAnchor="end"
-                height={56}
-                tickMargin={10}
-                tick={{ fill: '#A3AED0', fontSize: 10, fontWeight: 'bold' }}
-                padding={{ left: 30, right: 30 }}
-              />
-              <YAxis 
-                axisLine={false} 
-                tickLine={false} 
-                tick={{ fill: '#A3AED0', fontSize: 10, fontWeight: 'bold' }}
-                dx={-5}
-                domain={[0, maxScore]}
-                ticks={yTicks}
-              />
-              <Tooltip 
-                cursor={{ fill: '#F8FAFC' }}
-                contentStyle={{ 
-                  borderRadius: '16px', 
-                  border: 'none', 
-                  boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
-                  fontSize: '11px',
-                  fontWeight: 'bold'
-                }}
-              />
-              {datasets.map((ds: any, index: number) => {
-                const colors = ['#7a32fc', '#05CD99', '#FFB547', '#7551FF', '#EE5D50', '#00C2FF'];
-                return (
-                  <Bar 
-                    key={ds.label} 
-                    dataKey={ds.label} 
-                    fill={ds.borderColor || colors[index % colors.length]} 
-                    radius={[6, 6, 0, 0]} 
-                    maxBarSize={40}
-                    minPointSize={5}
-                    animationDuration={1500}
-                  />
-                );
-              })}
-            </BarChart>
-          </SafeResponsiveContainer>
-          ) : (
-            <div className="h-full w-full rounded-2xl bg-slate-50 animate-pulse" />
-          )}
+            <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={330}>
+              <BarChart data={data} margin={{ top: 16, right: 0, left: 0, bottom: 96 }}>
+                <XAxis dataKey="name" hide />
+                <YAxis
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#A3AED0', fontSize: 10, fontWeight: 'bold' }}
+                  domain={[0, safeMaxScore]}
+                  ticks={yTicks}
+                  width={48}
+                />
+              </BarChart>
+            </SafeResponsiveContainer>
+          ) : null}
+        </div>
+        <div className="overflow-x-auto pb-3 no-scrollbar cursor-grab active:cursor-grabbing">
+          <div style={{ minWidth: `${minWidth}px`, height: '430px', minHeight: '390px' }} className="relative min-w-0 min-h-0">
+            {isMounted ? (
+            <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={330}>
+              <BarChart
+                data={data}
+                margin={{ top: 16, right: 28, left: 0, bottom: 96 }}
+                barGap={12}
+                barCategoryGap="35%"
+              >
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                <XAxis 
+                  dataKey="name" 
+                  axisLine={false} 
+                  tickLine={false} 
+                  interval={0}
+                  height={96}
+                  tickMargin={12}
+                  tick={<WrappedXAxisTick />}
+                  padding={{ left: 40, right: 40 }}
+                />
+                <YAxis 
+                  hide
+                  domain={[0, safeMaxScore]}
+                  ticks={yTicks}
+                />
+                <Tooltip 
+                  cursor={{ fill: '#F8FAFC' }}
+                  contentStyle={{ 
+                    borderRadius: '16px', 
+                    border: 'none', 
+                    boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
+                    fontSize: '11px',
+                    fontWeight: 'bold'
+                  }}
+                />
+                {datasets.map((ds: any, index: number) => {
+                  const colors = ['#7a32fc', '#05CD99', '#FFB547', '#7551FF', '#EE5D50', '#00C2FF'];
+                  return (
+                    <Bar 
+                      key={ds.label} 
+                      dataKey={ds.label} 
+                      fill={ds.borderColor || colors[index % colors.length]} 
+                      radius={[6, 6, 0, 0]} 
+                      maxBarSize={40}
+                      minPointSize={5}
+                      animationDuration={1500}
+                    />
+                  );
+                })}
+              </BarChart>
+            </SafeResponsiveContainer>
+            ) : (
+              <div className="h-full w-full rounded-2xl bg-slate-50 animate-pulse" />
+            )}
+          </div>
         </div>
       </div>
       <div className="mt-2 flex flex-wrap items-center justify-center gap-4 px-2">

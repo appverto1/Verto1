@@ -28,6 +28,25 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
     setShowTrialConfirmation(true);
   };
 
+  const getMasteryTarget = (goal: any) => {
+    const target = Number(goal?.meta_sucessos ?? goal?.metaSucessos ?? goal?.masteryTarget ?? goal?.mastery_target);
+    return Number.isFinite(target) && target > 0 ? Math.floor(target) : 5;
+  };
+
+  const getConsecutiveMasteryCount = (goal: any) => {
+    const skillHistory = (patient.history || [])
+      .filter((h: any) => h.title === goal.name && h.type === 'task' && h.id > goal.id)
+      .sort((a: any, b: any) => b.id - a.id);
+
+    let count = 0;
+    for (const h of skillHistory) {
+      if (h.score === 1) count++;
+      else break;
+    }
+
+    return Math.min(count, getMasteryTarget(goal));
+  };
+
   const handleUndoTrial = () => {
     setShowTrialConfirmation(false);
     setLastRecordedGoalId(null);
@@ -164,28 +183,21 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
               </h2>
 
               {/* Mastery Progress for Criança */}
-              {patient.age <= 12 && (
-                <div className="flex gap-2 mb-8 items-center">
-                  {[1, 2, 3, 4, 5].map((i) => {
-                    // Calculate consecutive 1s for this goal
-                    // Only count trials recorded AFTER the goal was created in the PEI
-                    const skillHistory = (patient.history || [])
-                      .filter((h: any) => h.title === goal.name && h.type === 'task' && h.id > goal.id)
-                      .sort((a: any, b: any) => b.id - a.id);
-                    
-                    let count = 0;
-                    for (const h of skillHistory) {
-                      if (h.score === 1) count++;
-                      else break;
-                    }
-                    
+              {patient.age <= 12 && (() => {
+                const masteryTarget = getMasteryTarget(goal);
+                const masteryCount = getConsecutiveMasteryCount(goal);
+                const dotSize = masteryTarget > 30 ? 'w-2 h-2' : masteryTarget > 12 ? 'w-3 h-3' : 'w-4 h-4';
+
+                return (
+                  <div className="flex gap-2 mb-8 items-center flex-wrap">
+                    {Array.from({ length: masteryTarget }, (_, index) => index + 1).map((i) => {
                     const isMastered = goal.status === 'completed';
-                    const isActive = i <= count || isMastered;
+                    const isActive = i <= masteryCount || isMastered;
 
                     return (
                       <div 
                         key={i} 
-                        className={`w-4 h-4 rounded-full transition-all duration-500 ${
+                        className={`${dotSize} rounded-full transition-all duration-500 ${
                           isMastered ? 'bg-green-500 shadow-lg shadow-green-200' : 
                           isActive ? 'bg-[#7a32fc] scale-110 shadow-lg shadow-blue-200' : 
                           'bg-gray-100'
@@ -196,8 +208,12 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
                   <span className="text-xs font-bold text-gray-400 ml-2 uppercase tracking-widest">
                     {goal.status === 'completed' ? 'Adquirida' : 'Progresso de Maestria'}
                   </span>
-                </div>
-              )}
+                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                    {masteryCount}/{masteryTarget}
+                  </span>
+                  </div>
+                );
+              })()}
 
               {/* Scoring Buttons */}
               <div className={`grid gap-6 relative ${(goal.maxScore || 1) > 1 || ((goal.maxScore || 1) === 1 && patient.age > 12) ? 'grid-cols-5' : 'grid-cols-3'}`}>

@@ -26,6 +26,41 @@ const COLORS = {
   not_started: '#E2E8F0'
 };
 
+const wrapAxisLabel = (value: any, maxCharsPerLine = 18) => {
+  const words = String(value ?? '').split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = '';
+
+  words.forEach((word) => {
+    const next = current ? `${current} ${word}` : word;
+    if (next.length <= maxCharsPerLine || !current) {
+      current = next;
+      return;
+    }
+    lines.push(current);
+    current = word;
+  });
+
+  if (current) lines.push(current);
+  return lines.length ? lines : [''];
+};
+
+const WrappedXAxisTick = ({ x, y, payload }: any) => {
+  const lines = wrapAxisLabel(payload?.value, 18);
+
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text textAnchor="middle" fill="#64748B" fontSize={11} fontWeight={800}>
+        {lines.map((line, index) => (
+          <tspan key={`${line}-${index}`} x={0} dy={index === 0 ? 14 : 14}>
+            {line}
+          </tspan>
+        ))}
+      </text>
+    </g>
+  );
+};
+
 const normalizeText = (value: unknown) =>
   String(value || '')
     .normalize('NFD')
@@ -191,7 +226,7 @@ export const StackedDomainStatusChart = ({ protocols = [], history = [], patient
     );
   }
 
-  const minWidth = Math.max(980, chartData.length * 150);
+  const minWidth = Math.max(980, chartData.length * 190);
 
   return (
     <div className="rounded-[36px] border border-slate-100 bg-white p-5 shadow-sm sm:p-8">
@@ -211,22 +246,12 @@ export const StackedDomainStatusChart = ({ protocols = [], history = [], patient
         </div>
       </div>
 
-      <div className="overflow-x-auto pb-2">
-        <div className="h-[420px]" style={{ minWidth }}>
+      <div className="grid grid-cols-[58px_minmax(0,1fr)] gap-2">
+        <div className="h-[460px] rounded-l-2xl bg-white">
           {isMounted ? (
             <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={360}>
-              <BarChart data={chartData} margin={{ top: 12, right: 24, left: 0, bottom: 70 }} barCategoryGap="30%">
-                <CartesianGrid stroke="#F1F5F9" strokeDasharray="3 3" vertical={false} />
-                <XAxis
-                  dataKey="name"
-                  axisLine={false}
-                  tickLine={false}
-                  interval={0}
-                  angle={-30}
-                  textAnchor="end"
-                  height={70}
-                  tick={{ fill: '#64748B', fontSize: 11, fontWeight: 800 }}
-                />
+              <BarChart data={chartData} margin={{ top: 12, right: 0, left: 0, bottom: 112 }}>
+                <XAxis dataKey="name" hide />
                 <YAxis
                   axisLine={false}
                   tickLine={false}
@@ -234,6 +259,34 @@ export const StackedDomainStatusChart = ({ protocols = [], history = [], patient
                   ticks={[0, 20, 40, 60, 80, 100]}
                   tickFormatter={(value) => `${value}%`}
                   tick={{ fill: '#94A3B8', fontSize: 11, fontWeight: 800 }}
+                  width={54}
+                />
+              </BarChart>
+            </SafeResponsiveContainer>
+          ) : null}
+        </div>
+        <div className="overflow-x-auto pb-2">
+          <div className="h-[460px]" style={{ minWidth }}>
+          {isMounted ? (
+            <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={360}>
+              <BarChart data={chartData} margin={{ top: 12, right: 24, left: 0, bottom: 112 }} barCategoryGap="30%">
+                <CartesianGrid stroke="#F1F5F9" strokeDasharray="3 3" vertical={false} />
+                <XAxis
+                  dataKey="name"
+                  axisLine={false}
+                  tickLine={false}
+                  interval={0}
+                  height={112}
+                  tickMargin={12}
+                  tick={<WrappedXAxisTick />}
+                  padding={{ left: 38, right: 38 }}
+                />
+                <YAxis
+                  hide
+                  axisLine={false}
+                  tickLine={false}
+                  domain={[0, 100]}
+                  ticks={[0, 20, 40, 60, 80, 100]}
                 />
                 <Tooltip content={<CustomTooltip />} cursor={{ fill: '#F8FAFC' }} />
                 <Bar dataKey="acquired" name="Adquiridas" stackId="a" fill={COLORS.acquired} radius={[10, 10, 0, 0]} maxBarSize={72} />
@@ -244,6 +297,7 @@ export const StackedDomainStatusChart = ({ protocols = [], history = [], patient
           ) : (
             <div className="h-full w-full animate-pulse rounded-3xl bg-slate-50" />
           )}
+          </div>
         </div>
       </div>
 

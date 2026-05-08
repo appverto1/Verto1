@@ -5,6 +5,7 @@ import { AnamnesisModal } from './Anamnesis';
 import { ComparisonBarChart, EvolutionBarChart } from './Charts';
 import { HistoryCard } from './History';
 import { SessionMode } from './SessionMode';
+import { RadarDomainAssessmentChart } from './RadarDomainAssessmentChart';
 import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
@@ -263,6 +264,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const normalizedRole = String(userRole || '').toLowerCase();
     return ['coordinator', 'admin', 'owner'].includes(normalizedRole);
   }, [userRole]);
+  const showCoordinatorPatientRadar = String(userRole || '').toLowerCase() === 'coordinator';
+  const [expandedSessionHistoryDates, setExpandedSessionHistoryDates] = useState<Record<string, boolean>>({});
+
+  const toggleSessionHistoryDate = (dateKey: string) => {
+    setExpandedSessionHistoryDates((prev) => ({
+      ...prev,
+      [dateKey]: !prev[dateKey]
+    }));
+  };
 
   useEffect(() => {
     const loadClinicTherapists = async () => {
@@ -1898,6 +1908,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       const selectedSkillMaxScore = Number(
         selectedDomain?.skills?.find((s: any) => String(s.id) === String(selectedSkillId))?.maxScore ?? 4
       );
+      const selectedSkill = selectedDomain?.skills?.find((s: any) => String(s.id) === String(selectedSkillId));
+      const selectedSkillMasteryTarget = Number(
+        selectedSkill?.meta_sucessos ?? selectedSkill?.metaSucessos ?? selectedSkill?.masteryTarget ?? selectedSkill?.mastery_target
+      );
       const resolvedTaskMaxScore = isCreatingNewTask
         ? Math.max(1, Number(isKidsProfile ? newTaskMaxScore : 4) || 4)
         : Math.max(1, Number(selectedSkillMaxScore) || 4);
@@ -1912,6 +1926,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         scheduledAt: scheduledAt, 
         description: finalTaskSubtitle,
         maxScore: resolvedTaskMaxScore,
+        meta_sucessos: Number.isFinite(selectedSkillMasteryTarget) && selectedSkillMasteryTarget > 0 ? Math.floor(selectedSkillMasteryTarget) : undefined,
         noRealtimeScoring: !isKidsProfile,
         isDailyReminder: planType === 'intervention' ? isDailyReminder : false,
         linkedTask: planType === 'intervention' ? linkedTask : undefined,
@@ -2589,9 +2604,34 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     }
   };
 
-  const getMasteryProgress = (skillName: string) => {
+  const getGoalMasteryTarget = (goal: any) => {
+    const directTarget = Number(goal?.meta_sucessos ?? goal?.metaSucessos ?? goal?.masteryTarget ?? goal?.mastery_target);
+    if (Number.isFinite(directTarget) && directTarget > 0) return Math.floor(directTarget);
+
+    const catalogs = [planProtocolCatalog, protocols].filter(Array.isArray);
+    for (const catalog of catalogs) {
+      for (const protocol of catalog as any[]) {
+        for (const domain of protocol?.data || []) {
+          const skill = (domain?.skills || []).find((s: any) =>
+            String(s?.id) === String(goal?.skillId) ||
+            String(s?.name || '').trim().toLowerCase() === String(goal?.name || '').trim().toLowerCase()
+          );
+          const target = Number(skill?.meta_sucessos ?? skill?.metaSucessos ?? skill?.masteryTarget ?? skill?.mastery_target);
+          if (Number.isFinite(target) && target > 0) return Math.floor(target);
+        }
+      }
+    }
+
+    return 5;
+  };
+
+  const getMasteryProgress = (goalOrName: any) => {
     if (patientCategory !== 'Criança') return null;
-    const goal = patient.pei?.find((g: any) => g.name === skillName);
+    const goal = typeof goalOrName === 'string'
+      ? patient.pei?.find((g: any) => g.name === goalOrName)
+      : goalOrName;
+    const skillName = typeof goalOrName === 'string' ? goalOrName : goalOrName?.name;
+    const target = getGoalMasteryTarget(goal);
     const skillHistory = history
       .filter((h: any) => h.patientId === patient.id && h.title === skillName && h.type === 'task' && (!goal || h.id > goal.id))
       .sort((a: any, b: any) => b.id - a.id);
@@ -2601,26 +2641,29 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       if (h.score === 1) count++;
       else break;
     }
-    return Math.min(count, 5);
+    return Math.min(count, target);
   };
 
-  const MasteryDots = ({ count, status }: { count: number, status?: string }) => {
+  const MasteryDots = ({ count, status, target = 5 }: { count: number, status?: string, target?: number }) => {
+    const safeTarget = Math.max(1, Math.floor(Number(target) || 5));
+    const dots = Array.from({ length: safeTarget }, (_, index) => index + 1);
+    const dotSize = safeTarget > 30 ? 'w-1 h-1' : safeTarget > 12 ? 'w-1.5 h-1.5' : 'w-2 h-2';
     if (status === 'completed') {
       return (
-        <div className="flex gap-1 items-center">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <div key={i} className="w-2 h-2 rounded-full bg-green-500 shadow-sm shadow-green-200"></div>
+        <div className="flex flex-wrap gap-1 items-center max-w-[220px]">
+          {dots.map((i) => (
+            <div key={i} className={`${dotSize} rounded-full bg-green-500 shadow-sm shadow-green-200`}></div>
           ))}
           <CheckCircle2 size={12} className="text-green-500 ml-1" />
         </div>
       );
     }
     return (
-      <div className="flex gap-1 items-center">
-        {[1, 2, 3, 4, 5].map((i) => (
-          <div key={i} className={`w-2 h-2 rounded-full transition-all ${i <= count ? 'bg-[#7a32fc] scale-110 shadow-sm shadow-blue-200' : 'bg-gray-200'}`}></div>
+      <div className="flex flex-wrap gap-1 items-center max-w-[220px]">
+        {dots.map((i) => (
+          <div key={i} className={`${dotSize} rounded-full transition-all ${i <= count ? 'bg-[#7a32fc] scale-110 shadow-sm shadow-blue-200' : 'bg-gray-200'}`}></div>
         ))}
-        <span className="text-[9px] font-semibold text-gray-400 ml-1 uppercase">{count}/5</span>
+        <span className="text-[9px] font-semibold text-gray-400 ml-1 uppercase">{count}/{safeTarget}</span>
       </div>
     );
   };
@@ -2902,6 +2945,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       <div className="p-6"> 
         {activeTab === 'history' ? ( 
           <div className="space-y-6"> 
+            {showCoordinatorPatientRadar && (
+              <RadarDomainAssessmentChart
+                patientId={patient.id}
+                protocols={ageCompatibleProtocols}
+                history={history}
+              />
+            )}
             {isKidsProfile && (
               <div className="bg-white border border-amber-100 rounded-3xl p-5 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
@@ -3094,14 +3144,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 </div>
               </React.Fragment>
             ) : null}
-            {isKidsProfile && ((sortedDateKeys?.length || 0) > 0 ? sortedDateKeys.map((dateKey, gIdx) => ( 
+            {isKidsProfile && ((sortedDateKeys?.length || 0) > 0 ? sortedDateKeys.map((dateKey, gIdx) => {
+              const dateItems = groupedHistory[dateKey] || [];
+              const familyItems = dateItems.filter((item: any) => item.type === 'family_note' || item.type === 'photo');
+              const sessionItems = dateItems.filter((item: any) => item.type !== 'family_note' && item.type !== 'photo');
+              const isSessionHistoryExpanded = expandedSessionHistoryDates[dateKey] === true;
+              const firstVisibleItemId = gIdx === 0 ? 'history-item-0' : '';
+
+              return (
               <div key={dateKey} className="relative pl-6 border-l-2 border-gray-200 ml-2"> 
                 <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-[#7551FF] border-4 border-white ring-1 ring-gray-100"></div> 
                 <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">{dateKey}</h3> 
-                <div className="space-y-4"> 
-                  {(groupedHistory[dateKey] || []).map((item: any, idx: number) => (
+                <div className="space-y-4">
+                  {familyItems.map((item: any, idx: number) => (
                     <HistoryCard 
-                      id={gIdx === 0 && idx === 0 ? 'history-item-0' : ''} 
+                      id={firstVisibleItemId && idx === 0 ? firstVisibleItemId : ''} 
                       key={item.id} 
                       item={item} 
                       energyTags={ENERGY_TAGS} 
@@ -3112,10 +3169,60 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       fullHistory={(history || []).filter((h: any) => h.patientId === patient.id)}
                       peiGoals={patient.pei || []}
                     />
-                  ))} 
+                  ))}
+
+                  {sessionItems.length > 0 && (
+                    <div className="bg-white/90 border border-indigo-100 rounded-3xl shadow-sm overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => toggleSessionHistoryDate(dateKey)}
+                        className="w-full px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-left hover:bg-indigo-50/50 transition-all"
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="w-10 h-10 rounded-2xl bg-[#7a32fc]/10 text-[#7a32fc] flex items-center justify-center">
+                            <Clock size={18} />
+                          </span>
+                          <div>
+                            <p className="text-sm font-semibold text-gray-800">Registros de sessão</p>
+                            <p className="text-xs text-gray-500">
+                              {sessionItems.length} registro{sessionItems.length === 1 ? '' : 's'} técnico{sessionItems.length === 1 ? '' : 's'} recolhido{sessionItems.length === 1 ? '' : 's'} para priorizar o diário da família.
+                            </p>
+                          </div>
+                        </div>
+                        <span className="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc] bg-[#7a32fc]/10 px-3 py-2 rounded-full">
+                          {isSessionHistoryExpanded ? 'Recolher' : 'Ver registros'}
+                          <ChevronDown size={14} className={`transition-transform ${isSessionHistoryExpanded ? 'rotate-180' : ''}`} />
+                        </span>
+                      </button>
+
+                      {isSessionHistoryExpanded && (
+                        <div className="border-t border-indigo-50 p-4 space-y-4 bg-slate-50/50 animate-fade-in">
+                          {sessionItems.map((item: any, idx: number) => (
+                            <HistoryCard 
+                              id={!familyItems.length && firstVisibleItemId && idx === 0 ? firstVisibleItemId : ''} 
+                              key={item.id} 
+                              item={item} 
+                              energyTags={ENERGY_TAGS} 
+                              isTherapist={true} 
+                              onEvaluate={onEvaluateHistoryItem} 
+                              protocols={protocols} 
+                              isKid={patientCategory === 'Criança'}
+                              fullHistory={(history || []).filter((h: any) => h.patientId === patient.id)}
+                              peiGoals={patient.pei || []}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {familyItems.length === 0 && sessionItems.length === 0 && (
+                    <p className="text-sm text-gray-400 italic">Nenhum registro neste dia.</p>
+                  )}
                 </div> 
-              </div> 
-            )) : <p className="text-center text-gray-400 mt-10">Nenhum histórico disponível.</p>)} 
+              </div>
+              );
+            }) : <p className="text-center text-gray-400 mt-10">Nenhum histórico disponível.</p>)} 
           </div> 
         ) : activeTab === 'notes' ? ( 
           <div className="space-y-4 animate-fade-in"> 
@@ -3571,6 +3678,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                     objective: s.objective,
                                     criteria: s.criteria,
                                     maxScore: s.maxScore || 1,
+                                    meta_sucessos: s.meta_sucessos ?? s.metaSucessos ?? s.masteryTarget ?? s.mastery_target,
                                     status: 'not_started',
                                     progress: 0,
                                     term: 'short',
@@ -3650,7 +3758,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                     </h4>
                                     {patientCategory === 'Criança' && (
                                       <div className="mt-1 mb-2">
-                                        <MasteryDots count={getMasteryProgress(goal.name) || 0} status={goal.status} />
+                                        <MasteryDots count={getMasteryProgress(goal) || 0} status={goal.status} target={getGoalMasteryTarget(goal)} />
                                       </div>
                                     )}
                                     <p className="text-xs text-gray-500 mt-1">{goal.objective}</p>
@@ -4174,7 +4282,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                             <h4 className="text-xl font-semibold text-gray-800 tracking-tight">{goal.name}</h4>
                             {patientCategory === 'Criança' && (
                               <div className="mt-2">
-                                <MasteryDots count={getMasteryProgress(goal.name) || 0} status={goal.status} />
+                                <MasteryDots count={getMasteryProgress(goal) || 0} status={goal.status} target={getGoalMasteryTarget(goal)} />
                               </div>
                             )}
                             <p className="text-xs text-gray-500 mt-1 font-medium">{goal.objective}</p>

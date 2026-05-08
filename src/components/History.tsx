@@ -16,6 +16,20 @@ const repairMojibake = (value: any): string => {
   }
 };
 
+const getMasteryTarget = (goal: any, fallbackSkill?: any) => {
+  const target = Number(
+    goal?.meta_sucessos ??
+    goal?.metaSucessos ??
+    goal?.masteryTarget ??
+    goal?.mastery_target ??
+    fallbackSkill?.meta_sucessos ??
+    fallbackSkill?.metaSucessos ??
+    fallbackSkill?.masteryTarget ??
+    fallbackSkill?.mastery_target
+  );
+  return Number.isFinite(target) && target > 0 ? Math.floor(target) : 5;
+};
+
 export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protocols = [], id, isKid, fullHistory = [], peiGoals = [] }: any) => { 
   const [isEvaluating, setIsEvaluating] = useState(false); 
   const [score, setScore] = useState(item.score !== undefined ? item.score : ''); 
@@ -35,21 +49,6 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
     return skills;
   }, [protocols]);
 
-  const masteryProgress = useMemo(() => {
-    if (!isKid || !item.title || item.type !== 'task' || item.score !== 1) return null;
-    const goal = peiGoals.find((g: any) => g.name === item.title);
-    const skillHistory = fullHistory
-      .filter((h: any) => h.title === item.title && h.type === 'task' && h.id <= item.id && (!goal || h.id > goal.id))
-      .sort((a: any, b: any) => b.id - a.id);
-    
-    let count = 0;
-    for (const h of skillHistory) {
-      if (h.score === 1) count++;
-      else break;
-    }
-    return Math.min(count, 5);
-  }, [isKid, item.title, item.type, fullHistory]);
-
   const matchedSkill = useMemo(() => { 
     if (!protocols || !item.title) return null; 
     for (const proto of protocols) { 
@@ -60,6 +59,22 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
     } 
     return null; 
   }, [protocols, item.title]); 
+
+  const masteryProgress = useMemo(() => {
+    if (!isKid || !item.title || item.type !== 'task' || item.score !== 1) return null;
+    const goal = peiGoals.find((g: any) => g.name === item.title);
+    const target = getMasteryTarget(goal, matchedSkill);
+    const skillHistory = fullHistory
+      .filter((h: any) => h.title === item.title && h.type === 'task' && h.id <= item.id && (!goal || h.id > goal.id))
+      .sort((a: any, b: any) => b.id - a.id);
+    
+    let count = 0;
+    for (const h of skillHistory) {
+      if (h.score === 1) count++;
+      else break;
+    }
+    return { count: Math.min(count, target), target };
+  }, [isKid, item.title, item.type, fullHistory, peiGoals, matchedSkill]);
 
   const maxScore = useMemo(() => { 
     // Default to 1 for VB-MAPP style scoring as requested
@@ -125,9 +140,9 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
               )}
             </div>
             {masteryProgress !== null && (
-              <div className="flex gap-0.5 mt-1">
-                {[1, 2, 3, 4, 5].map((i) => (
-                  <div key={i} className={`w-1.5 h-1.5 rounded-full ${i <= masteryProgress ? 'bg-[#7a32fc]' : 'bg-gray-200'}`}></div>
+              <div className="flex gap-0.5 mt-1 flex-wrap max-w-[160px]">
+                {Array.from({ length: masteryProgress.target }, (_, index) => index + 1).map((i) => (
+                  <div key={i} className={`${masteryProgress.target > 30 ? 'w-1 h-1' : 'w-1.5 h-1.5'} rounded-full ${i <= masteryProgress.count ? 'bg-[#7a32fc]' : 'bg-gray-200'}`}></div>
                 ))}
               </div>
             )}
