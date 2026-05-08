@@ -3,11 +3,34 @@ import { ChevronDown, Trash2, Plus, ChevronLeft, Save, SearchCode, Boxes, Filter
 import { SuccessOverlay } from './Common';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
 import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
+import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
+import { VBMAPP_LEVEL_3_CANONICAL_PROTOCOL } from '../constants/vbmappLevel3Protocol';
+import { dataService } from '../services/dataService';
 
 const getLicensedCanonicalProtocolForRequest = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
   if (source.includes('afls') || source.includes('participacao-social') || source.includes('participação social')) {
     return AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL;
+  }
+  if (
+    source.includes('vb-mapp-level-3')
+    || source.includes('vb-mapp-nivel-3')
+    || source.includes('vbmapp3')
+    || source.includes('vb-mapp3')
+    || source.includes('nivel 3')
+    || source.includes('30 a 48')
+  ) {
+    return VBMAPP_LEVEL_3_CANONICAL_PROTOCOL;
+  }
+  if (
+    source.includes('vb-mapp-level-2')
+    || source.includes('vb-mapp-nivel-2')
+    || source.includes('vbmapp2')
+    || source.includes('vb-mapp2')
+    || source.includes('nivel 2')
+    || source.includes('18 a 30')
+  ) {
+    return VBMAPP_LEVEL_2_CANONICAL_PROTOCOL;
   }
   if (source.includes('vb-mapp') || source.includes('vbmapp') || source.includes('vb mapp')) {
     return VBMAPP_LEVEL_1_CANONICAL_PROTOCOL;
@@ -361,6 +384,41 @@ export const ProtocolManagementSystem = ({
       minute: "2-digit"
     });
   };
+  const manualProtocolBackupKey = 'verto_manual_protocol_editor_snapshot';
+  const persistManualProtocolSnapshot = (nextProtocols: any[]) => {
+    try {
+      localStorage.setItem(
+        manualProtocolBackupKey,
+        JSON.stringify({
+          updatedAt: new Date().toISOString(),
+          protocols: nextProtocols,
+        }),
+      );
+    } catch {
+      // O banco continua sendo a fonte principal; este backup e apenas redundancia local.
+    }
+  };
+  const prepareManualProtocolForPersistence = (protocol: any) => {
+    const nowIso = new Date().toISOString();
+    const existingId = protocol?.id ? String(protocol.id) : '';
+    return {
+      ...protocol,
+      id: existingId || `manual-protocol-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      origin: protocol?.origin || (protocol?.isApprovedImport ? 'verto_approved_import' : 'manual_editor'),
+      isManualProtocol: protocol?.isManualProtocol ?? !protocol?.isApprovedImport,
+      createdAt: protocol?.createdAt || nowIso,
+      updatedAt: nowIso,
+      version: Number(protocol?.version || 0) + 1,
+    };
+  };
+  const persistProtocolListImmediately = async (nextProtocols: any[]) => {
+    persistManualProtocolSnapshot(nextProtocols);
+    const result = await dataService.saveClinicState({ protocols: nextProtocols });
+    if (result?.success === false) {
+      console.warn('[protocol-library] saved local protocol backup; remote persistence pending:', result?.warning || result?.error);
+    }
+    return result;
+  };
 
   const resetImportState = () => {
     setShowImportModal(false);
@@ -635,8 +693,27 @@ export const ProtocolManagementSystem = ({
   const evaluationProtocols = baseEvaluationProtocols;
   const interventionProtocols = filteredProtocols.filter((p: any) => p.category === 'intervention');
 
+  const handlePersistedManualProtocolSave = async (updated: any) => {
+    const protocolForSave = prepareManualProtocolForPersistence(updated);
+    const exists = protocols.some((old: any) => String(old.id) === String(protocolForSave.id));
+    const nextProtocols = exists
+      ? protocols.map((old: any) => String(old.id) === String(protocolForSave.id) ? protocolForSave : old)
+      : [...protocols, protocolForSave];
+    await onSaveProtocol(protocolForSave, nextProtocols);
+    await persistProtocolListImmediately(nextProtocols);
+    setEditingProtocol(null);
+    return { success: true };
+  };
+
+  const handlePersistedManualProtocolDelete = async (protocolId: any) => {
+    const nextProtocols = protocols.filter((p: any) => String(p.id) !== String(protocolId));
+    persistManualProtocolSnapshot(nextProtocols);
+    onDeleteProtocol(protocolId, nextProtocols);
+    await persistProtocolListImmediately(nextProtocols);
+  };
+
   if (editingProtocol) { 
-    return (<ProtocolEditor protocol={editingProtocol} onSave={(updated: any) => { onSaveProtocol(updated); setEditingProtocol(null); }} onCancel={() => setEditingProtocol(null)} />); 
+    return (<ProtocolEditor protocol={editingProtocol} onSave={handlePersistedManualProtocolSave} onCancel={() => setEditingProtocol(null)} />); 
   } 
 
   const ProtocolCard = ({ proto }: any) => {
@@ -714,7 +791,9 @@ export const ProtocolManagementSystem = ({
             title="Excluir protocolo"
             onClick={(e) => {
               e.stopPropagation();
-              if(confirm(`Excluir o protocolo "${proto.title}" da biblioteca? Essa acao remove o protocolo para a equipe.`)) onDeleteProtocol(proto.id);
+              if(confirm(`Excluir o protocolo "${proto.title}" da biblioteca? Essa acao remove o protocolo para a equipe.`)) {
+                void handlePersistedManualProtocolDelete(proto.id);
+              }
             }}
             className="inline-flex items-center gap-1 rounded-xl bg-red-500/10 px-3 py-2 text-[10px] font-black uppercase text-red-300 hover:bg-red-500 hover:text-white transition-all"
           >

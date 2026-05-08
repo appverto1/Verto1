@@ -606,7 +606,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           <div className="hidden md:flex items-center gap-8">
             <a href="#funcionalidades" className="text-sm font-semibold text-gray-500 hover:text-[#7a32fc] transition-colors">Funcionalidades</a>
             <a href="#sobre" className="text-sm font-semibold text-gray-500 hover:text-[#7a32fc] transition-colors">Sobre</a>
-            <a href="#precos" className="text-sm font-semibold text-gray-500 hover:text-[#7a32fc] transition-colors">Preços</a>
+            <a href="#precos" className="text-sm font-semibold text-gray-500 hover:text-[#7a32fc] transition-colors">Planos</a>
           </div>
           <div className="flex items-center gap-4">
             <button 
@@ -652,7 +652,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 }}
                 className="bg-[#7a32fc] text-white px-10 py-5 rounded-3xl font-semibold text-lg shadow-2xl shadow-purple-500/30 hover:scale-105 transition-all flex items-center justify-center gap-3"
               >
-                Agendar uma demonstração <ArrowRight size={20} />
+                Falar com especialista <ArrowRight size={20} />
               </button>
             </div>
           </div>
@@ -990,173 +990,95 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         </div>
       </section>
 
-      {/* Pricing Section */}
+      {/* Plans Section */}
       <section id="precos" className="py-24 bg-white">
         <div className="max-w-7xl mx-auto px-6">
           <div className="text-center mb-20">
-            <h2 className="text-5xl font-semibold tracking-tighter mb-6">Planos que crescem com sua clínica e geram lucro real.</h2>
+            <h2 className="text-5xl font-semibold tracking-tighter mb-6">Configurações para cada fase da clínica.</h2>
             <p className="text-xl text-gray-500 font-medium max-w-3xl mx-auto">
-              De clínicas boutique a grandes redes, a Verto oferece a infraestrutura para escalar sua operação e entregar uma experiência premium.
+              Os recursos centrais são os mesmos. O que muda é o porte da operação, a forma de implantação e o nível de acompanhamento necessário.
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-16">
-            {/* Essencial */}
-            <div className="bg-white border border-gray-100 rounded-[40px] p-8 shadow-sm hover:shadow-xl transition-all flex flex-col">
-              <div className="mb-8">
-                <h3 className="text-xl font-semibold mb-2">Essencial</h3>
-                <p className="text-gray-400 text-xs font-semibold uppercase tracking-widest mb-6">Para clínicas boutique ou autônomos</p>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-3xl font-semibold">R$ 149,90</span>
-                  <span className="text-gray-400 font-semibold text-sm">/ mês</span>
-                </div>
-              </div>
-              <button 
-                onClick={() => {
-                  setSelectedPlan('Essencial');
-                  setRegisterType('professional');
-                  setRegisterStep(2);
-                  setShowRegister(true);
-                }}
-                className="w-full bg-gray-900 text-white py-4 rounded-2xl font-semibold text-sm mb-8 hover:bg-black transition-all"
+            {[
+              {
+                name: 'Essencial',
+                profile: 'Profissional solo ou clínica boutique',
+                team: 'Até 2 profissionais',
+                focus: 'Organizar agenda, prontuário, pacientes e evolução clínica sem aumentar complexidade.',
+                setup: 'Implantação enxuta, com estrutura pronta para crescer.'
+              },
+              {
+                name: 'Crescimento',
+                profile: 'Clínica com equipe em expansão',
+                team: '3 a 7 profissionais',
+                focus: 'Padronizar atendimentos, acompanhar indicadores e reduzir retrabalho administrativo.',
+                setup: 'Boa opção quando a operação já precisa de rotina e governança.',
+                highlight: true
+              },
+              {
+                name: 'Avançado',
+                profile: 'Clínica estabelecida',
+                team: '8 a 12 profissionais',
+                focus: 'Consolidar dados clínicos, gerenciais e financeiros com mais previsibilidade.',
+                setup: 'Indicado para coordenação ativa, múltiplas agendas e tomada de decisão por dados.'
+              },
+              {
+                name: 'Enterprise',
+                profile: 'Redes, franquias e operações multiunidade',
+                team: '13+ profissionais',
+                focus: 'Unificar protocolos, painéis e governança entre unidades sem perder rastreabilidade.',
+                setup: 'Desenho assistido para operações com regras, integrações ou implantação dedicada.'
+              }
+            ].map((plan) => (
+              <div
+                key={plan.name}
+                className={`relative rounded-[40px] p-8 shadow-sm hover:shadow-xl transition-all flex flex-col border ${
+                  plan.highlight
+                    ? 'bg-[#7a32fc]/5 border-2 border-[#7a32fc] lg:-translate-y-4'
+                    : 'bg-white border-gray-100'
+                }`}
               >
-                Começar Agora
-              </button>
-              <ul className="space-y-4 flex-1">
-                <li className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">Todas as funcionalidades inclusas</li>
-                {[
-                  'Até 2 profissionais',
-                  'Plano terapêutico inteligente por domínio',
-                  'Prontuário e histórico clínico centralizados',
-                  'Agenda completa com gestão de salas',
-                  'Portal do Paciente + Diário da Família (Kids)',
-                  'Relatórios visuais comparativos',
-                  'LGPD + HIPAA com proteção avançada'
-                ].map((f, i) => (
-                  <li key={i} className="flex items-start gap-3 text-sm font-medium text-gray-600">
-                    <Check size={18} className="text-green-500 shrink-0 mt-0.5" />
-                    {f}
-                  </li>
-                ))}
-              </ul>
-            </div>
+                {plan.highlight && (
+                  <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-[#7a32fc] text-white px-4 py-1 rounded-full text-[10px] font-semibold uppercase tracking-widest">
+                    Mais comum
+                  </div>
+                )}
+                <div className="mb-6">
+                  <p className={`text-[10px] font-semibold uppercase tracking-widest mb-3 ${plan.highlight ? 'text-[#7a32fc]' : 'text-gray-400'}`}>
+                    Perfil operacional
+                  </p>
+                  <h3 className="text-2xl font-semibold mb-3">{plan.name}</h3>
+                  <p className="text-sm text-gray-500 font-medium leading-relaxed">{plan.profile}</p>
+                </div>
 
-            {/* Crescimento */}
-            <div className="bg-[#7a32fc]/5 border-2 border-[#7a32fc] rounded-[40px] p-8 shadow-xl relative flex flex-col transform lg:-translate-y-4">
-              <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-[#7a32fc] text-white px-4 py-1 rounded-full text-[10px] font-semibold uppercase tracking-widest">Mais Popular</div>
-              <div className="mb-8">
-                <h3 className="text-xl font-semibold mb-2">Crescimento</h3>
-                <p className="text-gray-400 text-xs font-semibold uppercase tracking-widest mb-6">Para clínicas em crescimento</p>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-3xl font-semibold">R$ 399,90</span>
-                  <span className="text-gray-400 font-semibold text-sm">/ mês</span>
+                <div className="space-y-3 flex-1 mb-8">
+                  {[
+                    { label: 'Equipe sugerida', value: plan.team },
+                    { label: 'Foco principal', value: plan.focus },
+                    { label: 'Implantação', value: plan.setup }
+                  ].map((item) => (
+                    <div key={item.label} className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
+                      <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-1">{item.label}</p>
+                      <p className="text-sm font-semibold text-gray-700 leading-relaxed">{item.value}</p>
+                    </div>
+                  ))}
                 </div>
-              </div>
-              <button 
-                onClick={() => {
-                  setSelectedPlan('Crescimento');
-                  setRegisterType('professional');
-                  setRegisterStep(2);
-                  setShowRegister(true);
-                }}
-                className="w-full bg-[#7a32fc] text-white py-4 rounded-2xl font-semibold text-sm mb-8 shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all"
-              >
-                Começar Agora
-              </button>
-              <ul className="space-y-4 flex-1">
-                <li className="text-xs font-semibold text-[#7a32fc] uppercase tracking-widest mb-2">Todas as funcionalidades inclusas</li>
-                {[
-                  '3 a 7 profissionais',
-                  'Plano terapêutico inteligente por domínio',
-                  'Prontuário e histórico clínico centralizados',
-                  'Agenda completa com gestão de salas',
-                  'Portal do Paciente + Diário da Família (Kids)',
-                  'Relatórios visuais comparativos',
-                  'LGPD + HIPAA com proteção avançada'
-                ].map((f, i) => (
-                  <li key={i} className="flex items-start gap-3 text-sm font-medium text-gray-600">
-                    <Check size={18} className="text-[#7a32fc] shrink-0 mt-0.5" />
-                    {f}
-                  </li>
-                ))}
-              </ul>
-            </div>
 
-            {/* Avançado */}
-            <div className="bg-white border border-gray-100 rounded-[40px] p-8 shadow-sm hover:shadow-xl transition-all flex flex-col">
-              <div className="mb-8">
-                <h3 className="text-xl font-semibold mb-2">Avançado</h3>
-                <p className="text-gray-400 text-xs font-semibold uppercase tracking-widest mb-6">Para clínicas estabelecidas</p>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-3xl font-semibold">R$ 679,90</span>
-                  <span className="text-gray-400 font-semibold text-sm">/ mês</span>
-                </div>
+                <button
+                  onClick={() => window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer')}
+                  className={`w-full py-4 rounded-2xl font-semibold text-sm transition-all flex items-center justify-center gap-2 ${
+                    plan.highlight
+                      ? 'bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20 hover:opacity-90'
+                      : 'bg-gray-900 text-white hover:bg-black'
+                  }`}
+                >
+                  <MessageCircle size={16} />
+                  Falar com especialista
+                </button>
               </div>
-              <button 
-                onClick={() => {
-                  setSelectedPlan('Avançado');
-                  setRegisterType('professional');
-                  setRegisterStep(2);
-                  setShowRegister(true);
-                }}
-                className="w-full bg-gray-900 text-white py-4 rounded-2xl font-semibold text-sm mb-8 hover:bg-black transition-all"
-              >
-                Começar Agora
-              </button>
-              <ul className="space-y-4 flex-1">
-                <li className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">Todas as funcionalidades inclusas</li>
-                {[
-                  '8 a 12 profissionais',
-                  'Plano terapêutico inteligente por domínio',
-                  'Prontuário e histórico clínico centralizados',
-                  'Agenda completa com gestão de salas',
-                  'Portal do Paciente + Diário da Família (Kids)',
-                  'Relatórios visuais comparativos',
-                  'LGPD + HIPAA com proteção avançada'
-                ].map((f, i) => (
-                  <li key={i} className="flex items-start gap-3 text-sm font-medium text-gray-600">
-                    <Check size={18} className="text-green-500 shrink-0 mt-0.5" />
-                    {f}
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            {/* Enterprise */}
-            <div className="bg-slate-50 text-slate-900 border border-slate-200 rounded-[40px] p-8 shadow-sm hover:shadow-xl transition-all flex flex-col">
-              <div className="mb-8">
-                <h3 className="text-xl font-semibold mb-2">Enterprise</h3>
-                <p className="text-slate-500 text-xs font-semibold uppercase tracking-widest mb-6">Para grandes redes e franquias</p>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-3xl font-semibold">Personalizado</span>
-                </div>
-              </div>
-              <button 
-                onClick={() => {
-                  window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer');
-                }}
-                className="w-full bg-slate-900 text-white py-4 rounded-2xl font-semibold text-sm mb-8 hover:bg-black transition-all"
-              >
-                Agendar uma demonstração
-              </button>
-              <ul className="space-y-4 flex-1">
-                <li className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Todas as funcionalidades inclusas</li>
-                {[
-                  '13+ profissionais',
-                  'Plano terapêutico inteligente por domínio',
-                  'Prontuário e histórico clínico centralizados',
-                  'Agenda completa com gestão de salas',
-                  'Portal do Paciente + Diário da Família (Kids)',
-                  'Relatórios visuais comparativos',
-                  'LGPD + HIPAA com proteção avançada'
-                ].map((f, i) => (
-                  <li key={i} className="flex items-start gap-3 text-sm font-medium text-slate-600">
-                    <Check size={18} className="text-[#7a32fc] shrink-0 mt-0.5" />
-                    {f}
-                  </li>
-                ))}
-              </ul>
-            </div>
+            ))}
           </div>
 
           {/* ROI Callout */}
@@ -1285,7 +1207,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 className="inline-flex items-center gap-3 bg-[#25D366] text-white px-10 py-5 rounded-3xl font-semibold text-lg shadow-2xl shadow-green-500/20 hover:scale-105 transition-all"
               >
                 <MessageCircle size={24} />
-                Agendar Demonstração
+                Falar com especialista
               </a>
             </div>
           </div>
@@ -1777,10 +1699,9 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                       <div className="bg-pink-50 border border-pink-100 p-4 rounded-2xl mb-6">
                         <div className="flex items-center justify-between mb-2">
                           <h3 className="text-sm font-bold text-pink-600">Plano Paciente</h3>
-                          <div className="text-right">
-                            <span className="text-xl font-bold text-pink-600">R$ 4,90</span>
-                            <span className="text-[10px] text-gray-400 font-bold uppercase ml-1">/mês</span>
-                          </div>
+                          <span className="text-[10px] text-pink-600 font-bold uppercase tracking-widest bg-white px-3 py-1 rounded-full">
+                            Acesso acompanhado
+                          </span>
                         </div>
                         <p className="text-[10px] text-gray-500 font-medium leading-relaxed">
                           Acompanhe sua evolução, visualize metas e receba feedbacks em tempo real.
@@ -1865,7 +1786,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                         disabled={loading}
                         className={`w-full py-3 md:py-3.5 rounded-2xl font-semibold text-sm shadow-lg transition-all active:scale-[0.98] mt-2 ${registerType === 'professional' ? 'bg-[#7a32fc] text-white shadow-purple-500/10' : 'bg-pink-500 text-white shadow-pink-500/10'} ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
                       >
-                        {loading ? 'Processando...' : (registerType === 'professional' && !selectedPlan ? 'Continuar para Planos' : 'Criar minha conta e Pagar')}
+                        {loading ? 'Processando...' : (registerType === 'professional' && !selectedPlan ? 'Continuar para perfis de implantação' : 'Criar minha conta')}
                       </button>
 
                       <div className="relative my-3 md:my-4">
@@ -1918,7 +1839,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                         <Rocket size={20} />
                       </div>
                       <h2 className="text-base md:text-lg font-semibold tracking-tight">Quase lá, {name.split(' ')[0]}!</h2>
-                      <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider mt-1">Escolha o plano ideal para a fase da sua clínica</p>
+                      <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider mt-1">Veja o perfil mais parecido com sua operação e fale com um especialista</p>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
@@ -1938,23 +1859,22 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
                     <div className="space-y-2 md:space-y-2.5">
                       {[
-                        { name: 'Essencial', price: '149,90', desc: 'Até 2 profissionais' },
-                        { name: 'Crescimento', price: '399,90', desc: '3 a 7 profissionais' },
-                        { name: 'Avançado', price: '679,90', desc: '7 a 12 profissionais' }
+                        { name: 'Essencial', desc: 'Até 2 profissionais', note: 'Implantação enxuta' },
+                        { name: 'Crescimento', desc: '3 a 7 profissionais', note: 'Operação em expansão' },
+                        { name: 'Avançado', desc: '8 a 12 profissionais', note: 'Gestão consolidada' }
                       ].map((plan) => (
                         <button 
                           key={plan.name}
-                          onClick={() => handleSelectPlan(plan.name)}
+                          onClick={() => window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer')}
                           className="w-full p-3 md:p-4 bg-gray-50 border border-transparent hover:border-[#7a32fc] hover:bg-purple-50/50 rounded-2xl transition-all flex items-center justify-between group text-left"
                         >
                           <div>
                             <h3 className="font-semibold text-gray-800 text-[11px] md:text-xs">{plan.name}</h3>
                             <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">{plan.desc}</p>
                           </div>
-                          <div className="text-right">
-                            <span className="text-xs md:text-sm font-semibold text-[#7a32fc]">R$ {plan.price}</span>
-                            <p className="text-[7px] md:text-[8px] text-gray-400 font-normal uppercase">/mês</p>
-                          </div>
+                          <span className="text-[8px] md:text-[9px] font-semibold uppercase tracking-wider text-[#7a32fc] flex items-center gap-1">
+                            <MessageCircle size={12} /> {plan.note}
+                          </span>
                         </button>
                       ))}
                       <button
@@ -1967,7 +1887,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                           <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">Clínicas de grande porte com suporte dedicado</p>
                         </div>
                         <span className="text-[8px] md:text-[9px] font-semibold uppercase tracking-wider flex items-center gap-1">
-                          <MessageCircle size={12} /> Falar no WhatsApp
+                          <MessageCircle size={12} /> Falar com especialista
                         </span>
                       </button>
                     </div>

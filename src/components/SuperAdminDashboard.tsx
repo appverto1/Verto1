@@ -31,6 +31,8 @@ import { LogoVerto } from './Common';
 import { getSupabase } from '../lib/supabase';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
 import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
+import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
+import { VBMAPP_LEVEL_3_CANONICAL_PROTOCOL } from '../constants/vbmappLevel3Protocol';
 
 const COLORS = ['#0EA5E9', '#10B981', '#F59E0B', '#EF4444', '#6366F1', '#EC4899'];
 
@@ -85,12 +87,28 @@ const VERTO_PROTOCOL_OPTIONS = [
     hint: '0 a 18 meses',
     completionPercent: 100,
     statusLabel: 'Completo'
+  },
+  {
+    key: 'vb-mapp-level-2',
+    name: 'VB-MAPP - Nivel 2',
+    hint: '18 a 30 meses',
+    completionPercent: 100,
+    statusLabel: 'Completo'
+  },
+  {
+    key: 'vb-mapp-level-3',
+    name: 'VB-MAPP - Nivel 3',
+    hint: '30 a 48 meses',
+    completionPercent: 100,
+    statusLabel: 'Completo'
   }
 ];
 
 const VERTO_PROTOCOL_EDITOR_CATALOG = [
   { ...VERTO_PROTOCOL_OPTIONS[0], protocol: AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL },
-  { ...VERTO_PROTOCOL_OPTIONS[1], protocol: VBMAPP_LEVEL_1_CANONICAL_PROTOCOL }
+  { ...VERTO_PROTOCOL_OPTIONS[1], protocol: VBMAPP_LEVEL_1_CANONICAL_PROTOCOL },
+  { ...VERTO_PROTOCOL_OPTIONS[2], protocol: VBMAPP_LEVEL_2_CANONICAL_PROTOCOL },
+  { ...VERTO_PROTOCOL_OPTIONS[3], protocol: VBMAPP_LEVEL_3_CANONICAL_PROTOCOL }
 ];
 
 export const SuperAdminDashboard = ({ onLogout }: any) => {

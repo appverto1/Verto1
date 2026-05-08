@@ -1049,7 +1049,7 @@ export const AFLS_COMMUNITY_PROTOCOL = {
           "objective": "O aprendiz irá apertar botões na sequência correta para selecionar os itens que vai comprar",
           "question": "O aprendiz aperta botões na sequência correta para selecionar os itens que vai comprar?",
           "example": "Aperta B2 para pegar as para pegar os etc.",
-          "criteria": "2= aperta os botões na sequência, como por ex: B21 ou C5, nas máquinas que requerem cookies, o uso de letras e números, 1= aperta os botões que contém um desenho ou logo do item desejado",
+          "criteria": "2= aperta os botões na sequência, como por ex: B21 ou C5, nas máquinas que requerem cookies, o uso de letras e números, 1= aperta os botões que contém um desenho ou imagem do item desejado",
           "comment": "",
           "sourcePage": 18,
           "sourceDomain": "Compras"

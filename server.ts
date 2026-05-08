@@ -355,6 +355,12 @@ function identifyVertoProtocolCandidate(input?: string | null): { canonicalKey: 
   if (/\bafls\b|assessment functional living skills|functional living skills/.test(key)) {
     return { canonicalKey: 'afls-social-participation-adult', canonicalName: 'AFLS - Habilidades de Participação Social', confidence: 0.94 };
   }
+  if (/\bvb\s*mapp\s*2\b|\bvbmapp\s*2\b|\bvb\s*mapp\s*nivel\s*2\b|\bvb\s*mapp\s*level\s*2\b|\b18\s*a\s*30\b|\b18\s*30\b/.test(key)) {
+    return { canonicalKey: 'vb-mapp-level-2', canonicalName: 'VB-MAPP - Nivel 2', confidence: 0.92 };
+  }
+  if (/\bvb\s*mapp\s*3\b|\bvbmapp\s*3\b|\bvb\s*mapp\s*nivel\s*3\b|\bvb\s*mapp\s*level\s*3\b|\b30\s*a\s*48\b|\b30\s*48\b/.test(key)) {
+    return { canonicalKey: 'vb-mapp-level-3', canonicalName: 'VB-MAPP - Nivel 3', confidence: 0.92 };
+  }
   if (/\bvb\s*mapp\b|\bvbmapp\b|verbal behavior milestones/.test(key)) {
     return { canonicalKey: 'vb-mapp-level-1', canonicalName: 'VB-MAPP - Nivel 1', confidence: 0.9 };
   }
@@ -371,6 +377,12 @@ function normalizeApprovedProtocolKey(input?: string | null): string {
   const key = sanitizeString(input, 180);
   if (key === 'afls' || key === 'afls-social-participation' || key === 'afls-community') {
     return 'afls-social-participation-adult';
+  }
+  if (key === 'vb-mapp-level-2' || key === 'vb-mapp-nivel-2' || key === 'vbmapp2' || key === 'vb-mapp2') {
+    return 'vb-mapp-level-2';
+  }
+  if (key === 'vb-mapp-level-3' || key === 'vb-mapp-nivel-3' || key === 'vbmapp3' || key === 'vb-mapp3') {
+    return 'vb-mapp-level-3';
   }
   if (key === 'vb-mapp' || key === 'vbmapp' || key === 'vb mapp' || key === 'vb-mapp-nivel-1') {
     return 'vb-mapp-level-1';
@@ -393,6 +405,24 @@ const VERTO_PROTOCOL_CATALOG = [
     name: 'VB-MAPP - Nivel 1',
     ageMin: 0,
     ageMax: 1.5,
+    applicableAgeGroup: 'child',
+    completionPercent: 100,
+    statusLabel: 'Completo'
+  },
+  {
+    key: 'vb-mapp-level-2',
+    name: 'VB-MAPP - Nivel 2',
+    ageMin: 1.5,
+    ageMax: 2.5,
+    applicableAgeGroup: 'child',
+    completionPercent: 100,
+    statusLabel: 'Completo'
+  },
+  {
+    key: 'vb-mapp-level-3',
+    name: 'VB-MAPP - Nivel 3',
+    ageMin: 2.5,
+    ageMax: 4,
     applicableAgeGroup: 'child',
     completionPercent: 100,
     statusLabel: 'Completo'
@@ -12064,10 +12094,17 @@ async function startServer() {
   app.post('/api/admin/protocol-import-requests/:requestId/approve', checkAuth, checkPlatformAdmin, async (req: any, res) => {
     try {
       const requestId = sanitizeString(req.params.requestId, 120);
-      const canonicalKey = normalizeApprovedProtocolKey(req.body?.canonicalKey) || identifyVertoProtocolCandidate(req.body?.canonicalName).canonicalKey;
       const canonicalName = sanitizeString(req.body?.canonicalName, 180);
       if (!requestId || !canonicalName) {
         return res.status(400).json({ success: false, error: 'Informe a solicitacao e o protocolo Verto aprovado.' });
+      }
+      const requestedCanonicalKey = normalizeApprovedProtocolKey(req.body?.canonicalKey);
+      const inferredCanonicalKey = identifyVertoProtocolCandidate(canonicalName).canonicalKey;
+      const canonicalKey = VERTO_PROTOCOL_BY_KEY.has(requestedCanonicalKey)
+        ? requestedCanonicalKey
+        : inferredCanonicalKey;
+      if (!VERTO_PROTOCOL_BY_KEY.has(canonicalKey)) {
+        return res.status(400).json({ success: false, error: 'Selecione um protocolo existente na Biblioteca Verto.' });
       }
 
       let updatedTable = false;

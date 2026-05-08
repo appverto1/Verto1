@@ -2427,7 +2427,7 @@ export default function App() {
       }
     }
   };
-  const handleRecordTrial = async (pid: any, title: string, score: number, evalComment?: string) => {
+  const handleRecordTrial = async (pid: any, title: string, score: number, evalComment?: string, sessionMeta?: any) => {
     const targetPatient = allPatients.find(p => p.id === pid);
     const clinicalRecord = clinicalRecords.find(r => r.patientId === pid);
     const isKid = (targetPatient?.age !== undefined && targetPatient.age <= 12) || clinicalRecord?.anamnesisData?.formType === 'child';
@@ -2450,6 +2450,7 @@ export default function App() {
     }
 
     const newId = Date.now();
+    const sessionReferenceDate = sessionMeta?.sessionStartedAt || new Date().toISOString();
     const newHistoryItem = {
       id: newId,
       patientId: pid,
@@ -2459,7 +2460,10 @@ export default function App() {
       score: finalScore,
       evalComment: evalComment || "",
       dateGroup: "Hoje",
-      icon: "🎯"
+      icon: "🎯",
+      sessionId: sessionMeta?.sessionId || null,
+      sessionReferenceDate: sessionMeta?.sessionReferenceDate || sessionReferenceDate.slice(0, 10),
+      created_at: sessionReferenceDate
     };
     
     // Add a note about the trial
@@ -2478,7 +2482,8 @@ export default function App() {
         title: title,
         score: finalScore,
         note: evalComment || "",
-        icon: "🎯"
+        icon: "🎯",
+        created_at: sessionReferenceDate
       });
     } catch (error) {
       console.error('Falha ao persistir registro de sessão:', error);

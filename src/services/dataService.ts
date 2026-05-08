@@ -141,6 +141,35 @@ function ensureArray(value: any) {
   return Array.isArray(value) ? value : [];
 }
 
+function clinicProtocolsBackupKey(workspaceId?: string | null) {
+  return `verto_clinic_protocols_backup:${String(workspaceId || 'active').trim() || 'active'}`;
+}
+
+function readClinicProtocolsBackup(workspaceId?: string | null) {
+  try {
+    const raw = localStorage.getItem(clinicProtocolsBackupKey(workspaceId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return ensureArray(parsed?.protocols);
+  } catch {
+    return [];
+  }
+}
+
+function writeClinicProtocolsBackup(workspaceId: string | undefined | null, protocols: any[]) {
+  try {
+    localStorage.setItem(
+      clinicProtocolsBackupKey(workspaceId),
+      JSON.stringify({
+        updatedAt: new Date().toISOString(),
+        protocols: ensureArray(protocols),
+      }),
+    );
+  } catch (error) {
+    console.warn('[clinic-state] failed to persist protocol backup:', error);
+  }
+}
+
 async function getLocalRecordsData(type: OfflineType) {
   try {
     const local = await getRecordsByType(type);
@@ -1440,13 +1469,16 @@ export const dataService = {
       });
       const result = await safeJson(response);
       const clinicData = result?.data || {};
+      const remoteProtocols = ensureArray(clinicData?.protocols);
+      const backupProtocols = readClinicProtocolsBackup(workspaceId);
+      const protocols = remoteProtocols.length > 0 || clinicData?.updatedAt ? remoteProtocols : backupProtocols;
       return {
         ...result,
         data: {
           clinicId: clinicData?.clinicId || workspaceId || null,
           rooms: ensureArray(clinicData?.rooms),
           appointments: ensureArray(clinicData?.appointments),
-          protocols: ensureArray(clinicData?.protocols),
+          protocols,
           specialtySettings:
             clinicData?.specialtySettings && typeof clinicData.specialtySettings === 'object'
               ? clinicData.specialtySettings
@@ -1456,7 +1488,18 @@ export const dataService = {
       };
     } catch (error) {
       console.error('Error fetching clinic state:', error);
-      return { success: false, error: String(error) };
+      return {
+        success: false,
+        error: String(error),
+        data: {
+          clinicId: workspaceId || null,
+          rooms: [],
+          appointments: [],
+          protocols: readClinicProtocolsBackup(workspaceId),
+          specialtySettings: {},
+          updatedAt: null
+        }
+      };
     }
   },
 
@@ -1468,6 +1511,9 @@ export const dataService = {
     specialtySettings?: Record<string, number>;
   }) {
     try {
+      if (Array.isArray(payload?.protocols)) {
+        writeClinicProtocolsBackup(payload?.workspace_id, payload.protocols);
+      }
       const idempotencyKey = createIdempotencyKey('POST:/api/clinic/state');
       const response = await fetch('/api/clinic/state', {
         method: 'POST',
@@ -1482,7 +1528,11 @@ export const dataService = {
           idempotencyKey
         })
       });
-      return await safeJson(response);
+      const result = await safeJson(response);
+      if (Array.isArray(result?.data?.protocols)) {
+        writeClinicProtocolsBackup(payload?.workspace_id, result.data.protocols);
+      }
+      return result;
     } catch (error) {
       console.error('Error saving clinic state:', error);
       return { success: false, error: String(error) };
@@ -1684,17 +1734,25 @@ export const dataService = {
       });
     }
 
+    const clinicStateData = clinicStateRes?.data || {
+      clinicId: workspaceId || null,
+      rooms: [],
+      appointments: [],
+      protocols: [],
+      specialtySettings: {},
+      updatedAt: null
+    };
+    const remoteProtocols = ensureArray(clinicStateData?.protocols);
+    const backupProtocols = readClinicProtocolsBackup(workspaceId);
+    const clinicStateWithProtocolFallback = {
+      ...clinicStateData,
+      protocols: remoteProtocols.length > 0 || clinicStateData?.updatedAt ? remoteProtocols : backupProtocols
+    };
+
     return {
       success: true,
       data: {
-        clinicState: clinicStateRes?.data || {
-          clinicId: workspaceId || null,
-          rooms: [],
-          appointments: [],
-          protocols: [],
-          specialtySettings: {},
-          updatedAt: null
-        },
+        clinicState: clinicStateWithProtocolFallback,
         clinicAnamnesisTemplate: clinicTemplateRes?.data || {},
         patients: hydratedPatients,
         notes,

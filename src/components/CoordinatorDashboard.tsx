@@ -3293,6 +3293,7 @@ export function CoordinatorDashboard({
                   buildInitialAvatarDataUrl(user?.name),
                 professionalName: user?.name || "Profissional",
                 signatureUrl: user?.clinicSettings?.signatureDataUrl || null,
+                defaultSessionDuration: user?.clinicSettings?.defaultSessionDuration || defaultSessionDuration || 50,
               }}
               initialTab={patientOpenTab}
               openAnamnesisOnLoad={openAnamnesisOnPatientOpen}

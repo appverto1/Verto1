@@ -596,14 +596,14 @@ export const AnamnesisModal = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[170] bg-black/50 backdrop-blur-sm p-3 sm:p-6 flex items-center justify-center">
-      <div className="w-full max-w-6xl max-h-[96vh] overflow-y-auto rounded-3xl bg-white dark:bg-[#0b1b3a] shadow-2xl">
-        <div className="sticky top-0 z-20 bg-white dark:bg-[#0b1b3a] border-b border-slate-200 dark:border-slate-700 px-5 sm:px-8 py-4 flex items-center justify-between">
+    <div className="fixed inset-0 z-[170] bg-black/45 backdrop-blur-sm p-3 sm:p-6 flex items-start justify-center overflow-y-auto">
+      <div className="w-full max-w-6xl max-h-[calc(100vh-1.5rem)] sm:max-h-[calc(100vh-3rem)] overflow-y-auto rounded-3xl bg-white shadow-2xl">
+        <div className="sticky top-0 z-20 bg-white border-b border-slate-200 px-5 sm:px-8 py-4 flex items-center justify-between">
           <div>
-            <h2 className="text-xl sm:text-3xl font-bold text-slate-900 dark:text-slate-100">Ficha de Anamnese</h2>
-            <p className="text-sm text-slate-500 dark:text-slate-300">Modelo editável por perfil com versionamento.</p>
+            <h2 className="text-xl sm:text-3xl font-bold text-slate-900">Ficha de Anamnese</h2>
+            <p className="text-sm text-slate-500">Modelo editável por perfil com versionamento.</p>
           </div>
-          <button onClick={handleCloseModal} className="rounded-xl border border-slate-200 dark:border-slate-600 p-2 text-slate-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white">
+          <button onClick={handleCloseModal} className="rounded-xl border border-slate-200 p-2 text-slate-500 hover:text-slate-700">
             <X size={20} />
           </button>
         </div>
@@ -613,10 +613,10 @@ export const AnamnesisModal = ({
             <div
               className={`rounded-xl border px-4 py-3 text-sm font-medium ${
                 feedback.type === 'success'
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-700/50 dark:bg-emerald-900/20 dark:text-emerald-200'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
                   : feedback.type === 'error'
-                    ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-700/50 dark:bg-red-900/20 dark:text-red-200'
-                    : 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-700/50 dark:bg-blue-900/20 dark:text-blue-200'
+                    ? 'border-red-200 bg-red-50 text-red-700'
+                    : 'border-blue-200 bg-blue-50 text-blue-700'
               }`}
             >
               {feedback.message}
@@ -624,13 +624,13 @@ export const AnamnesisModal = ({
           )}
           <div className="flex flex-wrap items-center gap-2">
             <button
-              className={`rounded-xl px-4 py-2 text-sm font-semibold ${profileType === 'adult' ? 'bg-[#7a32fc] text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200'}`}
+              className={`rounded-xl px-4 py-2 text-sm font-semibold ${profileType === 'adult' ? 'bg-[#7a32fc] text-white' : 'bg-slate-100 text-slate-700'}`}
               onClick={() => setProfileType('adult')}
             >
               Adulto
             </button>
             <button
-              className={`rounded-xl px-4 py-2 text-sm font-semibold ${profileType === 'child' ? 'bg-[#7a32fc] text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200'}`}
+              className={`rounded-xl px-4 py-2 text-sm font-semibold ${profileType === 'child' ? 'bg-[#7a32fc] text-white' : 'bg-slate-100 text-slate-700'}`}
               onClick={() => setProfileType('child')}
             >
               Criança
@@ -639,13 +639,13 @@ export const AnamnesisModal = ({
               <>
                 <div className="mx-1 h-6 w-px bg-slate-200" />
                 <button
-                  className={`rounded-xl px-4 py-2 text-sm font-semibold ${view === 'fill' ? 'bg-slate-800 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200'}`}
+                  className={`rounded-xl px-4 py-2 text-sm font-semibold ${view === 'fill' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-700'}`}
                   onClick={() => setView('fill')}
                 >
                   Preenchimento
                 </button>
                 <button
-                  className={`rounded-xl px-4 py-2 text-sm font-semibold ${view === 'template' ? 'bg-slate-800 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200'}`}
+                  className={`rounded-xl px-4 py-2 text-sm font-semibold ${view === 'template' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-700'}`}
                   onClick={() => setView('template')}
                 >
                   Personalização da ficha
@@ -664,11 +664,11 @@ export const AnamnesisModal = ({
                     .sort((a, b) => a.order - b.order);
                   const expanded = expandedSections[section.id] ?? true;
                   return (
-                    <div key={section.id} className="rounded-2xl border border-slate-200 dark:border-slate-700">
-                      <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-slate-50 dark:bg-slate-800/60 rounded-t-2xl">
+                    <div key={section.id} className="rounded-2xl border border-slate-200">
+                      <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-slate-50 rounded-t-2xl">
                         <div className="flex items-center gap-2">
                           <button
-                            className="rounded-lg border border-slate-200 dark:border-slate-600 p-1 text-slate-500 dark:text-slate-300"
+                            className="rounded-lg border border-slate-200 p-1 text-slate-500"
                             onClick={() => setExpandedSections((prev) => ({ ...prev, [section.id]: !expanded }))}
                           >
                             <ChevronDown size={16} className={expanded ? 'rotate-180' : ''} />
@@ -676,12 +676,12 @@ export const AnamnesisModal = ({
                           <input
                             value={section.title}
                             onChange={(event) => handleSectionTitleChange(section.id, event.target.value)}
-                            className="rounded-lg border border-slate-200 dark:border-slate-600 px-2 py-1 text-sm font-semibold text-slate-700 dark:text-slate-100 bg-white dark:bg-slate-900/60"
+                            className="rounded-lg border border-slate-200 px-2 py-1 text-sm font-semibold text-slate-700 bg-white"
                           />
                         </div>
                         <div className="flex items-center gap-2">
                           <button
-                            className="rounded-lg border border-slate-200 dark:border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-200"
+                            className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600"
                             onClick={() => startAddQuestion(section.id)}
                           >
                             <Plus size={14} className="inline mr-1" />
@@ -699,18 +699,18 @@ export const AnamnesisModal = ({
                       {expanded && (
                         <div className="p-4 space-y-2">
                           {sectionQuestions.map((question) => (
-                            <div key={question.id} className="rounded-xl border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900/40">
+                            <div key={question.id} className="rounded-xl border border-slate-200 p-3 bg-white">
                               <div className="flex flex-wrap items-center justify-between gap-2">
                                 <div>
-                                  <p className="font-semibold text-slate-800 dark:text-slate-100">
+                                  <p className="font-semibold text-slate-800">
                                     {question.label}
                                     {question.required && <span className="ml-1 text-red-500">*</span>}
                                   </p>
-                                  <p className="text-xs text-slate-500 dark:text-slate-300">Tipo: {QUESTION_TYPE_LABEL[question.type]}</p>
+                                  <p className="text-xs text-slate-500">Tipo: {QUESTION_TYPE_LABEL[question.type]}</p>
                                 </div>
                                 <div className="flex items-center gap-2">
                                   <button
-                                    className="rounded-lg border border-slate-200 dark:border-slate-600 px-2 py-1 text-xs font-semibold text-slate-700 dark:text-slate-100"
+                                    className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-700"
                                     onClick={() => startQuestionEdit(question)}
                                   >
                                     <Pencil size={12} className="inline mr-1" />
@@ -729,16 +729,16 @@ export const AnamnesisModal = ({
 
                           {editingQuestionId && draftQuestion && (editorSectionId === section.id || sectionQuestions.some((q) => q.id === editingQuestionId)) && (
                             <div className="rounded-xl border border-[#7a32fc]/30 bg-[#7a32fc]/5 p-3 space-y-2">
-                              <h4 className="font-semibold text-slate-800 dark:text-slate-100">Editar pergunta</h4>
+                              <h4 className="font-semibold text-slate-800">Editar pergunta</h4>
                               <input
-                                className="w-full rounded-lg border border-slate-200 dark:border-slate-600 px-3 py-2 text-sm bg-white dark:bg-slate-900/60 text-slate-900 dark:text-slate-100"
+                                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900"
                                 placeholder="Texto da pergunta"
                                 value={draftQuestion.label}
                                 onChange={(event) => setDraftQuestion((prev) => (prev ? { ...prev, label: event.target.value } : prev))}
                               />
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                 <select
-                                  className="rounded-lg border border-slate-200 dark:border-slate-600 px-3 py-2 text-sm bg-white dark:bg-slate-900/60 text-slate-900 dark:text-slate-100"
+                                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900"
                                   value={draftQuestion.type}
                                   onChange={(event) =>
                                     setDraftQuestion((prev) =>
@@ -757,7 +757,7 @@ export const AnamnesisModal = ({
                                     </option>
                                   ))}
                                 </select>
-                                <label className="flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-600 px-3 py-2 text-sm text-slate-800 dark:text-slate-100">
+                                <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800">
                                   <input
                                     type="checkbox"
                                     checked={draftQuestion.required}
@@ -769,7 +769,7 @@ export const AnamnesisModal = ({
                               {(draftQuestion.type === 'multipla_escolha' || draftQuestion.type === 'multipla_selecao') && (
                                 <textarea
                                   rows={2}
-                                  className="w-full rounded-lg border border-slate-200 dark:border-slate-600 px-3 py-2 text-sm resize-none bg-white dark:bg-slate-900/60 text-slate-900 dark:text-slate-100"
+                                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm resize-none bg-white text-slate-900"
                                   placeholder="Opções separadas por vírgula"
                                   value={draftQuestion.optionsText}
                                   onChange={(event) => setDraftQuestion((prev) => (prev ? { ...prev, optionsText: event.target.value } : prev))}
@@ -783,7 +783,7 @@ export const AnamnesisModal = ({
                                   Confirmar pergunta
                                 </button>
                                 <button
-                                  className="rounded-lg border border-slate-200 dark:border-slate-600 px-3 py-2 text-sm font-semibold text-slate-600 dark:text-slate-100"
+                                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600"
                                   onClick={() => {
                                     setEditingQuestionId(null);
                                     setDraftQuestion(null);
@@ -802,7 +802,7 @@ export const AnamnesisModal = ({
                 })}
 
               <div className="flex flex-wrap items-center gap-2 pt-2">
-                <button onClick={resetTemplate} className="rounded-xl border border-slate-200 dark:border-slate-600 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-100">
+                <button onClick={resetTemplate} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700">
                   <RotateCcw size={14} className="inline mr-2" />
                   Restaurar ficha original
                 </button>
@@ -825,12 +825,12 @@ export const AnamnesisModal = ({
                   if (sectionQuestions.length === 0) return null;
 
                   return (
-                    <div key={section.id} className="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-900/30">
-                      <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-500 dark:text-slate-300">{section.title}</h3>
+                    <div key={section.id} className="rounded-2xl border border-slate-200 p-4 bg-white">
+                      <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-500">{section.title}</h3>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {sectionQuestions.map((question) => (
                           <div key={question.id} className="space-y-1">
-                            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                               {question.label}
                               {question.required && <span className="ml-1 text-red-500">*</span>}
                             </label>

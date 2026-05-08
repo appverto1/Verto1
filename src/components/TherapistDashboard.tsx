@@ -1372,6 +1372,7 @@ export const TherapistDashboard = ({
                       buildInitialAvatarDataUrl(user?.name),
                     professionalName: user?.name || "Profissional",
                     signatureUrl: user?.clinicSettings?.signatureDataUrl || null,
+                    defaultSessionDuration: user?.clinicSettings?.defaultSessionDuration || 50,
                   }}
                 />
               );

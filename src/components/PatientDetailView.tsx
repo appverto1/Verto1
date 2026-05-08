@@ -1,5 +1,5 @@
 ﻿import React, { useState, useMemo, useEffect } from 'react';
-import { ChevronLeft, MessageCircle, FileText, SlidersHorizontal, ChevronDown, Calendar, FileOutput, Download, EyeOff, Share2, Eye, Edit, X, UploadCloud, FileUp, File, Trash2, Activity, Search, Plus, Filter, Target, Zap, Info, BarChart2, CheckCircle2, RotateCcw } from 'lucide-react';
+import { ChevronLeft, MessageCircle, FileText, SlidersHorizontal, ChevronDown, Calendar, FileOutput, Download, EyeOff, Share2, Eye, Edit, X, UploadCloud, FileUp, File, Trash2, Activity, Search, Plus, Filter, Target, Zap, Info, BarChart2, CheckCircle2, RotateCcw, Clock, StopCircle } from 'lucide-react';
 import { TutorialOverlay } from './Tutorial';
 import { AnamnesisModal } from './Anamnesis';
 import { ComparisonBarChart, EvolutionBarChart } from './Charts';
@@ -379,10 +379,161 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [showTrialConfirmation, setShowTrialConfirmation] = useState(false);
   const [trialObservation, setTrialObservation] = useState("");
   const [isSavingObservation, setIsSavingObservation] = useState(false);
+  const sessionStorageKey = useMemo(
+    () => `verto.active_patient_session:${String(patient?.id || 'unknown')}`,
+    [patient?.id]
+  );
+  const configuredDefaultSessionMinutes = useMemo(() => {
+    const raw =
+      patient?.sessionDurationMinutes ||
+      resolvedClinicContext?.sessionDurationMinutes ||
+      resolvedClinicContext?.defaultSessionDuration ||
+      clinicContext?.sessionDurationMinutes ||
+      clinicContext?.defaultSessionDuration ||
+      50;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? Math.max(5, Math.min(240, Math.round(parsed))) : 50;
+  }, [
+    patient?.sessionDurationMinutes,
+    resolvedClinicContext?.sessionDurationMinutes,
+    resolvedClinicContext?.defaultSessionDuration,
+    clinicContext?.sessionDurationMinutes,
+    clinicContext?.defaultSessionDuration
+  ]);
+  const [activeSession, setActiveSession] = useState<any>(null);
+  const [sessionDurationInput, setSessionDurationInput] = useState(String(configuredDefaultSessionMinutes));
+  const [remainingSessionSeconds, setRemainingSessionSeconds] = useState(0);
+  const [showSessionStartConfirm, setShowSessionStartConfirm] = useState(false);
+  const [showSessionEndConfirm, setShowSessionEndConfirm] = useState(false);
+  const [pendingSessionAction, setPendingSessionAction] = useState<'tab' | 'fullscreen'>('tab');
 
   useEffect(() => {
     setResolvedClinicContext(clinicContext || {});
   }, [clinicContext]);
+
+  useEffect(() => {
+    setSessionDurationInput(String(configuredDefaultSessionMinutes));
+  }, [configuredDefaultSessionMinutes, patient?.id]);
+
+  const formatSessionCountdown = (totalSeconds: number) => {
+    const safeSeconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+    const minutes = Math.floor(safeSeconds / 60);
+    const seconds = safeSeconds % 60;
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  };
+
+  const calculateRemainingSessionSeconds = (session: any) => {
+    if (!session?.endsAt) return 0;
+    return Math.max(0, Math.ceil((new Date(session.endsAt).getTime() - Date.now()) / 1000));
+  };
+
+  const readPersistedSession = () => {
+    try {
+      const raw = localStorage.getItem(sessionStorageKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (String(parsed?.patientId) !== String(patient?.id) || parsed?.status !== 'active') return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
+
+  const persistActiveSession = (session: any) => {
+    localStorage.setItem(sessionStorageKey, JSON.stringify(session));
+    setActiveSession(session);
+    setRemainingSessionSeconds(calculateRemainingSessionSeconds(session));
+  };
+
+  const clearActiveSession = () => {
+    localStorage.removeItem(sessionStorageKey);
+    setActiveSession(null);
+    setRemainingSessionSeconds(0);
+  };
+
+  useEffect(() => {
+    const syncSession = () => {
+      const persisted = readPersistedSession();
+      setActiveSession(persisted);
+      setRemainingSessionSeconds(persisted ? calculateRemainingSessionSeconds(persisted) : 0);
+    };
+
+    syncSession();
+    const interval = window.setInterval(syncSession, 1000);
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === sessionStorageKey) syncSession();
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [sessionStorageKey, patient?.id]);
+
+  const requestSessionStart = (nextAction: 'tab' | 'fullscreen' = 'tab') => {
+    if (activeSession) {
+      if (nextAction === 'fullscreen') setIsSessionModeOpen(true);
+      else setActiveTab('session');
+      return;
+    }
+    setPendingSessionAction(nextAction);
+    setSessionDurationInput(String(configuredDefaultSessionMinutes));
+    if (nextAction === 'tab') setActiveTab('session');
+    setShowSessionStartConfirm(true);
+  };
+
+  const handleConfirmSessionStart = () => {
+    const durationMinutes = Math.max(5, Math.min(240, Math.round(Number(sessionDurationInput) || configuredDefaultSessionMinutes)));
+    const startedAt = new Date();
+    const endsAt = new Date(startedAt.getTime() + durationMinutes * 60 * 1000);
+    const nextSession = {
+      id: `session-${String(patient?.id || 'patient')}-${startedAt.getTime()}`,
+      patientId: patient?.id,
+      patientName: patient?.name || 'Paciente',
+      status: 'active',
+      durationMinutes,
+      startedAt: startedAt.toISOString(),
+      endsAt: endsAt.toISOString(),
+      referenceDate: startedAt.toISOString().slice(0, 10),
+      recordCount: 0
+    };
+    persistActiveSession(nextSession);
+    setShowSessionStartConfirm(false);
+    onAddActivityLog?.(
+      'Sessão iniciada',
+      `Sessão de ${patient?.name || 'paciente'} iniciada com duração prevista de ${durationMinutes} minutos.`,
+      'clinical'
+    );
+    if (pendingSessionAction === 'fullscreen') setIsSessionModeOpen(true);
+  };
+
+  const handleConfirmSessionEnd = () => {
+    const endedSession = activeSession;
+    clearActiveSession();
+    setShowSessionEndConfirm(false);
+    setIsSessionModeOpen(false);
+    if (endedSession) {
+      onAddNote?.(
+        patient.id,
+        `Sessão encerrada.\nInício: ${new Date(endedSession.startedAt).toLocaleString('pt-BR')}\nTérmino: ${new Date().toLocaleString('pt-BR')}\nRegistros nesta sessão: ${Number(endedSession.recordCount || 0)}`,
+        'private',
+        'Sessão'
+      );
+      onAddActivityLog?.(
+        'Sessão encerrada',
+        `Sessão de ${patient?.name || 'paciente'} encerrada com ${Number(endedSession.recordCount || 0)} registro(s).`,
+        'clinical'
+      );
+    }
+  };
+
+  const incrementActiveSessionRecordCount = () => {
+    if (!activeSession) return;
+    persistActiveSession({
+      ...activeSession,
+      recordCount: Number(activeSession.recordCount || 0) + 1
+    });
+  };
 
   const [reportStartDate, setReportStartDate] = useState("");
   const [reportEndDate, setReportEndDate] = useState("");
@@ -2026,6 +2177,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   };
 
   const handleRecordTrialWithConfirmation = (pid: any, goalId: any, title: string, score: number) => {
+    if (!activeSession) {
+      requestSessionStart('tab');
+      return;
+    }
     setPendingTrial({ pid, goalId, title, score });
     setLastRecordedGoalId(goalId);
     setTrialObservation("");
@@ -2041,8 +2196,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const handleSaveTrialObservation = () => {
     if (pendingTrial) {
       setIsSavingObservation(true);
-      const newId = onRecordTrial(pendingTrial.pid, pendingTrial.title, pendingTrial.score, trialObservation);
+      const sessionMeta = activeSession
+        ? {
+            sessionId: activeSession.id,
+            sessionStartedAt: activeSession.startedAt,
+            sessionReferenceDate: activeSession.referenceDate
+          }
+        : null;
+      const newId = onRecordTrial(pendingTrial.pid, pendingTrial.title, pendingTrial.score, trialObservation, sessionMeta);
       setLastRecordedTrialId(newId);
+      incrementActiveSessionRecordCount();
       
       setTimeout(() => {
         setIsSavingObservation(false);
@@ -2409,6 +2572,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           onRecordTrial={onRecordTrial} 
           onDeleteHistoryItem={onDeleteHistoryItem}
           onUpdateHistoryItem={onEvaluateHistoryItem}
+          activeSession={activeSession}
+          remainingSeconds={remainingSessionSeconds}
+          formatCountdown={formatSessionCountdown}
+          onRequestEndSession={() => setShowSessionEndConfirm(true)}
+          onSessionRecordSaved={incrementActiveSessionRecordCount}
         />
       )}
       {isTutorialActive && ( 
@@ -2451,6 +2619,75 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           </div> 
         </div> 
       )} 
+      {showSessionStartConfirm && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-[32px] p-7 shadow-2xl max-w-md w-full animate-pop border border-violet-100">
+            <div className="w-14 h-14 bg-[#7a32fc]/10 rounded-2xl flex items-center justify-center mb-5 text-[#7a32fc]">
+              <Clock size={28} />
+            </div>
+            <h3 className="text-2xl font-semibold text-gray-900 mb-2">Iniciar sessão?</h3>
+            <p className="text-sm text-gray-500 leading-relaxed mb-5">
+              A contagem regressiva começa agora e continuará ativa mesmo se você abrir outras abas deste paciente.
+            </p>
+            <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-2">
+              Tempo da sessão em minutos
+            </label>
+            <input
+              type="number"
+              min={5}
+              max={240}
+              value={sessionDurationInput}
+              onChange={(event) => setSessionDurationInput(event.target.value)}
+              className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 text-lg font-semibold text-gray-800 outline-none focus:border-[#7a32fc] mb-6"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowSessionStartConfirm(false)}
+                className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-semibold hover:bg-gray-200 transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleConfirmSessionStart}
+                className="flex-1 py-3 rounded-2xl bg-[#7a32fc] text-white font-semibold shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all"
+              >
+                Iniciar sessão
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showSessionEndConfirm && (
+        <div className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-[32px] p-7 shadow-2xl max-w-md w-full animate-pop border border-red-100">
+            <div className="w-14 h-14 bg-red-50 rounded-2xl flex items-center justify-center mb-5 text-red-500">
+              <StopCircle size={28} />
+            </div>
+            <h3 className="text-2xl font-semibold text-gray-900 mb-2">Encerrar sessão?</h3>
+            <p className="text-sm text-gray-500 leading-relaxed mb-6">
+              Os registros feitos nesta sessão já atualizam o histórico e os gráficos. Ao encerrar, a sessão deixa de aparecer como ativa.
+            </p>
+            <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4 mb-6">
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Tempo restante</p>
+              <p className="text-3xl font-semibold text-gray-900">{formatSessionCountdown(remainingSessionSeconds)}</p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowSessionEndConfirm(false)}
+                className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-semibold hover:bg-gray-200 transition-all"
+              >
+                Continuar
+              </button>
+              <button
+                onClick={handleConfirmSessionEnd}
+                className="flex-1 py-3 rounded-2xl bg-red-500 text-white font-semibold shadow-lg shadow-red-500/20 hover:bg-red-600 transition-all"
+              >
+                Encerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {editingTask && ( 
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in"> 
           <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-pop relative"> 
@@ -2577,7 +2814,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             </button>
           )}
           {canAccessTab('session') && isKidsProfile && (
-            <button id="tab-session" onClick={() => setActiveTab('session')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'session' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Sessão</button>
+            <button id="tab-session" onClick={() => requestSessionStart('tab')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'session' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Sessão</button>
           )}
           {canAccessTab('files') && <button id="tab-files" onClick={() => setActiveTab('files')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'files' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Arquivos</button>}
         </div> 
@@ -3176,7 +3413,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   <div className="flex gap-2">
                     {patient.pei?.some((g: any) => g.isPriority || g.status === 'in_progress') && (
                       <button 
-                        onClick={() => setIsSessionModeOpen(true)}
+                        onClick={() => requestSessionStart('fullscreen')}
                         className="bg-[#7a32fc] text-white font-semibold px-6 py-3 rounded-2xl shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 active:scale-95 transition-all flex items-center gap-2 text-sm"
                       >
                         <Activity size={20} /> Iniciar Sessão
@@ -3790,13 +4027,29 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   <h3 className="text-2xl font-semibold text-gray-800 tracking-tight">Registro de Sessão</h3>
                   <p className="text-xs text-gray-500 font-semibold uppercase tracking-widest mt-1">Pontuação DinÃ¢mica de Metas Prioritárias</p>
                 </div>
-                <button 
-                  id="session-start-btn"
-                  onClick={() => setIsSessionModeOpen(true)}
-                  className="bg-[#7a32fc] text-white font-semibold px-6 py-3 rounded-2xl shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 active:scale-95 transition-all flex items-center gap-2 text-sm"
-                >
-                  <Activity size={20} /> Modo Tela Cheia
-                </button>
+                <div className="flex flex-wrap items-center justify-end gap-3">
+                  {activeSession && (
+                    <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-2 text-right">
+                      <p className="text-[9px] font-semibold uppercase tracking-widest text-[#7a32fc]">Sessão em andamento</p>
+                      <p className="text-xl font-semibold text-gray-900">{formatSessionCountdown(remainingSessionSeconds)}</p>
+                    </div>
+                  )}
+                  {activeSession && (
+                    <button
+                      onClick={() => setShowSessionEndConfirm(true)}
+                      className="bg-red-50 text-red-500 font-semibold px-5 py-3 rounded-2xl border border-red-100 hover:bg-red-100 active:scale-95 transition-all flex items-center gap-2 text-sm"
+                    >
+                      <StopCircle size={18} /> Encerrar sessão
+                    </button>
+                  )}
+                  <button 
+                    id="session-start-btn"
+                    onClick={() => requestSessionStart('fullscreen')}
+                    className="bg-[#7a32fc] text-white font-semibold px-6 py-3 rounded-2xl shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 active:scale-95 transition-all flex items-center gap-2 text-sm"
+                  >
+                    <Activity size={20} /> {activeSession ? 'Modo Tela Cheia' : 'Iniciar Sessão'}
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-6">

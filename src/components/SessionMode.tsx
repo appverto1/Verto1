@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { X, ChevronLeft, Info, Zap, CheckCircle2, RotateCcw, Camera } from 'lucide-react';
-import { SuccessOverlay } from './Common';
+import React, { useState, useMemo } from 'react';
+import { ChevronLeft, Info, Zap, Camera, Clock, StopCircle } from 'lucide-react';
 import { SecureImage } from './SecureMedia';
 
-export const SessionMode = ({ patient, onClose, onRecordTrial, onDeleteHistoryItem, onUpdateHistoryItem }: any) => {
+export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, remainingSeconds = 0, formatCountdown, onRequestEndSession, onSessionRecordSaved }: any) => {
   const sessionGoals = (patient.pei?.filter((g: any) => g.isPriority || g.status === 'in_progress') || [])
     .sort((a: any, b: any) => (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0));
   const [trialCount, setTrialCount] = useState(0);
@@ -38,9 +37,17 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, onDeleteHistoryIt
   const handleSaveTrialObservation = () => {
     if (pendingTrial) {
       setIsSavingObservation(true);
-      const newId = onRecordTrial(patient.id, pendingTrial.goal.name, pendingTrial.score, trialObservation);
+      const sessionMeta = activeSession
+        ? {
+            sessionId: activeSession.id,
+            sessionStartedAt: activeSession.startedAt,
+            sessionReferenceDate: activeSession.referenceDate
+          }
+        : null;
+      const newId = onRecordTrial(patient.id, pendingTrial.goal.name, pendingTrial.score, trialObservation, sessionMeta);
       setTrialCount(prev => prev + 1);
       setLastRecordedTrialId(newId);
+      onSessionRecordSaved?.();
       
       setTimeout(() => {
         setIsSavingObservation(false);
@@ -60,6 +67,11 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, onDeleteHistoryIt
         <button onClick={onClose} className="absolute top-6 left-6 p-2 hover:bg-gray-100 rounded-full transition-all">
           <ChevronLeft size={32} className="text-gray-400" />
         </button>
+        {activeSession && (
+          <button onClick={onRequestEndSession} className="absolute top-6 right-6 px-4 py-2 bg-red-50 text-red-500 rounded-2xl text-xs font-bold uppercase tracking-widest hover:bg-red-100 transition-all flex items-center gap-2">
+            <StopCircle size={16} /> Encerrar sessão
+          </button>
+        )}
         <Zap size={64} className="text-gray-200 mb-4" />
         <h2 className="text-xl font-bold text-gray-800 text-center">Nenhuma meta em treino ou prioritária.</h2>
         <p className="text-gray-500 text-center mt-2">Altere o status de uma meta para "Em Treino" ou marque como prioridade para iniciar a sessão.</p>
@@ -80,9 +92,27 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, onDeleteHistoryIt
             <p className="text-xs font-bold text-gray-400 uppercase tracking-[0.2em] mt-1">Dashboard de Ensino Dinâmico</p>
           </div>
         </div>
-        <div className="text-right">
-          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Registros</p>
-          <p className="text-4xl font-bold text-[#7a32fc] leading-none">{trialCount}</p>
+        <div className="flex items-center gap-4">
+          {activeSession && (
+            <div className="bg-[#7a32fc]/10 text-[#7a32fc] rounded-2xl px-5 py-3 min-w-[150px] text-right">
+              <p className="text-[10px] font-bold uppercase tracking-widest flex items-center justify-end gap-2">
+                <Clock size={14} /> Tempo restante
+              </p>
+              <p className="text-3xl font-bold leading-none">{formatCountdown ? formatCountdown(remainingSeconds) : '00:00'}</p>
+            </div>
+          )}
+          {activeSession && (
+            <button
+              onClick={onRequestEndSession}
+              className="bg-red-50 text-red-500 font-bold px-5 py-4 rounded-2xl text-xs uppercase tracking-widest hover:bg-red-100 transition-all flex items-center gap-2"
+            >
+              <StopCircle size={18} /> Encerrar
+            </button>
+          )}
+          <div className="text-right">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Registros</p>
+            <p className="text-4xl font-bold text-[#7a32fc] leading-none">{trialCount}</p>
+          </div>
         </div>
       </div>
 
