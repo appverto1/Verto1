@@ -1762,6 +1762,117 @@ export function CoordinatorDashboard({
     [therapistAgenda, allPatients],
   );
 
+  const todayAgendaKey = useMemo(() => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }, []);
+
+  const getAgendaDateKey = (value: any) => {
+    if (!value) return "";
+    if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return value;
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  };
+
+  const isCanceledAgendaItem = (item: any) => {
+    const status = String(item?.status || item?.state || item?.statusLabel || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+    return status.includes("cancel") || status.includes("desmarc");
+  };
+
+  const todayAgendaItems = useMemo(
+    () =>
+      (normalizedAgenda || []).filter((item: any) => {
+        const dateKey = getAgendaDateKey(
+          item?.date || item?.scheduled_at || item?.scheduledAt || item?.start,
+        );
+        return dateKey === todayAgendaKey;
+      }),
+    [normalizedAgenda, todayAgendaKey],
+  );
+
+  const canceledTodayCount = useMemo(
+    () => todayAgendaItems.filter(isCanceledAgendaItem).length,
+    [todayAgendaItems],
+  );
+
+  const roomsUsedTodayCount = useMemo(() => {
+    const roomsInUse = new Set<string>();
+    (roomReservations || [])
+      .filter((reservation: any) => {
+        const dateKey = getAgendaDateKey(
+          reservation?.date || reservation?.scheduled_at || reservation?.startTime,
+        );
+        return dateKey === todayAgendaKey;
+      })
+      .forEach((reservation: any) => {
+        const roomKey =
+          reservation?.roomId ||
+          reservation?.room_id ||
+          reservation?.roomName ||
+          reservation?.room;
+        if (roomKey) roomsInUse.add(String(roomKey));
+      });
+
+    todayAgendaItems
+      .filter((item: any) => !isCanceledAgendaItem(item))
+      .forEach((item: any) => {
+        const roomKey =
+          item?.roomId ||
+          item?.room_id ||
+          item?.roomName ||
+          item?.room ||
+          item?.sessionRoom;
+        if (roomKey) roomsInUse.add(String(roomKey));
+      });
+
+    return roomsInUse.size;
+  }, [roomReservations, todayAgendaItems, todayAgendaKey]);
+
+  const dashboardDailyStats = useMemo(
+    () => [
+      {
+        id: "agenda",
+        label: "Agendados / atendidos",
+        value: todayAgendaItems.length,
+        hint: "para hoje",
+        icon: Calendar,
+        accent: "bg-emerald-500",
+        color: "text-emerald-600",
+        iconBg: theme === "dark" ? "bg-emerald-400/15" : "bg-emerald-50",
+      },
+      {
+        id: "agenda",
+        label: "Desmarcados",
+        value: canceledTodayCount,
+        hint: "para hoje",
+        icon: XCircle,
+        accent: "bg-rose-500",
+        color: "text-rose-600",
+        iconBg: theme === "dark" ? "bg-rose-400/15" : "bg-rose-50",
+      },
+      {
+        id: "rooms",
+        label: "Salas usadas",
+        value: roomsUsedTodayCount,
+        hint: "hoje",
+        icon: DoorOpen,
+        accent: "bg-sky-500",
+        color: "text-sky-600",
+        iconBg: theme === "dark" ? "bg-sky-400/15" : "bg-sky-50",
+      },
+    ],
+    [canceledTodayCount, roomsUsedTodayCount, theme, todayAgendaItems.length],
+  );
+
   useEffect(() => {
     const uniqueProfessionals = Array.from(
       new Set(
@@ -2552,9 +2663,9 @@ export function CoordinatorDashboard({
 
   const renderDashboard = () => (
     <div className="space-y-8 sm:space-y-12 animate-in fade-in duration-500">
-      <div className="grid grid-cols-1 gap-4 sm:gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
+      <div className="grid grid-cols-1 gap-4 sm:gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(360px,1fr)]">
         <section
-          className={`relative min-h-[260px] overflow-hidden rounded-[30px] border p-6 shadow-sm sm:min-h-[320px] sm:p-8 lg:p-10 ${
+          className={`relative min-h-[220px] overflow-hidden rounded-[30px] border p-6 shadow-sm sm:min-h-[260px] sm:p-8 lg:p-10 ${
             theme === "dark"
               ? "border-violet-400/15 bg-[#0b1024]"
               : "border-slate-100 bg-white"
@@ -2567,10 +2678,10 @@ export function CoordinatorDashboard({
             <div className="absolute right-[10%] bottom-12 h-2 w-2 rounded-full bg-fuchsia-300/80 shadow-[0_0_20px_rgba(217,70,239,0.55)]" />
           </div>
 
-          <div className="relative z-10 grid h-full items-center gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+          <div className="relative z-10 grid h-full items-center gap-6 lg:grid-cols-[minmax(0,1fr)_220px]">
             <div>
               <div
-                className={`mb-6 inline-flex items-center gap-2 rounded-full border px-4 py-2 text-[10px] font-black uppercase tracking-[0.22em] ${
+                className={`mb-5 inline-flex items-center gap-2 rounded-full border px-4 py-2 text-[10px] font-black uppercase tracking-[0.22em] ${
                   theme === "dark"
                     ? "border-violet-300/20 bg-white/5 text-violet-100"
                     : "border-violet-200 bg-white text-violet-700 shadow-sm"
@@ -2580,7 +2691,7 @@ export function CoordinatorDashboard({
                 {dashboardGreetingLabel}
               </div>
               <h2
-                className={`max-w-3xl text-3xl font-black leading-tight tracking-tight sm:text-4xl lg:text-5xl ${
+                className={`max-w-2xl text-2xl font-black leading-tight tracking-tight sm:text-3xl lg:text-4xl ${
                   theme === "dark" ? "text-white" : "text-slate-950"
                 }`}
               >
@@ -2589,64 +2700,50 @@ export function CoordinatorDashboard({
             </div>
 
             <div className="flex justify-center lg:justify-end">
-              <div className={`relative flex h-56 w-56 items-center justify-center overflow-hidden rounded-none ${theme === "dark" ? "bg-white/95" : "bg-white"}`}>
+              <div className="relative flex h-40 w-40 items-center justify-center sm:h-52 sm:w-52">
                 <img
-                  src="/verto-3d.png"
+                  src="/verto-3d-transparent.png"
                   alt="Logo 3D da Verto"
-                  className="h-full w-full object-contain"
+                  className="h-full w-full object-contain drop-shadow-[0_26px_45px_rgba(88,28,135,0.25)]"
                 />
               </div>
             </div>
           </div>
         </section>
 
-        <div className="grid grid-cols-1 gap-4">
-        {[
-          {
-            id: "patients",
-            label: "Pacientes Ativos",
-            value: (allPatients?.length || 0).toString(),
-            icon: Users,
-            trend: "+3",
-            color: "bg-purple-50 text-purple-600",
-          },
-          {
-            id: "agenda",
-            label: "Sessões Realizadas",
-            value: "142",
-            icon: Calendar,
-            trend: "+15",
-            color: "bg-orange-50 text-orange-600",
-          },
-        ].map((stat, i) => (
-          <div
-            key={i}
-            onClick={() => navigateToTab(stat.id as any)}
-            className="bg-white p-6 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100 hover:shadow-xl hover:border-blue-500/30 transition-all group cursor-pointer"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <div
-                className={`w-12 h-12 sm:w-14 sm:h-14 ${stat.color} rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform`}
-              >
-                <stat.icon size={24} className="sm:w-7 sm:h-7" />
-              </div>
-              <div className="flex flex-col items-end">
-                <span className="text-[10px] font-bold text-green-500 bg-green-50 px-2 py-1 rounded-lg">
-                  {stat.trend}
-                </span>
-                <span className="text-[8px] sm:text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-widest">
-                  Ver Detalhes
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 xl:grid-cols-1">
+          {dashboardDailyStats.map((stat) => (
+            <button
+              key={stat.label}
+              type="button"
+              onClick={() => navigateToTab(stat.id as any)}
+              className={`group relative overflow-hidden rounded-[26px] border p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-xl ${
+                theme === "dark"
+                  ? "border-white/10 bg-white/[0.04] hover:border-violet-300/30"
+                  : "border-slate-100 bg-white hover:border-violet-200"
+              }`}
+            >
+              <span className={`absolute left-0 top-0 h-full w-1.5 ${stat.accent}`} />
+              <div className="flex items-start justify-between gap-4 pl-2">
+                <div>
+                  <div
+                    className={`mb-4 flex h-12 w-12 items-center justify-center rounded-2xl ${stat.iconBg} ${stat.color} transition-transform group-hover:scale-105`}
+                  >
+                    <stat.icon size={22} />
+                  </div>
+                  <p className={`text-[11px] font-black uppercase tracking-[0.2em] ${stat.color}`}>
+                    {stat.label}
+                  </p>
+                  <p className={`mt-1 text-[11px] font-bold ${theme === "dark" ? "text-slate-400" : "text-slate-400"}`}>
+                    {stat.hint}
+                  </p>
+                </div>
+                <span className={`text-4xl font-black leading-none ${theme === "dark" ? "text-white" : "text-slate-950"}`}>
+                  {stat.value}
                 </span>
               </div>
-            </div>
-            <p className="text-slate-400 text-[10px] font-semibold uppercase tracking-widest mb-1">
-              {stat.label}
-            </p>
-            <h3 className="text-2xl sm:text-3xl font-bold text-slate-900">
-              {stat.value}
-            </h3>
-          </div>
-        ))}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -3543,14 +3640,14 @@ export function CoordinatorDashboard({
                 {activeTab === "rooms" && !isEditingRooms
                   ? "Salas"
                   : activeTab === "dashboard"
-                    ? dashboardGreetingLabel
+                    ? "Painel"
                     : `Páginas / ${tabLabels[activeTab] || "Painel"}`}
               </p>
               <h1 className={`text-base lg:text-2xl font-semibold tracking-tight ${theme === "dark" ? "text-slate-100" : "text-slate-900"} ${activeTab === "dashboard" ? "max-w-[980px] leading-snug" : "capitalize"}`}>
                 {activeTab === "rooms" && !isEditingRooms
                   ? "Reservas de Sala"
                   : activeTab === "dashboard"
-                    ? dashboardHeadlineMessage
+                    ? "Visão geral"
                     : tabLabels[activeTab] || "Painel"}
               </h1>
             </div>
