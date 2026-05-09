@@ -2552,98 +2552,55 @@ export function CoordinatorDashboard({
 
   const renderDashboard = () => (
     <div className="space-y-8 sm:space-y-12 animate-in fade-in duration-500">
-      <section
-        className={`relative overflow-hidden rounded-[36px] sm:rounded-[48px] border p-6 sm:p-8 lg:p-10 shadow-2xl ${
-          theme === "dark"
-            ? "border-violet-400/20 bg-[#0b1024] shadow-violet-950/30"
-            : "border-white/80 bg-white shadow-violet-200/30"
-        }`}
-      >
-        <div className="absolute inset-0 pointer-events-none">
-          <div
-            className={`absolute -left-24 -top-28 h-72 w-72 rounded-full blur-3xl ${
-              theme === "dark" ? "bg-violet-600/30" : "bg-violet-300/45"
-            }`}
-          />
-          <div
-            className={`absolute right-0 top-0 h-full w-2/3 ${
-              theme === "dark"
-                ? "bg-[radial-gradient(circle_at_65%_20%,rgba(139,92,246,0.34),transparent_34%),linear-gradient(135deg,rgba(46,16,101,0.4),transparent_60%)]"
-                : "bg-[radial-gradient(circle_at_65%_20%,rgba(167,139,250,0.35),transparent_34%),linear-gradient(135deg,rgba(250,245,255,0.9),transparent_60%)]"
-            }`}
-          />
-          <div className="absolute inset-x-8 bottom-0 h-px bg-gradient-to-r from-transparent via-violet-400/60 to-transparent" />
-          <div className="verto-hero-orb absolute right-[22%] top-8 h-3 w-3 rounded-full bg-violet-400 shadow-[0_0_28px_rgba(139,92,246,0.9)]" />
-          <div className="verto-hero-orb-delayed absolute right-[10%] bottom-14 h-2 w-2 rounded-full bg-fuchsia-300 shadow-[0_0_24px_rgba(217,70,239,0.75)]" />
-        </div>
-
-        <div className="relative z-10 grid items-center gap-8 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="max-w-4xl">
-            <div
-              className={`mb-5 inline-flex items-center gap-2 rounded-full border px-4 py-2 text-[10px] font-black uppercase tracking-[0.22em] ${
-                theme === "dark"
-                  ? "border-violet-300/20 bg-white/5 text-violet-100"
-                  : "border-violet-200 bg-violet-50 text-violet-700"
-              }`}
-            >
-              <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_16px_rgba(16,185,129,0.9)]" />
-              {dashboardGreetingLabel}
-            </div>
-            <h2
-              className={`max-w-3xl text-3xl font-black leading-tight tracking-tight sm:text-4xl lg:text-5xl ${
-                theme === "dark" ? "text-white" : "text-slate-950"
-              }`}
-            >
-              {dashboardHeadlineMessage}
-            </h2>
-            <p
-              className={`mt-5 max-w-2xl text-sm font-semibold leading-relaxed sm:text-base ${
-                theme === "dark" ? "text-slate-300" : "text-slate-500"
-              }`}
-            >
-              A Verto organiza seus dados clínicos, sua agenda e seus protocolos em um painel feito para começar o dia com clareza.
-            </p>
-            <div className="mt-8 grid max-w-2xl grid-cols-1 gap-3 sm:grid-cols-3">
-              {[
-                ["Hoje", "Foco clínico"],
-                [`${allPatients?.length || 0}`, "pacientes"],
-                [isTherapist ? "Meu painel" : "Coordenação", "visão ativa"],
-              ].map(([value, label]) => (
-                <div
-                  key={`${value}-${label}`}
-                  className={`rounded-3xl border px-5 py-4 backdrop-blur-md ${
-                    theme === "dark"
-                      ? "border-white/10 bg-white/[0.06]"
-                      : "border-violet-100 bg-white/70 shadow-sm"
-                  }`}
-                >
-                  <p className={`text-2xl font-black ${theme === "dark" ? "text-white" : "text-slate-900"}`}>{value}</p>
-                  <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-violet-400">{label}</p>
-                </div>
-              ))}
-            </div>
+      <div className="grid grid-cols-1 gap-4 sm:gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <section
+          className={`relative min-h-[260px] overflow-hidden rounded-[30px] border p-6 shadow-sm sm:min-h-[320px] sm:p-8 lg:p-10 ${
+            theme === "dark"
+              ? "border-violet-400/15 bg-[#0b1024]"
+              : "border-slate-100 bg-white"
+          }`}
+        >
+          <div className="absolute inset-0 pointer-events-none">
+            <div className={`absolute inset-y-0 left-0 w-[34%] ${theme === "dark" ? "bg-violet-600/16" : "bg-violet-100/80"}`} />
+            <div className={`absolute inset-y-0 right-0 w-[58%] ${theme === "dark" ? "bg-[linear-gradient(90deg,transparent,rgba(139,92,246,0.18))]" : "bg-[linear-gradient(90deg,transparent,rgba(237,233,254,0.85))]"}`} />
+            <div className="absolute right-[20%] top-10 h-3 w-3 rounded-full bg-violet-400/70 shadow-[0_0_26px_rgba(139,92,246,0.7)]" />
+            <div className="absolute right-[10%] bottom-12 h-2 w-2 rounded-full bg-fuchsia-300/80 shadow-[0_0_20px_rgba(217,70,239,0.55)]" />
           </div>
 
-          <div className="relative mx-auto flex h-[260px] w-full max-w-[360px] items-center justify-center lg:h-[330px]">
-            <div className="absolute inset-8 rounded-full bg-violet-500/20 blur-3xl" />
-            <div
-              className={`absolute inset-0 rounded-[44px] border ${
-                theme === "dark"
-                  ? "border-white/10 bg-white/[0.04]"
-                  : "border-white/80 bg-white/55"
-              } backdrop-blur-xl`}
-            />
-            <img
-              src="/verto-3d.png"
-              alt="Logo 3D da Verto"
-              className="verto-hero-logo relative z-10 h-[240px] w-[240px] object-contain drop-shadow-[0_30px_45px_rgba(76,29,149,0.35)] sm:h-[280px] sm:w-[280px] lg:h-[315px] lg:w-[315px]"
-            />
-          </div>
-        </div>
-      </section>
+          <div className="relative z-10 grid h-full items-center gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+            <div>
+              <div
+                className={`mb-6 inline-flex items-center gap-2 rounded-full border px-4 py-2 text-[10px] font-black uppercase tracking-[0.22em] ${
+                  theme === "dark"
+                    ? "border-violet-300/20 bg-white/5 text-violet-100"
+                    : "border-violet-200 bg-white text-violet-700 shadow-sm"
+                }`}
+              >
+                <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                {dashboardGreetingLabel}
+              </div>
+              <h2
+                className={`max-w-3xl text-3xl font-black leading-tight tracking-tight sm:text-4xl lg:text-5xl ${
+                  theme === "dark" ? "text-white" : "text-slate-950"
+                }`}
+              >
+                {dashboardHeadlineMessage}
+              </h2>
+            </div>
 
-      {/* Stats Grid - Topo do painel */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+            <div className="flex justify-center lg:justify-end">
+              <div className={`relative flex h-56 w-56 items-center justify-center overflow-hidden rounded-none ${theme === "dark" ? "bg-white/95" : "bg-white"}`}>
+                <img
+                  src="/verto-3d.png"
+                  alt="Logo 3D da Verto"
+                  className="h-full w-full object-contain"
+                />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <div className="grid grid-cols-1 gap-4">
         {[
           {
             id: "patients",
@@ -2690,6 +2647,7 @@ export function CoordinatorDashboard({
             </h3>
           </div>
         ))}
+        </div>
       </div>
 
       {!isTherapist && (
