@@ -395,16 +395,16 @@ export function CoordinatorDashboard({
     billing: "Assinatura e Cobrança",
   };
   const professionalDailyMessages = [
-    "Olá [nome], cada marco que você registra hoje é um capítulo na história de superação de alguém.",
-    "A ciência é sua base, mas sua escuta é o que transforma vidas. Bom trabalho hoje!",
+    "Cada marco registrado hoje é um capítulo na história de superação de alguém.",
+    "A ciência é sua base, mas sua escuta é o que transforma vidas.",
     "Lembre-se: para o paciente, você é a ponte entre o desafio e a conquista.",
     "O progresso clínico raramente é uma linha reta. Valorize as pequenas vitórias de hoje!",
-    "Olá [nome], grandes mudanças são feitas de pequenos marcos consistentes.",
+    "Grandes mudanças são feitas de pequenos marcos consistentes.",
     "Sua dedicação é a bússola que guia o desenvolvimento de quem você atende.",
-    "Olá [nome], para cuidar do outro com excelência, lembre-se de também cuidar de você.",
-    "Sua saúde mental é tão importante quanto a técnica que você aplica. Respire fundo e bom dia!",
-    "Olá [nome], lembre-se que quem faz o dia bonito é você!",
-    "Transformando dados em sorrisos e evolução. Vamos para mais um dia?",
+    "Para cuidar do outro com excelência, lembre-se de também cuidar de você.",
+    "Sua saúde mental é tão importante quanto a técnica que você aplica. Respire fundo.",
+    "Lembre-se que quem faz o dia bonito é você!",
+    "Transformando dados em sorrisos e evolução, um atendimento por vez.",
   ];
 
   const [loading, setLoading] = useState(false);
@@ -478,15 +478,13 @@ export function CoordinatorDashboard({
     let seed = 0;
     for (let i = 0; i < todayKey.length; i += 1) seed += todayKey.charCodeAt(i);
     const index = seed % professionalDailyMessages.length;
-    const firstName = String(user?.name || "Profissional").trim().split(" ")[0] || "Profissional";
-    return professionalDailyMessages[index].replace("[nome]", firstName);
-  }, [user?.name]);
-  const dashboardGreetingLabel = useMemo(() => {
+    return professionalDailyMessages[index];
+  }, []);
+  const dashboardGreeting = useMemo(() => {
     const hour = new Date().getHours();
     const firstName = String(user?.name || "colaborador").trim().split(" ")[0] || "colaborador";
-    if (hour < 12) return `Bom dia, ${firstName}`;
-    if (hour < 18) return `Boa tarde, ${firstName}`;
-    return `Boa noite, ${firstName}`;
+    const period = hour < 12 ? "Bom dia," : hour < 18 ? "Boa tarde," : "Boa noite,";
+    return { period, firstName };
   }, [user?.name]);
   useEffect(() => {
     if (!dashboardResumeKey || hasRestoredDashboardStateRef.current) return;
@@ -2672,23 +2670,24 @@ export function CoordinatorDashboard({
           }`}
         >
           <div className="absolute inset-0 pointer-events-none">
-            <div className={`absolute inset-y-0 left-0 w-[34%] ${theme === "dark" ? "bg-violet-600/16" : "bg-violet-100/80"}`} />
-            <div className={`absolute inset-y-0 right-0 w-[58%] ${theme === "dark" ? "bg-[linear-gradient(90deg,transparent,rgba(139,92,246,0.18))]" : "bg-[linear-gradient(90deg,transparent,rgba(237,233,254,0.85))]"}`} />
-            <div className="absolute right-[20%] top-10 h-3 w-3 rounded-full bg-violet-400/70 shadow-[0_0_26px_rgba(139,92,246,0.7)]" />
-            <div className="absolute right-[10%] bottom-12 h-2 w-2 rounded-full bg-fuchsia-300/80 shadow-[0_0_20px_rgba(217,70,239,0.55)]" />
+            <div className="absolute -right-[20%] top-1/2 hidden h-[125%] w-[62%] -translate-y-1/2 items-center justify-center lg:flex">
+              <img
+                src="/verto-3d-transparent.png"
+                alt=""
+                className="h-full w-full object-contain opacity-95 drop-shadow-[0_32px_60px_rgba(88,28,135,0.28)]"
+              />
+            </div>
           </div>
 
-          <div className="relative z-10 grid h-full items-center gap-6 lg:grid-cols-[minmax(0,1fr)_220px]">
-            <div>
+          <div className="relative z-10 grid h-full items-center gap-6 lg:grid-cols-[minmax(0,0.68fr)_minmax(160px,0.32fr)]">
+            <div className="max-w-xl">
               <div
-                className={`mb-5 inline-flex items-center gap-2 rounded-full border px-4 py-2 text-[10px] font-black uppercase tracking-[0.22em] ${
-                  theme === "dark"
-                    ? "border-violet-300/20 bg-white/5 text-violet-100"
-                    : "border-violet-200 bg-white text-violet-700 shadow-sm"
+                className={`mb-5 text-[11px] font-medium uppercase tracking-[0.2em] ${
+                  theme === "dark" ? "text-violet-100/80" : "text-violet-700"
                 }`}
               >
-                <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                {dashboardGreetingLabel}
+                <span>{dashboardGreeting.period} </span>
+                <strong className="font-black">{dashboardGreeting.firstName}</strong>
               </div>
               <h2
                 className={`max-w-2xl text-2xl font-black leading-tight tracking-tight sm:text-3xl lg:text-4xl ${
@@ -2699,7 +2698,7 @@ export function CoordinatorDashboard({
               </h2>
             </div>
 
-            <div className="flex justify-center lg:justify-end">
+            <div className="flex justify-center lg:hidden">
               <div className="relative flex h-40 w-40 items-center justify-center sm:h-52 sm:w-52">
                 <img
                   src="/verto-3d-transparent.png"
