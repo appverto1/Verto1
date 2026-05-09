@@ -1318,7 +1318,8 @@ export const ReceptionistDashboard = ({
                       user?.profilePicture ||
                       buildInitialAvatarDataUrl(user?.name),
                     professionalName: user?.name || "Profissional",
-                    signatureUrl: user?.clinicSettings?.signatureDataUrl || null,
+                    crp: user?.crp || user?.clinicSettings?.crp || "",
+                    signatureUrl: user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null,
                     defaultSessionDuration: user?.clinicSettings?.defaultSessionDuration || 50,
                   }}
                 />

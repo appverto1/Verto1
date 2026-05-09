@@ -11,6 +11,14 @@ interface ProfessionalOnboardingProps {
 }
 
 export function ProfessionalOnboarding({ user, onComplete, onClose }: ProfessionalOnboardingProps) {
+  const formatCnpjInput = (value: string) => {
+    const digits = String(value || '').replace(/\D/g, '').slice(0, 14);
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 5) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
+    if (digits.length <= 8) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`;
+    if (digits.length <= 12) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8)}`;
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
+  };
   const isCoordinator = user.role === 'coordinator' || user.role === 'admin';
   const isTherapist = user.role === 'therapist';
   const onboardingWorkspaceId = String(user?.activeWorkspaceId || user?.clinicId || 'global').trim() || 'global';
@@ -82,7 +90,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
           setProfilePicture(draft.profilePicture || user?.profilePicture || user?.profile_picture || null);
           setClinicName(String(draft.clinicName || ''));
           setClinicLogoUrl(draft.clinicLogoUrl || user?.clinicSettings?.clinicLogoUrl || null);
-          setClinicCnpj(String(draft.clinicCnpj || ''));
+          setClinicCnpj(formatCnpjInput(String(draft.clinicCnpj || '')));
           setClinicPhone(String(draft.clinicPhone || ''));
           setSpecialty(String(draft.specialty || ''));
           setCouncil(String(draft.council || ''));
@@ -104,7 +112,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         setProfilePicture(profile.profile_photo_url || user?.profilePicture || user?.profile_picture || null);
         setClinicName(profile.clinic_name || user?.clinicSettings?.clinicName || "");
         setClinicLogoUrl(profile.clinic_logo_url || user?.clinicSettings?.clinicLogoUrl || null);
-        setClinicCnpj(profile.metadata?.clinicCnpj || profile.address?.cnpj || "");
+        setClinicCnpj(formatCnpjInput(profile.metadata?.clinicCnpj || profile.address?.cnpj || ""));
         setClinicPhone(profile.clinic_phone || "");
         setSpecialty(profile.specialty || "");
         setCouncil(profile.council || "");
@@ -410,7 +418,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                 {isCoordinator && (
                   <div className="grid md:grid-cols-2 gap-4">
                     <input value={clinicName} onChange={(e) => setClinicName(e.target.value)} placeholder="Nome da clinica" className="px-4 py-3 rounded-xl bg-slate-50" />
-                    <input value={clinicCnpj} onChange={(e) => setClinicCnpj(e.target.value)} placeholder="CNPJ da clinica" className="px-4 py-3 rounded-xl bg-slate-50" />
+                    <input value={clinicCnpj} onChange={(e) => setClinicCnpj(formatCnpjInput(e.target.value))} placeholder="00.000.000/0000-00" className="px-4 py-3 rounded-xl bg-slate-50" />
                     <input value={clinicPhone} onChange={(e) => setClinicPhone(e.target.value)} placeholder="Telefone comercial" className="px-4 py-3 rounded-xl bg-slate-50" />
                     <input value={specialty} onChange={(e) => setSpecialty(e.target.value)} placeholder="Especialidade" className="px-4 py-3 rounded-xl bg-slate-50" />
                     <label className="md:col-span-2 block cursor-pointer">

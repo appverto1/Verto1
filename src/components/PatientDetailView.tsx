@@ -2044,9 +2044,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     ? `${formatReportDateLabel(progressReportComparisonKeys[0] || comparisonDate1 || '') || 'Base'} VS ${formatReportDateLabel(progressReportComparisonKeys[1] || comparisonDate2 || '') || 'Final'}`
     : `${formatReportDateLabel(adultReportDate1)} VS ${formatReportDateLabel(adultReportDate2)} - ${periodLabelByValue[reportPeriod as keyof typeof periodLabelByValue] || 'Período'}`;
 
+  const formatCnpj = (value: any) => {
+    const digits = String(value || '').replace(/\D/g, '');
+    if (digits.length !== 14) return String(value || '').trim();
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
+  };
+
   const progressReportClinic = {
     name: clinicContext?.clinicName || clinicContext?.name || 'Clínica Verto',
-    cnpj: clinicContext?.cnpj || clinicContext?.document || '-',
+    cnpj: formatCnpj(clinicContext?.cnpj || clinicContext?.clinicCnpj || clinicContext?.document || ''),
     address:
       clinicContext?.address ||
       [clinicContext?.street, clinicContext?.number, clinicContext?.complement, clinicContext?.neighborhood, clinicContext?.city]
@@ -2059,7 +2065,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
   const progressReportProfessional = {
     name: clinicContext?.professionalName || clinicContext?.userName || patient?.therapistName || 'Profissional responsável',
-    registry: clinicContext?.crp || clinicContext?.professionalCrp || clinicContext?.registry || '-'
+    registry: clinicContext?.crp || clinicContext?.professionalCrp || clinicContext?.registry || '-',
+    signatureUrl: clinicContext?.signatureUrl || clinicContext?.signatureDataUrl || clinicContext?.professionalSignatureUrl || null
   };
 
   const sanitizePdfFileName = (value: string) =>
@@ -2083,34 +2090,25 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     setIsGeneratingProgressPdf(true);
     try {
       const { jsPDF } = await import('jspdf');
-      const target = progressReportPdfRef.current;
-      const canvas = await html2canvas(target, {
-        backgroundColor: '#ffffff',
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        windowWidth: target.scrollWidth || 794,
-        windowHeight: target.scrollHeight || 1123
-      });
-
       const pdf = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      const margin = 18;
-      const contentWidth = pageWidth - margin * 2;
-      const imgHeight = (canvas.height * contentWidth) / canvas.width;
-      const imgData = canvas.toDataURL('image/png', 1.0);
+      const pages = Array.from(progressReportPdfRef.current.querySelectorAll('.progress-report-pdf-page')) as HTMLElement[];
+      const captureTargets = pages.length ? pages : [progressReportPdfRef.current];
 
-      let heightLeft = imgHeight;
-      let positionY = margin;
-      pdf.addImage(imgData, 'PNG', margin, positionY, contentWidth, imgHeight);
-      heightLeft -= pageHeight - margin * 2;
-
-      while (heightLeft > 0) {
-        pdf.addPage();
-        positionY = margin - (imgHeight - heightLeft);
-        pdf.addImage(imgData, 'PNG', margin, positionY, contentWidth, imgHeight);
-        heightLeft -= pageHeight - margin * 2;
+      for (let index = 0; index < captureTargets.length; index += 1) {
+        const page = captureTargets[index];
+        const canvas = await html2canvas(page, {
+          backgroundColor: '#ffffff',
+          scale: 2,
+          useCORS: true,
+          logging: false,
+          windowWidth: page.scrollWidth || 794,
+          windowHeight: page.scrollHeight || 1123
+        });
+        const imgData = canvas.toDataURL('image/png', 1.0);
+        if (index > 0) pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, 0, pageWidth, pageHeight);
       }
 
       if (action === 'view') {

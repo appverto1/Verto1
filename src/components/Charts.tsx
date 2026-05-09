@@ -103,7 +103,7 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
           <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={360}>
             <BarChart
               data={safeData}
-              margin={{ top: 16, right: 24, left: 6, bottom: 56 }}
+              margin={{ top: 16, right: 24, left: 6, bottom: 92 }}
               barGap={12}
               barCategoryGap="30%"
             >
@@ -113,11 +113,9 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
                 axisLine={false} 
                 tickLine={false} 
                 interval={0}
-                angle={-30}
-                textAnchor="end"
-                height={54}
-                tickMargin={8}
-                tick={{ fill: '#8ba0c5', fontSize: 11, fontWeight: 'bold' }}
+                height={92}
+                tickMargin={12}
+                tick={<WrappedXAxisTick />}
                 padding={{ left: 30, right: 30 }}
               />
               <YAxis 
@@ -236,16 +234,16 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1, title, description,
         </div>
       )}
       
-      <div className="relative z-10 grid grid-cols-[72px_minmax(0,1fr)] gap-2">
-        <div style={{ height: '430px', minHeight: '390px' }} className="relative rounded-l-2xl border-r border-slate-100 bg-white/95 shadow-sm">
-          <div className="absolute inset-0 flex flex-col justify-between pb-[96px] pl-2 pr-3 pt-4 text-right">
+      <div className="relative z-10 grid grid-cols-[64px_minmax(0,1fr)] gap-1">
+        <div style={{ height: '430px', minHeight: '390px' }} className="relative bg-transparent">
+          <div className="absolute inset-0 flex flex-col justify-between pb-[96px] pl-1 pr-3 pt-4 text-right">
             {[...yTicks].reverse().map((tick) => (
-              <span key={tick} className="text-[11px] font-black text-slate-400">
+              <span key={tick} className="text-[11px] font-black text-[#8ba0c5]">
                 {safeMaxScore === 100 ? `${tick}%` : tick}
               </span>
             ))}
           </div>
-          <div className="absolute left-2 top-1/2 -translate-y-1/2 -rotate-90 whitespace-nowrap text-[9px] font-black uppercase tracking-[0.18em] text-slate-300">
+          <div className="absolute left-1 top-1/2 -translate-y-1/2 -rotate-90 whitespace-nowrap text-[9px] font-black uppercase tracking-[0.18em] text-[#A3AED0]">
             {safeMaxScore === 100 ? 'Maestria' : 'Pontuação'}
           </div>
         </div>

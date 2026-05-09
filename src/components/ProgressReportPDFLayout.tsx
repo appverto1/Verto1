@@ -25,9 +25,9 @@ type ProgressReportPDFLayoutProps = {
   professional: {
     name?: string;
     registry?: string;
+    signatureUrl?: string | null;
   };
   report: {
-    title?: string;
     type?: string;
     periodLabel?: string;
     generatedAt?: string;
@@ -89,6 +89,44 @@ const PdfTooltip = ({ active, payload, label }: any) => {
   );
 };
 
+const chunkObservations = (observations: ProgressReportObservation[]) => {
+  if (!observations.length) return [[]] as ProgressReportObservation[][];
+  return observations.reduce<ProgressReportObservation[][]>((pages, item, index) => {
+    const pageIndex = Math.floor(index / 3);
+    if (!pages[pageIndex]) pages[pageIndex] = [];
+    pages[pageIndex].push(item);
+    return pages;
+  }, []);
+};
+
+const PageFooter = ({ professional, report }: Pick<ProgressReportPDFLayoutProps, 'professional' | 'report'>) => (
+  <footer style={{ marginTop: 44, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 24, pageBreakInside: 'avoid' }}>
+    <p style={{ margin: 0, fontSize: 9.5, color: '#94A3B8', maxWidth: 360 }}>
+      Documento gerado automaticamente pela plataforma Verto em {report.generatedAt || new Date().toLocaleString('pt-BR')}.
+    </p>
+    <div style={{ width: 260, textAlign: 'center' }}>
+      {professional.signatureUrl ? (
+        <img src={professional.signatureUrl} alt="Assinatura digital" style={{ display: 'block', height: 54, maxWidth: 230, objectFit: 'contain', margin: '0 auto 8px' }} />
+      ) : null}
+      <div style={{ borderTop: '1px solid #94A3B8', paddingTop: 6 }}>
+        <p style={{ margin: '0 0 2px', fontSize: 10.5, fontWeight: 700 }}>{professional.name || 'Profissional responsável'}</p>
+        <p style={{ margin: 0, fontSize: 9.5, color: '#64748B' }}>{professional.registry || 'Registro profissional'}</p>
+      </div>
+    </div>
+  </footer>
+);
+
+const ObservationCard = ({ item }: { item: ProgressReportObservation }) => (
+  <article style={{ border: '1px solid #E2E8F0', borderRadius: 12, padding: '12px 14px', borderLeft: `4px solid ${BRAND_PURPLE}`, background: '#FFFFFF', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+    <p style={{ margin: '0 0 6px', fontSize: 10, fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: 1 }}>
+      {item.date || '-'} | Tipo: {item.type || 'NOVO REGISTRO'} | Atividade: {item.activity || '-'} | Pontuação: {item.score || '-'}
+    </p>
+    <p style={{ margin: 0, fontSize: 11, lineHeight: 1.55, color: '#1E293B', whiteSpace: 'pre-wrap' }}>
+      <strong>Anotações do Profissional:</strong>{'\n'}{item.notes || 'Sem anotação textual selecionada.'}
+    </p>
+  </article>
+);
+
 export const ProgressReportPDFLayout = ({
   clinic,
   patient,
@@ -103,149 +141,168 @@ export const ProgressReportPDFLayout = ({
     : Object.keys(chartData?.[0] || {}).filter((key) => key !== 'name');
   const chartHeight = Math.max(320, (chartData?.length || 1) * 52);
   const hasChartData = Array.isArray(chartData) && chartData.length > 0 && comparisonKeys.length > 0;
+  const observationPages = chunkObservations(observations);
+  const pageStyle: React.CSSProperties = {
+    width: 794,
+    minHeight: 1123,
+    background: '#FFFFFF',
+    color: '#0F172A',
+    fontFamily: 'Arial, Helvetica, sans-serif',
+    padding: '34px 38px',
+    boxSizing: 'border-box',
+    pageBreakAfter: 'always',
+  };
 
   return (
-    <div
-      style={{
-        width: 794,
-        minHeight: 1123,
-        background: '#FFFFFF',
-        color: '#0F172A',
-        fontFamily: 'Arial, Helvetica, sans-serif',
-        padding: '34px 38px',
-        boxSizing: 'border-box',
-      }}
-    >
-      <header style={{ display: 'flex', justifyContent: 'space-between', gap: 28, borderBottom: '1px solid #E2E8F0', paddingBottom: 20 }}>
-        <div style={{ width: '48%' }}>
-          <div style={{ width: 96, height: 54, border: '1px solid #E2E8F0', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12, overflow: 'hidden', background: '#F8FAFC' }}>
-            {clinic.logoUrl ? (
-              <img src={clinic.logoUrl} alt="Logo da clínica" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+    <div style={{ background: '#FFFFFF' }}>
+      <div className="progress-report-pdf-page" style={pageStyle}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', gap: 28, borderBottom: '1px solid #E2E8F0', paddingBottom: 20 }}>
+          <div style={{ width: '48%' }}>
+            <div style={{ width: 96, height: 54, border: '1px solid #E2E8F0', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12, overflow: 'hidden', background: '#F8FAFC' }}>
+              {clinic.logoUrl ? (
+                <img src={clinic.logoUrl} alt="Logo da clínica" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+              ) : (
+                <span style={{ fontSize: 10, fontWeight: 800, color: '#94A3B8', letterSpacing: 1 }}>LOGO</span>
+              )}
+            </div>
+            <h1 style={{ margin: '0 0 8px', fontSize: 18, lineHeight: 1.2 }}>Relatório de Progresso</h1>
+            <p style={{ margin: '3px 0', fontSize: 10.5, color: '#334155' }}><strong>{clinic.name || 'Clínica não informada'}</strong></p>
+            <p style={{ margin: '3px 0', fontSize: 10.5, color: '#475569' }}>CNPJ: {clinic.cnpj || '-'}</p>
+            <p style={{ margin: '3px 0', fontSize: 10.5, color: '#475569' }}>Endereço: {clinic.address || '-'}</p>
+            <p style={{ margin: '3px 0', fontSize: 10.5, color: '#475569' }}>Contato: {clinic.phone || '-'} / {clinic.email || '-'}</p>
+          </div>
+
+          <div style={{ width: '48%', borderLeft: `4px solid ${BRAND_PURPLE}`, paddingLeft: 16 }}>
+            <p style={{ margin: '0 0 8px', fontSize: 10, fontWeight: 800, color: BRAND_PURPLE, letterSpacing: 1.6, textTransform: 'uppercase' }}>Dados do relatório</p>
+            <p style={{ margin: '5px 0', fontSize: 11, color: '#334155' }}><strong>Paciente:</strong> {patient.name || '-'}</p>
+            <p style={{ margin: '5px 0', fontSize: 11, color: '#334155' }}><strong>Tipo de ficha:</strong> {report.type || 'Relatório de Progresso (comparativo)'}</p>
+            <p style={{ margin: '5px 0', fontSize: 11, color: '#334155' }}><strong>Período:</strong> {report.periodLabel || '-'}</p>
+            <p style={{ margin: '5px 0', fontSize: 11, color: '#334155' }}><strong>Profissional responsável:</strong> {professional.name || '-'}</p>
+            <p style={{ margin: '5px 0', fontSize: 11, color: '#334155' }}><strong>Registro:</strong> {professional.registry || '-'}</p>
+          </div>
+        </header>
+
+        <section style={{ marginTop: 24 }}>
+          <h2 style={{ margin: '0 0 4px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1.2 }}>1. Gráfico Comparativo por Domínio</h2>
+          <p style={{ margin: '0 0 14px', fontSize: 10.5, lineHeight: 1.5, color: '#64748B' }}>
+            Comparação percentual da evolução por domínio, com barras horizontais para preservar a legibilidade em folha A4.
+          </p>
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: 14, background: '#FFFFFF' }}>
+            {hasChartData ? (
+              <BarChart
+                width={690}
+                height={chartHeight}
+                data={chartData}
+                layout="vertical"
+                margin={{ top: 10, right: 28, left: 168, bottom: 18 }}
+                barGap={8}
+                barCategoryGap="28%"
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" horizontal={false} />
+                <XAxis
+                  type="number"
+                  domain={[0, 100]}
+                  ticks={[0, 20, 40, 60, 80, 100]}
+                  tickFormatter={(value) => `${value}%`}
+                  tick={{ fill: '#475569', fontSize: 10, fontWeight: 700 }}
+                  axisLine={{ stroke: '#CBD5E1' }}
+                  tickLine={false}
+                />
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  width={165}
+                  tick={<WrappedYAxisTick />}
+                  tickLine={false}
+                  axisLine={false}
+                  interval={0}
+                />
+                <Tooltip content={<PdfTooltip />} />
+                {comparisonKeys.map((key, index) => (
+                  <Bar
+                    key={key}
+                    dataKey={key}
+                    fill={index === 0 ? BRAND_PURPLE : SUCCESS_GREEN}
+                    radius={[0, 8, 8, 0]}
+                    maxBarSize={20}
+                  />
+                ))}
+              </BarChart>
             ) : (
-              <span style={{ fontSize: 10, fontWeight: 800, color: '#94A3B8', letterSpacing: 1 }}>LOGO</span>
+              <div style={{ padding: 30, color: '#64748B', fontSize: 12, textAlign: 'center' }}>
+                Sem dados comparativos suficientes para o período selecionado.
+              </div>
             )}
           </div>
-          <h1 style={{ margin: '0 0 8px', fontSize: 18, lineHeight: 1.2 }}>Relatório de Progresso</h1>
-          <p style={{ margin: '3px 0', fontSize: 10.5, color: '#334155' }}><strong>{clinic.name || 'Clínica não informada'}</strong></p>
-          <p style={{ margin: '3px 0', fontSize: 10.5, color: '#475569' }}>CNPJ: {clinic.cnpj || '-'}</p>
-          <p style={{ margin: '3px 0', fontSize: 10.5, color: '#475569' }}>Endereço: {clinic.address || '-'}</p>
-          <p style={{ margin: '3px 0', fontSize: 10.5, color: '#475569' }}>Contato: {clinic.phone || '-'} / {clinic.email || '-'}</p>
-        </div>
-
-        <div style={{ width: '48%', borderLeft: `4px solid ${BRAND_PURPLE}`, paddingLeft: 16 }}>
-          <p style={{ margin: '0 0 8px', fontSize: 10, fontWeight: 800, color: BRAND_PURPLE, letterSpacing: 1.6, textTransform: 'uppercase' }}>Dados do relatório</p>
-          <p style={{ margin: '5px 0', fontSize: 11, color: '#334155' }}><strong>Paciente:</strong> {patient.name || '-'}</p>
-          <p style={{ margin: '5px 0', fontSize: 11, color: '#334155' }}><strong>Tipo de ficha:</strong> {report.type || 'Relatório de Progresso (comparativo)'}</p>
-          <p style={{ margin: '5px 0', fontSize: 11, color: '#334155' }}><strong>Período:</strong> {report.periodLabel || '-'}</p>
-          <p style={{ margin: '5px 0', fontSize: 11, color: '#334155' }}><strong>Profissional responsável:</strong> {professional.name || '-'}</p>
-          <p style={{ margin: '5px 0', fontSize: 11, color: '#334155' }}><strong>Registro:</strong> {professional.registry || '-'}</p>
-        </div>
-      </header>
-
-      <section style={{ marginTop: 24 }}>
-        <h2 style={{ margin: '0 0 4px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1.2 }}>1. Gráfico Comparativo por Domínio</h2>
-        <p style={{ margin: '0 0 14px', fontSize: 10.5, lineHeight: 1.5, color: '#64748B' }}>
-          Comparação percentual da evolução por domínio, com barras horizontais para preservar a legibilidade em folha A4.
-        </p>
-        <div style={{ border: '1px solid #E2E8F0', borderRadius: 14, padding: 14, background: '#FFFFFF' }}>
-          {hasChartData ? (
-            <BarChart
-              width={690}
-              height={chartHeight}
-              data={chartData}
-              layout="vertical"
-              margin={{ top: 10, right: 28, left: 168, bottom: 18 }}
-              barGap={8}
-              barCategoryGap="28%"
-            >
-              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" horizontal={false} />
-              <XAxis
-                type="number"
-                domain={[0, 100]}
-                ticks={[0, 20, 40, 60, 80, 100]}
-                tickFormatter={(value) => `${value}%`}
-                tick={{ fill: '#475569', fontSize: 10, fontWeight: 700 }}
-                axisLine={{ stroke: '#CBD5E1' }}
-                tickLine={false}
-              />
-              <YAxis
-                type="category"
-                dataKey="name"
-                width={165}
-                tick={<WrappedYAxisTick />}
-                tickLine={false}
-                axisLine={false}
-                interval={0}
-              />
-              <Tooltip content={<PdfTooltip />} />
+          {comparisonKeys.length > 0 && (
+            <div style={{ display: 'flex', gap: 16, justifyContent: 'center', marginTop: 10 }}>
               {comparisonKeys.map((key, index) => (
-                <Bar
-                  key={key}
-                  dataKey={key}
-                  fill={index === 0 ? BRAND_PURPLE : SUCCESS_GREEN}
-                  radius={[0, 8, 8, 0]}
-                  maxBarSize={20}
-                />
+                <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 700, color: '#334155' }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 999, background: index === 0 ? BRAND_PURPLE : SUCCESS_GREEN }} />
+                  {key}
+                </span>
               ))}
-            </BarChart>
-          ) : (
-            <div style={{ padding: 30, color: '#64748B', fontSize: 12, textAlign: 'center' }}>
-              Sem dados comparativos suficientes para o período selecionado.
             </div>
           )}
-        </div>
-        {comparisonKeys.length > 0 && (
-          <div style={{ display: 'flex', gap: 16, justifyContent: 'center', marginTop: 10 }}>
-            {comparisonKeys.map((key, index) => (
-              <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 700, color: '#334155' }}>
-                <span style={{ width: 10, height: 10, borderRadius: 999, background: index === 0 ? BRAND_PURPLE : SUCCESS_GREEN }} />
-                {key}
-              </span>
-            ))}
-          </div>
-        )}
-      </section>
+        </section>
 
-      <section style={{ marginTop: 26 }}>
-        <h2 style={{ margin: '0 0 4px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1.2 }}>2. Observações Selecionadas para o Relatório</h2>
-        <p style={{ margin: '0 0 14px', fontSize: 10.5, lineHeight: 1.5, color: '#64748B' }}>
-          Registros clínicos e anotações selecionados pelo profissional para compor a documentação técnica.
-        </p>
-        <div style={{ display: 'grid', gap: 10 }}>
-          {observations.length ? observations.map((item) => (
-            <article key={item.id} style={{ border: '1px solid #E2E8F0', borderRadius: 12, padding: '12px 14px', borderLeft: `4px solid ${BRAND_PURPLE}`, background: '#FFFFFF' }}>
-              <p style={{ margin: '0 0 6px', fontSize: 10, fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: 1 }}>
-                {item.date || '-'} | Tipo: {item.type || 'NOVO REGISTRO'} | Atividade: {item.activity || '-'} | Pontuação: {item.score || '-'}
-              </p>
-              <p style={{ margin: 0, fontSize: 11, lineHeight: 1.55, color: '#1E293B', whiteSpace: 'pre-wrap' }}>
-                <strong>Anotações do Profissional:</strong>{'\n'}{item.notes || 'Sem anotação textual selecionada.'}
-              </p>
-            </article>
-          )) : (
-            <div style={{ border: '1px dashed #CBD5E1', borderRadius: 12, padding: 18, color: '#64748B', fontSize: 11, textAlign: 'center' }}>
-              Nenhuma observação foi selecionada para este relatório.
-            </div>
-          )}
-        </div>
-        {additionalNote?.trim() && (
-          <div style={{ marginTop: 12, border: '1px solid #E2E8F0', borderRadius: 12, padding: 14, background: '#F8FAFC' }}>
+        <section style={{ marginTop: 26 }}>
+          <h2 style={{ margin: '0 0 4px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1.2 }}>2. Observações Selecionadas para o Relatório</h2>
+          <p style={{ margin: '0 0 14px', fontSize: 10.5, lineHeight: 1.5, color: '#64748B' }}>
+            Registros clínicos e anotações selecionados pelo profissional para compor a documentação técnica.
+          </p>
+          <div style={{ display: 'grid', gap: 10 }}>
+            {observationPages[0]?.length ? observationPages[0].map((item) => (
+              <React.Fragment key={item.id}>
+                <ObservationCard item={item} />
+              </React.Fragment>
+            )) : (
+              <div style={{ border: '1px dashed #CBD5E1', borderRadius: 12, padding: 18, color: '#64748B', fontSize: 11, textAlign: 'center' }}>
+                Nenhuma observação foi selecionada para este relatório.
+              </div>
+            )}
+          </div>
+        </section>
+
+        {observationPages.length === 1 && additionalNote?.trim() && (
+          <div style={{ marginTop: 12, border: '1px solid #E2E8F0', borderRadius: 12, padding: 14, background: '#F8FAFC', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
             <p style={{ margin: '0 0 6px', fontSize: 10, fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: 1 }}>Observação adicional</p>
             <p style={{ margin: 0, fontSize: 11, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{additionalNote}</p>
           </div>
         )}
-      </section>
 
-      <footer style={{ marginTop: 44, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 24, pageBreakInside: 'avoid' }}>
-        <p style={{ margin: 0, fontSize: 9.5, color: '#94A3B8', maxWidth: 360 }}>
-          Documento gerado automaticamente pela plataforma Verto em {report.generatedAt || new Date().toLocaleString('pt-BR')}.
-        </p>
-        <div style={{ width: 260, textAlign: 'center' }}>
-          <div style={{ borderTop: '1px solid #94A3B8', paddingTop: 6 }}>
-            <p style={{ margin: '0 0 2px', fontSize: 10.5, fontWeight: 700 }}>{professional.name || 'Profissional responsável'}</p>
-            <p style={{ margin: 0, fontSize: 9.5, color: '#64748B' }}>{professional.registry || 'Registro profissional'}</p>
+        {observationPages.length === 1 && <PageFooter professional={professional} report={report} />}
+      </div>
+
+      {observationPages.slice(1).map((pageItems, pageIndex) => {
+        const isLastPage = pageIndex === observationPages.length - 2;
+        return (
+          <div key={`observations-page-${pageIndex}`} className="progress-report-pdf-page" style={pageStyle}>
+            <section>
+              <h2 style={{ margin: '0 0 4px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1.2 }}>2. Observações Selecionadas para o Relatório</h2>
+              <p style={{ margin: '0 0 14px', fontSize: 10.5, lineHeight: 1.5, color: '#64748B' }}>
+                Continuação dos registros clínicos selecionados pelo profissional.
+              </p>
+              <div style={{ display: 'grid', gap: 10 }}>
+                {pageItems.map((item) => (
+                  <React.Fragment key={item.id}>
+                    <ObservationCard item={item} />
+                  </React.Fragment>
+                ))}
+              </div>
+            </section>
+
+            {isLastPage && additionalNote?.trim() && (
+              <div style={{ marginTop: 12, border: '1px solid #E2E8F0', borderRadius: 12, padding: 14, background: '#F8FAFC', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+                <p style={{ margin: '0 0 6px', fontSize: 10, fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: 1 }}>Observação adicional</p>
+                <p style={{ margin: 0, fontSize: 11, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{additionalNote}</p>
+              </div>
+            )}
+
+            {isLastPage && <PageFooter professional={professional} report={report} />}
           </div>
-        </div>
-      </footer>
+        );
+      })}
     </div>
   );
 };

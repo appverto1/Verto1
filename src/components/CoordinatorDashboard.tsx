@@ -149,6 +149,14 @@ export function CoordinatorDashboard({
   onAddTask,
   onUpdateTask,
 }: CoordinatorDashboardProps) {
+  const formatCnpjInput = (value: string) => {
+    const digits = String(value || '').replace(/\D/g, '').slice(0, 14);
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 5) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
+    if (digits.length <= 8) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`;
+    if (digits.length <= 12) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8)}`;
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
+  };
   type ClinicBillingSummary = {
     activePatients: number;
     unitPrice: number;
@@ -572,7 +580,7 @@ export function CoordinatorDashboard({
   const [loadingAnamnesisTemplate, setLoadingAnamnesisTemplate] =
     useState(false);
   const [clinicCnpj, setClinicCnpj] = useState(
-    String(user?.clinicSettings?.clinicCnpj || ""),
+    formatCnpjInput(String(user?.clinicSettings?.clinicCnpj || "")),
   );
   const buildInitialAvatarDataUrl = (name?: string) => {
     const initial = (name || "P").trim().charAt(0).toUpperCase() || "P";
@@ -841,7 +849,7 @@ export function CoordinatorDashboard({
     );
     setWorkStart(String(user?.clinicSettings?.workStart || "08:00"));
     setWorkEnd(String(user?.clinicSettings?.workEnd || "18:00"));
-    setClinicCnpj(String(user?.clinicSettings?.clinicCnpj || ""));
+    setClinicCnpj(formatCnpjInput(String(user?.clinicSettings?.clinicCnpj || "")));
   }, [
     user?.crp,
     user?.name,
@@ -3218,7 +3226,8 @@ export function CoordinatorDashboard({
                   user?.profilePicture ||
                   buildInitialAvatarDataUrl(user?.name),
                 professionalName: user?.name || "Profissional",
-                signatureUrl: user?.clinicSettings?.signatureDataUrl || null,
+                crp: user?.crp || user?.clinicSettings?.crp || "",
+                signatureUrl: user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null,
                 defaultSessionDuration: user?.clinicSettings?.defaultSessionDuration || defaultSessionDuration || 50,
               }}
               initialTab={patientOpenTab}
@@ -5255,7 +5264,7 @@ export function CoordinatorDashboard({
                             <input
                               type="text"
                               value={clinicCnpj}
-                              onChange={(e) => setClinicCnpj(e.target.value)}
+                              onChange={(e) => setClinicCnpj(formatCnpjInput(e.target.value))}
                               placeholder="00.000.000/0000-00"
                               className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
                             />
