@@ -29,6 +29,7 @@ import {
   CalendarRange,
   CalendarDays,
   CalendarPlus,
+  Cake,
   MessageCircle,
   CreditCard,
   CheckCircle2,
@@ -1802,44 +1803,45 @@ export function CoordinatorDashboard({
     [todayAgendaItems],
   );
 
-  const roomsUsedTodayCount = useMemo(() => {
-    const roomsInUse = new Set<string>();
-    (roomReservations || [])
-      .filter((reservation: any) => {
-        const dateKey = getAgendaDateKey(
-          reservation?.date || reservation?.scheduled_at || reservation?.startTime,
-        );
-        return dateKey === todayAgendaKey;
-      })
-      .forEach((reservation: any) => {
-        const roomKey =
-          reservation?.roomId ||
-          reservation?.room_id ||
-          reservation?.roomName ||
-          reservation?.room;
-        if (roomKey) roomsInUse.add(String(roomKey));
-      });
+  const birthdayTodayCount = useMemo(() => {
+    const today = new Date();
+    const todayMonth = today.getMonth() + 1;
+    const todayDay = today.getDate();
 
-    todayAgendaItems
-      .filter((item: any) => !isCanceledAgendaItem(item))
-      .forEach((item: any) => {
-        const roomKey =
-          item?.roomId ||
-          item?.room_id ||
-          item?.roomName ||
-          item?.room ||
-          item?.sessionRoom;
-        if (roomKey) roomsInUse.add(String(roomKey));
-      });
+    const parseBirthDate = (value: any) => {
+      const raw = String(value || "").trim();
+      if (!raw) return null;
+      const brazilianDate = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (brazilianDate) {
+        return {
+          day: Number(brazilianDate[1]),
+          month: Number(brazilianDate[2]),
+        };
+      }
+      const date = new Date(raw);
+      if (Number.isNaN(date.getTime())) return null;
+      return {
+        day: date.getDate(),
+        month: date.getMonth() + 1,
+      };
+    };
 
-    return roomsInUse.size;
-  }, [roomReservations, todayAgendaItems, todayAgendaKey]);
+    return (allPatients || []).filter((patient: any) => {
+      const birthDate = parseBirthDate(
+        patient?.birthDate ||
+          patient?.birth_date ||
+          patient?.dataNascimento ||
+          patient?.anamnesisData?.dataNascimento,
+      );
+      return birthDate?.day === todayDay && birthDate?.month === todayMonth;
+    }).length;
+  }, [allPatients]);
 
   const dashboardDailyStats = useMemo(
     () => [
       {
         id: "agenda",
-        label: "Agendados / atendidos",
+        label: "Consultas hoje",
         value: todayAgendaItems.length,
         hint: "para hoje",
         icon: Calendar,
@@ -1858,17 +1860,17 @@ export function CoordinatorDashboard({
         iconBg: theme === "dark" ? "bg-rose-400/15" : "bg-rose-50",
       },
       {
-        id: "rooms",
-        label: "Salas usadas",
-        value: roomsUsedTodayCount,
+        id: "birthdays",
+        label: "Aniversariantes",
+        value: birthdayTodayCount,
         hint: "hoje",
-        icon: DoorOpen,
+        icon: Cake,
         accent: "bg-sky-500",
         color: "text-sky-600",
         iconBg: theme === "dark" ? "bg-sky-400/15" : "bg-sky-50",
       },
     ],
-    [canceledTodayCount, roomsUsedTodayCount, theme, todayAgendaItems.length],
+    [birthdayTodayCount, canceledTodayCount, theme, todayAgendaItems.length],
   );
 
   useEffect(() => {
@@ -2663,18 +2665,19 @@ export function CoordinatorDashboard({
     <div className="space-y-8 sm:space-y-12 animate-in fade-in duration-500">
       <div className="grid grid-cols-1 gap-4 sm:gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(360px,1fr)]">
         <section
-          className={`relative min-h-[220px] overflow-hidden rounded-[30px] border p-6 shadow-sm sm:min-h-[260px] sm:p-8 lg:p-10 ${
+          className={`relative min-h-[220px] overflow-hidden rounded-[30px] border p-6 sm:min-h-[260px] sm:p-8 lg:p-10 ${
             theme === "dark"
-              ? "border-violet-400/15 bg-[#0b1024]"
-              : "border-slate-100 bg-white"
+              ? "border-violet-400/30 bg-[#0b1024] shadow-[0_20px_65px_rgba(124,58,237,0.22)]"
+              : "border-violet-200/80 bg-white shadow-[0_20px_65px_rgba(124,58,237,0.16)]"
           }`}
         >
           <div className="absolute inset-0 pointer-events-none">
-            <div className="absolute -right-[20%] top-1/2 hidden h-[125%] w-[62%] -translate-y-1/2 items-center justify-center lg:flex">
+            <div className="absolute -left-24 -top-28 h-72 w-72 rounded-full bg-[radial-gradient(circle,rgba(139,92,246,0.22)_0%,rgba(168,85,247,0.12)_38%,transparent_72%)] blur-2xl" />
+            <div className="absolute -right-[22%] top-1/2 hidden h-[162%] w-[78%] -translate-y-1/2 items-center justify-center lg:flex">
               <img
                 src="/verto-3d-transparent.png"
                 alt=""
-                className="h-full w-full object-contain opacity-95 drop-shadow-[0_32px_60px_rgba(88,28,135,0.28)]"
+                className="h-full w-full object-contain opacity-30 drop-shadow-[0_36px_80px_rgba(88,28,135,0.42)]"
               />
             </div>
           </div>
