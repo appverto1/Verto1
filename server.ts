@@ -3053,6 +3053,7 @@ async function startServer() {
     standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
     legacyHeaders: false, // Disable the `X-RateLimit-*` headers
     validate: false, // Disable all validation checks for proxy headers
+    skip: (req) => req.path === '/auth/login' || req.path === '/auth/me',
   });
 
   const recoveryLimiter = rateLimit({
@@ -3074,6 +3075,15 @@ async function startServer() {
     legacyHeaders: false,
     validate: false,
     message: { error: 'Muitas tentativas de login. Tente novamente em alguns minutos.' }
+  });
+
+  const authMeLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    message: { error: 'Muitas verificações de sessão. Aguarde alguns instantes e tente novamente.' }
   });
 
   const authSignupLimiter = rateLimit({
@@ -5533,7 +5543,7 @@ async function startServer() {
     });
   });
 
-  app.get('/api/auth/me', syncWorkspaceContextInSession, async (req: any, res: any) => {
+  app.get('/api/auth/me', authMeLimiter, syncWorkspaceContextInSession, async (req: any, res: any) => {
     if (req.session.user) {
       return res.json({ user: req.session.user });
     }
