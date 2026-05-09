@@ -28,3 +28,26 @@
 .chart-glow {
   box-shadow: 0 20px 50px -12px rgba(67, 24, 255, 0.1);
 }
+
+@keyframes verto-hero-float {
+  0%, 100% { transform: translateY(0) rotate(-1deg) scale(1); }
+  50% { transform: translateY(-12px) rotate(1deg) scale(1.025); }
+}
+
+@keyframes verto-hero-orb {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: .65; }
+  50% { transform: translate3d(-18px, 18px, 0) scale(1.45); opacity: 1; }
+}
+
+.verto-hero-logo {
+  animation: verto-hero-float 6s ease-in-out infinite;
+}
+
+.verto-hero-orb {
+  animation: verto-hero-orb 5s ease-in-out infinite;
+}
+
+.verto-hero-orb-delayed {
+  animation: verto-hero-orb 6.5s ease-in-out infinite;
+  animation-delay: 1.2s;
+}
