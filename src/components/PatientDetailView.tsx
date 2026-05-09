@@ -7,6 +7,7 @@ import { HistoryCard } from './History';
 import { SessionMode } from './SessionMode';
 import { RadarDomainAssessmentChart } from './RadarDomainAssessmentChart';
 import { CumulativeGrowthChart } from './CumulativeGrowthChart';
+import { ProgressReportPDFLayout } from './ProgressReportPDFLayout';
 import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
@@ -170,6 +171,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [selectedAdultEvolutionIds, setSelectedAdultEvolutionIds] = useState<string[]>([]);
   const [reportAdditionalNote, setReportAdditionalNote] = useState('');
   const [isGeneratingAdultReport, setIsGeneratingAdultReport] = useState(false);
+  const [isGeneratingProgressPdf, setIsGeneratingProgressPdf] = useState(false);
   const [planType, setPlanType] = useState('task'); 
   const [isCreatingNewTask, setIsCreatingNewTask] = useState(false); 
   const [filterAge, setFilterAge] = useState(""); 
@@ -267,6 +269,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   }, [userRole]);
   const showCoordinatorPatientRadar = String(userRole || '').toLowerCase() === 'coordinator';
   const [expandedSessionHistoryDates, setExpandedSessionHistoryDates] = useState<Record<string, boolean>>({});
+  const progressReportPdfRef = React.useRef<HTMLDivElement | null>(null);
 
   const toggleSessionHistoryDate = (dateKey: string) => {
     setExpandedSessionHistoryDates((prev) => ({
@@ -1997,6 +2000,133 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       };
     });
   }, [isKidsProfile, selectedChartProtocol, adultReportDate1, adultReportDate2, adultTasksInPeriod]);
+
+  const formatReportDateLabel = (value: string) => {
+    if (!value) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      const [year, month, day] = value.split('-');
+      return `${day}/${month}/${year}`;
+    }
+    return value;
+  };
+
+  const progressReportChartData = isKidsProfile ? comparisonChartData : adultReportDomainComparisonData;
+  const progressReportComparisonKeys = useMemo(() => {
+    const firstRow = progressReportChartData?.[0] || {};
+    return Object.keys(firstRow).filter((key) => key !== 'name');
+  }, [progressReportChartData]);
+
+  const progressReportObservations = useMemo(() => {
+    if (isKidsProfile) {
+      return kidsReportSelectableNotes
+        .filter((note: any) => selectedReportNotes.map(String).includes(String(note.id)))
+        .map((note: any) => ({
+          id: note.id,
+          date: String(note?.date || '-'),
+          type: 'NOVO REGISTRO',
+          activity: String(note?.subject || 'Observação clínica'),
+          score: '-',
+          notes: normalizeNoteText(note?.text || '')
+        }));
+    }
+
+    return adultEvolutionSelectedTasks.map((task: any) => ({
+      id: task.id,
+      date: task.eventDate?.toLocaleString?.('pt-BR') || '-',
+      type: 'NOVO REGISTRO',
+      activity: task.taskTitle || 'Atividade clínica',
+      score: `${task.professionalScore ?? '-'} de ${task.maxScore ?? '-'} PTS`,
+      notes: task.evolutionNote || 'Sem anotação técnica registrada.'
+    }));
+  }, [isKidsProfile, kidsReportSelectableNotes, selectedReportNotes, adultEvolutionSelectedTasks]);
+
+  const progressReportPeriodLabel = isKidsProfile
+    ? `${formatReportDateLabel(progressReportComparisonKeys[0] || comparisonDate1 || '') || 'Base'} VS ${formatReportDateLabel(progressReportComparisonKeys[1] || comparisonDate2 || '') || 'Final'}`
+    : `${formatReportDateLabel(adultReportDate1)} VS ${formatReportDateLabel(adultReportDate2)} - ${periodLabelByValue[reportPeriod as keyof typeof periodLabelByValue] || 'Período'}`;
+
+  const progressReportClinic = {
+    name: clinicContext?.clinicName || clinicContext?.name || 'Clínica Verto',
+    cnpj: clinicContext?.cnpj || clinicContext?.document || '-',
+    address:
+      clinicContext?.address ||
+      [clinicContext?.street, clinicContext?.number, clinicContext?.complement, clinicContext?.neighborhood, clinicContext?.city]
+        .filter(Boolean)
+        .join(', '),
+    phone: clinicContext?.phone || clinicContext?.telephone || '-',
+    email: clinicContext?.email || clinicContext?.clinicEmail || '-',
+    logoUrl: clinicContext?.logoUrl || clinicContext?.clinicLogoUrl || null
+  };
+
+  const progressReportProfessional = {
+    name: clinicContext?.professionalName || clinicContext?.userName || patient?.therapistName || 'Profissional responsável',
+    registry: clinicContext?.crp || clinicContext?.professionalCrp || clinicContext?.registry || '-'
+  };
+
+  const sanitizePdfFileName = (value: string) =>
+    String(value || 'Paciente')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9_-]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '');
+
+  const handlePDFAction = async (action: 'view' | 'download') => {
+    if (!progressReportChartData.length) {
+      alert('Selecione períodos com dados suficientes para gerar o PDF.');
+      return;
+    }
+    if (!progressReportPdfRef.current) {
+      alert('Não foi possível preparar o layout do PDF. Tente novamente.');
+      return;
+    }
+
+    setIsGeneratingProgressPdf(true);
+    try {
+      const { jsPDF } = await import('jspdf');
+      const target = progressReportPdfRef.current;
+      const canvas = await html2canvas(target, {
+        backgroundColor: '#ffffff',
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        windowWidth: target.scrollWidth || 794,
+        windowHeight: target.scrollHeight || 1123
+      });
+
+      const pdf = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 18;
+      const contentWidth = pageWidth - margin * 2;
+      const imgHeight = (canvas.height * contentWidth) / canvas.width;
+      const imgData = canvas.toDataURL('image/png', 1.0);
+
+      let heightLeft = imgHeight;
+      let positionY = margin;
+      pdf.addImage(imgData, 'PNG', margin, positionY, contentWidth, imgHeight);
+      heightLeft -= pageHeight - margin * 2;
+
+      while (heightLeft > 0) {
+        pdf.addPage();
+        positionY = margin - (imgHeight - heightLeft);
+        pdf.addImage(imgData, 'PNG', margin, positionY, contentWidth, imgHeight);
+        heightLeft -= pageHeight - margin * 2;
+      }
+
+      if (action === 'view') {
+        window.open(pdf.output('bloburl'), '_blank', 'noopener,noreferrer');
+        return;
+      }
+
+      const generatedAt = new Date().toISOString().slice(0, 10);
+      pdf.save(`Relatorio_Progresso_Verto_${sanitizePdfFileName(patient?.name)}_${generatedAt}.pdf`);
+    } catch (error) {
+      console.error('Falha ao gerar PDF do relatório de progresso:', error);
+      alert('Não foi possível gerar o PDF agora. Verifique os dados do relatório e tente novamente.');
+    } finally {
+      setIsGeneratingProgressPdf(false);
+    }
+  };
   
   const handleSchedule = async () => { 
     if (!scheduleDate || !scheduleTime) { alert("Selecione data e hora."); return; } 
@@ -2792,6 +2922,35 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
   return ( 
     <div className="min-h-screen bg-gray-50 flex flex-col animate-slide-up relative overflow-y-auto"> 
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'fixed',
+          left: '-10000px',
+          top: 0,
+          width: '794px',
+          background: '#ffffff',
+          pointerEvents: 'none',
+          zIndex: -1
+        }}
+      >
+        <div ref={progressReportPdfRef}>
+          <ProgressReportPDFLayout
+            clinic={progressReportClinic}
+            patient={{ name: patient?.name }}
+            professional={progressReportProfessional}
+            report={{
+              type: 'Relatório de Progresso (comparativo)',
+              periodLabel: progressReportPeriodLabel,
+              generatedAt: new Date().toLocaleString('pt-BR'),
+              comparisonKeys: progressReportComparisonKeys
+            }}
+            chartData={progressReportChartData}
+            observations={progressReportObservations}
+            additionalNote={reportAdditionalNote}
+          />
+        </div>
+      </div>
       {isSessionModeOpen && (
         <SessionMode 
           patient={{ ...patient, history: history.filter((h: any) => h.patientId === patient.id) }} 
@@ -3747,17 +3906,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               <div className="mt-8 flex justify-end gap-3">
                 <button
                   className="px-6 py-3 bg-gray-100 text-gray-600 font-semibold rounded-xl text-xs hover:bg-gray-200 transition-all"
-                  onClick={isKidsProfile ? undefined : () => setActiveTab('history')}
+                  onClick={isKidsProfile ? () => void handlePDFAction('view') : () => setActiveTab('history')}
+                  disabled={isKidsProfile && isGeneratingProgressPdf}
                 >
                   {isKidsProfile ? 'Visualizar PDF' : 'Ver Histórico'}
                 </button>
                 <button
                   id="report-download-btn"
-                  onClick={isKidsProfile ? undefined : () => void handleGenerateAdultEvolutionReport()}
-                  disabled={!isKidsProfile && isGeneratingAdultReport}
+                  onClick={isKidsProfile ? () => void handlePDFAction('download') : () => void handleGenerateAdultEvolutionReport()}
+                  disabled={isKidsProfile ? isGeneratingProgressPdf : isGeneratingAdultReport}
                   className="px-6 py-3 bg-[#7a32fc] text-white font-semibold rounded-xl text-xs shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <Download size={16} /> {isKidsProfile ? 'Gerar Relatório Final' : (isGeneratingAdultReport ? 'Gerando...' : 'Gerar PDF Adulto')}
+                  <Download size={16} /> {isKidsProfile ? (isGeneratingProgressPdf ? 'Gerando PDF...' : 'Gerar Relatório Final') : (isGeneratingAdultReport ? 'Gerando...' : 'Gerar PDF Adulto')}
                 </button>
               </div>
             </div>
