@@ -2644,18 +2644,25 @@ export default function App() {
         else break;
       }
 
-      const progress = Math.min(consecutiveCount * 20, 100);
-      const isMastered = progress === 100;
-      updatedPei = sourcePei.map((goal: any) =>
-        goal.name === title
-          ? { ...goal, status: isMastered ? 'completed' : 'in_progress', progress }
-          : goal
-      );
+      updatedPei = sourcePei.map((goal: any) => {
+        if (goal.name !== title) return goal;
+
+        const masteryTarget = Math.max(
+          1,
+          Math.floor(Number(goal?.meta_sucessos ?? goal?.metaSucessos ?? goal?.masteryTarget ?? goal?.mastery_target) || 5)
+        );
+        const progress = Math.min(Math.round((consecutiveCount / masteryTarget) * 100), 100);
+        const isMastered = progress >= 100;
+
+        return { ...goal, status: isMastered ? 'completed' : 'in_progress', progress };
+      });
+      const updatedGoal = updatedPei.find((goal: any) => goal.name === title);
+      const isMastered = updatedGoal?.status === 'completed';
 
       if (isMastered && peiGoal?.status !== 'completed') {
         handleAddNote(
           pid,
-          `â­ CRITÃ‰RIO DE MAESTRIA ATINGIDO!\nA habilidade "${title}" foi realizada de forma independente por 5 vezes consecutivas. Status atualizado para Adquirida.`,
+          `CRITERIO DE MAESTRIA ATINGIDO!\nA habilidade "${title}" atingiu a meta individual de sucessos independentes consecutivos. Status atualizado para Adquirida.`,
           'private',
           'Maestria'
         );

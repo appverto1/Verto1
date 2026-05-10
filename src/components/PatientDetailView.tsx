@@ -2876,6 +2876,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     return Math.min(count, target);
   };
 
+  const getGoalProgressPercent = (goal: any) => {
+    const storedProgress = Number(goal?.progress);
+    if (patientCategory !== 'Criança') {
+      return Number.isFinite(storedProgress) ? Math.min(Math.max(Math.round(storedProgress), 0), 100) : 0;
+    }
+
+    const target = getGoalMasteryTarget(goal);
+    const consecutiveSuccesses = getMasteryProgress(goal) || 0;
+    return Math.min(Math.round((consecutiveSuccesses / target) * 100), 100);
+  };
+
   const MasteryDots = ({ count, status, target = 5 }: { count: number, status?: string, target?: number }) => {
     const safeTarget = Math.max(1, Math.floor(Number(target) || 5));
     const dots = Array.from({ length: safeTarget }, (_, index) => index + 1);
@@ -2891,11 +2902,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       );
     }
     return (
-      <div className="flex flex-wrap gap-1 items-center max-w-[220px]">
-        {dots.map((i) => (
-          <div key={i} className={`${dotSize} rounded-full transition-all ${i <= count ? 'bg-[#7a32fc] scale-110 shadow-sm shadow-blue-200' : 'bg-gray-200'}`}></div>
-        ))}
-        <span className="text-[9px] font-semibold text-gray-400 ml-1 uppercase">{count}/{safeTarget}</span>
+        <div className="flex flex-wrap gap-1 items-center max-w-[220px]">
+          {dots.map((i) => (
+            <div key={i} className={`${dotSize} rounded-full transition-all ${i <= count ? 'bg-[#7a32fc] scale-110 shadow-sm shadow-blue-200' : 'bg-gray-200 dark:bg-slate-600'}`}></div>
+          ))}
+        <span className="text-[9px] font-semibold text-gray-400 dark:text-slate-300 ml-1 uppercase">{count}/{safeTarget}</span>
       </div>
     );
   };
@@ -2919,7 +2930,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   }, [isTutorialActive, tutorialStep, isKidsProfile, allowedTabsSet]);
 
   return ( 
-    <div className="min-h-screen bg-gray-50 flex flex-col animate-slide-up relative overflow-y-auto"> 
+    <div className="min-h-screen bg-gray-50 dark:bg-[#081324] flex flex-col animate-slide-up relative overflow-y-auto"> 
       <div
         aria-hidden="true"
         style={{
@@ -3004,16 +3015,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         </div> 
       )} 
       {showSessionStartConfirm && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-[32px] p-7 shadow-2xl max-w-md w-full animate-pop border border-violet-100">
+        <div className="fixed inset-0 z-[120] flex items-start justify-center p-4 pt-6 sm:pt-10 bg-black/30 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white dark:bg-[#101b2e] rounded-[32px] p-7 shadow-2xl max-w-md w-full animate-pop border border-violet-100 dark:border-violet-500/30">
             <div className="w-14 h-14 bg-[#7a32fc]/10 rounded-2xl flex items-center justify-center mb-5 text-[#7a32fc]">
               <Clock size={28} />
             </div>
-            <h3 className="text-2xl font-semibold text-gray-900 mb-2">Iniciar sessão?</h3>
-            <p className="text-sm text-gray-500 leading-relaxed mb-5">
+            <h3 className="text-2xl font-semibold text-gray-900 dark:text-slate-50 mb-2">Iniciar sessão?</h3>
+            <p className="text-sm text-gray-500 dark:text-slate-300 leading-relaxed mb-5">
               A contagem regressiva começa agora e continuará ativa mesmo se você abrir outras abas deste paciente.
             </p>
-            <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-2">
+            <label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-widest mb-2">
               Tempo da sessão em minutos
             </label>
             <input
@@ -3022,12 +3033,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               max={240}
               value={sessionDurationInput}
               onChange={(event) => setSessionDurationInput(event.target.value)}
-              className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 text-lg font-semibold text-gray-800 outline-none focus:border-[#7a32fc] mb-6"
+              className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-2xl px-4 py-3 text-lg font-semibold text-gray-800 dark:text-slate-50 outline-none focus:border-[#7a32fc] mb-6"
             />
             <div className="flex gap-3">
               <button
                 onClick={() => setShowSessionStartConfirm(false)}
-                className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-semibold hover:bg-gray-200 transition-all"
+                className="flex-1 py-3 rounded-2xl bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-200 font-semibold hover:bg-gray-200 dark:hover:bg-slate-700 transition-all"
               >
                 Cancelar
               </button>
@@ -3042,23 +3053,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         </div>
       )}
       {showSessionEndConfirm && (
-        <div className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-[32px] p-7 shadow-2xl max-w-md w-full animate-pop border border-red-100">
+        <div className="fixed inset-0 z-[130] flex items-start justify-center p-4 pt-6 sm:pt-10 bg-black/30 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white dark:bg-[#101b2e] rounded-[32px] p-7 shadow-2xl max-w-md w-full animate-pop border border-red-100 dark:border-red-500/30">
             <div className="w-14 h-14 bg-red-50 rounded-2xl flex items-center justify-center mb-5 text-red-500">
               <StopCircle size={28} />
             </div>
-            <h3 className="text-2xl font-semibold text-gray-900 mb-2">Encerrar sessão?</h3>
-            <p className="text-sm text-gray-500 leading-relaxed mb-6">
+            <h3 className="text-2xl font-semibold text-gray-900 dark:text-slate-50 mb-2">Encerrar sessão?</h3>
+            <p className="text-sm text-gray-500 dark:text-slate-300 leading-relaxed mb-6">
               Os registros feitos nesta sessão já atualizam o histórico e os gráficos. Ao encerrar, a sessão deixa de aparecer como ativa.
             </p>
-            <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4 mb-6">
-              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Tempo restante</p>
-              <p className="text-3xl font-semibold text-gray-900">{formatSessionCountdown(remainingSessionSeconds)}</p>
+            <div className="rounded-2xl bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 p-4 mb-6">
+              <p className="text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-widest">Tempo restante</p>
+              <p className="text-3xl font-semibold text-gray-900 dark:text-slate-50">{formatSessionCountdown(remainingSessionSeconds)}</p>
             </div>
             <div className="flex gap-3">
               <button
                 onClick={() => setShowSessionEndConfirm(false)}
-                className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-semibold hover:bg-gray-200 transition-all"
+                className="flex-1 py-3 rounded-2xl bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-200 font-semibold hover:bg-gray-200 dark:hover:bg-slate-700 transition-all"
               >
                 Continuar
               </button>
@@ -3124,27 +3135,27 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         </div>
       )}
 
-      <div className="bg-white px-6 pt-6 pb-6 shadow-sm z-20"> 
+      <div className="bg-white dark:bg-[#0f1b2f] px-6 pt-6 pb-6 shadow-sm z-20"> 
         <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-4"> 
           <div className="flex items-center gap-4"> 
             {!hideBackButton && (
-              <button id="back-btn" onClick={onBack} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-xl transition-all border border-slate-100 text-slate-400 hover:text-[#7a32fc] group">
+              <button id="back-btn" onClick={onBack} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl transition-all border border-slate-100 dark:border-slate-700 text-slate-400 dark:text-slate-300 hover:text-[#7a32fc] group">
                 <ChevronLeft size={20} className="group-hover:-translate-x-0.5 transition-transform" />
                 <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">Painel</span>
               </button>
             )}
             <div id="patient-header-info">
                 <div className="flex items-center gap-2">
-                    <h1 className="text-2xl font-semibold text-gray-800 tracking-tight">{patient.name}</h1>
+                    <h1 className="text-2xl font-semibold text-gray-800 dark:text-slate-50 tracking-tight">{patient.name}</h1>
                 </div>
-                <p className="text-gray-500 text-xs">Detalhes do Paciente</p>
+                <p className="text-gray-500 dark:text-slate-300 text-xs">Detalhes do Paciente</p>
                 {canManageTherapistAssignment && (
                   <div className="mt-2 flex items-center gap-2">
-                    <label className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                    <label className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-400">
                       Terapeuta Responsável
                     </label>
                     <select
-                      className="min-w-[220px] bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-xs font-semibold text-gray-700 outline-none focus:border-[#7551FF]"
+                      className="min-w-[220px] bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs font-semibold text-gray-700 dark:text-slate-100 outline-none focus:border-[#7551FF]"
                       value={selectedTherapistId}
                       onChange={(e) => handleTherapistAssignmentChange(e.target.value)}
                       disabled={isLoadingTherapists}
@@ -3171,7 +3182,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               <MessageCircle size={16} /> WhatsApp
             </a>
             {canOpenAnamnesis && (
-              <button id="anamnesis-btn" onClick={() => setShowAnamnesis(true)} className="flex-1 sm:flex-none bg-[#F4F7FE] text-[#7a32fc] px-4 py-2.5 rounded-xl text-xs font-semibold hover:bg-[#7a32fc]/10 transition-colors flex items-center justify-center gap-2 border border-blue-100"> 
+              <button id="anamnesis-btn" onClick={() => setShowAnamnesis(true)} className="flex-1 sm:flex-none bg-[#F4F7FE] dark:bg-violet-500/10 text-[#7a32fc] dark:text-violet-200 px-4 py-2.5 rounded-xl text-xs font-semibold hover:bg-[#7a32fc]/10 transition-colors flex items-center justify-center gap-2 border border-blue-100 dark:border-violet-400/30"> 
                 <FileText size={16} /> Ficha Anamnese 
               </button>
             )}
@@ -3184,23 +3195,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             </button>
           </div>
         </div> 
-        <div id="tab-nav" className="flex gap-2 bg-gray-100 p-1 rounded-xl overflow-x-auto no-scrollbar"> 
-          {canAccessTab('history') && <button id="tab-history" onClick={() => setActiveTab('history')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'history' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Histórico</button>}
-          {canAccessTab('notes') && <button id="tab-notes" onClick={() => setActiveTab('notes')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'notes' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Anotações</button>}
-          {canAccessTab('report') && <button id="tab-report" onClick={() => setActiveTab('report')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'report' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Relatório</button>}
+        <div id="tab-nav" className="flex gap-2 bg-gray-100 dark:bg-slate-900/70 p-1 rounded-xl overflow-x-auto no-scrollbar"> 
+          {canAccessTab('history') && <button id="tab-history" onClick={() => setActiveTab('history')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'history' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-white shadow-sm' : 'text-gray-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'}`}>Histórico</button>}
+          {canAccessTab('notes') && <button id="tab-notes" onClick={() => setActiveTab('notes')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'notes' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-white shadow-sm' : 'text-gray-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'}`}>Anotações</button>}
+          {canAccessTab('report') && <button id="tab-report" onClick={() => setActiveTab('report')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'report' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-white shadow-sm' : 'text-gray-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'}`}>Relatório</button>}
           {canAccessTab('plan') && (
             <button
               id="tab-plan"
               onClick={() => setActiveTab('plan')}
-              className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'plan' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}
+              className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'plan' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-white shadow-sm' : 'text-gray-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'}`}
             >
               {isKidsProfile ? 'Plano' : 'Plano Adulto'}
             </button>
           )}
           {canAccessTab('session') && isKidsProfile && (
-            <button id="tab-session" onClick={() => requestSessionStart('tab')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'session' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Sessão</button>
+            <button id="tab-session" onClick={() => requestSessionStart('tab')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'session' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-white shadow-sm' : 'text-gray-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'}`}>Sessão</button>
           )}
-          {canAccessTab('files') && <button id="tab-files" onClick={() => setActiveTab('files')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'files' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Arquivos</button>}
+          {canAccessTab('files') && <button id="tab-files" onClick={() => setActiveTab('files')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'files' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-white shadow-sm' : 'text-gray-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'}`}>Arquivos</button>}
         </div> 
       </div> 
       <div className="p-6"> 
@@ -3558,20 +3569,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           </div> 
         ) : activeTab === 'notes' ? ( 
           <div className="space-y-4 animate-fade-in"> 
-            <div id="note-export-card" className="bg-white border border-gray-200 p-5 rounded-[24px] shadow-sm mb-6 animate-fade-in">
+            <div id="note-export-card" className="bg-white dark:bg-[#101b2e] border border-gray-200 dark:border-slate-700 p-5 rounded-[24px] shadow-sm mb-6 animate-fade-in">
               <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
                 <div className="flex-1">
-                  <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-tight mb-3 flex items-center gap-2">
+                  <h4 className="text-xs font-semibold text-gray-700 dark:text-slate-100 uppercase tracking-tight mb-3 flex items-center gap-2">
                     <FileOutput size={14} className="text-[#7a32fc]" /> Exportar Relatório de Evolução
                   </h4>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-[9px] font-semibold text-gray-400 uppercase mb-1 ml-1">Início</label>
-                      <input type="date" className="w-full bg-gray-50 border border-gray-100 rounded-xl p-2 text-xs outline-none focus:border-[#7a32fc] transition-all text-gray-700" value={reportStartDate} onChange={e => setReportStartDate(e.target.value)} />
+                      <input type="date" className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-2 text-xs outline-none focus:border-[#7a32fc] transition-all text-gray-700 dark:text-slate-100" value={reportStartDate} onChange={e => setReportStartDate(e.target.value)} />
                     </div>
                     <div>
                       <label className="block text-[9px] font-semibold text-gray-400 uppercase mb-1 ml-1">Fim</label>
-                      <input type="date" className="w-full bg-gray-50 border border-gray-100 rounded-xl p-2 text-xs outline-none focus:border-[#7a32fc] transition-all text-gray-700" value={reportEndDate} onChange={e => setReportEndDate(e.target.value)} />
+                      <input type="date" className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-2 text-xs outline-none focus:border-[#7a32fc] transition-all text-gray-700 dark:text-slate-100" value={reportEndDate} onChange={e => setReportEndDate(e.target.value)} />
                     </div>
                   </div>
                 </div>
@@ -3585,14 +3596,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </div>
             </div>
 
-            <div id="note-type-toggles" className="flex bg-gray-100 p-1 rounded-xl mb-4"> 
-              <button onClick={() => setNoteMode('private')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'private' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-400'}`}><EyeOff size={12} /> Privadas</button> 
-              <button onClick={() => setNoteMode('patient')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'patient' ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-gray-400'}`}><Share2 size={12} /> Paciente</button> 
-              <button onClick={() => setNoteMode('professional')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'professional' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}><SlidersHorizontal size={12} /> Profissionais</button> 
+            <div id="note-type-toggles" className="flex bg-gray-100 dark:bg-slate-900/70 p-1 rounded-xl mb-4"> 
+              <button onClick={() => setNoteMode('private')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'private' ? 'bg-white dark:bg-slate-800 text-gray-800 dark:text-white shadow-sm' : 'text-gray-400 dark:text-slate-300'}`}><EyeOff size={12} /> Privadas</button> 
+              <button onClick={() => setNoteMode('patient')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'patient' ? 'bg-white dark:bg-slate-800 text-[#7a32fc] dark:text-violet-200 shadow-sm' : 'text-gray-400 dark:text-slate-300'}`}><Share2 size={12} /> Paciente</button> 
+              <button onClick={() => setNoteMode('professional')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'professional' ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-200 shadow-sm' : 'text-gray-400 dark:text-slate-300'}`}><SlidersHorizontal size={12} /> Profissionais</button> 
             </div> 
 
             <div className="flex items-center justify-between mb-2 px-1">
-              <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-100 flex items-center gap-2">
                 {noteMode === 'private' ? <FileText size={16} className="text-gray-500"/> : noteMode === 'patient' ? <Share2 size={16} className="text-[#7a32fc]"/> : <SlidersHorizontal size={16} className="text-indigo-600"/>}
                 {noteMode === 'private' ? "Nova Anotação Privada" : noteMode === 'patient' ? "Enviar para Paciente (Portátil)" : "Compartilhar com Profissionais (Portátil)"}
               </h3>
@@ -3621,18 +3632,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </div>
             )}
 
-            <div id="note-input-area" className={`bg-white p-4 rounded-2xl shadow-sm border border-gray-100 transition-colors ${noteMode === 'patient' ? 'border-[#7a32fc]/20 bg-blue-50/30' : noteMode === 'professional' ? 'border-indigo-100 bg-indigo-50/30' : ''}`}> 
+            <div id="note-input-area" className={`bg-white dark:bg-[#101b2e] p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-700 transition-colors ${noteMode === 'patient' ? 'border-[#7a32fc]/20 bg-blue-50/30 dark:bg-violet-500/10' : noteMode === 'professional' ? 'border-indigo-100 bg-indigo-50/30 dark:bg-indigo-500/10' : ''}`}> 
               <div className="mb-3">
                 <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1 ml-1">Assunto / Tema</label>
-                <input type="text" className="w-full bg-gray-50 rounded-xl p-2 text-xs outline-none border border-transparent focus:border-[#7551FF] focus:bg-white transition-all" placeholder="Ex: Comportamento, Evolução, Social..." value={newNoteSubject} onChange={e => setNewNoteSubject(e.target.value)} />
+                <input type="text" className="w-full bg-gray-50 dark:bg-slate-800 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 focus:border-[#7551FF] focus:bg-white dark:focus:bg-slate-800 transition-all text-slate-800 dark:text-slate-100" placeholder="Ex: Comportamento, Evolução, Social..." value={newNoteSubject} onChange={e => setNewNoteSubject(e.target.value)} />
               </div>
-              <textarea className="w-full h-24 bg-gray-50 rounded-xl p-3 text-sm outline-none border border-transparent focus:border-[#7551FF] focus:bg-white transition-all resize-none" placeholder={noteMode === 'private' ? "Digite observações clínicas..." : noteMode === 'patient' ? "Escreva uma orientação ou feedback (Portátil)..." : "Informações para outros profissionais (Portátil)..."} value={newNote} onChange={(e) => setNewNote(e.target.value)}></textarea> 
+              <textarea className="w-full h-24 bg-gray-50 dark:bg-slate-800 rounded-xl p-3 text-sm outline-none border border-transparent dark:border-slate-700 focus:border-[#7551FF] focus:bg-white dark:focus:bg-slate-800 transition-all resize-none text-slate-800 dark:text-slate-100" placeholder={noteMode === 'private' ? "Digite observações clínicas..." : noteMode === 'patient' ? "Escreva uma orientação ou feedback (Portátil)..." : "Informações para outros profissionais (Portátil)..."} value={newNote} onChange={(e) => setNewNote(e.target.value)}></textarea> 
               <button onClick={handleAddNoteWithSubject} className={`w-full mt-3 text-white font-semibold py-3 rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2 ${noteMode === 'private' ? 'bg-[#7551FF]' : noteMode === 'patient' ? 'bg-[#7a32fc]' : 'bg-indigo-600'}`}>{noteMode === 'private' ? "Salvar Nota" : noteMode === 'patient' ? "Enviar Mensagem" : "Compartilhar com Equipe"}</button> 
             </div> 
 
             <div className="space-y-3"> 
               {filteredNotes.length > 0 ? (filteredNotes.map((note: any) => ( 
-                <div key={note.id} className={`bg-white p-4 rounded-2xl border shadow-sm relative group transition-all ${(note.visibility === 'patient' || note.type === 'shared') ? 'border-[#7a32fc]/30 bg-blue-50/20' : (note.visibility === 'professional' || note.type === 'professional') ? 'border-indigo-200 bg-indigo-50/20' : 'border-gray-100'}`}> 
+                <div key={note.id} className={`bg-white dark:bg-[#101b2e] p-4 rounded-2xl border shadow-sm relative group transition-all ${(note.visibility === 'patient' || note.type === 'shared') ? 'border-[#7a32fc]/30 bg-blue-50/20 dark:bg-violet-500/10' : (note.visibility === 'professional' || note.type === 'professional') ? 'border-indigo-200 bg-indigo-50/20 dark:bg-indigo-500/10' : 'border-gray-100 dark:border-slate-700'}`}> 
                   <div className="flex justify-between items-start mb-2">
                     <div className="flex flex-col">
                       <span className="text-[10px] font-semibold text-gray-400 uppercase block">{note.date}</span>
@@ -3656,7 +3667,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       )}
                     </div>
                   </div> 
-                  <p className="text-sm text-gray-700 whitespace-pre-wrap mb-1">{normalizeNoteText(note.text)}</p> 
+                  <p className="text-sm text-gray-700 dark:text-slate-200 whitespace-pre-wrap mb-1">{normalizeNoteText(note.text)}</p> 
                   <div className="flex items-center gap-2 mt-2">
                     {(note.visibility === 'patient' || note.type === 'shared') && <span className="text-[9px] font-semibold bg-[#7a32fc] text-white px-2 py-0.5 rounded-full uppercase">Visível para Paciente (Portátil)</span>}
                     {(note.visibility === 'professional' || note.type === 'professional') && <span className="text-[9px] font-semibold bg-indigo-600 text-white px-2 py-0.5 rounded-full uppercase">Visível para Equipe (Portátil)</span>}
@@ -3842,7 +3853,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
               <div className="mt-8">
                 <div className="flex items-center justify-between mb-4">
-                  <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-tight flex items-center gap-2">
+                  <h4 className="text-xs font-semibold text-gray-700 dark:text-slate-100 uppercase tracking-tight flex items-center gap-2">
                     <FileText size={16} className="text-[#7a32fc]" /> {isKidsProfile ? 'Incluir Observações Clínicas' : 'Incluir Anotações de Evolução'}
                   </h4>
                   <span className="text-[10px] font-semibold text-gray-400 uppercase">
@@ -3855,13 +3866,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                         <div
                           key={note.id}
                           onClick={() => toggleReportNote(note.id)}
-                          className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedReportNotes.includes(note.id) ? 'border-[#7a32fc] bg-blue-50/50 shadow-sm' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200'}`}
+                          className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedReportNotes.includes(note.id) ? 'border-[#7a32fc] bg-blue-50/50 dark:bg-violet-500/15 shadow-sm' : 'border-gray-100 dark:border-slate-700 bg-gray-50 dark:bg-slate-800 hover:bg-white dark:hover:bg-slate-700 hover:border-gray-200'}`}
                         >
                           <div className="flex justify-between items-start mb-2">
                             <span className="text-[9px] font-semibold text-gray-400 uppercase">{note.date}</span>
                             {selectedReportNotes.includes(note.id) && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
                           </div>
-                          <p className="text-xs text-gray-600 line-clamp-3">{normalizeNoteText(note.text)}</p>
+                          <p className="text-xs text-gray-600 dark:text-slate-200 line-clamp-3">{normalizeNoteText(note.text)}</p>
                         </div>
                       ))
                     : adultTasksInPeriod.map((task: any) => {
@@ -3870,7 +3881,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                           <div
                             key={`adult-evo-select-${task.id}`}
                             onClick={() => toggleAdultEvolutionSelection(String(task.id))}
-                            className={`p-4 rounded-2xl border cursor-pointer transition-all ${selected ? 'border-[#7a32fc] bg-blue-50/50 shadow-sm' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200'}`}
+                            className={`p-4 rounded-2xl border cursor-pointer transition-all ${selected ? 'border-[#7a32fc] bg-blue-50/50 dark:bg-violet-500/15 shadow-sm' : 'border-gray-100 dark:border-slate-700 bg-gray-50 dark:bg-slate-800 hover:bg-white dark:hover:bg-slate-700 hover:border-gray-200'}`}
                           >
                             <div className="flex justify-between items-start mb-2">
                               <span className="text-[9px] font-semibold text-gray-400 uppercase">
@@ -3878,9 +3889,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               </span>
                               {selected && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
                             </div>
-                            <p className="text-xs font-semibold text-gray-700">{task.taskTitle}</p>
-                            <p className="text-[11px] text-gray-500 mt-1">Esforço {task.patientEffort}% • Nota {task.professionalScore ?? '-'} / {task.maxScore}</p>
-                            <p className="text-xs text-gray-600 line-clamp-2 mt-1">{task.evolutionNote || 'Sem anotação técnica.'}</p>
+                            <p className="text-xs font-semibold text-gray-700 dark:text-slate-100">{task.taskTitle}</p>
+                            <p className="text-[11px] text-gray-500 dark:text-slate-300 mt-1">Esforço {task.patientEffort}% • Nota {task.professionalScore ?? '-'} / {task.maxScore}</p>
+                            <p className="text-xs text-gray-600 dark:text-slate-200 line-clamp-2 mt-1">{task.evolutionNote || 'Sem anotação técnica.'}</p>
                           </div>
                         );
                       })}
@@ -3892,7 +3903,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                     Anotação adicional do relatório
                   </label>
                   <textarea
-                    className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm outline-none resize-none"
+                    className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-3 text-sm outline-none resize-none text-slate-800 dark:text-slate-100"
                     rows={3}
                     placeholder="Resumo clínico adicional para o PDF final."
                     value={reportAdditionalNote}
@@ -3923,12 +3934,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         ) : activeTab === 'plan' ? ( 
           <div className="space-y-6 animate-fade-in"> 
             {isKidsProfile && (
-              <div className="bg-white p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 relative overflow-hidden">
+              <div className="bg-white dark:bg-[#101b2e] p-6 rounded-[32px] shadow-sm border border-gray-100 dark:border-slate-700 mb-6 relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-[#05CD99]/5 rounded-bl-full -z-0"></div>
                 <div className="flex items-center justify-between mb-6 relative z-10">
                   <div>
-                    <h3 className="text-xl font-semibold text-gray-800 tracking-tight">PEI - Plano de Ensino Individualizado</h3>
-                    <p className="text-xs text-gray-500 font-semibold uppercase tracking-widest mt-1">Metas e Objetivos de Intervenção</p>
+                    <h3 className="text-xl font-semibold text-gray-800 dark:text-slate-50 tracking-tight">PEI - Plano de Ensino Individualizado</h3>
+                    <p className="text-xs text-gray-500 dark:text-slate-300 font-semibold uppercase tracking-widest mt-1">Metas e Objetivos de Intervenção</p>
                   </div>
                   <div className="flex gap-2">
                     {patient.pei?.some((g: any) => g.isPriority || g.status === 'in_progress') && (
@@ -4055,14 +4066,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               {term === 'short' ? 'Curto Prazo' : term === 'medium' ? 'Médio Prazo' : 'Longo Prazo'}
                             </h5>
                             {termGoals.sort((a: any, b: any) => (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0)).map((goal: any) => (
-                              <div key={goal.id} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm group hover:shadow-md transition-all">
+                              <div key={goal.id} className="bg-white dark:bg-[#101b2e] p-5 rounded-2xl border border-gray-100 dark:border-slate-700 shadow-sm group hover:shadow-md transition-all">
                                 <div className="flex justify-between items-start mb-3">
                                   <div>
                                     <div className="flex items-center gap-2 mb-1">
                                       <span className="text-[9px] font-semibold text-[#05CD99] bg-[#05CD99]/10 px-2 py-0.5 rounded-full uppercase">{goal.protocolTitle}</span>
-                                      <span className="text-[9px] font-semibold text-gray-400 uppercase">{goal.domainName}</span>
+                                      <span className="text-[9px] font-semibold text-gray-400 dark:text-slate-300 uppercase">{goal.domainName}</span>
                                       <select 
-                                        className="text-[9px] font-semibold bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full uppercase outline-none"
+                                        className="text-[9px] font-semibold bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-200 px-2 py-0.5 rounded-full uppercase outline-none"
                                         value={goal.term}
                                         onChange={(e) => {
                                           const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, term: e.target.value } : g);
@@ -4074,7 +4085,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                         <option value="long">Longo Prazo</option>
                                       </select>
                                     </div>
-                                    <h4 className="font-semibold text-gray-800 text-base flex items-center gap-2">
+                                    <h4 className="font-semibold text-gray-800 dark:text-slate-50 text-base flex items-center gap-2">
                                       {goal.name}
                                       <button 
                                         onClick={() => {
@@ -4092,14 +4103,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                         <MasteryDots count={getMasteryProgress(goal) || 0} status={goal.status} target={getGoalMasteryTarget(goal)} />
                                       </div>
                                     )}
-                                    <p className="text-xs text-gray-500 mt-1">{goal.objective}</p>
+                                    <p className="text-xs text-gray-500 dark:text-slate-300 mt-1">{goal.objective}</p>
                                   </div>
                                     <div className="flex items-center gap-2">
                                       <select 
                                         className={`text-[10px] font-semibold px-3 py-1.5 rounded-xl outline-none appearance-none uppercase tracking-wider border-2 transition-all ${
-                                          goal.status === 'completed' ? 'bg-green-100 text-green-600 border-green-200' : 
-                                          goal.status === 'in_progress' ? 'bg-blue-100 text-blue-600 border-blue-200' : 
-                                          'bg-gray-100 text-gray-400 border-gray-200'
+                                          goal.status === 'completed' ? 'bg-green-100 dark:bg-emerald-500/15 text-green-600 dark:text-emerald-200 border-green-200 dark:border-emerald-400/30' : 
+                                          goal.status === 'in_progress' ? 'bg-blue-100 dark:bg-blue-500/15 text-blue-600 dark:text-blue-200 border-blue-200 dark:border-blue-400/30' : 
+                                          'bg-gray-100 dark:bg-slate-800 text-gray-400 dark:text-slate-300 border-gray-200 dark:border-slate-700'
                                         }`}
                                         value={goal.status}
                                         onChange={(e) => {
@@ -4140,23 +4151,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                   <div className="flex justify-between items-center">
                                     <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Progresso da Meta</span>
                                     <span className={`text-xs font-semibold px-2 py-0.5 rounded-lg ${
-                                      goal.progress >= 100 ? 'bg-green-100 text-green-600' : 
-                                      goal.progress >= 60 ? 'bg-blue-100 text-blue-600' : 
-                                      'bg-gray-100 text-gray-600'
-                                    }`}>{goal.progress}%</span>
+                                      getGoalProgressPercent(goal) >= 100 ? 'bg-green-100 dark:bg-emerald-500/15 text-green-600 dark:text-emerald-200 border border-green-200 dark:border-emerald-400/30' : 
+                                      getGoalProgressPercent(goal) >= 60 ? 'bg-blue-100 dark:bg-blue-500/15 text-blue-600 dark:text-blue-200 border border-blue-200 dark:border-blue-400/30' : 
+                                      'bg-gray-100 dark:bg-violet-500/15 text-gray-600 dark:text-violet-100 border border-gray-200 dark:border-violet-400/30'
+                                    }`}>{getGoalProgressPercent(goal)}%</span>
                                   </div>
-                                  <div className="relative w-full h-4 bg-gray-100 rounded-full overflow-hidden shadow-inner border border-gray-200/50">
+                                  <div className="relative w-full h-4 bg-gray-100 dark:bg-slate-800 rounded-full overflow-hidden shadow-inner border border-gray-200/50 dark:border-slate-700">
                                     {/* Progress Fill with Gradient */}
                                     <div 
                                       className={`absolute top-0 left-0 h-full transition-all duration-1000 ease-out ${
-                                        goal.progress >= 100 ? 'bg-gradient-to-r from-green-400 to-emerald-600' :
-                                        goal.progress >= 80 ? 'bg-gradient-to-r from-blue-400 to-indigo-500' :
-                                        goal.progress >= 60 ? 'bg-gradient-to-r from-cyan-400 to-blue-500' :
-                                        goal.progress >= 40 ? 'bg-gradient-to-r from-yellow-400 to-orange-500' :
-                                        goal.progress >= 20 ? 'bg-gradient-to-r from-orange-400 to-red-500' :
+                                        getGoalProgressPercent(goal) >= 100 ? 'bg-gradient-to-r from-green-400 to-emerald-600' :
+                                        getGoalProgressPercent(goal) >= 80 ? 'bg-gradient-to-r from-blue-400 to-indigo-500' :
+                                        getGoalProgressPercent(goal) >= 60 ? 'bg-gradient-to-r from-cyan-400 to-blue-500' :
+                                        getGoalProgressPercent(goal) >= 40 ? 'bg-gradient-to-r from-yellow-400 to-orange-500' :
+                                        getGoalProgressPercent(goal) >= 20 ? 'bg-gradient-to-r from-orange-400 to-red-500' :
                                         'bg-gradient-to-r from-red-500 to-rose-600'
                                       }`}
-                                      style={{ width: `${goal.progress}%` }}
+                                      style={{ width: `${getGoalProgressPercent(goal)}%` }}
                                     >
                                       {/* Animated Shine Effect */}
                                       <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -skew-x-12 animate-pulse"></div>
@@ -4173,7 +4184,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                     <input 
                                       type="range" 
                                       className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                                      value={goal.progress}
+                                      value={getGoalProgressPercent(goal)}
                                       onChange={(e) => {
                                         const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, progress: parseInt(e.target.value) } : g);
                                         onUpdatePatient({ ...patient, pei: updatedPEI });
@@ -4182,8 +4193,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                   </div>
                                   {patientCategory === 'Criança' && (
                                     <div className="flex justify-between px-1">
-                                      <span className="text-[8px] font-semibold text-gray-300 uppercase">Início</span>
-                                      <span className="text-[8px] font-semibold text-gray-300 uppercase">Maestria</span>
+                                      <span className="text-[8px] font-semibold text-gray-300 dark:text-slate-400 uppercase">Início</span>
+                                      <span className="text-[8px] font-semibold text-gray-300 dark:text-slate-400 uppercase">Maestria</span>
                                     </div>
                                   )}
                                 </div>
@@ -4539,18 +4550,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           </div> 
         ) : activeTab === 'session' && isKidsProfile ? (
           <div className="space-y-6 animate-fade-in">
-            <div className="bg-white p-8 rounded-[40px] shadow-sm border border-gray-100 relative overflow-hidden">
+            <div className="bg-white dark:bg-[#101b2e] p-8 rounded-[40px] shadow-sm border border-gray-100 dark:border-slate-700 relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-[#7a32fc]/5 rounded-bl-full -z-0"></div>
               <div className="flex items-center justify-between mb-8 relative z-10">
                 <div>
-                  <h3 className="text-2xl font-semibold text-gray-800 tracking-tight">Registro de Sessão</h3>
-                  <p className="text-xs text-gray-500 font-semibold uppercase tracking-widest mt-1">Pontuação DinÃ¢mica de Metas Prioritárias</p>
+                  <h3 className="text-2xl font-semibold text-gray-800 dark:text-slate-50 tracking-tight">Registro de Sessão</h3>
+                  <p className="text-xs text-gray-500 dark:text-slate-300 font-semibold uppercase tracking-widest mt-1">Pontuação DinÃ¢mica de Metas Prioritárias</p>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-3">
                   {activeSession && (
-                    <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-2 text-right">
+                    <div className="rounded-2xl border border-violet-100 dark:border-violet-400/30 bg-violet-50 dark:bg-violet-500/10 px-4 py-2 text-right">
                       <p className="text-[9px] font-semibold uppercase tracking-widest text-[#7a32fc]">Sessão em andamento</p>
-                      <p className="text-xl font-semibold text-gray-900">{formatSessionCountdown(remainingSessionSeconds)}</p>
+                      <p className="text-xl font-semibold text-gray-900 dark:text-slate-50">{formatSessionCountdown(remainingSessionSeconds)}</p>
                     </div>
                   )}
                   {activeSession && (
@@ -4574,14 +4585,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               <div className="space-y-6">
                 {patient.pei?.filter((g: any) => g.isPriority || g.status === 'in_progress').length > 0 ? (
                   patient.pei.filter((g: any) => g.isPriority || g.status === 'in_progress').map((goal: any) => (
-                      <div key={goal.id} className="bg-gray-50 p-6 rounded-[32px] border border-gray-100 relative group">
+                      <div key={goal.id} className="bg-gray-50 dark:bg-slate-800 p-6 rounded-[32px] border border-gray-100 dark:border-slate-700 relative group">
                         {showTrialConfirmation && lastRecordedGoalId === goal.id && (
-                          <div className="absolute inset-x-0 bottom-0 z-30 bg-white/95 backdrop-blur-sm border-t border-gray-100 p-4 animate-slide-up rounded-b-[32px]">
+                          <div className="absolute inset-x-0 bottom-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-t border-gray-100 dark:border-slate-700 p-4 animate-slide-up rounded-b-[32px]">
                             <div className="flex items-center gap-3">
                               <div className="flex-1">
                                 <input 
                                   type="text"
-                                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-green-500 transition-all"
+                                  className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-green-500 transition-all text-slate-800 dark:text-slate-100"
                                   placeholder="Anotações do Profissional (opcional)..."
                                   value={trialObservation}
                                   onChange={(e) => setTrialObservation(e.target.value)}
@@ -4610,13 +4621,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                             <span className="text-[9px] font-semibold text-[#7a32fc] bg-[#7a32fc]/10 px-3 py-1 rounded-full uppercase tracking-widest mb-2 inline-block">
                               {goal.domainName}
                             </span>
-                            <h4 className="text-xl font-semibold text-gray-800 tracking-tight">{goal.name}</h4>
+                            <h4 className="text-xl font-semibold text-gray-800 dark:text-slate-50 tracking-tight">{goal.name}</h4>
                             {patientCategory === 'Criança' && (
                               <div className="mt-2">
                                 <MasteryDots count={getMasteryProgress(goal) || 0} status={goal.status} target={getGoalMasteryTarget(goal)} />
                               </div>
                             )}
-                            <p className="text-xs text-gray-500 mt-1 font-medium">{goal.objective}</p>
+                            <p className="text-xs text-gray-500 dark:text-slate-300 mt-1 font-medium">{goal.objective}</p>
                           </div>
                         </div>
 
@@ -4660,8 +4671,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                         </div>
                       
                       <div className="mt-4 flex items-center justify-center gap-2">
-                        <Info size={12} className="text-gray-300" />
-                        <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">
+                        <Info size={12} className="text-gray-300 dark:text-slate-500" />
+                        <p className="text-[10px] font-semibold text-gray-400 dark:text-slate-300 uppercase tracking-widest">
                           Critério: {goal.criteria || "Nenhum critério definido"}
                         </p>
                       </div>
