@@ -15,6 +15,29 @@ type CronServiceOptions = {
 };
 
 const BRAZIL_TIMEZONE = 'America/Sao_Paulo';
+const BRAZIL_NOTIFICATION_START_MINUTE = 8 * 60;
+const BRAZIL_NOTIFICATION_END_MINUTE = 21 * 60;
+const CRON_LOOKBACK_MINUTES = 20;
+const REMINDER_STEPS = [
+  {
+    kind: '24h',
+    hoursBefore: 24,
+    sentColumn: 'notification_sent',
+    sentAtColumn: 'notification_sent_at',
+    requiresPreviousSent: false,
+    title: 'Lembrete de Consulta',
+    body: 'Sua consulta pela Verto é amanhã! Clique aqui para confirmar ou remarcar.'
+  },
+  {
+    kind: '12h',
+    hoursBefore: 12,
+    sentColumn: 'notification_12h_sent',
+    sentAtColumn: 'notification_12h_sent_at',
+    requiresPreviousSent: true,
+    title: 'Confirmação de Consulta',
+    body: 'Sua consulta está chegando. Confirme sua presença para ajudar a evitar faltas e remarcações.'
+  }
+] as const;
 let started = false;
 let running = false;
 
@@ -24,6 +47,29 @@ const sanitizeText = (value: unknown, maxLength = 240) =>
 const isGonePushError = (error: any) => {
   const statusCode = Number(error?.statusCode ?? error?.status);
   return statusCode === 404 || statusCode === 410;
+};
+
+const minutesFromStartOfDay = (date: dayjs.Dayjs) => date.hour() * 60 + date.minute();
+
+const isWithinBrazilNotificationWindow = (date: dayjs.Dayjs) => {
+  const minutes = minutesFromStartOfDay(date.tz(BRAZIL_TIMEZONE));
+  return minutes >= BRAZIL_NOTIFICATION_START_MINUTE && minutes <= BRAZIL_NOTIFICATION_END_MINUTE;
+};
+
+const resolveAdjustedReminderTimeUtc = (scheduledAt: string, hoursBefore: number) => {
+  const idealBrazil = dayjs(scheduledAt).tz(BRAZIL_TIMEZONE).subtract(hoursBefore, 'hour');
+  const idealMinute = minutesFromStartOfDay(idealBrazil);
+  const reminderDayStart = idealBrazil.startOf('day');
+
+  if (idealMinute < BRAZIL_NOTIFICATION_START_MINUTE) {
+    return reminderDayStart.add(BRAZIL_NOTIFICATION_START_MINUTE, 'minute').utc();
+  }
+
+  if (idealMinute > BRAZIL_NOTIFICATION_END_MINUTE) {
+    return reminderDayStart.add(BRAZIL_NOTIFICATION_END_MINUTE, 'minute').utc();
+  }
+
+  return idealBrazil.utc();
 };
 
 async function deleteInvalidSubscription(supabase: any, endpoint: string, logger: CronServiceOptions['logger']) {
@@ -47,9 +93,11 @@ async function sendReminderToPatient(params: {
   supabase: any;
   appointmentId: string;
   patientId: string;
+  title: string;
+  body: string;
   logger: CronServiceOptions['logger'];
 }) {
-  const { supabase, appointmentId, patientId, logger } = params;
+  const { supabase, appointmentId, patientId, title, body, logger } = params;
 
   const { data: subscriptions, error } = await supabase
     .from('push_subscriptions')
@@ -70,8 +118,8 @@ async function sendReminderToPatient(params: {
   if (!rows.length) return { sent: 0, failed: 0 };
 
   const payload = JSON.stringify({
-    title: 'Lembrete de Consulta',
-    body: 'Sua consulta pela Verto é amanhã! Clique aqui para confirmar ou remarcar.',
+    title,
+    body,
     url: `/consulta?appointment_id=${encodeURIComponent(appointmentId)}`,
     appointmentId
   });
@@ -108,17 +156,31 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
 
   try {
     const nowUtc = dayjs().utc();
-    const windowStartUtc = nowUtc.add(23, 'hour').add(45, 'minute');
-    const windowEndUtc = nowUtc.add(24, 'hour').add(15, 'minute');
+    const nowBrazil = nowUtc.tz(BRAZIL_TIMEZONE);
+    if (!isWithinBrazilNotificationWindow(nowBrazil)) {
+      options.logger.log('[Appointment Reminder Cron] Fora da janela de notificação em Brasília. Execução ignorada.', {
+        trigger,
+        nowBrazil: nowBrazil.format(),
+        notificationWindowBrazil: '08:00-21:00'
+      });
+      return;
+    }
+
+    const reminderWindowStartUtc = nowUtc.subtract(CRON_LOOKBACK_MINUTES, 'minute');
+    const reminderWindowEndUtc = nowUtc.add(1, 'minute');
+    const queryScheduledStartUtc = nowUtc;
+    const queryScheduledEndUtc = nowUtc.add(28, 'hour');
 
     const { data: appointments, error } = await options.supabase
       .from('appointments')
-      .select('id, patient_id, scheduled_at, status, notification_sent')
+      .select('id, patient_id, scheduled_at, status, notification_sent, notification_12h_sent')
       .neq('status', 'cancelled')
       .neq('status', 'canceled')
-      .or('notification_sent.is.false,notification_sent.is.null')
-      .gte('scheduled_at', windowStartUtc.toISOString())
-      .lt('scheduled_at', windowEndUtc.toISOString())
+      .neq('status', 'confirmed')
+      .neq('status', 'reschedule')
+      .or('notification_sent.is.false,notification_sent.is.null,notification_12h_sent.is.false,notification_12h_sent.is.null')
+      .gte('scheduled_at', queryScheduledStartUtc.toISOString())
+      .lt('scheduled_at', queryScheduledEndUtc.toISOString())
       .order('scheduled_at', { ascending: true })
       .limit(250);
 
@@ -133,13 +195,30 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
     for (const appointment of appointments || []) {
       const appointmentId = sanitizeText(appointment?.id, 120);
       const patientId = sanitizeText(appointment?.patient_id, 120);
-      if (!appointmentId || !patientId) continue;
+      const scheduledAt = sanitizeText(appointment?.scheduled_at, 80);
+      if (!appointmentId || !patientId || !scheduledAt) continue;
+
+      const dueReminder = REMINDER_STEPS.find((step) => {
+        const alreadySent = Boolean(appointment?.[step.sentColumn]);
+        if (alreadySent) return false;
+        if (step.requiresPreviousSent && !Boolean(appointment?.notification_sent)) return false;
+
+        const adjustedReminderUtc = resolveAdjustedReminderTimeUtc(scheduledAt, step.hoursBefore);
+        return (
+          !adjustedReminderUtc.isBefore(reminderWindowStartUtc) &&
+          !adjustedReminderUtc.isAfter(reminderWindowEndUtc)
+        );
+      });
+
+      if (!dueReminder) continue;
 
       try {
         const result = await sendReminderToPatient({
           supabase: options.supabase,
           appointmentId,
           patientId,
+          title: dueReminder.title,
+          body: dueReminder.body,
           logger: options.logger
         });
 
@@ -147,14 +226,15 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
           const { error: updateError } = await options.supabase
             .from('appointments')
             .update({
-              notification_sent: true,
-              notification_sent_at: dayjs().utc().toISOString()
+              [dueReminder.sentColumn]: true,
+              [dueReminder.sentAtColumn]: dayjs().utc().toISOString()
             })
             .eq('id', appointmentId);
 
           if (updateError) {
-            options.logger.warn('[Appointment Reminder Cron] Push enviado, mas update de notification_sent falhou.', {
+            options.logger.warn('[Appointment Reminder Cron] Push enviado, mas update do marcador de notificação falhou.', {
               appointmentId,
+              reminderKind: dueReminder.kind,
               message: updateError.message
             });
           }
@@ -170,10 +250,12 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
 
     options.logger.log('[Appointment Reminder Cron] Execução concluída.', {
       trigger,
-      checkedWindowStartUtc: windowStartUtc.toISOString(),
-      checkedWindowEndUtc: windowEndUtc.toISOString(),
-      checkedWindowStartBrazil: windowStartUtc.tz(BRAZIL_TIMEZONE).format(),
-      checkedWindowEndBrazil: windowEndUtc.tz(BRAZIL_TIMEZONE).format(),
+      reminderWindowStartUtc: reminderWindowStartUtc.toISOString(),
+      reminderWindowEndUtc: reminderWindowEndUtc.toISOString(),
+      queryScheduledStartUtc: queryScheduledStartUtc.toISOString(),
+      queryScheduledEndUtc: queryScheduledEndUtc.toISOString(),
+      nowBrazil: nowBrazil.format(),
+      notificationWindowBrazil: '08:00-21:00',
       total: appointments?.length || 0
     });
   } catch (error: any) {
