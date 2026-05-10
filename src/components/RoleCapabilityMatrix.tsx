@@ -40,10 +40,9 @@ export function RoleCapabilityMatrix() {
   return (
     <section className="bg-white rounded-[32px] border border-slate-100 shadow-sm p-6 md:p-8">
       <div className="mb-8">
-        <h2 className="text-xl font-bold text-slate-900 tracking-tight">Matriz de Capacidade por Role</h2>
+        <h2 className="text-xl font-bold text-slate-900 tracking-tight">Matriz de permissões da equipe</h2>
         <p className="text-sm text-slate-500 mt-2">
-          Fonte única para separar os papéis no produto e facilitar personalizações futuras no Google IA Studio.
-          Ajuste central em <code>src/constants/roleCapabilities.ts</code>.
+          Consulte rapidamente o que coordenadores, recepcionistas e terapeutas podem acessar na operação da clínica.
         </p>
       </div>
 

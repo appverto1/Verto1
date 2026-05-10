@@ -1905,16 +1905,31 @@ export const TherapistDashboard = ({
                       patientData?.anamnesisData?.formType === "child";
                     const category = isKid ? "Criança" : "Adulto";
 
-                    const statusColors: any = {
-                      confirmed: "bg-green-50 border-green-100",
-                      pending: "bg-yellow-50 border-yellow-100",
-                      canceled: "bg-red-50 border-red-100",
-                      reschedule: "bg-red-50 border-red-100",
-                      absent: "bg-gray-50 border-gray-100",
-                    };
-                    const cardBg =
-                      statusColors[patientItem.status] ||
-                      "bg-white border-indigo-50";
+                    const normalizedStatus = String(patientItem.status || "pending").toLowerCase();
+                    const isCancelled = normalizedStatus === "canceled" || normalizedStatus === "cancelled";
+                    const isReschedule = normalizedStatus === "reschedule";
+                    const isConfirmed = normalizedStatus === "confirmed";
+                    const cardBg = isConfirmed
+                      ? "bg-green-50 border-green-300"
+                      : isReschedule
+                        ? "bg-amber-50 border-amber-300"
+                        : isCancelled
+                          ? "bg-gray-50 border-red-100 border-l-4 border-l-red-500 opacity-60"
+                          : "bg-yellow-50 border-yellow-100";
+                    const statusBadgeClass = isConfirmed
+                      ? "bg-green-500 text-white"
+                      : isReschedule
+                        ? "bg-amber-500 text-white"
+                        : isCancelled
+                          ? "bg-red-500 text-white"
+                          : "bg-yellow-100 text-yellow-600";
+                    const statusLabel = isConfirmed
+                      ? "Confirmado"
+                      : isReschedule
+                        ? "Atenção"
+                        : isCancelled
+                          ? "Cancelado"
+                          : "Pendente";
 
                     return (
                       <div
@@ -1946,13 +1961,10 @@ export const TherapistDashboard = ({
                           </div>
                           <div className="flex flex-col items-end gap-1">
                             <span
-                              className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase ${patientItem.status === "confirmed" ? "bg-green-100 text-green-600" : patientItem.status === "pending" ? "bg-yellow-100 text-yellow-600" : "bg-red-100 text-red-500"}`}
+                              className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase inline-flex items-center gap-1 ${statusBadgeClass}`}
                             >
-                              {patientItem.status === "confirmed"
-                                ? "Conf"
-                                : patientItem.status === "pending"
-                                  ? "Pend"
-                                  : "Canc"}
+                              {isConfirmed ? <CheckCircle2 size={11} /> : isReschedule ? <AlertCircle size={11} /> : isCancelled ? <X size={11} /> : <Clock size={11} />}
+                              {statusLabel}
                             </span>
                             <span
                               className={`text-[8px] font-semibold px-1.5 py-0.5 rounded-full uppercase tracking-tighter ${isKid ? "bg-pink-100 text-pink-500" : "bg-indigo-50 text-indigo-500"}`}
@@ -1976,10 +1988,10 @@ export const TherapistDashboard = ({
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleStatusUpdate(patientItem.id, "pending");
+                                handleStatusUpdate(patientItem.id, "reschedule");
                               }}
-                              title="Pendente"
-                              className={`flex-1 flex items-center justify-center py-2 rounded-xl transition-all border ${patientItem.status === "pending" ? "bg-yellow-500 text-white border-yellow-500 shadow-lg shadow-yellow-500/20" : "bg-white text-yellow-500 border-yellow-100 hover:bg-yellow-50"}`}
+                              title="Remarcar"
+                              className={`flex-1 flex items-center justify-center py-2 rounded-xl transition-all border ${patientItem.status === "reschedule" ? "bg-yellow-500 text-white border-yellow-500 shadow-lg shadow-yellow-500/20" : "bg-white text-yellow-500 border-yellow-100 hover:bg-yellow-50"}`}
                             >
                               <Clock size={16} strokeWidth={3} />
                             </button>
@@ -2001,7 +2013,7 @@ export const TherapistDashboard = ({
                               >
                               {(String(patientItem?.name || "P").trim().charAt(0) || "P").toUpperCase()}
                               </div>
-                              <h3 className="font-semibold text-gray-700 text-sm truncate tracking-tight max-w-[100px]">
+                              <h3 className={`font-semibold text-gray-700 text-sm truncate tracking-tight max-w-[100px] ${isCancelled ? "line-through decoration-2 decoration-red-500" : ""}`}>
                                 {patientItem.name}
                               </h3>
                               <p className="text-[10px] text-gray-400 font-medium">

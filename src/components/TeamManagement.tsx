@@ -18,7 +18,6 @@ import {
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { motion, AnimatePresence } from 'framer-motion';
-import { RoleCapabilityMatrix } from './RoleCapabilityMatrix';
 
 interface Member {
   id: string;
@@ -592,10 +591,6 @@ export function TeamManagement({
               </div>
             )}
           </div>
-        </div>
-
-        <div className="lg:col-span-3">
-          <RoleCapabilityMatrix />
         </div>
       </div>
     </div>

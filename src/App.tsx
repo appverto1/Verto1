@@ -965,6 +965,11 @@ export default function App() {
 
   const [rooms, setRooms] = useState<any[]>([]);
   const [therapistAgenda, setTherapistAgenda] = useState<any[]>([]);
+  const [appointmentConfirmation, setAppointmentConfirmation] = useState<{
+    appointmentId: string;
+    isUpdating: boolean;
+    message: string;
+  } | null>(null);
 
   const [specialtySettings, setSpecialtySettings] = useState<any>({});
 
@@ -992,6 +997,69 @@ export default function App() {
         status: item.status
       }));
   }, [therapistAgenda, rooms, specialtySettings]);
+
+  const urlBase64ToUint8Array = (base64String: string) => {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = `${base64String}${padding}`.replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
+  };
+
+  useEffect(() => {
+    if (!user || typeof window === 'undefined') return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
+
+    let cancelled = false;
+
+    const registerPush = async () => {
+      try {
+        const registration = await navigator.serviceWorker.register('/sw.js');
+        if (Notification.permission === 'default') {
+          await Notification.requestPermission();
+        }
+        if (cancelled || Notification.permission !== 'granted') return;
+
+        const keyResponse = await fetch('/api/push/vapid-public-key', { credentials: 'include' });
+        const keyPayload = await keyResponse.json().catch(() => ({}));
+        if (!keyResponse.ok || !keyPayload?.publicKey) return;
+
+        const existingSubscription = await registration.pushManager.getSubscription();
+        const subscription =
+          existingSubscription ||
+          (await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(String(keyPayload.publicKey)),
+          }));
+
+        await fetch('/api/push/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ subscription }),
+        });
+      } catch (error) {
+        console.warn('Push registration failed:', error);
+      }
+    };
+
+    void registerPush();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const appointmentId = params.get('appointment_id');
+    if (!appointmentId) return;
+    setAppointmentConfirmation({
+      appointmentId,
+      isUpdating: false,
+      message: '',
+    });
+  }, []);
 
   const [profilePicture, setProfilePicture] = useState<string | null>(null);
   const [crp, setCrp] = useState<string>('');
@@ -1869,8 +1937,19 @@ export default function App() {
       }
     }
   };
-  const handleUpdateAgendaStatus = (id: any, status: string) => {
-    setTherapistAgenda(prev => prev.map(item => item.id === id ? { ...item, status } : item));
+  const handleUpdateAgendaStatus = async (id: any, status: string) => {
+    const normalizedStatus = status === 'cancelled' ? 'canceled' : status;
+    setTherapistAgenda(prev => prev.map(item => String(item.id) === String(id) ? { ...item, status: normalizedStatus } : item));
+    try {
+      await fetch(`/api/appointments/${encodeURIComponent(String(id))}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ status: normalizedStatus })
+      });
+    } catch (error) {
+      console.warn('Falha ao persistir status da consulta imediatamente:', error);
+    }
   };
 
   const handleUpdateAppointment = (id: any, updates: any) => {
@@ -2941,6 +3020,52 @@ export default function App() {
     alert(result.error || 'Nao foi possivel selecionar este workspace.');
   };
 
+  const handleAppointmentConfirmationChoice = async (status: 'confirmed' | 'reschedule' | 'canceled') => {
+    if (!appointmentConfirmation?.appointmentId) return;
+    const feedback =
+      status === 'reschedule'
+        ? 'Anotado! A recepção entrará em contato para reagendar.'
+        : status === 'confirmed'
+          ? 'Presença confirmada com sucesso.'
+          : 'Consulta cancelada. A equipe foi sinalizada.';
+
+    setAppointmentConfirmation((prev) => prev ? { ...prev, isUpdating: true, message: '' } : prev);
+    try {
+      const response = await fetch(`/api/appointments/${encodeURIComponent(appointmentConfirmation.appointmentId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ status })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error || 'Não foi possível atualizar a consulta.');
+      }
+      setTherapistAgenda(prev =>
+        prev.map(item =>
+          String(item.id) === String(appointmentConfirmation.appointmentId)
+            ? { ...item, status }
+            : item
+        )
+      );
+      setAppointmentConfirmation((prev) => prev ? { ...prev, isUpdating: false, message: feedback } : prev);
+      window.history.replaceState({}, document.title, window.location.pathname);
+      if (status !== 'reschedule') {
+        window.setTimeout(() => setAppointmentConfirmation(null), 1600);
+      }
+    } catch (error: any) {
+      setAppointmentConfirmation((prev) =>
+        prev
+          ? {
+              ...prev,
+              isUpdating: false,
+              message: error?.message || 'Não foi possível atualizar a consulta.',
+            }
+          : prev,
+      );
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-white">
@@ -2961,6 +3086,52 @@ export default function App() {
   return (
     <React.Fragment>
       <GlobalStyles />
+      {appointmentConfirmation && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md overflow-hidden rounded-[32px] border border-violet-200 bg-white shadow-[0_30px_80px_rgba(124,58,237,0.28)]">
+            <div className="bg-gradient-to-br from-violet-600 via-fuchsia-500 to-blue-500 p-6 text-white">
+              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/18">
+                <CheckCircle2 size={30} />
+              </div>
+              <h2 className="text-2xl font-black tracking-tight">Lembrete de Consulta - Verto</h2>
+              <p className="mt-2 text-sm font-semibold text-white/90">
+                Olá! Você confirma sua presença para a consulta agendada?
+              </p>
+            </div>
+            <div className="space-y-3 p-5">
+              {appointmentConfirmation.message && (
+                <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-sm font-bold text-violet-700">
+                  {appointmentConfirmation.message}
+                </div>
+              )}
+              <button
+                type="button"
+                disabled={appointmentConfirmation.isUpdating}
+                onClick={() => void handleAppointmentConfirmationChoice('confirmed')}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-600 disabled:opacity-60"
+              >
+                <CheckCircle2 size={18} /> Confirmado
+              </button>
+              <button
+                type="button"
+                disabled={appointmentConfirmation.isUpdating}
+                onClick={() => void handleAppointmentConfirmationChoice('reschedule')}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-amber-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-amber-500/25 transition hover:bg-amber-600 disabled:opacity-60"
+              >
+                <AlertCircle size={18} /> Remarcar
+              </button>
+              <button
+                type="button"
+                disabled={appointmentConfirmation.isUpdating}
+                onClick={() => void handleAppointmentConfirmationChoice('canceled')}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-rose-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-rose-500/25 transition hover:bg-rose-600 disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <Suspense fallback={lazyFallback}>
       
       {!user || userNeedsPatientActivation ? (

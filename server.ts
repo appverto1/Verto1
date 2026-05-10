@@ -15,6 +15,7 @@ import Stripe from 'stripe';
 import { Resend } from 'resend';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import webpush from 'web-push';
 import { generateSecret, verifySync, generateURI } from 'otplib';
 import QRCode from 'qrcode';
 import {
@@ -99,6 +100,16 @@ function getResend() {
     resendClient = new Resend(key);
   }
   return resendClient;
+}
+
+const vapidPublicKey = sanitizeString(process.env.VAPID_PUBLIC_KEY || '', 500);
+const vapidPrivateKey = sanitizeString(process.env.VAPID_PRIVATE_KEY || '', 500);
+const vapidSubject =
+  sanitizeString(process.env.VAPID_SUBJECT || process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '', 500) ||
+  'mailto:suporte@appverto.com.br';
+
+if (vapidPublicKey && vapidPrivateKey) {
+  webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
 }
 
 function normalizeSubscriptionStatusFromStripe(status: string): 'active' | 'pending' | 'delinquent' | 'canceled' {
@@ -6507,6 +6518,175 @@ async function startServer() {
       });
     } catch (error) {
       return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/push/vapid-public-key', (_req, res) => {
+    if (!vapidPublicKey || !vapidPrivateKey) {
+      return res.status(503).json({
+        success: false,
+        error: 'VAPID_NOT_CONFIGURED',
+        message: 'Chaves VAPID ausentes no backend.'
+      });
+    }
+    return res.json({ success: true, publicKey: vapidPublicKey });
+  });
+
+  app.post('/api/push/subscribe', checkAuth, async (req: any, res) => {
+    try {
+      const subscription = req.body?.subscription;
+      const endpoint = sanitizeString(subscription?.endpoint, 2000);
+      if (!endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+        return res.status(400).json({ success: false, error: 'Inscrição push inválida.' });
+      }
+
+      const user = req.session.user;
+      const payload = cleanObject({
+        user_id: sanitizeString(user?.id, 120),
+        clinic_id: currentClinicId(user),
+        role: sanitizeString(user?.role, 40),
+        endpoint,
+        subscription,
+        updated_at: new Date().toISOString()
+      });
+
+      const { error } = await supabase
+        .from('push_subscriptions')
+        .upsert([payload], { onConflict: 'endpoint' });
+
+      if (error) {
+        console.warn('[Push] Não foi possível persistir assinatura push:', error.message);
+        return res.json({
+          success: false,
+          warning: 'Tabela push_subscriptions não encontrada ou indisponível.'
+        });
+      }
+
+      return res.json({ success: true });
+    } catch (error: any) {
+      console.error('[Push] subscribe error:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Erro ao salvar inscrição push.' });
+    }
+  });
+
+  app.patch('/api/appointments/:appointmentId/status', checkAuth, async (req: any, res) => {
+    try {
+      const appointmentId = sanitizeString(req.params.appointmentId, 120);
+      const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();
+      const allowedStatuses = new Set(['pending', 'confirmed', 'reschedule', 'cancelled', 'canceled']);
+      if (!appointmentId || !allowedStatuses.has(requestedStatus)) {
+        return res.status(400).json({ success: false, error: 'Status de consulta inválido.' });
+      }
+
+      const normalizedStatus = requestedStatus === 'cancelled' ? 'canceled' : requestedStatus;
+      const actor = req.session.user;
+      const clinicId = currentClinicId(actor);
+
+      const { data, error } = await supabase
+        .from('clinic_state')
+        .select('appointments')
+        .eq('clinic_id', clinicId)
+        .maybeSingle();
+      if (error) throw error;
+
+      const appointments = Array.isArray(data?.appointments) ? data.appointments : [];
+      let foundAppointment: any = null;
+      const nextAppointments = appointments.map((appointment: any) => {
+        if (String(appointment?.id) !== appointmentId) return appointment;
+        foundAppointment = appointment;
+        return {
+          ...appointment,
+          status: normalizedStatus,
+          statusUpdatedAt: new Date().toISOString(),
+          statusUpdatedBy: sanitizeString(actor?.id, 120)
+        };
+      });
+
+      if (!foundAppointment) {
+        return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
+      }
+
+      if (sanitizeString(actor?.role, 40) === 'patient') {
+        const actorId = sanitizeString(actor?.id, 120);
+        const actorEmail = sanitizeEmail(actor?.email);
+        const appointmentPatientId = sanitizeString(foundAppointment?.patientId || foundAppointment?.patient_id, 120);
+        const appointmentPatientEmail = sanitizeEmail(foundAppointment?.patientEmail || foundAppointment?.patient_email);
+        if (
+          appointmentPatientId !== actorId &&
+          (!actorEmail || appointmentPatientEmail !== actorEmail)
+        ) {
+          return res.status(403).json({ success: false, error: 'Consulta não pertence a este paciente.' });
+        }
+      }
+
+      const { data: updated, error: updateError } = await supabase
+        .from('clinic_state')
+        .update({
+          appointments: nextAppointments,
+          updated_by: sanitizeString(actor?.id, 120),
+          updated_at: new Date().toISOString()
+        })
+        .eq('clinic_id', clinicId)
+        .select('appointments')
+        .single();
+      if (updateError) throw updateError;
+
+      return res.json({
+        success: true,
+        appointment: nextAppointments.find((appointment: any) => String(appointment?.id) === appointmentId),
+        appointments: Array.isArray(updated?.appointments) ? updated.appointments : nextAppointments
+      });
+    } catch (error: any) {
+      console.error('[Appointments] status update error:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Erro ao atualizar status da consulta.' });
+    }
+  });
+
+  app.post('/api/push/appointment-reminder', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!vapidPublicKey || !vapidPrivateKey) {
+        return res.status(503).json({ success: false, error: 'VAPID_NOT_CONFIGURED' });
+      }
+
+      const appointmentId = sanitizeString(req.body?.appointmentId, 120);
+      const patientId = sanitizeString(req.body?.patientId, 120);
+      const targetUrl = `/consulta?appointment_id=${encodeURIComponent(appointmentId)}`;
+      if (!appointmentId || !patientId) {
+        return res.status(400).json({ success: false, error: 'appointmentId e patientId são obrigatórios.' });
+      }
+
+      const { data: subscriptions, error } = await supabase
+        .from('push_subscriptions')
+        .select('subscription')
+        .eq('user_id', patientId)
+        .limit(20);
+      if (error) {
+        console.warn('[Push] Falha ao buscar assinaturas:', error.message);
+        return res.json({ success: false, warning: 'Tabela push_subscriptions indisponível.' });
+      }
+
+      const payload = JSON.stringify({
+        title: 'Lembrete de Consulta - Verto',
+        body: 'Toque para confirmar sua presença.',
+        url: targetUrl,
+        appointmentId
+      });
+
+      const results = await Promise.allSettled(
+        (subscriptions || [])
+          .map((row: any) => row?.subscription)
+          .filter(Boolean)
+          .map((subscription: any) => webpush.sendNotification(subscription, payload))
+      );
+
+      return res.json({
+        success: true,
+        sent: results.filter((result) => result.status === 'fulfilled').length,
+        failed: results.filter((result) => result.status === 'rejected').length
+      });
+    } catch (error: any) {
+      console.error('[Push] appointment reminder error:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Erro ao enviar push.' });
     }
   });
 

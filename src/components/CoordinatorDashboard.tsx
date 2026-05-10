@@ -54,6 +54,7 @@ import { AnamnesisModal } from "./Anamnesis";
 import { RoomReservation } from "./RoomReservation";
 import { ProtocolManagementSystem } from "./Protocols";
 import { StackedDomainStatusChart } from "./StackedDomainStatusChart";
+import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { CalendarWidget, DayDetailsModal } from "./Calendar";
 import { LogoVerto } from "./Common";
 import { SecureImage } from "./SecureMedia";
@@ -1979,6 +1980,44 @@ export function CoordinatorDashboard({
     });
   }, []);
 
+  const getAgendaStatusVisual = (status: string) => {
+    const normalized = String(status || "pending").toLowerCase();
+    if (normalized === "confirmed") {
+      return {
+        card: "border-emerald-400 bg-emerald-50/80 hover:bg-emerald-50",
+        badge: "bg-emerald-500 text-white",
+        label: "Confirmado",
+        icon: CheckCircle2,
+        name: "",
+      };
+    }
+    if (normalized === "reschedule") {
+      return {
+        card: "border-amber-300 bg-amber-50 hover:bg-amber-50",
+        badge: "bg-amber-500 text-white",
+        label: "Atenção",
+        icon: AlertCircle,
+        name: "",
+      };
+    }
+    if (normalized === "canceled" || normalized === "cancelled") {
+      return {
+        card: "border-l-4 border-l-rose-500 border-rose-100 bg-slate-50 opacity-60 hover:bg-slate-50",
+        badge: "bg-rose-500 text-white",
+        label: "Cancelado",
+        icon: XCircle,
+        name: "line-through decoration-2 decoration-rose-500",
+      };
+    }
+    return {
+      card: "border-[#7a32fc]/20 bg-[#7a32fc]/5 hover:bg-[#7a32fc]/10",
+      badge: "bg-violet-100 text-violet-700",
+      label: "Pendente",
+      icon: Clock,
+      name: "",
+    };
+  };
+
   const renderGoogleDayGrid = () => {
     const todayKey = new Date().toISOString().split("T")[0];
     return (
@@ -2030,30 +2069,40 @@ export function CoordinatorDashboard({
                 <div className="px-3 py-2 bg-white">
                   <div className="flex flex-wrap gap-2">
                     {slotItems.length > 0 ? (
-                      slotItems.map((item: any) => (
-                        <button
-                          key={item.id}
-                          onClick={() =>
-                            onPatientClick(item.patientId, undefined, item.patientName)
-                          }
-                          className="text-left min-w-[220px] rounded-xl border border-[#7a32fc]/20 bg-[#7a32fc]/5 px-3 py-2 hover:bg-[#7a32fc]/10 transition-all"
-                        >
-                          <p className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                            {item.time} • {item.patientName}
-                            {item.anamnesisPending && (
-                              <span
-                                title="Paciente pendente de ficha anamnese"
-                                className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-100 text-amber-700 text-[10px] font-black"
-                              >
-                                !
+                      slotItems.map((item: any) => {
+                        const statusVisual = getAgendaStatusVisual(item.status);
+                        const StatusIcon = statusVisual.icon;
+                        return (
+                          <button
+                            key={item.id}
+                            onClick={() =>
+                              onPatientClick(item.patientId, undefined, item.patientName)
+                            }
+                            className={`text-left min-w-[220px] rounded-xl border px-3 py-2 transition-all ${statusVisual.card}`}
+                          >
+                            <div className="mb-1 flex items-center justify-between gap-2">
+                              <p className={`text-xs font-bold text-slate-900 flex items-center gap-1.5 ${statusVisual.name}`}>
+                                {item.time} • {item.patientName}
+                                {item.anamnesisPending && (
+                                  <span
+                                    title="Paciente pendente de ficha anamnese"
+                                    className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-100 text-amber-700 text-[10px] font-black"
+                                  >
+                                    !
+                                  </span>
+                                )}
+                              </p>
+                              <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[9px] font-black uppercase ${statusVisual.badge}`}>
+                                <StatusIcon size={11} />
+                                {statusVisual.label}
                               </span>
-                            )}
-                          </p>
-                          <p className="text-[10px] text-slate-500">
-                            {item.therapistName} • Sala {item.room || "--"}
-                          </p>
-                        </button>
-                      ))
+                            </div>
+                            <p className="text-[10px] text-slate-500">
+                              {item.therapistName} • Sala {item.room || "--"}
+                            </p>
+                          </button>
+                        );
+                      })
                     ) : (
                       <span className="text-[11px] text-slate-300">
                         Sem agendamento
@@ -5451,6 +5500,20 @@ export function CoordinatorDashboard({
                             Gerenciar Assinatura
                           </button>
                         </div>
+                      </div>
+                    )}
+
+                    {!isTherapist && (
+                      <div className="space-y-4">
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">
+                            Gestão da clínica
+                          </h4>
+                          <p className="mt-2 text-sm text-slate-500">
+                            Acompanhe as permissões de cada papel para organizar acessos, responsabilidades e rotinas da equipe.
+                          </p>
+                        </div>
+                        <RoleCapabilityMatrix />
                       </div>
                     )}
                   </div>
