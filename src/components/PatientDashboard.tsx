@@ -2,6 +2,7 @@
 import { motion, AnimatePresence } from 'motion/react';
 import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle } from 'lucide-react';
 import { EvolutionBarChart } from './Charts';
+import { CumulativeGrowthChart } from './CumulativeGrowthChart';
 import { LogoVerto, SuccessOverlay, BigEnergySlider, ENERGY_TAGS } from './Common';
 import { HistoryCard } from './History';
 import { DrawingCanvas } from './DrawingCanvas';
@@ -131,6 +132,22 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return null;
   };
 
+  const normalizeClinicalKey = (value: any) =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+
+  const isSameClinicalSkill = (a: string, b: string) => {
+    const left = normalizeClinicalKey(a);
+    const right = normalizeClinicalKey(b);
+    if (!left || !right) return false;
+    return left === right || left.includes(right) || right.includes(left);
+  };
+
   const scoredClinicalEvents = useMemo(() => {
     const fromHistory = (Array.isArray(history) ? history : [])
       .filter((h: any) => {
@@ -148,6 +165,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       .filter((t: any) => getEventScore(t) !== null)
       .map((t: any) => ({
         id: t?.id || `task-${t?.task_id || Math.random()}`,
+        patientId: user?.id,
+        patient_id: user?.id,
         type: 'task_scored',
         title: t?.title || t?.task_data?.title || '',
         domain: t?.domain || t?.task_data?.domain || t?.domainName || '',
@@ -173,7 +192,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       if (curTs >= prevTs) dedup.set(key, item);
     });
     return Array.from(dedup.values());
-  }, [history, tasks]);
+  }, [history, tasks, user?.id]);
 
   const availableSnapshots = useMemo(() => {
     const dates = scoredClinicalEvents.map((h: any) => getSnapshotKey(h)).filter(Boolean);
@@ -196,6 +215,47 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     }
   }, [availableSnapshots, selectedBaseDate, selectedCompareDate]);
 
+  const activeKidsProtocol = useMemo(() => {
+    const list = Array.isArray(protocols) ? protocols : [];
+    const peiGoals = Array.isArray(user?.pei) ? user.pei : [];
+    const activeGoal = peiGoals.find((goal: any) => {
+      const status = String(goal?.status || '').toLowerCase();
+      return goal?.protocolTitle && status !== 'completed';
+    }) || peiGoals.find((goal: any) => goal?.protocolTitle);
+
+    if (activeGoal) {
+      const goalProtocolId = String(activeGoal?.protocolId ?? activeGoal?.protocol_id ?? '').trim();
+      const goalProtocolTitle = normalizeClinicalKey(activeGoal?.protocolTitle || '');
+      const matched = list.find((protocol: any) => {
+        const protocolId = String(protocol?.id || '').trim();
+        const protocolTitle = normalizeClinicalKey(protocol?.title || protocol?.name || '');
+        return (goalProtocolId && protocolId === goalProtocolId) || (goalProtocolTitle && protocolTitle === goalProtocolTitle);
+      });
+      if (matched) return matched;
+    }
+
+    return list.find((p: any) => /vb[\s-]?mapp/i.test(String(p?.title || p?.name || ''))) || list[0] || { data: [] };
+  }, [protocols, user?.pei]);
+
+  const activeKidsProtocolEvents = useMemo(() => {
+    const domainTasks = (Array.isArray(activeKidsProtocol?.data) ? activeKidsProtocol.data : [])
+      .flatMap((domain: any) => (Array.isArray(domain?.skills) ? domain.skills : []).map((skill: any) => ({
+        domainName: String(domain?.name || '').trim(),
+        skillName: String(skill?.name || '').trim()
+      })));
+
+    if (!domainTasks.length) return scoredClinicalEvents;
+
+    return scoredClinicalEvents.filter((event: any) => {
+      const eventTitle = String(event?.title || event?.taskTitle || event?.task_data?.title || '').trim();
+      const eventDomain = String(event?.domain || event?.domainName || event?.task_data?.domain || event?.task_data?.domainName || '').trim();
+      return domainTasks.some((task: any) =>
+        isSameClinicalSkill(task.skillName, eventTitle) ||
+        (task.domainName && normalizeClinicalKey(task.domainName) === normalizeClinicalKey(eventDomain))
+      );
+    });
+  }, [activeKidsProtocol, scoredClinicalEvents]);
+
   const kidChartData = useMemo(() => {
     const defaultKidsDomains = [
       'Mando (Mand)',
@@ -207,17 +267,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       'Ecoico (Echoic)'
     ];
 
-    const normalizeSkill = (value: any) =>
-      String(value || '')
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toLowerCase();
-
     const inferKidsDomainFromTitle = (title: any): string => {
-      const n = normalizeSkill(title);
+      const n = normalizeClinicalKey(title);
       if (!n) return '';
       if (n.includes('mando') || n.includes('mand')) return 'Mando (Mand)';
       if (n.includes('tato') || n.includes('tact')) return 'Tato (Tact)';
@@ -229,15 +280,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return '';
     };
 
-    const isSameSkill = (a: string, b: string) => {
-      const left = normalizeSkill(a);
-      const right = normalizeSkill(b);
-      if (!left || !right) return false;
-      return left === right || left.includes(right) || right.includes(left);
-    };
-
-    const vbmapp = protocols?.find((p: any) => String(p?.title || '').includes('VB-MAPP'));
-    const selectedProto = vbmapp || protocols?.[0] || { data: [] };
+    const selectedProto = activeKidsProtocol || { data: [] };
     const protocolDomains = Array.isArray(selectedProto?.data)
       ? selectedProto.data
           .map((d: any) => ({
@@ -247,7 +290,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           .filter((d: any) => d.name)
       : [];
 
-    const sourceHistory = Array.isArray(scoredClinicalEvents) ? scoredClinicalEvents : [];
+    const sourceHistory = Array.isArray(activeKidsProtocolEvents) ? activeKidsProtocolEvents : [];
     const scoredEvents = sourceHistory
       .map((h: any) => {
         const scoreRaw = getEventScore(h);
@@ -269,9 +312,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           _score: score,
           _timestamp: ts,
           _title: title,
-          _titleKey: normalizeSkill(title),
+          _titleKey: normalizeClinicalKey(title),
           _domain: domain || 'Geral',
-          _domainKey: normalizeSkill(domain || 'Geral')
+          _domainKey: normalizeClinicalKey(domain || 'Geral')
         };
       })
       .filter(Boolean)
@@ -290,7 +333,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     }));
 
     const fallbackHasOnlyGeneral =
-      fallbackDomains.length === 1 && normalizeSkill(fallbackDomains[0]?.name) === 'geral';
+      fallbackDomains.length === 1 && normalizeClinicalKey(fallbackDomains[0]?.name) === 'geral';
     const effectiveDomains = protocolDomains.length
       ? protocolDomains
       : fallbackDomains.length && !fallbackHasOnlyGeneral
@@ -320,8 +363,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         const domainEvents = scoredEvents
           .filter((event: any) => event._timestamp <= cutoffTs)
           .filter((event: any) => {
-            const matchesDomain = normalizeSkill(event?._domain || '') === normalizeSkill(domainName);
-            const matchesSkill = domainTasks.some((task: any) => isSameSkill(task.name, event?._title || ''));
+            const matchesDomain = normalizeClinicalKey(event?._domain || '') === normalizeClinicalKey(domainName);
+            const matchesSkill = domainTasks.some((task: any) => isSameClinicalSkill(task.name, event?._title || ''));
             return matchesDomain || matchesSkill;
           })
           .map((event: any) => ({
@@ -363,7 +406,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         }
       ]
     };
-  }, [scoredClinicalEvents, protocols, selectedBaseDate, selectedCompareDate, availableSnapshots]);
+  }, [activeKidsProtocol, activeKidsProtocolEvents, selectedBaseDate, selectedCompareDate, availableSnapshots]);
 
   const familyDiaryHistory = useMemo(() => {
     return history
@@ -688,8 +731,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     </div>
                     <div className="mb-4 sm:mb-5 px-1 sm:px-2">
                       <h2 className="text-lg sm:text-xl font-semibold text-[#7a32fc] flex items-center justify-center gap-2 text-center">
-                        <Trophy className="text-yellow-500" size={20}/> Nível de Herói
+                        <Trophy className="text-yellow-500" size={20}/> {activeKidsProtocol?.title || 'Nível de Herói'}
                       </h2>
+                      <p className="mt-1 text-center text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                        Protocolo ativo do nível atual
+                      </p>
                     </div>
                     <div className="mb-4 sm:mb-5 px-1 sm:px-2 grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 items-end">
                       <div>
@@ -733,6 +779,17 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                       <EvolutionBarChart chartData={kidChartData} maxScore={100} />
                     </div>
                     <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-widest text-center mt-2">Filtro por datas para comparação do progresso</p>
+                </div>
+
+                <div className="mb-6">
+                  <CumulativeGrowthChart
+                    patientId={user.id}
+                    history={activeKidsProtocolEvents.map((event: any) => ({
+                      ...event,
+                      patientId: event?.patientId || event?.patient_id || user.id,
+                      patient_id: event?.patient_id || event?.patientId || user.id
+                    }))}
+                  />
                 </div>
 
                 <div className="bg-white p-4 sm:p-6 rounded-[28px] shadow-lg border border-blue-100 mb-6">

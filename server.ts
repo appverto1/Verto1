@@ -3064,7 +3064,11 @@ async function startServer() {
     standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
     legacyHeaders: false, // Disable the `X-RateLimit-*` headers
     validate: false, // Disable all validation checks for proxy headers
-    skip: (req) => req.path === '/auth/login' || req.path === '/auth/me',
+    skip: (req) =>
+      req.path === '/auth/login' ||
+      req.path === '/auth/me' ||
+      req.path === '/logs' ||
+      req.path === '/patients/create-user',
   });
 
   const recoveryLimiter = rateLimit({
@@ -3104,6 +3108,18 @@ async function startServer() {
     legacyHeaders: false,
     validate: false,
     message: { error: 'Muitos cadastros em sequência. Aguarde e tente novamente.' }
+  });
+
+  const patientCreateLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    message: {
+      success: false,
+      error: 'Muitos cadastros de pacientes em sequência. Aguarde alguns instantes e tente novamente.'
+    }
   });
 
   const inviteLimiter = rateLimit({
@@ -6781,7 +6797,7 @@ async function startServer() {
   });
 
   // Create Patient User Account (called by therapist when adding a patient)
-  app.post('/api/patients/create-user', authSignupLimiter, checkAuth, async (req: any, res) => {
+  app.post('/api/patients/create-user', patientCreateLimiter, checkAuth, async (req: any, res) => {
     const { email, name, type, cpf } = req.body;
     if (!email) return res.status(400).json({ error: 'Email is required' });
 
