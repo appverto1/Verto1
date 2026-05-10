@@ -23,6 +23,7 @@ import {
   syncAllClinicsActivePatientAddonQuantity,
   syncClinicActivePatientAddonQuantity
 } from './services/stripeService';
+import { startAppointmentReminderCron } from './services/cronService';
 import {
   buildActivationEmailTemplate,
   buildPasswordRecoveryEmailTemplate
@@ -13518,6 +13519,13 @@ async function startServer() {
   } else {
     console.warn('[Stripe Sync] STRIPE_ACTIVE_PATIENT_PRICE_ID não configurado. Sync de pacientes ativos desabilitado.');
   }
+
+  startAppointmentReminderCron({
+    supabase,
+    vapidPublicKey,
+    vapidPrivateKey,
+    logger: console
+  });
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
