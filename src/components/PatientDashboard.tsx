@@ -1,6 +1,6 @@
 ﻿import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle } from 'lucide-react';
+import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle, Settings, User, MapPin, Bell } from 'lucide-react';
 import { EvolutionBarChart } from './Charts';
 import { CumulativeGrowthChart } from './CumulativeGrowthChart';
 import { LogoVerto, SuccessOverlay, BigEnergySlider, ENERGY_TAGS } from './Common';
@@ -35,6 +35,22 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [showFamilySuccess, setShowFamilySuccess] = useState(false);
   const [isFamilyLogOpen, setIsFamilyLogOpen] = useState(false);
+  const initialAddress = String(user?.address || user?.endereco || user?.anamnesisData?.endereco || '').trim();
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [displayName, setDisplayName] = useState(String(user?.name || 'Paciente'));
+  const [profilePicture, setProfilePicture] = useState<string | null>(user?.profilePicture || user?.profile_picture || null);
+  const [settingsForm, setSettingsForm] = useState({
+    name: String(user?.name || 'Paciente'),
+    address: initialAddress,
+    profilePicture: user?.profilePicture || user?.profile_picture || ''
+  });
+  const [settingsMessage, setSettingsMessage] = useState('');
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isEnablingNotifications, setIsEnablingNotifications] = useState(false);
+  const [notificationStatus, setNotificationStatus] = useState<NotificationPermission | 'unsupported'>(() => {
+    if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+    return Notification.permission;
+  });
 
   const [isUploading, setIsUploading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -60,6 +76,150 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const timer = window.setInterval(() => setCurrentTime(new Date()), 30000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const nextName = String(user?.name || 'Paciente');
+    const nextPicture = user?.profilePicture || user?.profile_picture || null;
+    const nextAddress = String(user?.address || user?.endereco || user?.anamnesisData?.endereco || '').trim();
+    setDisplayName(nextName);
+    setProfilePicture(nextPicture);
+    setSettingsForm({
+      name: nextName,
+      address: nextAddress,
+      profilePicture: nextPicture || ''
+    });
+  }, [user?.name, user?.profilePicture, user?.profile_picture, user?.address, user?.endereco, user?.anamnesisData?.endereco]);
+
+  const urlBase64ToUint8Array = (base64String: string) => {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = `${base64String}${padding}`.replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
+  };
+
+  const enablePatientNotifications = async () => {
+    if (typeof window === 'undefined' || !('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setNotificationStatus('unsupported');
+      setSettingsMessage('Este dispositivo ou navegador não suporta notificações push.');
+      return false;
+    }
+
+    setIsEnablingNotifications(true);
+    setSettingsMessage('');
+    try {
+      const permission = Notification.permission === 'granted'
+        ? 'granted'
+        : await Notification.requestPermission();
+      setNotificationStatus(permission);
+      if (permission !== 'granted') {
+        setSettingsMessage('As notificações não foram liberadas. Se você bloqueou antes, habilite nas configurações do navegador.');
+        return false;
+      }
+
+      const registration = await navigator.serviceWorker.register('/sw.js');
+      const keyResponse = await fetch('/api/push/vapid-public-key', { credentials: 'include' });
+      const keyPayload = await keyResponse.json().catch(() => ({}));
+      if (!keyResponse.ok || !keyPayload?.publicKey) {
+        setSettingsMessage('As notificações ainda não estão configuradas no servidor.');
+        return false;
+      }
+
+      const existingSubscription = await registration.pushManager.getSubscription();
+      const subscription =
+        existingSubscription ||
+        (await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(String(keyPayload.publicKey)),
+        }));
+
+      const response = await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ subscription }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result?.success === false) {
+        setSettingsMessage(result?.error || result?.warning || 'Não foi possível ativar as notificações agora.');
+        return false;
+      }
+
+      setSettingsMessage('Notificações ativadas neste dispositivo.');
+      return true;
+    } catch (error: any) {
+      console.warn('Patient notification permission failed:', error);
+      setSettingsMessage(error?.message || 'Não foi possível ativar as notificações.');
+      return false;
+    } finally {
+      setIsEnablingNotifications(false);
+    }
+  };
+
+  const handleProfilePhotoChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setSettingsMessage('Envie uma imagem válida para a foto do perfil.');
+      event.target.value = '';
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setSettingsMessage('Escolha uma imagem de até 2MB para manter o painel leve.');
+      event.target.value = '';
+      return;
+    }
+
+    setIsSavingSettings(true);
+    setSettingsMessage('Enviando foto...');
+    try {
+      const extension = file.type.includes('jpeg') || file.type.includes('jpg') ? 'jpg' : file.type.includes('webp') ? 'webp' : 'png';
+      const fileName = `${user.id}/profile-${Date.now()}.${extension}`;
+      const upload = await dataService.uploadFile('patient-photos', fileName, file);
+      if (!upload?.success || !upload.url) {
+        setSettingsMessage(upload?.error || 'Não foi possível enviar a foto.');
+        return;
+      }
+      setSettingsForm((prev) => ({ ...prev, profilePicture: upload.url, profilePicturePath: upload.path } as any));
+      setProfilePicture(upload.url);
+      setSettingsMessage('Foto pronta. Clique em salvar para confirmar.');
+    } finally {
+      setIsSavingSettings(false);
+      event.target.value = '';
+    }
+  };
+
+  const handleSavePatientSettings = async () => {
+    const nextName = settingsForm.name.trim();
+    if (!nextName) {
+      setSettingsMessage('Informe seu nome para salvar.');
+      return;
+    }
+
+    setIsSavingSettings(true);
+    setSettingsMessage('');
+    try {
+      const result = await dataService.updatePatientSelfProfile({
+        name: nextName,
+        address: settingsForm.address.trim(),
+        profilePicture: settingsForm.profilePicture || null,
+        profilePicturePath: (settingsForm as any).profilePicturePath || null
+      });
+
+      if (!result?.success) {
+        setSettingsMessage(result?.error || 'Não foi possível salvar suas configurações.');
+        return;
+      }
+
+      setDisplayName(nextName);
+      setProfilePicture(settingsForm.profilePicture || null);
+      setSettingsMessage('Configurações salvas com sucesso.');
+      setTimeout(() => setIsSettingsOpen(false), 700);
+    } catch (error: any) {
+      setSettingsMessage(error?.message || 'Não foi possível salvar suas configurações.');
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
 
   const visiblePatientTasks = useMemo(() => {
     const list = Array.isArray(tasks) ? tasks : [];
@@ -633,6 +793,124 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     });
   }, [groupedKidsTimeline]);
 
+  const patientSettingsModal = isSettingsOpen ? (
+    <div className="fixed inset-0 z-[90] flex items-start justify-center bg-slate-950/45 px-4 py-5 backdrop-blur-sm">
+      <motion.div
+        initial={{ opacity: 0, y: -18, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: -18, scale: 0.98 }}
+        className="w-full max-w-lg overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-2xl shadow-purple-500/20"
+      >
+        <div className="relative overflow-hidden bg-gradient-to-br from-[#7a32fc] via-[#8B5CF6] to-[#05CD99] px-6 py-5 text-white">
+          <div className="absolute -right-10 -top-12 h-36 w-36 rounded-full bg-white/20 blur-2xl"></div>
+          <div className="relative flex items-start justify-between gap-4">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/75">Configurações</p>
+              <h2 className="mt-1 text-2xl font-black tracking-tight">Seu perfil na Verto</h2>
+              <p className="mt-1 text-sm font-medium text-white/80">Atualize foto, nome, endereço e notificações do dispositivo.</p>
+            </div>
+            <button
+              onClick={() => setIsSettingsOpen(false)}
+              className="rounded-2xl bg-white/15 p-2 text-white transition hover:bg-white/25"
+            >
+              <X size={20} />
+            </button>
+          </div>
+        </div>
+
+        <div className="max-h-[72vh] space-y-5 overflow-y-auto p-6">
+          <div className="flex items-center gap-4">
+            <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-[24px] border border-purple-100 bg-purple-50 shadow-inner">
+              {profilePicture ? (
+                <SecureImage src={profilePicture} alt="Foto do paciente" className="h-full w-full object-cover" />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center text-[#7a32fc]">
+                  <User size={34} />
+                </div>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-[#7a32fc]/10 px-4 py-2 text-sm font-bold text-[#7a32fc] transition hover:bg-[#7a32fc]/15">
+                <Camera size={16} />
+                Trocar foto
+                <input type="file" accept="image/*" className="hidden" onChange={handleProfilePhotoChange} disabled={isSavingSettings} />
+              </label>
+              <p className="mt-2 text-xs font-medium text-slate-500">Use uma foto nítida, de até 2MB.</p>
+            </div>
+          </div>
+
+          <div className="grid gap-4">
+            <label className="block">
+              <span className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">
+                <User size={14} /> Nome
+              </span>
+              <input
+                value={settingsForm.name}
+                onChange={(e) => setSettingsForm((prev) => ({ ...prev, name: e.target.value }))}
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-[#7a32fc] focus:bg-white"
+                placeholder="Seu nome"
+              />
+            </label>
+
+            <label className="block">
+              <span className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">
+                <MapPin size={14} /> Endereço
+              </span>
+              <input
+                value={settingsForm.address}
+                onChange={(e) => setSettingsForm((prev) => ({ ...prev, address: e.target.value }))}
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-[#7a32fc] focus:bg-white"
+                placeholder="Rua, número, bairro e cidade"
+              />
+            </label>
+          </div>
+
+          <div className="rounded-3xl border border-emerald-100 bg-emerald-50/70 p-4">
+            <label className="flex cursor-pointer items-start gap-3">
+              <input
+                type="checkbox"
+                className="mt-1 h-5 w-5 rounded border-emerald-300 text-emerald-600 accent-emerald-500"
+                checked={notificationStatus === 'granted'}
+                disabled={notificationStatus === 'granted' || isEnablingNotifications || notificationStatus === 'unsupported'}
+                onChange={() => void enablePatientNotifications()}
+              />
+              <span>
+                <span className="flex items-center gap-2 text-sm font-black text-emerald-800">
+                  <Bell size={16} /> Permitir notificações neste dispositivo
+                </span>
+                <span className="mt-1 block text-xs font-medium leading-relaxed text-emerald-700">
+                  Use esta opção se você pulou ou não aprovou o aviso inicial. Se o navegador bloqueou, libere nas configurações do site.
+                </span>
+              </span>
+            </label>
+          </div>
+
+          {settingsMessage && (
+            <div className="rounded-2xl border border-purple-100 bg-purple-50 px-4 py-3 text-sm font-semibold text-purple-700">
+              {settingsMessage}
+            </div>
+          )}
+
+          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <button
+              onClick={() => setIsSettingsOpen(false)}
+              className="rounded-2xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-500 transition hover:bg-slate-50"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleSavePatientSettings}
+              disabled={isSavingSettings}
+              className="rounded-2xl bg-[#7a32fc] px-5 py-3 text-sm font-black text-white shadow-lg shadow-purple-500/25 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSavingSettings ? 'Salvando...' : 'Salvar configurações'}
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  ) : null;
+
   const closeMoodModal = () => {
     setIsMoodModalOpen(false);
     setSelectedMood(null);
@@ -652,13 +930,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return (
         <div className="min-h-screen bg-gradient-to-b from-[#F2FAFF] via-[#F6F2FF] to-[#FFF8EF] p-4 sm:p-6 flex flex-col items-center relative overflow-y-auto">
             {(showFamilySuccess) && <SuccessOverlay />} 
+            <AnimatePresence>{patientSettingsModal}</AnimatePresence>
             <div className="absolute top-0 left-0 w-full h-64 bg-gradient-to-b from-blue-100 to-transparent -z-0"></div>
             <div className="w-full max-w-md relative z-10 flex flex-col h-full">
                 <div className="flex justify-between items-center mb-6 sm:mb-8">
                     <div className="flex items-center gap-3">
-                         <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white rounded-full flex items-center justify-center shadow-md text-xl sm:text-2xl">🚀</div>
+                         <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white rounded-full flex items-center justify-center shadow-md text-xl sm:text-2xl overflow-hidden">
+                           {profilePicture ? <SecureImage src={profilePicture} alt="Foto do paciente" className="w-full h-full object-cover" /> : '🚀'}
+                         </div>
                          <div>
-                             <h1 className="text-xl sm:text-2xl font-semibold text-[#7a32fc]">Oi, {user.name}!</h1>
+                             <h1 className="text-xl sm:text-2xl font-semibold text-[#7a32fc]">Oi, {displayName}!</h1>
                              <p className="text-[10px] sm:text-sm text-gray-400 font-medium">Vamos ver seus poderes?</p>
                          </div>
                     </div>
@@ -687,6 +968,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                                 <BookOpen size={18} /> Diário da Família
                               </button>
                             )}
+                            <button
+                              onClick={() => { setIsSettingsOpen(true); setIsMenuOpen(false); }}
+                              className="w-full flex items-center gap-3 p-3 text-sm font-medium text-[#7a32fc] hover:bg-purple-50 rounded-xl transition-colors"
+                            >
+                              <Settings size={18} /> Configurações
+                            </button>
                             <button 
                               onClick={() => { onLogout(); setIsMenuOpen(false); }}
                               className="w-full flex items-center gap-3 p-3 text-sm font-medium text-red-500 hover:bg-red-50 rounded-xl transition-colors"
@@ -963,6 +1250,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   return ( 
     <div className={`min-h-screen p-6 flex flex-col overflow-x-hidden ${isConventionalAdult ? 'bg-gradient-to-b from-[#FFF9F3] to-[#F8F5FF]' : 'bg-[#F4F7FE]'}`}> 
       {(showTaskSuccess || showMoodSuccess) && <SuccessOverlay />} 
+      <AnimatePresence>{patientSettingsModal}</AnimatePresence>
       {isMessagesOpen && ( 
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in" onClick={() => setIsMessagesOpen(false)}> 
           <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl animate-pop relative" onClick={e => e.stopPropagation()}> 
@@ -981,10 +1269,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       )} 
       <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-6"> 
         <div className="flex items-center gap-4"> 
-          <LogoVerto size={50} showText={true} className="drop-shadow-sm shrink-0" />
+          {profilePicture ? (
+            <div className="h-[50px] w-[50px] shrink-0 overflow-hidden rounded-2xl border border-purple-100 bg-white shadow-sm">
+              <SecureImage src={profilePicture} alt="Foto do paciente" className="h-full w-full object-cover" />
+            </div>
+          ) : (
+            <LogoVerto size={50} showText={true} className="drop-shadow-sm shrink-0" />
+          )}
           <div className="w-px h-8 bg-gray-200 mx-2 hidden sm:block"></div>
           <div>
-            <h1 className="text-2xl font-semibold text-gray-800 tracking-tight leading-none"> Olá, <span className="text-[#7a32fc]">{user.name}</span>! </h1> 
+            <h1 className="text-2xl font-semibold text-gray-800 tracking-tight leading-none"> Olá, <span className="text-[#7a32fc]">{displayName}</span>! </h1> 
             <p className="text-gray-400 font-medium mt-1 text-xs"> Vamos cuidar de você hoje? </p> 
           </div>
         </div> 
@@ -1021,6 +1315,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     )}
                   </button>
                 )}
+                <button
+                  onClick={() => { setIsSettingsOpen(true); setIsMenuOpen(false); }}
+                  className="w-full flex items-center gap-3 p-3 text-sm font-medium text-[#7a32fc] hover:bg-purple-50 rounded-xl transition-colors"
+                >
+                  <Settings size={18} /> Configurações
+                </button>
                 <button 
                   onClick={() => { onLogout(); setIsMenuOpen(false); }}
                   className="w-full flex items-center gap-3 p-3 text-sm font-medium text-red-500 hover:bg-red-50 rounded-xl transition-colors"

@@ -1144,6 +1144,26 @@ export const dataService = {
     return local ? local.data : { success: false };
   },
 
+  async updatePatientSelfProfile(profile: {
+    name?: string;
+    address?: string;
+    profilePicture?: string | null;
+    profilePicturePath?: string | null;
+  }) {
+    try {
+      const response = await fetch('/api/patient/self/profile', {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(profile || {})
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error updating patient profile:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
   async getUserProfileMedia(userId: string) {
     try {
       const response = await fetch(`/api/profile/${userId}/media`, {

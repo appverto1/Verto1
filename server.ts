@@ -278,7 +278,7 @@ async function readOptionalScalarColumn(params: {
 }
 
 async function patchTableSafely(
-  table: 'users' | 'clinics',
+  table: 'users' | 'clinics' | 'patients',
   matcher: { column: string; value: string },
   patch: Record<string, any>
 ): Promise<void> {
@@ -1368,6 +1368,19 @@ function extractPatientPhotosStoragePath(raw: unknown): string | null {
     }
   }
   return null;
+}
+
+async function resolvePatientPhotoUrl(rawUrl: unknown, rawPath?: unknown): Promise<string | null> {
+  const storagePath = extractPatientPhotosStoragePath(rawPath) || extractPatientPhotosStoragePath(rawUrl);
+  if (storagePath) {
+    try {
+      const { data } = await supabase.storage.from('patient-photos').createSignedUrl(storagePath, 60 * 60 * 24 * 30);
+      if (data?.signedUrl) return data.signedUrl;
+    } catch (error: any) {
+      console.warn('[PatientProfile] signed photo url warning:', error?.message || String(error));
+    }
+  }
+  return sanitizeSessionUrl(rawUrl);
 }
 
 type DetectedUploadMime =
@@ -2704,6 +2717,7 @@ function buildSessionUserPayload(input: any) {
     role: ensureRole(resolvedRole) ? resolvedRole : 'therapist',
     name: sanitizeString(input?.name, 180),
     profilePicture: sanitizeSessionUrl(input?.profilePicture),
+    address: sanitizeString(input?.address, 320) || null,
     type: sanitizeString(input?.type, 80) || null,
     age: typeof input?.age === 'number' ? input.age : null,
     subscriptionStatus: sanitizeString(input?.subscriptionStatus, 40) || null,
@@ -3698,7 +3712,8 @@ async function startServer() {
                 role: selectedWorkspace?.role || profile.role,
                 name: profile.name,
                 sessionToken: issueSessionToken(sanitizeString(user.id, 120)),
-                profilePicture: sanitizeUrl(profile.profile_picture) || null,
+                profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
+                address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
                 type: profile.type || user.user_metadata?.type || null,
                 age: typeof profile.age === 'number' ? profile.age : null,
               subscriptionStatus: profile.subscription_status,
@@ -4437,7 +4452,8 @@ async function startServer() {
         role: roleForSession,
         name: profile.name,
         sessionToken: issueSessionToken(sanitizeString(user.id, 120)),
-        profilePicture: sanitizeUrl(profile.profile_picture) || null,
+        profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
+        address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
         type: profile.type || user.user_metadata?.type || null,
         age: typeof profile.age === 'number' ? profile.age : null,
         subscriptionStatus: profile.subscription_status,
@@ -5511,7 +5527,8 @@ async function startServer() {
         email: user.email,
         role: roleForSession,
         name: profile.name,
-        profilePicture: sanitizeUrl(profile.profile_picture) || null,
+        profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
+        address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
         type: profile.type || user.user_metadata?.type || null,
         age: typeof profile.age === 'number' ? profile.age : null,
         subscriptionStatus: profile.subscription_status,
@@ -6583,6 +6600,93 @@ async function startServer() {
     } catch (error: any) {
       console.error('[Push] subscribe error:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Erro ao salvar inscrição push.' });
+    }
+  });
+
+  app.patch('/api/patient/self/profile', checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const email = sanitizeEmail(req.session.user?.email);
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Sessão inválida.' });
+      }
+
+      const name =
+        sanitizeString(req.body?.name, 180) ||
+        sanitizeString(req.session.user?.name, 180) ||
+        'Paciente';
+      const address = sanitizeString(req.body?.address || req.body?.endereco, 320) || null;
+      const profilePicture =
+        sanitizeSessionUrl(req.body?.profilePicture) ||
+        sanitizeSessionUrl(req.body?.profile_picture) ||
+        sanitizeSessionUrl(req.session.user?.profilePicture) ||
+        null;
+      const profilePicturePath = sanitizeString(req.body?.profilePicturePath || req.body?.profile_picture_path, 500) || null;
+      const updatedAt = new Date().toISOString();
+
+      await patchTableSafely('users', { column: 'id', value: userId }, {
+        name,
+        address: address || undefined,
+        endereco: address || undefined,
+        profile_picture: profilePicture || undefined,
+        profile_picture_path: profilePicturePath || undefined,
+        updated_at: updatedAt
+      });
+
+      if (email) {
+        await patchTableSafely('patients', { column: 'email', value: email }, {
+          name,
+          address: address || undefined,
+          endereco: address || undefined,
+          profile_picture: profilePicture || undefined,
+          profile_picture_path: profilePicturePath || undefined,
+          updated_at: updatedAt
+        });
+      }
+
+      try {
+        await supabase.auth.admin.updateUserById(userId, {
+          user_metadata: cleanObject({
+            ...((req.session.user as any)?.user_metadata || {}),
+            full_name: name,
+            address,
+            avatar_url: profilePicture || undefined,
+            profile_picture: profilePicture || undefined,
+            profile_picture_path: profilePicturePath || undefined
+          })
+        });
+      } catch (metadataError: any) {
+        console.warn('[PatientProfile] metadata update warning:', metadataError?.message || String(metadataError));
+      }
+
+      req.session.user = buildSessionUserPayload({
+        ...req.session.user,
+        name,
+        address,
+        profilePicture
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        req.session.save((sessionError: any) => {
+          if (sessionError) {
+            reject(sessionError);
+            return;
+          }
+          resolve();
+        });
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          name,
+          address,
+          profilePicture
+        }
+      });
+    } catch (error: any) {
+      console.error('[PatientProfile] update error:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Erro ao salvar configurações do paciente.' });
     }
   });
 
