@@ -533,13 +533,17 @@ function sanitizePhoneE164(value: unknown): string | null {
 }
 
 function resolveStoredCrp(input: any): string | null {
-  return (
+  const raw = (
     sanitizeString(input?.crp, 80) ||
     sanitizeString(input?.council_number, 80) ||
     sanitizeString(input?.councilNumber, 80) ||
     sanitizeString(input?.clinicSettings?.councilNumber, 80) ||
     null
   );
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, '').slice(0, 7);
+  if (digits.length <= 2) return digits || null;
+  return `${digits.slice(0, 2)}/${digits.slice(2)}`;
 }
 
 function resolveStoredCouncil(input: any): string | null {
@@ -5724,11 +5728,51 @@ async function startServer() {
       
       if (error) throw error;
 
+      const memberIds = Array.from(
+        new Set(
+          (data || [])
+            .map((member: any) => sanitizeString(member?.users?.id || member?.user_id, 120))
+            .filter(Boolean),
+        ),
+      );
+      const professionalProfilesByUserId = new Map<string, any>();
+      if (memberIds.length > 0) {
+        const { data: professionalProfiles } = await supabase
+          .from('professional_profiles')
+          .select('user_id, full_name, metadata')
+          .in('user_id', memberIds);
+
+        (professionalProfiles || []).forEach((profile: any) => {
+          const userId = sanitizeString(profile?.user_id, 120);
+          if (userId) professionalProfilesByUserId.set(userId, profile);
+        });
+      }
+
       const members = (data || []).map((m: any) => ({
         id: m.users?.id || m.user_id,
-        name: m.users?.name || 'Profissional',
+        name:
+          sanitizeString(
+            professionalProfilesByUserId.get(sanitizeString(m.users?.id || m.user_id, 120))?.full_name,
+            180,
+          ) ||
+          m.users?.name ||
+          'Profissional',
+        full_name:
+          sanitizeString(
+            professionalProfilesByUserId.get(sanitizeString(m.users?.id || m.user_id, 120))?.full_name,
+            180,
+          ) ||
+          m.users?.name ||
+          'Profissional',
         email: m.users?.email || '',
         role: m.role,
+        profileRole:
+          sanitizeString(
+            professionalProfilesByUserId.get(sanitizeString(m.users?.id || m.user_id, 120))?.metadata?.role,
+            40,
+          ) ||
+          sanitizeString(m?.role, 40) ||
+          null,
         clinic_id: clinicId,
         created_at: m.created_at
       }));
@@ -6502,6 +6546,56 @@ async function startServer() {
         nextSpecialtySettings === undefined
       ) {
         return res.status(400).json({ success: false, error: 'Nenhum payload de estado enviado.' });
+      }
+
+      if (nextAppointments !== undefined) {
+        const effectiveSpecialtySettings =
+          nextSpecialtySettings && typeof nextSpecialtySettings === 'object'
+            ? nextSpecialtySettings
+            : {};
+        const toMinutes = (time: string) => {
+          const [hours, minutes] = String(time || '00:00')
+            .split(':')
+            .map((value) => Number(value) || 0);
+          return hours * 60 + minutes;
+        };
+        const getEndMinutes = (appointment: any) => {
+          const startMinutes = toMinutes(sanitizeString(appointment?.time, 10));
+          const approach = sanitizeString(appointment?.type || appointment?.approach, 120);
+          const duration = Number((effectiveSpecialtySettings as any)?.[approach] || 60);
+          return startMinutes + (Number.isFinite(duration) ? duration : 60);
+        };
+
+        for (let index = 0; index < nextAppointments.length; index += 1) {
+          const current = nextAppointments[index];
+          const currentStatus = sanitizeString(current?.status, 40)?.toLowerCase();
+          if (currentStatus === 'canceled' || currentStatus === 'cancelled') continue;
+
+          const currentPatientId = sanitizeString(current?.patientId || current?.patient_id, 120);
+          const currentDate = sanitizeDate(current?.date);
+          const currentTime = sanitizeString(current?.time, 10);
+          if (!currentPatientId || !currentDate || !currentTime) continue;
+
+          const currentStart = toMinutes(currentTime);
+          const currentEnd = getEndMinutes(current);
+
+          for (let otherIndex = index + 1; otherIndex < nextAppointments.length; otherIndex += 1) {
+            const other = nextAppointments[otherIndex];
+            const otherStatus = sanitizeString(other?.status, 40)?.toLowerCase();
+            if (otherStatus === 'canceled' || otherStatus === 'cancelled') continue;
+            if (sanitizeString(other?.patientId || other?.patient_id, 120) !== currentPatientId) continue;
+            if (sanitizeDate(other?.date) !== currentDate) continue;
+
+            const otherStart = toMinutes(sanitizeString(other?.time, 10));
+            const otherEnd = getEndMinutes(other);
+            if (currentStart < otherEnd && currentEnd > otherStart) {
+              return res.status(409).json({
+                success: false,
+                error: 'O paciente já possui um agendamento conflitante nesse intervalo.',
+              });
+            }
+          }
+        }
       }
 
       const previous = await supabase

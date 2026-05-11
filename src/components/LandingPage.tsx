@@ -30,6 +30,7 @@ import { LogoVerto } from './Common';
 import { SecureImage } from './SecureMedia';
 import { getSupabase } from '../lib/supabase';
 import { dataService } from '../services/dataService';
+import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 
 export const LandingPage = ({ onLogin, setUser }: any) => {
   const registerPasswordInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -1669,7 +1670,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                             className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-2.5 md:py-3 px-4 md:px-5 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
                             placeholder="Ex: 06/123456"
                             value={crp}
-                            onChange={(e) => { setCrp(e.target.value); if (registerError) setRegisterError(''); }}
+                            onChange={(e) => { setCrp(formatProfessionalRegistry(e.target.value)); if (registerError) setRegisterError(''); }}
                           />
                         </div>
                       )}

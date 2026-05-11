@@ -51,6 +51,7 @@ import {
 } from "./RoomReservation";
 import { RECEPTIONIST_ALLOWED_VIEWS } from "../constants/roleCapabilities";
 import { dataService } from "../services/dataService";
+import { formatProfessionalRegistry } from "../utils/professionalRegistry";
 import {
   getDefaultAnamnesisTemplate,
   normalizeAnamnesisTemplate,
@@ -68,7 +69,7 @@ const ProfileView = ({
   const [profileSpecialty, setProfileSpecialty] = useState(
     user.specialty || "Psicólogo",
   );
-  const [profileCrp, setProfileCrp] = useState(user.crp || "");
+  const [profileCrp, setProfileCrp] = useState(formatProfessionalRegistry(user.crp || ""));
 
   const handleSaveProfile = () => {
     if (profileSpecialty === "Psicólogo" && !profileCrp.trim()) {
@@ -201,7 +202,7 @@ const ProfileView = ({
               <input
                 type="text"
                 value={profileCrp}
-                onChange={(e) => setProfileCrp(e.target.value)}
+                onChange={(e) => setProfileCrp(formatProfessionalRegistry(e.target.value))}
                 placeholder="00/00000"
                 className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all"
                 required={profileSpecialty === "Psicólogo"}

@@ -4,6 +4,7 @@ import { testSupabaseConnection, getSupabase, ensureFreshSession } from './lib/s
 import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard } from 'lucide-react';
 import { syncOfflineData } from './services/localDb';
 import { dataService } from './services/dataService';
+import { formatProfessionalRegistry } from './utils/professionalRegistry';
 
 const LandingPage = React.lazy(() =>
   import('./components/LandingPage').then((m) => ({ default: m.LandingPage }))
@@ -393,7 +394,7 @@ export default function App() {
 
     setUser(resolvedUser);
     setProfilePicture(resolvedUser?.profilePicture || resolvedUser?.profile_picture || null);
-    setCrp(String(resolvedUser?.crp || ''));
+    setCrp(formatProfessionalRegistry(resolvedUser?.crp || ''));
     if (hasValidWorkspaceContext(resolvedUser)) {
       setLastActiveWorkspaceId(resolvedUser?.activeWorkspaceId || resolvedUser?.clinicId);
     }
@@ -979,6 +980,16 @@ export default function App() {
     const date = new Date();
     date.setHours(hours, minutes + duration);
     return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  };
+
+  const appointmentTimesOverlap = (startA: string, endA: string, startB: string, endB: string) => {
+    const toMinutes = (value: string) => {
+      const [hours, minutes] = String(value || '00:00')
+        .split(':')
+        .map((part) => Number(part) || 0);
+      return hours * 60 + minutes;
+    };
+    return toMinutes(startA) < toMinutes(endB) && toMinutes(endA) > toMinutes(startB);
   };
 
   const roomReservations = useMemo(() => {
@@ -1959,8 +1970,38 @@ export default function App() {
   };
 
   const handleUpdateAppointment = (id: any, updates: any) => {
+    const currentAppointment = therapistAgenda.find((item) => String(item.id) === String(id));
+    if (!currentAppointment) {
+      return { success: false, errors: ['Agendamento não encontrado.'] };
+    }
+
+    const nextDate = updates.date || currentAppointment.date;
+    const nextTime = updates.time || currentAppointment.time;
+    const nextApproach = updates.type || updates.approach || currentAppointment.type || 'Consulta Padrão';
+    const nextEndTime = calculateEndTime(nextTime, nextApproach);
+    const nextPatientId = currentAppointment.patientId;
+
+    const patientConflict = therapistAgenda.find((item) => {
+      if (String(item.id) === String(id)) return false;
+      if (item.status === 'canceled') return false;
+      if (String(item.patientId || '') !== String(nextPatientId || '')) return false;
+      if (item.date !== nextDate) return false;
+      const itemEndTime = calculateEndTime(item.time, item.type || item.approach || 'Consulta Padrão');
+      return appointmentTimesOverlap(nextTime, nextEndTime, item.time, itemEndTime);
+    });
+
+    if (patientConflict) {
+      return {
+        success: false,
+        errors: [
+          `Conflito de Paciente: ${currentAppointment.name || 'Paciente'} já possui sessão em ${nextDate} às ${patientConflict.time}.`,
+        ],
+      };
+    }
+
     setTherapistAgenda(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
     onAddActivityLog("EdiÃ§Ã£o de Agendamento", `Agendamento ID ${id} atualizado: ${JSON.stringify(updates)}`, 'management');
+    return { success: true };
   };
 
   const handleAddPatient = async (data: any) => { 
@@ -2387,14 +2428,17 @@ export default function App() {
       }
 
       // 3. Patient Conflict Check
-      const patientConflict = therapistAgenda.find(a => 
-        a.date === dateStr && 
-        a.patientId === pid && 
-        a.time === sess.time &&
-        a.status !== 'canceled'
-      );
+      const patientConflict = therapistAgenda.find((a) => {
+        if (a.date !== dateStr || a.status === 'canceled') return false;
+        if (String(a.patientId || '') !== String(pid || '')) return false;
+        const existingEndTime = calculateEndTime(
+          a.time,
+          a.type || a.approach || 'Consulta Padrão',
+        );
+        return appointmentTimesOverlap(startTime, endTime, a.time, existingEndTime);
+      });
       if (patientConflict) {
-        conflicts.push(`Conflito de Paciente: ${sess.patientName} jÃ¡ tem sessÃ£o em ${dateStr} Ã s ${startTime}`);
+        conflicts.push(`Conflito de Paciente: ${sess.patientName} já tem sessão em conflito em ${dateStr} às ${patientConflict.time}`);
       }
 
       if (conflicts.length === 0) {
@@ -3285,7 +3329,7 @@ export default function App() {
                 };
 
                 if (nextUser.profilePicture !== undefined) setProfilePicture(nextUser.profilePicture);
-                if (nextUser.crp !== undefined) setCrp(nextUser.crp);
+                if (nextUser.crp !== undefined) setCrp(formatProfessionalRegistry(nextUser.crp));
                 setUser(nextUser);
 
                 await dataService.saveUserProfile(user.id, {
@@ -3298,7 +3342,7 @@ export default function App() {
               } catch (error) {
                 console.error('Profile asset upload error:', error);
                 if (baseUser.profilePicture !== undefined) setProfilePicture(baseUser.profilePicture);
-                if (baseUser.crp !== undefined) setCrp(baseUser.crp);
+                if (baseUser.crp !== undefined) setCrp(formatProfessionalRegistry(baseUser.crp));
                 setUser(baseUser);
                 await dataService.saveUserProfile(user.id, {
                   ...baseUser,

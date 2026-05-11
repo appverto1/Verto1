@@ -12,6 +12,7 @@ import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
 import { calculateDomainMastery, normalizeScoreToPercent } from '../utils/clinicalMath';
+import { prepareElementForPdfCapture } from '../utils/pdfCapture';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
 import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
 import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
@@ -41,6 +42,8 @@ const isVbMappProtocol = (protocol: any) => {
 };
 
 export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole }: any) => { 
+  const safeSetProtocols =
+    typeof setProtocols === 'function' ? setProtocols : null;
   const coalescePatientText = (...values: any[]) => {
     for (const value of values) {
       if (typeof value === 'string') {
@@ -1057,14 +1060,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     sandbox.innerHTML = htmlContent;
     document.body.appendChild(sandbox);
     const target = (sandbox.querySelector('.sheet') as HTMLElement) || sandbox;
+    const captureTarget = await prepareElementForPdfCapture(target);
 
     try {
-      const canvas = await html2canvas(target, {
+      const canvas = await html2canvas(captureTarget, {
         backgroundColor: '#ffffff',
         scale: 2,
         useCORS: true,
+        allowTaint: true,
         logging: false,
-        windowWidth: target.scrollWidth || 794,
+        windowWidth: captureTarget.scrollWidth || 794,
       });
 
       const pdf = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
@@ -1089,6 +1094,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
       return new Blob([pdf.output('arraybuffer')], { type: 'application/pdf' });
     } finally {
+      if (captureTarget.parentNode) {
+        captureTarget.parentNode.removeChild(captureTarget);
+      }
       document.body.removeChild(sandbox);
     }
   };
@@ -2098,17 +2106,25 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
       for (let index = 0; index < captureTargets.length; index += 1) {
         const page = captureTargets[index];
-        const canvas = await html2canvas(page, {
-          backgroundColor: '#ffffff',
-          scale: 2,
-          useCORS: true,
-          logging: false,
-          windowWidth: page.scrollWidth || 794,
-          windowHeight: page.scrollHeight || 1123
-        });
-        const imgData = canvas.toDataURL('image/png', 1.0);
-        if (index > 0) pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, 0, pageWidth, pageHeight);
+        const captureNode = await prepareElementForPdfCapture(page);
+        try {
+          const canvas = await html2canvas(captureNode, {
+            backgroundColor: '#ffffff',
+            scale: 2,
+            useCORS: true,
+            allowTaint: true,
+            logging: false,
+            windowWidth: captureNode.scrollWidth || 794,
+            windowHeight: captureNode.scrollHeight || 1123
+          });
+          const imgData = canvas.toDataURL('image/png', 1.0);
+          if (index > 0) pdf.addPage();
+          pdf.addImage(imgData, 'PNG', 0, 0, pageWidth, pageHeight);
+        } finally {
+          if (captureNode.parentNode) {
+            captureNode.parentNode.removeChild(captureNode);
+          }
+        }
       }
 
       if (action === 'view') {
@@ -2210,7 +2226,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             } 
             return p; 
           }); 
-          setProtocols(updatedProtocols); 
+          safeSetProtocols?.(updatedProtocols); 
         } else { 
           if (!newProtocolName || !newDomainName) { alert("Preencha os dados do novo protocolo."); return; } 
           const inferredAgeGroup =
@@ -2235,7 +2251,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             min_age: minAge,
             max_age: maxAge
           }; 
-          setProtocols([...protocols, newProtocol]); 
+          safeSetProtocols?.([...protocols, newProtocol]); 
         } 
       } else { if (!selectedSkillId) { alert("Selecione uma tarefa."); return; } } 
       if (isKidsProfile) {

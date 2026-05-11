@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Camera, CheckCircle2, UploadCloud, X } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
+import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 
 interface ProfessionalOnboardingProps {
   user: any;
@@ -94,7 +95,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
           setClinicPhone(String(draft.clinicPhone || ''));
           setSpecialty(String(draft.specialty || ''));
           setCouncil(String(draft.council || ''));
-          setCouncilNumber(String(draft.councilNumber || ''));
+          setCouncilNumber(formatProfessionalRegistry(String(draft.councilNumber || '')));
           setSignatureDataUrl(draft.signatureDataUrl || user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null);
         }
         if (isTherapist && user?.clinicSettings?.clinicName) {
@@ -116,7 +117,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         setClinicPhone(profile.clinic_phone || "");
         setSpecialty(profile.specialty || "");
         setCouncil(profile.council || "");
-        setCouncilNumber(profile.council_number || "");
+        setCouncilNumber(formatProfessionalRegistry(profile.council_number || ""));
         setSignatureDataUrl(profile.signature_data_url || user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null);
         setSessionDurationMinutes(String(profile.metadata?.sessionDurationMinutes || "50"));
 
@@ -454,7 +455,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                 {(councilRequired || isCoordinator) && (
                   <div className="grid md:grid-cols-2 gap-4">
                     <input value={council} onChange={(e) => setCouncil(e.target.value)} placeholder="Conselho (ex: CRP)" className="px-4 py-3 rounded-xl bg-slate-50" />
-                    <input value={councilNumber} onChange={(e) => setCouncilNumber(e.target.value)} placeholder="Numero do conselho" className="px-4 py-3 rounded-xl bg-slate-50" />
+                    <input value={councilNumber} onChange={(e) => setCouncilNumber(formatProfessionalRegistry(e.target.value))} placeholder="00/00000" className="px-4 py-3 rounded-xl bg-slate-50" />
                   </div>
                 )}
 

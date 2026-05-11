@@ -70,7 +70,7 @@ export const CalendarWidget = ({ agenda, currentDate, onDateChange, onDateSelect
   );
 };
 
-export const DayDetailsModal = ({ isOpen, onClose, date, agenda, onAddSession, onPatientClick }: any) => {
+export const DayDetailsModal = ({ isOpen, onClose, date, agenda, onAddSession, onPatientClick, onAppointmentClick }: any) => {
   if (!isOpen) return null;
   
   const appointments = agenda.filter((a: any) => a.date === date).sort((a: any, b: any) => a.time.localeCompare(b.time));
@@ -91,7 +91,7 @@ export const DayDetailsModal = ({ isOpen, onClose, date, agenda, onAddSession, o
         
         <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3 mb-6 pr-2 -mr-2">
             {appointments.map((apt: any) => (
-                <div key={apt.id} onClick={() => onPatientClick(apt.patientId ?? apt.id, undefined, apt.patientName || apt.name)} className="bg-gray-50 p-4 rounded-2xl border border-gray-100 flex items-center justify-between hover:bg-white hover:shadow-sm hover:border-blue-100 transition-all group cursor-pointer">
+                <div key={apt.id} onClick={() => onAppointmentClick ? onAppointmentClick(apt) : onPatientClick(apt.patientId ?? apt.id, undefined, apt.patientName || apt.name)} className="bg-gray-50 p-4 rounded-2xl border border-gray-100 flex items-center justify-between hover:bg-white hover:shadow-sm hover:border-blue-100 transition-all group cursor-pointer">
                       <div className="flex items-center gap-3">
                         <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm text-white ${apt.color.replace('text', 'bg').replace('-100', '-500')}`}>
                       {(String(apt?.name || 'P').trim().charAt(0) || 'P').toUpperCase()}

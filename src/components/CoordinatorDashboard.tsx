@@ -303,9 +303,11 @@ export function CoordinatorDashboard({
         if (!isMounted || !result?.success || !Array.isArray(result?.data)) return;
         const byId: Record<string, any> = {};
         result.data.forEach((member: any) => {
-          const role = String(member?.role || "").toLowerCase();
+          const role = String(
+            member?.profileRole || member?.professionalProfileRole || member?.role || "",
+          ).toLowerCase();
           const id = String(member?.id || "").trim();
-          if (role === "therapist" && id) {
+          if ((role === "therapist" || role === "professional") && id) {
             byId[id] = member;
           }
         });
@@ -324,7 +326,9 @@ export function CoordinatorDashboard({
     const entries = Object.entries(therapistMembersById as Record<string, any>)
       .map(([id, member]: [string, any]) => ({
         id,
-        label: String(member?.name || member?.email || id).trim(),
+        label: String(
+          member?.full_name || member?.fullName || member?.name || member?.email || id,
+        ).trim(),
       }))
       .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
     return entries;
@@ -475,6 +479,8 @@ export function CoordinatorDashboard({
   const [isPatientProfileModalOpen, setIsPatientProfileModalOpen] =
     useState(false);
   const [selectedPatientProfile, setSelectedPatientProfile] = useState<any>(null);
+  const [selectedAgendaAppointment, setSelectedAgendaAppointment] =
+    useState<any>(null);
   const [filteredPatients, setFilteredPatients] = useState<any[]>([]);
   const dashboardHeadlineMessage = useMemo(() => {
     const todayKey = new Date().toISOString().slice(0, 10);
@@ -1142,7 +1148,12 @@ export function CoordinatorDashboard({
         room: sessionRoom,
         professional: sessionProfessional,
       };
-      onUpdateAppointment(editingAppointmentId, updates);
+      const result: any = onUpdateAppointment(editingAppointmentId, updates);
+      if (result && !result.success) {
+        hideProcessing();
+        showToast(result.errors.join(" | "), "error");
+        return;
+      }
       onAddActivityLog(
         "Agendamento editado",
         `Sessão de ${sessionPatientName} atualizada para ${sessionDate} às ${sessionTime}.`,
@@ -1650,12 +1661,14 @@ export function CoordinatorDashboard({
 
   const handleEditAppointment = (appointment: any) => {
     setEditingAppointmentId(appointment.id);
-    setSessionPatientName(appointment.name);
+    setSessionPatientName(appointment.patientName || appointment.name || "");
     setSessionDate(appointment.date);
     setSessionTime(appointment.time);
-    setSessionApproach(appointment.type);
-    setSessionRoom(appointment.room);
-    setSessionProfessional(appointment.therapistName);
+    setSessionApproach(appointment.type || appointment.approach || "");
+    setSessionRoom(appointment.room || "");
+    setSessionProfessional(
+      appointment.therapistName || appointment.professional || "",
+    );
     setIsAddSessionModalOpen(true);
   };
 
@@ -1726,6 +1739,93 @@ export function CoordinatorDashboard({
     setSelectedPatientProfile(patient);
     setIsPatientProfileModalOpen(true);
   };
+
+  const resolvePatientFromAgendaItem = useCallback(
+    (appointment: any) => {
+      const normalizedName = normalizeUtf8Text(
+        String(appointment?.patientName || appointment?.name || ""),
+      )
+        .trim()
+        .toLowerCase();
+
+      return (
+        allPatients.find(
+          (patient: any) =>
+            appointment?.patientId !== undefined &&
+            appointment?.patientId !== null &&
+            String(patient?.id) === String(appointment.patientId),
+        ) ||
+        allPatients.find(
+          (patient: any) =>
+            normalizedName.length > 0 &&
+            normalizeUtf8Text(String(patient?.name || ""))
+              .trim()
+              .toLowerCase() === normalizedName,
+        ) ||
+        null
+      );
+    },
+    [allPatients],
+  );
+
+  const closeAgendaActionModal = useCallback(() => {
+    setSelectedAgendaAppointment(null);
+  }, []);
+
+  const openAgendaActionModal = useCallback((appointment: any) => {
+    setIsDayDetailsModalOpen(false);
+    setSelectedAgendaAppointment(appointment);
+  }, []);
+
+  const openAppointmentProfileFromAgenda = useCallback(
+    (appointment: any) => {
+      const resolvedPatient = resolvePatientFromAgendaItem(appointment);
+      closeAgendaActionModal();
+      if (resolvedPatient) {
+        openPatientProfileModal(resolvedPatient);
+        return;
+      }
+      onPatientClick(
+        appointment?.patientId,
+        undefined,
+        appointment?.patientName || appointment?.name,
+      );
+    },
+    [
+      closeAgendaActionModal,
+      onPatientClick,
+      openPatientProfileModal,
+      resolvePatientFromAgendaItem,
+    ],
+  );
+
+  const openAppointmentChartFromAgenda = useCallback(
+    (appointment: any, openAnamnesis = false) => {
+      closeAgendaActionModal();
+      onPatientClick(
+        appointment?.patientId,
+        { tab: "history", openAnamnesis },
+        appointment?.patientName || appointment?.name,
+      );
+    },
+    [closeAgendaActionModal, onPatientClick],
+  );
+
+  const handleRescheduleAppointmentFromAgenda = useCallback(
+    (appointment: any) => {
+      closeAgendaActionModal();
+      handleEditAppointment(appointment);
+    },
+    [closeAgendaActionModal, handleEditAppointment],
+  );
+
+  const handleCancelAppointmentFromAgenda = useCallback(
+    (appointment: any) => {
+      closeAgendaActionModal();
+      handleStatusUpdate(Number(appointment?.id), "canceled");
+    },
+    [closeAgendaActionModal, handleStatusUpdate],
+  );
 
   const normalizedAgenda = useMemo(
     () =>
@@ -2076,9 +2176,7 @@ export function CoordinatorDashboard({
                         return (
                           <button
                             key={item.id}
-                            onClick={() =>
-                              onPatientClick(item.patientId, undefined, item.patientName)
-                            }
+                            onClick={() => openAgendaActionModal(item)}
                             className={`text-left min-w-[220px] rounded-xl border px-3 py-2 transition-all ${statusVisual.card}`}
                           >
                             <div className="mb-1 flex items-center justify-between gap-2">
@@ -2166,9 +2264,7 @@ export function CoordinatorDashboard({
                           items.map((item: any) => (
                             <button
                               key={item.id}
-                              onClick={() =>
-                                onPatientClick(item.patientId, undefined, item.patientName)
-                              }
+                              onClick={() => openAgendaActionModal(item)}
                               className="text-left rounded-lg border border-[#7a32fc]/20 bg-[#7a32fc]/5 px-2 py-1.5 hover:bg-[#7a32fc]/10 transition-all"
                             >
                               <p className="text-[10px] font-bold text-slate-800 truncate flex items-center gap-1.5">
@@ -2565,6 +2661,7 @@ export function CoordinatorDashboard({
         agenda={filteredAgenda}
         onAddSession={() => setIsAddSessionModalOpen(true)}
         onPatientClick={onPatientClick}
+        onAppointmentClick={openAgendaActionModal}
       />
     </div>
   );
@@ -3501,6 +3598,7 @@ export function CoordinatorDashboard({
               onAddTask={onAddTask}
               onUpdateTask={onUpdateTask}
               protocols={protocols}
+              setProtocols={setProtocols}
               userRole={user.role}
               allowedTabs={isReceptionist ? ["files"] : undefined}
               anamnesisTemplate={anamnesisTemplate}
@@ -5664,13 +5762,25 @@ export function CoordinatorDashboard({
                 <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
                   Terapeuta Responsável
                 </label>
-                <input
-                  type="text"
+                <select
                   className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
                   placeholder="Nome do Profissional"
                   value={sessionProfessional}
                   onChange={(e) => setSessionProfessional(e.target.value)}
-                />
+                >
+                  <option value="">Selecione...</option>
+                  {therapistFilterOptions.map((member) => (
+                    <option key={member.id} value={member.label}>
+                      {member.label}
+                    </option>
+                  ))}
+                  {sessionProfessional &&
+                    !therapistFilterOptions.some(
+                      (member) => member.label === sessionProfessional,
+                    ) && (
+                      <option value={sessionProfessional}>{sessionProfessional}</option>
+                    )}
+                </select>
               </div>
               <button
                 onClick={handleSessionSubmit}
@@ -5800,6 +5910,118 @@ export function CoordinatorDashboard({
               <div><span className="text-slate-400">Renovação da anamnese:</span> <p className="font-semibold text-slate-800">{normalizeAnamnesisRenewalMonths(selectedPatientProfile.anamnesisRenewalMonths)} meses</p></div>
               <div className="md:col-span-2"><span className="text-slate-400">Endereço:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.address?.logradouro || "-"} {selectedPatientProfile.address?.numero || ""} - {selectedPatientProfile.address?.bairro || ""} - {selectedPatientProfile.address?.cidade || ""}</p></div>
               <div className="md:col-span-2"><span className="text-slate-400">Observações:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.notes || "-"}</p></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedAgendaAppointment && (
+        <div
+          className="fixed inset-0 z-[135] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+          onClick={closeAgendaActionModal}
+        >
+          <div
+            className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 mb-5">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-400">
+                  Agendamento
+                </p>
+                <h3 className="text-lg font-bold text-slate-900">
+                  {selectedAgendaAppointment.patientName ||
+                    selectedAgendaAppointment.name ||
+                    "Paciente"}
+                </h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  {selectedAgendaAppointment.date} às {selectedAgendaAppointment.time}
+                  {selectedAgendaAppointment.room
+                    ? ` • Sala ${selectedAgendaAppointment.room}`
+                    : ""}
+                </p>
+              </div>
+              <button
+                onClick={closeAgendaActionModal}
+                className="text-slate-400 hover:text-slate-700"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="mb-5">
+              {(() => {
+                const statusVisual = getAgendaStatusVisual(
+                  selectedAgendaAppointment.status,
+                );
+                const StatusIcon = statusVisual.icon;
+                return (
+                  <span
+                    className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[10px] font-black uppercase ${statusVisual.badge}`}
+                  >
+                    <StatusIcon size={12} />
+                    {statusVisual.label}
+                  </span>
+                );
+              })()}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                onClick={() =>
+                  handleRescheduleAppointmentFromAgenda(selectedAgendaAppointment)
+                }
+                className="flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all"
+              >
+                <Edit2 size={16} className="text-[#7a32fc]" />
+                Remarcar
+              </button>
+              <button
+                onClick={() =>
+                  handleCancelAppointmentFromAgenda(selectedAgendaAppointment)
+                }
+                className="flex items-center gap-2 rounded-2xl border border-rose-200 px-4 py-3 text-sm font-semibold text-rose-600 hover:bg-rose-50 transition-all"
+              >
+                <XCircle size={16} />
+                Cancelar
+              </button>
+              <button
+                onClick={() =>
+                  openAppointmentProfileFromAgenda(selectedAgendaAppointment)
+                }
+                className="flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all sm:col-span-2"
+              >
+                <Search size={16} className="text-[#7a32fc]" />
+                {isReceptionist ? "Visualizar ficha cadastral" : "Ficha cadastral"}
+              </button>
+              {!isReceptionist && (
+                <>
+                  <button
+                    onClick={() =>
+                      openAppointmentChartFromAgenda(
+                        selectedAgendaAppointment,
+                        true,
+                      )
+                    }
+                    className="flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all"
+                  >
+                    <ClipboardCheck size={16} className="text-purple-600" />
+                    Anamnese
+                  </button>
+                  <button
+                    onClick={() =>
+                      openAppointmentChartFromAgenda(
+                        selectedAgendaAppointment,
+                        false,
+                      )
+                    }
+                    className="flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all"
+                  >
+                    <FileText size={16} className="text-blue-600" />
+                    Prontuário
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
