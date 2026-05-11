@@ -939,6 +939,7 @@ export const TherapistDashboard = ({
           <div className="p-4 sm:p-8">
             <ProtocolManagementSystem
               protocols={protocols}
+              canManageLibrary={false}
               onSaveProtocol={handleSaveProtocol}
               onDeleteProtocol={handleDeleteProtocol}
               onBack={() => setView("home")}

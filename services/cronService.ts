@@ -178,6 +178,8 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
       .neq('status', 'canceled')
       .neq('status', 'confirmed')
       .neq('status', 'reschedule')
+      .eq('is_active', true)
+      .is('deleted_at', null)
       .or('notification_sent.is.false,notification_sent.is.null,notification_12h_sent.is.false,notification_12h_sent.is.null')
       .gte('scheduled_at', queryScheduledStartUtc.toISOString())
       .lt('scheduled_at', queryScheduledEndUtc.toISOString())

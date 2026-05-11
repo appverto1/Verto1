@@ -41,6 +41,8 @@ async function countActivePatientsByClinic(
     .from('patients')
     .select('id,status')
     .eq('clinic_id', clinicId)
+    .eq('is_active', true)
+    .is('deleted_at', null)
     .limit(10000);
 
   if (error) throw error;

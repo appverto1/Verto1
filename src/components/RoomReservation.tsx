@@ -49,6 +49,7 @@ export const RoomReservationTable = ({
   onDeleteReservation: (id: string) => void 
 }) => {
   const timeSlots = Array.from({ length: 14 }, (_, i) => `${String(i + 8).padStart(2, '0')}:00`);
+  const canManageReservations = ['coordinator', 'receptionist', 'admin', 'owner'].includes(String(user?.role || '').toLowerCase());
 
   return (
     <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 overflow-hidden">
@@ -105,7 +106,7 @@ export const RoomReservationTable = ({
                               {reservation.professionalName}
                             </p>
                           </div>
-                          {(reservation.professionalId === user.id || user.role === 'coordinator' || user.role === 'receptionist') && (
+                          {canManageReservations && (
                             <button 
                               onClick={() => onDeleteReservation(reservation.id)}
                               className="absolute top-2 right-2 p-1 text-slate-300 hover:text-red-500 hover:bg-white rounded-lg transition-all opacity-0 group-hover:opacity-100"
@@ -137,6 +138,7 @@ export function RoomReservation({ user, rooms, reservations, onDeleteReservation
   onBack: () => void
 }) {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const isTherapist = String(user?.role || '').toLowerCase() === 'therapist';
 
   const handleDeleteReservation = (id: string) => {
     onDeleteReservation(id);
@@ -151,7 +153,7 @@ export function RoomReservation({ user, rooms, reservations, onDeleteReservation
           </button>
           <div>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Reserva de Salas</h1>
-            <p className="text-slate-500 text-sm">Gerencie o uso das salas da clínica.</p>
+            <p className="text-slate-500 text-sm">{isTherapist ? 'Visualize o calendário de reservas da clínica.' : 'Gerencie o uso das salas da clínica.'}</p>
           </div>
         </div>
         

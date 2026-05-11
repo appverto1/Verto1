@@ -1566,13 +1566,19 @@ export default function App() {
     clinicStateSyncTimerRef.current = setTimeout(async () => {
       try {
         const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || '').trim();
-        await dataService.saveClinicState({
+        const role = String(user?.role || '').toLowerCase();
+        const payload: any = {
           workspace_id: workspaceId || undefined,
-          rooms,
-          appointments: therapistAgenda,
-          protocols,
-          specialtySettings
-        });
+          appointments: therapistAgenda
+        };
+        if (role === 'coordinator' || role === 'admin' || role === 'owner') {
+          payload.rooms = rooms;
+          payload.protocols = protocols;
+          payload.specialtySettings = specialtySettings;
+        } else if (role === 'receptionist') {
+          payload.rooms = rooms;
+        }
+        await dataService.saveClinicState(payload);
       } catch (error) {
         console.error('Erro ao sincronizar estado clÃ­nico no Supabase:', error);
       }

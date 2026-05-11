@@ -474,6 +474,8 @@ async function loadProtocolAccessMap(): Promise<Map<string, string[]>> {
       .from('activity_logs')
       .select('payload_details, timestamp')
       .eq('type', 'protocol_access_updated')
+      .eq('is_active', true)
+      .is('deleted_at', null)
       .gte('timestamp', VERTO_PROTOCOL_PANEL_RESET_AT)
       .order('timestamp', { ascending: true })
       .limit(1000);
@@ -2344,6 +2346,8 @@ async function findDuplicatePatientInClinic(params: {
       .select('id, name, email, status')
       .eq('clinic_id', safeClinicId)
       .eq('email', safeEmail)
+      .eq('is_active', true)
+      .is('deleted_at', null)
       .limit(10);
     if (emailError) throw emailError;
 
@@ -2365,6 +2369,8 @@ async function findDuplicatePatientInClinic(params: {
         .select('id, name, cpf, status')
         .eq('clinic_id', safeClinicId)
         .eq('cpf', safeCpf)
+        .eq('is_active', true)
+        .is('deleted_at', null)
         .limit(10);
       if (cpfError) throw cpfError;
 
@@ -2428,6 +2434,8 @@ async function getClinicPatientIdsByEmail(clinicId: string, patientEmail: string
     .select('id')
     .eq('clinic_id', clinicId)
     .eq('email', patientEmail)
+    .eq('is_active', true)
+    .is('deleted_at', null)
     .limit(500);
 
   if (error) return [];
@@ -2443,6 +2451,8 @@ async function getPatientIdsByEmailAcrossClinics(patientEmail: string): Promise<
     .from('patients')
     .select('id')
     .ilike('email', safeEmail)
+    .eq('is_active', true)
+    .is('deleted_at', null)
     .limit(1000);
   if (error) return [];
   return (data || [])
@@ -2504,6 +2514,8 @@ async function resolvePatientIdForRequest(
       .from('patients')
       .select('id')
       .eq('id', safeRaw)
+      .eq('is_active', true)
+      .is('deleted_at', null)
       .maybeSingle();
 
     if (!byIdError && byId?.id) return sanitizeString(byId.id, 120);
@@ -2516,6 +2528,8 @@ async function resolvePatientIdForRequest(
           .from('patients')
           .select('id')
           .ilike('email', safeEmail)
+          .eq('is_active', true)
+          .is('deleted_at', null)
           .order('created_at', { ascending: false })
           .limit(1);
         if (scopedToClinic && clinicId) {
@@ -2550,6 +2564,8 @@ async function resolvePatientIdForRequest(
     .select('id, name')
     .eq('clinic_id', clinicId)
     .ilike('name', guessedName)
+    .eq('is_active', true)
+    .is('deleted_at', null)
     .limit(1)
     .maybeSingle();
 
@@ -2559,6 +2575,8 @@ async function resolvePatientIdForRequest(
       .select('id, name')
       .eq('clinic_id', clinicId)
       .ilike('name', `%${guessedName}%`)
+      .eq('is_active', true)
+      .is('deleted_at', null)
       .limit(1)
       .maybeSingle();
     foundByName = relaxed.data || null;
@@ -2764,6 +2782,8 @@ async function derivePatientTreatmentStatus(user: any): Promise<'active' | 'inac
       .from('patients')
       .select('id, clinic_id, status')
       .ilike('email', safeEmail)
+      .eq('is_active', true)
+      .is('deleted_at', null)
       .limit(1000);
     patientRows = Array.isArray(data) ? data : [];
   }
@@ -2803,7 +2823,9 @@ async function canAccessPatientInCurrentClinic(patientId: string, user: any): Pr
   let query = supabase
     .from('patients')
     .select('id, therapist_id, clinic_id')
-    .eq('id', patientId);
+    .eq('id', patientId)
+    .eq('is_active', true)
+    .is('deleted_at', null);
   if (clinicId) {
     query = query.eq('clinic_id', clinicId);
   }
@@ -2821,6 +2843,8 @@ async function canAccessPatientInCurrentClinic(patientId: string, user: any): Pr
       .select('id')
       .eq('id', patientId)
       .eq('therapist_id', userId)
+      .eq('is_active', true)
+      .is('deleted_at', null)
       .maybeSingle();
     if (!byTherapistError && byTherapist?.id) return true;
   }
@@ -2839,13 +2863,15 @@ async function updatePatientStatusIfNeeded(user: any): Promise<'active' | 'inact
       .from('users')
       .update({ status })
       .eq('id', sanitizeString(user.id, 120));
-    if (status === 'active' && safeEmail) {
-      await supabase
-        .from('patients')
-        .update({ status: 'active' })
-        .ilike('email', safeEmail)
-        .in('status', ['pending', 'waiting_treatment', 'inactive']);
-    }
+      if (status === 'active' && safeEmail) {
+        await supabase
+          .from('patients')
+          .update({ status: 'active' })
+          .ilike('email', safeEmail)
+          .eq('is_active', true)
+          .is('deleted_at', null)
+          .in('status', ['pending', 'waiting_treatment', 'inactive']);
+      }
   } catch (error) {
     console.warn('[Auth] Não foi possível atualizar status clínico do paciente:', (error as any)?.message || error);
   }
@@ -3796,6 +3822,7 @@ async function startServer() {
         payload_details: sanitizeString(payloadDetails || content, 4000) || null,
         source: 'server',
         status: 'active',
+        is_active: true,
         created_at: basePayload.timestamp,
         updated_at: basePayload.timestamp
       };
@@ -3849,7 +3876,8 @@ async function startServer() {
           'created_at',
           'updated_at',
           'status',
-          'deleted_at'
+          'deleted_at',
+          'is_active'
         ].includes(column)
     );
 
@@ -6447,12 +6475,23 @@ async function startServer() {
       const clinicId = currentClinicId(req.session.user);
       const actorId = sanitizeString(req.session.user?.id, 120);
       const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
+      const actorRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const canManageRooms =
+        actorRole === 'coordinator' ||
+        actorRole === 'receptionist' ||
+        actorRole === 'admin' ||
+        actorRole === 'owner';
+      const canManageProtocols =
+        actorRole === 'coordinator' ||
+        actorRole === 'admin' ||
+        actorRole === 'owner';
+      const canManageSpecialtySettings = canManageProtocols;
 
-      const nextRooms = Array.isArray(req.body?.rooms) ? req.body.rooms.slice(0, 400) : undefined;
+      const nextRooms = canManageRooms && Array.isArray(req.body?.rooms) ? req.body.rooms.slice(0, 400) : undefined;
       const nextAppointments = Array.isArray(req.body?.appointments) ? req.body.appointments.slice(0, 5000) : undefined;
-      const nextProtocols = Array.isArray(req.body?.protocols) ? req.body.protocols.slice(0, 600) : undefined;
+      const nextProtocols = canManageProtocols && Array.isArray(req.body?.protocols) ? req.body.protocols.slice(0, 600) : undefined;
       const nextSpecialtySettings =
-        req.body?.specialtySettings && typeof req.body.specialtySettings === 'object'
+        canManageSpecialtySettings && req.body?.specialtySettings && typeof req.body.specialtySettings === 'object'
           ? req.body.specialtySettings
           : undefined;
 
@@ -7634,7 +7673,7 @@ async function startServer() {
   // Patients
   app.get('/api/patients', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
-      let query = supabase.from('patients').select('*');
+      let query = supabase.from('patients').select('*').eq('is_active', true).is('deleted_at', null);
       const role = req.session.user.role as AppRole;
       const scopedClinicId = currentClinicId(req.session.user);
 
@@ -7655,7 +7694,9 @@ async function startServer() {
         let fallbackQuery = supabase
           .from('patients')
           .select('*')
-          .eq('therapist_id', sanitizeString(req.session.user?.id, 120));
+          .eq('therapist_id', sanitizeString(req.session.user?.id, 120))
+          .eq('is_active', true)
+          .is('deleted_at', null);
         if (scopedClinicId) {
           fallbackQuery = fallbackQuery.eq('clinic_id', scopedClinicId);
         }
@@ -7843,7 +7884,9 @@ async function startServer() {
       let patientUpdateQuery = supabase
         .from('patients')
         .update(updates)
-        .eq('id', req.params.id);
+        .eq('id', req.params.id)
+        .eq('is_active', true)
+        .is('deleted_at', null);
       if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
         patientUpdateQuery = patientUpdateQuery.eq('clinic_id', scopedClinicId);
       }
@@ -8636,7 +8679,7 @@ async function startServer() {
     excludePatientId?: string;
     role: string;
   }) => {
-    let query = supabase.from('notes').select('*');
+    let query = supabase.from('notes').select('*').eq('is_active', true).is('deleted_at', null);
     if (params.patientId) query = query.eq('patient_id', params.patientId);
     if (params.patientEmail) query = query.eq('patient_email', params.patientEmail);
     if (params.excludePatientId) query = query.neq('patient_id', params.excludePatientId);
@@ -8650,7 +8693,7 @@ async function startServer() {
     if (!result.error) return { data: result.data || [], error: null };
 
     if (needsPatientVisibilityFilter && isMissingColumnError(result.error, 'visibility')) {
-      let fallbackQuery = supabase.from('notes').select('*');
+      let fallbackQuery = supabase.from('notes').select('*').eq('is_active', true).is('deleted_at', null);
       if (params.patientId) fallbackQuery = fallbackQuery.eq('patient_id', params.patientId);
       if (params.patientEmail) fallbackQuery = fallbackQuery.eq('patient_email', params.patientEmail);
       if (params.excludePatientId) fallbackQuery = fallbackQuery.neq('patient_id', params.excludePatientId);
@@ -8732,6 +8775,8 @@ async function startServer() {
         .from('patients')
         .select('email')
         .eq('id', patientId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
         .maybeSingle();
       const patientEmail = sanitizeEmail(patientRow?.email);
 
@@ -8777,7 +8822,9 @@ async function startServer() {
       let findQuery = supabase
         .from('patients')
         .select('id, clinic_id, email, name, therapist_id')
-        .eq('id', patientId);
+        .eq('id', patientId)
+        .eq('is_active', true)
+        .is('deleted_at', null);
       if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
         findQuery = findQuery.eq('clinic_id', scopedClinicId);
       }
@@ -8794,6 +8841,7 @@ async function startServer() {
       const unlinkPayload = cleanObject({
         clinic_id: null,
         status: 'deleted',
+        is_active: false,
         // Algumas bases têm `therapist_id` como NOT NULL.
         // Mantemos o vínculo histórico do terapeuta para evitar violação de constraint.
         therapist_id: sanitizeString(patientRow?.therapist_id, 120) || undefined,
@@ -8823,6 +8871,27 @@ async function startServer() {
       }
 
       const patientEmail = sanitizeEmail(patientRow?.email);
+      const archiveDependency = async (table: 'notes' | 'history' | 'appointments' | 'activity_logs', column: string, value: string | null) => {
+        if (!value) return;
+        const payload = table === 'activity_logs'
+          ? { deleted_at: nowIso, is_active: false, status: 'archived', updated_at: nowIso }
+          : { deleted_at: nowIso, is_active: false };
+        const { error } = await supabase
+          .from(table)
+          .update(payload)
+          .eq(column, value);
+        if (error) throw error;
+      };
+
+      await Promise.all([
+        archiveDependency('notes', 'patient_id', patientId),
+        archiveDependency('history', 'patient_id', patientId),
+        archiveDependency('appointments', 'patient_id', patientId),
+        archiveDependency('activity_logs', 'user_id', patientId),
+        archiveDependency('notes', 'patient_email', patientEmail),
+        archiveDependency('history', 'patient_email', patientEmail)
+      ]);
+
       if (patientEmail) {
         let safeUserPatch: Record<string, any> = cleanObject({
           status: 'waiting_treatment',
@@ -8844,6 +8913,12 @@ async function startServer() {
         }
       }
 
+      if (sanitizeString(req.session.user?.id, 120) === patientId) {
+        await supabase.auth.admin.updateUserById(patientId, {
+          ban_duration: '876000h'
+        });
+      }
+
       if (scopedClinicId && isUuid(scopedClinicId)) {
         queueActivePatientSync(scopedClinicId, 'patient_delete');
       }
@@ -8853,6 +8928,13 @@ async function startServer() {
         actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
         title: 'Paciente excluído/desvinculado',
         content: `Paciente ${sanitizeString(patientRow?.name || patientId, 180)} foi removido da clínica.`,
+        actionType: 'PATIENT_ARCHIVED',
+        payloadDetails: JSON.stringify({
+          action: 'PATIENT_ARCHIVED',
+          patient_id: patientId,
+          requested_by: sanitizeString(req.session.user?.id, 120),
+          requested_at: nowIso
+        }),
         type: 'management'
       });
 
@@ -8881,6 +8963,8 @@ async function startServer() {
         .from('notes')
         .select('*')
         .eq('patient_email', safeEmail)
+        .eq('is_active', true)
+        .is('deleted_at', null)
         .order('created_at', { ascending: false });
 
       if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
@@ -9019,6 +9103,8 @@ async function startServer() {
         .from('patients')
         .select('email')
         .eq('id', patientId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
         .maybeSingle();
       const patientEmail = sanitizeEmail(patientRow?.email);
 
@@ -9026,6 +9112,8 @@ async function startServer() {
         .from('history')
         .select('*')
         .eq('patient_id', patientId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
         .order('created_at', { ascending: false });
       if (historyByIdError) throw historyByIdError;
 
@@ -9036,6 +9124,8 @@ async function startServer() {
           .select('*')
           .eq('patient_email', patientEmail)
           .neq('patient_id', patientId)
+          .eq('is_active', true)
+          .is('deleted_at', null)
           .order('created_at', { ascending: false });
         if (historyByEmailError) throw historyByEmailError;
         historyByEmail = Array.isArray(historyByEmailData) ? historyByEmailData : [];
@@ -9068,6 +9158,8 @@ async function startServer() {
         .from('history')
         .select('*')
         .eq('patient_email', safeEmail)
+        .eq('is_active', true)
+        .is('deleted_at', null)
         .order('created_at', { ascending: false });
 
       if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
@@ -9129,6 +9221,8 @@ async function startServer() {
         .from('history')
         .select('*')
         .eq('patient_email', patientEmail)
+        .eq('is_active', true)
+        .is('deleted_at', null)
         .order('created_at', { ascending: false });
       if (historyByEmailError) throw historyByEmailError;
 
@@ -9138,6 +9232,8 @@ async function startServer() {
           .from('history')
           .select('*')
           .in('patient_id', scopedPatientIds)
+          .eq('is_active', true)
+          .is('deleted_at', null)
           .order('created_at', { ascending: false });
         if (historyByIdError) throw historyByIdError;
         historyById = Array.isArray(historyByIdData) ? historyByIdData : [];
@@ -9300,7 +9396,9 @@ async function startServer() {
       const { data: patientLinks, error: patientLinksError } = await supabase
         .from('patients')
         .select('clinic_id, status, created_at')
-        .eq('email', patientEmail);
+        .eq('email', patientEmail)
+        .eq('is_active', true)
+        .is('deleted_at', null);
 
       if (patientLinksError) throw patientLinksError;
 
@@ -9364,6 +9462,8 @@ async function startServer() {
           .select('id')
           .eq('type', 'photo')
           .eq('patient_email', safeEmail)
+          .eq('is_active', true)
+          .is('deleted_at', null)
           .gte('created_at', startOfDay)
           .lt('created_at', endOfDay)
           .limit(1);
@@ -9453,6 +9553,8 @@ async function startServer() {
         .from('history')
         .select('*')
         .eq('patient_id', patientId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
         .order('created_at', { ascending: false });
       if (historyError) throw historyError;
 
@@ -9605,6 +9707,8 @@ async function startServer() {
             .from('activity_logs')
             .select('*')
             .eq('clinic_id', clinicId)
+            .eq('is_active', true)
+            .is('deleted_at', null)
             .order('timestamp', { ascending: false })
             .limit(limit);
 
@@ -9635,6 +9739,8 @@ async function startServer() {
               .from('activity_logs')
               .select('*')
               .in('user_id', Array.from(new Set(memberIds)))
+              .eq('is_active', true)
+              .is('deleted_at', null)
               .order('timestamp', { ascending: false })
               .limit(limit);
             byMembers = memberLogsRes.data || [];
@@ -9667,6 +9773,8 @@ async function startServer() {
             .from('activity_logs')
             .select('*')
             .eq('user_id', currentUser.id)
+            .eq('is_active', true)
+            .is('deleted_at', null)
             .order('timestamp', { ascending: false })
             .limit(limit);
           data = (result.data || []).filter((row: any) => sanitizeString(row?.status, 40).toLowerCase() !== 'archived');
@@ -9765,6 +9873,8 @@ async function startServer() {
         .from('activity_logs')
         .select('*')
         .eq('id', logId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
         .maybeSingle();
       if (error) throw error;
       if (!data) return res.status(404).json({ success: false, error: 'Log não encontrado.' });
@@ -9795,6 +9905,8 @@ async function startServer() {
         .from('activity_logs')
         .select('*')
         .eq('id', logId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
         .maybeSingle();
       if (findError) throw findError;
       if (!existing) return res.status(404).json({ success: false, error: 'Log não encontrado.' });
@@ -9856,6 +9968,8 @@ async function startServer() {
         .from('activity_logs')
         .select('*')
         .eq('id', logId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
         .maybeSingle();
       if (findError) throw findError;
       if (!existing) return res.status(404).json({ success: false, error: 'Log não encontrado.' });
@@ -9871,6 +9985,7 @@ async function startServer() {
 
       let archivePayload: Record<string, any> = {
         status: 'archived',
+        is_active: false,
         deleted_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       };
@@ -10671,6 +10786,8 @@ async function startServer() {
         .from('history')
         .select('*')
         .eq('id', historyId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
         .maybeSingle();
       if (existingError) throw existingError;
       if (!existing) return res.status(404).json({ success: false, error: 'Registro não encontrado.' });
@@ -10739,13 +10856,18 @@ async function startServer() {
         .from('history')
         .select('id, patient_id')
         .eq('id', historyId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
         .maybeSingle();
       if (existingError) throw existingError;
       if (!existing) return res.status(404).json({ success: false, error: 'Registro não encontrado.' });
       if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
       }
-      const { error } = await supabase.from('history').delete().eq('id', historyId);
+      const { error } = await supabase
+        .from('history')
+        .update({ deleted_at: new Date().toISOString(), is_active: false })
+        .eq('id', historyId);
       if (error) throw error;
       return res.json({ success: true });
     } catch (error: any) {
@@ -10766,6 +10888,8 @@ async function startServer() {
           .from('notes')
           .select('*')
           .eq('id', noteId)
+          .eq('is_active', true)
+          .is('deleted_at', null)
           .maybeSingle();
         existing = result.data;
         existingError = result.error;
@@ -10777,6 +10901,8 @@ async function startServer() {
         let fallbackQuery = supabase
           .from('notes')
           .select('*')
+          .eq('is_active', true)
+          .is('deleted_at', null)
           .order('created_at', { ascending: false })
           .limit(1);
         if (isUuid(fallbackPatientId)) fallbackQuery = fallbackQuery.eq('patient_id', fallbackPatientId);
@@ -10836,6 +10962,8 @@ async function startServer() {
           .from('notes')
           .select('id, patient_id')
           .eq('id', noteId)
+          .eq('is_active', true)
+          .is('deleted_at', null)
           .maybeSingle();
         existing = result.data;
         existingError = result.error;
@@ -10845,6 +10973,8 @@ async function startServer() {
         let fallbackQuery = supabase
           .from('notes')
           .select('id, patient_id')
+          .eq('is_active', true)
+          .is('deleted_at', null)
           .order('created_at', { ascending: false })
           .limit(1);
         if (isUuid(fallbackPatientId)) fallbackQuery = fallbackQuery.eq('patient_id', fallbackPatientId);
@@ -10858,7 +10988,10 @@ async function startServer() {
       if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
       }
-      const { error } = await supabase.from('notes').delete().eq('id', sanitizeString(existing.id, 120));
+      const { error } = await supabase
+        .from('notes')
+        .update({ deleted_at: new Date().toISOString(), is_active: false })
+        .eq('id', sanitizeString(existing.id, 120));
       if (error) throw error;
       return res.json({ success: true });
     } catch (error) {
@@ -12484,6 +12617,8 @@ async function startServer() {
           .from('activity_logs')
           .select('id, payload_details, timestamp')
           .eq('type', 'protocol_import_request')
+          .eq('is_active', true)
+          .is('deleted_at', null)
           .gte('timestamp', VERTO_PROTOCOL_PANEL_RESET_AT)
           .order('timestamp', { ascending: false })
           .limit(200);
@@ -12525,6 +12660,8 @@ async function startServer() {
           .from('activity_logs')
           .select('payload_details, timestamp')
           .eq('type', 'protocol_import_review')
+          .eq('is_active', true)
+          .is('deleted_at', null)
           .gte('timestamp', VERTO_PROTOCOL_PANEL_RESET_AT)
           .order('timestamp', { ascending: false })
           .limit(300);
@@ -13226,6 +13363,8 @@ async function startServer() {
           .select('id, user_id, title, content, action_type, payload_details, timestamp')
           .eq('type', 'lead_recovery')
           .in('user_id', candidateIds)
+          .eq('is_active', true)
+          .is('deleted_at', null)
           .order('timestamp', { ascending: false })
           .limit(5000);
         if (!logsError) {
@@ -13236,6 +13375,8 @@ async function startServer() {
             .select('id, user_id, title, content, action_type, payload_details, timestamp')
             .in('user_id', candidateIds)
             .ilike('title', '%Checkout cancelado%')
+            .eq('is_active', true)
+            .is('deleted_at', null)
             .order('timestamp', { ascending: false })
             .limit(5000);
           leadLogs = fallbackLogs || [];

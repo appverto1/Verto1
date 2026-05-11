@@ -175,6 +175,7 @@ export function CoordinatorDashboard({
   const isTherapist = capabilityRole === "therapist";
   const isReceptionist = capabilityRole === "receptionist";
   const canCreatePatients = !isTherapist;
+  const canManageRooms = !isTherapist;
   const dashboardResumeKey = useMemo(() => {
     const userId = String(user?.id || "").trim();
     const workspaceId =
@@ -2248,6 +2249,7 @@ export function CoordinatorDashboard({
 
   const handleAddRoom = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canManageRooms) return;
     const specialtiesArray = newRoom.specialties
       .split(",")
       .map((s) => s.trim())
@@ -2262,12 +2264,14 @@ export function CoordinatorDashboard({
   };
 
   const handleEditRoom = (room: any) => {
+    if (!canManageRooms) return;
     setEditingRoom(room);
     setNewRoom({ name: room.name, specialties: room.specialties.join(", ") });
   };
 
   const handleUpdateRoom = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canManageRooms) return;
     if (!editingRoom) return;
     const specialtiesArray = newRoom.specialties
       .split(",")
@@ -2285,6 +2289,7 @@ export function CoordinatorDashboard({
   };
 
   const handleDeleteRoom = (id: string) => {
+    if (!canManageRooms) return;
     setRooms((prev) => prev.filter((r) => r.id !== id));
   };
 
@@ -2568,20 +2573,22 @@ export function CoordinatorDashboard({
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-slate-100 gap-4">
         <div>
-          <h3 className="text-lg sm:text-xl font-bold text-slate-900">Salas</h3>
+          <h3 className="text-lg sm:text-xl font-bold text-slate-900">{canManageRooms ? "Salas" : "Reservas de Sala"}</h3>
           <p className="text-slate-500 text-sm hidden sm:block">
-            Configure as salas disponíveis.
+            {canManageRooms ? "Configure as salas disponíveis." : "Visualize o calendário de reservas da clínica."}
           </p>
         </div>
-        <button
-          onClick={() => setIsEditingRooms(!isEditingRooms)}
-          className={`px-4 sm:px-6 py-2 sm:py-3 rounded-2xl font-bold text-[10px] sm:text-sm transition-all flex items-center justify-center gap-2 ${isEditingRooms ? "bg-slate-100 text-slate-600" : "bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20"}`}
-        >
-          {isEditingRooms ? "Ver Reservas" : "Editar Salas"}
-        </button>
+        {canManageRooms && (
+          <button
+            onClick={() => setIsEditingRooms(!isEditingRooms)}
+            className={`px-4 sm:px-6 py-2 sm:py-3 rounded-2xl font-bold text-[10px] sm:text-sm transition-all flex items-center justify-center gap-2 ${isEditingRooms ? "bg-slate-100 text-slate-600" : "bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20"}`}
+          >
+            {isEditingRooms ? "Ver Reservas" : "Editar Salas"}
+          </button>
+        )}
       </div>
 
-      {isEditingRooms ? (
+      {canManageRooms && isEditingRooms ? (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
             <div className="bg-white p-6 rounded-[32px] shadow-sm border border-slate-100 sticky top-6">
@@ -2704,7 +2711,9 @@ export function CoordinatorDashboard({
           rooms={rooms}
           reservations={roomReservations}
           onDeleteReservation={onDeleteRoomReservation}
-          onBack={() => setIsEditingRooms(true)}
+          onBack={() => {
+            if (canManageRooms) setIsEditingRooms(true);
+          }}
         />
       )}
     </div>

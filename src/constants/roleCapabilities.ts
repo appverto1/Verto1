@@ -48,8 +48,8 @@ export const ROLE_CAPABILITY_SECTIONS: RoleCapabilitySection[] = [
       },
       {
         key: 'rooms',
-        label: 'Reserva e edição de salas',
-        description: 'Reservar salas e ajustar disponibilidade operacional.',
+        label: 'Calendário de reservas de salas',
+        description: 'Visualizar reservas de salas sem alterar a configuração operacional.',
         coordinator: 'full',
         receptionist: 'full',
         therapist: 'limited',
