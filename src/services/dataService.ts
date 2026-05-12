@@ -125,6 +125,106 @@ function normalizeApiErrorMessage(value: any): string {
   return String(value || 'Erro desconhecido');
 }
 
+function extractLatestProtocolReference(row: any) {
+  if (!row || typeof row !== 'object') {
+    return {
+      protocolId: '',
+      levelId: '',
+      protocolName: '',
+      updatedAt: '',
+      createdAt: '',
+      source: ''
+    };
+  }
+
+  const nestedTaskData = row?.task_data && typeof row.task_data === 'object' ? row.task_data : {};
+  const nestedMetadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+
+  const protocolId = String(
+    row?.protocol_id ??
+      row?.protocolId ??
+      nestedTaskData?.protocol_id ??
+      nestedTaskData?.protocolId ??
+      nestedMetadata?.protocol_id ??
+      nestedMetadata?.protocolId ??
+      ''
+  ).trim();
+
+  const levelId = String(
+    row?.level_id ??
+      row?.levelId ??
+      nestedTaskData?.level_id ??
+      nestedTaskData?.levelId ??
+      nestedMetadata?.level_id ??
+      nestedMetadata?.levelId ??
+      ''
+  ).trim();
+
+  const protocolName = String(
+    row?.protocol_name ??
+      row?.protocolTitle ??
+      row?.protocol_title ??
+      row?.level_name ??
+      row?.levelName ??
+      nestedTaskData?.protocol_name ??
+      nestedTaskData?.protocolTitle ??
+      nestedTaskData?.level_name ??
+      nestedTaskData?.levelName ??
+      nestedMetadata?.protocol_name ??
+      nestedMetadata?.protocolTitle ??
+      nestedMetadata?.canonicalName ??
+      nestedMetadata?.level_name ??
+      nestedMetadata?.levelName ??
+      ''
+  ).trim();
+
+  return {
+    protocolId,
+    levelId,
+    protocolName,
+    updatedAt: String(row?.updated_at || row?.updatedAt || '').trim(),
+    createdAt: String(row?.created_at || row?.createdAt || '').trim(),
+    source: String(row?.source || '').trim()
+  };
+}
+
+async function tryFetchLatestProtocolRow(
+  supabase: any,
+  table: string,
+  patientColumn: string,
+  patientId: string
+) {
+  const baseQuery = () => supabase.from(table).select('*').eq(patientColumn, patientId).limit(1);
+  const attempts = [
+    () => baseQuery().order('updated_at', { ascending: false }).order('created_at', { ascending: false }),
+    () => baseQuery().order('created_at', { ascending: false }),
+    () => baseQuery()
+  ];
+
+  for (const attempt of attempts) {
+    try {
+      const { data, error } = await attempt();
+      if (error) {
+        const message = String(error?.message || '').toLowerCase();
+        const retryable =
+          message.includes('column') ||
+          message.includes('does not exist') ||
+          message.includes('schema cache') ||
+          message.includes('failed to parse order');
+        if (retryable) continue;
+        return { row: null, error };
+      }
+
+      const row = Array.isArray(data) ? data[0] || null : data || null;
+      if (row) return { row, error: null };
+    } catch (error) {
+      continue;
+    }
+  }
+
+  return { row: null, error: null };
+}
+
 function parseJsonObject(value: any) {
   if (!value) return null;
   if (typeof value === 'object') return value;
@@ -1174,6 +1274,60 @@ export const dataService = {
     } catch (error) {
       console.error('Error refreshing user profile media:', error);
       return { success: false, error: String(error) };
+    }
+  },
+
+  async discoverLatestPatientProtocol(patientId: string) {
+    const normalizedPatientId = String(patientId || '').trim();
+    if (!normalizedPatientId) {
+      return { success: false, error: 'patient_id ausente', data: null };
+    }
+
+    try {
+      const supabase = await getSupabase();
+      const candidates = [
+        { table: 'vb_mapp_scores', patientColumns: ['patient_id', 'patientId'] },
+        { table: 'assessments', patientColumns: ['patient_id', 'patientId'] }
+      ];
+
+      for (const candidate of candidates) {
+        for (const patientColumn of candidate.patientColumns) {
+          const { row, error } = await tryFetchLatestProtocolRow(
+            supabase,
+            candidate.table,
+            patientColumn,
+            normalizedPatientId
+          );
+
+          if (error) {
+            const message = String(error?.message || '').toLowerCase();
+            const retryable =
+              message.includes('does not exist') ||
+              message.includes('schema cache') ||
+              message.includes('permission') ||
+              message.includes('row-level security') ||
+              message.includes('column');
+            if (retryable) continue;
+          }
+
+          const extracted = extractLatestProtocolReference(row);
+          if (extracted.protocolId || extracted.levelId || extracted.protocolName) {
+            return {
+              success: true,
+              data: {
+                ...extracted,
+                table: candidate.table,
+                patientColumn
+              }
+            };
+          }
+        }
+      }
+
+      return { success: true, data: null };
+    } catch (error: any) {
+      console.error('Error discovering latest patient protocol:', error);
+      return { success: false, error: error?.message || String(error), data: null };
     }
   },
 

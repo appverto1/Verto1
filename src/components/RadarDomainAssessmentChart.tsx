@@ -14,6 +14,7 @@ type RadarDomainAssessmentChartProps = {
   patientId: string | number;
   protocols?: any[];
   history?: any[];
+  initialProtocolId?: string | number | null;
 };
 
 type RadarDomainRow = {
@@ -65,10 +66,13 @@ const CustomTooltip = ({ active, payload }: any) => {
 export const RadarDomainAssessmentChart = ({
   patientId,
   protocols = [],
-  history = []
+  history = [],
+  initialProtocolId = null
 }: RadarDomainAssessmentChartProps) => {
   const [isMounted, setIsMounted] = useState(false);
-  const [selectedProtocolId, setSelectedProtocolId] = useState('all');
+  const [selectedProtocolId, setSelectedProtocolId] = useState(() =>
+    String(initialProtocolId || '').trim() || 'all'
+  );
   useEffect(() => setIsMounted(true), []);
 
   const protocolOptions = useMemo(() => {
@@ -82,11 +86,25 @@ export const RadarDomainAssessmentChart = ({
   }, [protocols]);
 
   useEffect(() => {
+    const normalizedInitialProtocolId = String(initialProtocolId || '').trim();
+    const initialIsValid = normalizedInitialProtocolId
+      ? protocolOptions.some((option) => option.id === normalizedInitialProtocolId)
+      : false;
+
+    if (initialIsValid) {
+      setSelectedProtocolId((prev) => {
+        const previousIsValid = protocolOptions.some((option) => option.id === prev);
+        if (prev === 'all' || !previousIsValid) return normalizedInitialProtocolId;
+        return prev;
+      });
+      return;
+    }
+
     if (selectedProtocolId === 'all') return;
     if (!protocolOptions.some((option) => option.id === selectedProtocolId)) {
       setSelectedProtocolId('all');
     }
-  }, [protocolOptions, selectedProtocolId]);
+  }, [initialProtocolId, protocolOptions, selectedProtocolId]);
 
   const visibleProtocols = useMemo(() => {
     if (selectedProtocolId === 'all') return protocolOptions.map((option) => option.protocol);

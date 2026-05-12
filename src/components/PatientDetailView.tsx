@@ -586,13 +586,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [reportStartDate, setReportStartDate] = useState("");
   const [reportEndDate, setReportEndDate] = useState("");
 
-  const [selectedChartProtocolId, setSelectedChartProtocolId] = useState(() => {
-    if (isKidsProfile) {
-      const vbmapp = protocols.find((p: any) => p.title.includes('VB-MAPP'));
-      if (vbmapp) return vbmapp.id;
-    }
-    return protocols[0]?.id || '';
-  });
+  const [selectedChartProtocolId, setSelectedChartProtocolId] = useState('');
+  const [latestProtocolReference, setLatestProtocolReference] = useState<any>(null);
+  const [hasUserChangedChartProtocol, setHasUserChangedChartProtocol] = useState(false);
   const [selectedSnapshotDate, setSelectedSnapshotDate] = useState("all");
   const isUuidLike = (value: unknown) =>
     typeof value === 'string' &&
@@ -622,6 +618,88 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     if (Number.isFinite(numericAge) && numericAge >= 0) return numericAge;
     return null;
   }, [patient?.birth_date, patient?.dataNascimento, patient?.anamnesisData?.dataNascimento, patient?.age]);
+
+  useEffect(() => {
+    setHasUserChangedChartProtocol(false);
+  }, [patient?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadLatestProtocolReference = async () => {
+      const patientId = String(patient?.id || '').trim();
+      if (!patientId) {
+        if (!cancelled) setLatestProtocolReference(null);
+        return;
+      }
+
+      const result = await dataService.discoverLatestPatientProtocol(patientId);
+      if (!cancelled) {
+        setLatestProtocolReference(result?.success ? result.data || null : null);
+      }
+    };
+
+    void loadLatestProtocolReference();
+    return () => {
+      cancelled = true;
+    };
+  }, [patient?.id]);
+
+  useEffect(() => {
+    const protocolList = Array.isArray(protocols) ? protocols : [];
+    if (!protocolList.length) {
+      setSelectedChartProtocolId('');
+      return;
+    }
+
+    const normalizeProtocolName = (value: any) =>
+      String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\p{L}\p{N}\s-]/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+
+    const resolveMatchingProtocolId = (rawId: any, rawName: any) => {
+      const targetId = String(rawId || '').trim();
+      const targetName = normalizeProtocolName(rawName);
+      const match = protocolList.find((protocol: any) => {
+        const protocolId = String(protocol?.id || '').trim();
+        const protocolName = normalizeProtocolName(protocol?.title || protocol?.name || '');
+        return (targetId && protocolId === targetId) || (targetName && protocolName === targetName);
+      });
+      return String(match?.id || '').trim();
+    };
+
+    const assignedGoal = (Array.isArray(patient?.pei) ? patient.pei : []).find((goal: any) => {
+      const status = String(goal?.status || '').toLowerCase();
+      return goal?.protocolTitle && status !== 'completed';
+    }) || (Array.isArray(patient?.pei) ? patient.pei : []).find((goal: any) => goal?.protocolTitle);
+
+    const discoveredMatchId = resolveMatchingProtocolId(
+      latestProtocolReference?.protocolId || latestProtocolReference?.levelId || '',
+      latestProtocolReference?.protocolName || ''
+    );
+    const assignedMatchId = resolveMatchingProtocolId(
+      assignedGoal?.protocolId ?? assignedGoal?.protocol_id ?? '',
+      assignedGoal?.protocolTitle || ''
+    );
+    const defaultVbMappId = String(
+      protocolList.find((p: any) => /vb[\s-]?mapp/i.test(String(p?.title || p?.name || '')))?.id || ''
+    ).trim();
+    const fallbackProtocolId =
+      discoveredMatchId ||
+      assignedMatchId ||
+      defaultVbMappId ||
+      String(protocolList[0]?.id || '').trim();
+
+    setSelectedChartProtocolId((prev) => {
+      const previousIsValid = prev && protocolList.some((protocol: any) => String(protocol?.id) === String(prev));
+      if (hasUserChangedChartProtocol && previousIsValid) return prev;
+      return fallbackProtocolId;
+    });
+  }, [hasUserChangedChartProtocol, latestProtocolReference, patient?.pei, protocols]);
 
   const mapAgeGroupToRange = (ageGroup?: string): { min: number; max: number | null } => {
     const group = String(ageGroup || '').toLowerCase();
@@ -3320,6 +3398,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   patientId={patient.id}
                   protocols={planProtocolCatalog}
                   history={history}
+                  initialProtocolId={selectedChartProtocolId}
                 />
                 <CumulativeGrowthChart
                   patientId={patient.id}
@@ -3355,7 +3434,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       <select
                         className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
                         value={selectedChartProtocolId}
-                        onChange={(e) => setSelectedChartProtocolId(e.target.value)}
+                        onChange={(e) => { setHasUserChangedChartProtocol(true); setSelectedChartProtocolId(e.target.value); }}
                       >
                         {planProtocolCatalog.map((protocol: any) => (
                           <option key={protocol.id} value={protocol.id}>{protocol.title}</option>
@@ -3550,7 +3629,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               id="protocol-selector"
                               className="w-full bg-white border border-slate-200 text-sm font-semibold text-slate-700 px-4 py-3 rounded-2xl outline-none focus:border-[#7a32fc] focus:ring-4 focus:ring-[#7a32fc]/10 transition-all appearance-none"
                               value={selectedChartProtocolId}
-                              onChange={(e) => setSelectedChartProtocolId(e.target.value)}
+                              onChange={(e) => { setHasUserChangedChartProtocol(true); setSelectedChartProtocolId(e.target.value); }}
                             >
                               {protocols.map((p: any) => (
                                 <option key={p.id} value={p.id}>{p.title}</option>
@@ -3811,7 +3890,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       <select
                         className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
                         value={selectedChartProtocolId}
-                        onChange={(e) => setSelectedChartProtocolId(e.target.value)}
+                        onChange={(e) => { setHasUserChangedChartProtocol(true); setSelectedChartProtocolId(e.target.value); }}
                       >
                         {planProtocolCatalog.map((protocol: any) => (
                           <option key={protocol.id} value={protocol.id}>{protocol.title}</option>

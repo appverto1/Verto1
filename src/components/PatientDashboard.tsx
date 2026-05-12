@@ -57,6 +57,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [showStarCelebration, setShowStarCelebration] = useState(false);
   const [celebrationKey, setCelebrationKey] = useState(0);
   const [currentTime, setCurrentTime] = useState(() => new Date());
+  const [latestProtocolReference, setLatestProtocolReference] = useState<any>(null);
   const previousStarsRef = useRef<number>(0);
   const userType = typeof user.type === 'string' ? user.type.toLowerCase() : '';
   const hasExplicitPatientType = Boolean(userType);
@@ -375,8 +376,44 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     }
   }, [availableSnapshots, selectedBaseDate, selectedCompareDate]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadLatestProtocolReference = async () => {
+      const patientId = String(user?.id || '').trim();
+      if (!patientId) {
+        if (!cancelled) setLatestProtocolReference(null);
+        return;
+      }
+
+      const result = await dataService.discoverLatestPatientProtocol(patientId);
+      if (!cancelled) {
+        setLatestProtocolReference(result?.success ? result.data || null : null);
+      }
+    };
+
+    void loadLatestProtocolReference();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
   const activeKidsProtocol = useMemo(() => {
     const list = Array.isArray(protocols) ? protocols : [];
+    const discoveredProtocolId = String(
+      latestProtocolReference?.protocolId || latestProtocolReference?.levelId || ''
+    ).trim();
+    const discoveredProtocolName = normalizeClinicalKey(latestProtocolReference?.protocolName || '');
+
+    if (discoveredProtocolId || discoveredProtocolName) {
+      const discovered = list.find((protocol: any) => {
+        const protocolId = String(protocol?.id || '').trim();
+        const protocolTitle = normalizeClinicalKey(protocol?.title || protocol?.name || '');
+        return (discoveredProtocolId && protocolId === discoveredProtocolId) || (discoveredProtocolName && protocolTitle === discoveredProtocolName);
+      });
+      if (discovered) return discovered;
+    }
+
     const peiGoals = Array.isArray(user?.pei) ? user.pei : [];
     const activeGoal = peiGoals.find((goal: any) => {
       const status = String(goal?.status || '').toLowerCase();
@@ -395,7 +432,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     }
 
     return list.find((p: any) => /vb[\s-]?mapp/i.test(String(p?.title || p?.name || ''))) || list[0] || { data: [] };
-  }, [protocols, user?.pei]);
+  }, [latestProtocolReference, protocols, user?.pei]);
 
   const activeKidsProtocolEvents = useMemo(() => {
     const domainTasks = (Array.isArray(activeKidsProtocol?.data) ? activeKidsProtocol.data : [])
