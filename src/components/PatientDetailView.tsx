@@ -1395,38 +1395,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     return Array.from(catalog.values());
   }, [safeProtocols, approvedVertoProtocolStatuses]);
 
-  const ageCompatibleProtocols = useMemo(() => {
-    return planProtocolCatalog.filter((p: any) => {
-      if (isKidsProfile && isVbMappProtocol(p)) return true;
-      return p?.isApprovedImport || isProtocolCompatibleWithPatient(p);
-    });
-  }, [planProtocolCatalog, patientAgeYears, isKidsProfile]);
-
   const filteredProtocols = useMemo(() => { 
-    return ageCompatibleProtocols.filter((p: any) => { 
+    return planProtocolCatalog.filter((p: any) => { 
       const matchAge = filterAge ? (p.ageGroup === filterAge || p.ageGroup === 'all') : true; 
       const matchType = filterType ? p.type === filterType : true; 
       const matchDomain = filterDomain ? (p.domain && p.domain.toLowerCase().includes(filterDomain.toLowerCase())) : true; 
       return matchAge && matchType && matchDomain; 
     }); 
-  }, [ageCompatibleProtocols, filterAge, filterType, filterDomain]); 
+  }, [planProtocolCatalog, filterAge, filterType, filterDomain]); 
 
   const selectedProtocol = planProtocolCatalog.find((p: any) => String(p.id) === String(selectedProtocolId)); 
   const selectedDomain = selectedProtocol?.data.find((d: any) => String(d.id) === String(selectedDomainId)); 
   const targetProtocol = planProtocolCatalog.find((p: any) => String(p.id) === String(targetProtocolId)); 
   const targetDomain = targetProtocol?.data.find((d: any) => String(d.id) === String(targetDomainId)); 
-
-  useEffect(() => {
-    if (!selectedProtocolId || selectedProtocolId === 'pei-goals') return;
-    const selected = planProtocolCatalog.find((p: any) => String(p.id) === String(selectedProtocolId));
-    if (!selected) return;
-    if (!(isKidsProfile && isVbMappProtocol(selected)) && !selected?.isApprovedImport && !isProtocolCompatibleWithPatient(selected)) {
-      alert('Este protocolo não é recomendado para a faixa etária do paciente');
-      setSelectedProtocolId('');
-      setSelectedDomainId('');
-      setSelectedSkillId('');
-    }
-  }, [selectedProtocolId, planProtocolCatalog, patientAgeYears]);
 
   useEffect(() => { 
     if (!isCreatingNewTask && selectedSkillId && selectedDomain) { 
@@ -2245,13 +2226,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     if (!scheduleDate || !scheduleTime) { alert("Selecione data e hora."); return; } 
     let scheduledAt; try { scheduledAt = new Date(`${scheduleDate}T${scheduleTime}`).toISOString(); } catch (e) { alert("Data inválida"); return; } 
     if (planType === 'task' || planType === 'intervention') { 
-      if (selectedProtocolId && selectedProtocolId !== 'pei-goals') {
-        const selected = planProtocolCatalog.find((p: any) => String(p.id) === String(selectedProtocolId));
-        if (selected && !(isKidsProfile && isVbMappProtocol(selected)) && !selected?.isApprovedImport && !isProtocolCompatibleWithPatient(selected)) {
-          alert('Este protocolo não é recomendado para a faixa etária do paciente');
-          return;
-        }
-      }
       const selectedSkillMaxScore = Number(
         selectedDomain?.skills?.find((s: any) => String(s.id) === String(selectedSkillId))?.maxScore ?? 4
       );
@@ -3344,7 +3318,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
                 <RadarDomainAssessmentChart
                   patientId={patient.id}
-                  protocols={ageCompatibleProtocols}
+                  protocols={planProtocolCatalog}
                   history={history}
                 />
                 <CumulativeGrowthChart
@@ -3383,7 +3357,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                         value={selectedChartProtocolId}
                         onChange={(e) => setSelectedChartProtocolId(e.target.value)}
                       >
-                        {ageCompatibleProtocols.map((protocol: any) => (
+                        {planProtocolCatalog.map((protocol: any) => (
                           <option key={protocol.id} value={protocol.id}>{protocol.title}</option>
                         ))}
                       </select>
@@ -3839,7 +3813,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                         value={selectedChartProtocolId}
                         onChange={(e) => setSelectedChartProtocolId(e.target.value)}
                       >
-                        {ageCompatibleProtocols.map((protocol: any) => (
+                        {planProtocolCatalog.map((protocol: any) => (
                           <option key={protocol.id} value={protocol.id}>{protocol.title}</option>
                         ))}
                       </select>
@@ -4381,7 +4355,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               </div> 
                               {addToProtocolMode === 'existing' ? ( 
                                 <div className="space-y-2"> 
-                                  <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-xs outline-none" value={targetProtocolId} onChange={e => setTargetProtocolId(e.target.value)}><option value="">Selecione Protocolo...</option>{ageCompatibleProtocols.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).map((p: any) => <option key={p.id} value={p.id}>{p.title}</option>)}</select> 
+                                  <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-xs outline-none" value={targetProtocolId} onChange={e => setTargetProtocolId(e.target.value)}><option value="">Selecione Protocolo...</option>{planProtocolCatalog.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).map((p: any) => <option key={p.id} value={p.id}>{p.title}</option>)}</select> 
                                   {targetProtocol && (<select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-xs outline-none" value={targetDomainId} onChange={e => setTargetDomainId(e.target.value)}><option value="">Selecione Domínio...</option>{targetProtocol.data.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>)} 
                                 </div> 
                               ) : ( 
@@ -4417,11 +4391,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               )}
                             </div> 
                             <div><label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Protocolo ({filteredProtocols.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).length})</label>
-                              {patientAgeYears !== null && (
-                                <p className="text-[10px] text-amber-600 font-semibold mb-2">
-                                  Faixa etária do paciente: {patientAgeYears} anos. Protocolos aceitos pela Verto aparecem quando liberados pelo superadmin.
-                                </p>
-                              )}
                               <select 
                                 className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" 
                                 value={selectedProtocolId} 
@@ -4504,7 +4473,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                 onChange={(e) => setLinkedInterventionProtocolId(e.target.value)}
                               >
                                 <option value="">Nenhum protocolo vinculado</option>
-                                {ageCompatibleProtocols.filter((p: any) => p.category === 'intervention').map((p: any) => (
+                                {planProtocolCatalog.filter((p: any) => p.category === 'intervention').map((p: any) => (
                                   <option key={p.id} value={p.id}>{p.title}</option>
                                 ))}
                               </select>
