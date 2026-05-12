@@ -6957,7 +6957,8 @@ async function startServer() {
       const referenceDate = sanitizeDate(req.body?.referenceDate) || new Date().toISOString().slice(0, 10);
       const templateVersion = asSafeNumber(req.body?.templateVersion, 1, 10_000);
       const profileType = sanitizeString(req.body?.profileType, 20) === 'child' ? 'child' : 'adult';
-      const patientFileId = sanitizeString(req.body?.patientFileId, 120) || null;
+      const rawPatientFileId = sanitizeString(req.body?.patientFileId, 120) || null;
+      const patientFileId = rawPatientFileId && isUuid(rawPatientFileId) ? rawPatientFileId : null;
       const anamnesisData = req.body?.anamnesisData && typeof req.body.anamnesisData === 'object' ? req.body.anamnesisData : {};
 
       if (!patientId || !clinicId || !professionalId) {
@@ -8052,7 +8053,7 @@ async function startServer() {
     try {
       if (!enforcePayloadLimit(req, res, 512 * 1024, 'Payload do prontuário')) return;
       const rawPatientId = sanitizeString(req.params.patientId, 100);
-      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
       if (!clinicId) return res.status(400).json({ error: 'clinicId inválido' });
       const patientId = await resolvePatientIdForRequest(rawPatientId, req.session.user, {
         createIfMissing: true,
@@ -8126,7 +8127,7 @@ async function startServer() {
 
       const actorId = sanitizeString(req.session.user?.id, 120);
       const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
-      const clinicAuditId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120);
+      const clinicAuditId = sanitizeString(currentClinicId(req.session.user), 120);
       const hasFilesPayload = Array.isArray(mergedPayload?.files);
       const hasAnamnesisPayload = Boolean(mergedPayload?.template_version || mergedPayload?.anamnesisTemplateVersion || mergedPayload?.anamnese);
       const filesCount = hasFilesPayload ? mergedPayload.files.length : 0;
@@ -8701,7 +8702,7 @@ async function startServer() {
   app.get('/api/patient-records/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
-      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
       if (!patientId) return res.status(400).json({ error: 'patientId inválido' });
       if (!isUuid(patientId)) return res.json({ success: true, data: null });
       if (!clinicId && !hasGlobalClinicAccess(req.session.user)) {

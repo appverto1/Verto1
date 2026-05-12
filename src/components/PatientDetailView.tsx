@@ -2597,7 +2597,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           reader.readAsDataURL(pdfBlob);
         });
         const fallbackFile = {
-          id: `anamnesis_fallback_${Date.now()}`,
+          id: crypto.randomUUID(),
           patientId: String(patient.id),
           fileName: normalizedName,
           name: normalizedName,
