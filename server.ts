@@ -6947,7 +6947,7 @@ async function startServer() {
   app.post('/api/patient-anamnesis/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const rawPatientId = sanitizeString(req.params.patientId, 100);
-      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
       const professionalId = sanitizeString(req.session.user?.id, 100);
       const patientId = await resolvePatientIdForRequest(rawPatientId, req.session.user, {
         createIfMissing: true,
@@ -7011,7 +7011,7 @@ async function startServer() {
   app.get('/api/patient-anamnesis/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
-      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const { data, error } = await supabase
         .from('patient_anamnesis_submissions')
@@ -8204,7 +8204,9 @@ async function startServer() {
         source: sanitizeString(rawFile?.source, 40) || 'upload',
         createdAt: sanitizeString(rawFile?.createdAt || rawFile?.date, 80) || new Date().toISOString(),
         metadata: rawFile?.metadata && typeof rawFile.metadata === 'object' ? rawFile.metadata : {},
-        signedUrl
+        signedUrl,
+        url: signedUrl || sanitizeUrl(rawFile?.url) || null,
+        content: sanitizeString(rawFile?.content || rawFile?.dataUrl, 20_000_000) || null
       });
     }
     return mapped;
@@ -8280,7 +8282,7 @@ async function startServer() {
       if (!patientId) return res.status(400).json({ success: false, error: 'patientId inválido.' });
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
 
-      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
       const fallbackPayload = await readPatientRecordPayloadForFiles(patientId, clinicId, req.session.user);
       const fallbackFiles = await buildPatientFilesFromPayload(
         patientId,
@@ -8343,7 +8345,7 @@ async function startServer() {
       const multipartFile = multipart?.file;
 
       const rawPatientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
-      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
       const uploadedBy = sanitizeString(req.session.user?.id, 120);
       const rawName =
         sanitizeString(multipartFile?.fileName || multipartFields.fileName || req.body?.fileName, 220) ||
@@ -8623,7 +8625,7 @@ async function startServer() {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
       const fileId = sanitizeString(req.params.fileId, 120);
-      const clinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
       if (!patientId || !fileId || !clinicId) {
         return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
       }
