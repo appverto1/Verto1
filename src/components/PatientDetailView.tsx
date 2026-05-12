@@ -1065,7 +1065,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     try {
       const canvas = await html2canvas(captureTarget, {
         backgroundColor: '#ffffff',
-        scale: 2,
+        scale: 1.35,
         useCORS: true,
         allowTaint: true,
         logging: false,
@@ -1078,17 +1078,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       const margin = 24;
       const contentWidth = pageWidth - margin * 2;
       const imgHeight = (canvas.height * contentWidth) / canvas.width;
-      const imgData = canvas.toDataURL('image/png', 1.0);
+      const imgData = canvas.toDataURL('image/jpeg', 0.78);
 
       let heightLeft = imgHeight;
       let positionY = margin;
-      pdf.addImage(imgData, 'PNG', margin, positionY, contentWidth, imgHeight);
+      pdf.addImage(imgData, 'JPEG', margin, positionY, contentWidth, imgHeight, undefined, 'FAST');
       heightLeft -= (pageHeight - margin * 2);
 
       while (heightLeft > 0) {
         pdf.addPage();
         positionY = margin - (imgHeight - heightLeft);
-        pdf.addImage(imgData, 'PNG', margin, positionY, contentWidth, imgHeight);
+        pdf.addImage(imgData, 'JPEG', margin, positionY, contentWidth, imgHeight, undefined, 'FAST');
         heightLeft -= (pageHeight - margin * 2);
       }
 

@@ -1,4 +1,6 @@
 const imageDataUrlCache = new Map<string, string>();
+const TRANSPARENT_PIXEL =
+  "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
 
 const shouldInlineImage = (src: string) => {
   const normalized = String(src || "").trim();
@@ -37,7 +39,7 @@ export const convertImageUrlToDataUrl = async (src: string): Promise<string | nu
     return dataUrl;
   } catch (error) {
     console.warn("Não foi possível converter imagem para base64 antes do PDF:", error);
-    return normalized;
+    return null;
   }
 };
 
@@ -61,9 +63,7 @@ export const prepareElementForPdfCapture = async (source: HTMLElement): Promise<
     images.map(async (img) => {
       const src = img.getAttribute("src") || "";
       const nextSrc = await convertImageUrlToDataUrl(src);
-      if (nextSrc) {
-        img.setAttribute("src", nextSrc);
-      }
+      img.setAttribute("src", nextSrc || TRANSPARENT_PIXEL);
       img.setAttribute("crossorigin", "anonymous");
       await new Promise<void>((resolve) => {
         if ((img as HTMLImageElement).complete) {

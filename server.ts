@@ -8424,6 +8424,7 @@ async function startServer() {
 
   app.post('/api/patient-files/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
+      if (!enforcePayloadLimit(req, res, 18 * 1024 * 1024, 'Upload de arquivo do paciente')) return;
       const isMultipart = String(req.headers?.['content-type'] || '').toLowerCase().includes('multipart/form-data');
       const multipart = isMultipart ? await parseMultipartFormData(req) : null;
       const multipartFields = multipart?.fields || {};
