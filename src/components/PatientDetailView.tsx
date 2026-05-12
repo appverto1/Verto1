@@ -2673,7 +2673,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       }
 
       try {
-        await dataService.savePatientAnamnesisSubmission(String(patient.id), {
+        const submissionResult = await dataService.savePatientAnamnesisSubmission(String(patient.id), {
           title: normalizedName,
           referenceDate: anamnesisFileDate,
           anamnesisData: pendingAnamnesisData || patient?.anamnesisData || {},
@@ -2681,9 +2681,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           profileType: (pendingAnamnesisData?.formType || patient?.anamnesisData?.formType) === 'child' ? 'child' : 'adult',
           patientFileId: String(uploadResult?.data?.id || '')
         });
+        if (submissionResult?.success === false && !submissionResult?.warning) {
+          throw new Error(submissionResult?.error || 'Falha ao registrar a submissão da anamnese.');
+        }
         if (uploadResult?.success && uploadResult?.data) {
           setPatientFiles((prev) => [normalizeFileRecord(uploadResult.data), ...prev]);
         }
+        await onAddActivityLog(
+          'Ficha de Anamnese Salva',
+          `Ficha de anamnese de ${patient?.name || 'paciente'} salva em Arquivos${anamnesisFileDate ? ` com referência em ${new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString('pt-BR')}` : ''}.`,
+          'clinical'
+        );
         setShowAnamnesisFileModal(false);
         setPendingAnamnesisPayload("");
         setPendingAnamnesisData(null);
