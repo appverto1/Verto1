@@ -8111,17 +8111,26 @@ async function startServer() {
         updated_at: new Date().toISOString()
       });
 
-      const { error } = await supabase
-        .from('patient_records')
-        .upsert([row], { onConflict: 'patient_id' });
+      const writeResult = await writePatientRecordSafely({
+        patientId,
+        clinicId,
+        sessionUser: req.session.user,
+        row
+      });
 
-      if (error) {
+      if (!writeResult.success) {
+        const error = writeResult.error;
         if (String(error?.message || '').toLowerCase().includes('patient_records')) {
           return res.status(200).json({
             success: false,
             warning: 'Tabela patient_records ainda não existe. Execute o SQL de segurança para persistência criptografada.'
           });
         }
+        logRouteDbError('/api/patient-records/:patientId [POST]', error, {
+          patientId,
+          clinicId,
+          actorId: sanitizeString(req.session.user?.id, 120)
+        });
         throw error;
       }
 
@@ -8177,6 +8186,78 @@ async function startServer() {
       payload,
       pseudonymId: sanitizeString(data?.pseudonym_id, 160) || null
     };
+  };
+
+  const writePatientRecordSafely = async (params: {
+    patientId: string;
+    clinicId: string;
+    sessionUser: any;
+    row: Record<string, any>;
+  }) => {
+    const { patientId, clinicId, sessionUser } = params;
+    let safeRow: Record<string, any> = cleanObject(params.row || {});
+    const scopeByClinic = !hasGlobalClinicAccess(sessionUser);
+
+    const existingQuery = (() => {
+      let query = supabase
+        .from('patient_records')
+        .select('patient_id')
+        .eq('patient_id', patientId)
+        .limit(1);
+      if (scopeByClinic) query = query.eq('clinic_id', clinicId);
+      return query;
+    })();
+
+    const existingResult = await existingQuery;
+    if (existingResult.error) {
+      return { success: false, error: existingResult.error };
+    }
+
+    const runMutation = async (mode: 'insert' | 'update') => {
+      while (Object.keys(safeRow).length > 0) {
+        const result =
+          mode === 'insert'
+            ? await supabase.from('patient_records').insert([safeRow])
+            : await (() => {
+                let query = supabase.from('patient_records').update(safeRow).eq('patient_id', patientId);
+                if (scopeByClinic) query = query.eq('clinic_id', clinicId);
+                return query;
+              })();
+
+        if (!result.error) return { success: true };
+
+        const missingColumn = extractMissingColumnName(result.error);
+        if (missingColumn && missingColumn in safeRow) {
+          delete safeRow[missingColumn];
+          continue;
+        }
+
+        return { success: false, error: result.error };
+      }
+
+      return { success: false, error: new Error('Nenhuma coluna válida para persistir em patient_records.') };
+    };
+
+    const hasExisting = Array.isArray(existingResult.data) && existingResult.data.length > 0;
+    let writeResult = await runMutation(hasExisting ? 'update' : 'insert');
+    if (writeResult.success) return writeResult;
+
+    const writeMessage = extractSupabaseErrorMessage(writeResult.error).toLowerCase();
+    const shouldRetryAsUpdate =
+      !hasExisting &&
+      (
+        sanitizeString(writeResult.error?.code, 20) === '23505' ||
+        writeMessage.includes('duplicate key') ||
+        writeMessage.includes('on conflict') ||
+        writeMessage.includes('unique') ||
+        writeMessage.includes('constraint')
+      );
+
+    if (shouldRetryAsUpdate) {
+      writeResult = await runMutation('update');
+    }
+
+    return writeResult;
   };
 
   const buildPatientFilesFromPayload = async (patientId: string, payloadFiles: any[]) => {
@@ -8271,10 +8352,13 @@ async function startServer() {
       updated_at: new Date().toISOString()
     });
 
-    const { error } = await supabase
-      .from('patient_records')
-      .upsert([row], { onConflict: 'patient_id' });
-    if (error) throw error;
+    const writeResult = await writePatientRecordSafely({
+      patientId: params.patientId,
+      clinicId: params.clinicId,
+      sessionUser: params.sessionUser,
+      row
+    });
+    if (!writeResult.success) throw writeResult.error;
   };
 
   app.get('/api/patient-files/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
@@ -9083,6 +9167,10 @@ async function startServer() {
 
       res.json({ success: true, data: filtered });
     } catch (error) {
+      logRouteDbError('/api/patient-records/:patientId [POST]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        actorId: sanitizeString(req.session.user?.id, 120)
+      });
       res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });

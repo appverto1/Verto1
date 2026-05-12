@@ -170,6 +170,14 @@ async function getCurrentUserId(): Promise<string> {
   return userId;
 }
 
+async function getCurrentUserIdOrNull(): Promise<string | null> {
+  try {
+    return await getCurrentUserId();
+  } catch {
+    return null;
+  }
+}
+
 async function deriveSessionKey(userId: string): Promise<CryptoKey> {
   await ensureSessionSeed();
   const seed = sessionStorage.getItem(SESSION_SEED_KEY) || localStorage.getItem(persistentSeedKeyForUser(userId));
@@ -246,7 +254,8 @@ async function mapStoredToOfflineRecord(row: OfflineRecordStored): Promise<Offli
 }
 
 export async function saveEncryptedRecord(record: OfflineRecord) {
-  const userId = await getCurrentUserId();
+  const userId = await getCurrentUserIdOrNull();
+  if (!userId) return false;
   const dataEncrypted = await encryptPayload(userId, record.data);
   const row: OfflineRecordStored = {
     id: record.id,
@@ -260,6 +269,7 @@ export async function saveEncryptedRecord(record: OfflineRecord) {
   };
   persistLogBackup(row);
   await db.records.put(row);
+  return true;
 }
 
 export async function markRecordSyncStatus(id: string, status: 'synced' | 'pending') {
@@ -289,7 +299,7 @@ export async function getRecordsByType(type: OfflineRecord['type']): Promise<Off
 
 export async function getPendingRecords(): Promise<OfflineRecord[]> {
   const rows = await db.records.where('sync_status').equals('pending').toArray();
-  const currentUserId = await getCurrentUserId().catch(() => '');
+  const currentUserId = await getCurrentUserIdOrNull();
   const backupRows = currentUserId
     ? Object.values(readLogBackups(currentUserId)).filter((row) => row.sync_status === 'pending')
     : [];
