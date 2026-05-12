@@ -13,6 +13,7 @@ import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
 import { calculateDomainMastery, normalizeScoreToPercent } from '../utils/clinicalMath';
 import { prepareElementForPdfCapture } from '../utils/pdfCapture';
+import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
 import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
 import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
@@ -803,9 +804,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         .trim()
         .replace(/^./, (l) => l.toUpperCase());
 
+    const normalizeBooleanText = (value: any) => {
+      if (typeof value === "boolean") return value ? "Sim" : "Não";
+      const normalized = String(value ?? "").trim().toLowerCase();
+      if (normalized === "true") return "Sim";
+      if (normalized === "false") return "Não";
+      return null;
+    };
+
     const normalizeValue = (key: string, value: any) => {
       if (value === null || value === undefined) return "";
-      if (key === "menorDeIdade") return value ? "Sim" : "Não";
+      const booleanText = normalizeBooleanText(value);
+      if (booleanText) return booleanText;
       if (key === "formType") {
         if (value === "adult") return "Adulto";
         if (value === "child") return "Criança";
@@ -906,24 +916,46 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     ]);
     const professionalKeys = new Set(["profissional", "crp"]);
 
-    const buildRows = (entries: Array<[string, any]>) =>
+    const buildRowData = (entries: Array<[string, any]>) =>
       entries
         .map(([key, value]) => {
           const normalized = normalizeValue(key, value);
-          if (!normalized.trim()) return "";
-          const label = dynamicLabelMap[key] || fieldLabelMap[key] || fallbackLabel(key);
-          return `
-            <tr>
-              <td style="padding:8px 10px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;color:#334155;width:35%;">${escapeHtml(label)}</td>
-              <td style="padding:8px 10px;border:1px solid #e2e8f0;color:#0f172a;">${escapeHtml(normalized)}</td>
-            </tr>`;
+          if (!normalized.trim()) return null;
+          return {
+            key,
+            label: dynamicLabelMap[key] || fieldLabelMap[key] || fallbackLabel(key),
+            value: normalized,
+          };
         })
-        .filter(Boolean)
+        .filter(Boolean) as Array<{ key: string; label: string; value: string }>;
+
+    const buildRows = (rows: Array<{ key: string; label: string; value: string }>) =>
+      rows
+        .map(
+          (row) => `
+            <tr>
+              <td class="th">${escapeHtml(row.label)}</td>
+              <td class="td">${escapeHtml(row.value)}</td>
+            </tr>`,
+        )
         .join("");
 
-    const patientRows = buildRows(orderedEntries.filter(([key]) => patientIdentityKeys.has(key)));
-    const professionalRows = buildRows(orderedEntries.filter(([key]) => professionalKeys.has(key)));
-    const clinicalRows = buildRows(
+    const chunkRows = (rows: Array<{ key: string; label: string; value: string }>, firstChunkSize: number, nextChunkSize: number) => {
+      if (!rows.length) return [[]];
+      const chunks: Array<Array<{ key: string; label: string; value: string }>> = [];
+      let index = 0;
+      let chunkSize = firstChunkSize;
+      while (index < rows.length) {
+        chunks.push(rows.slice(index, index + chunkSize));
+        index += chunkSize;
+        chunkSize = nextChunkSize;
+      }
+      return chunks;
+    };
+
+    const patientRowData = buildRowData(orderedEntries.filter(([key]) => patientIdentityKeys.has(key)));
+    const professionalRowData = buildRowData(orderedEntries.filter(([key]) => professionalKeys.has(key)));
+    const clinicalRowData = buildRowData(
       orderedEntries.filter(([key]) => !patientIdentityKeys.has(key) && !professionalKeys.has(key)),
     );
 
@@ -934,12 +966,83 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const professionalName =
       String(anamnesis?.profissional || c.professionalName || c.userName || '').trim() ||
       'Profissional responsável';
-    const professionalCrp = String(anamnesis?.crp || c.crp || c.professionalCrp || '-').trim();
+    const professionalCrp =
+      formatProfessionalRegistry(anamnesis?.crp || c.crp || c.professionalCrp || c.registry || "") || "-";
+    const clinicName = String(c.clinicName || c.name || c.professionalClinicName || "").trim() || "Clínica Verto";
+    const clinicCnpj = formatCnpj(c.cnpj || c.clinicCnpj || c.document || "") || "-";
     const clinicAddress =
-      String(c.address || '').trim() ||
+      String(c.address || c.clinicAddress || '').trim() ||
       [c.street, c.number, c.complement, c.neighborhood, c.city].filter(Boolean).join(', ') ||
       '-';
+    const clinicLogoUrl = String(c.logoUrl || c.clinicLogoUrl || c.profilePictureUrl || "").trim();
+    const signatureUrl = String(c.signatureUrl || c.signatureDataUrl || c.professionalSignatureUrl || "").trim();
     const fichaType = normalizeValue('formType', anamnesis?.formType || patient?.anamnesisData?.formType || '');
+    const headerSummaryHtml = `
+      <p class="meta"><strong>Clínica:</strong> ${escapeHtml(clinicName)}</p>
+      <p class="meta"><strong>CNPJ:</strong> ${escapeHtml(clinicCnpj)}</p>
+      <p class="meta"><strong>Endereço:</strong> ${escapeHtml(clinicAddress)}</p>
+      <p class="meta"><strong>Profissional responsável:</strong> ${escapeHtml(professionalName)} | <strong>Registro:</strong> ${escapeHtml(professionalCrp)}</p>
+    `;
+    const patientSummaryHtml = `
+      <p class="patient"><strong>Paciente:</strong> ${escapeHtml(patient?.name || "-")} | <strong>Data da ficha:</strong> ${escapeHtml(fichaDate)} | <strong>Tipo:</strong> ${escapeHtml(fichaType || '-')}</p>
+    `;
+    const footerHtml = `
+      <div class="footer">
+        <div>
+          <p class="note">Documento gerado automaticamente pela plataforma Verto.</p>
+        </div>
+        <div class="signature">
+          ${signatureUrl ? `<img src="${escapeHtml(signatureUrl)}" alt="Assinatura profissional" />` : `<div class="signature-placeholder"></div>`}
+          <p class="signature-line">${escapeHtml(professionalName)}</p>
+          <p class="signature-subtitle">Registro profissional: ${escapeHtml(professionalCrp)}</p>
+        </div>
+      </div>
+    `;
+
+    const pages: Array<string> = [];
+    const patientChunks = chunkRows(patientRowData, 15, 19);
+    const clinicalChunks = chunkRows(clinicalRowData, patientRowData.length > 15 ? 18 : 15, 19);
+    const professionalChunks = professionalRowData.length ? chunkRows(professionalRowData, 8, 12) : [];
+
+    patientChunks.forEach((chunk, index) => {
+      pages.push(`
+        <section class="section-block">
+          ${index === 0 ? patientSummaryHtml : `<p class="patient patient-continuation"><strong>Paciente:</strong> ${escapeHtml(patient?.name || "-")} | <strong>Continuação da ficha</strong></p>`}
+          <h3 class="section-title">${index === 0 ? "1. Informações cadastrais do paciente" : "1. Informações cadastrais do paciente (continuação)"}</h3>
+          <table class="table">${buildRows(chunk) || `<tr><td class="td">Sem dados cadastrais preenchidos.</td></tr>`}</table>
+        </section>
+      `);
+    });
+
+    clinicalChunks.forEach((chunk, index) => {
+      pages.push(`
+        <section class="section-block">
+          ${pages.length === 0 ? patientSummaryHtml : ""}
+          <h3 class="section-title">${index === 0 ? "2. Perguntas e respostas clínicas" : "2. Perguntas e respostas clínicas (continuação)"}</h3>
+          <table class="table">${buildRows(chunk) || `<tr><td class="td">Sem respostas clínicas preenchidas.</td></tr>`}</table>
+        </section>
+      `);
+    });
+
+    professionalChunks.forEach((chunk, index) => {
+      pages.push(`
+        <section class="section-block">
+          ${pages.length === 0 ? patientSummaryHtml : ""}
+          <h3 class="section-title">${index === 0 ? "3. Informações do profissional" : "3. Informações do profissional (continuação)"}</h3>
+          <table class="table">${buildRows(chunk)}</table>
+        </section>
+      `);
+    });
+
+    if (!pages.length) {
+      pages.push(`
+        <section class="section-block">
+          ${patientSummaryHtml}
+          <h3 class="section-title">1. Informações cadastrais do paciente</h3>
+          <table class="table"><tr><td class="td">Sem dados preenchidos na ficha.</td></tr></table>
+        </section>
+      `);
+    }
 
     return `<!doctype html>
 <html lang="pt-BR">
@@ -950,53 +1053,55 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   <style>
     @page { size: A4; margin: 18mm; }
     body { font-family: 'Inter', 'Segoe UI', Arial, sans-serif; background: #f5f7ff; color: #0f172a; margin: 0; }
-    .sheet { max-width: 960px; margin: 24px auto; background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 12px 32px rgba(15,23,42,.08); }
+    .anamnesis-pdf-page { width: 794px; min-height: 1123px; margin: 24px auto; background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 12px 32px rgba(15,23,42,.08); page-break-after: always; break-after: page; display: flex; flex-direction: column; }
+    .anamnesis-pdf-page:last-child { page-break-after: auto; break-after: auto; }
     .header { padding: 22px 24px; background: linear-gradient(135deg,#eef2ff,#f8f5ff); border-bottom: 1px solid #e2e8f0; display:flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
     .title { margin: 0 0 6px 0; font-size: 22px; color: #312e81; }
     .meta { margin: 2px 0; font-size: 13px; color: #475569; }
-    .logo { width: 90px; height: 90px; object-fit: contain; border-radius: 12px; border: 1px solid #e2e8f0; background: #fff; padding: 8px; }
-    .content { padding: 20px 24px; }
+    .logo-wrap { width: 90px; height: 90px; border-radius: 12px; border: 1px solid #e2e8f0; background: #fff; padding: 8px; display:flex; align-items:center; justify-content:center; overflow:hidden; flex-shrink: 0; }
+    .logo { width: 100%; height: 100%; object-fit: contain; }
+    .logo-fallback { font-size: 10px; font-weight: 800; color: #94a3b8; letter-spacing: 1px; text-transform: uppercase; text-align: center; }
+    .content { padding: 20px 24px; flex: 1; }
     .patient { margin: 0 0 14px 0; font-size: 13px; color: #334155; }
+    .patient-continuation { color: #64748b; }
+    .section-block { break-inside: avoid; page-break-inside: avoid; }
+    .section-title { margin: 10px 0 8px; font-size: 15px; color: #312e81; }
     .table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    .th { padding: 9px 10px; border: 1px solid #e2e8f0; background: #f8fafc; font-weight: 700; color: #334155; width: 35%; vertical-align: top; }
-    .td { padding: 9px 10px; border: 1px solid #e2e8f0; color: #0f172a; white-space: pre-wrap; }
+    .table tr { break-inside: avoid; page-break-inside: avoid; }
+    .th { padding: 9px 10px; border: 1px solid #e2e8f0; background: #f8fafc; font-weight: 700; color: #334155; width: 35%; vertical-align: top; word-break: break-word; }
+    .td { padding: 9px 10px; border: 1px solid #e2e8f0; color: #0f172a; white-space: pre-wrap; word-break: break-word; }
     .footer { padding: 16px 24px; border-top: 1px solid #e2e8f0; display:flex; justify-content: space-between; align-items: flex-end; gap: 14px; }
     .signature { text-align: right; min-width: 240px; }
-    .signature img { height: 46px; max-width: 220px; object-fit: contain; display:block; margin-left:auto; }
-    .signature-line { margin-top: 6px; border-top: 1px solid #cbd5e1; padding-top: 4px; font-size: 11px; color: #64748b; }
+    .signature img { height: 58px; max-width: 220px; object-fit: contain; display:block; margin-left:auto; }
+    .signature-placeholder { height: 58px; width: 220px; margin-left: auto; }
+    .signature-line { margin: 6px 0 2px; border-top: 1px solid #cbd5e1; padding-top: 4px; font-size: 11px; color: #334155; font-weight: 600; }
+    .signature-subtitle { margin: 0; font-size: 10px; color: #64748b; }
     .note { margin: 0; font-size: 12px; color: #64748b; }
   </style>
 </head>
 <body>
-  <div class="sheet">
-    <div class="header">
-      <div>
-        <h1 class="title">Ficha de Anamnese</h1>
-        <p class="meta"><strong>Clínica:</strong> ${escapeHtml(c.clinicName || "Clínica Verto")}</p>
-        <p class="meta"><strong>CNPJ:</strong> ${escapeHtml(c.cnpj || "-")}</p>
-        <p class="meta"><strong>Endereço:</strong> ${escapeHtml(clinicAddress)}</p>
-        <p class="meta"><strong>Profissional responsável:</strong> ${escapeHtml(professionalName)} | <strong>Registro:</strong> ${escapeHtml(professionalCrp)}</p>
-      </div>
-      <img src="${escapeHtml(c.logoUrl || buildInitialAvatarDataUrl(c.professionalName || patient?.name || 'Profissional'))}" class="logo" />
-    </div>
-    <div class="content">
-      <p class="patient"><strong>Paciente:</strong> ${escapeHtml(patient?.name || "-")} | <strong>Data da ficha:</strong> ${escapeHtml(fichaDate)} | <strong>Tipo:</strong> ${escapeHtml(fichaType || '-')}</p>
-      <h3 style="margin:10px 0 8px;font-size:15px;color:#312e81;">1. Informações cadastrais do paciente</h3>
-      <table class="table">${patientRows || `<tr><td class="td">Sem dados cadastrais preenchidos.</td></tr>`}</table>
-      <h3 style="margin:18px 0 8px;font-size:15px;color:#312e81;">2. Perguntas e respostas clínicas</h3>
-      <table class="table">${clinicalRows || `<tr><td class="td">Sem respostas clínicas preenchidas.</td></tr>`}</table>
-      ${professionalRows ? `<h3 style="margin:18px 0 8px;font-size:15px;color:#312e81;">3. Informações do profissional</h3><table class="table">${professionalRows}</table>` : ''}
-    </div>
-    <div class="footer">
-      <div>
-        <p class="note">Documento gerado automaticamente pela plataforma Verto.</p>
-      </div>
-      <div class="signature">
-        ${c.signatureUrl ? `<img src="${escapeHtml(c.signatureUrl)}" />` : ""}
-        <p class="signature-line">Assinatura profissional</p>
-      </div>
-    </div>
-  </div>
+  ${pages
+    .map(
+      (pageHtml, index) => `
+        <div class="anamnesis-pdf-page">
+          <div class="header">
+            <div>
+              <h1 class="title">Ficha de Anamnese</h1>
+              ${headerSummaryHtml}
+            </div>
+            <div class="logo-wrap">
+              ${
+                clinicLogoUrl
+                  ? `<img src="${escapeHtml(clinicLogoUrl)}" class="logo" alt="Logo da clínica" />`
+                  : `<span class="logo-fallback">Logo da clínica</span>`
+              }
+            </div>
+          </div>
+          <div class="content">${pageHtml}</div>
+          ${index === pages.length - 1 ? footerHtml : ""}
+        </div>`,
+    )
+    .join("")}
 </body>
 </html>`;
   };
@@ -1059,44 +1164,38 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     sandbox.style.zIndex = '-1';
     sandbox.innerHTML = htmlContent;
     document.body.appendChild(sandbox);
-    const target = (sandbox.querySelector('.sheet') as HTMLElement) || sandbox;
-    const captureTarget = await prepareElementForPdfCapture(target);
+    const pages = Array.from(sandbox.querySelectorAll('.anamnesis-pdf-page')) as HTMLElement[];
+    const captureTargets = pages.length ? pages : [sandbox];
 
     try {
-      const canvas = await html2canvas(captureTarget, {
-        backgroundColor: '#ffffff',
-        scale: 1.35,
-        useCORS: true,
-        allowTaint: true,
-        logging: false,
-        windowWidth: captureTarget.scrollWidth || 794,
-      });
-
       const pdf = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      const margin = 24;
-      const contentWidth = pageWidth - margin * 2;
-      const imgHeight = (canvas.height * contentWidth) / canvas.width;
-      const imgData = canvas.toDataURL('image/jpeg', 0.78);
 
-      let heightLeft = imgHeight;
-      let positionY = margin;
-      pdf.addImage(imgData, 'JPEG', margin, positionY, contentWidth, imgHeight, undefined, 'FAST');
-      heightLeft -= (pageHeight - margin * 2);
-
-      while (heightLeft > 0) {
-        pdf.addPage();
-        positionY = margin - (imgHeight - heightLeft);
-        pdf.addImage(imgData, 'JPEG', margin, positionY, contentWidth, imgHeight, undefined, 'FAST');
-        heightLeft -= (pageHeight - margin * 2);
+      for (let index = 0; index < captureTargets.length; index += 1) {
+        const captureNode = await prepareElementForPdfCapture(captureTargets[index]);
+        try {
+          const canvas = await html2canvas(captureNode, {
+            backgroundColor: '#ffffff',
+            scale: 1.35,
+            useCORS: true,
+            allowTaint: true,
+            logging: false,
+            windowWidth: captureNode.scrollWidth || 794,
+            windowHeight: captureNode.scrollHeight || 1123,
+          });
+          const imgData = canvas.toDataURL('image/jpeg', 0.82);
+          if (index > 0) pdf.addPage();
+          pdf.addImage(imgData, 'JPEG', 0, 0, pageWidth, pageHeight, undefined, 'FAST');
+        } finally {
+          if (captureNode.parentNode) {
+            captureNode.parentNode.removeChild(captureNode);
+          }
+        }
       }
 
       return new Blob([pdf.output('arraybuffer')], { type: 'application/pdf' });
     } finally {
-      if (captureTarget.parentNode) {
-        captureTarget.parentNode.removeChild(captureTarget);
-      }
       document.body.removeChild(sandbox);
     }
   };
