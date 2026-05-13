@@ -2645,9 +2645,12 @@ export default function App() {
       return matchesAssignedTask ? { ...x, completed: true, status: 'completed' } : x;
     })); 
     
-    // Add a note about the patient completing the task
-    const noteText = `? TAREFA CONCLUÃDA PELO PACIENTE\nAtividade: ${t.title}\n${isKid ? `PontuaÃ§Ã£o: ${e}\n` : ''}AnotaÃ§Ãµes do Paciente: ${n || "Nenhuma observaÃ§Ã£o."}`;
-    handleAddNote(targetPatientId, noteText, 'private', 'EvoluÃ§Ã£o');
+    if (isKid) {
+      const noteText = `TAREFA CONCLUÍDA PELO PACIENTE\nAtividade: ${t.title}\n${
+        typeof normalizedEffort === 'number' && Number.isFinite(normalizedEffort) ? `Pontuação: ${normalizedEffort}\n` : ''
+      }Anotações do Paciente: ${n || "Nenhuma observação."}`;
+      handleAddNote(targetPatientId, noteText, 'private', 'Evolução');
+    }
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');

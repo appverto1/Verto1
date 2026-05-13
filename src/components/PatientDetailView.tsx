@@ -423,9 +423,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [uploadProgress, setUploadProgress] = useState(0);
   const [assignedTasks, setAssignedTasks] = useState<any[]>([]);
   const [isLoadingAssignedTasks, setIsLoadingAssignedTasks] = useState(false);
-  const [patientActivityLogs, setPatientActivityLogs] = useState<any[]>([]);
-  const [isLoadingPatientActivityLogs, setIsLoadingPatientActivityLogs] = useState(false);
-  const [activityLogDateFilter, setActivityLogDateFilter] = useState('');
   const [assignedReviewDrafts, setAssignedReviewDrafts] = useState<Record<string, { score: string; note: string }>>({});
   const [lastRecordedTrialId, setLastRecordedTrialId] = useState<any>(null);
   const [lastRecordedGoalId, setLastRecordedGoalId] = useState<any>(null);
@@ -739,41 +736,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     };
     loadAssignedTasks();
   }, [patient?.id, patientAgeYears]);
-
-  useEffect(() => {
-    if (!patient?.id || isKidsProfile) {
-      setPatientActivityLogs([]);
-      return;
-    }
-    let cancelled = false;
-    let unsubscribe = () => {};
-    const loadPatientLogs = async () => {
-      setIsLoadingPatientActivityLogs(true);
-      try {
-        const result = await dataService.getPatientLogs(String(patient.id));
-        if (!cancelled && result?.success && Array.isArray(result?.data)) {
-          setPatientActivityLogs(result.data);
-        }
-      } catch (error) {
-        console.error('Erro ao carregar logs do paciente:', error);
-        if (!cancelled) setPatientActivityLogs([]);
-      } finally {
-        if (!cancelled) setIsLoadingPatientActivityLogs(false);
-      }
-    };
-
-    loadPatientLogs();
-    const interval = window.setInterval(loadPatientLogs, 15000);
-    dataService.subscribeToPatientLogs(String(patient.id), loadPatientLogs).then((cleanup) => {
-      unsubscribe = typeof cleanup === 'function' ? cleanup : () => {};
-    });
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-      unsubscribe();
-    };
-  }, [patient?.id, isKidsProfile]);
 
   const resolveProtocolAgeRange = (protocol: any): { min: number; max: number | null } => {
     const explicitMin = Number(
@@ -1654,8 +1616,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       .replace(/ðŸ“/g, '📝')
       .replace(/ðŸŽ¯/g, '🎯')
       .replace(/ðŸ /g, '🏠')
+      .replace(/\?\s*TAREFA CONCLUÍDA PELO PACIENTE/g, 'TAREFA CONCLUÍDA PELO PACIENTE')
+      .replace(/TAREFA CONCLUÃDA PELO PACIENTE/g, 'TAREFA CONCLUÍDA PELO PACIENTE')
+      .replace(/TAREFA CONCLUÃ DA PELO PACIENTE/g, 'TAREFA CONCLUÍDA PELO PACIENTE')
+      .replace(/EvoluÃ§Ã£o/g, 'Evolução')
+      .replace(/CONCLUÃDA/g, 'CONCLUÍDA')
       .replace(/PontuaÃ§Ã£o/g, 'Pontuação')
       .replace(/AnotaÃ§Ãµes/g, 'Anotações')
+      .replace(/prontuÃ¡rio/gi, 'prontuário')
       .replace(/observaÃ§Ã£o/gi, 'observação')
       .replace(/famÃ­lia/gi, 'família')
       .replace(/sessÃ£o/gi, 'sessão')
@@ -1914,121 +1882,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
     return Array.from(mergedMap.values()).sort((a: any, b: any) => a.eventDate.getTime() - b.eventDate.getTime());
   }, [patientTasks, assignedTasks, isKidsProfile]);
-
-  const parsePatientLogValue = (log: any) => {
-    if (log?.value && typeof log.value === 'object') return log.value;
-    if (typeof log?.value === 'string') {
-      try {
-        return JSON.parse(log.value);
-      } catch {
-        return { value: log.value };
-      }
-    }
-    return {
-      title: log?.title,
-      score: log?.score,
-      energy: log?.energy,
-      note: log?.note,
-      icon: log?.icon
-    };
-  };
-
-  const filteredPatientActivityLogs = useMemo(() => {
-    const rows = Array.isArray(patientActivityLogs) ? patientActivityLogs : [];
-    const parseLogValue = (log: any) => {
-      if (log?.value && typeof log.value === 'object') return log.value;
-      if (typeof log?.value === 'string') {
-        try {
-          return JSON.parse(log.value);
-        } catch {
-          return { value: log.value };
-        }
-      }
-      return {
-        title: log?.title,
-        score: log?.score,
-        note: log?.note,
-        icon: log?.icon,
-        energy: log?.energy
-      };
-    };
-    const dedupedRows = rows.filter((log: any, index: number, array: any[]) => {
-      const value = parseLogValue(log);
-      const key = [
-        String(log?.type || ''),
-        String(log?.patient_id || ''),
-        String(value?.task_id || ''),
-        String(value?.title || ''),
-        String(value?.note || ''),
-        String(log?.timestamp || log?.created_at || ''),
-      ].join('|');
-      return array.findIndex((candidate: any) => {
-        const candidateValue = parseLogValue(candidate);
-        const candidateKey = [
-          String(candidate?.type || ''),
-          String(candidate?.patient_id || ''),
-          String(candidateValue?.task_id || ''),
-          String(candidateValue?.title || ''),
-          String(candidateValue?.note || ''),
-          String(candidate?.timestamp || candidate?.created_at || ''),
-        ].join('|');
-        return candidateKey === key;
-      }) === index;
-    });
-    return dedupedRows
-      .filter((log: any) => {
-        if (!activityLogDateFilter) return true;
-        const timestamp = log?.timestamp || log?.created_at;
-        const date = new Date(timestamp || 0);
-        if (Number.isNaN(date.getTime())) return false;
-        const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-        return key === activityLogDateFilter;
-      })
-      .sort((a: any, b: any) => new Date(b?.timestamp || b?.created_at || 0).getTime() - new Date(a?.timestamp || a?.created_at || 0).getTime());
-  }, [patientActivityLogs, activityLogDateFilter]);
-
-  const describePatientLog = (log: any) => {
-    const value = parsePatientLogValue(log);
-    const type = String(log?.type || '').toLowerCase();
-    if (type === 'energy') {
-      return {
-        icon: <Zap size={18} />,
-        label: 'Energia',
-        title: `${value?.value ?? value?.energy ?? '-'}% registrado`,
-        detail: value?.note || 'Registro de energia feito pelo paciente.',
-        badgeClass: 'bg-blue-100 text-blue-700',
-        dotClass: 'bg-blue-500'
-      };
-    }
-    if (type === 'task' || type === 'intervention' || type === 'reinforcement') {
-      const effortValue = value?.effort ?? value?.energy ?? log?.energy;
-      const effortLabel =
-        effortValue !== null && effortValue !== undefined && effortValue !== ''
-          ? `Energia informada: ${Number(effortValue)}%.`
-          : '';
-      return {
-        icon: <CheckCircle2 size={18} />,
-        label: 'Tarefa',
-        title: value?.title || log?.title || 'Tarefa concluída',
-        detail: [effortLabel, value?.note || 'Paciente marcou a atividade como concluída.'].filter(Boolean).join('\n'),
-        badgeClass: 'bg-emerald-100 text-emerald-700',
-        dotClass: 'bg-emerald-500'
-      };
-    }
-    return {
-      icon: <Activity size={18} />,
-      label: 'Humor',
-      title: value?.icon ? `${value.icon} Registro de humor` : 'Registro de humor',
-      detail: [
-        value?.energy !== null && value?.energy !== undefined && value?.energy !== ''
-          ? `Energia informada: ${Number(value.energy)}%.`
-          : '',
-        value?.note || 'Check-in emocional feito pelo paciente.'
-      ].filter(Boolean).join('\n'),
-      badgeClass: 'bg-[#7a32fc]/10 text-[#7a32fc]',
-      dotClass: 'bg-[#7a32fc]'
-    };
-  };
 
   const selectedChartProtocol = useMemo(
     () => protocols.find((p: any) => String(p.id) === String(selectedChartProtocolId)),
@@ -3666,66 +3519,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             )}
             {!isKidsProfile && (
               <div className="bg-white dark:bg-[#101b2e] border border-gray-100 dark:border-slate-700 p-5 rounded-3xl shadow-sm transition-colors">
-                <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-5">
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-800 dark:text-slate-100 tracking-tight">Histórico de Atividades</h3>
-                    <p className="text-xs text-gray-500 dark:text-slate-300 mt-1">Registros enviados pelo portal adulto em tempo real para apoio à decisão clínica.</p>
-                  </div>
-                  <div className="w-full sm:w-56">
-                    <label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-widest mb-1">Filtrar por data</label>
-                    <input
-                      type="date"
-                      value={activityLogDateFilter}
-                      onChange={(e) => setActivityLogDateFilter(e.target.value)}
-                      className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-3 text-sm font-semibold text-gray-700 dark:text-slate-100 outline-none focus:border-[#7a32fc]"
-                    />
-                  </div>
-                </div>
-                {isLoadingPatientActivityLogs && filteredPatientActivityLogs.length === 0 ? (
-                  <p className="text-sm text-gray-400 dark:text-slate-400 italic">Carregando histórico do paciente...</p>
-                ) : filteredPatientActivityLogs.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/60 p-6 text-center transition-colors">
-                    <p className="text-sm font-semibold text-gray-500 dark:text-slate-200">Nenhum registro encontrado para este filtro.</p>
-                    <p className="text-xs text-gray-400 dark:text-slate-400 mt-1">Quando o paciente registrar humor, energia ou tarefas, os eventos aparecerão aqui.</p>
-                  </div>
-                ) : (
-                  <div className="relative pl-8 border-l-2 border-slate-100 dark:border-slate-700 ml-2 space-y-4">
-                    {filteredPatientActivityLogs.map((log: any) => {
-                      const meta = describePatientLog(log);
-                      const timestamp = new Date(log?.timestamp || log?.created_at || 0);
-                      return (
-                        <div key={`patient-activity-${log.id}`} className="relative">
-                          <div className={`absolute -left-[39px] top-5 w-5 h-5 rounded-full ${meta.dotClass} border-4 border-white dark:border-[#101b2e] ring-2 ring-slate-100 dark:ring-slate-700`}></div>
-                          <div className="bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-[#16243b] border border-gray-100 dark:border-slate-700 rounded-2xl p-4 shadow-sm transition-colors">
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div className="flex items-start gap-3">
-                                <span className={`w-10 h-10 rounded-2xl flex items-center justify-center ${meta.badgeClass}`}>
-                                  {meta.icon}
-                                </span>
-                                <div>
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <p className="text-sm font-semibold text-gray-800 dark:text-slate-100">{meta.title}</p>
-                                    <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase tracking-wide ${meta.badgeClass}`}>{meta.label}</span>
-                                  </div>
-                                  <p className="text-xs text-gray-500 dark:text-slate-300 mt-1 whitespace-pre-wrap">{meta.detail}</p>
-                                </div>
-                              </div>
-                              <span className="text-[11px] font-semibold text-gray-400 dark:text-slate-400">
-                                {Number.isNaN(timestamp.getTime())
-                                  ? 'Sem horário'
-                                  : `${timestamp.toLocaleDateString('pt-BR')} às ${timestamp.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-            {!isKidsProfile && (
-              <div className="bg-white dark:bg-[#101b2e] border border-gray-100 dark:border-slate-700 p-5 rounded-3xl shadow-sm transition-colors">
                 <h3 className="text-sm font-semibold text-gray-800 dark:text-slate-100 tracking-tight mb-4">Histórico Adulto (Auditoria Clínica)</h3>
                 {adultCompletedTasks.length === 0 ? (
                   <p className="text-sm text-gray-400 dark:text-slate-400 italic">Sem eventos concluídos para exibir no histórico adulto.</p>
@@ -3970,10 +3763,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </div>
             </div>
 
-            <div id="note-type-toggles" className="flex bg-gray-100 dark:bg-slate-900/70 p-1 rounded-xl mb-4"> 
-              <button onClick={() => setNoteMode('private')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'private' ? 'bg-white dark:bg-slate-800 text-gray-800 dark:text-white shadow-sm' : 'text-gray-400 dark:text-slate-300'}`}><EyeOff size={12} /> Privadas</button> 
-              <button onClick={() => setNoteMode('patient')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'patient' ? 'bg-white dark:bg-slate-800 text-[#7a32fc] dark:text-violet-200 shadow-sm' : 'text-gray-400 dark:text-slate-300'}`}><Share2 size={12} /> Paciente</button> 
-              <button onClick={() => setNoteMode('professional')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'professional' ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-200 shadow-sm' : 'text-gray-400 dark:text-slate-300'}`}><SlidersHorizontal size={12} /> Profissionais</button> 
+            <div id="note-type-toggles" className={`flex p-1 rounded-xl mb-4 border transition-colors ${isPanelDark ? 'bg-slate-900/70 border-slate-800' : 'bg-white border-slate-200 shadow-sm'}`}> 
+              <button onClick={() => setNoteMode('private')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'private' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-slate-100 text-slate-800 shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}><EyeOff size={12} /> Privadas</button> 
+              <button onClick={() => setNoteMode('patient')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'patient' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-violet-50 text-[#7a32fc] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}><Share2 size={12} /> Paciente</button> 
+              <button onClick={() => setNoteMode('professional')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'professional' ? (isPanelDark ? 'bg-slate-800 text-indigo-200 shadow-sm' : 'bg-indigo-50 text-indigo-600 shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}><SlidersHorizontal size={12} /> Profissionais</button> 
             </div> 
 
             <div className="flex items-center justify-between mb-2 px-1">
@@ -3981,55 +3774,55 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 {noteMode === 'private' ? <FileText size={16} className="text-gray-500"/> : noteMode === 'patient' ? <Share2 size={16} className="text-[#7a32fc]"/> : <SlidersHorizontal size={16} className="text-indigo-600"/>}
                 {noteMode === 'private' ? "Nova Anotação Privada" : noteMode === 'patient' ? "Enviar para Paciente (Portátil)" : "Compartilhar com Profissionais (Portátil)"}
               </h3>
-              <button id="note-filters-btn" onClick={() => setShowNoteFilters(!showNoteFilters)} className={`text-[10px] font-semibold px-3 py-1 rounded-full transition-all flex items-center gap-1 ${showNoteFilters ? 'bg-gray-200 text-gray-700' : 'bg-gray-100 text-gray-400'}`}>
+              <button id="note-filters-btn" onClick={() => setShowNoteFilters(!showNoteFilters)} className={`text-[10px] font-semibold px-3 py-1 rounded-full transition-all flex items-center gap-1 border ${showNoteFilters ? (isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-slate-100 border-slate-200 text-slate-700') : (isPanelDark ? 'bg-slate-900 border-slate-800 text-slate-300' : 'bg-white border-slate-200 text-slate-500')}`}>
                 <Filter size={10} /> {showNoteFilters ? "Fechar Filtros" : "Filtrar Notas"}
               </button>
             </div>
 
             {showNoteFilters && (
-              <div className="bg-white border border-gray-100 p-4 rounded-2xl shadow-sm mb-4 animate-slide-up space-y-3">
+              <div className={`p-4 rounded-2xl shadow-sm mb-4 animate-slide-up space-y-3 border transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[9px] font-semibold text-gray-400 uppercase mb-1 ml-1">Data</label>
-                    <input type="date" className="w-full bg-gray-50 border border-gray-100 rounded-xl p-2 text-xs outline-none focus:border-[#7a32fc]" value={noteDateFilter} onChange={e => setNoteDateFilter(e.target.value)} />
+                    <input type="date" className={`w-full rounded-xl p-2 text-xs outline-none border transition-colors ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-slate-50 border-slate-200 text-slate-700'} focus:border-[#7a32fc]`} value={noteDateFilter} onChange={e => setNoteDateFilter(e.target.value)} />
                   </div>
                   <div>
                     <label className="block text-[9px] font-semibold text-gray-400 uppercase mb-1 ml-1">Assunto/Tema</label>
-                    <input type="text" className="w-full bg-gray-50 border border-gray-100 rounded-xl p-2 text-xs outline-none focus:border-[#7a32fc]" placeholder="Ex: Evolução..." value={noteSubjectFilter} onChange={e => setNoteSubjectFilter(e.target.value)} />
+                    <input type="text" className={`w-full rounded-xl p-2 text-xs outline-none border transition-colors ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-slate-50 border-slate-200 text-slate-700'} focus:border-[#7a32fc]`} placeholder="Ex: Evolução..." value={noteSubjectFilter} onChange={e => setNoteSubjectFilter(e.target.value)} />
                   </div>
                 </div>
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
-                  <input type="text" className="w-full bg-gray-50 border border-gray-100 rounded-xl p-2 pl-9 text-xs outline-none focus:border-[#7a32fc]" placeholder="Palavra-chave no conteúdo..." value={noteSearchQuery} onChange={e => setNoteSearchQuery(e.target.value)} />
+                  <Search className={`absolute left-3 top-1/2 -translate-y-1/2 ${isPanelDark ? 'text-slate-400' : 'text-slate-400'}`} size={14} />
+                  <input type="text" className={`w-full rounded-xl p-2 pl-9 text-xs outline-none border transition-colors ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-slate-50 border-slate-200 text-slate-700'} focus:border-[#7a32fc]`} placeholder="Palavra-chave no conteúdo..." value={noteSearchQuery} onChange={e => setNoteSearchQuery(e.target.value)} />
                 </div>
                 <button onClick={() => { setNoteSearchQuery(""); setNoteSubjectFilter(""); setNoteDateFilter(""); }} className="text-[9px] font-semibold text-[#7a32fc] uppercase tracking-wider hover:underline">Limpar Filtros</button>
               </div>
             )}
 
-            <div id="note-input-area" className={`bg-white dark:bg-[#101b2e] p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-700 transition-colors ${noteMode === 'patient' ? 'border-[#7a32fc]/20 bg-blue-50/30 dark:bg-violet-500/10' : noteMode === 'professional' ? 'border-indigo-100 bg-indigo-50/30 dark:bg-indigo-500/10' : ''}`}> 
+            <div id="note-input-area" className={`p-4 rounded-2xl shadow-sm border transition-colors ${noteMode === 'patient' ? (isPanelDark ? 'bg-violet-500/10 border-violet-400/20' : 'bg-violet-50/70 border-violet-200') : noteMode === 'professional' ? (isPanelDark ? 'bg-indigo-500/10 border-indigo-400/20' : 'bg-indigo-50/70 border-indigo-200') : (isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200')}`}> 
               <div className="mb-3">
                 <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1 ml-1">Assunto / Tema</label>
-                <input type="text" className="w-full bg-gray-50 dark:bg-slate-800 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 focus:border-[#7551FF] focus:bg-white dark:focus:bg-slate-800 transition-all text-slate-800 dark:text-slate-100" placeholder="Ex: Comportamento, Evolução, Social..." value={newNoteSubject} onChange={e => setNewNoteSubject(e.target.value)} />
+                <input type="text" className={`w-full rounded-xl p-2 text-xs outline-none border transition-all ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 focus:bg-slate-800' : 'bg-slate-50 border-slate-200 text-slate-800 focus:bg-white'} focus:border-[#7551FF]`} placeholder="Ex: Comportamento, Evolução, Social..." value={newNoteSubject} onChange={e => setNewNoteSubject(e.target.value)} />
               </div>
-              <textarea className="w-full h-24 bg-gray-50 dark:bg-slate-800 rounded-xl p-3 text-sm outline-none border border-transparent dark:border-slate-700 focus:border-[#7551FF] focus:bg-white dark:focus:bg-slate-800 transition-all resize-none text-slate-800 dark:text-slate-100" placeholder={noteMode === 'private' ? "Digite observações clínicas..." : noteMode === 'patient' ? "Escreva uma orientação ou feedback (Portátil)..." : "Informações para outros profissionais (Portátil)..."} value={newNote} onChange={(e) => setNewNote(e.target.value)}></textarea> 
+              <textarea className={`w-full h-24 rounded-xl p-3 text-sm outline-none border transition-all resize-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 focus:bg-slate-800' : 'bg-slate-50 border-slate-200 text-slate-800 focus:bg-white'} focus:border-[#7551FF]`} placeholder={noteMode === 'private' ? "Digite observações clínicas..." : noteMode === 'patient' ? "Escreva uma orientação ou feedback (Portátil)..." : "Informações para outros profissionais (Portátil)..."} value={newNote} onChange={(e) => setNewNote(e.target.value)}></textarea> 
               <button onClick={handleAddNoteWithSubject} className={`w-full mt-3 text-white font-semibold py-3 rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2 ${noteMode === 'private' ? 'bg-[#7551FF]' : noteMode === 'patient' ? 'bg-[#7a32fc]' : 'bg-indigo-600'}`}>{noteMode === 'private' ? "Salvar Nota" : noteMode === 'patient' ? "Enviar Mensagem" : "Compartilhar com Equipe"}</button> 
             </div> 
 
             <div className="space-y-3"> 
               {filteredNotes.length > 0 ? (filteredNotes.map((note: any) => ( 
-                <div key={note.id} className={`bg-white dark:bg-[#101b2e] p-4 rounded-2xl border shadow-sm relative group transition-all ${(note.visibility === 'patient' || note.type === 'shared') ? 'border-[#7a32fc]/30 bg-blue-50/20 dark:bg-violet-500/10' : (note.visibility === 'professional' || note.type === 'professional') ? 'border-indigo-200 bg-indigo-50/20 dark:bg-indigo-500/10' : 'border-gray-100 dark:border-slate-700'}`}> 
+                <div key={note.id} className={`p-4 rounded-2xl border shadow-sm relative group transition-all ${(note.visibility === 'patient' || note.type === 'shared') ? (isPanelDark ? 'bg-violet-500/10 border-violet-400/20' : 'bg-violet-50/70 border-violet-200') : (note.visibility === 'professional' || note.type === 'professional') ? (isPanelDark ? 'bg-indigo-500/10 border-indigo-400/20' : 'bg-indigo-50/70 border-indigo-200') : (isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200')}`}> 
                   <div className="flex justify-between items-start mb-2">
                     <div className="flex flex-col">
                       <span className="text-[10px] font-semibold text-gray-400 uppercase block">{note.date}</span>
-                      {note.subject && <span className="text-[11px] font-semibold text-gray-700 mt-0.5 uppercase tracking-tight">#{note.subject}</span>}
+                      {note.subject && <span className={`text-[11px] font-semibold mt-0.5 uppercase tracking-tight ${isPanelDark ? 'text-slate-200' : 'text-gray-700'}`}>#{normalizeNoteText(note.subject)}</span>}
                     </div>
                     <div className="flex gap-1">
                       {(note.visibility === 'private' || note.type === 'private' || !note.visibility) && (
                         <React.Fragment>
-                          <button onClick={() => (window as any).handleToggleNoteTypeApp(note.id, 'patient')} className={`p-1.5 rounded-lg transition-all ${note.hasSharedCopy ? 'bg-[#7a32fc] text-white' : 'bg-gray-100 text-gray-400 hover:bg-blue-100 hover:text-[#7a32fc]'}`} title="Compartilhar com Paciente">
+                          <button onClick={() => (window as any).handleToggleNoteTypeApp(note.id, 'patient')} className={`p-1.5 rounded-lg transition-all ${note.hasSharedCopy ? 'bg-[#7a32fc] text-white' : (isPanelDark ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-violet-200' : 'bg-slate-100 text-slate-400 hover:bg-blue-100 hover:text-[#7a32fc]')}`} title="Compartilhar com Paciente">
                             <Share2 size={14} />
                           </button>
-                          <button onClick={() => (window as any).handleToggleNoteTypeApp(note.id, 'professional')} className={`p-1.5 rounded-lg transition-all ${note.hasProfessionalCopy ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400 hover:bg-indigo-100 hover:text-indigo-600'}`} title="Compartilhar com Profissionais">
+                          <button onClick={() => (window as any).handleToggleNoteTypeApp(note.id, 'professional')} className={`p-1.5 rounded-lg transition-all ${note.hasProfessionalCopy ? 'bg-indigo-600 text-white' : (isPanelDark ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-indigo-200' : 'bg-slate-100 text-slate-400 hover:bg-indigo-100 hover:text-indigo-600')}`} title="Compartilhar com Profissionais">
                             <SlidersHorizontal size={14} />
                           </button>
                         </React.Fragment>
