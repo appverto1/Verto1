@@ -1703,7 +1703,10 @@ export default function App() {
       const persisted = await dataService.addTask({
         ...taskToPersist,
         patient_id: String(taskToPersist.patientId),
-        patient_email: patient?.email || null
+        patient_email: patient?.email || null,
+        protocol_id: taskToPersist.protocol_id || taskToPersist.protocolId || null,
+        protocol_name: taskToPersist.protocol_name || taskToPersist.protocolTitle || null,
+        domain_name: taskToPersist.domainName || null
       });
       if (persisted?.success && persisted?.data?.id) {
         setTasks(prev => prev.map(task => (task.id === taskToPersist.id ? { ...task, id: persisted.data.id } : task)));
@@ -2552,7 +2555,12 @@ export default function App() {
       icon: t.icon, 
       dateGroup: "Hoje",
       isDailyReminder: t.isDailyReminder,
-      linkedTask: t.linkedTask
+      linkedTask: t.linkedTask,
+      protocol_id: t.protocol_id || t.protocolId || null,
+      protocolId: t.protocolId || t.protocol_id || null,
+      protocolTitle: t.protocolTitle || t.protocol_name || null,
+      protocol_name: t.protocol_name || t.protocolTitle || null,
+      domainName: t.domainName || t.domain_name || null
     };
     setHistory(prev => [newHistoryItem, ...prev]); 
     setTasks(prev => prev.map(x => String(x.id) === String(t.id) ? { ...x, completed: true, status: 'completed' } : x)); 
@@ -2572,7 +2580,10 @@ export default function App() {
       score: isKid ? normalizedEffort : null,
       energy: energyValue,
       note: n,
-      icon: t.icon
+      icon: t.icon,
+      protocol_id: t.protocol_id || t.protocolId || null,
+      protocol_name: t.protocol_name || t.protocolTitle || null,
+      domain_name: t.domainName || t.domain_name || null
     });
 
     await dataService.addPatientLog({

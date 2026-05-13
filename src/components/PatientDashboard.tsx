@@ -394,6 +394,19 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       }) || null;
     };
 
+    const peiGoals = Array.isArray(user?.pei) ? user.pei : [];
+    const activeGoal = peiGoals.find((goal: any) => {
+      const status = String(goal?.status || '').toLowerCase();
+      return goal?.protocolTitle && status !== 'completed';
+    }) || peiGoals.find((goal: any) => goal?.protocolTitle);
+
+    if (activeGoal) {
+      const goalProtocolId = String(activeGoal?.protocolId ?? activeGoal?.protocol_id ?? '').trim();
+      const goalProtocolTitle = normalizeClinicalKey(activeGoal?.protocolTitle || '');
+      const matched = resolveProtocolMatch(goalProtocolId, goalProtocolTitle);
+      if (matched) return matched;
+    }
+
     const scoredEventsForProtocolResolution = scoredClinicalEvents.some((event: any) => event?._source === 'history')
       ? scoredClinicalEvents.filter((event: any) => event?._source === 'history')
       : scoredClinicalEvents;
@@ -481,19 +494,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (discoveredProtocolId || discoveredProtocolName) {
       const discovered = resolveProtocolMatch(discoveredProtocolId, discoveredProtocolName);
       if (discovered) return discovered;
-    }
-
-    const peiGoals = Array.isArray(user?.pei) ? user.pei : [];
-    const activeGoal = peiGoals.find((goal: any) => {
-      const status = String(goal?.status || '').toLowerCase();
-      return goal?.protocolTitle && status !== 'completed';
-    }) || peiGoals.find((goal: any) => goal?.protocolTitle);
-
-    if (activeGoal) {
-      const goalProtocolId = String(activeGoal?.protocolId ?? activeGoal?.protocol_id ?? '').trim();
-      const goalProtocolTitle = normalizeClinicalKey(activeGoal?.protocolTitle || '');
-      const matched = resolveProtocolMatch(goalProtocolId, goalProtocolTitle);
-      if (matched) return matched;
     }
 
     return list.find((p: any) => /vb[\s-]?mapp/i.test(String(p?.title || p?.name || ''))) || list[0] || { data: [] };
