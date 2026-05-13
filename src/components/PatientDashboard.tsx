@@ -394,7 +394,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       }) || null;
     };
 
-    const latestScoredEvent = [...scoredClinicalEvents]
+    const scoredEventsForProtocolResolution = scoredClinicalEvents.some((event: any) => event?._source === 'history')
+      ? scoredClinicalEvents.filter((event: any) => event?._source === 'history')
+      : scoredClinicalEvents;
+
+    const latestScoredEvent = [...scoredEventsForProtocolResolution]
       .sort((a: any, b: any) => {
         const left = new Date(a?.created_at || a?.date || 0).getTime() || 0;
         const right = new Date(b?.created_at || b?.date || 0).getTime() || 0;
