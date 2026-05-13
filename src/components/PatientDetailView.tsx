@@ -3400,7 +3400,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           {canAccessTab('files') && <button id="tab-files" onClick={() => setActiveTab('files')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'files' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-white shadow-sm' : 'text-gray-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'}`}>Arquivos</button>}
         </div> 
       </div> 
-      <div className="p-6"> 
+      <div className="p-6 bg-gray-50 dark:bg-[#081324] transition-colors"> 
         {activeTab === 'history' ? ( 
           <div className="space-y-6"> 
             {showCoordinatorPatientRadar && (
@@ -3432,18 +3432,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             )}
             {!isKidsProfile && (
               <div className="space-y-4 mb-6">
-                <div className="bg-white border border-gray-100 rounded-3xl p-5 shadow-sm">
-                  <p className="text-sm font-semibold text-gray-700">Histórico Adulto</p>
-                  <p className="text-xs text-gray-500 mt-1">
+                <div className="bg-white dark:bg-[#101b2e] border border-gray-100 dark:border-slate-700 rounded-3xl p-5 shadow-sm transition-colors">
+                  <p className="text-sm font-semibold text-gray-700 dark:text-slate-100">Histórico Adulto</p>
+                  <p className="text-xs text-gray-500 dark:text-slate-300 mt-1">
                     Comparativo por domínio do protocolo, entre duas datas selecionadas.
                   </p>
                 </div>
-                <div className="bg-white border border-gray-100 rounded-3xl p-4 sm:p-5 shadow-sm space-y-4">
+                <div className="bg-white dark:bg-[#101b2e] border border-gray-100 dark:border-slate-700 rounded-3xl p-4 sm:p-5 shadow-sm space-y-4 transition-colors">
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <div>
-                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Protocolo</label>
+                      <label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1.5 ml-1">Protocolo</label>
                       <select
-                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
+                        className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-3 text-sm font-semibold text-gray-700 dark:text-slate-100 outline-none focus:border-[#4318FF]"
                         value={selectedChartProtocolId}
                         onChange={(e) => { setHasUserChangedChartProtocol(true); setSelectedChartProtocolId(e.target.value); }}
                       >
@@ -3453,9 +3453,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Data Base</label>
+                      <label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1.5 ml-1">Data Base</label>
                       <select
-                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
+                        className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-3 text-sm font-semibold text-gray-700 dark:text-slate-100 outline-none focus:border-[#4318FF]"
                         value={comparisonDate1}
                         onChange={(e) => setComparisonDate1(e.target.value)}
                       >
@@ -3466,9 +3466,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Data Comparação</label>
+                      <label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1.5 ml-1">Data Comparação</label>
                       <select
-                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
+                        className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-3 text-sm font-semibold text-gray-700 dark:text-slate-100 outline-none focus:border-[#4318FF]"
                         value={comparisonDate2}
                         onChange={(e) => setComparisonDate2(e.target.value)}
                       >
@@ -3490,70 +3490,70 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </div>
             )}
             {!isKidsProfile && (
-              <div className="bg-white border border-gray-100 p-5 rounded-3xl shadow-sm">
+              <div className="bg-white dark:bg-[#101b2e] border border-gray-100 dark:border-slate-700 p-5 rounded-3xl shadow-sm transition-colors">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-semibold text-gray-800 tracking-tight">Próximas Atividades Agendadas</h3>
-                  <span className="text-[10px] font-semibold text-[#7a32fc] bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-full uppercase tracking-wide">
+                  <h3 className="text-sm font-semibold text-gray-800 dark:text-slate-100 tracking-tight">Próximas Atividades Agendadas</h3>
+                  <span className="text-[10px] font-semibold text-[#7a32fc] dark:text-violet-200 bg-indigo-50 dark:bg-violet-500/10 border border-indigo-100 dark:border-violet-400/30 px-2.5 py-1 rounded-full uppercase tracking-wide">
                     Painel Profissional
                   </span>
                 </div>
                 {adultScheduledTasks.length > 0 ? (
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                     {adultScheduledTasks.map((task: any) => (
-                      <div key={`adult-home-${task.id}`} className="rounded-2xl border border-gray-100 bg-gradient-to-br from-white to-slate-50 px-4 py-3 shadow-sm">
+                      <div key={`adult-home-${task.id}`} className="rounded-2xl border border-gray-100 dark:border-slate-700 bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-[#16243b] px-4 py-3 shadow-sm transition-colors">
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <p className="text-sm font-semibold text-gray-800">{task.title}</p>
-                            {task.description ? <p className="text-xs text-gray-500 mt-1 line-clamp-2">{task.description}</p> : null}
+                            <p className="text-sm font-semibold text-gray-800 dark:text-slate-100">{task.title}</p>
+                            {task.description ? <p className="text-xs text-gray-500 dark:text-slate-300 mt-1 line-clamp-2">{task.description}</p> : null}
                           </div>
                           <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase ${task.type === 'reinforcement' ? 'bg-yellow-100 text-yellow-700' : task.type === 'intervention' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
                             {task.type === 'reinforcement' ? 'Reforço' : task.type === 'intervention' ? 'Intervenção' : 'Avaliação'}
                           </span>
                         </div>
-                        <p className="text-[11px] text-gray-500 mt-2">
+                        <p className="text-[11px] text-gray-500 dark:text-slate-300 mt-2">
                           {task.eventDate.toLocaleDateString('pt-BR')} às {task.eventDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                         </p>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-400 italic">Nenhuma atividade de casa cadastrada no momento.</p>
+                  <p className="text-sm text-gray-400 dark:text-slate-400 italic">Nenhuma atividade de casa cadastrada no momento.</p>
                 )}
               </div>
             )}
             {!isKidsProfile && (
-              <div className="bg-white border border-gray-100 p-5 rounded-3xl shadow-sm">
+              <div className="bg-white dark:bg-[#101b2e] border border-gray-100 dark:border-slate-700 p-5 rounded-3xl shadow-sm transition-colors">
                 <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-5">
                   <div>
-                    <h3 className="text-sm font-semibold text-gray-800 tracking-tight">Histórico de Atividades</h3>
-                    <p className="text-xs text-gray-500 mt-1">Registros enviados pelo portal adulto em tempo real para apoio à decisão clínica.</p>
+                    <h3 className="text-sm font-semibold text-gray-800 dark:text-slate-100 tracking-tight">Histórico de Atividades</h3>
+                    <p className="text-xs text-gray-500 dark:text-slate-300 mt-1">Registros enviados pelo portal adulto em tempo real para apoio à decisão clínica.</p>
                   </div>
                   <div className="w-full sm:w-56">
-                    <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-1">Filtrar por data</label>
+                    <label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-widest mb-1">Filtrar por data</label>
                     <input
                       type="date"
                       value={activityLogDateFilter}
                       onChange={(e) => setActivityLogDateFilter(e.target.value)}
-                      className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#7a32fc]"
+                      className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-3 text-sm font-semibold text-gray-700 dark:text-slate-100 outline-none focus:border-[#7a32fc]"
                     />
                   </div>
                 </div>
                 {isLoadingPatientActivityLogs && filteredPatientActivityLogs.length === 0 ? (
-                  <p className="text-sm text-gray-400 italic">Carregando histórico do paciente...</p>
+                  <p className="text-sm text-gray-400 dark:text-slate-400 italic">Carregando histórico do paciente...</p>
                 ) : filteredPatientActivityLogs.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-6 text-center">
-                    <p className="text-sm font-semibold text-gray-500">Nenhum registro encontrado para este filtro.</p>
-                    <p className="text-xs text-gray-400 mt-1">Quando o paciente registrar humor, energia ou tarefas, os eventos aparecerão aqui.</p>
+                  <div className="rounded-2xl border border-dashed border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/60 p-6 text-center transition-colors">
+                    <p className="text-sm font-semibold text-gray-500 dark:text-slate-200">Nenhum registro encontrado para este filtro.</p>
+                    <p className="text-xs text-gray-400 dark:text-slate-400 mt-1">Quando o paciente registrar humor, energia ou tarefas, os eventos aparecerão aqui.</p>
                   </div>
                 ) : (
-                  <div className="relative pl-8 border-l-2 border-slate-100 ml-2 space-y-4">
+                  <div className="relative pl-8 border-l-2 border-slate-100 dark:border-slate-700 ml-2 space-y-4">
                     {filteredPatientActivityLogs.map((log: any) => {
                       const meta = describePatientLog(log);
                       const timestamp = new Date(log?.timestamp || log?.created_at || 0);
                       return (
                         <div key={`patient-activity-${log.id}`} className="relative">
-                          <div className={`absolute -left-[39px] top-5 w-5 h-5 rounded-full ${meta.dotClass} border-4 border-white ring-2 ring-slate-100`}></div>
-                          <div className="bg-gradient-to-br from-white to-slate-50 border border-gray-100 rounded-2xl p-4 shadow-sm">
+                          <div className={`absolute -left-[39px] top-5 w-5 h-5 rounded-full ${meta.dotClass} border-4 border-white dark:border-[#101b2e] ring-2 ring-slate-100 dark:ring-slate-700`}></div>
+                          <div className="bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-[#16243b] border border-gray-100 dark:border-slate-700 rounded-2xl p-4 shadow-sm transition-colors">
                             <div className="flex flex-wrap items-start justify-between gap-3">
                               <div className="flex items-start gap-3">
                                 <span className={`w-10 h-10 rounded-2xl flex items-center justify-center ${meta.badgeClass}`}>
@@ -3561,13 +3561,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                 </span>
                                 <div>
                                   <div className="flex flex-wrap items-center gap-2">
-                                    <p className="text-sm font-semibold text-gray-800">{meta.title}</p>
+                                    <p className="text-sm font-semibold text-gray-800 dark:text-slate-100">{meta.title}</p>
                                     <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase tracking-wide ${meta.badgeClass}`}>{meta.label}</span>
                                   </div>
-                                  <p className="text-xs text-gray-500 mt-1 whitespace-pre-wrap">{meta.detail}</p>
+                                  <p className="text-xs text-gray-500 dark:text-slate-300 mt-1 whitespace-pre-wrap">{meta.detail}</p>
                                 </div>
                               </div>
-                              <span className="text-[11px] font-semibold text-gray-400">
+                              <span className="text-[11px] font-semibold text-gray-400 dark:text-slate-400">
                                 {Number.isNaN(timestamp.getTime())
                                   ? 'Sem horário'
                                   : `${timestamp.toLocaleDateString('pt-BR')} às ${timestamp.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`}
@@ -3582,37 +3582,37 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </div>
             )}
             {!isKidsProfile && (
-              <div className="bg-white border border-gray-100 p-5 rounded-3xl shadow-sm">
-                <h3 className="text-sm font-semibold text-gray-800 tracking-tight mb-4">Histórico Adulto (Auditoria Clínica)</h3>
+              <div className="bg-white dark:bg-[#101b2e] border border-gray-100 dark:border-slate-700 p-5 rounded-3xl shadow-sm transition-colors">
+                <h3 className="text-sm font-semibold text-gray-800 dark:text-slate-100 tracking-tight mb-4">Histórico Adulto (Auditoria Clínica)</h3>
                 {adultCompletedTasks.length === 0 ? (
-                  <p className="text-sm text-gray-400 italic">Sem eventos concluídos para exibir no histórico adulto.</p>
+                  <p className="text-sm text-gray-400 dark:text-slate-400 italic">Sem eventos concluídos para exibir no histórico adulto.</p>
                 ) : (
-                  <div className="relative pl-8 border-l-2 border-indigo-100 ml-2 space-y-4">
+                  <div className="relative pl-8 border-l-2 border-indigo-100 dark:border-indigo-400/30 ml-2 space-y-4">
                     {adultCompletedTasks.map((event: any) => (
                       <div key={`adult-history-${event.id}`} className="relative">
-                        <div className="absolute -left-[39px] top-5 w-5 h-5 rounded-full bg-[#7551FF] border-4 border-white ring-2 ring-indigo-100"></div>
-                        <div className="bg-gradient-to-br from-white to-slate-50 border border-gray-100 rounded-2xl p-5 space-y-2 shadow-sm">
+                        <div className="absolute -left-[39px] top-5 w-5 h-5 rounded-full bg-[#7551FF] border-4 border-white dark:border-[#101b2e] ring-2 ring-indigo-100 dark:ring-indigo-400/30"></div>
+                        <div className="bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-[#16243b] border border-gray-100 dark:border-slate-700 rounded-2xl p-5 space-y-2 shadow-sm transition-colors">
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="text-lg font-semibold text-gray-800 tracking-tight">{event.taskTitle}</p>
+                            <p className="text-lg font-semibold text-gray-800 dark:text-slate-100 tracking-tight">{event.taskTitle}</p>
                             <span className="text-[10px] font-semibold bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-full uppercase tracking-wide">
                               {event.taskType === 'intervention' ? 'Intervenção' : event.taskType === 'reinforcement' ? 'Reforço' : 'Avaliação'}
                             </span>
                           </div>
-                          <p className="text-sm text-gray-500">
+                          <p className="text-sm text-gray-500 dark:text-slate-300">
                             Execução: {event.eventDate.toLocaleDateString('pt-BR')} às {event.eventDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                           </p>
-                          <p className="text-sm text-gray-600">
-                            Esforço percebido: <span className="font-semibold text-gray-800">{event.patientEffort}%</span>
+                          <p className="text-sm text-gray-600 dark:text-slate-300">
+                            Esforço percebido: <span className="font-semibold text-gray-800 dark:text-slate-100">{event.patientEffort}%</span>
                           </p>
-                          <p className="text-sm text-gray-600">
+                          <p className="text-sm text-gray-600 dark:text-slate-300">
                             Comentário do paciente: {event.patientComment || 'Sem comentário.'}
                           </p>
-                          <p className="text-sm text-gray-600">
-                            Nota final do profissional: <span className="font-semibold text-gray-800">{event.professionalScore ?? '-'} / {event.maxScore}</span>
+                          <p className="text-sm text-gray-600 dark:text-slate-300">
+                            Nota final do profissional: <span className="font-semibold text-gray-800 dark:text-slate-100">{event.professionalScore ?? '-'} / {event.maxScore}</span>
                           </p>
-                          <div className="bg-white border border-gray-100 rounded-xl p-3 mt-3">
-                            <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1">Anotação de Evolução</p>
-                            <p className="text-sm text-gray-700 whitespace-pre-wrap">{event.evolutionNote || 'Sem anotação técnica registrada.'}</p>
+                          <div className="bg-white dark:bg-slate-800/80 border border-gray-100 dark:border-slate-700 rounded-xl p-3 mt-3 transition-colors">
+                            <p className="text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Anotação de Evolução</p>
+                            <p className="text-sm text-gray-700 dark:text-slate-100 whitespace-pre-wrap">{event.evolutionNote || 'Sem anotação técnica registrada.'}</p>
                           </div>
                         </div>
                       </div>
@@ -4404,61 +4404,61 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
             {!isKidsProfile && (
               <React.Fragment>
-                <div id="new-schedule-card" className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100"> 
-                  <h3 className="font-semibold text-gray-800 text-lg mb-2 tracking-tight">Plano Semanal Adulto</h3> 
-                  <p className="text-xs text-gray-500 font-medium mb-4">
+                <div id="new-schedule-card" className="bg-white dark:bg-[#101b2e] p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 transition-colors"> 
+                  <h3 className="font-semibold text-gray-800 dark:text-slate-100 text-lg mb-2 tracking-tight">Plano Semanal Adulto</h3> 
+                  <p className="text-xs text-gray-500 dark:text-slate-300 font-medium mb-4">
                     Tarefas para execução fora do consultório, sem pontuação em tempo real.
                   </p>
-                  <div className="flex bg-gray-100 p-1 rounded-xl mb-6"> 
-                    <button onClick={() => { setPlanType('task'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'task' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>{!isKidsProfile ? 'Avaliação' : 'Tarefa'}</button> 
-                    <button onClick={() => { setPlanType('intervention'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'intervention' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Intervenção</button> 
-                    <button onClick={() => { setPlanType('reinforcement'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'reinforcement' ? 'bg-white text-[#7551FF] shadow-sm' : 'text-gray-500'}`}>Reforço</button> 
+                  <div className="flex bg-gray-100 dark:bg-slate-900/70 p-1 rounded-xl mb-6 transition-colors"> 
+                    <button onClick={() => { setPlanType('task'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'task' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-violet-200 shadow-sm' : 'text-gray-500 dark:text-slate-300'}`}>{!isKidsProfile ? 'Avaliação' : 'Tarefa'}</button> 
+                    <button onClick={() => { setPlanType('intervention'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'intervention' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-violet-200 shadow-sm' : 'text-gray-500 dark:text-slate-300'}`}>Intervenção</button> 
+                    <button onClick={() => { setPlanType('reinforcement'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'reinforcement' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-violet-200 shadow-sm' : 'text-gray-500 dark:text-slate-300'}`}>Reforço</button> 
                   </div> 
                   <div className="space-y-4"> 
                     {(planType === 'task' || planType === 'intervention') ? ( 
                       <React.Fragment> 
                         <div className="flex items-center justify-between mb-2"> 
-                          <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Modo</span> 
+                          <span className="text-xs font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-wider">Modo</span> 
                           <button onClick={() => setIsCreatingNewTask(!isCreatingNewTask)} className="text-xs font-semibold text-[#7551FF] bg-[#7551FF]/10 px-3 py-1 rounded-full transition-colors hover:bg-[#7551FF]/20">{isCreatingNewTask ? "Selecionar Existente" : "Criar Nova"}</button> 
                         </div> 
                         {isCreatingNewTask ? ( 
-                          <div className={`animate-fade-in space-y-4 p-4 rounded-2xl border ${planType === 'intervention' ? 'bg-green-50/30 border-green-100' : 'bg-[#F4F7FE] border-blue-100'}`}> 
-                            <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Nome da Nova {planType === 'intervention' ? 'Intervenção' : (!isKidsProfile ? 'Avaliação' : 'Tarefa')}</label><input type="text" className="w-full bg-white rounded-xl p-3 text-sm outline-none border border-transparent focus:border-[#7551FF]" placeholder={planType === 'intervention' ? "Ex: Autoestima" : (!isKidsProfile ? "Ex: Avaliação de Autonomia" : "Ex: Arrumar a cama")} value={newTaskName} onChange={e => setNewTaskName(e.target.value)} /></div> 
+                          <div className={`animate-fade-in space-y-4 p-4 rounded-2xl border transition-colors ${planType === 'intervention' ? 'bg-green-50/30 dark:bg-green-500/10 border-green-100 dark:border-green-400/20' : 'bg-[#F4F7FE] dark:bg-slate-900/70 border-blue-100 dark:border-slate-700'}`}> 
+                            <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Nome da Nova {planType === 'intervention' ? 'Intervenção' : (!isKidsProfile ? 'Avaliação' : 'Tarefa')}</label><input type="text" className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-3 text-sm outline-none border border-transparent dark:border-slate-700 focus:border-[#7551FF]" placeholder={planType === 'intervention' ? "Ex: Autoestima" : (!isKidsProfile ? "Ex: Avaliação de Autonomia" : "Ex: Arrumar a cama")} value={newTaskName} onChange={e => setNewTaskName(e.target.value)} /></div> 
                             {planType === 'task' && (
                               <div className="grid grid-cols-1 gap-3 opacity-80 hover:opacity-100 transition-opacity"> 
-                                <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Código/Tag da atividade (opcional)</label><input type="text" className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-transparent focus:border-[#7551FF]" placeholder="Ex: ADL-SEMANA-01" value={newTaskCode} onChange={e => setNewTaskCode(e.target.value)} /></div> 
+                                <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Código/Tag da atividade (opcional)</label><input type="text" className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 focus:border-[#7551FF]" placeholder="Ex: ADL-SEMANA-01" value={newTaskCode} onChange={e => setNewTaskCode(e.target.value)} /></div> 
                               </div> 
                             )}
-                            <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">{planType === 'intervention' ? 'Objetivo / Instruções de Escrita' : 'Objetivo (Base para descrição)'}</label><textarea className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-transparent resize-none" rows={planType === 'intervention' ? 4 : 2} placeholder={planType === 'intervention' ? "Ex: Liste 20 qualidades que você tem..." : "Objetivo da tarefa..."} value={newTaskObjective} onChange={e => setNewTaskObjective(e.target.value)}></textarea></div> 
+                            <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">{planType === 'intervention' ? 'Objetivo / Instruções de Escrita' : 'Objetivo (Base para descrição)'}</label><textarea className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 resize-none" rows={planType === 'intervention' ? 4 : 2} placeholder={planType === 'intervention' ? "Ex: Liste 20 qualidades que você tem..." : "Objetivo da tarefa..."} value={newTaskObjective} onChange={e => setNewTaskObjective(e.target.value)}></textarea></div> 
                             {planType === 'task' && (
                               <>
-                                <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Exemplos</label><textarea className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-transparent resize-none" rows={2} placeholder="Ex: Passo a passo..." value={newTaskExample} onChange={e => setNewTaskExample(e.target.value)}></textarea></div> 
-                                <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Orientação de execução</label><textarea className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-transparent resize-none" rows={2} placeholder="Como o paciente/família deve executar durante a semana..." value={newTaskCriteria} onChange={e => setNewTaskCriteria(e.target.value)}></textarea></div> 
+                                <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Exemplos</label><textarea className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 resize-none" rows={2} placeholder="Ex: Passo a passo..." value={newTaskExample} onChange={e => setNewTaskExample(e.target.value)}></textarea></div> 
+                                <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Orientação de execução</label><textarea className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 resize-none" rows={2} placeholder="Como o paciente/família deve executar durante a semana..." value={newTaskCriteria} onChange={e => setNewTaskCriteria(e.target.value)}></textarea></div> 
                               </>
                             )}
-                            <div><label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Anotações do Profissional</label><textarea className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-transparent resize-none" rows={2} value={newTaskComment || ''} onChange={(e) => setNewTaskComment(e.target.value)} placeholder="Anotações do profissional..."></textarea></div> 
-                            <div className={`pt-2 border-t mt-2 ${planType === 'intervention' ? 'border-green-100' : 'border-blue-100'}`}> 
-                              <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-2">Salvar no Protocolo:</label> 
+                            <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Anotações do Profissional</label><textarea className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 resize-none" rows={2} value={newTaskComment || ''} onChange={(e) => setNewTaskComment(e.target.value)} placeholder="Anotações do profissional..."></textarea></div> 
+                            <div className={`pt-2 border-t mt-2 ${planType === 'intervention' ? 'border-green-100 dark:border-green-400/20' : 'border-blue-100 dark:border-slate-700'}`}> 
+                              <label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-2">Salvar no Protocolo:</label> 
                               <div className="flex gap-2 mb-3"> 
-                                <button onClick={() => setAddToProtocolMode('existing')} className={`flex-1 py-2 text-xs font-semibold rounded-lg border ${addToProtocolMode === 'existing' ? 'bg-white border-[#7551FF] text-[#7551FF]' : 'border-transparent bg-gray-100 text-gray-500'}`}>Existente</button> 
-                                <button onClick={() => setAddToProtocolMode('new')} className={`flex-1 py-2 text-xs font-semibold rounded-lg border ${addToProtocolMode === 'new' ? 'bg-white border-[#7551FF] text-[#7551FF]' : 'border-transparent bg-gray-100 text-gray-500'}`}>Novo</button> 
+                                <button onClick={() => setAddToProtocolMode('existing')} className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors ${addToProtocolMode === 'existing' ? 'bg-white dark:bg-slate-800 border-[#7551FF] text-[#7551FF] dark:text-violet-200' : 'border-transparent bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-300'}`}>Existente</button> 
+                                <button onClick={() => setAddToProtocolMode('new')} className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors ${addToProtocolMode === 'new' ? 'bg-white dark:bg-slate-800 border-[#7551FF] text-[#7551FF] dark:text-violet-200' : 'border-transparent bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-300'}`}>Novo</button> 
                               </div> 
                               {addToProtocolMode === 'existing' ? ( 
                                 <div className="space-y-2"> 
-                                  <select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-xs outline-none" value={targetProtocolId} onChange={e => setTargetProtocolId(e.target.value)}><option value="">Selecione Protocolo...</option>{planProtocolCatalog.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).map((p: any) => <option key={p.id} value={p.id}>{p.title}</option>)}</select> 
-                                  {targetProtocol && (<select className="w-full bg-white border border-gray-200 rounded-xl p-2 text-xs outline-none" value={targetDomainId} onChange={e => setTargetDomainId(e.target.value)}><option value="">Selecione Domínio...</option>{targetProtocol.data.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>)} 
+                                  <select className="w-full bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-100 outline-none" value={targetProtocolId} onChange={e => setTargetProtocolId(e.target.value)}><option value="">Selecione Protocolo...</option>{planProtocolCatalog.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).map((p: any) => <option key={p.id} value={p.id}>{p.title}</option>)}</select> 
+                                  {targetProtocol && (<select className="w-full bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-100 outline-none" value={targetDomainId} onChange={e => setTargetDomainId(e.target.value)}><option value="">Selecione Domínio...</option>{targetProtocol.data.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>)} 
                                 </div> 
                               ) : ( 
                                 <div className="space-y-2"> 
-                                  <input type="text" className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-gray-200" placeholder="Nome do Novo Protocolo" value={newProtocolName} onChange={e => setNewProtocolName(e.target.value)} /> 
-                                  <input type="text" className="w-full bg-white rounded-xl p-2 text-xs outline-none border border-gray-200" placeholder="Nome do Domínio (Categoria)" value={newDomainName} onChange={e => setNewDomainName(e.target.value)} /> 
+                                  <input type="text" className="w-full bg-white dark:bg-slate-800 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-100 outline-none border border-gray-200 dark:border-slate-700" placeholder="Nome do Novo Protocolo" value={newProtocolName} onChange={e => setNewProtocolName(e.target.value)} /> 
+                                  <input type="text" className="w-full bg-white dark:bg-slate-800 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-100 outline-none border border-gray-200 dark:border-slate-700" placeholder="Nome do Domínio (Categoria)" value={newDomainName} onChange={e => setNewDomainName(e.target.value)} /> 
                                 </div> 
                               )} 
                             </div> 
                           </div> 
                         ) : ( 
                           <div className="animate-fade-in space-y-4"> 
-                            <div className="bg-blue-50/50 p-3 rounded-xl border border-blue-100 mb-2"> 
+                            <div className="bg-blue-50/50 dark:bg-slate-900/60 p-3 rounded-xl border border-blue-100 dark:border-slate-700 mb-2 transition-colors"> 
                               <button onClick={() => setIsPlanFilterOpen(!isPlanFilterOpen)} className="w-full flex items-center justify-between text-[#7a32fc] mb-2">
                                 <div className="flex items-center gap-2"><Filter size={14}/><span className="text-[10px] font-semibold uppercase tracking-widest">Filtrar Protocolos</span></div> 
                                 <ChevronDown size={14} className={`transition-transform ${isPlanFilterOpen ? 'rotate-180' : ''}`} />
@@ -4467,22 +4467,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               {isPlanFilterOpen && (
                                 <div className="space-y-2 animate-fade-in">
                                   <div className="grid grid-cols-2 gap-2 mb-2"> 
-                                    <select className="bg-white border border-blue-100 rounded-lg p-1.5 text-xs outline-none font-semibold text-gray-700" value={filterAge} onChange={(e) => setFilterAge(e.target.value)}> 
+                                    <select className="bg-white dark:bg-slate-800 border border-blue-100 dark:border-slate-700 rounded-lg p-1.5 text-xs outline-none font-semibold text-gray-700 dark:text-slate-100" value={filterAge} onChange={(e) => setFilterAge(e.target.value)}> 
                                       <option value="">Faixa Etária (Todas)</option> <option value="child">0 a 12 anos</option> <option value="teen">13 a 18 anos</option> <option value="adult">19 a 59 anos</option> <option value="senior">60 anos ou mais</option> 
                                     </select> 
-                                    <select className="bg-white border border-blue-100 rounded-lg p-1.5 text-xs outline-none font-semibold text-gray-700" value={filterType} onChange={(e) => setFilterType(e.target.value)}> 
+                                    <select className="bg-white dark:bg-slate-800 border border-blue-100 dark:border-slate-700 rounded-lg p-1.5 text-xs outline-none font-semibold text-gray-700 dark:text-slate-100" value={filterType} onChange={(e) => setFilterType(e.target.value)}> 
                                       <option value="">Tipo (Todos)</option> <option value="conventional">Convencional</option> <option value="neurodevelopment">Neurodesenvolvimento</option> <option value="occupational">T. Ocupacional</option> 
                                     </select> 
                                   </div> 
                                   <div className="relative"> 
-                                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" size={12} /> <input type="text" className="w-full bg-white border border-blue-100 rounded-lg p-1.5 pl-7 text-xs outline-none font-semibold text-gray-700" placeholder="Buscar por tema..." value={filterDomain} onChange={(e) => setFilterDomain(e.target.value)} /> 
+                                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 dark:text-slate-400" size={12} /> <input type="text" className="w-full bg-white dark:bg-slate-800 border border-blue-100 dark:border-slate-700 rounded-lg p-1.5 pl-7 text-xs outline-none font-semibold text-gray-700 dark:text-slate-100" placeholder="Buscar por tema..." value={filterDomain} onChange={(e) => setFilterDomain(e.target.value)} /> 
                                   </div> 
                                 </div>
                               )}
                             </div> 
-                            <div><label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Protocolo ({filteredProtocols.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).length})</label>
+                            <div><label className="block text-xs font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-wider mb-1">Protocolo ({filteredProtocols.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).length})</label>
                               <select 
-                                className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" 
+                                className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700 dark:text-slate-100" 
                                 value={selectedProtocolId} 
                                 onChange={e => { setSelectedProtocolId(e.target.value); setSelectedDomainId(''); setSelectedSkillId(''); }}
                               >
@@ -4499,9 +4499,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                             </div> 
                             {selectedProtocolId === 'pei-goals' ? (
                               <div>
-                                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Meta do PEI</label>
+                                <label className="block text-xs font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-wider mb-1">Meta do PEI</label>
                                 <select 
-                                  className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" 
+                                  className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700 dark:text-slate-100" 
                                   value={selectedSkillId} 
                                   onChange={e => {
                                     const goal = patient.pei.find((g: any) => String(g.id) === e.target.value);
@@ -4518,8 +4518,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               </div>
                             ) : (
                               <React.Fragment>
-                                {selectedProtocol && (<div><label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Domínio</label><select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={selectedDomainId} onChange={e => { setSelectedDomainId(e.target.value); setSelectedSkillId(''); }}><option value="">Selecione...</option>{selectedProtocol.data.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>)} 
-                                {selectedDomain && (<div><label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">{planType === 'intervention' ? 'Tarefa de Intervenção' : 'Habilidade / Tarefa'}</label><select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700" value={selectedSkillId} onChange={e => {
+                                {selectedProtocol && (<div><label className="block text-xs font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-wider mb-1">Domínio</label><select className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700 dark:text-slate-100" value={selectedDomainId} onChange={e => { setSelectedDomainId(e.target.value); setSelectedSkillId(''); }}><option value="">Selecione...</option>{selectedProtocol.data.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>)} 
+                                {selectedDomain && (<div><label className="block text-xs font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-wider mb-1">{planType === 'intervention' ? 'Tarefa de Intervenção' : 'Habilidade / Tarefa'}</label><select className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700 dark:text-slate-100" value={selectedSkillId} onChange={e => {
                                   const skill = selectedDomain.skills.find((s: any) => String(s.id) === e.target.value);
                                   setSelectedSkillId(e.target.value);
                                   if (skill) {
@@ -4872,8 +4872,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           </div>
         ) : (
           <div className="space-y-6 animate-fade-in">
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-              <h3 className="font-semibold text-gray-800 text-lg mb-4 flex items-center gap-2 tracking-tight">
+            <div className="bg-white dark:bg-[#101b2e] p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 transition-colors">
+              <h3 className="font-semibold text-gray-800 dark:text-slate-100 text-lg mb-4 flex items-center gap-2 tracking-tight">
                 <UploadCloud className="text-[#7a32fc]" size={20} /> Upload de Documentos
               </h3>
               <div id="file-upload-btn" className="relative group">
@@ -4886,22 +4886,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 />
                 <label 
                   htmlFor="patient-file-upload" 
-                  className={`w-full py-10 border-2 border-dashed rounded-[24px] flex flex-col items-center justify-center cursor-pointer transition-all duration-300 ${isUploadingFile ? 'bg-gray-50 border-gray-200' : 'bg-blue-50/30 border-blue-200 hover:border-[#7a32fc] hover:bg-blue-50'}`}
+                  className={`w-full py-10 border-2 border-dashed rounded-[24px] flex flex-col items-center justify-center cursor-pointer transition-all duration-300 ${isUploadingFile ? 'bg-gray-50 dark:bg-slate-900/60 border-gray-200 dark:border-slate-700' : 'bg-blue-50/30 dark:bg-slate-900/60 border-blue-200 dark:border-slate-700 hover:border-[#7a32fc] hover:bg-blue-50 dark:hover:bg-slate-900'}`}
                 >
                   {isUploadingFile ? (
                     <div className="w-full max-w-[240px] text-center">
-                      <div className="h-2 w-full bg-gray-100 rounded-full mb-3 overflow-hidden">
+                      <div className="h-2 w-full bg-gray-100 dark:bg-slate-800 rounded-full mb-3 overflow-hidden">
                         <div className="h-full bg-[#7a32fc] transition-all duration-200" style={{ width: `${uploadProgress}%` }}></div>
                       </div>
-                      <span className="text-sm font-semibold text-gray-500 animate-pulse">Enviando arquivo... {uploadProgress}%</span>
+                      <span className="text-sm font-semibold text-gray-500 dark:text-slate-300 animate-pulse">Enviando arquivo... {uploadProgress}%</span>
                     </div>
                   ) : (
                     <React.Fragment>
-                      <div className="p-4 bg-blue-100 rounded-full text-[#7a32fc] mb-3 shadow-sm group-hover:rotate-6 transition-transform">
+                      <div className="p-4 bg-blue-100 dark:bg-violet-500/10 rounded-full text-[#7a32fc] dark:text-violet-200 mb-3 shadow-sm group-hover:rotate-6 transition-transform">
                         <FileUp size={32} />
                       </div>
-                      <p className="text-base font-semibold text-gray-700">Clique para selecionar ou arraste arquivos</p>
-                      <p className="text-xs text-gray-400 mt-1 uppercase font-medium">PDF, JPG, PNG, DOCX (Máx. 10MB)</p>
+                      <p className="text-base font-semibold text-gray-700 dark:text-slate-100">Clique para selecionar ou arraste arquivos</p>
+                      <p className="text-xs text-gray-400 dark:text-slate-400 mt-1 uppercase font-medium">PDF, JPG, PNG, DOCX (Máx. 10MB)</p>
                     </React.Fragment>
                   )}
                 </label>
@@ -4909,48 +4909,48 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             </div>
 
             <div className="space-y-3">
-              <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider ml-2 flex items-center gap-2 tracking-widest">
+              <h3 className="text-sm font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-wider ml-2 flex items-center gap-2 tracking-widest">
                 <File size={16} /> Arquivos Salvos ({patientFiles.length})
               </h3>
               {isLoadingFiles ? (
-                <div className="text-center py-10 bg-white/50 rounded-3xl border border-dashed border-gray-200">
-                  <p className="text-sm text-gray-500 font-medium">Carregando arquivos do prontuário...</p>
+                <div className="text-center py-10 bg-white/50 dark:bg-slate-900/60 rounded-3xl border border-dashed border-gray-200 dark:border-slate-700 transition-colors">
+                  <p className="text-sm text-gray-500 dark:text-slate-300 font-medium">Carregando arquivos do prontuário...</p>
                 </div>
               ) : patientFiles.length > 0 ? patientFiles.map((file: any) => (
-                <div key={file.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between group hover:border-blue-100 transition-all animate-slide-up">
+                <div key={file.id} className="bg-white dark:bg-[#101b2e] p-4 rounded-2xl border border-gray-100 dark:border-slate-700 shadow-sm flex items-center justify-between group hover:border-blue-100 dark:hover:border-violet-400/30 transition-all animate-slide-up">
                   <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center text-[#7a32fc]">
+                    <div className="w-12 h-12 bg-gray-50 dark:bg-slate-800 rounded-xl flex items-center justify-center text-[#7a32fc] dark:text-violet-200">
                       {file.type.includes('pdf') ? <FileText size={24} /> : file.type.includes('image') ? <Activity size={24} /> : <File size={24} />}
                     </div>
                     <div>
-                      <p className="font-semibold text-gray-800 text-sm truncate max-w-[200px] tracking-tight">{file.name}</p>
-                      <p className="text-[10px] text-gray-400 font-semibold uppercase">{file.size} • {file.date}</p>
+                      <p className="font-semibold text-gray-800 dark:text-slate-100 text-sm truncate max-w-[200px] tracking-tight">{file.name}</p>
+                      <p className="text-[10px] text-gray-400 dark:text-slate-400 font-semibold uppercase">{file.size} • {file.date}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <button
                       title="Visualizar"
                       onClick={() => setPreviewFile(file)}
-                      className="p-2.5 text-gray-400 hover:text-[#7a32fc] hover:bg-blue-50 rounded-xl transition-all"
+                      className="p-2.5 text-gray-400 dark:text-slate-400 hover:text-[#7a32fc] dark:hover:text-violet-200 hover:bg-blue-50 dark:hover:bg-slate-800 rounded-xl transition-all"
                     >
                       <Eye size={18} />
                     </button>
                     <button
                       title="Download"
                       onClick={() => handleDownloadPatientFile(file)}
-                      className="p-2.5 text-gray-400 hover:text-[#7a32fc] hover:bg-blue-50 rounded-xl transition-all"
+                      className="p-2.5 text-gray-400 dark:text-slate-400 hover:text-[#7a32fc] dark:hover:text-violet-200 hover:bg-blue-50 dark:hover:bg-slate-800 rounded-xl transition-all"
                     >
                       <Download size={18} />
                     </button>
-                    <button onClick={() => removeFile(file.id)} title="Excluir" className="p-2.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all">
+                    <button onClick={() => removeFile(file.id)} title="Excluir" className="p-2.5 text-gray-400 dark:text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-xl transition-all">
                       <Trash2 size={18} />
                     </button>
                   </div>
                 </div>
               )) : (
-                <div className="text-center py-10 bg-white/50 rounded-3xl border border-dashed border-gray-200">
-                  <FileText size={40} className="mx-auto mb-2 text-gray-300 opacity-50" />
-                  <p className="text-sm text-gray-400 font-medium italic">Nenhum arquivo anexado a este prontuário.</p>
+                <div className="text-center py-10 bg-white/50 dark:bg-slate-900/60 rounded-3xl border border-dashed border-gray-200 dark:border-slate-700 transition-colors">
+                  <FileText size={40} className="mx-auto mb-2 text-gray-300 dark:text-slate-600 opacity-50" />
+                  <p className="text-sm text-gray-400 dark:text-slate-400 font-medium italic">Nenhum arquivo anexado a este prontuário.</p>
                 </div>
               )}
             </div>
