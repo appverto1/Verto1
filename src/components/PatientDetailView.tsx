@@ -3321,23 +3321,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-4"> 
           <div className="flex items-center gap-4"> 
             {!hideBackButton && (
-              <button id="back-btn" onClick={onBack} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl transition-all border border-slate-100 dark:border-slate-700 text-slate-400 dark:text-slate-300 hover:text-[#7a32fc] group">
+              <button id="back-btn" onClick={onBack} className={`flex items-center gap-2 px-3 py-2 rounded-xl transition-all border hover:text-[#7a32fc] group ${isPanelDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-100 text-slate-400 hover:bg-slate-50'}`}>
                 <ChevronLeft size={20} className="group-hover:-translate-x-0.5 transition-transform" />
                 <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">Painel</span>
               </button>
             )}
             <div id="patient-header-info">
                 <div className="flex items-center gap-2">
-                    <h1 className="text-2xl font-semibold text-gray-800 dark:text-slate-50 tracking-tight">{patient.name}</h1>
+                    <h1 className={`text-2xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{patient.name}</h1>
                 </div>
-                <p className="text-gray-500 dark:text-slate-300 text-xs">Detalhes do Paciente</p>
+                <p className={`text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Detalhes do Paciente</p>
                 {canManageTherapistAssignment && (
                   <div className="mt-2 flex items-center gap-2">
-                    <label className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-400">
+                    <label className={`text-[10px] font-semibold uppercase tracking-wide ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
                       Terapeuta Responsável
                     </label>
                     <select
-                      className="min-w-[220px] bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs font-semibold text-gray-700 dark:text-slate-100 outline-none focus:border-[#7551FF]"
+                      className={`min-w-[220px] rounded-lg px-3 py-1.5 text-xs font-semibold outline-none focus:border-[#7551FF] border ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`}
                       value={selectedTherapistId}
                       onChange={(e) => handleTherapistAssignmentChange(e.target.value)}
                       disabled={isLoadingTherapists}
@@ -3364,7 +3364,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               <MessageCircle size={16} /> WhatsApp
             </a>
             {canOpenAnamnesis && (
-              <button id="anamnesis-btn" onClick={() => setShowAnamnesis(true)} className="flex-1 sm:flex-none bg-[#F4F7FE] dark:bg-violet-500/10 text-[#7a32fc] dark:text-violet-200 px-4 py-2.5 rounded-xl text-xs font-semibold hover:bg-[#7a32fc]/10 transition-colors flex items-center justify-center gap-2 border border-blue-100 dark:border-violet-400/30"> 
+              <button id="anamnesis-btn" onClick={() => setShowAnamnesis(true)} className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2 border ${isPanelDark ? 'bg-violet-500/10 text-violet-200 border-violet-400/30 hover:bg-violet-500/20' : 'bg-[#F4F7FE] text-[#7a32fc] border-blue-100 hover:bg-[#7a32fc]/10'}`}> 
                 <FileText size={16} /> Ficha Anamnese 
               </button>
             )}
@@ -3428,18 +3428,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             )}
             {!isKidsProfile && (
               <div className="space-y-4 mb-6">
-                <div className="bg-white dark:bg-[#101b2e] border border-gray-100 dark:border-slate-700 rounded-3xl p-5 shadow-sm transition-colors">
-                  <p className="text-sm font-semibold text-gray-700 dark:text-slate-100">Histórico Adulto</p>
-                  <p className="text-xs text-gray-500 dark:text-slate-300 mt-1">
+                <div className={`border rounded-3xl p-5 shadow-sm transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
+                  <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Histórico Adulto</p>
+                  <p className={`text-xs mt-1 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
                     Comparativo por domínio do protocolo, entre duas datas selecionadas.
                   </p>
                 </div>
-                <div className="bg-white dark:bg-[#101b2e] border border-gray-100 dark:border-slate-700 rounded-3xl p-4 sm:p-5 shadow-sm space-y-4 transition-colors">
+                <div className={`border rounded-3xl p-4 sm:p-5 shadow-sm space-y-4 transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <div>
-                      <label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1.5 ml-1">Protocolo</label>
+                      <label className={`block text-[10px] font-semibold uppercase mb-1.5 ml-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Protocolo</label>
                       <select
-                        className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-3 text-sm font-semibold text-gray-700 dark:text-slate-100 outline-none focus:border-[#4318FF]"
+                        className={`w-full border rounded-xl p-3 text-sm font-semibold outline-none focus:border-[#4318FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`}
                         value={selectedChartProtocolId}
                         onChange={(e) => { setHasUserChangedChartProtocol(true); setSelectedChartProtocolId(e.target.value); }}
                       >
@@ -3449,9 +3449,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1.5 ml-1">Data Base</label>
+                      <label className={`block text-[10px] font-semibold uppercase mb-1.5 ml-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Data Base</label>
                       <select
-                        className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-3 text-sm font-semibold text-gray-700 dark:text-slate-100 outline-none focus:border-[#4318FF]"
+                        className={`w-full border rounded-xl p-3 text-sm font-semibold outline-none focus:border-[#4318FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`}
                         value={comparisonDate1}
                         onChange={(e) => setComparisonDate1(e.target.value)}
                       >
@@ -3462,9 +3462,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1.5 ml-1">Data Comparação</label>
+                      <label className={`block text-[10px] font-semibold uppercase mb-1.5 ml-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Data Comparação</label>
                       <select
-                        className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-3 text-sm font-semibold text-gray-700 dark:text-slate-100 outline-none focus:border-[#4318FF]"
+                        className={`w-full border rounded-xl p-3 text-sm font-semibold outline-none focus:border-[#4318FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`}
                         value={comparisonDate2}
                         onChange={(e) => setComparisonDate2(e.target.value)}
                       >
@@ -3475,7 +3475,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       </select>
                     </div>
                   </div>
-                  <div className="min-h-0 min-w-0">
+                  <div className={`min-h-0 min-w-0 rounded-3xl ${isPanelDark ? 'bg-slate-900/30' : 'bg-white'}`}>
                     <ComparisonBarChart
                       data={adultDomainComparisonData}
                       title={`Comparativo por Domínio (${selectedChartProtocol?.title || 'Protocolo'})`}
@@ -3486,44 +3486,44 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </div>
             )}
             {!isKidsProfile && (
-              <div className="bg-white dark:bg-[#101b2e] border border-gray-100 dark:border-slate-700 p-5 rounded-3xl shadow-sm transition-colors">
+              <div className={`border p-5 rounded-3xl shadow-sm transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-semibold text-gray-800 dark:text-slate-100 tracking-tight">Próximas Atividades Agendadas</h3>
-                  <span className="text-[10px] font-semibold text-[#7a32fc] dark:text-violet-200 bg-indigo-50 dark:bg-violet-500/10 border border-indigo-100 dark:border-violet-400/30 px-2.5 py-1 rounded-full uppercase tracking-wide">
+                  <h3 className={`text-sm font-semibold tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Próximas Atividades Agendadas</h3>
+                  <span className={`text-[10px] font-semibold px-2.5 py-1 rounded-full uppercase tracking-wide border ${isPanelDark ? 'text-violet-200 bg-violet-500/10 border-violet-400/30' : 'text-[#7a32fc] bg-indigo-50 border-indigo-100'}`}>
                     Painel Profissional
                   </span>
                 </div>
                 {adultScheduledTasks.length > 0 ? (
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                     {adultScheduledTasks.map((task: any) => (
-                      <div key={`adult-home-${task.id}`} className="rounded-2xl border border-gray-100 dark:border-slate-700 bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-[#16243b] px-4 py-3 shadow-sm transition-colors">
+                      <div key={`adult-home-${task.id}`} className={`rounded-2xl border px-4 py-3 shadow-sm transition-colors ${isPanelDark ? 'border-slate-700 bg-[#14233a]' : 'border-slate-200 bg-slate-50'}`}>
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <p className="text-sm font-semibold text-gray-800 dark:text-slate-100">{task.title}</p>
-                            {task.description ? <p className="text-xs text-gray-500 dark:text-slate-300 mt-1 line-clamp-2">{task.description}</p> : null}
+                            <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{task.title}</p>
+                            {task.description ? <p className={`text-xs mt-1 line-clamp-2 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{task.description}</p> : null}
                           </div>
                           <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase ${task.type === 'reinforcement' ? 'bg-yellow-100 text-yellow-700' : task.type === 'intervention' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
                             {task.type === 'reinforcement' ? 'Reforço' : task.type === 'intervention' ? 'Intervenção' : 'Avaliação'}
                           </span>
                         </div>
-                        <p className="text-[11px] text-gray-500 dark:text-slate-300 mt-2">
+                        <p className={`text-[11px] mt-2 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
                           {task.eventDate.toLocaleDateString('pt-BR')} às {task.eventDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                         </p>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-400 dark:text-slate-400 italic">Nenhuma atividade de casa cadastrada no momento.</p>
+                  <p className={`text-sm italic ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Nenhuma atividade de casa cadastrada no momento.</p>
                 )}
               </div>
             )}
             {!isKidsProfile && (
-              <div className="bg-white dark:bg-[#101b2e] border border-gray-100 dark:border-slate-700 p-5 rounded-3xl shadow-sm transition-colors">
-                <h3 className="text-sm font-semibold text-gray-800 dark:text-slate-100 tracking-tight mb-4">Histórico Adulto (Auditoria Clínica)</h3>
+              <div className={`border p-5 rounded-3xl shadow-sm transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
+                <h3 className={`text-sm font-semibold tracking-tight mb-4 ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Histórico Adulto (Auditoria Clínica)</h3>
                 {adultCompletedTasks.length === 0 ? (
-                  <p className="text-sm text-gray-400 dark:text-slate-400 italic">Sem eventos concluídos para exibir no histórico adulto.</p>
+                  <p className={`text-sm italic ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Sem eventos concluídos para exibir no histórico adulto.</p>
                 ) : (
-                  <div className="relative pl-8 border-l-2 border-indigo-100 dark:border-indigo-400/30 ml-2 space-y-4">
+                  <div className={`relative pl-8 border-l-2 ml-2 space-y-4 ${isPanelDark ? 'border-indigo-400/30' : 'border-indigo-100'}`}>
                     {adultCompletedTasks.map((event: any) => {
                       const reviewKey = String(event.id);
                       const draft = assignedReviewDrafts[reviewKey] || { score: '', note: '' };
@@ -3532,29 +3532,29 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       const reviewContext = resolveAssignedTaskEvaluationContext(event);
                       return (
                         <div key={`adult-history-${event.id}`} className="relative">
-                          <div className="absolute -left-[39px] top-5 w-5 h-5 rounded-full bg-[#7551FF] border-4 border-white dark:border-[#101b2e] ring-2 ring-indigo-100 dark:ring-indigo-400/30"></div>
-                          <div className="bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-[#16243b] border border-gray-100 dark:border-slate-700 rounded-2xl p-5 space-y-2 shadow-sm transition-colors">
+                          <div className={`absolute -left-[39px] top-5 w-5 h-5 rounded-full bg-[#7551FF] border-4 ring-2 ${isPanelDark ? 'border-[#101b2e] ring-indigo-400/30' : 'border-white ring-indigo-100'}`}></div>
+                          <div className={`border rounded-2xl p-5 space-y-2 shadow-sm transition-colors ${isPanelDark ? 'bg-[#14233a] border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
                             <div className="flex flex-wrap items-center justify-between gap-2">
-                              <p className="text-lg font-semibold text-gray-800 dark:text-slate-100 tracking-tight">{event.taskTitle}</p>
+                              <p className={`text-lg font-semibold tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{event.taskTitle}</p>
                               <span className="text-[10px] font-semibold bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-full uppercase tracking-wide">
                                 {event.taskType === 'intervention' ? 'Intervenção' : event.taskType === 'reinforcement' ? 'Reforço' : 'Avaliação'}
                               </span>
                             </div>
-                            <p className="text-sm text-gray-500 dark:text-slate-300">
+                            <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
                               Execução: {event.eventDate.toLocaleDateString('pt-BR')} às {event.eventDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                             </p>
-                            <p className="text-sm text-gray-600 dark:text-slate-300">
-                              Esforço percebido: <span className="font-semibold text-gray-800 dark:text-slate-100">{event.patientEffort}%</span>
+                            <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                              Esforço percebido: <span className={`font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{event.patientEffort}%</span>
                             </p>
-                            <p className="text-sm text-gray-600 dark:text-slate-300">
+                            <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
                               Comentário do paciente: {event.patientComment || 'Sem comentário.'}
                             </p>
-                            <p className="text-sm text-gray-600 dark:text-slate-300">
-                              Nota final do profissional: <span className="font-semibold text-gray-800 dark:text-slate-100">{event.professionalScore ?? '-'} / {event.maxScore}</span>
+                            <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                              Nota final do profissional: <span className={`font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{event.professionalScore ?? '-'} / {event.maxScore}</span>
                             </p>
-                            <div className="bg-white dark:bg-slate-800/80 border border-gray-100 dark:border-slate-700 rounded-xl p-3 mt-3 transition-colors">
-                              <p className="text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Anotação de Evolução</p>
-                              <p className="text-sm text-gray-700 dark:text-slate-100 whitespace-pre-wrap">{event.evolutionNote || 'Sem anotação técnica registrada.'}</p>
+                            <div className={`border rounded-xl p-3 mt-3 transition-colors ${isPanelDark ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'}`}>
+                              <p className={`text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Anotação de Evolução</p>
+                              <p className={`text-sm whitespace-pre-wrap ${isPanelDark ? 'text-slate-100' : 'text-slate-700'}`}>{event.evolutionNote || 'Sem anotação técnica registrada.'}</p>
                             </div>
                             {isReviewable && event.professionalScore === null && (
                               <div className="bg-white dark:bg-slate-800/80 border border-orange-100 dark:border-orange-400/20 rounded-xl p-3 mt-3 space-y-3 transition-colors">
@@ -4384,21 +4384,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
             {!isKidsProfile && (
               <React.Fragment>
-                <div id="new-schedule-card" className="bg-white dark:bg-[#101b2e] p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 transition-colors"> 
-                  <h3 className="font-semibold text-gray-800 dark:text-slate-100 text-lg mb-2 tracking-tight">Plano Semanal Adulto</h3> 
-                  <p className="text-xs text-gray-500 dark:text-slate-300 font-medium mb-4">
+                <div id="new-schedule-card" className={`p-6 rounded-3xl shadow-sm border transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}> 
+                  <h3 className={`font-semibold text-lg mb-2 tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Plano Semanal Adulto</h3> 
+                  <p className={`text-xs font-medium mb-4 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
                     Tarefas para execução fora do consultório, sem pontuação em tempo real.
                   </p>
-                  <div className="flex bg-gray-100 dark:bg-slate-900/70 p-1 rounded-xl mb-6 transition-colors"> 
-                    <button onClick={() => { setPlanType('task'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'task' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-violet-200 shadow-sm' : 'text-gray-500 dark:text-slate-300'}`}>{!isKidsProfile ? 'Avaliação' : 'Tarefa'}</button> 
-                    <button onClick={() => { setPlanType('intervention'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'intervention' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-violet-200 shadow-sm' : 'text-gray-500 dark:text-slate-300'}`}>Intervenção</button> 
-                    <button onClick={() => { setPlanType('reinforcement'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'reinforcement' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-violet-200 shadow-sm' : 'text-gray-500 dark:text-slate-300'}`}>Reforço</button> 
+                  <div className={`flex p-1 rounded-xl mb-6 transition-colors ${isPanelDark ? 'bg-slate-900/70' : 'bg-slate-100'}`}> 
+                    <button onClick={() => { setPlanType('task'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'task' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>{!isKidsProfile ? 'Avaliação' : 'Tarefa'}</button> 
+                    <button onClick={() => { setPlanType('intervention'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'intervention' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>Intervenção</button> 
+                    <button onClick={() => { setPlanType('reinforcement'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'reinforcement' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>Reforço</button> 
                   </div> 
                   <div className="space-y-4"> 
                     {(planType === 'task' || planType === 'intervention') ? ( 
                       <React.Fragment> 
                         <div className="flex items-center justify-between mb-2"> 
-                          <span className="text-xs font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-wider">Modo</span> 
+                          <span className={`text-xs font-semibold uppercase tracking-wider ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Modo</span> 
                           <button onClick={() => setIsCreatingNewTask(!isCreatingNewTask)} className="text-xs font-semibold text-[#7551FF] bg-[#7551FF]/10 px-3 py-1 rounded-full transition-colors hover:bg-[#7551FF]/20">{isCreatingNewTask ? "Selecionar Existente" : "Criar Nova"}</button> 
                         </div> 
                         {isCreatingNewTask ? ( 
@@ -4438,7 +4438,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                           </div> 
                         ) : ( 
                           <div className="animate-fade-in space-y-4"> 
-                            <div className="bg-blue-50/50 dark:bg-slate-900/60 p-3 rounded-xl border border-blue-100 dark:border-slate-700 mb-2 transition-colors"> 
+                            <div className={`p-3 rounded-xl border mb-2 transition-colors ${isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-blue-50/50 border-blue-100'}`}> 
                               <button onClick={() => setIsPlanFilterOpen(!isPlanFilterOpen)} className="w-full flex items-center justify-between text-[#7a32fc] mb-2">
                                 <div className="flex items-center gap-2"><Filter size={14}/><span className="text-[10px] font-semibold uppercase tracking-widest">Filtrar Protocolos</span></div> 
                                 <ChevronDown size={14} className={`transition-transform ${isPlanFilterOpen ? 'rotate-180' : ''}`} />
@@ -4447,22 +4447,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               {isPlanFilterOpen && (
                                 <div className="space-y-2 animate-fade-in">
                                   <div className="grid grid-cols-2 gap-2 mb-2"> 
-                                    <select className="bg-white dark:bg-slate-800 border border-blue-100 dark:border-slate-700 rounded-lg p-1.5 text-xs outline-none font-semibold text-gray-700 dark:text-slate-100" value={filterAge} onChange={(e) => setFilterAge(e.target.value)}> 
+                                    <select className={`border rounded-lg p-1.5 text-xs outline-none font-semibold ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-blue-100 text-slate-700'}`} value={filterAge} onChange={(e) => setFilterAge(e.target.value)}> 
                                       <option value="">Faixa Etária (Todas)</option> <option value="child">0 a 12 anos</option> <option value="teen">13 a 18 anos</option> <option value="adult">19 a 59 anos</option> <option value="senior">60 anos ou mais</option> 
                                     </select> 
-                                    <select className="bg-white dark:bg-slate-800 border border-blue-100 dark:border-slate-700 rounded-lg p-1.5 text-xs outline-none font-semibold text-gray-700 dark:text-slate-100" value={filterType} onChange={(e) => setFilterType(e.target.value)}> 
+                                    <select className={`border rounded-lg p-1.5 text-xs outline-none font-semibold ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-blue-100 text-slate-700'}`} value={filterType} onChange={(e) => setFilterType(e.target.value)}> 
                                       <option value="">Tipo (Todos)</option> <option value="conventional">Convencional</option> <option value="neurodevelopment">Neurodesenvolvimento</option> <option value="occupational">T. Ocupacional</option> 
                                     </select> 
                                   </div> 
                                   <div className="relative"> 
-                                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 dark:text-slate-400" size={12} /> <input type="text" className="w-full bg-white dark:bg-slate-800 border border-blue-100 dark:border-slate-700 rounded-lg p-1.5 pl-7 text-xs outline-none font-semibold text-gray-700 dark:text-slate-100" placeholder="Buscar por tema..." value={filterDomain} onChange={(e) => setFilterDomain(e.target.value)} /> 
+                                    <Search className={`absolute left-2 top-1/2 -translate-y-1/2 ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`} size={12} /> <input type="text" className={`w-full border rounded-lg p-1.5 pl-7 text-xs outline-none font-semibold ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-blue-100 text-slate-700'}`} placeholder="Buscar por tema..." value={filterDomain} onChange={(e) => setFilterDomain(e.target.value)} /> 
                                   </div> 
                                 </div>
                               )}
                             </div> 
-                            <div><label className="block text-xs font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-wider mb-1">Protocolo ({filteredProtocols.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).length})</label>
+                            <div><label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Protocolo ({filteredProtocols.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).length})</label>
                               <select 
-                                className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700 dark:text-slate-100" 
+                                className={`w-full border rounded-xl p-3 text-sm outline-none font-semibold ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`} 
                                 value={selectedProtocolId} 
                                 onChange={e => { setSelectedProtocolId(e.target.value); setSelectedDomainId(''); setSelectedSkillId(''); }}
                               >
@@ -4479,9 +4479,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                             </div> 
                             {selectedProtocolId === 'pei-goals' ? (
                               <div>
-                                <label className="block text-xs font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-wider mb-1">Meta do PEI</label>
+                                <label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Meta do PEI</label>
                                 <select 
-                                  className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700 dark:text-slate-100" 
+                                  className={`w-full border rounded-xl p-3 text-sm outline-none font-semibold ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`} 
                                   value={selectedSkillId} 
                                   onChange={e => {
                                     const goal = patient.pei.find((g: any) => String(g.id) === e.target.value);
@@ -4498,8 +4498,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               </div>
                             ) : (
                               <React.Fragment>
-                                {selectedProtocol && (<div><label className="block text-xs font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-wider mb-1">Domínio</label><select className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700 dark:text-slate-100" value={selectedDomainId} onChange={e => { setSelectedDomainId(e.target.value); setSelectedSkillId(''); }}><option value="">Selecione...</option>{selectedProtocol.data.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>)} 
-                                {selectedDomain && (<div><label className="block text-xs font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-wider mb-1">{planType === 'intervention' ? 'Tarefa de Intervenção' : 'Habilidade / Tarefa'}</label><select className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700 dark:text-slate-100" value={selectedSkillId} onChange={e => {
+                                {selectedProtocol && (<div><label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Domínio</label><select className={`w-full border rounded-xl p-3 text-sm outline-none font-semibold ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`} value={selectedDomainId} onChange={e => { setSelectedDomainId(e.target.value); setSelectedSkillId(''); }}><option value="">Selecione...</option>{selectedProtocol.data.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>)} 
+                                {selectedDomain && (<div><label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{planType === 'intervention' ? 'Tarefa de Intervenção' : 'Habilidade / Tarefa'}</label><select className={`w-full border rounded-xl p-3 text-sm outline-none font-semibold ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`} value={selectedSkillId} onChange={e => {
                                   const skill = selectedDomain.skills.find((s: any) => String(s.id) === e.target.value);
                                   setSelectedSkillId(e.target.value);
                                   if (skill) {
@@ -4536,9 +4536,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                         {planType === 'task' && !isKidsProfile && (
                           <div className="mt-4 space-y-4">
                             <div>
-                              <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Vincular Protocolo de Intervenção</label>
+                              <label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Vincular Protocolo de Intervenção</label>
                               <select 
-                                className="w-full bg-white border border-gray-200 rounded-xl p-3 text-xs font-semibold text-gray-700 outline-none focus:border-[#7551FF] transition-all" 
+                                className={`w-full border rounded-xl p-3 text-xs font-semibold outline-none focus:border-[#7551FF] transition-all ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-gray-200 text-gray-700'}`} 
                                 value={linkedInterventionProtocolId} 
                                 onChange={(e) => setLinkedInterventionProtocolId(e.target.value)}
                               >
@@ -4547,16 +4547,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                   <option key={p.id} value={p.id}>{p.title}</option>
                                 ))}
                               </select>
-                              <p className="text-[9px] text-gray-400 mt-1 font-medium italic">* Define qual protocolo será sugerido para intervenção após esta avaliação.</p>
+                              <p className={`text-[9px] mt-1 font-medium italic ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>* Define qual protocolo será sugerido para intervenção após esta avaliação.</p>
                             </div>
                           </div>
                         )}
                         {planType === 'intervention' && (
                           <div className="space-y-4">
                             <div>
-                              <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Vincular a Habilidade de Avaliação</label>
+                              <label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Vincular a Habilidade de Avaliação</label>
                               <select 
-                                className="w-full bg-white border border-gray-200 rounded-xl p-3 text-xs font-semibold text-gray-700 outline-none focus:border-[#7551FF] transition-all" 
+                                className={`w-full border rounded-xl p-3 text-xs font-semibold outline-none focus:border-[#7551FF] transition-all ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-gray-200 text-gray-700'}`} 
                                 value={linkedTask} 
                                 onChange={(e) => {
                                   const val = e.target.value;
@@ -4584,10 +4584,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                 </p>
                               )}
                             </div>
-                            <div className="bg-green-50/50 p-4 rounded-2xl border border-green-100 flex items-center justify-between">
+                            <div className={`p-4 rounded-2xl border flex items-center justify-between ${isPanelDark ? 'bg-green-500/10 border-green-400/20' : 'bg-green-50/50 border-green-100'}`}>
                               <div>
-                                <p className="text-xs font-semibold text-gray-700">Lembrete Diário</p>
-                                <p className="text-[10px] text-gray-500">Notificar o paciente para ler esta tarefa todos os dias.</p>
+                                <p className={`text-xs font-semibold ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>Lembrete Diário</p>
+                                <p className={`text-[10px] ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Notificar o paciente para ler esta tarefa todos os dias.</p>
                               </div>
                               <button 
                                 onClick={() => setIsDailyReminder(!isDailyReminder)}
@@ -4599,18 +4599,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                           </div>
                         )}
                         <div className="grid grid-cols-2 gap-4 mt-2"> 
-                          <div><label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Data</label><input type="date" className="w-full bg-white border border-gray-200 rounded-xl p-3 text-sm outline-none" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} /></div> 
-                          <div><label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Hora</label><input type="time" className="w-full bg-white border border-gray-200 rounded-xl p-3 text-sm outline-none" value={scheduleTime} onChange={e => setScheduleTime(e.target.value)} /></div> 
+                          <div><label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Data</label><input type="date" className={`w-full border rounded-xl p-3 text-sm outline-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-gray-200 text-slate-800'}`} value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} /></div> 
+                          <div><label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Hora</label><input type="time" className={`w-full border rounded-xl p-3 text-sm outline-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-gray-200 text-slate-800'}`} value={scheduleTime} onChange={e => setScheduleTime(e.target.value)} /></div> 
                         </div> 
                         <button onClick={handleSchedule} disabled={!isFormValid()} className={`w-full font-semibold py-3 rounded-xl shadow-lg transition-opacity mt-4 ${isFormValid() ? 'bg-[#7551FF] text-white hover:opacity-90' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>Confirmar Agendamento</button> 
                       </React.Fragment> 
                     ) : ( 
                       <div> 
-                        <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Mensagem de Reforço</label> 
-                        <textarea className="w-full h-24 bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none resize-none" placeholder="Ex: Parabéns pela dedicação hoje!" value={message} onChange={e => setMessage(e.target.value)}></textarea> 
+                        <label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Mensagem de Reforço</label> 
+                        <textarea className={`w-full h-24 border rounded-xl p-3 text-sm outline-none resize-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-gray-50 border-gray-200 text-slate-800'}`} placeholder="Ex: Parabéns pela dedicação hoje!" value={message} onChange={e => setMessage(e.target.value)}></textarea> 
                         <div className="grid grid-cols-2 gap-4 mt-2"> 
-                          <div><label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Data</label><input type="date" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} /></div> 
-                          <div><label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Hora</label><input type="time" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none" value={scheduleTime} onChange={e => setScheduleTime(e.target.value)} /></div> 
+                          <div><label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Data</label><input type="date" className={`w-full border rounded-xl p-3 text-sm outline-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-gray-50 border-gray-200 text-slate-800'}`} value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} /></div> 
+                          <div><label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Hora</label><input type="time" className={`w-full border rounded-xl p-3 text-sm outline-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-gray-50 border-gray-200 text-slate-800'}`} value={scheduleTime} onChange={e => setScheduleTime(e.target.value)} /></div> 
                         </div> 
                         <button onClick={handleSchedule} disabled={!isFormValid()} className={`w-full font-semibold py-3 rounded-xl shadow-lg transition-opacity mt-4 ${isFormValid() ? 'bg-[#7551FF] text-white hover:opacity-90' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>Confirmar Agendamento</button> 
                       </div> 
@@ -4618,17 +4618,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   </div> 
                 </div> 
                 <div className="space-y-3"> 
-                  <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider ml-2 tracking-widest">Agendados</h3> 
+                  <h3 className={`text-sm font-semibold uppercase tracking-wider ml-2 tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Agendados</h3> 
                   {((isKidsProfile ? (patientTasks || []) : adultScheduledTasks).length || 0) > 0 ? ((isKidsProfile ? (patientTasks || []) : adultScheduledTasks).map((task: any) => ( 
-                    <div key={task.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between"> 
+                    <div key={task.id} className={`p-4 rounded-2xl border shadow-sm flex items-center justify-between ${isPanelDark ? 'bg-[#14233a] border-slate-700' : 'bg-white border-gray-100'}`}> 
                       <div className="flex items-center gap-3"> 
                         <span className="text-xl">{task.type === 'reinforcement' ? '🌟' : task.type === 'intervention' ? '✍️' : '📋'}</span> 
-                        <div><p className="font-semibold text-gray-800 text-sm tracking-tight">{task.title}</p><p className="text-xs text-gray-500">{new Date(task.scheduledAt).toLocaleDateString('pt-BR')} • {new Date(task.scheduledAt).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</p></div> 
+                        <div><p className={`font-semibold text-sm tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-gray-800'}`}>{task.title}</p><p className={`text-xs ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>{new Date(task.scheduledAt).toLocaleDateString('pt-BR')} • {new Date(task.scheduledAt).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</p></div> 
                       </div> 
                       <div className="flex items-center gap-2"> 
                         <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase ${task.type === 'reinforcement' ? 'bg-yellow-100 text-yellow-600' : task.type === 'intervention' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>{task.type === 'reinforcement' ? 'Reforço' : task.type === 'intervention' ? 'Intervenção' : (!isKidsProfile ? 'Avaliação' : 'Tarefa')}</span> 
                         {task.source !== 'server' && (
-                          <button onClick={() => setEditingTask(task)} className="p-2 text-gray-400 hover:text-[#7551FF] hover:bg-gray-100 rounded-lg transition-colors"> <Edit size={16} /> </button>
+                          <button onClick={() => setEditingTask(task)} className={`p-2 rounded-lg transition-colors hover:text-[#7551FF] ${isPanelDark ? 'text-slate-400 hover:bg-slate-800' : 'text-gray-400 hover:bg-gray-100'}`}> <Edit size={16} /> </button>
                         )}
                       </div> 
                     </div> 
