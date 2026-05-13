@@ -475,6 +475,47 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
     if (!domainTasks.length) return scoredClinicalEvents;
 
+    const activeProtocolId = String(activeKidsProtocol?.id || '').trim();
+    const activeProtocolTitle = normalizeClinicalKey(activeKidsProtocol?.title || activeKidsProtocol?.name || '');
+
+    const extractEventProtocolRef = (event: any) => {
+      const taskData = event?.task_data && typeof event.task_data === 'object' ? event.task_data : {};
+      const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+      return {
+        id: String(
+          event?.protocol_id ||
+            event?.protocolId ||
+            taskData?.protocol_id ||
+            taskData?.protocolId ||
+            metadata?.protocol_id ||
+            metadata?.protocolId ||
+            ''
+        ).trim(),
+        title: normalizeClinicalKey(
+          event?.protocolTitle ||
+            event?.protocol_name ||
+            taskData?.protocolTitle ||
+            taskData?.protocol_name ||
+            metadata?.protocolTitle ||
+            metadata?.protocol_name ||
+            metadata?.canonicalName ||
+            ''
+        )
+      };
+    };
+
+    const eventsWithExplicitProtocol = scoredClinicalEvents.filter((event: any) => {
+      const ref = extractEventProtocolRef(event);
+      return Boolean(ref.id || ref.title);
+    });
+
+    if (eventsWithExplicitProtocol.length) {
+      return eventsWithExplicitProtocol.filter((event: any) => {
+        const ref = extractEventProtocolRef(event);
+        return (activeProtocolId && ref.id === activeProtocolId) || (activeProtocolTitle && ref.title === activeProtocolTitle);
+      });
+    }
+
     return scoredClinicalEvents.filter((event: any) => {
       const eventTitle = String(event?.title || event?.taskTitle || event?.task_data?.title || '').trim();
       const eventDomain = String(event?.domain || event?.domainName || event?.task_data?.domain || event?.task_data?.domainName || '').trim();
