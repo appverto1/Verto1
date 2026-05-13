@@ -1292,6 +1292,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   }, [history, patient.id]);
 
   const patientCategory = useMemo(() => (isKidsProfile ? 'Criança' : 'Adulto'), [isKidsProfile]);
+  const normalizeClinicalTaskKey = (value: any) =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+
+  const isSameClinicalTask = (a: any, b: any) => {
+    const left = normalizeClinicalTaskKey(a);
+    const right = normalizeClinicalTaskKey(b);
+    if (!left || !right) return false;
+    return left === right || left.includes(right) || right.includes(left);
+  };
 
   const evaluationSkills = useMemo(() => {
     const skills: any[] = [];
@@ -2484,6 +2499,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         const saved = (await onAddTask(taskPayload)) !== false;
         if (!saved) return;
       } else {
+        const selectedProtocolCategory = String(selectedProtocol?.category || (planType === 'task' ? 'evaluation' : 'intervention')).toLowerCase();
         const assignedPayload = {
           patient_id: String(patient.id),
           patient_email: patient?.email || null,
@@ -2497,6 +2513,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             color: taskPayload.color || 'bg-blue-100 text-blue-600',
             linkedTask: planType === 'intervention' ? linkedTask || undefined : undefined,
             linkedProtocolId: planType === 'task' ? linkedInterventionProtocolId || undefined : undefined,
+            protocolId: taskPayload.protocolId || undefined,
+            protocolTitle: taskPayload.protocolTitle || undefined,
+            protocolCategory: selectedProtocolCategory,
+            domainId: taskPayload.domainId || undefined,
+            domainName: taskPayload.domainName || undefined,
+            skillId: selectedSkill?.id || undefined,
+            skillName: selectedSkill?.name || taskPayload.title || undefined,
             maxScore: resolvedTaskMaxScore,
             noRealtimeScoring: true
           }
@@ -2539,25 +2562,82 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     setShowConfirmation(true); setMessage(''); setNewTaskName(''); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setNewProtocolName(''); setNewDomainName(''); setNewTaskCode(''); setNewTaskObjective(''); setNewTaskExample(''); setNewTaskCriteria(''); setNewTaskComment(''); setSelectedProtocolId(''); setSelectedDomainId(''); setSelectedSkillId(''); setLinkedTask(''); setLinkedInterventionProtocolId('');
   }; 
 
+  const resolveAssignedTaskEvaluationContext = (task: any) => {
+    const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
+    const taskType = String(task?.task_type || task?.type || '').toLowerCase();
+    if (taskType !== 'task') return null;
+
+    const explicitCategory = String(taskData?.protocolCategory || '').toLowerCase();
+    if (explicitCategory && explicitCategory !== 'evaluation') return null;
+
+    const evaluationProtocols = (protocols || []).filter((p: any) => p?.category === 'evaluation' || !p?.category);
+    const explicitProtocolId = String(taskData?.protocolId || taskData?.protocol_id || '').trim();
+    const explicitProtocolTitle = String(taskData?.protocolTitle || taskData?.protocol_name || '').trim();
+    const explicitSkillId = String(taskData?.skillId || taskData?.skill_id || '').trim();
+    const explicitSkillName = String(taskData?.skillName || taskData?.skill_name || taskData?.title || task?.title || '').trim();
+
+    const matchedProtocol =
+      evaluationProtocols.find((protocol: any) => {
+        if (explicitProtocolId && String(protocol?.id || '').trim() === explicitProtocolId) return true;
+        if (explicitProtocolTitle && isSameClinicalTask(protocol?.title || protocol?.name || '', explicitProtocolTitle)) return true;
+        if (!explicitSkillName) return false;
+        return (protocol?.data || []).some((domain: any) =>
+          (domain?.skills || []).some((skill: any) => isSameClinicalTask(skill?.name || '', explicitSkillName))
+        );
+      }) || null;
+
+    if (!matchedProtocol) return null;
+
+    let matchedDomain: any = null;
+    let matchedSkill: any = null;
+    for (const domain of matchedProtocol?.data || []) {
+      const foundSkill = (domain?.skills || []).find((skill: any) => {
+        if (explicitSkillId && String(skill?.id || '').trim() === explicitSkillId) return true;
+        return isSameClinicalTask(skill?.name || '', explicitSkillName);
+      });
+      if (foundSkill) {
+        matchedDomain = domain;
+        matchedSkill = foundSkill;
+        break;
+      }
+    }
+
+    if (!matchedSkill) return null;
+    return { protocol: matchedProtocol, domain: matchedDomain, skill: matchedSkill };
+  };
+
+  const isAssignedTaskReviewable = (task: any) => Boolean(resolveAssignedTaskEvaluationContext(task));
+
+  const resolveAssignedTaskMaxScore = (task: any) => {
+    const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
+    const context = resolveAssignedTaskEvaluationContext(task);
+    if (context?.skill) {
+      return Math.max(1, Number(context.skill?.maxScore ?? context.skill?.max_score ?? 1) || 1);
+    }
+    return Math.max(1, Number(taskData?.maxScore ?? taskData?.max_score ?? task?.max_score ?? 4) || 4);
+  };
+
   const pendingAssignedReviews = useMemo(
     () =>
       (assignedTasks || []).filter(
         (task: any) =>
+          isAssignedTaskReviewable(task) &&
           String(task?.status || '').toLowerCase() === 'completed' &&
           (task?.pro_score === null || task?.pro_score === undefined)
       ),
-    [assignedTasks]
+    [assignedTasks, protocols]
   );
 
   const reviewedAssignedTasks = useMemo(
     () =>
       (assignedTasks || []).filter(
         (task: any) =>
+          isAssignedTaskReviewable(task) &&
           String(task?.status || '').toLowerCase() === 'completed' &&
           task?.pro_score !== null &&
           task?.pro_score !== undefined
       ),
-    [assignedTasks]
+    [assignedTasks, protocols]
   );
 
   const handleAssignedReviewChange = (taskId: string, next: Partial<{ score: string; note: string }>) => {
@@ -2574,8 +2654,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const taskId = String(task?.id || '');
     if (!taskId) return;
     const draft = assignedReviewDrafts[taskId] || { score: '', note: '' };
-    const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
-    const dynamicMaxScore = Math.max(1, Number(taskData?.maxScore ?? taskData?.max_score ?? 4) || 4);
+    const dynamicMaxScore = resolveAssignedTaskMaxScore(task);
     const numericScore = Number(draft.score);
     if (!Number.isFinite(numericScore) || numericScore < 0 || numericScore > dynamicMaxScore) {
       alert(`A pontuação profissional deve estar entre 0 e ${dynamicMaxScore}.`);
@@ -3652,35 +3731,79 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                   <p className="text-sm text-gray-400 dark:text-slate-400 italic">Sem eventos concluídos para exibir no histórico adulto.</p>
                 ) : (
                   <div className="relative pl-8 border-l-2 border-indigo-100 dark:border-indigo-400/30 ml-2 space-y-4">
-                    {adultCompletedTasks.map((event: any) => (
-                      <div key={`adult-history-${event.id}`} className="relative">
-                        <div className="absolute -left-[39px] top-5 w-5 h-5 rounded-full bg-[#7551FF] border-4 border-white dark:border-[#101b2e] ring-2 ring-indigo-100 dark:ring-indigo-400/30"></div>
-                        <div className="bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-[#16243b] border border-gray-100 dark:border-slate-700 rounded-2xl p-5 space-y-2 shadow-sm transition-colors">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="text-lg font-semibold text-gray-800 dark:text-slate-100 tracking-tight">{event.taskTitle}</p>
-                            <span className="text-[10px] font-semibold bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-full uppercase tracking-wide">
-                              {event.taskType === 'intervention' ? 'Intervenção' : event.taskType === 'reinforcement' ? 'Reforço' : 'Avaliação'}
-                            </span>
-                          </div>
-                          <p className="text-sm text-gray-500 dark:text-slate-300">
-                            Execução: {event.eventDate.toLocaleDateString('pt-BR')} às {event.eventDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                          </p>
-                          <p className="text-sm text-gray-600 dark:text-slate-300">
-                            Esforço percebido: <span className="font-semibold text-gray-800 dark:text-slate-100">{event.patientEffort}%</span>
-                          </p>
-                          <p className="text-sm text-gray-600 dark:text-slate-300">
-                            Comentário do paciente: {event.patientComment || 'Sem comentário.'}
-                          </p>
-                          <p className="text-sm text-gray-600 dark:text-slate-300">
-                            Nota final do profissional: <span className="font-semibold text-gray-800 dark:text-slate-100">{event.professionalScore ?? '-'} / {event.maxScore}</span>
-                          </p>
-                          <div className="bg-white dark:bg-slate-800/80 border border-gray-100 dark:border-slate-700 rounded-xl p-3 mt-3 transition-colors">
-                            <p className="text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Anotação de Evolução</p>
-                            <p className="text-sm text-gray-700 dark:text-slate-100 whitespace-pre-wrap">{event.evolutionNote || 'Sem anotação técnica registrada.'}</p>
+                    {adultCompletedTasks.map((event: any) => {
+                      const reviewKey = String(event.id);
+                      const draft = assignedReviewDrafts[reviewKey] || { score: '', note: '' };
+                      const isReviewable = isAssignedTaskReviewable(event);
+                      const dynamicMaxScore = resolveAssignedTaskMaxScore(event);
+                      const reviewContext = resolveAssignedTaskEvaluationContext(event);
+                      return (
+                        <div key={`adult-history-${event.id}`} className="relative">
+                          <div className="absolute -left-[39px] top-5 w-5 h-5 rounded-full bg-[#7551FF] border-4 border-white dark:border-[#101b2e] ring-2 ring-indigo-100 dark:ring-indigo-400/30"></div>
+                          <div className="bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-[#16243b] border border-gray-100 dark:border-slate-700 rounded-2xl p-5 space-y-2 shadow-sm transition-colors">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="text-lg font-semibold text-gray-800 dark:text-slate-100 tracking-tight">{event.taskTitle}</p>
+                              <span className="text-[10px] font-semibold bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-full uppercase tracking-wide">
+                                {event.taskType === 'intervention' ? 'Intervenção' : event.taskType === 'reinforcement' ? 'Reforço' : 'Avaliação'}
+                              </span>
+                            </div>
+                            <p className="text-sm text-gray-500 dark:text-slate-300">
+                              Execução: {event.eventDate.toLocaleDateString('pt-BR')} às {event.eventDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                            </p>
+                            <p className="text-sm text-gray-600 dark:text-slate-300">
+                              Esforço percebido: <span className="font-semibold text-gray-800 dark:text-slate-100">{event.patientEffort}%</span>
+                            </p>
+                            <p className="text-sm text-gray-600 dark:text-slate-300">
+                              Comentário do paciente: {event.patientComment || 'Sem comentário.'}
+                            </p>
+                            <p className="text-sm text-gray-600 dark:text-slate-300">
+                              Nota final do profissional: <span className="font-semibold text-gray-800 dark:text-slate-100">{event.professionalScore ?? '-'} / {event.maxScore}</span>
+                            </p>
+                            <div className="bg-white dark:bg-slate-800/80 border border-gray-100 dark:border-slate-700 rounded-xl p-3 mt-3 transition-colors">
+                              <p className="text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Anotação de Evolução</p>
+                              <p className="text-sm text-gray-700 dark:text-slate-100 whitespace-pre-wrap">{event.evolutionNote || 'Sem anotação técnica registrada.'}</p>
+                            </div>
+                            {isReviewable && event.professionalScore === null && (
+                              <div className="bg-white dark:bg-slate-800/80 border border-orange-100 dark:border-orange-400/20 rounded-xl p-3 mt-3 space-y-3 transition-colors">
+                                <div>
+                                  <p className="text-[10px] font-semibold text-orange-500 uppercase tracking-widest">Pontuação profissional pendente</p>
+                                  <p className="text-xs text-gray-500 dark:text-slate-300 mt-1">
+                                    {String(reviewContext?.protocol?.title || reviewContext?.protocol?.name || 'Protocolo de avaliação')} • faixa 0-{dynamicMaxScore}
+                                  </p>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-[140px_1fr] gap-2">
+                                  <select
+                                    value={draft.score}
+                                    onChange={(e) => handleAssignedReviewChange(reviewKey, { score: e.target.value })}
+                                    className="w-full bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-xl p-3 text-sm text-slate-800 dark:text-slate-100 outline-none"
+                                  >
+                                    <option value="">Nota 0-{dynamicMaxScore}</option>
+                                    {Array.from({ length: dynamicMaxScore + 1 }, (_, i) => i).map((score) => (
+                                      <option key={`history-score-${reviewKey}-${score}`} value={String(score)}>
+                                        {score}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <textarea
+                                    value={draft.note}
+                                    onChange={(e) => handleAssignedReviewChange(reviewKey, { note: e.target.value })}
+                                    className="w-full bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-xl p-3 text-sm text-slate-800 dark:text-slate-100 outline-none resize-none"
+                                    rows={2}
+                                    placeholder="Anotação técnica opcional"
+                                  />
+                                </div>
+                                <button
+                                  onClick={() => void handleSubmitAssignedReview(event)}
+                                  className="w-full font-semibold py-2.5 rounded-xl shadow-sm transition-opacity bg-[#7551FF] text-white hover:opacity-90"
+                                >
+                                  Salvar Nota Profissional
+                                </button>
+                              </div>
+                            )}
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -4732,7 +4855,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                         const reviewKey = String(task.id);
                         const draft = assignedReviewDrafts[reviewKey] || { score: '', note: '' };
                         const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
-                        const dynamicMaxScore = Math.max(1, Number(taskData?.maxScore ?? taskData?.max_score ?? 4) || 4);
+                        const reviewContext = resolveAssignedTaskEvaluationContext(task);
+                        const dynamicMaxScore = resolveAssignedTaskMaxScore(task);
                         const displayedTitle = taskData?.title || task?.title || 'Tarefa';
                         return (
                           <div key={reviewKey} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
@@ -4742,6 +4866,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                 <p className="text-xs text-gray-500">
                                   Esforço informado: {Number(task?.patient_effort ?? 0)}%
                                 </p>
+                                {reviewContext?.protocol && (
+                                  <p className="text-[11px] text-[#7a32fc] font-semibold mt-1">
+                                    {String(reviewContext.protocol?.title || reviewContext.protocol?.name || 'Protocolo')} • 0-{dynamicMaxScore}
+                                  </p>
+                                )}
                               </div>
                               <span className="text-[10px] font-semibold px-2 py-1 rounded-full uppercase bg-orange-100 text-orange-600">
                                 Aguardando nota

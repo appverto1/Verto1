@@ -1715,6 +1715,13 @@ export default function App() {
             color: t.color || '',
             linkedTask: t.linkedTask || '',
             linkedProtocolId: t.linkedProtocolId || '',
+            protocolId: t.protocolId || t.protocol_id || '',
+            protocolTitle: t.protocolTitle || t.protocol_name || '',
+            protocolCategory: t.protocolCategory || (String(t.type || 'task') === 'task' ? 'evaluation' : String(t.type || 'task')),
+            domainId: t.domainId || '',
+            domainName: t.domainName || '',
+            skillId: t.skillId || '',
+            skillName: t.skillName || t.title || '',
             maxScore: Number.isFinite(Number(t.maxScore)) ? Number(t.maxScore) : 4
           },
           scheduled_at: t.scheduledAt || new Date().toISOString(),
