@@ -11832,6 +11832,10 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
       }
 
+      if (String(existing?.status || '').toLowerCase() === 'completed' && existing?.completed_at) {
+        return res.json({ success: true, data: existing, skipped: true });
+      }
+
       const updatePayload = cleanObject({
         patient_effort: asSafeNumber(req.body?.patient_effort, 0, 100),
         patient_comment: sanitizeTextField(req.body?.patient_comment, 4000),
@@ -11848,27 +11852,52 @@ async function startServer() {
       if (error) throw error;
 
       const taskData = data?.task_data && typeof data.task_data === 'object' ? data.task_data : {};
+      let historyEntry: any = null;
       try {
+        historyEntry = cleanObject({
+          id: crypto.randomUUID(),
+          patient_id: sanitizeString(data?.patient_id, 120),
+          patient_email: sanitizeEmail(data?.patient_email),
+          type: sanitizeString(data?.task_type, 80) || 'task',
+          title: sanitizeTextField(taskData?.title || 'Tarefa concluída', 180),
+          score: null,
+          energy: asSafeNumber(data?.patient_effort, 0, 100),
+          note: sanitizeTextField(data?.patient_comment, 12000),
+          icon: sanitizeString(taskData?.icon, 40) || '📌',
+          therapist_id: sanitizeString(data?.professional_id, 120),
+          created_at: data?.completed_at || new Date().toISOString()
+        });
         await supabase
           .from('history')
-          .insert([cleanObject({
-            id: crypto.randomUUID(),
-            patient_id: sanitizeString(data?.patient_id, 120),
-            patient_email: sanitizeEmail(data?.patient_email),
-            type: sanitizeString(data?.task_type, 80) || 'task',
-            title: sanitizeTextField(taskData?.title || 'Tarefa concluída', 180),
-            score: null,
-            energy: asSafeNumber(data?.patient_effort, 0, 100),
-            note: sanitizeTextField(data?.patient_comment, 12000),
-            icon: sanitizeString(taskData?.icon, 40) || '📌',
-            therapist_id: sanitizeString(data?.professional_id, 120),
-            created_at: data?.completed_at || new Date().toISOString()
-          })]);
+          .insert([historyEntry]);
       } catch (historyInsertError: any) {
         console.warn('[AssignedTasks] Falha ao criar histórico automático:', historyInsertError?.message || String(historyInsertError));
       }
 
-      return res.json({ success: true, data });
+      let patientLogEntry: any = null;
+      try {
+        patientLogEntry = cleanObject({
+          id: crypto.randomUUID(),
+          patient_id: sanitizeString(data?.patient_id, 120),
+          professional_id: sanitizeString(data?.professional_id, 120),
+          type: sanitizeString(data?.task_type, 80) || 'task',
+          value: cleanObject({
+            task_id: sanitizeString(data?.id, 120),
+            title: sanitizeTextField(taskData?.title || 'Tarefa concluída', 180),
+            completed: true,
+            effort: asSafeNumber(data?.patient_effort, 0, 100),
+            energy: asSafeNumber(data?.patient_effort, 0, 100),
+            note: sanitizeTextField(data?.patient_comment, 4000),
+            icon: sanitizeString(taskData?.icon, 40) || '📌'
+          }),
+          timestamp: data?.completed_at || new Date().toISOString()
+        });
+        await supabase.from('patient_logs').insert([patientLogEntry]);
+      } catch (patientLogError: any) {
+        console.warn('[AssignedTasks] Falha ao criar log automático do paciente:', patientLogError?.message || String(patientLogError));
+      }
+
+      return res.json({ success: true, data, historyEntry, patientLogEntry });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || String(error) });
     }

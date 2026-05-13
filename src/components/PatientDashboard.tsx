@@ -248,6 +248,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     endOfToday.setDate(endOfToday.getDate() + 1);
 
     return list.filter((task: any) => {
+      if (task?.completed || String(task?.status || '').toLowerCase() === 'completed') return false;
       const scheduledRaw = task?.scheduledAt || task?.scheduled_at;
       if (!scheduledRaw) return false;
       const scheduledAt = parseScheduledTaskDate(scheduledRaw);
@@ -906,9 +907,33 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         ? history
         : history.filter((h: any) => h.dateGroup === selectedSnapshotDate);
 
-    if (!isConventionalAdult) return scopedByDate;
+    const deduped = scopedByDate.filter((item: any, index: number, array: any[]) => {
+      const itemKey = [
+        String(item?.patient_id || item?.patientId || user?.id || ''),
+        String(item?.type || ''),
+        String(item?.title || ''),
+        String(item?.note || ''),
+        String(item?.created_at || item?.date || ''),
+        String(item?.energy ?? ''),
+        String(item?.score ?? ''),
+      ].join('|');
+      return array.findIndex((candidate: any) => {
+        const candidateKey = [
+          String(candidate?.patient_id || candidate?.patientId || user?.id || ''),
+          String(candidate?.type || ''),
+          String(candidate?.title || ''),
+          String(candidate?.note || ''),
+          String(candidate?.created_at || candidate?.date || ''),
+          String(candidate?.energy ?? ''),
+          String(candidate?.score ?? ''),
+        ].join('|');
+        return candidateKey === itemKey;
+      }) === index;
+    });
 
-    return scopedByDate.filter((item: any) => {
+    if (!isConventionalAdult) return deduped;
+
+    return deduped.filter((item: any) => {
       const directScore = parseScore(item?.score);
       const proScore = parseScore(item?.pro_score);
       const nestedScore = parseScore(item?.task_data?.pro_score ?? item?.task_data?.score);

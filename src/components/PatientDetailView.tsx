@@ -1812,7 +1812,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   };
 
   const adultCompletedTasks = useMemo(() => {
-    return (assignedTasks || [])
+    const deduped = new Map<string, any>();
+    (assignedTasks || [])
       .filter((task: any) => String(task?.status || '').toLowerCase() === 'completed')
       .map((task: any) => {
         const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
@@ -1836,7 +1837,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           evolutionNote: String(task?.pro_review_note || '')
         };
       })
-      .sort((a: any, b: any) => b.eventDate.getTime() - a.eventDate.getTime());
+      .forEach((task: any) => {
+        const key = String(task?.assignedTaskId || task?.id || '') || [
+          String(task?.patient_id || task?.patientId || ''),
+          String(task?.taskTitle || ''),
+          String(task?.eventDateRaw || ''),
+        ].join('|');
+        const prev = deduped.get(key);
+        if (!prev || task.eventDate.getTime() >= prev.eventDate.getTime()) {
+          deduped.set(key, task);
+        }
+      });
+
+    return Array.from(deduped.values()).sort((a: any, b: any) => b.eventDate.getTime() - a.eventDate.getTime());
   }, [assignedTasks]);
 
   const adultScheduledTasks = useMemo(() => {
@@ -1901,7 +1914,47 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
   const filteredPatientActivityLogs = useMemo(() => {
     const rows = Array.isArray(patientActivityLogs) ? patientActivityLogs : [];
-    return rows
+    const parseLogValue = (log: any) => {
+      if (log?.value && typeof log.value === 'object') return log.value;
+      if (typeof log?.value === 'string') {
+        try {
+          return JSON.parse(log.value);
+        } catch {
+          return { value: log.value };
+        }
+      }
+      return {
+        title: log?.title,
+        score: log?.score,
+        note: log?.note,
+        icon: log?.icon,
+        energy: log?.energy
+      };
+    };
+    const dedupedRows = rows.filter((log: any, index: number, array: any[]) => {
+      const value = parseLogValue(log);
+      const key = [
+        String(log?.type || ''),
+        String(log?.patient_id || ''),
+        String(value?.task_id || ''),
+        String(value?.title || ''),
+        String(value?.note || ''),
+        String(log?.timestamp || log?.created_at || ''),
+      ].join('|');
+      return array.findIndex((candidate: any) => {
+        const candidateValue = parseLogValue(candidate);
+        const candidateKey = [
+          String(candidate?.type || ''),
+          String(candidate?.patient_id || ''),
+          String(candidateValue?.task_id || ''),
+          String(candidateValue?.title || ''),
+          String(candidateValue?.note || ''),
+          String(candidate?.timestamp || candidate?.created_at || ''),
+        ].join('|');
+        return candidateKey === key;
+      }) === index;
+    });
+    return dedupedRows
       .filter((log: any) => {
         if (!activityLogDateFilter) return true;
         const timestamp = log?.timestamp || log?.created_at;
@@ -1945,7 +1998,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       icon: <Activity size={18} />,
       label: 'Humor',
       title: value?.icon ? `${value.icon} Registro de humor` : 'Registro de humor',
-      detail: value?.note || 'Check-in emocional feito pelo paciente.',
+      detail: [
+        value?.energy !== null && value?.energy !== undefined && value?.energy !== ''
+          ? `Energia informada: ${Number(value.energy)}%.`
+          : '',
+        value?.note || 'Check-in emocional feito pelo paciente.'
+      ].filter(Boolean).join('\n'),
       badgeClass: 'bg-[#7a32fc]/10 text-[#7a32fc]',
       dotClass: 'bg-[#7a32fc]'
     };

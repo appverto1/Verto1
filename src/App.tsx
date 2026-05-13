@@ -2589,25 +2589,13 @@ export default function App() {
         type: 'mood',
         value: {
           score: normalizedEnergy,
+          energy: persistedEnergy,
           note: n,
           icon: i,
           tag: t?.label || t?.id || null
         },
         timestamp: new Date().toISOString()
       });
-      if (!isConventionalAdult && normalizedEnergy !== null) {
-        await dataService.addPatientLog({
-          patient_id: String(identity.patientId || user.id),
-          professional_id: identity.professionalId || user?.professional_id || user?.therapist_id || null,
-          type: 'energy',
-          value: {
-            value: normalizedEnergy,
-            note: n,
-            tag: t?.label || t?.id || null
-          },
-          timestamp: new Date().toISOString()
-        });
-      }
     } catch (error) {
       console.error('Falha ao persistir check-in do paciente:', error);
     }
@@ -2642,8 +2630,13 @@ export default function App() {
       protocol_name: t.protocol_name || t.protocolTitle || null,
       domainName: t.domainName || t.domain_name || null
     };
-    setHistory(prev => [newHistoryItem, ...prev]); 
-    setTasks(prev => prev.map(x => String(x.id) === String(t.id) ? { ...x, completed: true, status: 'completed' } : x)); 
+    setTasks(prev => prev.map(x => {
+      const matchesAssignedTask =
+        String(x?.assignedTaskId || '') === String(t?.assignedTaskId || '') ||
+        String(x?.id || '') === String(t?.id || '') ||
+        String(x?.id || '') === `assigned-${String(t?.assignedTaskId || '')}`;
+      return matchesAssignedTask ? { ...x, completed: true, status: 'completed' } : x;
+    })); 
     
     // Add a note about the patient completing the task
     const noteText = `? TAREFA CONCLUÃDA PELO PACIENTE\nAtividade: ${t.title}\n${isKid ? `PontuaÃ§Ã£o: ${e}\n` : ''}AnotaÃ§Ãµes do Paciente: ${n || "Nenhuma observaÃ§Ã£o."}`;
@@ -2651,37 +2644,6 @@ export default function App() {
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
-    await dataService.addHistoryItem({
-      patient_id: targetPatientId,
-      patient_email: identity.patientEmail,
-      patient_name: identity.patientName,
-      type: t.type || 'task',
-      title: t.title,
-      score: isKid ? normalizedEffort : null,
-      energy: energyValue,
-      note: n,
-      icon: t.icon,
-      protocol_id: t.protocol_id || t.protocolId || null,
-      protocol_name: t.protocol_name || t.protocolTitle || null,
-      domain_name: t.domainName || t.domain_name || null
-    });
-
-    await dataService.addPatientLog({
-      patient_id: targetPatientId,
-      professional_id: t?.professional_id || t?.professionalId || identity.professionalId || user?.professional_id || user?.therapist_id || null,
-      type: 'task',
-      value: {
-        task_id: t?.assignedTaskId || t?.id || null,
-        title: t.title,
-        completed: true,
-        effort: normalizedEffort,
-        energy: energyValue,
-        note: n,
-        icon: t.icon
-      },
-      timestamp: new Date().toISOString()
-    });
-
     const assignedTaskId = String(t?.assignedTaskId || '');
     const isTaskIdUuid = isUuidLike(String(t?.id || ''));
     const completionTargetId = assignedTaskId || (isTaskIdUuid ? String(t.id) : '');
@@ -2695,10 +2657,55 @@ export default function App() {
         } else {
           completionPayload.patient_effort = null;
         }
-        await dataService.completeAssignedTask(completionTargetId, completionPayload);
+        const completionResult = await dataService.completeAssignedTask(completionTargetId, completionPayload);
+        const persistedHistory = completionResult?.historyEntry;
+        setHistory(prev => {
+          const duplicateKey = [
+            String(targetPatientId || ''),
+            String(t?.type || 'task'),
+            String(t?.title || ''),
+            String(n || ''),
+            String(persistedHistory?.created_at || ''),
+          ].join('|');
+
+          const withoutDuplicates = prev.filter((item: any) => {
+            const itemKey = [
+              String(item?.patient_id || item?.patientId || ''),
+              String(item?.type || ''),
+              String(item?.title || ''),
+              String(item?.note || ''),
+              String(item?.created_at || ''),
+            ].join('|');
+            return itemKey !== duplicateKey;
+          });
+
+          if (persistedHistory?.id) {
+            return [
+              {
+                ...persistedHistory,
+                patientId: persistedHistory?.patient_id || targetPatientId,
+                time: persistedHistory?.created_at
+                  ? new Date(persistedHistory.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  : time,
+                dateGroup:
+                  persistedHistory?.created_at && new Date(persistedHistory.created_at).toDateString() === new Date().toDateString()
+                    ? 'Hoje'
+                    : persistedHistory?.created_at
+                      ? new Date(persistedHistory.created_at).toLocaleDateString()
+                      : 'Hoje'
+              },
+              ...withoutDuplicates
+            ];
+          }
+
+          return [newHistoryItem, ...withoutDuplicates];
+        });
       } catch (error) {
         console.error('Falha ao concluir assigned task (nÃ£o bloqueante):', error);
+        setHistory(prev => [newHistoryItem, ...prev]);
       }
+    } else {
+      setHistory(prev => [newHistoryItem, ...prev]);
     }
   };
   const handleRecordTrial = async (pid: any, title: string, score: number, evalComment?: string, sessionMeta?: any) => {
