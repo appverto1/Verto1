@@ -162,8 +162,11 @@ export const SuccessOverlay = ({ title = "Fantástico!", message = "Você está 
   </div> 
 );
 
-export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true }: any) => { 
+export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true, label = 'Energia', scaleLabels }: any) => { 
   const numericValue = Number(value) || 0;
+  const resolvedScaleLabels = Array.isArray(scaleLabels) && scaleLabels.length === 3
+    ? scaleLabels
+    : ['Baixa', 'Média', 'Alta'];
   const getMoodEmoji = (val: number) => { 
     if (val < 20) return "😫"; 
     if (val < 40) return "😕"; 
@@ -175,7 +178,7 @@ export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true }:
     <div className="w-full"> 
       {showLabel && (
         <div className="flex justify-between items-center mb-4">
-          <span className="font-semibold text-gray-700 flex items-center gap-2"><BatteryCharging size={20} className="text-[#7a32fc]" /> Energia</span>
+          <span className="font-semibold text-gray-700 flex items-center gap-2"><BatteryCharging size={20} className="text-[#7a32fc]" /> {label}</span>
           <div className="flex items-center gap-2 bg-white px-3 py-1 rounded-full shadow-sm">
             <span className="text-2xl">{getMoodEmoji(numericValue)}</span>
             <span className="text-xl font-semibold text-[#7a32fc]">{numericValue}%</span>
@@ -187,7 +190,7 @@ export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true }:
         <div className="slider-thumb-indicator" style={{ left: `${numericValue}%` }}>{getMoodEmoji(numericValue)}</div>
         <input type="range" min="0" max="100" value={numericValue} onChange={onChange} onMouseUp={onCommit} onTouchEnd={onCommit} className="big-slider-input" />
       </div>
-      <div className="flex justify-between text-xs text-gray-400 mt-2 font-semibold px-1"><span>Baixa</span><span>Média</span><span>Alta</span></div> 
+      <div className="flex justify-between text-xs text-gray-400 mt-2 font-semibold px-1"><span>{resolvedScaleLabels[0]}</span><span>{resolvedScaleLabels[1]}</span><span>{resolvedScaleLabels[2]}</span></div> 
     </div> 
   ); 
 };

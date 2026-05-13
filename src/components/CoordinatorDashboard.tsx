@@ -3515,6 +3515,7 @@ export function CoordinatorDashboard({
           <main className="p-4 lg:p-8 pb-20">
             <PatientDetailView
               patient={patient}
+              themeMode={theme}
               onBack={() => setView("home")}
               hideBackButton={true}
               clinicContext={{

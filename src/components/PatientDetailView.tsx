@@ -42,7 +42,7 @@ const isVbMappProtocol = (protocol: any) => {
   return source.includes('vb-mapp') || source.includes('vbmapp') || source.includes('vb mapp');
 };
 
-export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole }: any) => { 
+export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode }: any) => { 
   const safeSetProtocols =
     typeof setProtocols === 'function' ? setProtocols : null;
   const coalescePatientText = (...values: any[]) => {
@@ -271,6 +271,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const normalizedRole = String(userRole || '').toLowerCase();
     return ['coordinator', 'admin', 'owner'].includes(normalizedRole);
   }, [userRole]);
+  const isPanelDark = useMemo(() => {
+    if (themeMode === 'dark') return true;
+    if (themeMode === 'light') return false;
+    if (typeof document === 'undefined') return false;
+    return document.body.classList.contains('theme-dark');
+  }, [themeMode]);
   const showCoordinatorPatientRadar = String(userRole || '').toLowerCase() === 'coordinator';
   const [expandedSessionHistoryDates, setExpandedSessionHistoryDates] = useState<Record<string, boolean>>({});
   const progressReportPdfRef = React.useRef<HTMLDivElement | null>(null);
@@ -3174,7 +3180,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   }, [isTutorialActive, tutorialStep, isKidsProfile, allowedTabsSet]);
 
   return ( 
-    <div className="min-h-screen bg-gray-50 dark:bg-[#081324] flex flex-col animate-slide-up relative overflow-y-auto"> 
+    <div className={`min-h-screen flex flex-col animate-slide-up relative overflow-y-auto transition-colors ${isPanelDark ? 'bg-[#081324]' : 'bg-gray-50'}`}> 
       <div
         aria-hidden="true"
         style={{
@@ -3379,7 +3385,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         </div>
       )}
 
-      <div className="bg-white dark:bg-[#0f1b2f] px-6 pt-6 pb-6 shadow-sm z-20"> 
+      <div className={`px-6 pt-6 pb-6 shadow-sm z-20 transition-colors ${isPanelDark ? 'bg-[#0f1b2f]' : 'bg-white'}`}> 
         <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-4"> 
           <div className="flex items-center gap-4"> 
             {!hideBackButton && (
@@ -3439,26 +3445,26 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             </button>
           </div>
         </div> 
-        <div id="tab-nav" className="flex gap-2 bg-gray-100 dark:bg-slate-900/70 p-1 rounded-xl overflow-x-auto no-scrollbar"> 
-          {canAccessTab('history') && <button id="tab-history" onClick={() => setActiveTab('history')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'history' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-white shadow-sm' : 'text-gray-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'}`}>Histórico</button>}
-          {canAccessTab('notes') && <button id="tab-notes" onClick={() => setActiveTab('notes')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'notes' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-white shadow-sm' : 'text-gray-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'}`}>Anotações</button>}
-          {canAccessTab('report') && <button id="tab-report" onClick={() => setActiveTab('report')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'report' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-white shadow-sm' : 'text-gray-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'}`}>Relatório</button>}
+        <div id="tab-nav" className={`flex gap-2 p-1 rounded-xl overflow-x-auto no-scrollbar transition-colors ${isPanelDark ? 'bg-slate-900/70' : 'bg-gray-100'}`}> 
+          {canAccessTab('history') && <button id="tab-history" onClick={() => setActiveTab('history')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'history' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Histórico</button>}
+          {canAccessTab('notes') && <button id="tab-notes" onClick={() => setActiveTab('notes')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'notes' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Anotações</button>}
+          {canAccessTab('report') && <button id="tab-report" onClick={() => setActiveTab('report')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'report' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Relatório</button>}
           {canAccessTab('plan') && (
             <button
               id="tab-plan"
               onClick={() => setActiveTab('plan')}
-              className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'plan' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-white shadow-sm' : 'text-gray-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'}`}
+              className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'plan' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}
             >
               {isKidsProfile ? 'Plano' : 'Plano Adulto'}
             </button>
           )}
           {canAccessTab('session') && isKidsProfile && (
-            <button id="tab-session" onClick={() => requestSessionStart('tab')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'session' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-white shadow-sm' : 'text-gray-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'}`}>Sessão</button>
+            <button id="tab-session" onClick={() => requestSessionStart('tab')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'session' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Sessão</button>
           )}
-          {canAccessTab('files') && <button id="tab-files" onClick={() => setActiveTab('files')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'files' ? 'bg-white dark:bg-slate-800 text-[#7551FF] dark:text-white shadow-sm' : 'text-gray-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'}`}>Arquivos</button>}
+          {canAccessTab('files') && <button id="tab-files" onClick={() => setActiveTab('files')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'files' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Arquivos</button>}
         </div> 
       </div> 
-      <div className="p-6 bg-gray-50 dark:bg-[#081324] transition-colors"> 
+      <div className={`p-6 transition-colors ${isPanelDark ? 'bg-[#081324]' : 'bg-gray-50'}`}> 
         {activeTab === 'history' ? ( 
           <div className="space-y-6"> 
             {showCoordinatorPatientRadar && (

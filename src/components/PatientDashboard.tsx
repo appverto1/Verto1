@@ -1815,29 +1815,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                   </div>
                 ) : (
                   <React.Fragment>
-                    {isConventionalAdult ? (
-                      <div className="space-y-4">
-                        <textarea
-                          className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none mb-2 font-medium"
-                          placeholder="Como foi fazer essa tarefa?"
-                          value={taskNote}
-                          onChange={(e) => setTaskNote(e.target.value)}
-                          autoFocus
-                        ></textarea>
-                        <button
-                          onClick={handleConfirmTask}
-                          disabled={showTaskSuccess}
-                          className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-500 text-white shadow-green-500/30 hover:opacity-90"
-                        >
-                          {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir</React.Fragment>}
-                        </button>
-                      </div>
-                    ) : (
-                      <React.Fragment>
-                        <BigEnergySlider value={taskEnergy} onChange={(e: any) => setTaskEnergy(Number(e.target.value) || 0)} onCommit={handleEnergyCommit} /> 
-                        <p className="text-center text-[10px] text-[#7a32fc]/50 mt-4 font-medium animate-pulse italic uppercase tracking-widest">(Solte para continuar)</p>
-                      </React.Fragment>
-                    )}
+                    <React.Fragment>
+                      <BigEnergySlider
+                        value={taskEnergy}
+                        onChange={(e: any) => setTaskEnergy(Number(e.target.value) || 0)}
+                        onCommit={handleEnergyCommit}
+                        label={isConventionalAdult ? 'Esforço' : 'Energia'}
+                        scaleLabels={isConventionalAdult ? ['Difícil', 'Moderado', 'Leve'] : ['Baixa', 'Média', 'Alta']}
+                      /> 
+                      <p className="text-center text-[10px] text-[#7a32fc]/50 mt-4 font-medium animate-pulse italic uppercase tracking-widest">(Solte para continuar)</p>
+                    </React.Fragment>
                   </React.Fragment>
                 )}
               </div> 
@@ -1846,15 +1833,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 <div className="mb-4"> 
                   <div className="flex items-center justify-between mb-2"> 
                     <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">{isKidsProfile ? 'Sua Pontuação' : isConventionalAdult ? 'Esforço' : 'Energia'}</span> 
-                    <span className="text-sm font-semibold text-[#7a32fc] flex items-center gap-2">{!isKidsProfile && !isConventionalAdult ? <span>{getTaskEnergyEmoji(Number(taskEnergy) || 0)}</span> : null}{isKidsProfile ? taskEnergy : `${taskEnergy}%`}</span> 
+                    <span className="text-sm font-semibold text-[#7a32fc] flex items-center gap-2">{!isKidsProfile ? <span>{getTaskEnergyEmoji(Number(taskEnergy) || 0)}</span> : null}{isKidsProfile ? taskEnergy : `${taskEnergy}%`}</span> 
                   </div> 
                   <div className="w-full bg-gray-100 rounded-full h-2"> 
                     <div className="bg-[#7a32fc] h-2 rounded-full" style={{ width: isKidsProfile ? `${taskEnergy * 100}%` : `${taskEnergy}%` }}></div> 
                   </div> 
                   {isConventionalAdult && (
                     <div className="flex justify-between text-[10px] text-gray-400 font-semibold mt-1">
-                      <span>Mais difícil 😟</span>
-                      <span>Mais fácil 🙂</span>
+                      <span>Maior esforço 😟</span>
+                      <span>Menor esforço 🙂</span>
                     </div>
                   )}
                 </div> 
