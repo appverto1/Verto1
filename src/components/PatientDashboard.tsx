@@ -438,6 +438,35 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           ''
       );
       if (matchedFromLatestScore) return matchedFromLatestScore;
+
+      const latestEventTitle = String(
+        latestScoredEvent?.title ||
+        latestScoredEvent?.taskTitle ||
+        taskData?.title ||
+        ''
+      ).trim();
+      const latestEventDomain = String(
+        latestScoredEvent?.domain ||
+        latestScoredEvent?.domainName ||
+        taskData?.domain ||
+        taskData?.domainName ||
+        metadata?.domain ||
+        ''
+      ).trim();
+
+      if (latestEventTitle || latestEventDomain) {
+        const inferredFromLatestScore = list.find((protocol: any) =>
+          (Array.isArray(protocol?.data) ? protocol.data : []).some((domain: any) => {
+            const domainName = String(domain?.name || '').trim();
+            const domainMatches = latestEventDomain && normalizeClinicalKey(domainName) === normalizeClinicalKey(latestEventDomain);
+            const skillMatches = (Array.isArray(domain?.skills) ? domain.skills : []).some((skill: any) =>
+              isSameClinicalSkill(String(skill?.name || '').trim(), latestEventTitle)
+            );
+            return domainMatches || skillMatches;
+          })
+        );
+        if (inferredFromLatestScore) return inferredFromLatestScore;
+      }
     }
 
     const discoveredProtocolId = String(
