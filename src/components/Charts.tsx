@@ -234,26 +234,14 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1, title, description,
         </div>
       )}
       
-      <div className="relative z-10 grid grid-cols-[64px_minmax(0,1fr)] gap-1">
-        <div style={{ height: '430px', minHeight: '390px' }} className="relative bg-transparent">
-          <div className="absolute inset-0 flex flex-col justify-between pb-[96px] pl-1 pr-3 pt-4 text-right">
-            {[...yTicks].reverse().map((tick) => (
-              <span key={tick} className="text-[11px] font-black text-[#8ba0c5]">
-                {safeMaxScore === 100 ? `${tick}%` : tick}
-              </span>
-            ))}
-          </div>
-          <div className="absolute left-1 top-1/2 -translate-y-1/2 -rotate-90 whitespace-nowrap text-[9px] font-black uppercase tracking-[0.18em] text-[#A3AED0]">
-            {safeMaxScore === 100 ? 'Maestria' : 'Pontuação'}
-          </div>
-        </div>
+      <div className="relative z-10">
         <div className="overflow-x-auto pb-3 no-scrollbar cursor-grab active:cursor-grabbing">
           <div style={{ minWidth: `${minWidth}px`, height: '430px', minHeight: '390px' }} className="relative min-w-0 min-h-0">
             {isMounted ? (
             <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={330}>
               <BarChart
                 data={data}
-                margin={{ top: 16, right: 28, left: 0, bottom: 96 }}
+                margin={{ top: 16, right: 28, left: 8, bottom: 96 }}
                 barGap={12}
                 barCategoryGap="35%"
               >
@@ -269,9 +257,13 @@ export const EvolutionBarChart = ({ chartData, maxScore = 1, title, description,
                   padding={{ left: 40, right: 40 }}
                 />
                 <YAxis 
-                  hide
+                  width={48}
                   domain={[0, safeMaxScore]}
                   ticks={yTicks}
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#8ba0c5', fontSize: 11, fontWeight: 800 }}
+                  tickFormatter={(value) => safeMaxScore === 100 ? `${value}%` : `${value}`}
                 />
                 <Tooltip 
                   cursor={{ fill: '#F8FAFC' }}

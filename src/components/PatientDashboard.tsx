@@ -361,22 +361,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   }, [scoredClinicalEvents]);
 
   useEffect(() => {
-    if (!availableSnapshots.length) {
-      setSelectedBaseDate("");
-      setSelectedCompareDate("");
-      return;
-    }
-    if (!selectedBaseDate || !availableSnapshots.includes(selectedBaseDate)) {
-      setSelectedBaseDate(availableSnapshots[0]);
-      return;
-    }
-    if (!selectedCompareDate || selectedCompareDate === selectedBaseDate || !availableSnapshots.includes(selectedCompareDate)) {
-      const firstDifferent = availableSnapshots.find((d: any) => d !== selectedBaseDate) || "";
-      setSelectedCompareDate(firstDifferent);
-    }
-  }, [availableSnapshots, selectedBaseDate, selectedCompareDate]);
-
-  useEffect(() => {
     let cancelled = false;
 
     const loadLatestProtocolReference = async () => {
@@ -400,17 +384,69 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const activeKidsProtocol = useMemo(() => {
     const list = Array.isArray(protocols) ? protocols : [];
+    const resolveProtocolMatch = (rawId: any, rawName: any) => {
+      const targetId = String(rawId || '').trim();
+      const targetName = normalizeClinicalKey(rawName || '');
+      return list.find((protocol: any) => {
+        const protocolId = String(protocol?.id || '').trim();
+        const protocolTitle = normalizeClinicalKey(protocol?.title || protocol?.name || '');
+        return (targetId && protocolId === targetId) || (targetName && protocolTitle === targetName);
+      }) || null;
+    };
+
+    const latestScoredEvent = [...scoredClinicalEvents]
+      .sort((a: any, b: any) => {
+        const left = new Date(a?.created_at || a?.date || 0).getTime() || 0;
+        const right = new Date(b?.created_at || b?.date || 0).getTime() || 0;
+        return right - left;
+      })
+      .find((event: any) => {
+        const taskData = event?.task_data && typeof event.task_data === 'object' ? event.task_data : {};
+        const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+        return Boolean(
+          event?.protocol_id ||
+          event?.protocolId ||
+          taskData?.protocol_id ||
+          taskData?.protocolId ||
+          taskData?.protocolTitle ||
+          taskData?.protocol_name ||
+          metadata?.protocol_id ||
+          metadata?.protocolId ||
+          metadata?.protocolTitle ||
+          metadata?.protocol_name
+        );
+      });
+
+    if (latestScoredEvent) {
+      const taskData = latestScoredEvent?.task_data && typeof latestScoredEvent.task_data === 'object' ? latestScoredEvent.task_data : {};
+      const metadata = latestScoredEvent?.metadata && typeof latestScoredEvent.metadata === 'object' ? latestScoredEvent.metadata : {};
+      const matchedFromLatestScore = resolveProtocolMatch(
+        latestScoredEvent?.protocol_id ||
+          latestScoredEvent?.protocolId ||
+          taskData?.protocol_id ||
+          taskData?.protocolId ||
+          metadata?.protocol_id ||
+          metadata?.protocolId ||
+          '',
+        latestScoredEvent?.protocolTitle ||
+          latestScoredEvent?.protocol_name ||
+          taskData?.protocolTitle ||
+          taskData?.protocol_name ||
+          metadata?.protocolTitle ||
+          metadata?.protocol_name ||
+          metadata?.canonicalName ||
+          ''
+      );
+      if (matchedFromLatestScore) return matchedFromLatestScore;
+    }
+
     const discoveredProtocolId = String(
       latestProtocolReference?.protocolId || latestProtocolReference?.levelId || ''
     ).trim();
     const discoveredProtocolName = normalizeClinicalKey(latestProtocolReference?.protocolName || '');
 
     if (discoveredProtocolId || discoveredProtocolName) {
-      const discovered = list.find((protocol: any) => {
-        const protocolId = String(protocol?.id || '').trim();
-        const protocolTitle = normalizeClinicalKey(protocol?.title || protocol?.name || '');
-        return (discoveredProtocolId && protocolId === discoveredProtocolId) || (discoveredProtocolName && protocolTitle === discoveredProtocolName);
-      });
+      const discovered = resolveProtocolMatch(discoveredProtocolId, discoveredProtocolName);
       if (discovered) return discovered;
     }
 
@@ -423,16 +459,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (activeGoal) {
       const goalProtocolId = String(activeGoal?.protocolId ?? activeGoal?.protocol_id ?? '').trim();
       const goalProtocolTitle = normalizeClinicalKey(activeGoal?.protocolTitle || '');
-      const matched = list.find((protocol: any) => {
-        const protocolId = String(protocol?.id || '').trim();
-        const protocolTitle = normalizeClinicalKey(protocol?.title || protocol?.name || '');
-        return (goalProtocolId && protocolId === goalProtocolId) || (goalProtocolTitle && protocolTitle === goalProtocolTitle);
-      });
+      const matched = resolveProtocolMatch(goalProtocolId, goalProtocolTitle);
       if (matched) return matched;
     }
 
     return list.find((p: any) => /vb[\s-]?mapp/i.test(String(p?.title || p?.name || ''))) || list[0] || { data: [] };
-  }, [latestProtocolReference, protocols, user?.pei]);
+  }, [latestProtocolReference, protocols, scoredClinicalEvents, user?.pei]);
 
   const activeKidsProtocolEvents = useMemo(() => {
     const domainTasks = (Array.isArray(activeKidsProtocol?.data) ? activeKidsProtocol.data : [])
@@ -452,6 +484,27 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       );
     });
   }, [activeKidsProtocol, scoredClinicalEvents]);
+
+  const activeProtocolSnapshots = useMemo(() => {
+    const dates = activeKidsProtocolEvents.map((h: any) => getSnapshotKey(h)).filter(Boolean);
+    return Array.from(new Set(dates)).sort((a: any, b: any) => new Date(String(b)).getTime() - new Date(String(a)).getTime());
+  }, [activeKidsProtocolEvents]);
+
+  useEffect(() => {
+    if (!activeProtocolSnapshots.length) {
+      setSelectedBaseDate("");
+      setSelectedCompareDate("");
+      return;
+    }
+    if (!selectedBaseDate || !activeProtocolSnapshots.includes(selectedBaseDate)) {
+      setSelectedBaseDate(activeProtocolSnapshots[0]);
+      return;
+    }
+    if (!selectedCompareDate || selectedCompareDate === selectedBaseDate || !activeProtocolSnapshots.includes(selectedCompareDate)) {
+      const firstDifferent = activeProtocolSnapshots.find((d: any) => d !== selectedBaseDate) || "";
+      setSelectedCompareDate(firstDifferent);
+    }
+  }, [activeProtocolSnapshots, selectedBaseDate, selectedCompareDate]);
 
   const kidChartData = useMemo(() => {
     const defaultKidsDomains = [
@@ -579,8 +632,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       });
     };
 
-    const resolvedBaseDate = selectedBaseDate || availableSnapshots[0] || "";
-    const resolvedCurrentDate = selectedCompareDate || availableSnapshots[0] || "";
+    const resolvedBaseDate = selectedBaseDate || activeProtocolSnapshots[0] || "";
+    const resolvedCurrentDate = selectedCompareDate || activeProtocolSnapshots[0] || "";
     const baselineData = resolveDomainProgressPercent(resolvedBaseDate || null, 'first');
     const currentData = resolveDomainProgressPercent(resolvedCurrentDate || null, 'latest');
 
@@ -603,7 +656,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         }
       ]
     };
-  }, [activeKidsProtocol, activeKidsProtocolEvents, selectedBaseDate, selectedCompareDate, availableSnapshots]);
+  }, [activeKidsProtocol, activeKidsProtocolEvents, selectedBaseDate, selectedCompareDate, activeProtocolSnapshots]);
 
   const familyDiaryHistory = useMemo(() => {
     return history
@@ -1054,11 +1107,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                       </div>
                     </div>
                     <div className="mb-4 sm:mb-5 px-1 sm:px-2">
-                      <h2 className="text-lg sm:text-xl font-semibold text-[#7a32fc] flex items-center justify-center gap-2 text-center">
-                        <Trophy className="text-yellow-500" size={20}/> {activeKidsProtocol?.title || 'Nível de Herói'}
+                      <h2 className="text-2xl sm:text-3xl font-semibold text-[#7a32fc] flex items-center justify-center gap-2 text-center">
+                        <span role="img" aria-label="Troféu">🏆</span>
                       </h2>
                       <p className="mt-1 text-center text-[10px] font-bold uppercase tracking-widest text-gray-400">
-                        Protocolo ativo do nível atual
+                        Protocolo ativo atual
                       </p>
                     </div>
                     <div className="mb-4 sm:mb-5 px-1 sm:px-2 grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 items-end">
@@ -1069,10 +1122,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             className="w-full bg-blue-50 border border-blue-100 text-[10px] sm:text-[11px] font-semibold text-[#7a32fc] px-3 py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
                             value={selectedBaseDate}
                             onChange={(e) => setSelectedBaseDate(e.target.value)}
-                            disabled={availableSnapshots.length === 0}
+                            disabled={activeProtocolSnapshots.length === 0}
                           >
-                            {availableSnapshots.length === 0 && <option value="">Sem dados avaliados</option>}
-                            {availableSnapshots.map((date: any) => (
+                            {activeProtocolSnapshots.length === 0 && <option value="">Sem dados avaliados</option>}
+                            {activeProtocolSnapshots.map((date: any) => (
                               <option key={date} value={date}>{formatFilterDate(String(date))}</option>
                             ))}
                           </select>
@@ -1086,10 +1139,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             className="w-full bg-emerald-50 border border-emerald-100 text-[10px] sm:text-[11px] font-semibold text-emerald-700 px-3 py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
                             value={selectedCompareDate}
                             onChange={(e) => setSelectedCompareDate(e.target.value)}
-                            disabled={availableSnapshots.length === 0}
+                            disabled={activeProtocolSnapshots.length === 0}
                           >
                             <option value="">Sem comparação</option>
-                            {availableSnapshots
+                            {activeProtocolSnapshots
                               .filter((date: any) => date !== selectedBaseDate)
                               .map((date: any) => (
                                 <option key={`compare-${date}`} value={date}>{formatFilterDate(String(date))}</option>
