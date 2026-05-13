@@ -1283,52 +1283,7 @@ export const dataService = {
       return { success: false, error: 'patient_id ausente', data: null };
     }
 
-    try {
-      const supabase = await getSupabase();
-      const candidates = [
-        { table: 'vb_mapp_scores', patientColumns: ['patient_id', 'patientId'] },
-        { table: 'assessments', patientColumns: ['patient_id', 'patientId'] }
-      ];
-
-      for (const candidate of candidates) {
-        for (const patientColumn of candidate.patientColumns) {
-          const { row, error } = await tryFetchLatestProtocolRow(
-            supabase,
-            candidate.table,
-            patientColumn,
-            normalizedPatientId
-          );
-
-          if (error) {
-            const message = String(error?.message || '').toLowerCase();
-            const retryable =
-              message.includes('does not exist') ||
-              message.includes('schema cache') ||
-              message.includes('permission') ||
-              message.includes('row-level security') ||
-              message.includes('column');
-            if (retryable) continue;
-          }
-
-          const extracted = extractLatestProtocolReference(row);
-          if (extracted.protocolId || extracted.levelId || extracted.protocolName) {
-            return {
-              success: true,
-              data: {
-                ...extracted,
-                table: candidate.table,
-                patientColumn
-              }
-            };
-          }
-        }
-      }
-
-      return { success: true, data: null };
-    } catch (error: any) {
-      console.error('Error discovering latest patient protocol:', error);
-      return { success: false, error: error?.message || String(error), data: null };
-    }
+    return { success: true, data: null };
   },
 
   async uploadFile(bucket: string, path: string, file: File) {

@@ -407,83 +407,39 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       if (matched) return matched;
     }
 
-    const scoredEventsForProtocolResolution = scoredClinicalEvents.some((event: any) => event?._source === 'history')
-      ? scoredClinicalEvents.filter((event: any) => event?._source === 'history')
-      : scoredClinicalEvents;
-
-    const latestScoredEvent = [...scoredEventsForProtocolResolution]
+    const latestTaskWithProtocol = (Array.isArray(tasks) ? [...tasks] : [])
       .sort((a: any, b: any) => {
-        const left = new Date(a?.created_at || a?.date || 0).getTime() || 0;
-        const right = new Date(b?.created_at || b?.date || 0).getTime() || 0;
+        const left = new Date(a?.updated_at || a?.completed_at || a?.scheduled_at || a?.created_at || 0).getTime() || 0;
+        const right = new Date(b?.updated_at || b?.completed_at || b?.scheduled_at || b?.created_at || 0).getTime() || 0;
         return right - left;
       })
-      .find((event: any) => {
-        const taskData = event?.task_data && typeof event.task_data === 'object' ? event.task_data : {};
-        const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+      .find((task: any) => {
+        const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
         return Boolean(
-          event?.protocol_id ||
-          event?.protocolId ||
+          task?.protocol_id ||
+          task?.protocolId ||
           taskData?.protocol_id ||
           taskData?.protocolId ||
           taskData?.protocolTitle ||
-          taskData?.protocol_name ||
-          metadata?.protocol_id ||
-          metadata?.protocolId ||
-          metadata?.protocolTitle ||
-          metadata?.protocol_name
+          taskData?.protocol_name
         );
       });
 
-    if (latestScoredEvent) {
-      const taskData = latestScoredEvent?.task_data && typeof latestScoredEvent.task_data === 'object' ? latestScoredEvent.task_data : {};
-      const metadata = latestScoredEvent?.metadata && typeof latestScoredEvent.metadata === 'object' ? latestScoredEvent.metadata : {};
-      const matchedFromLatestScore = resolveProtocolMatch(
-        latestScoredEvent?.protocol_id ||
-          latestScoredEvent?.protocolId ||
+    if (latestTaskWithProtocol) {
+      const taskData = latestTaskWithProtocol?.task_data && typeof latestTaskWithProtocol.task_data === 'object' ? latestTaskWithProtocol.task_data : {};
+      const matchedFromTask = resolveProtocolMatch(
+        latestTaskWithProtocol?.protocol_id ||
+          latestTaskWithProtocol?.protocolId ||
           taskData?.protocol_id ||
           taskData?.protocolId ||
-          metadata?.protocol_id ||
-          metadata?.protocolId ||
           '',
-        latestScoredEvent?.protocolTitle ||
-          latestScoredEvent?.protocol_name ||
+        latestTaskWithProtocol?.protocolTitle ||
+          latestTaskWithProtocol?.protocol_name ||
           taskData?.protocolTitle ||
           taskData?.protocol_name ||
-          metadata?.protocolTitle ||
-          metadata?.protocol_name ||
-          metadata?.canonicalName ||
           ''
       );
-      if (matchedFromLatestScore) return matchedFromLatestScore;
-
-      const latestEventTitle = String(
-        latestScoredEvent?.title ||
-        latestScoredEvent?.taskTitle ||
-        taskData?.title ||
-        ''
-      ).trim();
-      const latestEventDomain = String(
-        latestScoredEvent?.domain ||
-        latestScoredEvent?.domainName ||
-        taskData?.domain ||
-        taskData?.domainName ||
-        metadata?.domain ||
-        ''
-      ).trim();
-
-      if (latestEventTitle || latestEventDomain) {
-        const inferredFromLatestScore = list.find((protocol: any) =>
-          (Array.isArray(protocol?.data) ? protocol.data : []).some((domain: any) => {
-            const domainName = String(domain?.name || '').trim();
-            const domainMatches = latestEventDomain && normalizeClinicalKey(domainName) === normalizeClinicalKey(latestEventDomain);
-            const skillMatches = (Array.isArray(domain?.skills) ? domain.skills : []).some((skill: any) =>
-              isSameClinicalSkill(String(skill?.name || '').trim(), latestEventTitle)
-            );
-            return domainMatches || skillMatches;
-          })
-        );
-        if (inferredFromLatestScore) return inferredFromLatestScore;
-      }
+      if (matchedFromTask) return matchedFromTask;
     }
 
     const discoveredProtocolId = String(
@@ -496,8 +452,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       if (discovered) return discovered;
     }
 
-    return list.find((p: any) => /vb[\s-]?mapp/i.test(String(p?.title || p?.name || ''))) || list[0] || { data: [] };
-  }, [latestProtocolReference, protocols, scoredClinicalEvents, user?.pei]);
+    const vbmappLevelOne = list.find((p: any) => {
+      const title = String(p?.title || p?.name || '').toLowerCase();
+      return /vb[\s-]?mapp/i.test(title) && (title.includes('nivel 1') || title.includes('nível 1') || title.includes('level 1'));
+    });
+    return vbmappLevelOne || list.find((p: any) => /vb[\s-]?mapp/i.test(String(p?.title || p?.name || ''))) || list[0] || { data: [] };
+  }, [latestProtocolReference, protocols, tasks, user?.pei]);
 
   const activeKidsProtocolEvents = useMemo(() => {
     const domainTasks = (Array.isArray(activeKidsProtocol?.data) ? activeKidsProtocol.data : [])
