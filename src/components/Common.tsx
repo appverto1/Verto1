@@ -163,12 +163,13 @@ export const SuccessOverlay = ({ title = "Fantástico!", message = "Você está 
 );
 
 export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true }: any) => { 
+  const numericValue = Number(value) || 0;
   const getMoodEmoji = (val: number) => { 
-    if (val < 20) return "ðŸ˜«"; 
-    if (val < 40) return "ðŸ˜•"; 
-    if (val < 60) return "ðŸ˜"; 
-    if (val < 80) return "ðŸ™‚"; 
-    return "ðŸ¤©"; 
+    if (val < 20) return "😫"; 
+    if (val < 40) return "😕"; 
+    if (val < 60) return "😐"; 
+    if (val < 80) return "🙂"; 
+    return "🤩"; 
   }; 
   return ( 
     <div className="w-full"> 
@@ -176,15 +177,15 @@ export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true }:
         <div className="flex justify-between items-center mb-4">
           <span className="font-semibold text-gray-700 flex items-center gap-2"><BatteryCharging size={20} className="text-[#7a32fc]" /> Energia</span>
           <div className="flex items-center gap-2 bg-white px-3 py-1 rounded-full shadow-sm">
-            <span className="text-2xl">{getMoodEmoji(value)}</span>
-            <span className="text-xl font-semibold text-[#7a32fc]">{value}%</span>
+            <span className="text-2xl">{getMoodEmoji(numericValue)}</span>
+            <span className="text-xl font-semibold text-[#7a32fc]">{numericValue}%</span>
           </div>
         </div>
       )} 
       <div className="big-slider-container">
-        <div className="big-slider-fill" style={{ width: `${value}%` }}></div>
-        <div className="slider-thumb-indicator" style={{ left: `${value}%` }}>{getMoodEmoji(value)}</div>
-        <input type="range" min="0" max="100" value={value} onChange={onChange} onMouseUp={onCommit} onTouchEnd={onCommit} className="big-slider-input" />
+        <div className="big-slider-fill" style={{ width: `${numericValue}%` }}></div>
+        <div className="slider-thumb-indicator" style={{ left: `${numericValue}%` }}>{getMoodEmoji(numericValue)}</div>
+        <input type="range" min="0" max="100" value={numericValue} onChange={onChange} onMouseUp={onCommit} onTouchEnd={onCommit} className="big-slider-input" />
       </div>
       <div className="flex justify-between text-xs text-gray-400 mt-2 font-semibold px-1"><span>Baixa</span><span>Média</span><span>Alta</span></div> 
     </div> 

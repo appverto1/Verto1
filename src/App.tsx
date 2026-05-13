@@ -1620,7 +1620,7 @@ export default function App() {
     void fetchPatientScopedData();
     const interval = window.setInterval(() => {
       void fetchPatientScopedData();
-    }, 60_000);
+    }, 15_000);
 
     return () => {
       mounted = false;

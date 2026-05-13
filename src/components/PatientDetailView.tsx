@@ -1927,11 +1927,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       };
     }
     if (type === 'task' || type === 'intervention' || type === 'reinforcement') {
+      const effortValue = value?.effort ?? value?.energy ?? log?.energy;
+      const effortLabel =
+        effortValue !== null && effortValue !== undefined && effortValue !== ''
+          ? `Energia informada: ${Number(effortValue)}%.`
+          : '';
       return {
         icon: <CheckCircle2 size={18} />,
         label: 'Tarefa',
         title: value?.title || log?.title || 'Tarefa concluída',
-        detail: value?.note || 'Paciente marcou a atividade como concluída.',
+        detail: [effortLabel, value?.note || 'Paciente marcou a atividade como concluída.'].filter(Boolean).join('\n'),
         badgeClass: 'bg-emerald-100 text-emerald-700',
         dotClass: 'bg-emerald-500'
       };

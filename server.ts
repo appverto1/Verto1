@@ -221,6 +221,42 @@ function normalizeProfessionalPlan(input?: string | null): 'Essencial' | 'Cresci
   return null;
 }
 
+function resolveProfessionalPlanPriceId(planName: string | null | undefined): string {
+  const normalizedPlan = normalizeProfessionalPlan(planName || '');
+  if (!normalizedPlan) return '';
+
+  const envNames: Record<string, string[]> = {
+    Essencial: ['STRIPE_PRICE_ESSENCIAL', 'STRIPE_ESSENCIAL_PRICE_ID'],
+    Crescimento: ['STRIPE_PRICE_CRESCIMENTO', 'STRIPE_CRESCIMENTO_PRICE_ID'],
+    Avançado: ['STRIPE_PRICE_AVANCADO', 'STRIPE_AVANCADO_PRICE_ID', 'STRIPE_PRICE_AVANÇADO']
+  };
+
+  for (const envName of envNames[normalizedPlan] || []) {
+    const priceId = sanitizeString(process.env[envName] || '', 160);
+    if (priceId) return priceId;
+  }
+
+  return '';
+}
+
+function resolveProfessionalPlanByPriceId(priceId: string | null | undefined): 'Essencial' | 'Crescimento' | 'Avançado' | null {
+  const safePriceId = sanitizeString(priceId, 160);
+  if (!safePriceId) return null;
+
+  const planNames: Array<'Essencial' | 'Crescimento' | 'Avançado'> = ['Essencial', 'Crescimento', 'Avançado'];
+  for (const planName of planNames) {
+    if (resolveProfessionalPlanPriceId(planName) === safePriceId) {
+      return planName;
+    }
+  }
+
+  return null;
+}
+
+function generateTemporaryCheckoutPassword(): string {
+  return `Verto#${crypto.randomBytes(12).toString('base64url')}9aA!`;
+}
+
 type AppRole = 'owner' | 'admin' | 'coordinator' | 'receptionist' | 'therapist' | 'patient';
 type ClinicRole = 'coordinator' | 'therapist' | 'receptionist';
 
@@ -2820,6 +2856,31 @@ async function derivePatientTreatmentStatus(user: any): Promise<'active' | 'inac
   return 'waiting_treatment';
 }
 
+async function resolveProfessionalPlanFromCheckoutSession(
+  stripe: Stripe,
+  session: Stripe.Checkout.Session,
+): Promise<'Essencial' | 'Crescimento' | 'Avançado' | null> {
+  const metadataPlan = normalizeProfessionalPlan((session.metadata as any)?.planName);
+  if (metadataPlan) return metadataPlan;
+
+  try {
+    const lineItems = await stripe.checkout.sessions.listLineItems(session.id, { limit: 10 });
+    for (const lineItem of lineItems.data || []) {
+      const planByPriceId = resolveProfessionalPlanByPriceId(
+        typeof lineItem.price === 'string' ? lineItem.price : lineItem.price?.id,
+      );
+      if (planByPriceId) return planByPriceId;
+    }
+  } catch (error: any) {
+    console.warn('[Stripe] Falha ao resolver plano pelos line items da sessao:', {
+      sessionId: sanitizeString(session.id, 200),
+      message: error?.message || String(error)
+    });
+  }
+
+  return null;
+}
+
 async function canAccessPatientInCurrentClinic(patientId: string, user: any): Promise<boolean> {
   if (!isUuid(patientId)) return false;
   if (hasGlobalClinicAccess(user)) return true;
@@ -3302,6 +3363,26 @@ async function startServer() {
           const planNameFromMetadata = sanitizeString((session.metadata as any)?.planName, 80);
           const customerEmail = sanitizeEmail(session.customer_details?.email || session.customer_email);
           const stripeCustomerId = sanitizeString(String(session.customer || ''), 200);
+          const resolvedDirectPlan = await resolveProfessionalPlanFromCheckoutSession(stripe, session);
+
+          if (!flowType && !userId && customerEmail && resolvedDirectPlan) {
+            try {
+              await provisionProfessionalFromDirectStripeCheckout({
+                email: customerEmail,
+                planName: resolvedDirectPlan,
+                customerName: sanitizeString(session.customer_details?.name, 180) || null,
+                stripeCustomerId
+              });
+            } catch (directProvisionError: any) {
+              console.error('[Stripe Webhook] Falha ao provisionar conta por payment link direto:', {
+                email: maskEmail(customerEmail),
+                planName: resolvedDirectPlan,
+                message: directProvisionError?.message || String(directProvisionError)
+              });
+              throw directProvisionError;
+            }
+            break;
+          }
 
           await updateClinicSubscriptionStatus({
             clinicId,
@@ -3374,7 +3455,7 @@ async function startServer() {
                   .from('users')
                   .update({
                     subscription_status: 'active',
-                    plan_name: normalizeProfessionalPlan(planNameFromMetadata) || undefined,
+                    plan_name: normalizeProfessionalPlan(planNameFromMetadata) || resolvedDirectPlan || undefined,
                     updated_at: new Date().toISOString()
                   })
                   .eq('id', effectiveUserId);
@@ -4705,6 +4786,180 @@ async function startServer() {
           : 'Conta criada. Enviamos um link de confirmação para seu e-mail. Confirme antes de acessar funcionalidades sensíveis.'
       }
     };
+  };
+
+  const provisionProfessionalFromDirectStripeCheckout = async (params: {
+    email: string;
+    planName: 'Essencial' | 'Crescimento' | 'Avançado';
+    customerName?: string | null;
+    stripeCustomerId?: string | null;
+  }) => {
+    const safeEmail = sanitizeEmail(params.email);
+    const planName = normalizeProfessionalPlan(params.planName);
+    const customerName = sanitizeString(params.customerName, 180);
+    const stripeCustomerId = sanitizeString(params.stripeCustomerId, 200);
+    if (!safeEmail || !planName) {
+      throw new Error('Dados insuficientes para provisionar acesso profissional por checkout direto.');
+    }
+
+    const planPrices: Record<'Essencial' | 'Crescimento' | 'Avançado', number> = {
+      Essencial: 149.9,
+      Crescimento: 399.9,
+      Avançado: 679.9
+    };
+
+    let authUser = await findAuthUserByEmail(safeEmail);
+    let userId = sanitizeString(authUser?.id, 120);
+    const displayName = customerName || sanitizeString(authUser?.user_metadata?.full_name, 180) || safeEmail.split('@')[0];
+
+    if (!userId) {
+      const signupResult = await registerUserWithEmailConfirmation(
+        {
+          email: safeEmail,
+          password: generateTemporaryCheckoutPassword(),
+          name: displayName,
+          role: 'professional',
+          intendedRole: 'coordinator',
+          planName
+        },
+        { deferActivationEmail: true }
+      );
+
+      if (!signupResult.ok) {
+        throw new Error(sanitizeString((signupResult.body as any)?.error || 'Falha ao criar conta pós-pagamento.', 300));
+      }
+
+      userId = sanitizeString((signupResult.body as any)?.userId, 120);
+      authUser = await findAuthUserByEmail(safeEmail);
+    }
+
+    if (!userId) {
+      throw new Error('Nao foi possivel localizar a conta apos o checkout.');
+    }
+
+    const { data: existingProfile } = await supabase
+      .from('users')
+      .select('id, role, email, name')
+      .eq('id', userId)
+      .maybeSingle();
+
+    const existingRole = sanitizeString(existingProfile?.role, 40).toLowerCase();
+    if (existingRole === 'patient') {
+      throw new Error('Este e-mail ja possui cadastro como paciente e nao pode receber plano profissional direto.');
+    }
+
+    let profileUpdatePayload = cleanObject({
+      email: safeEmail,
+      name: displayName,
+      role: 'coordinator',
+      clinic_id: userId,
+      subscription_status: 'active',
+      plan_name: planName,
+      plan_price: planPrices[planName],
+      updated_at: new Date().toISOString()
+    });
+
+    const removedColumns = new Set<string>();
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const { error: updateError } = await supabase
+        .from('users')
+        .update(profileUpdatePayload)
+        .eq('id', userId);
+
+      if (!updateError) break;
+
+      const missingColumn = extractMissingColumnName(updateError);
+      if (!missingColumn || removedColumns.has(missingColumn)) {
+        throw updateError;
+      }
+
+      removedColumns.add(missingColumn);
+      const { [missingColumn]: _removed, ...rest } = profileUpdatePayload as any;
+      profileUpdatePayload = rest;
+    }
+
+    await ensureClinicAndMembershipForCoordinator(userId, displayName || null);
+    await updateClinicSubscriptionStatus({
+      clinicId: userId,
+      userId,
+      email: safeEmail,
+      status: 'active'
+    });
+
+    if (stripeCustomerId) {
+      await persistStripeCustomerReference({
+        customerId: stripeCustomerId,
+        email: safeEmail,
+        userId,
+        clinicId: userId
+      });
+    }
+
+    try {
+      await supabase.auth.admin.updateUserById(userId, {
+        user_metadata: {
+          ...((authUser as any)?.user_metadata || {}),
+          full_name: displayName,
+          role: 'coordinator'
+        }
+      });
+    } catch (metadataError: any) {
+      console.warn('[Stripe] Nao foi possivel atualizar metadata do usuario provisionado por link direto:', {
+        userId,
+        message: metadataError?.message || String(metadataError)
+      });
+    }
+
+    const { data: authData, error: authError } = await supabase.auth.admin.getUserById(userId);
+    if (authError) {
+      throw authError;
+    }
+
+    const latestAuthUser = authData?.user;
+    const isEmailConfirmed = Boolean((latestAuthUser as any)?.email_confirmed_at || (latestAuthUser as any)?.confirmed_at);
+    const targetEmail = sanitizeEmail(latestAuthUser?.email) || safeEmail;
+
+    if (!isEmailConfirmed && targetEmail) {
+      const activationLink =
+        (await generateSupabaseActionLink({
+          type: 'signup',
+          email: targetEmail,
+          redirectTo: getActivationRedirectUrl('coordinator', targetEmail)
+        })) ||
+        (await generateSupabaseActionLink({
+          type: 'recovery',
+          email: targetEmail,
+          redirectTo: getActivationRedirectUrl('coordinator', targetEmail)
+        })) ||
+        getActivationRedirectUrl('coordinator', targetEmail);
+
+      const activationEmail = buildActivationEmailTemplate({
+        nome: displayName,
+        link_ativacao: activationLink,
+        perfil: 'professional'
+      });
+
+      await sendTransactionalEmailSafe({
+        to: targetEmail,
+        subject: activationEmail.subject,
+        html: activationEmail.html,
+        context: 'professional_direct_payment_activation',
+        from: OFFICIAL_FROM_CONTACT,
+        replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+        templateKind: 'welcome_professional',
+        templateData: {
+          nome: displayName,
+          link_ativacao: activationLink
+        },
+        metadata: {
+          userId,
+          email: maskEmail(targetEmail),
+          planName
+        }
+      });
+    }
+
+    return { userId, planName, email: targetEmail };
   };
 
   app.post('/api/auth/signup', authSignupLimiter, async (req, res) => {
@@ -13564,10 +13819,13 @@ async function startServer() {
 
       const stripe = getStripe();
       const origin = req.headers.origin || `${req.protocol}://${req.get('host')}`;
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ['card'],
-        line_items: [
-          {
+      const stripePriceId = resolveProfessionalPlanPriceId(requestedPlan);
+      const lineItem: Stripe.Checkout.SessionCreateParams.LineItem = stripePriceId
+        ? {
+            price: stripePriceId,
+            quantity: 1
+          }
+        : {
             price_data: {
               currency: 'brl',
               product_data: {
@@ -13579,8 +13837,11 @@ async function startServer() {
               }
             },
             quantity: 1
-          }
-        ],
+          };
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        line_items: [lineItem],
         mode: 'subscription',
         success_url: `${origin}/?payment=success&mode=professional-signup&signup=check-email&checkout_session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${origin}/?payment=cancel&mode=professional-signup&lead_ref=${encodeURIComponent(userId)}&plan=${encodeURIComponent(requestedPlan)}&checkout_session_id={CHECKOUT_SESSION_ID}`,
@@ -13722,6 +13983,7 @@ async function startServer() {
       // Determine price
       let amount = 0;
       let description = '';
+      let checkoutPlanName = '';
       
       if (user.role === 'patient') {
         amount = 490; // R$ 4,90 in cents
@@ -13779,6 +14041,7 @@ async function startServer() {
         
         amount = planPrices[planName];
         description = `Plano ${planName} - Verto`;
+        checkoutPlanName = planName;
       }
 
       console.log('Checkout details:', { amount, description });
@@ -13807,10 +14070,13 @@ async function startServer() {
         email: sanitizeEmail(user.email)
       });
 
-      const checkoutPayload: Stripe.Checkout.SessionCreateParams = {
-        payment_method_types: ['card'],
-        line_items: [
-          {
+      const professionalPriceId = user.role === 'patient' ? '' : resolveProfessionalPlanPriceId(checkoutPlanName);
+      const lineItem: Stripe.Checkout.SessionCreateParams.LineItem = professionalPriceId
+        ? {
+            price: professionalPriceId,
+            quantity: 1
+          }
+        : {
             price_data: {
               currency: 'brl',
               product_data: {
@@ -13822,19 +14088,24 @@ async function startServer() {
               },
             },
             quantity: 1,
-          },
-        ],
+          };
+
+      const checkoutPayload: Stripe.Checkout.SessionCreateParams = {
+        payment_method_types: ['card'],
+        line_items: [lineItem],
         mode: 'subscription',
         success_url: `${origin}/?payment=success`,
         cancel_url: `${origin}/?payment=cancel`,
         metadata: {
           userId: user.id,
-          clinicId
+          clinicId,
+          ...(user.role === 'patient' ? {} : { planName: checkoutPlanName })
         },
         subscription_data: {
           metadata: {
             userId: user.id,
-            clinicId
+            clinicId,
+            ...(user.role === 'patient' ? {} : { planName: checkoutPlanName })
           }
         }
       };

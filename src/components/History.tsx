@@ -115,6 +115,12 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
     if (item?.type === 'task') return '🎯';
     return '📝';
   })();
+  const energyValue =
+    item?.energy !== null && item?.energy !== undefined
+      ? Number(item.energy)
+      : item?.patientEffort !== null && item?.patientEffort !== undefined
+        ? Number(item.patientEffort)
+        : null;
   const hasStarMarker = /\u2b50|⭐/.test(String(item?.subject || ''));
   const isMilestoneAwarded = Boolean(item?.milestoneAwarded) || Number(item?.score ?? 0) >= 1 || hasStarMarker;
   const handleToggleMilestone = () => {
@@ -169,6 +175,12 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
           )}
         </div>
       )} 
+      {isTherapist && energyValue !== null && Number.isFinite(energyValue) && (
+        <div className="mb-3 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-emerald-600">Energia do paciente</p>
+          <p className="text-sm font-semibold text-emerald-800">{energyValue}%</p>
+        </div>
+      )}
       {isTherapist && isFamilyEntry && (
         <div className="mt-4 pt-3 border-t border-gray-100 flex justify-end"> 
           <button onClick={handleToggleMilestone} className={`text-[10px] font-semibold px-4 py-2 rounded-xl shadow-sm transition-all uppercase tracking-widest ${isMilestoneAwarded ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-[#7551FF] text-white hover:opacity-90'}`}> 

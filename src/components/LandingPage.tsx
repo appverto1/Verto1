@@ -495,9 +495,10 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     return `https://wa.me/5511959348563?text=${encodeURIComponent(message)}`;
   };
 
-  const handleRegister = async (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent, planOverride?: string) => {
     e.preventDefault();
     setRegisterError('');
+    const effectiveSelectedPlan = planOverride || selectedPlan;
 
     try {
       if ((registerType === 'professional' || registerType === 'coordinator') && !crp.trim()) {
@@ -516,7 +517,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         return;
       }
 
-      if (registerType === 'professional' && !selectedPlan) {
+      if (registerType === 'professional' && !effectiveSelectedPlan) {
         setRegisterStep(3);
         return;
       }
@@ -535,7 +536,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           name,
           role: registerType === 'professional' ? 'coordinator' : 'patient',
           crp: registerType === 'professional' ? crp : undefined,
-          planName: registerType === 'patient' ? 'Paciente' : selectedPlan,
+          planName: registerType === 'patient' ? 'Paciente' : effectiveSelectedPlan,
           phone: registerType === 'professional' ? normalizeWhatsappPhone(whatsappPhone) : undefined,
           acquisitionChannel
         })
@@ -589,7 +590,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     try {
       setSelectedPlan(planName);
       const syntheticSubmitEvent = { preventDefault: () => {} } as React.FormEvent;
-      await handleRegister(syntheticSubmitEvent);
+      await handleRegister(syntheticSubmitEvent, planName);
     } catch (err: any) {
       console.error('Select plan error:', err);
       setRegisterError('Erro ao processar checkout: ' + err.message);
@@ -1778,7 +1779,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                         <Rocket size={20} />
                       </div>
                       <h2 className="text-base md:text-lg font-semibold tracking-tight">Quase lá, {name.split(' ')[0]}!</h2>
-                      <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider mt-1">Veja o perfil mais parecido com sua operação e fale com um especialista</p>
+                      <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider mt-1">Escolha um plano e conclua o pagamento pela Stripe</p>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
@@ -1798,13 +1799,14 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
                     <div className="space-y-2 md:space-y-2.5">
                       {[
-                        { name: 'Essencial', desc: 'Até 2 profissionais', note: 'Implantação enxuta' },
-                        { name: 'Crescimento', desc: '3 a 7 profissionais', note: 'Operação em expansão' },
-                        { name: 'Avançado', desc: '8 a 12 profissionais', note: 'Gestão consolidada' }
+                        { name: 'Essencial', desc: 'Até 2 profissionais', price: 'R$ 149,90/mês' },
+                        { name: 'Crescimento', desc: '3 a 7 profissionais', price: 'R$ 399,90/mês' },
+                        { name: 'Avançado', desc: '8 a 12 profissionais', price: 'R$ 679,90/mês' }
                       ].map((plan) => (
                         <button 
                           key={plan.name}
-                          onClick={() => window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer')}
+                          onClick={() => void handleSelectPlan(plan.name)}
+                          disabled={loading}
                           className="w-full p-3 md:p-4 bg-gray-50 border border-transparent hover:border-[#7a32fc] hover:bg-purple-50/50 rounded-2xl transition-all flex items-center justify-between group text-left"
                         >
                           <div>
@@ -1812,7 +1814,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                             <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">{plan.desc}</p>
                           </div>
                           <span className="text-[8px] md:text-[9px] font-semibold uppercase tracking-wider text-[#7a32fc] flex items-center gap-1">
-                            <MessageCircle size={12} /> {plan.note}
+                            <ExternalLink size={12} /> {loading && selectedPlan === plan.name ? 'Abrindo Stripe...' : plan.price}
                           </span>
                         </button>
                       ))}

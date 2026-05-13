@@ -74,9 +74,26 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const readOnlyNotice = "Você não possui um tratamento ativo no momento. Entre em contato com sua clínica para retomar o acompanhamento.";
 
   useEffect(() => {
-    const timer = window.setInterval(() => setCurrentTime(new Date()), 30000);
+    const timer = window.setInterval(() => setCurrentTime(new Date()), 5000);
     return () => window.clearInterval(timer);
   }, []);
+
+  const parseScheduledTaskDate = (value: any) => {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+
+    const direct = new Date(raw);
+    if (!Number.isNaN(direct.getTime())) return direct;
+
+    const brMatch = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
+    if (brMatch) {
+      const [, dd, mm, yyyy, hh = '00', min = '00', ss = '00'] = brMatch;
+      const parsed = new Date(`${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}`);
+      if (!Number.isNaN(parsed.getTime())) return parsed;
+    }
+
+    return null;
+  };
 
   useEffect(() => {
     const nextName = String(user?.name || 'Paciente');
@@ -233,8 +250,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return list.filter((task: any) => {
       const scheduledRaw = task?.scheduledAt || task?.scheduled_at;
       if (!scheduledRaw) return false;
-      const scheduledAt = new Date(scheduledRaw);
-      if (Number.isNaN(scheduledAt.getTime())) return false;
+      const scheduledAt = parseScheduledTaskDate(scheduledRaw);
+      if (!scheduledAt) return false;
       return scheduledAt >= startOfToday && scheduledAt < endOfToday && scheduledAt <= currentTime;
     });
   }, [tasks, isKidsProfile, currentTime]);
@@ -250,6 +267,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const moodInfluenceTags = isConventionalAdult ? conventionalMoodTags : (energyTags || []);
 
   const moodOptions = [ { value: 10, emoji: "😫", label: "Esgotado", color: "bg-red-100 border-red-200 hover:bg-red-200" }, { value: 30, emoji: "😕", label: "Baixo", color: "bg-orange-100 border-orange-200 hover:bg-orange-200" }, { value: 50, emoji: "😐", label: "Normal", color: "bg-yellow-100 border-yellow-200 hover:bg-yellow-200" }, { value: 70, emoji: "🙂", label: "Bem", color: "bg-blue-100 border-blue-200 hover:bg-blue-200" }, { value: 90, emoji: "🤩", label: "Ótimo!", color: "bg-green-100 border-green-200 hover:bg-green-200" } ];
+  const getTaskEnergyEmoji = (val: number) => {
+    if (val < 20) return "😫";
+    if (val < 40) return "😕";
+    if (val < 60) return "😐";
+    if (val < 80) return "🙂";
+    return "🤩";
+  };
 
   const getSnapshotKey = (item: any) => {
     const raw = String(item?.dateGroup || '').trim();
@@ -1785,7 +1809,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                       </div>
                     ) : (
                       <React.Fragment>
-                        <BigEnergySlider value={taskEnergy} onChange={(e: any) => setTaskEnergy(e.target.value)} onCommit={handleEnergyCommit} /> 
+                        <BigEnergySlider value={taskEnergy} onChange={(e: any) => setTaskEnergy(Number(e.target.value) || 0)} onCommit={handleEnergyCommit} /> 
                         <p className="text-center text-[10px] text-[#7a32fc]/50 mt-4 font-medium animate-pulse italic uppercase tracking-widest">(Solte para continuar)</p>
                       </React.Fragment>
                     )}
@@ -1797,7 +1821,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 <div className="mb-4"> 
                   <div className="flex items-center justify-between mb-2"> 
                     <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">{isKidsProfile ? 'Sua Pontuação' : isConventionalAdult ? 'Esforço' : 'Energia'}</span> 
-                    <span className="text-sm font-semibold text-[#7a32fc]">{isKidsProfile ? taskEnergy : `${taskEnergy}%`}</span> 
+                    <span className="text-sm font-semibold text-[#7a32fc] flex items-center gap-2">{!isKidsProfile && !isConventionalAdult ? <span>{getTaskEnergyEmoji(Number(taskEnergy) || 0)}</span> : null}{isKidsProfile ? taskEnergy : `${taskEnergy}%`}</span> 
                   </div> 
                   <div className="w-full bg-gray-100 rounded-full h-2"> 
                     <div className="bg-[#7a32fc] h-2 rounded-full" style={{ width: isKidsProfile ? `${taskEnergy * 100}%` : `${taskEnergy}%` }}></div> 
