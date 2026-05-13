@@ -3736,20 +3736,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           </div> 
         ) : activeTab === 'notes' ? ( 
           <div className="space-y-4 animate-fade-in"> 
-            <div id="note-export-card" className="bg-white dark:bg-[#101b2e] border border-gray-200 dark:border-slate-700 p-5 rounded-[24px] shadow-sm mb-6 animate-fade-in">
+            <div id="note-export-card" className={`border p-5 rounded-[24px] shadow-sm mb-6 animate-fade-in transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
               <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
                 <div className="flex-1">
-                  <h4 className="text-xs font-semibold text-gray-700 dark:text-slate-100 uppercase tracking-tight mb-3 flex items-center gap-2">
+                  <h4 className={`text-xs font-semibold uppercase tracking-tight mb-3 flex items-center gap-2 ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>
                     <FileOutput size={14} className="text-[#7a32fc]" /> Exportar Relatório de Evolução
                   </h4>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[9px] font-semibold text-gray-400 uppercase mb-1 ml-1">Início</label>
-                      <input type="date" className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-2 text-xs outline-none focus:border-[#7a32fc] transition-all text-gray-700 dark:text-slate-100" value={reportStartDate} onChange={e => setReportStartDate(e.target.value)} />
+                      <label className={`block text-[9px] font-semibold uppercase mb-1 ml-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Início</label>
+                      <input type="date" className={`w-full border rounded-xl p-2 text-xs outline-none focus:border-[#7a32fc] transition-all ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-gray-50 border-gray-100 text-gray-700'}`} value={reportStartDate} onChange={e => setReportStartDate(e.target.value)} />
                     </div>
                     <div>
-                      <label className="block text-[9px] font-semibold text-gray-400 uppercase mb-1 ml-1">Fim</label>
-                      <input type="date" className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-2 text-xs outline-none focus:border-[#7a32fc] transition-all text-gray-700 dark:text-slate-100" value={reportEndDate} onChange={e => setReportEndDate(e.target.value)} />
+                      <label className={`block text-[9px] font-semibold uppercase mb-1 ml-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Fim</label>
+                      <input type="date" className={`w-full border rounded-xl p-2 text-xs outline-none focus:border-[#7a32fc] transition-all ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-gray-50 border-gray-100 text-gray-700'}`} value={reportEndDate} onChange={e => setReportEndDate(e.target.value)} />
                     </div>
                   </div>
                 </div>
@@ -3770,8 +3770,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             </div> 
 
             <div className="flex items-center justify-between mb-2 px-1">
-              <h3 className="text-sm font-semibold text-gray-700 dark:text-slate-100 flex items-center gap-2">
-                {noteMode === 'private' ? <FileText size={16} className="text-gray-500"/> : noteMode === 'patient' ? <Share2 size={16} className="text-[#7a32fc]"/> : <SlidersHorizontal size={16} className="text-indigo-600"/>}
+              <h3 className={`text-sm font-semibold flex items-center gap-2 ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>
+                {noteMode === 'private' ? <FileText size={16} className={isPanelDark ? 'text-slate-400' : 'text-gray-500'}/> : noteMode === 'patient' ? <Share2 size={16} className="text-[#7a32fc]"/> : <SlidersHorizontal size={16} className="text-indigo-600"/>}
                 {noteMode === 'private' ? "Nova Anotação Privada" : noteMode === 'patient' ? "Enviar para Paciente (Portátil)" : "Compartilhar com Profissionais (Portátil)"}
               </h3>
               <button id="note-filters-btn" onClick={() => setShowNoteFilters(!showNoteFilters)} className={`text-[10px] font-semibold px-3 py-1 rounded-full transition-all flex items-center gap-1 border ${showNoteFilters ? (isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-slate-100 border-slate-200 text-slate-700') : (isPanelDark ? 'bg-slate-900 border-slate-800 text-slate-300' : 'bg-white border-slate-200 text-slate-500')}`}>
@@ -3834,7 +3834,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       )}
                     </div>
                   </div> 
-                  <p className="text-sm text-gray-700 dark:text-slate-200 whitespace-pre-wrap mb-1">{normalizeNoteText(note.text)}</p> 
+                  <p className={`text-sm whitespace-pre-wrap mb-1 ${isPanelDark ? 'text-slate-200' : 'text-gray-700'}`}>{normalizeNoteText(note.text)}</p> 
                   <div className="flex items-center gap-2 mt-2">
                     {(note.visibility === 'patient' || note.type === 'shared') && <span className="text-[9px] font-semibold bg-[#7a32fc] text-white px-2 py-0.5 rounded-full uppercase">Visível para Paciente (Portátil)</span>}
                     {(note.visibility === 'professional' || note.type === 'professional') && <span className="text-[9px] font-semibold bg-indigo-600 text-white px-2 py-0.5 rounded-full uppercase">Visível para Equipe (Portátil)</span>}
@@ -3847,23 +3847,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           </div> 
         ) : activeTab === 'report' ? (
           <div className="space-y-6 animate-fade-in">
-            <div id="report-config-card" className="bg-white border border-gray-100 p-6 rounded-[32px] shadow-sm">
+            <div id="report-config-card" className={`border p-6 rounded-[32px] shadow-sm transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>
               <div className="flex items-center gap-3 mb-6">
-                <div className="p-3 bg-indigo-50 rounded-2xl text-[#7a32fc]">
+                <div className={`p-3 rounded-2xl text-[#7a32fc] ${isPanelDark ? 'bg-violet-500/10' : 'bg-indigo-50'}`}>
                   <BarChart2 size={24} />
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-gray-800 tracking-tight">Relatório de Progresso</h3>
-                  <p className="text-xs text-gray-400 font-semibold uppercase tracking-widest">Análise Comparativa para Clínicas e Operadores</p>
+                  <h3 className={`text-lg font-semibold tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-gray-800'}`}>Relatório de Progresso</h3>
+                  <p className={`text-xs font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>Análise Comparativa para Clínicas e Operadores</p>
                 </div>
               </div>
 
               <div className={`grid grid-cols-1 ${isKidsProfile ? 'md:grid-cols-3' : 'md:grid-cols-4'} gap-4 mb-6`}>
                 <div>
-                  <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Período de Análise</label>
+                  <label className={`block text-[10px] font-semibold uppercase mb-1.5 ml-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>Período de Análise</label>
                   <select 
                     id="report-period-selector"
-                    className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
+                    className={`w-full border rounded-xl p-3 text-sm font-semibold outline-none focus:border-[#4318FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-gray-50 border-gray-100 text-gray-700'}`}
                     value={reportPeriod}
                     onChange={(e) => setReportPeriod(e.target.value)}
                   >
@@ -3877,9 +3877,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 {!isKidsProfile && (
                   <React.Fragment>
                     <div>
-                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Protocolo</label>
+                      <label className={`block text-[10px] font-semibold uppercase mb-1.5 ml-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>Protocolo</label>
                       <select
-                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
+                        className={`w-full border rounded-xl p-3 text-sm font-semibold outline-none focus:border-[#4318FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-gray-50 border-gray-100 text-gray-700'}`}
                         value={selectedChartProtocolId}
                         onChange={(e) => { setHasUserChangedChartProtocol(true); setSelectedChartProtocolId(e.target.value); }}
                       >
@@ -3889,9 +3889,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Data Base</label>
+                      <label className={`block text-[10px] font-semibold uppercase mb-1.5 ml-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>Data Base</label>
                       <select
-                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
+                        className={`w-full border rounded-xl p-3 text-sm font-semibold outline-none focus:border-[#4318FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-gray-50 border-gray-100 text-gray-700'}`}
                         value={adultReportDate1}
                         onChange={(e) => setAdultReportDate1(e.target.value)}
                       >
@@ -3902,9 +3902,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Data Comparação</label>
+                      <label className={`block text-[10px] font-semibold uppercase mb-1.5 ml-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>Data Comparação</label>
                       <select
-                        className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
+                        className={`w-full border rounded-xl p-3 text-sm font-semibold outline-none focus:border-[#4318FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-gray-50 border-gray-100 text-gray-700'}`}
                         value={adultReportDate2}
                         onChange={(e) => setAdultReportDate2(e.target.value)}
                       >
@@ -4020,10 +4020,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
               <div className="mt-8">
                 <div className="flex items-center justify-between mb-4">
-                  <h4 className="text-xs font-semibold text-gray-700 dark:text-slate-100 uppercase tracking-tight flex items-center gap-2">
+                  <h4 className={`text-xs font-semibold uppercase tracking-tight flex items-center gap-2 ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>
                     <FileText size={16} className="text-[#7a32fc]" /> {isKidsProfile ? 'Incluir Observações Clínicas' : 'Incluir Anotações de Evolução'}
                   </h4>
-                  <span className="text-[10px] font-semibold text-gray-400 uppercase">
+                  <span className={`text-[10px] font-semibold uppercase ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>
                     {isKidsProfile ? `${selectedReportNotes.length} selecionadas` : `${selectedAdultEvolutionIds.length} selecionadas`}
                   </span>
                 </div>
@@ -4033,13 +4033,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                         <div
                           key={note.id}
                           onClick={() => toggleReportNote(note.id)}
-                          className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedReportNotes.includes(note.id) ? 'border-[#7a32fc] bg-blue-50/50 dark:bg-violet-500/15 shadow-sm' : 'border-gray-100 dark:border-slate-700 bg-gray-50 dark:bg-slate-800 hover:bg-white dark:hover:bg-slate-700 hover:border-gray-200'}`}
+                          className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedReportNotes.includes(note.id) ? (isPanelDark ? 'border-[#7a32fc] bg-violet-500/15 shadow-sm' : 'border-[#7a32fc] bg-blue-50/50 shadow-sm') : (isPanelDark ? 'border-slate-700 bg-slate-800 hover:bg-slate-700' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200')}`}
                         >
                           <div className="flex justify-between items-start mb-2">
                             <span className="text-[9px] font-semibold text-gray-400 uppercase">{note.date}</span>
                             {selectedReportNotes.includes(note.id) && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
                           </div>
-                          <p className="text-xs text-gray-600 dark:text-slate-200 line-clamp-3">{normalizeNoteText(note.text)}</p>
+                          <p className={`text-xs line-clamp-3 ${isPanelDark ? 'text-slate-200' : 'text-gray-600'}`}>{normalizeNoteText(note.text)}</p>
                         </div>
                       ))
                     : adultTasksInPeriod.map((task: any) => {
@@ -4048,7 +4048,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                           <div
                             key={`adult-evo-select-${task.id}`}
                             onClick={() => toggleAdultEvolutionSelection(String(task.id))}
-                            className={`p-4 rounded-2xl border cursor-pointer transition-all ${selected ? 'border-[#7a32fc] bg-blue-50/50 dark:bg-violet-500/15 shadow-sm' : 'border-gray-100 dark:border-slate-700 bg-gray-50 dark:bg-slate-800 hover:bg-white dark:hover:bg-slate-700 hover:border-gray-200'}`}
+                            className={`p-4 rounded-2xl border cursor-pointer transition-all ${selected ? (isPanelDark ? 'border-[#7a32fc] bg-violet-500/15 shadow-sm' : 'border-[#7a32fc] bg-blue-50/50 shadow-sm') : (isPanelDark ? 'border-slate-700 bg-slate-800 hover:bg-slate-700' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200')}`}
                           >
                             <div className="flex justify-between items-start mb-2">
                               <span className="text-[9px] font-semibold text-gray-400 uppercase">
@@ -4056,9 +4056,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               </span>
                               {selected && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
                             </div>
-                            <p className="text-xs font-semibold text-gray-700 dark:text-slate-100">{task.taskTitle}</p>
-                            <p className="text-[11px] text-gray-500 dark:text-slate-300 mt-1">Esforço {task.patientEffort}% • Nota {task.professionalScore ?? '-'} / {task.maxScore}</p>
-                            <p className="text-xs text-gray-600 dark:text-slate-200 line-clamp-2 mt-1">{task.evolutionNote || 'Sem anotação técnica.'}</p>
+                            <p className={`text-xs font-semibold ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>{task.taskTitle}</p>
+                            <p className={`text-[11px] mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Esforço {task.patientEffort}% • Nota {task.professionalScore ?? '-'} / {task.maxScore}</p>
+                            <p className={`text-xs line-clamp-2 mt-1 ${isPanelDark ? 'text-slate-200' : 'text-gray-600'}`}>{task.evolutionNote || 'Sem anotação técnica.'}</p>
                           </div>
                         );
                       })}
@@ -4066,11 +4066,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </div>
               {!isKidsProfile && (
                 <div className="mt-6">
-                  <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">
+                  <label className={`block text-[10px] font-semibold uppercase mb-1.5 ml-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>
                     Anotação adicional do relatório
                   </label>
                   <textarea
-                    className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-3 text-sm outline-none resize-none text-slate-800 dark:text-slate-100"
+                    className={`w-full border rounded-xl p-3 text-sm outline-none resize-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-gray-50 border-gray-100 text-slate-800'}`}
                     rows={3}
                     placeholder="Resumo clínico adicional para o PDF final."
                     value={reportAdditionalNote}
@@ -4081,7 +4081,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
               <div className="mt-8 flex justify-end gap-3">
                 <button
-                  className="px-6 py-3 bg-gray-100 text-gray-600 font-semibold rounded-xl text-xs hover:bg-gray-200 transition-all"
+                  className={`px-6 py-3 font-semibold rounded-xl text-xs transition-all ${isPanelDark ? 'bg-slate-800 text-slate-200 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                   onClick={isKidsProfile ? () => void handlePDFAction('view') : () => setActiveTab('history')}
                   disabled={isKidsProfile && isGeneratingProgressPdf}
                 >
@@ -4858,8 +4858,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           </div>
         ) : (
           <div className="space-y-6 animate-fade-in">
-            <div className="bg-white dark:bg-[#101b2e] p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 transition-colors">
-              <h3 className="font-semibold text-gray-800 dark:text-slate-100 text-lg mb-4 flex items-center gap-2 tracking-tight">
+            <div className={`p-6 rounded-3xl shadow-sm border transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>
+              <h3 className={`font-semibold text-lg mb-4 flex items-center gap-2 tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-gray-800'}`}>
                 <UploadCloud className="text-[#7a32fc]" size={20} /> Upload de Documentos
               </h3>
               <div id="file-upload-btn" className="relative group">
@@ -4872,22 +4872,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 />
                 <label 
                   htmlFor="patient-file-upload" 
-                  className={`w-full py-10 border-2 border-dashed rounded-[24px] flex flex-col items-center justify-center cursor-pointer transition-all duration-300 ${isUploadingFile ? 'bg-gray-50 dark:bg-slate-900/60 border-gray-200 dark:border-slate-700' : 'bg-blue-50/30 dark:bg-slate-900/60 border-blue-200 dark:border-slate-700 hover:border-[#7a32fc] hover:bg-blue-50 dark:hover:bg-slate-900'}`}
+                  className={`w-full py-10 border-2 border-dashed rounded-[24px] flex flex-col items-center justify-center cursor-pointer transition-all duration-300 ${isUploadingFile ? (isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-gray-50 border-gray-200') : (isPanelDark ? 'bg-slate-900/60 border-slate-700 hover:border-[#7a32fc] hover:bg-slate-900' : 'bg-blue-50/30 border-blue-200 hover:border-[#7a32fc] hover:bg-blue-50')}`}
                 >
                   {isUploadingFile ? (
                     <div className="w-full max-w-[240px] text-center">
-                      <div className="h-2 w-full bg-gray-100 dark:bg-slate-800 rounded-full mb-3 overflow-hidden">
+                      <div className={`h-2 w-full rounded-full mb-3 overflow-hidden ${isPanelDark ? 'bg-slate-800' : 'bg-gray-100'}`}>
                         <div className="h-full bg-[#7a32fc] transition-all duration-200" style={{ width: `${uploadProgress}%` }}></div>
                       </div>
-                      <span className="text-sm font-semibold text-gray-500 dark:text-slate-300 animate-pulse">Enviando arquivo... {uploadProgress}%</span>
+                      <span className={`text-sm font-semibold animate-pulse ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Enviando arquivo... {uploadProgress}%</span>
                     </div>
                   ) : (
                     <React.Fragment>
-                      <div className="p-4 bg-blue-100 dark:bg-violet-500/10 rounded-full text-[#7a32fc] dark:text-violet-200 mb-3 shadow-sm group-hover:rotate-6 transition-transform">
+                      <div className={`p-4 rounded-full mb-3 shadow-sm group-hover:rotate-6 transition-transform ${isPanelDark ? 'bg-violet-500/10 text-violet-200' : 'bg-blue-100 text-[#7a32fc]'}`}>
                         <FileUp size={32} />
                       </div>
-                      <p className="text-base font-semibold text-gray-700 dark:text-slate-100">Clique para selecionar ou arraste arquivos</p>
-                      <p className="text-xs text-gray-400 dark:text-slate-400 mt-1 uppercase font-medium">PDF, JPG, PNG, DOCX (Máx. 10MB)</p>
+                      <p className={`text-base font-semibold ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>Clique para selecionar ou arraste arquivos</p>
+                      <p className={`text-xs mt-1 uppercase font-medium ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>PDF, JPG, PNG, DOCX (Máx. 10MB)</p>
                     </React.Fragment>
                   )}
                 </label>
@@ -4895,48 +4895,48 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             </div>
 
             <div className="space-y-3">
-              <h3 className="text-sm font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-wider ml-2 flex items-center gap-2 tracking-widest">
+              <h3 className={`text-sm font-semibold uppercase tracking-wider ml-2 flex items-center gap-2 tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>
                 <File size={16} /> Arquivos Salvos ({patientFiles.length})
               </h3>
               {isLoadingFiles ? (
-                <div className="text-center py-10 bg-white/50 dark:bg-slate-900/60 rounded-3xl border border-dashed border-gray-200 dark:border-slate-700 transition-colors">
-                  <p className="text-sm text-gray-500 dark:text-slate-300 font-medium">Carregando arquivos do prontuário...</p>
+                <div className={`text-center py-10 rounded-3xl border border-dashed transition-colors ${isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-white/50 border-gray-200'}`}>
+                  <p className={`text-sm font-medium ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Carregando arquivos do prontuário...</p>
                 </div>
               ) : patientFiles.length > 0 ? patientFiles.map((file: any) => (
-                <div key={file.id} className="bg-white dark:bg-[#101b2e] p-4 rounded-2xl border border-gray-100 dark:border-slate-700 shadow-sm flex items-center justify-between group hover:border-blue-100 dark:hover:border-violet-400/30 transition-all animate-slide-up">
+                <div key={file.id} className={`p-4 rounded-2xl border shadow-sm flex items-center justify-between group transition-all animate-slide-up ${isPanelDark ? 'bg-[#101b2e] border-slate-700 hover:border-violet-400/30' : 'bg-white border-gray-100 hover:border-blue-100'}`}>
                   <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-gray-50 dark:bg-slate-800 rounded-xl flex items-center justify-center text-[#7a32fc] dark:text-violet-200">
+                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${isPanelDark ? 'bg-slate-800 text-violet-200' : 'bg-gray-50 text-[#7a32fc]'}`}>
                       {file.type.includes('pdf') ? <FileText size={24} /> : file.type.includes('image') ? <Activity size={24} /> : <File size={24} />}
                     </div>
                     <div>
-                      <p className="font-semibold text-gray-800 dark:text-slate-100 text-sm truncate max-w-[200px] tracking-tight">{file.name}</p>
-                      <p className="text-[10px] text-gray-400 dark:text-slate-400 font-semibold uppercase">{file.size} • {file.date}</p>
+                      <p className={`font-semibold text-sm truncate max-w-[200px] tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-gray-800'}`}>{file.name}</p>
+                      <p className={`text-[10px] font-semibold uppercase ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>{file.size} • {file.date}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <button
                       title="Visualizar"
                       onClick={() => setPreviewFile(file)}
-                      className="p-2.5 text-gray-400 dark:text-slate-400 hover:text-[#7a32fc] dark:hover:text-violet-200 hover:bg-blue-50 dark:hover:bg-slate-800 rounded-xl transition-all"
+                      className={`p-2.5 rounded-xl transition-all ${isPanelDark ? 'text-slate-400 hover:text-violet-200 hover:bg-slate-800' : 'text-gray-400 hover:text-[#7a32fc] hover:bg-blue-50'}`}
                     >
                       <Eye size={18} />
                     </button>
                     <button
                       title="Download"
                       onClick={() => handleDownloadPatientFile(file)}
-                      className="p-2.5 text-gray-400 dark:text-slate-400 hover:text-[#7a32fc] dark:hover:text-violet-200 hover:bg-blue-50 dark:hover:bg-slate-800 rounded-xl transition-all"
+                      className={`p-2.5 rounded-xl transition-all ${isPanelDark ? 'text-slate-400 hover:text-violet-200 hover:bg-slate-800' : 'text-gray-400 hover:text-[#7a32fc] hover:bg-blue-50'}`}
                     >
                       <Download size={18} />
                     </button>
-                    <button onClick={() => removeFile(file.id)} title="Excluir" className="p-2.5 text-gray-400 dark:text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-xl transition-all">
+                    <button onClick={() => removeFile(file.id)} title="Excluir" className={`p-2.5 rounded-xl transition-all ${isPanelDark ? 'text-slate-400 hover:text-red-300 hover:bg-red-500/10' : 'text-gray-400 hover:text-red-500 hover:bg-red-50'}`}>
                       <Trash2 size={18} />
                     </button>
                   </div>
                 </div>
               )) : (
-                <div className="text-center py-10 bg-white/50 dark:bg-slate-900/60 rounded-3xl border border-dashed border-gray-200 dark:border-slate-700 transition-colors">
-                  <FileText size={40} className="mx-auto mb-2 text-gray-300 dark:text-slate-600 opacity-50" />
-                  <p className="text-sm text-gray-400 dark:text-slate-400 font-medium italic">Nenhum arquivo anexado a este prontuário.</p>
+                <div className={`text-center py-10 rounded-3xl border border-dashed transition-colors ${isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-white/50 border-gray-200'}`}>
+                  <FileText size={40} className={`mx-auto mb-2 opacity-50 ${isPanelDark ? 'text-slate-600' : 'text-gray-300'}`} />
+                  <p className={`text-sm font-medium italic ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>Nenhum arquivo anexado a este prontuário.</p>
                 </div>
               )}
             </div>
