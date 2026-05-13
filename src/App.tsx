@@ -968,6 +968,9 @@ export default function App() {
   const [therapistAgenda, setTherapistAgenda] = useState<any[]>([]);
   const [appointmentConfirmation, setAppointmentConfirmation] = useState<{
     appointmentId: string;
+    dateLabel: string;
+    timeLabel: string;
+    isLoading: boolean;
     isUpdating: boolean;
     message: string;
   } | null>(null);
@@ -990,6 +993,38 @@ export default function App() {
       return hours * 60 + minutes;
     };
     return toMinutes(startA) < toMinutes(endB) && toMinutes(endA) > toMinutes(startB);
+  };
+
+  const formatAppointmentConfirmationDateTime = (appointment: any) => {
+    const scheduledAt = appointment?.scheduledAt || appointment?.scheduled_at;
+    const explicitDate = String(appointment?.date || '').trim();
+    const explicitTime = String(appointment?.time || '').trim();
+
+    if (scheduledAt) {
+      const scheduled = new Date(scheduledAt);
+      if (!Number.isNaN(scheduled.getTime())) {
+        return {
+          dateLabel: scheduled.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+          timeLabel: scheduled.toLocaleTimeString('pt-BR', {
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZone: 'America/Sao_Paulo',
+          }),
+        };
+      }
+    }
+
+    if (explicitDate) {
+      const localDate = new Date(`${explicitDate}T${explicitTime || '00:00'}:00`);
+      if (!Number.isNaN(localDate.getTime())) {
+        return {
+          dateLabel: localDate.toLocaleDateString('pt-BR'),
+          timeLabel: explicitTime || localDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+        };
+      }
+    }
+
+    return { dateLabel: '', timeLabel: '' };
   };
 
   const roomReservations = useMemo(() => {
@@ -1067,9 +1102,54 @@ export default function App() {
     if (!appointmentId) return;
     setAppointmentConfirmation({
       appointmentId,
+      dateLabel: '',
+      timeLabel: '',
+      isLoading: true,
       isUpdating: false,
       message: '',
     });
+
+    let cancelled = false;
+    const loadAppointmentConfirmation = async () => {
+      try {
+        const response = await fetch(`/api/appointments/${encodeURIComponent(appointmentId)}/confirmation`, {
+          credentials: 'include',
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result?.success) {
+          throw new Error(result?.error || 'Não foi possível carregar os dados da consulta.');
+        }
+        const labels = formatAppointmentConfirmationDateTime(result.appointment || {});
+        if (!cancelled) {
+          setAppointmentConfirmation((prev) =>
+            prev && prev.appointmentId === appointmentId
+              ? {
+                  ...prev,
+                  ...labels,
+                  isLoading: false,
+                }
+              : prev,
+          );
+        }
+      } catch (error: any) {
+        if (!cancelled) {
+          setAppointmentConfirmation((prev) =>
+            prev && prev.appointmentId === appointmentId
+              ? {
+                  ...prev,
+                  isLoading: false,
+                  message: error?.message || 'Não foi possível carregar os dados da consulta.',
+                }
+              : prev,
+          );
+        }
+      }
+    };
+
+    void loadAppointmentConfirmation();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const [profilePicture, setProfilePicture] = useState<string | null>(null);
@@ -3103,7 +3183,7 @@ export default function App() {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ status })
+        body: JSON.stringify({ status, source: 'appointment_24h_popup' })
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result?.success) {
@@ -3112,7 +3192,7 @@ export default function App() {
       setTherapistAgenda(prev =>
         prev.map(item =>
           String(item.id) === String(appointmentConfirmation.appointmentId)
-            ? { ...item, status }
+            ? { ...item, ...(result.appointment || {}), status }
             : item
         )
       );
@@ -3163,10 +3243,17 @@ export default function App() {
               </div>
               <h2 className="text-2xl font-black tracking-tight">Lembrete de Consulta - Verto</h2>
               <p className="mt-2 text-sm font-semibold text-white/90">
-                Olá! Você confirma sua presença para a consulta agendada?
+                {appointmentConfirmation.dateLabel && appointmentConfirmation.timeLabel
+                  ? `Você confirma presença na consulta do dia ${appointmentConfirmation.dateLabel}, às ${appointmentConfirmation.timeLabel}?`
+                  : 'Você confirma sua presença para a consulta agendada?'}
               </p>
             </div>
             <div className="space-y-3 p-5">
+              {appointmentConfirmation.isLoading && (
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-500">
+                  Carregando dados da consulta...
+                </div>
+              )}
               {appointmentConfirmation.message && (
                 <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-sm font-bold text-violet-700">
                   {appointmentConfirmation.message}
@@ -3174,7 +3261,7 @@ export default function App() {
               )}
               <button
                 type="button"
-                disabled={appointmentConfirmation.isUpdating}
+                disabled={appointmentConfirmation.isUpdating || appointmentConfirmation.isLoading}
                 onClick={() => void handleAppointmentConfirmationChoice('confirmed')}
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-600 disabled:opacity-60"
               >
@@ -3182,7 +3269,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                disabled={appointmentConfirmation.isUpdating}
+                disabled={appointmentConfirmation.isUpdating || appointmentConfirmation.isLoading}
                 onClick={() => void handleAppointmentConfirmationChoice('reschedule')}
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-amber-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-amber-500/25 transition hover:bg-amber-600 disabled:opacity-60"
               >
@@ -3190,7 +3277,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                disabled={appointmentConfirmation.isUpdating}
+                disabled={appointmentConfirmation.isUpdating || appointmentConfirmation.isLoading}
                 onClick={() => void handleAppointmentConfirmationChoice('canceled')}
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-rose-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-rose-500/25 transition hover:bg-rose-600 disabled:opacity-60"
               >

@@ -6823,6 +6823,67 @@ async function startServer() {
     }
   });
 
+  app.get('/api/appointments/:appointmentId/confirmation', checkAuth, async (req: any, res) => {
+    try {
+      const appointmentId = sanitizeString(req.params.appointmentId, 120);
+      if (!appointmentId) {
+        return res.status(400).json({ success: false, error: 'Consulta inválida.' });
+      }
+
+      const actor = req.session.user;
+      const clinicId = currentClinicId(actor);
+      const clinicStateQuery = supabase
+        .from('clinic_state')
+        .select('clinic_id, appointments');
+      const { data, error } = clinicId
+        ? await clinicStateQuery.eq('clinic_id', clinicId).maybeSingle()
+        : await clinicStateQuery.limit(200);
+      if (error) throw error;
+
+      const states = clinicId ? [data].filter(Boolean) : (Array.isArray(data) ? data : []);
+      let foundAppointment: any = null;
+      for (const state of states) {
+        const appointments = Array.isArray(state?.appointments) ? state.appointments : [];
+        foundAppointment = appointments.find((appointment: any) => String(appointment?.id) === appointmentId);
+        if (foundAppointment) break;
+      }
+
+      if (!foundAppointment) {
+        return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
+      }
+
+      if (sanitizeString(actor?.role, 40) === 'patient') {
+        const actorId = sanitizeString(actor?.id, 120);
+        const actorEmail = sanitizeEmail(actor?.email);
+        const appointmentPatientId = sanitizeString(foundAppointment?.patientId || foundAppointment?.patient_id, 120);
+        const appointmentPatientEmail = sanitizeEmail(foundAppointment?.patientEmail || foundAppointment?.patient_email);
+        if (
+          appointmentPatientId !== actorId &&
+          (!actorEmail || appointmentPatientEmail !== actorEmail)
+        ) {
+          return res.status(403).json({ success: false, error: 'Consulta não pertence a este paciente.' });
+        }
+      }
+
+      return res.json({
+        success: true,
+        appointment: {
+          id: foundAppointment.id,
+          date: foundAppointment.date || null,
+          time: foundAppointment.time || null,
+          scheduledAt: foundAppointment.scheduledAt || foundAppointment.scheduled_at || null,
+          patientName: foundAppointment.name || foundAppointment.patientName || foundAppointment.patient_name || null,
+          status: foundAppointment.status || 'pending',
+          patientConfirmationStatus: foundAppointment.patientConfirmationStatus || null,
+          patientConfirmationAt: foundAppointment.patientConfirmationAt || null
+        }
+      });
+    } catch (error: any) {
+      console.error('[Appointments] confirmation read error:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Erro ao carregar dados da consulta.' });
+    }
+  });
+
   app.patch('/api/appointments/:appointmentId/status', checkAuth, async (req: any, res) => {
     try {
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
@@ -6836,23 +6897,47 @@ async function startServer() {
       const actor = req.session.user;
       const clinicId = currentClinicId(actor);
 
-      const { data, error } = await supabase
+      const clinicStateQuery = supabase
         .from('clinic_state')
-        .select('appointments')
-        .eq('clinic_id', clinicId)
-        .maybeSingle();
+        .select('clinic_id, appointments');
+      const { data, error } = clinicId
+        ? await clinicStateQuery.eq('clinic_id', clinicId).maybeSingle()
+        : await clinicStateQuery.limit(200);
       if (error) throw error;
 
-      const appointments = Array.isArray(data?.appointments) ? data.appointments : [];
+      const states = clinicId ? [data].filter(Boolean) : (Array.isArray(data) ? data : []);
       let foundAppointment: any = null;
+      let foundClinicId = '';
+      const ownerState = states.find((state: any) => {
+        const appointments = Array.isArray(state?.appointments) ? state.appointments : [];
+        const match = appointments.find((appointment: any) => String(appointment?.id) === appointmentId);
+        if (!match) return false;
+        foundAppointment = match;
+        foundClinicId = sanitizeString(state?.clinic_id || clinicId, 120);
+        return true;
+      });
+
+      const appointments = Array.isArray(ownerState?.appointments) ? ownerState.appointments : [];
+      const now = new Date().toISOString();
       const nextAppointments = appointments.map((appointment: any) => {
         if (String(appointment?.id) !== appointmentId) return appointment;
-        foundAppointment = appointment;
         return {
           ...appointment,
           status: normalizedStatus,
-          statusUpdatedAt: new Date().toISOString(),
-          statusUpdatedBy: sanitizeString(actor?.id, 120)
+          statusUpdatedAt: now,
+          statusUpdatedBy: sanitizeString(actor?.id, 120),
+          patientConfirmationStatus: sanitizeString(actor?.role, 40) === 'patient'
+            ? normalizedStatus
+            : appointment?.patientConfirmationStatus,
+          patientConfirmationAt: sanitizeString(actor?.role, 40) === 'patient'
+            ? now
+            : appointment?.patientConfirmationAt,
+          patientConfirmationBy: sanitizeString(actor?.role, 40) === 'patient'
+            ? sanitizeString(actor?.id, 120)
+            : appointment?.patientConfirmationBy,
+          patientConfirmationSource: sanitizeString(actor?.role, 40) === 'patient'
+            ? 'appointment_24h_popup'
+            : appointment?.patientConfirmationSource
         };
       });
 
@@ -6878,9 +6963,9 @@ async function startServer() {
         .update({
           appointments: nextAppointments,
           updated_by: sanitizeString(actor?.id, 120),
-          updated_at: new Date().toISOString()
+          updated_at: now
         })
-        .eq('clinic_id', clinicId)
+        .eq('clinic_id', foundClinicId || clinicId)
         .select('appointments')
         .single();
       if (updateError) throw updateError;

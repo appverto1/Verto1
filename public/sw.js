@@ -12,7 +12,7 @@ self.addEventListener("push", (event) => {
     `/consulta${appointmentId ? `?appointment_id=${encodeURIComponent(appointmentId)}` : ""}`;
 
   event.waitUntil(
-    self.registration.showNotification("Lembrete de Consulta - Verto", {
+    self.registration.showNotification(payload.title || "Lembrete de Consulta - Verto", {
       body: payload.body || "Toque para confirmar sua presença.",
       icon: "/verto-3d-transparent.png",
       badge: "/verto-3d-transparent.png",

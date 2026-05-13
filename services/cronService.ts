@@ -20,6 +20,8 @@ type ReminderAppointment = {
   appointmentId: string;
   patientId: string;
   scheduledAt: string;
+  status?: string | null;
+  patientConfirmationStatus?: string | null;
   notification_sent?: boolean | null;
   notification_12h_sent?: boolean | null;
 };
@@ -35,6 +37,7 @@ const REMINDER_STEPS = [
     sentColumn: 'notification_sent',
     sentAtColumn: 'notification_sent_at',
     requiresPreviousSent: false,
+    requiresNoPatientResponse: false,
     title: 'Lembrete de Consulta',
     body: 'Sua consulta pela Verto e amanha. Clique aqui para confirmar ou remarcar.'
   },
@@ -44,6 +47,7 @@ const REMINDER_STEPS = [
     sentColumn: 'notification_12h_sent',
     sentAtColumn: 'notification_12h_sent_at',
     requiresPreviousSent: false,
+    requiresNoPatientResponse: true,
     title: 'Confirmacao de Consulta',
     body: 'Sua consulta esta chegando. Confirme sua presenca para ajudar a evitar faltas e remarcacoes.'
   }
@@ -98,6 +102,14 @@ const buildScheduledAtFromClinicStateAppointment = (appointment: any) => {
   return candidate.utc().toISOString();
 };
 
+const formatAppointmentReminderBody = (scheduledAt: string, fallbackBody: string) => {
+  const scheduled = dayjs(scheduledAt).tz(BRAZIL_TIMEZONE);
+  if (!scheduled.isValid()) return fallbackBody;
+  const date = scheduled.format('DD/MM/YYYY');
+  const time = scheduled.format('HH:mm');
+  return `Sua consulta pela Verto esta agendada para o dia ${date}, as ${time}. Confirma sua presenca?`;
+};
+
 async function deleteInvalidSubscription(supabase: any, endpoint: string, logger: CronServiceOptions['logger']) {
   const safeEndpoint = sanitizeText(endpoint, 2000);
   if (!safeEndpoint) return;
@@ -119,11 +131,15 @@ async function sendReminderToPatient(params: {
   supabase: any;
   appointmentId: string;
   patientId: string;
+  scheduledAt: string;
   title: string;
   body: string;
   logger: CronServiceOptions['logger'];
 }) {
-  const { supabase, appointmentId, patientId, title, body, logger } = params;
+  const { supabase, appointmentId, patientId, scheduledAt, title, body, logger } = params;
+  const scheduled = dayjs(scheduledAt).tz(BRAZIL_TIMEZONE);
+  const dateLabel = scheduled.isValid() ? scheduled.format('DD/MM/YYYY') : '';
+  const timeLabel = scheduled.isValid() ? scheduled.format('HH:mm') : '';
 
   const { data: subscriptions, error } = await supabase
     .from('push_subscriptions')
@@ -145,9 +161,12 @@ async function sendReminderToPatient(params: {
 
   const payload = JSON.stringify({
     title,
-    body,
+    body: formatAppointmentReminderBody(scheduledAt, body),
     url: `/consulta?appointment_id=${encodeURIComponent(appointmentId)}`,
-    appointmentId
+    appointmentId,
+    scheduledAt,
+    dateLabel,
+    timeLabel
   });
 
   let sent = 0;
@@ -213,6 +232,7 @@ async function fetchReminderAppointments(
         appointmentId,
         patientId,
         scheduledAt,
+        status: sanitizeText(appointment?.status, 40).toLowerCase(),
         notification_sent: Boolean(appointment?.notification_sent),
         notification_12h_sent: Boolean(appointment?.notification_12h_sent)
       });
@@ -253,12 +273,18 @@ async function fetchReminderAppointments(
           continue;
         }
 
+        appointmentsToNotify.delete(`table:${appointmentId}`);
         appointmentsToNotify.set(`clinic:${clinicId}:${appointmentId}`, {
           source: 'clinic_state',
           clinicId,
           appointmentId,
           patientId,
           scheduledAt,
+          status,
+          patientConfirmationStatus: sanitizeText(
+            appointment?.patientConfirmationStatus || appointment?.patient_confirmation_status,
+            40,
+          ).toLowerCase(),
           notification_sent: Boolean(appointment?.notification_sent),
           notification_12h_sent: Boolean(appointment?.notification_12h_sent)
         });
@@ -381,6 +407,13 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
         const alreadySent = Boolean((appointment as any)?.[step.sentColumn]);
         if (alreadySent) return false;
         if (step.requiresPreviousSent && !Boolean(appointment?.notification_sent)) return false;
+        if (step.requiresNoPatientResponse) {
+          const patientResponse = sanitizeText(appointment?.patientConfirmationStatus, 40).toLowerCase();
+          const status = sanitizeText(appointment?.status, 40).toLowerCase();
+          if (patientResponse || status === 'confirmed' || status === 'reschedule' || status === 'canceled' || status === 'cancelled') {
+            return false;
+          }
+        }
 
         const adjustedReminderUtc = resolveAdjustedReminderTimeUtc(scheduledAt, step.hoursBefore);
         return (
@@ -396,6 +429,7 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
           supabase: options.supabase,
           appointmentId,
           patientId,
+          scheduledAt,
           title: dueReminder.title,
           body: dueReminder.body,
           logger: options.logger
