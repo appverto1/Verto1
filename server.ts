@@ -4037,6 +4037,147 @@ async function startServer() {
     res.status(401).json({ error: 'Unauthorized - No valid session or token' });
   };
 
+  const normalizeActivityActionLabel = (value: unknown) =>
+    sanitizeString(value, 220)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/�/g, '')
+      .toLowerCase()
+      .trim();
+
+  const toActivityActionSlug = (value: unknown) => {
+    const normalized = normalizeActivityActionLabel(value)
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 120);
+    return normalized || 'activity_logged';
+  };
+
+  const activityActionByLabel: Record<string, string> = {
+    'checkout cancelado lead em recuperacao': 'checkout_cancelled',
+    'login de paciente mfa': 'patient_login_mfa',
+    'login de paciente': 'patient_login',
+    'leitura de historico sem tratamento ativo': 'patient_history_read_without_active_treatment',
+    'convite de colaborador reenviado': 'clinic_invite_resent',
+    'convite de colaborador enviado': 'clinic_invite_created',
+    'convite cancelado': 'clinic_invite_cancelled',
+    'convite aceito': 'clinic_invite_accepted',
+    'papel de colaborador atualizado': 'team_member_role_updated',
+    'membro desvinculado da clinica': 'team_member_unlinked',
+    'salas atualizadas': 'update_rooms',
+    'agenda clinica atualizada': 'update_appointments',
+    'agendamento criado': 'create_appointment',
+    'agendamento de sessao': 'create_session',
+    'agendamento editado': 'update_appointment',
+    'edicao de agendamento': 'update_appointment',
+    'status de agenda atualizado': 'update_status',
+    'configuracoes de duracao de sessao atualizadas': 'update_session_duration_settings',
+    'protocolos atualizados': 'update_protocols',
+    'template de anamnese atualizado': 'update_anamnesis_template',
+    'ficha de anamnese arquivada': 'archive_anamnesis',
+    'ficha de anamnese registrada': 'create_anamnesis',
+    'paciente cadastrado atualizado': 'upsert_patient',
+    'cadastro de paciente atualizado': 'update_patient',
+    'cadastro de paciente': 'create_patient',
+    'paciente cadastrado': 'create_patient',
+    'novo paciente': 'create_patient',
+    'paciente atualizado': 'update_patient',
+    'atualizacao de cadastro': 'update_patient',
+    'paciente excluido desvinculado': 'archive_patient',
+    'paciente excluido': 'delete_patient',
+    'paciente desvinculado': 'unlink_patient',
+    'desvinculacao de paciente': 'unlink_patient',
+    'arquivo salvo no prontuario': 'upload_patient_file',
+    'arquivo removido do prontuario': 'delete_patient_file',
+    'arquivos do prontuario atualizados': 'update_patient_files',
+    'nota registrada no prontuario': 'create_note',
+    'compartilhamento de anotacao': 'share_note',
+    'remocao de compartilhamento de anotacao': 'unshare_note',
+    'registro de evolucao salvo': 'create_history',
+    'registro de evolucao': 'create_history',
+    'edicao de historico': 'update_history',
+    'exclusao de registro': 'delete_history',
+    'registro de avaliacao': 'create_assessment',
+    'registro da familia': 'create_family_note',
+    'tarefa pei salva': 'upsert_task',
+    'criacao de tarefa': 'create_task',
+    'atualizacao de tarefa': 'update_task',
+    'pagamento registrado': 'create_payment',
+    'pesquisa do financeiro enviada': 'submit_financial_survey',
+    'perfil profissional atualizado': 'update_professional_profile',
+    'configuracoes atualizadas': 'update_clinic_settings',
+    'reenvio de ativacao': 'resend_patient_activation',
+    'reenvio de recuperacao': 'resend_patient_recovery',
+    'solicitacao de protocolo importado': 'protocol_import_requested',
+    'solicitacao de protocolo excluida': 'protocol_import_request_deleted',
+    'acervo de protocolos atualizado': 'protocol_access_updated',
+    'protocolo aprovado para uso': 'protocol_import_approved',
+    'protocolo recusado': 'protocol_import_rejected',
+    'varredura segura de protocolo': 'protocol_import_scanned',
+    'protocolo canonico verto salvo': 'verto_protocol_saved',
+    'logout do sistema': 'logout'
+  };
+
+  const resolveActivityLogAction = ({
+    action,
+    actionType,
+    title,
+    type,
+  }: {
+    action?: unknown;
+    actionType?: unknown;
+    title?: unknown;
+    type?: unknown;
+  }) => {
+    for (const candidate of [action, actionType, title]) {
+      const label = normalizeActivityActionLabel(candidate);
+      if (!label) continue;
+      if (activityActionByLabel[label]) return activityActionByLabel[label];
+    }
+
+    const titleLabel = normalizeActivityActionLabel(title);
+    const pathMutation = titleLabel.match(/^(criou|atualizou|removeu|alterou)\s+(.+)$/);
+    if (pathMutation) {
+      const verb = pathMutation[1] === 'criou'
+        ? 'create'
+        : pathMutation[1] === 'atualizou'
+          ? 'update'
+          : pathMutation[1] === 'removeu'
+            ? 'delete'
+            : 'mutate';
+      return `${verb}_${toActivityActionSlug(pathMutation[2])}`.slice(0, 120);
+    }
+
+    const auditMutation = titleLabel.match(/^(adicao|edicao|exclusao|atualizacao)\s+registrada\s+em\s+(.+)$/);
+    if (auditMutation) {
+      const verb = auditMutation[1] === 'adicao'
+        ? 'create'
+        : auditMutation[1] === 'edicao' || auditMutation[1] === 'atualizacao'
+          ? 'update'
+          : 'delete';
+      return `${verb}_${toActivityActionSlug(auditMutation[2])}`.slice(0, 120);
+    }
+
+    const explicitActionType = sanitizeString(actionType, 180);
+    if (explicitActionType) return toActivityActionSlug(explicitActionType);
+
+    const explicitAction = sanitizeString(action, 180);
+    if (explicitAction) return toActivityActionSlug(explicitAction);
+
+    const fallback = sanitizeString(title || type, 180);
+    return toActivityActionSlug(fallback || 'activity_logged');
+  };
+
+  const stringifyActivityPayload = (value: unknown) => {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'string') return value;
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  };
+
   const persistActivityLog = async ({
     userId,
     clinicId,
@@ -4044,26 +4185,45 @@ async function startServer() {
     title,
     content,
     type = 'management',
+    action,
     actionType,
-    payloadDetails
+    payloadDetails,
+    details,
+    payload
   }: {
     userId: string;
     clinicId?: string | null;
     actorName?: string | null;
     title: string;
-    content: string;
+    content?: string;
     type?: string;
+    action?: string | null;
     actionType?: string | null;
     payloadDetails?: string | null;
+    details?: string | null;
+    payload?: unknown;
   }) => {
     try {
       const safeUserId = sanitizeString(userId, 120);
       const safeClinicId = sanitizeString(clinicId, 120);
+      const safeTitle = sanitizeString(title, 180) || 'Atividade registrada';
+      const safeContent =
+        sanitizeString(content || details, 2000) ||
+        'Ação registrada no sistema.';
+      const resolvedAction = resolveActivityLogAction({
+        action,
+        actionType,
+        title: safeTitle,
+        type
+      });
+      const resolvedPayloadDetails =
+        sanitizeString(payloadDetails || stringifyActivityPayload(payload) || details || safeContent, 4000) || null;
       const basePayload: any = {
         id: crypto.randomUUID(),
         user_id: isUuid(safeUserId) ? safeUserId : null,
-        title: sanitizeString(title, 180),
-        content: sanitizeString(content, 2000),
+        action: resolvedAction,
+        title: safeTitle,
+        content: safeContent,
         type: sanitizeString(type, 40) || 'management',
         timestamp: new Date().toISOString()
       };
@@ -4072,8 +4232,8 @@ async function startServer() {
         ...basePayload,
         clinic_id: isUuid(safeClinicId) ? safeClinicId : null,
         actor_name: sanitizeString(actorName, 180) || null,
-        action_type: sanitizeString(actionType || title, 180) || null,
-        payload_details: sanitizeString(payloadDetails || content, 4000) || null,
+        action_type: sanitizeString(actionType || resolvedAction, 180) || resolvedAction,
+        payload_details: resolvedPayloadDetails,
         source: 'server',
         status: 'active',
         is_active: true,
@@ -4083,7 +4243,7 @@ async function startServer() {
 
       const insert = await writeActivityLogWithFallback(extendedPayload);
       if (!insert.error) return;
-      logRouteDbError('persistActivityLog', insert.error, { title, userId, clinicId });
+      logRouteDbError('persistActivityLog', insert.error, { title: safeTitle, action: resolvedAction, userId, clinicId });
     } catch (error) {
       console.warn('[ActivityLog] Failed to persist audit event:', String(error));
     }
