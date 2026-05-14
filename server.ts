@@ -7345,16 +7345,37 @@ async function startServer() {
         });
       }
 
+      const requestedPatientId = sanitizeString(req.body?.patientId || req.body?.patient_id, 120);
+      const requestedPatientEmail = sanitizeEmail(req.body?.patientEmail || req.body?.patient_email || user?.email);
+      const lookupClinicId = isPatientRole ? null : currentClinicId(user);
+      console.log('[Push] subscribe received.', {
+        role,
+        authUserId: sanitizeString(user?.id, 120) || null,
+        authEmail: sanitizeEmail(user?.email) || null,
+        requestedPatientId: requestedPatientId || null,
+        requestedPatientEmail: requestedPatientEmail || null,
+        clinicId: lookupClinicId,
+        endpointPrefix: endpoint.slice(0, 80)
+      });
+
       const patientIds = await resolvePatientIdsForPush({
         supabase,
-        patientId: sanitizeString(req.body?.patientId || req.body?.patient_id, 120),
-        patientEmail: sanitizeEmail(req.body?.patientEmail || req.body?.patient_email || user?.email),
+        patientId: requestedPatientId,
+        patientEmail: requestedPatientEmail,
         userId: sanitizeString(user?.id, 120),
-        clinicId: isPatientRole ? null : currentClinicId(user)
+        clinicId: lookupClinicId,
+        logger: console
       });
       const patientId = patientIds[0];
 
       if (!patientId) {
+        console.warn('[Push] subscribe patient not found.', {
+          authUserId: sanitizeString(user?.id, 120) || null,
+          authEmail: sanitizeEmail(user?.email) || null,
+          requestedPatientId: requestedPatientId || null,
+          requestedPatientEmail: requestedPatientEmail || null,
+          clinicId: lookupClinicId
+        });
         return res.status(409).json({
           success: false,
           error: 'Não encontrei o cadastro de paciente vinculado a este login. Verifique se o e-mail do paciente na clínica é o mesmo usado no app.'
@@ -7368,13 +7389,20 @@ async function startServer() {
         userId: sanitizeString(user?.id, 120),
         userEmail: sanitizeEmail(user?.email),
         clinicId: currentClinicId(user),
-        role
+        role,
+        logger: console
       });
 
       if (!result.success) {
         console.warn('[Push] Não foi possível persistir assinatura push:', result.error);
         return res.status(500).json({ success: false, error: result.error || 'Erro ao salvar inscrição push.' });
       }
+
+      console.log('[Push] subscribe persisted.', {
+        patientId,
+        authUserId: sanitizeString(user?.id, 120) || null,
+        endpointPrefix: endpoint.slice(0, 80)
+      });
 
       return res.json({ success: true, patientId });
     } catch (error: any) {
@@ -12236,11 +12264,18 @@ async function startServer() {
 
       // Fallback robusto: caso assigned_tasks esteja vazio/indisponível para este paciente,
       // também lemos tarefas pendentes da tabela legacy `tasks` com scheduled_at.
+      const isPendingLegacyTask = (task: any) => {
+        const status = sanitizeString(task?.status, 40).toLowerCase();
+        if (status) return status !== 'completed' && status !== 'done';
+        if (typeof task?.is_completed === 'boolean') return !task.is_completed;
+        if (typeof task?.done === 'boolean') return !task.done;
+        if (typeof task?.completed === 'boolean') return !task.completed;
+        return true;
+      };
       const { data: legacyTasksByEmail, error: legacyTasksByEmailError } = await supabase
         .from('tasks')
         .select('*')
         .ilike('patient_email', patientEmail)
-        .eq('completed', false)
         .order('created_at', { ascending: false });
       if (legacyTasksByEmailError) {
         console.warn('[PatientSelfAssignedTasks] fallback tasks by email warning:', legacyTasksByEmailError.message || String(legacyTasksByEmailError));
@@ -12252,7 +12287,6 @@ async function startServer() {
           .from('tasks')
           .select('*')
           .in('patient_id', patientIds)
-          .eq('completed', false)
           .order('created_at', { ascending: false });
         if (legacyTasksByIdError) {
           console.warn('[PatientSelfAssignedTasks] fallback tasks by id warning:', legacyTasksByIdError.message || String(legacyTasksByIdError));
@@ -12268,7 +12302,9 @@ async function startServer() {
             row
           ])
         ).values()
-      ).map((task: any) => ({
+      )
+        .filter(isPendingLegacyTask)
+        .map((task: any) => ({
         id: String(task?.id || crypto.randomUUID()),
         patient_id: sanitizeString(task?.patient_id, 120) || null,
         patient_email: sanitizeEmail(task?.patient_email),

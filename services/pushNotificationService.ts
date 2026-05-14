@@ -24,6 +24,7 @@ type ResolvePatientIdsParams = {
   patientEmail?: string | null;
   clinicId?: string | null;
   userId?: string | null;
+  logger?: Logger;
 };
 
 type SavePushSubscriptionParams = {
@@ -34,6 +35,7 @@ type SavePushSubscriptionParams = {
   userEmail?: string | null;
   clinicId?: string | null;
   role?: string | null;
+  logger?: Logger;
 };
 
 type SendAppointmentNotificationParams = {
@@ -134,6 +136,26 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
   const userId = sanitizeText(params.userId, 120);
   const email = sanitizeEmail(params.patientEmail);
   const clinicId = sanitizeText(params.clinicId, 120);
+  const summarizePatientRows = (rows: any[]) =>
+    (rows || []).slice(0, 20).map((row: any) => ({
+      id: sanitizeText(row?.id, 120) || null,
+      email: sanitizeText(row?.email, 320) || null,
+      normalizedEmail: sanitizeEmail(row?.email) || null,
+      clinic_id: sanitizeText(row?.clinic_id, 120) || null,
+      status: sanitizeText(row?.status, 60) || null,
+      is_active: row?.is_active ?? null,
+      has_deleted_at: Boolean(row?.deleted_at)
+    }));
+  const logLookup = (phase: string, details: Record<string, any>) => {
+    params.logger?.log?.('[PushPatientResolve]', {
+      phase,
+      requestedPatientId: explicitPatientId || null,
+      requestedPatientEmail: email || null,
+      userId: userId || null,
+      clinicId: clinicId || null,
+      ...details
+    });
+  };
 
   const addPatientRows = (rows: any[]) => {
     for (const row of rows || []) {
@@ -152,13 +174,17 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
       query = query.eq('clinic_id', clinicId);
     }
     const { data, error } = await query;
+    logLookup('explicit_patient_id', {
+      error: error?.message || null,
+      returned: summarizePatientRows(data || [])
+    });
     if (!error) addPatientRows(data || []);
   }
 
   if (email) {
     let query = params.supabase
       .from('patients')
-      .select('id, clinic_id')
+      .select('id, email, clinic_id, status, is_active, deleted_at')
       .ilike('email', email)
       .limit(100);
     if (clinicId && isUuid(clinicId)) {
@@ -166,26 +192,61 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
     }
 
     const { data, error } = await query;
+    logLookup('email_exact_ilike', {
+      error: error?.message || null,
+      returned: summarizePatientRows(data || [])
+    });
     if (!error) addPatientRows(data || []);
 
     if (!ids.size && clinicId && isUuid(clinicId)) {
       const fallback = await params.supabase
         .from('patients')
-        .select('id')
+        .select('id, email, clinic_id, status, is_active, deleted_at')
         .ilike('email', email)
         .limit(100);
+      logLookup('email_across_clinics_after_scoped_miss', {
+        error: fallback.error?.message || null,
+        returned: summarizePatientRows(fallback.data || [])
+      });
       if (!fallback.error) addPatientRows(fallback.data || []);
+    }
+
+    if (!ids.size) {
+      let fuzzyQuery = params.supabase
+        .from('patients')
+        .select('id, email, clinic_id, status, is_active, deleted_at')
+        .ilike('email', `%${email}%`)
+        .limit(100);
+      if (clinicId && isUuid(clinicId)) {
+        fuzzyQuery = fuzzyQuery.eq('clinic_id', clinicId);
+      }
+      const fuzzy = await fuzzyQuery;
+      const trimmedMatches = (fuzzy.data || []).filter((row: any) => sanitizeEmail(row?.email) === email);
+      logLookup('email_trimmed_fallback', {
+        error: fuzzy.error?.message || null,
+        returned: summarizePatientRows(fuzzy.data || []),
+        accepted: summarizePatientRows(trimmedMatches)
+      });
+      if (!fuzzy.error) addPatientRows(trimmedMatches);
     }
   }
 
   if (!ids.size && isUuid(userId)) {
     const { data, error } = await params.supabase
       .from('patients')
-      .select('id')
+      .select('id, email, clinic_id, status, is_active, deleted_at')
       .eq('id', userId)
       .limit(1);
+    logLookup('auth_user_id_as_patient_id', {
+      error: error?.message || null,
+      returned: summarizePatientRows(data || [])
+    });
     if (!error && data?.[0]?.id) ids.add(sanitizeText(data[0].id, 120));
   }
+
+  logLookup('resolved', {
+    patientIds: Array.from(ids)
+  });
 
   return Array.from(ids);
 }
@@ -200,6 +261,17 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
   if (!isUuid(patientId)) {
     return { success: false, error: 'Paciente invalido para inscricao push.' };
   }
+
+  params.logger?.log?.('[PushSubscriptionSave] start', {
+    patientId,
+    userId: sanitizeText(params.userId, 120) || null,
+    userEmail: sanitizeEmail(params.userEmail) || null,
+    clinicId: sanitizeText(params.clinicId, 120) || null,
+    role: sanitizeText(params.role, 40) || null,
+    endpointPrefix: normalized.endpoint.slice(0, 80),
+    hasP256dh: Boolean(normalized.keys.p256dh),
+    hasAuth: Boolean(normalized.keys.auth)
+  });
 
   const now = new Date().toISOString();
   let payload: Record<string, any> = {
@@ -221,6 +293,10 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
     if (!missingColumn || !(missingColumn in payload) || !isRemovablePushColumn(missingColumn)) {
       return false;
     }
+    params.logger?.warn?.('[PushSubscriptionSave] coluna ausente removida do payload.', {
+      patientId,
+      missingColumn
+    });
     delete payload[missingColumn];
     return true;
   };
@@ -237,9 +313,19 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
         .limit(1);
 
       if (!error) {
+        params.logger?.log?.('[PushSubscriptionSave] update checked.', {
+          patientId,
+          updated: Array.isArray(data) && data.length > 0,
+          endpointPrefix: normalized.endpoint.slice(0, 80)
+        });
         return { success: true, updated: Array.isArray(data) && data.length > 0, error: null };
       }
       if (removeMissingColumn(error)) continue;
+      params.logger?.warn?.('[PushSubscriptionSave] update failed.', {
+        patientId,
+        endpointPrefix: normalized.endpoint.slice(0, 80),
+        message: error.message || String(error)
+      });
       return { success: false, updated: false, error };
     }
     return { success: false, updated: false, error: new Error('Nao foi possivel montar payload push.') };
@@ -258,8 +344,18 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
       .from('push_subscriptions')
       .insert([payload]);
 
-    if (!error) return { success: true, patientId, endpoint: normalized.endpoint };
+    if (!error) {
+      params.logger?.log?.('[PushSubscriptionSave] insert succeeded.', {
+        patientId,
+        endpointPrefix: normalized.endpoint.slice(0, 80)
+      });
+      return { success: true, patientId, endpoint: normalized.endpoint };
+    }
     if (isDuplicatePushError(error)) {
+      params.logger?.warn?.('[PushSubscriptionSave] duplicate endpoint on insert; retrying update.', {
+        patientId,
+        endpointPrefix: normalized.endpoint.slice(0, 80)
+      });
       const retryUpdate = await updateExisting();
       if (retryUpdate.success) {
         return { success: true, patientId, endpoint: normalized.endpoint };
@@ -268,6 +364,11 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
     }
 
     if (!removeMissingColumn(error)) {
+      params.logger?.warn?.('[PushSubscriptionSave] insert failed.', {
+        patientId,
+        endpointPrefix: normalized.endpoint.slice(0, 80),
+        message: error.message || String(error)
+      });
       return { success: false, error: error.message || 'Erro ao salvar inscricao push.' };
     }
   }

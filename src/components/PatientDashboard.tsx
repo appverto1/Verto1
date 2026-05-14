@@ -220,6 +220,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           ? patientIdForPush
           : '';
       const patientEmailForPush = String(user?.email || '').trim().toLowerCase();
+      console.log('[push] ativando subscription pelo painel do paciente.', {
+        patientId: safePatientIdForPush || null,
+        patientEmail: patientEmailForPush || null,
+        endpointPrefix: String(subscription.endpoint || '').slice(0, 80)
+      });
       const response = await fetch('/api/push/subscribe', {
         method: 'POST',
         headers: await buildPushRequestHeaders(),
@@ -234,11 +239,18 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || result?.success === false) {
+        console.warn('[push] falha ao salvar subscription pelo painel do paciente.', {
+          status: response.status,
+          result
+        });
         setNotificationSubscriptionReady(false);
         setSettingsMessage(result?.error || result?.warning || 'Não foi possível ativar as notificações agora.');
         return false;
       }
 
+      console.log('[push] subscription do painel persistida.', {
+        patientId: result?.patientId || safePatientIdForPush || null
+      });
       setNotificationSubscriptionReady(true);
       setSettingsMessage('Notificações ativadas neste dispositivo.');
       return true;

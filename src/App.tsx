@@ -1135,6 +1135,11 @@ export default function App() {
             ? patientIdForPush
             : '';
         const patientEmailForPush = String(user?.email || '').trim().toLowerCase();
+        console.log('[push] registrando subscription do paciente.', {
+          patientId: safePatientIdForPush || null,
+          patientEmail: patientEmailForPush || null,
+          endpointPrefix: String(subscription.endpoint || '').slice(0, 80)
+        });
         const response = await fetch('/api/push/subscribe', {
           method: 'POST',
           headers: await buildJsonAuthHeaders(),
@@ -1149,7 +1154,14 @@ export default function App() {
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || result?.success === false) {
-          console.warn('[push] Falha ao persistir subscription do paciente:', result);
+          console.warn('[push] Falha ao persistir subscription do paciente:', {
+            status: response.status,
+            result
+          });
+        } else {
+          console.log('[push] subscription persistida.', {
+            patientId: result?.patientId || safePatientIdForPush || null
+          });
         }
       } catch (error) {
         console.warn('Push registration failed:', error);
