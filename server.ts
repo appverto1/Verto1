@@ -7382,13 +7382,37 @@ async function startServer() {
         });
       }
 
+      let resolvedPatientClinicId = currentClinicId(user);
+      if (!resolvedPatientClinicId && isUuid(patientId)) {
+        const { data: patientRow, error: patientClinicError } = await supabase
+          .from('patients')
+          .select('id, clinic_id')
+          .eq('id', patientId)
+          .maybeSingle();
+
+        if (patientClinicError) {
+          console.warn('[Push] Não foi possível resolver clinic_id pelo cadastro do paciente.', {
+            patientId,
+            message: patientClinicError.message || String(patientClinicError)
+          });
+        } else {
+          resolvedPatientClinicId = sanitizeString(patientRow?.clinic_id, 120) || null;
+        }
+      }
+
+      console.log('[Push] subscribe resolved patient clinic.', {
+        patientId,
+        sessionClinicId: currentClinicId(user),
+        resolvedPatientClinicId
+      });
+
       const result = await savePatientPushSubscription({
         supabase,
         subscription,
         patientId,
         userId: sanitizeString(user?.id, 120),
         userEmail: sanitizeEmail(user?.email),
-        clinicId: currentClinicId(user),
+        clinicId: resolvedPatientClinicId,
         role,
         logger: console
       });
@@ -7400,6 +7424,7 @@ async function startServer() {
 
       console.log('[Push] subscribe persisted.', {
         patientId,
+        clinicId: resolvedPatientClinicId,
         authUserId: sanitizeString(user?.id, 120) || null,
         endpointPrefix: endpoint.slice(0, 80)
       });
