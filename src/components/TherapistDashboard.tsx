@@ -1928,7 +1928,7 @@ export const TherapistDashboard = ({
                     const statusLabel = isConfirmed
                       ? "Confirmado"
                       : isReschedule
-                        ? "Atenção"
+                        ? "Remarcar"
                         : isCancelled
                           ? "Cancelado"
                           : "Pendente";
@@ -2111,6 +2111,10 @@ export const TherapistDashboard = ({
                                     {item.type} •{" "}
                                     {item.status === "confirmed"
                                       ? "Confirmado"
+                                      : item.status === "reschedule"
+                                        ? "Remarcar"
+                                        : item.status === "canceled" || item.status === "cancelled"
+                                          ? "Cancelado"
                                       : "Pendente"}
                                   </p>
                                 </div>

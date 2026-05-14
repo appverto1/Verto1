@@ -1096,6 +1096,34 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const handleServiceWorkerMessage = (event: MessageEvent) => {
+      const data = event.data || {};
+      if (data?.type !== 'APPOINTMENT_STATUS_UPDATED') return;
+      const appointmentId = String(data.appointmentId || '');
+      const status = String(data.status || '').toLowerCase();
+      if (!appointmentId || !status) return;
+      setTherapistAgenda(prev =>
+        prev.map(item =>
+          String(item.id) === appointmentId
+            ? {
+                ...item,
+                status,
+                patientConfirmationStatus: status,
+                patientConfirmationAt: new Date().toISOString(),
+              }
+            : item
+        )
+      );
+    };
+
+    navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
+    return () => {
+      navigator.serviceWorker.removeEventListener('message', handleServiceWorkerMessage);
+    };
+  }, []);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
     const appointmentId = params.get('appointment_id');
@@ -2089,7 +2117,13 @@ export default function App() {
       };
     }
 
-    setTherapistAgenda(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
+    const nextScheduledAt = new Date(`${nextDate}T${nextTime}:00`).toISOString();
+    const normalizedUpdates = {
+      ...updates,
+      scheduledAt: nextScheduledAt,
+      scheduled_at: nextScheduledAt,
+    };
+    setTherapistAgenda(prev => prev.map(item => item.id === id ? { ...item, ...normalizedUpdates } : item));
     onAddActivityLog("EdiÃ§Ã£o de Agendamento", `Agendamento ID ${id} atualizado: ${JSON.stringify(updates)}`, 'management');
     return { success: true };
   };
@@ -2138,7 +2172,24 @@ export default function App() {
     setAllPatients(prev => mergePatients(prev, [newPatient])); 
     setClinicalRecords(prev => [...prev, newClinicalRecord]);
 
-    if(data.scheduleImmediate) setTherapistAgenda(prev => [...prev, {id: newId, name: data.name, date: data.date || todayStr, time: data.time, status: 'pending', type: 'Primeira', color: 'bg-blue-100 text-blue-600'}].sort((a,b) => a.time.localeCompare(b.time))); 
+    if(data.scheduleImmediate) {
+      const immediateDate = data.date || todayStr;
+      const immediateTime = data.time || '08:00';
+      setTherapistAgenda(prev => [...prev, {
+        id: newId,
+        patientId: newId,
+        patientEmail: data.email || null,
+        patient_email: data.email || null,
+        name: data.name,
+        date: immediateDate,
+        time: immediateTime,
+        scheduledAt: new Date(`${immediateDate}T${immediateTime}:00`).toISOString(),
+        scheduled_at: new Date(`${immediateDate}T${immediateTime}:00`).toISOString(),
+        status: 'pending',
+        type: 'Primeira',
+        color: 'bg-blue-100 text-blue-600'
+      }].sort((a,b) => a.time.localeCompare(b.time)));
+    } 
     onAddActivityLog("Cadastro de Paciente", `Paciente ID ${newId} cadastrado no sistema.`, 'management');
     const rollbackOptimisticPatient = () => {
       setAllPatients(prev => prev.filter((p: any) => String(p.id) !== String(newId)));
@@ -2479,7 +2530,8 @@ export default function App() {
     }
   };
   const handleScheduleSession = (sess: any) => { 
-    const pid = allPatients.find(p => p.name === sess.patientName)?.id || Date.now(); 
+    const patientForSession = allPatients.find(p => p.name === sess.patientName);
+    const pid = patientForSession?.id || Date.now(); 
     const numSessions = sess.numSessions || 1;
     const newItems = [];
     const conflicts: string[] = [];
@@ -2535,9 +2587,13 @@ export default function App() {
         newItems.push({
           id: Date.now() + i, // Unique ID for each session
           patientId: pid,
+          patientEmail: patientForSession?.email || null,
+          patient_email: patientForSession?.email || null,
           name: sess.patientName, 
           date: dateStr, 
           time: sess.time, 
+          scheduledAt: new Date(`${dateStr}T${sess.time}:00`).toISOString(),
+          scheduled_at: new Date(`${dateStr}T${sess.time}:00`).toISOString(),
           status: 'pending', 
           type: sess.approach, 
           color: 'bg-blue-100 text-blue-600',
@@ -3189,10 +3245,10 @@ export default function App() {
     if (!appointmentConfirmation?.appointmentId) return;
     const feedback =
       status === 'reschedule'
-        ? 'Anotado! A recepção entrará em contato para reagendar.'
+        ? 'Solicitação de remarcação registrada. A recepção entrará em contato.'
         : status === 'confirmed'
           ? 'Presença confirmada com sucesso.'
-          : 'Consulta cancelada. A equipe foi sinalizada.';
+          : 'Agendamento cancelado. O horário foi liberado para a equipe.';
 
     setAppointmentConfirmation((prev) => prev ? { ...prev, isUpdating: true, message: '' } : prev);
     try {
@@ -3200,24 +3256,32 @@ export default function App() {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ status, source: 'appointment_24h_popup' })
+        body: JSON.stringify({ status, source: 'appointment_reminder_popup' })
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result?.success) {
         throw new Error(result?.error || 'Não foi possível atualizar a consulta.');
       }
+      const serverStatus = String(result?.appointment?.status || status).toLowerCase();
       setTherapistAgenda(prev =>
         prev.map(item =>
           String(item.id) === String(appointmentConfirmation.appointmentId)
-            ? { ...item, ...(result.appointment || {}), status }
+            ? { ...item, ...(result.appointment || {}), status: serverStatus }
             : item
         )
       );
-      setAppointmentConfirmation((prev) => prev ? { ...prev, isUpdating: false, message: feedback } : prev);
+      const alreadyAnsweredMessage = result?.alreadyAnswered
+        ? serverStatus === 'confirmed'
+          ? 'Essa presença já estava confirmada.'
+          : serverStatus === 'reschedule'
+            ? 'Essa consulta já estava marcada para remarcação.'
+            : serverStatus === 'canceled'
+              ? 'Esse agendamento já estava cancelado.'
+              : 'Essa consulta já tinha uma resposta registrada.'
+        : feedback;
+      setAppointmentConfirmation((prev) => prev ? { ...prev, isUpdating: false, message: alreadyAnsweredMessage } : prev);
       window.history.replaceState({}, document.title, window.location.pathname);
-      if (status !== 'reschedule') {
-        window.setTimeout(() => setAppointmentConfirmation(null), 1600);
-      }
+      window.setTimeout(() => setAppointmentConfirmation(null), 1800);
     } catch (error: any) {
       setAppointmentConfirmation((prev) =>
         prev
@@ -3261,8 +3325,8 @@ export default function App() {
               <h2 className="text-2xl font-black tracking-tight">Lembrete de Consulta - Verto</h2>
               <p className="mt-2 text-sm font-semibold text-white/90">
                 {appointmentConfirmation.dateLabel && appointmentConfirmation.timeLabel
-                  ? `Você confirma presença na consulta do dia ${appointmentConfirmation.dateLabel}, às ${appointmentConfirmation.timeLabel}?`
-                  : 'Você confirma sua presença para a consulta agendada?'}
+                  ? `Consulta no dia ${appointmentConfirmation.dateLabel}, às ${appointmentConfirmation.timeLabel}. Como deseja responder?`
+                  : 'Como deseja responder à consulta agendada?'}
               </p>
             </div>
             <div className="space-y-3 p-5">
@@ -3282,7 +3346,7 @@ export default function App() {
                 onClick={() => void handleAppointmentConfirmationChoice('confirmed')}
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-600 disabled:opacity-60"
               >
-                <CheckCircle2 size={18} /> Confirmado
+                <CheckCircle2 size={18} /> Presença na consulta confirmada
               </button>
               <button
                 type="button"
@@ -3290,7 +3354,7 @@ export default function App() {
                 onClick={() => void handleAppointmentConfirmationChoice('reschedule')}
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-amber-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-amber-500/25 transition hover:bg-amber-600 disabled:opacity-60"
               >
-                <AlertCircle size={18} /> Remarcar
+                <AlertCircle size={18} /> Remarcar consulta
               </button>
               <button
                 type="button"
@@ -3298,7 +3362,7 @@ export default function App() {
                 onClick={() => void handleAppointmentConfirmationChoice('canceled')}
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-rose-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-rose-500/25 transition hover:bg-rose-600 disabled:opacity-60"
               >
-                Cancelar
+                Cancelar agendamento
               </button>
             </div>
           </div>

@@ -10,6 +10,7 @@ import {
   Plus,
   Search,
   Bell,
+  ChevronLeft,
   ChevronRight,
   ChevronDown,
   DollarSign,
@@ -1130,6 +1131,14 @@ export function CoordinatorDashboard({
     setEditingAppointmentId(null);
   };
 
+  const openNewAppointmentAt = (date: string, time = "08:00") => {
+    resetSessionForm();
+    setSessionDate(date);
+    setSessionTime(time);
+    setIsDayDetailsModalOpen(false);
+    setIsAddSessionModalOpen(true);
+  };
+
   const handleSessionSubmit = async () => {
     if (!sessionPatientName || !sessionTime || !sessionRoom) {
       showToast("Preencha nome, horário e sala.", "error");
@@ -1881,6 +1890,66 @@ export function CoordinatorDashboard({
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   };
 
+  const getLocalDateKey = (date: Date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+
+  const focusedAgendaDate = useMemo(() => {
+    const next = new Date(calendarDate);
+    next.setHours(0, 0, 0, 0);
+    return next;
+  }, [calendarDate]);
+
+  const focusedAgendaDateKey = useMemo(
+    () => getLocalDateKey(focusedAgendaDate),
+    [focusedAgendaDate],
+  );
+
+  const focusedWeekRange = useMemo(() => {
+    const start = new Date(focusedAgendaDate);
+    start.setDate(start.getDate() - start.getDay());
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
+  }, [focusedAgendaDate]);
+
+  const moveAgendaDate = (direction: -1 | 1) => {
+    setCalendarDate((prev) => {
+      const next = new Date(prev);
+      if (agendaView === "day") next.setDate(next.getDate() + direction);
+      if (agendaView === "week") next.setDate(next.getDate() + direction * 7);
+      if (agendaView === "month") next.setMonth(next.getMonth() + direction);
+      return next;
+    });
+  };
+
+  const agendaPeriodLabel = useMemo(() => {
+    if (agendaView === "day") {
+      return focusedAgendaDate.toLocaleDateString("pt-BR", {
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+      });
+    }
+    if (agendaView === "week") {
+      const start = focusedWeekRange.start.toLocaleDateString("pt-BR", {
+        day: "2-digit",
+        month: "short",
+      });
+      const end = focusedWeekRange.end.toLocaleDateString("pt-BR", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+      return `${start} - ${end}`;
+    }
+    return focusedAgendaDate.toLocaleDateString("pt-BR", {
+      month: "long",
+      year: "numeric",
+    });
+  }, [agendaView, focusedAgendaDate, focusedWeekRange]);
+
   const isCanceledAgendaItem = (item: any) => {
     const status = String(item?.status || item?.state || item?.statusLabel || "")
       .normalize("NFD")
@@ -2017,27 +2086,22 @@ export function CoordinatorDashboard({
   }, [normalizedAgenda, professionalFilter, agendaSearchMode, agendaSearchTerm]);
 
   const currentViewAgenda = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
     return (filteredAgenda || [])
       .filter((a: any) => {
         const itemDate = new Date(a.date + "T00:00:00");
-        if (agendaView === "day") return itemDate.getTime() === today.getTime();
+        if (agendaView === "day") return itemDate.getTime() === focusedAgendaDate.getTime();
         if (agendaView === "week") {
-          const nextWeek = new Date(today);
-          nextWeek.setDate(today.getDate() + 7);
-          return itemDate >= today && itemDate <= nextWeek;
+          return itemDate >= focusedWeekRange.start && itemDate <= focusedWeekRange.end;
         }
         if (agendaView === "month")
           return (
-            itemDate.getMonth() === today.getMonth() &&
-            itemDate.getFullYear() === today.getFullYear()
+            itemDate.getMonth() === focusedAgendaDate.getMonth() &&
+            itemDate.getFullYear() === focusedAgendaDate.getFullYear()
           );
         return true;
       })
       .sort((a, b) => a.time.localeCompare(b.time));
-  }, [agendaView, filteredAgenda]);
+  }, [agendaView, filteredAgenda, focusedAgendaDate, focusedWeekRange]);
 
   const groupedAgenda = useMemo(() => {
     if (agendaView === "day" || agendaView === "month") return null;
@@ -2064,12 +2128,10 @@ export function CoordinatorDashboard({
   );
 
   const weekDays = useMemo(() => {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
     return Array.from({ length: 7 }, (_, i) => {
-      const date = new Date(start);
-      date.setDate(start.getDate() + i);
-      const key = date.toISOString().split("T")[0];
+      const date = new Date(focusedWeekRange.start);
+      date.setDate(focusedWeekRange.start.getDate() + i);
+      const key = getLocalDateKey(date);
       return {
         key,
         label: date.toLocaleDateString("pt-BR", {
@@ -2079,51 +2141,84 @@ export function CoordinatorDashboard({
         }),
       };
     });
-  }, []);
+  }, [focusedWeekRange]);
 
   const getAgendaStatusVisual = (status: string) => {
     const normalized = String(status || "pending").toLowerCase();
+    const dark = theme === "dark";
     if (normalized === "confirmed") {
       return {
-        card: "border-emerald-400 bg-emerald-50/80 hover:bg-emerald-50",
+        card: dark
+          ? "border-emerald-300/70 bg-emerald-400 text-emerald-950 hover:bg-emerald-300 shadow-sm"
+          : "border-emerald-400 bg-emerald-50/80 text-slate-900 hover:bg-emerald-50",
         badge: "bg-emerald-500 text-white",
         label: "Confirmado",
         icon: CheckCircle2,
         name: "",
+        title: dark ? "text-emerald-950" : "text-slate-900",
+        meta: dark ? "text-emerald-950/75" : "text-slate-500",
       };
     }
     if (normalized === "reschedule") {
       return {
-        card: "border-amber-300 bg-amber-50 hover:bg-amber-50",
+        card: dark
+          ? "border-amber-300/70 bg-amber-400 text-amber-950 hover:bg-amber-300 shadow-sm"
+          : "border-amber-300 bg-amber-50 text-slate-900 hover:bg-amber-50",
         badge: "bg-amber-500 text-white",
-        label: "Atenção",
+        label: "Remarcar",
         icon: AlertCircle,
         name: "",
+        title: dark ? "text-amber-950" : "text-slate-900",
+        meta: dark ? "text-amber-950/75" : "text-slate-500",
       };
     }
     if (normalized === "canceled" || normalized === "cancelled") {
       return {
-        card: "border-l-4 border-l-rose-500 border-rose-100 bg-slate-50 opacity-60 hover:bg-slate-50",
+        card: dark
+          ? "border-l-4 border-l-rose-300 border-rose-300/50 bg-rose-500/80 text-white opacity-80 hover:bg-rose-500"
+          : "border-l-4 border-l-rose-500 border-rose-100 bg-slate-50 text-slate-900 opacity-60 hover:bg-slate-50",
         badge: "bg-rose-500 text-white",
         label: "Cancelado",
         icon: XCircle,
         name: "line-through decoration-2 decoration-rose-500",
+        title: dark ? "text-white" : "text-slate-900",
+        meta: dark ? "text-rose-50/85" : "text-slate-500",
       };
     }
     return {
-      card: "border-[#7a32fc]/20 bg-[#7a32fc]/5 hover:bg-[#7a32fc]/10",
+      card: dark
+        ? "border-sky-300/70 bg-sky-400 text-sky-950 hover:bg-sky-300 shadow-sm"
+        : "border-[#7a32fc]/20 bg-[#7a32fc]/5 text-slate-900 hover:bg-[#7a32fc]/10",
       badge: "bg-violet-100 text-violet-700",
       label: "Pendente",
       icon: Clock,
       name: "",
+      title: dark ? "text-sky-950" : "text-slate-900",
+      meta: dark ? "text-sky-950/75" : "text-slate-500",
     };
   };
 
   const renderGoogleDayGrid = () => {
-    const todayKey = new Date().toISOString().split("T")[0];
+    const todayKey = focusedAgendaDateKey;
+    const isFocusedToday = todayKey === getLocalDateKey(new Date());
+    const shellClass = theme === "dark"
+      ? "rounded-3xl border border-slate-700/80 bg-[#101827] overflow-hidden"
+      : "rounded-3xl border border-slate-100 bg-white overflow-hidden";
+    const headerClass = theme === "dark"
+      ? "grid grid-cols-[96px_1fr] bg-[#0b1220] border-b border-slate-700/80"
+      : "grid grid-cols-[96px_1fr] bg-slate-50 border-b border-slate-100";
+    const rowClass = theme === "dark"
+      ? "grid grid-cols-[96px_1fr] border-b border-slate-700/70 min-h-[66px]"
+      : "grid grid-cols-[96px_1fr] border-b border-slate-50 min-h-[66px]";
+    const timeCellClass = theme === "dark"
+      ? "px-4 py-3 text-xs font-semibold text-slate-200 bg-[#0b1220]"
+      : "px-4 py-3 text-xs font-semibold text-slate-500 bg-white";
+    const slotCellClass = theme === "dark"
+      ? "px-3 py-2 bg-[#101827] hover:bg-[#132033] transition-colors cursor-pointer"
+      : "px-3 py-2 bg-white hover:bg-slate-50 transition-colors cursor-pointer";
     return (
-      <div className="rounded-3xl border border-slate-100 overflow-hidden">
-        <div className="grid grid-cols-[96px_1fr] bg-slate-50 border-b border-slate-100">
+      <div className={shellClass}>
+        <div className={headerClass}>
           <div className="px-4 py-3 text-[10px] font-bold tracking-widest uppercase text-slate-400">
             Horário
           </div>
@@ -2137,7 +2232,7 @@ export function CoordinatorDashboard({
         </div>
 
         <div className="relative">
-          {currentTimelineOffsetPx !== null && (
+          {isFocusedToday && currentTimelineOffsetPx !== null && (
             <div
               className="absolute left-[96px] right-0 z-10 pointer-events-none"
               style={{ top: `${currentTimelineOffsetPx}px` }}
@@ -2162,12 +2257,16 @@ export function CoordinatorDashboard({
             return (
               <div
                 key={slot}
-                className="grid grid-cols-[96px_1fr] border-b border-slate-50 min-h-[66px]"
+                className={rowClass}
               >
-                <div className="px-4 py-3 text-xs font-semibold text-slate-500 bg-white">
+                <div className={timeCellClass}>
                   {slot}
                 </div>
-                <div className="px-3 py-2 bg-white">
+                <div
+                  className={slotCellClass}
+                  onClick={() => openNewAppointmentAt(todayKey, slot)}
+                  title="Criar agendamento neste horário"
+                >
                   <div className="flex flex-wrap gap-2">
                     {slotItems.length > 0 ? (
                       slotItems.map((item: any) => {
@@ -2176,11 +2275,14 @@ export function CoordinatorDashboard({
                         return (
                           <button
                             key={item.id}
-                            onClick={() => openAgendaActionModal(item)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openAgendaActionModal(item);
+                            }}
                             className={`text-left min-w-[220px] rounded-xl border px-3 py-2 transition-all ${statusVisual.card}`}
                           >
                             <div className="mb-1 flex items-center justify-between gap-2">
-                              <p className={`text-xs font-bold text-slate-900 flex items-center gap-1.5 ${statusVisual.name}`}>
+                              <p className={`text-xs font-bold flex items-center gap-1.5 ${statusVisual.title} ${statusVisual.name}`}>
                                 {item.time} • {item.patientName}
                                 {item.anamnesisPending && (
                                   <span
@@ -2196,7 +2298,7 @@ export function CoordinatorDashboard({
                                 {statusVisual.label}
                               </span>
                             </div>
-                            <p className="text-[10px] text-slate-500">
+                            <p className={`text-[10px] ${statusVisual.meta}`}>
                               {item.therapistName} • Sala {item.room || "--"}
                             </p>
                           </button>
@@ -2222,11 +2324,26 @@ export function CoordinatorDashboard({
     weekDays.forEach((d) => {
       byDate[d.key] = currentViewAgenda.filter((item: any) => item.date === d.key);
     });
+    const shellClass = theme === "dark"
+      ? "min-w-[980px] rounded-3xl border border-slate-700/80 bg-[#101827] overflow-hidden"
+      : "min-w-[980px] rounded-3xl border border-slate-100 bg-white overflow-hidden";
+    const headerClass = theme === "dark"
+      ? "grid grid-cols-[96px_repeat(7,minmax(0,1fr))] bg-[#0b1220] border-b border-slate-700/80"
+      : "grid grid-cols-[96px_repeat(7,minmax(0,1fr))] bg-slate-50 border-b border-slate-100";
+    const rowClass = theme === "dark"
+      ? "grid grid-cols-[96px_repeat(7,minmax(0,1fr))] border-b border-slate-700/70 min-h-[68px]"
+      : "grid grid-cols-[96px_repeat(7,minmax(0,1fr))] border-b border-slate-50 min-h-[68px]";
+    const timeCellClass = theme === "dark"
+      ? "px-3 py-3 text-xs font-semibold text-slate-200 bg-[#0b1220]"
+      : "px-3 py-3 text-xs font-semibold text-slate-500 bg-white";
+    const dayCellClass = theme === "dark"
+      ? "px-2 py-2 border-l border-slate-700/70 bg-[#101827] hover:bg-[#132033] transition-colors cursor-pointer"
+      : "px-2 py-2 border-l border-slate-50 bg-white hover:bg-slate-50 transition-colors cursor-pointer";
 
     return (
       <div className="overflow-x-auto">
-        <div className="min-w-[980px] rounded-3xl border border-slate-100 overflow-hidden">
-          <div className="grid grid-cols-[96px_repeat(7,minmax(0,1fr))] bg-slate-50 border-b border-slate-100">
+        <div className={shellClass}>
+          <div className={headerClass}>
             <div className="px-3 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">
               Hora
             </div>
@@ -2244,9 +2361,9 @@ export function CoordinatorDashboard({
             return (
               <div
                 key={slot}
-                className="grid grid-cols-[96px_repeat(7,minmax(0,1fr))] border-b border-slate-50 min-h-[68px]"
+                className={rowClass}
               >
-                <div className="px-3 py-3 text-xs font-semibold text-slate-500 bg-white">
+                <div className={timeCellClass}>
                   {slot}
                 </div>
                 {weekDays.map((d) => {
@@ -2257,32 +2374,40 @@ export function CoordinatorDashboard({
                   return (
                     <div
                       key={`${d.key}-${slot}`}
-                      className="px-2 py-2 border-l border-slate-50 bg-white"
+                      className={dayCellClass}
+                      onClick={() => openNewAppointmentAt(d.key, slot)}
+                      title="Criar agendamento neste horário"
                     >
                       <div className="flex flex-col gap-1">
                         {items.length > 0 ? (
-                          items.map((item: any) => (
-                            <button
-                              key={item.id}
-                              onClick={() => openAgendaActionModal(item)}
-                              className="text-left rounded-lg border border-[#7a32fc]/20 bg-[#7a32fc]/5 px-2 py-1.5 hover:bg-[#7a32fc]/10 transition-all"
-                            >
-                              <p className="text-[10px] font-bold text-slate-800 truncate flex items-center gap-1.5">
-                                {item.time} • {item.patientName}
-                                {item.anamnesisPending && (
-                                  <span
-                                    title="Pendente de anamnese"
-                                    className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-amber-100 text-amber-700 text-[9px] font-black shrink-0"
-                                  >
-                                    !
-                                  </span>
-                                )}
-                              </p>
-                              <p className="text-[9px] text-slate-500 truncate">
-                                {item.therapistName}
-                              </p>
-                            </button>
-                          ))
+                          items.map((item: any) => {
+                            const statusVisual = getAgendaStatusVisual(item.status);
+                            return (
+                              <button
+                                key={item.id}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openAgendaActionModal(item);
+                                }}
+                                className={`text-left rounded-lg border px-2 py-1.5 transition-all ${statusVisual.card}`}
+                              >
+                                <p className={`text-[10px] font-bold truncate flex items-center gap-1.5 ${statusVisual.title} ${statusVisual.name}`}>
+                                  {item.time} • {item.patientName}
+                                  {item.anamnesisPending && (
+                                    <span
+                                      title="Pendente de anamnese"
+                                      className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-amber-100 text-amber-700 text-[9px] font-black shrink-0"
+                                    >
+                                      !
+                                    </span>
+                                  )}
+                                </p>
+                                <p className={`text-[9px] truncate ${statusVisual.meta}`}>
+                                  {item.therapistName}
+                                </p>
+                              </button>
+                            );
+                          })
                         ) : (
                           <span className="text-[10px] text-slate-300">-</span>
                         )}
@@ -2525,15 +2650,32 @@ export function CoordinatorDashboard({
 
   const COLORS = ["#7a32fc", "#6AD2FF", "#EFF4FB", "#A3AED0"];
 
-  const renderAgendaContent = () => (
+  const renderAgendaContent = () => {
+    const dark = theme === "dark";
+    const panelClass = dark
+      ? "bg-[#101827] border-slate-700/80 text-slate-100"
+      : "bg-white border-slate-100 text-slate-900";
+    const mutedTextClass = dark ? "text-slate-300" : "text-slate-500";
+    const softPanelClass = dark ? "bg-[#0b1220]" : "bg-slate-100";
+    const inactivePillClass = dark
+      ? "bg-[#132033] text-slate-300 hover:bg-[#172b46]"
+      : "bg-slate-50 text-slate-500 hover:bg-slate-100";
+    const activeTabClass = dark
+      ? "bg-[#172b46] text-white shadow-sm"
+      : "bg-white text-[#7a32fc] shadow-sm";
+    const inputClass = dark
+      ? "w-full bg-[#0b1220] border border-slate-700 rounded-xl py-2.5 pl-9 pr-3 text-xs font-medium text-slate-100 placeholder:text-slate-500 outline-none focus:border-[#7a32fc]/60"
+      : "w-full bg-slate-50 border border-slate-100 rounded-xl py-2.5 pl-9 pr-3 text-xs font-medium text-slate-600 outline-none focus:border-[#7a32fc]/40";
+
+    return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-slate-100 gap-4">
+      <div className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 sm:p-6 rounded-[32px] shadow-sm border gap-4 ${panelClass}`}>
         <div className="flex flex-col sm:flex-row sm:items-center gap-6">
           <div>
-            <h3 className="text-lg sm:text-xl font-bold text-slate-900">
+            <h3 className={`text-lg sm:text-xl font-bold ${dark ? "text-white" : "text-slate-900"}`}>
               Agenda Global
             </h3>
-            <p className="text-slate-500 text-sm hidden sm:block">
+            <p className={`${mutedTextClass} text-sm hidden sm:block`}>
               Visualização diária, semanal e mensal estilo calendário.
             </p>
           </div>
@@ -2551,22 +2693,49 @@ export function CoordinatorDashboard({
           )}
         </div>
         <div className="flex items-center gap-3 w-full sm:w-auto overflow-x-auto no-scrollbar pb-1 sm:pb-0">
-          <div className="bg-slate-100 p-1 rounded-xl flex gap-1 w-full sm:w-auto">
+          <button
+            onClick={() => setCalendarDate(new Date())}
+            className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all ${
+              dark ? "border-slate-600 text-slate-100 hover:bg-[#172b46]" : "border-slate-200 text-slate-700 hover:bg-slate-50"
+            }`}
+          >
+            Hoje
+          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => moveAgendaDate(-1)}
+              className={`p-2 rounded-xl transition-all ${dark ? "text-slate-300 hover:bg-[#172b46]" : "text-slate-500 hover:bg-slate-100"}`}
+              aria-label="Período anterior"
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <button
+              onClick={() => moveAgendaDate(1)}
+              className={`p-2 rounded-xl transition-all ${dark ? "text-slate-300 hover:bg-[#172b46]" : "text-slate-500 hover:bg-slate-100"}`}
+              aria-label="Próximo período"
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+          <div className={`min-w-[180px] text-sm font-bold capitalize ${dark ? "text-white" : "text-slate-800"}`}>
+            {agendaPeriodLabel}
+          </div>
+          <div className={`${softPanelClass} p-1 rounded-xl flex gap-1 w-full sm:w-auto`}>
             <button
               onClick={() => setAgendaView("day")}
-              className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === "day" ? "bg-white text-[#7a32fc] shadow-sm" : "text-slate-400"}`}
+              className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === "day" ? activeTabClass : "text-slate-400"}`}
             >
               <Calendar size={14} /> Dia
             </button>
             <button
               onClick={() => setAgendaView("week")}
-              className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === "week" ? "bg-white text-[#7a32fc] shadow-sm" : "text-slate-400"}`}
+              className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === "week" ? activeTabClass : "text-slate-400"}`}
             >
               <CalendarRange size={14} /> Semana
             </button>
             <button
               onClick={() => setAgendaView("month")}
-              className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === "month" ? "bg-white text-[#7a32fc] shadow-sm" : "text-slate-400"}`}
+              className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === "month" ? activeTabClass : "text-slate-400"}`}
             >
               <CalendarDays size={14} /> Mês
             </button>
@@ -2574,7 +2743,7 @@ export function CoordinatorDashboard({
         </div>
       </div>
 
-      <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-slate-100">
+      <div className={`p-4 sm:p-6 rounded-[32px] shadow-sm border ${panelClass}`}>
         <div className="mb-6 space-y-3">
           <div className="flex items-center gap-3 overflow-x-auto no-scrollbar pb-2">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap hidden sm:inline">
@@ -2582,7 +2751,7 @@ export function CoordinatorDashboard({
             </span>
             <button
               onClick={() => setProfessionalFilter("all")}
-              className={`px-4 py-1.5 rounded-xl text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${professionalFilter === "all" ? "bg-[#7a32fc] text-white shadow-md" : "bg-slate-50 text-slate-500 hover:bg-slate-100"}`}
+              className={`px-4 py-1.5 rounded-xl text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${professionalFilter === "all" ? "bg-[#7a32fc] text-white shadow-md" : inactivePillClass}`}
             >
               Todos
             </button>
@@ -2590,7 +2759,7 @@ export function CoordinatorDashboard({
               <button
                 key={String(prof)}
                 onClick={() => setProfessionalFilter(String(prof))}
-                className={`px-4 py-1.5 rounded-xl text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${professionalFilter === prof ? "bg-[#7a32fc] text-white shadow-md" : "bg-slate-50 text-slate-500 hover:bg-slate-100"}`}
+                className={`px-4 py-1.5 rounded-xl text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${professionalFilter === prof ? "bg-[#7a32fc] text-white shadow-md" : inactivePillClass}`}
               >
                 {String(prof)}
               </button>
@@ -2598,16 +2767,16 @@ export function CoordinatorDashboard({
           </div>
 
           <div className="flex flex-col md:flex-row md:items-center gap-2">
-            <div className="bg-slate-100 p-1 rounded-xl flex gap-1 w-full md:w-auto">
+            <div className={`${softPanelClass} p-1 rounded-xl flex gap-1 w-full md:w-auto`}>
               <button
                 onClick={() => setAgendaSearchMode("patient")}
-                className={`flex-1 md:flex-none px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${agendaSearchMode === "patient" ? "bg-white text-[#7a32fc] shadow-sm" : "text-slate-500"}`}
+                className={`flex-1 md:flex-none px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${agendaSearchMode === "patient" ? activeTabClass : "text-slate-500"}`}
               >
                 Paciente
               </button>
               <button
                 onClick={() => setAgendaSearchMode("professional")}
-                className={`flex-1 md:flex-none px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${agendaSearchMode === "professional" ? "bg-white text-[#7a32fc] shadow-sm" : "text-slate-500"}`}
+                className={`flex-1 md:flex-none px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${agendaSearchMode === "professional" ? activeTabClass : "text-slate-500"}`}
               >
                 Profissional
               </button>
@@ -2618,7 +2787,7 @@ export function CoordinatorDashboard({
                 value={agendaSearchTerm}
                 onChange={(e) => setAgendaSearchTerm(e.target.value)}
                 placeholder={`Filtrar por ${agendaSearchMode === "patient" ? "paciente" : "profissional"}...`}
-                className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2.5 pl-9 pr-3 text-xs font-medium text-slate-600 outline-none focus:border-[#7a32fc]/40"
+                className={inputClass}
               />
             </div>
           </div>
@@ -2640,13 +2809,14 @@ export function CoordinatorDashboard({
             {renderGoogleDayGrid()}
           </div>
         ) : agendaView === "month" ? (
-          <CalendarWidget
-            agenda={filteredAgenda}
-            currentDate={calendarDate}
-            onDateChange={setCalendarDate}
-            onDateSelect={(dateStr: string) => {
-              setSessionDate(dateStr);
-              setIsDayDetailsModalOpen(true);
+                  <CalendarWidget
+                    agenda={filteredAgenda}
+                    currentDate={calendarDate}
+                    onDateChange={setCalendarDate}
+                    theme={theme}
+                    onDateSelect={(dateStr: string) => {
+                      setSessionDate(dateStr);
+                      setIsDayDetailsModalOpen(true);
             }}
           />
         ) : (
@@ -2659,12 +2829,14 @@ export function CoordinatorDashboard({
         onClose={() => setIsDayDetailsModalOpen(false)}
         date={sessionDate}
         agenda={filteredAgenda}
-        onAddSession={() => setIsAddSessionModalOpen(true)}
+        onAddSession={() => openNewAppointmentAt(sessionDate, "08:00")}
         onPatientClick={onPatientClick}
         onAppointmentClick={openAgendaActionModal}
+        theme={theme}
       />
     </div>
-  );
+    );
+  };
 
   const renderRoomsContent = () => (
     <div className="space-y-6">

@@ -19,6 +19,7 @@ type ReminderAppointment = {
   clinicId?: string;
   appointmentId: string;
   patientId: string;
+  patientEmail?: string | null;
   scheduledAt: string;
   status?: string | null;
   patientConfirmationStatus?: string | null;
@@ -27,9 +28,7 @@ type ReminderAppointment = {
 };
 
 const BRAZIL_TIMEZONE = 'America/Sao_Paulo';
-const BRAZIL_NOTIFICATION_START_MINUTE = 8 * 60;
-const BRAZIL_NOTIFICATION_END_MINUTE = 21 * 60;
-const CRON_LOOKBACK_MINUTES = 20;
+const CRON_LOOKBACK_MINUTES = 180;
 const REMINDER_STEPS = [
   {
     kind: '24h',
@@ -38,8 +37,8 @@ const REMINDER_STEPS = [
     sentAtColumn: 'notification_sent_at',
     requiresPreviousSent: false,
     requiresNoPatientResponse: false,
-    title: 'Lembrete de Consulta',
-    body: 'Sua consulta pela Verto e amanha. Clique aqui para confirmar ou remarcar.'
+    title: 'Lembrete de consulta - 24h',
+    body: 'Sua consulta pela Verto e amanha. Clique para confirmar presenca, remarcar ou cancelar.'
   },
   {
     kind: '12h',
@@ -48,8 +47,8 @@ const REMINDER_STEPS = [
     sentAtColumn: 'notification_12h_sent_at',
     requiresPreviousSent: false,
     requiresNoPatientResponse: true,
-    title: 'Confirmacao de Consulta',
-    body: 'Sua consulta esta chegando. Confirme sua presenca para ajudar a evitar faltas e remarcacoes.'
+    title: 'Lembrete de consulta - 12h',
+    body: 'Sua consulta esta chegando. Clique para confirmar presenca, remarcar ou cancelar.'
   }
 ] as const;
 let started = false;
@@ -58,32 +57,21 @@ let running = false;
 const sanitizeText = (value: unknown, maxLength = 240) =>
   String(value ?? '').trim().slice(0, maxLength);
 
+const sanitizeEmail = (value: unknown) =>
+  String(value ?? '').trim().toLowerCase().slice(0, 320);
+
+const isUuid = (value: unknown) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(value || '').trim(),
+  );
+
 const isGonePushError = (error: any) => {
   const statusCode = Number(error?.statusCode ?? error?.status);
   return statusCode === 404 || statusCode === 410;
 };
 
-const minutesFromStartOfDay = (date: dayjs.Dayjs) => date.hour() * 60 + date.minute();
-
-const isWithinBrazilNotificationWindow = (date: dayjs.Dayjs) => {
-  const minutes = minutesFromStartOfDay(date.tz(BRAZIL_TIMEZONE));
-  return minutes >= BRAZIL_NOTIFICATION_START_MINUTE && minutes <= BRAZIL_NOTIFICATION_END_MINUTE;
-};
-
 const resolveAdjustedReminderTimeUtc = (scheduledAt: string, hoursBefore: number) => {
-  const idealBrazil = dayjs(scheduledAt).tz(BRAZIL_TIMEZONE).subtract(hoursBefore, 'hour');
-  const idealMinute = minutesFromStartOfDay(idealBrazil);
-  const reminderDayStart = idealBrazil.startOf('day');
-
-  if (idealMinute < BRAZIL_NOTIFICATION_START_MINUTE) {
-    return reminderDayStart.add(BRAZIL_NOTIFICATION_START_MINUTE, 'minute').utc();
-  }
-
-  if (idealMinute > BRAZIL_NOTIFICATION_END_MINUTE) {
-    return reminderDayStart.add(BRAZIL_NOTIFICATION_END_MINUTE, 'minute').utc();
-  }
-
-  return idealBrazil.utc();
+  return dayjs(scheduledAt).tz(BRAZIL_TIMEZONE).subtract(hoursBefore, 'hour').utc();
 };
 
 const buildScheduledAtFromClinicStateAppointment = (appointment: any) => {
@@ -107,7 +95,7 @@ const formatAppointmentReminderBody = (scheduledAt: string, fallbackBody: string
   if (!scheduled.isValid()) return fallbackBody;
   const date = scheduled.format('DD/MM/YYYY');
   const time = scheduled.format('HH:mm');
-  return `Sua consulta pela Verto esta agendada para o dia ${date}, as ${time}. Confirma sua presenca?`;
+  return `Sua consulta pela Verto esta agendada para o dia ${date}, as ${time}. Confirme presenca, solicite remarcacao ou cancele pelo app.`;
 };
 
 async function deleteInvalidSubscription(supabase: any, endpoint: string, logger: CronServiceOptions['logger']) {
@@ -131,20 +119,67 @@ async function sendReminderToPatient(params: {
   supabase: any;
   appointmentId: string;
   patientId: string;
+  patientEmail?: string | null;
   scheduledAt: string;
+  reminderKind: string;
   title: string;
   body: string;
   logger: CronServiceOptions['logger'];
 }) {
-  const { supabase, appointmentId, patientId, scheduledAt, title, body, logger } = params;
+  const { supabase, appointmentId, patientId, patientEmail, scheduledAt, reminderKind, title, body, logger } = params;
   const scheduled = dayjs(scheduledAt).tz(BRAZIL_TIMEZONE);
   const dateLabel = scheduled.isValid() ? scheduled.format('DD/MM/YYYY') : '';
   const timeLabel = scheduled.isValid() ? scheduled.format('HH:mm') : '';
+  const recipientUserIds = new Set<string>();
+  const safeEmail = sanitizeEmail(patientEmail);
+
+  if (isUuid(patientId)) {
+    recipientUserIds.add(patientId);
+  }
+
+  if (safeEmail) {
+    const { data: emailSubscriptions, error: emailSubscriptionError } = await supabase
+      .from('push_subscriptions')
+      .select('user_id')
+      .ilike('user_email', safeEmail)
+      .limit(20);
+
+    if (!emailSubscriptionError) {
+      for (const row of emailSubscriptions || []) {
+        const userId = sanitizeText(row?.user_id, 120);
+        if (isUuid(userId)) recipientUserIds.add(userId);
+      }
+    }
+
+    const { data: profiles, error: profilesError } = await supabase
+      .from('profiles')
+      .select('id,user_id,email')
+      .ilike('email', safeEmail)
+      .limit(10);
+
+    if (!profilesError) {
+      for (const profile of profiles || []) {
+        const profileId = sanitizeText(profile?.id, 120);
+        const userId = sanitizeText(profile?.user_id, 120);
+        if (isUuid(profileId)) recipientUserIds.add(profileId);
+        if (isUuid(userId)) recipientUserIds.add(userId);
+      }
+    }
+  }
+
+  if (!recipientUserIds.size) {
+    logger?.warn?.('[Appointment Reminder Cron] Nenhum usuario push resolvido para o paciente.', {
+      appointmentId,
+      patientId,
+      patientEmail: safeEmail || null
+    });
+    return { sent: 0, failed: 0 };
+  }
 
   const { data: subscriptions, error } = await supabase
     .from('push_subscriptions')
     .select('endpoint, subscription')
-    .eq('user_id', patientId)
+    .in('user_id', Array.from(recipientUserIds))
     .limit(20);
 
   if (error) {
@@ -164,6 +199,7 @@ async function sendReminderToPatient(params: {
     body: formatAppointmentReminderBody(scheduledAt, body),
     url: `/consulta?appointment_id=${encodeURIComponent(appointmentId)}`,
     appointmentId,
+    reminderKind,
     scheduledAt,
     dateLabel,
     timeLabel
@@ -172,7 +208,11 @@ async function sendReminderToPatient(params: {
   let sent = 0;
   let failed = 0;
 
-  for (const row of rows) {
+  const uniqueRows = Array.from(
+    new Map(rows.map((row: any) => [sanitizeText(row?.endpoint, 2000), row])).values(),
+  );
+
+  for (const row of uniqueRows) {
     try {
       if (!row?.subscription) continue;
       await webpush.sendNotification(row.subscription, payload);
@@ -204,10 +244,11 @@ async function fetchReminderAppointments(
 
   const { data: tableAppointments, error: tableError } = await options.supabase
     .from('appointments')
-    .select('id, patient_id, scheduled_at, status, notification_sent, notification_12h_sent')
+    .select('*')
     .neq('status', 'cancelled')
     .neq('status', 'canceled')
     .neq('status', 'reschedule')
+    .neq('status', 'confirmed')
     .eq('is_active', true)
     .is('deleted_at', null)
     .or('notification_sent.is.false,notification_sent.is.null,notification_12h_sent.is.false,notification_12h_sent.is.null')
@@ -231,8 +272,10 @@ async function fetchReminderAppointments(
         source: 'appointments_table',
         appointmentId,
         patientId,
+        patientEmail: sanitizeEmail(appointment?.patient_email || appointment?.patientEmail),
         scheduledAt,
         status: sanitizeText(appointment?.status, 40).toLowerCase(),
+        patientConfirmationStatus: sanitizeText(appointment?.patient_confirmation_status, 40).toLowerCase(),
         notification_sent: Boolean(appointment?.notification_sent),
         notification_12h_sent: Boolean(appointment?.notification_12h_sent)
       });
@@ -259,7 +302,7 @@ async function fetchReminderAppointments(
         const scheduledAt = buildScheduledAtFromClinicStateAppointment(appointment);
         const status = sanitizeText(appointment?.status, 40).toLowerCase();
         if (!appointmentId || !patientId || !scheduledAt) continue;
-        if (status === 'canceled' || status === 'cancelled' || status === 'reschedule') continue;
+        if (status === 'canceled' || status === 'cancelled' || status === 'reschedule' || status === 'confirmed') continue;
 
         const scheduledMoment = dayjs(scheduledAt);
         if (
@@ -269,17 +312,18 @@ async function fetchReminderAppointments(
           continue;
         }
 
+        appointmentsToNotify.delete(`table:${appointmentId}`);
         if (Boolean(appointment?.notification_sent) && Boolean(appointment?.notification_12h_sent)) {
           continue;
         }
 
-        appointmentsToNotify.delete(`table:${appointmentId}`);
         appointmentsToNotify.set(`clinic:${clinicId}:${appointmentId}`, {
           source: 'clinic_state',
           clinicId,
           appointmentId,
-          patientId,
-          scheduledAt,
+        patientId,
+        patientEmail: sanitizeEmail(appointment?.patientEmail || appointment?.patient_email),
+        scheduledAt,
           status,
           patientConfirmationStatus: sanitizeText(
             appointment?.patientConfirmationStatus || appointment?.patient_confirmation_status,
@@ -368,6 +412,24 @@ async function markReminderAsSent(params: {
       reminderKind: sentColumn,
       message: updateError.message
     });
+    return;
+  }
+
+  const { error: tableMirrorError } = await supabase
+    .from('appointments')
+    .update({
+      [sentColumn]: true,
+      [sentAtColumn]: sentAt
+    })
+    .eq('id', appointment.appointmentId);
+
+  if (tableMirrorError && !String(tableMirrorError.message || '').toLowerCase().includes('appointments')) {
+    logger?.warn?.('[Appointment Reminder Cron] Marcador em clinic_state salvo, mas espelho appointments falhou.', {
+      clinicId: appointment.clinicId,
+      appointmentId: appointment.appointmentId,
+      reminderKind: sentColumn,
+      message: tableMirrorError.message
+    });
   }
 }
 
@@ -378,15 +440,6 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
   try {
     const nowUtc = dayjs().utc();
     const nowBrazil = nowUtc.tz(BRAZIL_TIMEZONE);
-    if (!isWithinBrazilNotificationWindow(nowBrazil)) {
-      options.logger.log('[Appointment Reminder Cron] Fora da janela de notificacao em Brasilia. Execucao ignorada.', {
-        trigger,
-        nowBrazil: nowBrazil.format(),
-        notificationWindowBrazil: '08:00-21:00'
-      });
-      return;
-    }
-
     const reminderWindowStartUtc = nowUtc.subtract(CRON_LOOKBACK_MINUTES, 'minute');
     const reminderWindowEndUtc = nowUtc.add(1, 'minute');
     const queryScheduledStartUtc = nowUtc;
@@ -402,6 +455,8 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
       const patientId = sanitizeText(appointment?.patientId, 120);
       const scheduledAt = sanitizeText(appointment?.scheduledAt, 80);
       if (!appointmentId || !patientId || !scheduledAt) continue;
+      const appointmentStatus = sanitizeText(appointment?.status || 'pending', 40).toLowerCase() || 'pending';
+      if (appointmentStatus !== 'pending') continue;
 
       const dueReminder = REMINDER_STEPS.find((step) => {
         const alreadySent = Boolean((appointment as any)?.[step.sentColumn]);
@@ -409,8 +464,7 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
         if (step.requiresPreviousSent && !Boolean(appointment?.notification_sent)) return false;
         if (step.requiresNoPatientResponse) {
           const patientResponse = sanitizeText(appointment?.patientConfirmationStatus, 40).toLowerCase();
-          const status = sanitizeText(appointment?.status, 40).toLowerCase();
-          if (patientResponse || status === 'confirmed' || status === 'reschedule' || status === 'canceled' || status === 'cancelled') {
+          if (patientResponse) {
             return false;
           }
         }
@@ -429,7 +483,9 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
           supabase: options.supabase,
           appointmentId,
           patientId,
+          patientEmail: appointment.patientEmail,
           scheduledAt,
+          reminderKind: dueReminder.kind,
           title: dueReminder.title,
           body: dueReminder.body,
           logger: options.logger
@@ -460,7 +516,6 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
       queryScheduledStartUtc: queryScheduledStartUtc.toISOString(),
       queryScheduledEndUtc: queryScheduledEndUtc.toISOString(),
       nowBrazil: nowBrazil.format(),
-      notificationWindowBrazil: '08:00-21:00',
       total: appointments?.length || 0
     });
   } catch (error: any) {

@@ -6965,6 +6965,7 @@ async function startServer() {
       const user = req.session.user;
       const payload = cleanObject({
         user_id: sanitizeString(user?.id, 120),
+        user_email: sanitizeEmail(user?.email),
         clinic_id: currentClinicId(user),
         role: sanitizeString(user?.role, 40),
         endpoint,
@@ -6972,9 +6973,18 @@ async function startServer() {
         updated_at: new Date().toISOString()
       });
 
-      const { error } = await supabase
+      let { error } = await supabase
         .from('push_subscriptions')
         .upsert([payload], { onConflict: 'endpoint' });
+
+      if (error && String(error.message || '').toLowerCase().includes('user_email')) {
+        const fallbackPayload = { ...payload };
+        delete (fallbackPayload as any).user_email;
+        const retry = await supabase
+          .from('push_subscriptions')
+          .upsert([fallbackPayload], { onConflict: 'endpoint' });
+        error = retry.error;
+      }
 
       if (error) {
         console.warn('[Push] Não foi possível persistir assinatura push:', error.message);
@@ -7103,6 +7113,22 @@ async function startServer() {
         if (foundAppointment) break;
       }
 
+      let foundInAppointmentsTable = false;
+      if (!foundAppointment) {
+        const { data: tableAppointment, error: tableError } = await supabase
+          .from('appointments')
+          .select('*')
+          .eq('id', appointmentId)
+          .maybeSingle();
+        if (tableError) {
+          console.warn('[Appointments] fallback read from appointments table failed:', tableError.message);
+        }
+        if (tableAppointment) {
+          foundAppointment = tableAppointment;
+          foundInAppointmentsTable = true;
+        }
+      }
+
       if (!foundAppointment) {
         return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
       }
@@ -7129,8 +7155,9 @@ async function startServer() {
           scheduledAt: foundAppointment.scheduledAt || foundAppointment.scheduled_at || null,
           patientName: foundAppointment.name || foundAppointment.patientName || foundAppointment.patient_name || null,
           status: foundAppointment.status || 'pending',
-          patientConfirmationStatus: foundAppointment.patientConfirmationStatus || null,
-          patientConfirmationAt: foundAppointment.patientConfirmationAt || null
+          patientConfirmationStatus: foundAppointment.patientConfirmationStatus || foundAppointment.patient_confirmation_status || null,
+          patientConfirmationAt: foundAppointment.patientConfirmationAt || foundAppointment.patient_confirmation_at || null,
+          source: foundInAppointmentsTable ? 'appointments' : 'clinic_state'
         }
       });
     } catch (error: any) {
@@ -7150,7 +7177,49 @@ async function startServer() {
 
       const normalizedStatus = requestedStatus === 'cancelled' ? 'canceled' : requestedStatus;
       const actor = req.session.user;
+      const actorRole = sanitizeString(actor?.role, 40).toLowerCase();
+      const actorId = sanitizeString(actor?.id, 120);
+      const isPatientActor = actorRole === 'patient';
       const clinicId = currentClinicId(actor);
+      const now = new Date().toISOString();
+
+      const updateAppointmentsTableStatus = async () => {
+        const patchWithConfirmation: any = {
+          status: normalizedStatus
+        };
+        if (isPatientActor) {
+          Object.assign(patchWithConfirmation, {
+            patient_confirmation_status: normalizedStatus,
+            patient_confirmation_at: now,
+            patient_confirmation_by: actorId,
+            patient_confirmation_source: sanitizeString(req.body?.source, 80) || 'appointment_confirmation_popup'
+          });
+        }
+
+        let { data: updatedTableAppointment, error: tableUpdateError } = await supabase
+          .from('appointments')
+          .update(patchWithConfirmation)
+          .eq('id', appointmentId)
+          .select('*')
+          .maybeSingle();
+
+        if (tableUpdateError && /patient_confirmation_/i.test(String(tableUpdateError.message || ''))) {
+          const retry = await supabase
+            .from('appointments')
+            .update({ status: normalizedStatus })
+            .eq('id', appointmentId)
+            .select('*')
+            .maybeSingle();
+          updatedTableAppointment = retry.data;
+          tableUpdateError = retry.error;
+        }
+
+        if (tableUpdateError) {
+          console.warn('[Appointments] status table sync failed:', tableUpdateError.message);
+          return null;
+        }
+        return updatedTableAppointment || null;
+      };
 
       const clinicStateQuery = supabase
         .from('clinic_state')
@@ -7172,36 +7241,27 @@ async function startServer() {
         return true;
       });
 
-      const appointments = Array.isArray(ownerState?.appointments) ? ownerState.appointments : [];
-      const now = new Date().toISOString();
-      const nextAppointments = appointments.map((appointment: any) => {
-        if (String(appointment?.id) !== appointmentId) return appointment;
-        return {
-          ...appointment,
-          status: normalizedStatus,
-          statusUpdatedAt: now,
-          statusUpdatedBy: sanitizeString(actor?.id, 120),
-          patientConfirmationStatus: sanitizeString(actor?.role, 40) === 'patient'
-            ? normalizedStatus
-            : appointment?.patientConfirmationStatus,
-          patientConfirmationAt: sanitizeString(actor?.role, 40) === 'patient'
-            ? now
-            : appointment?.patientConfirmationAt,
-          patientConfirmationBy: sanitizeString(actor?.role, 40) === 'patient'
-            ? sanitizeString(actor?.id, 120)
-            : appointment?.patientConfirmationBy,
-          patientConfirmationSource: sanitizeString(actor?.role, 40) === 'patient'
-            ? 'appointment_24h_popup'
-            : appointment?.patientConfirmationSource
-        };
-      });
+      if (!foundAppointment) {
+        const { data: tableAppointment, error: tableReadError } = await supabase
+          .from('appointments')
+          .select('*')
+          .eq('id', appointmentId)
+          .maybeSingle();
+        if (tableReadError) {
+          console.warn('[Appointments] status fallback read failed:', tableReadError.message);
+        }
+        if (tableAppointment) {
+          foundAppointment = tableAppointment;
+        }
+      }
 
       if (!foundAppointment) {
         return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
       }
 
-      if (sanitizeString(actor?.role, 40) === 'patient') {
-        const actorId = sanitizeString(actor?.id, 120);
+      const appointments = Array.isArray(ownerState?.appointments) ? ownerState.appointments : [];
+
+      if (isPatientActor) {
         const actorEmail = sanitizeEmail(actor?.email);
         const appointmentPatientId = sanitizeString(foundAppointment?.patientId || foundAppointment?.patient_id, 120);
         const appointmentPatientEmail = sanitizeEmail(foundAppointment?.patientEmail || foundAppointment?.patient_email);
@@ -7211,24 +7271,83 @@ async function startServer() {
         ) {
           return res.status(403).json({ success: false, error: 'Consulta não pertence a este paciente.' });
         }
+
+        const currentStatus = sanitizeString(foundAppointment?.status || 'pending', 40).toLowerCase() || 'pending';
+        const currentPatientResponse = sanitizeString(
+          foundAppointment?.patientConfirmationStatus || foundAppointment?.patient_confirmation_status,
+          40
+        );
+        if (currentStatus !== 'pending' || currentPatientResponse) {
+          return res.json({
+            success: true,
+            alreadyAnswered: true,
+            appointment: foundAppointment,
+            appointments
+          });
+        }
       }
 
-      const { data: updated, error: updateError } = await supabase
-        .from('clinic_state')
-        .update({
-          appointments: nextAppointments,
-          updated_by: sanitizeString(actor?.id, 120),
-          updated_at: now
-        })
-        .eq('clinic_id', foundClinicId || clinicId)
-        .select('appointments')
-        .single();
-      if (updateError) throw updateError;
+      let nextAppointments = appointments;
+      let updatedClinicAppointments: any[] | null = null;
+
+      if (ownerState) {
+        nextAppointments = appointments.map((appointment: any) => {
+          if (String(appointment?.id) !== appointmentId) return appointment;
+          return {
+            ...appointment,
+            status: normalizedStatus,
+            statusUpdatedAt: now,
+            statusUpdatedBy: actorId,
+            patientConfirmationStatus: isPatientActor
+              ? normalizedStatus
+              : appointment?.patientConfirmationStatus,
+            patientConfirmationAt: isPatientActor
+              ? now
+              : appointment?.patientConfirmationAt,
+            patientConfirmationBy: isPatientActor
+              ? actorId
+              : appointment?.patientConfirmationBy,
+            patientConfirmationSource: isPatientActor
+              ? (sanitizeString(req.body?.source, 80) || 'appointment_confirmation_popup')
+              : appointment?.patientConfirmationSource
+          };
+        });
+
+        const { data: updated, error: updateError } = await supabase
+          .from('clinic_state')
+          .update({
+            appointments: nextAppointments,
+            updated_by: actorId,
+            updated_at: now
+          })
+          .eq('clinic_id', foundClinicId || clinicId)
+          .select('appointments')
+          .single();
+        if (updateError) throw updateError;
+        updatedClinicAppointments = Array.isArray(updated?.appointments) ? updated.appointments : nextAppointments;
+      }
+
+      const updatedTableAppointment = await updateAppointmentsTableStatus();
+      const updatedAppointment =
+        nextAppointments.find((appointment: any) => String(appointment?.id) === appointmentId) ||
+        updatedTableAppointment ||
+        {
+          ...foundAppointment,
+          status: normalizedStatus,
+          ...(isPatientActor ? {
+            patientConfirmationStatus: normalizedStatus,
+            patient_confirmation_status: normalizedStatus,
+            patientConfirmationAt: now,
+            patient_confirmation_at: now,
+            patientConfirmationBy: actorId,
+            patient_confirmation_by: actorId
+          } : {})
+        };
 
       return res.json({
         success: true,
-        appointment: nextAppointments.find((appointment: any) => String(appointment?.id) === appointmentId),
-        appointments: Array.isArray(updated?.appointments) ? updated.appointments : nextAppointments
+        appointment: updatedAppointment,
+        appointments: updatedClinicAppointments || nextAppointments
       });
     } catch (error: any) {
       console.error('[Appointments] status update error:', error?.message || String(error));
@@ -7244,15 +7363,50 @@ async function startServer() {
 
       const appointmentId = sanitizeString(req.body?.appointmentId, 120);
       const patientId = sanitizeString(req.body?.patientId, 120);
+      const patientEmail = sanitizeEmail(req.body?.patientEmail || req.body?.patient_email);
       const targetUrl = `/consulta?appointment_id=${encodeURIComponent(appointmentId)}`;
       if (!appointmentId || !patientId) {
         return res.status(400).json({ success: false, error: 'appointmentId e patientId são obrigatórios.' });
       }
 
+      const recipientUserIds = new Set<string>();
+      if (isUuid(patientId)) recipientUserIds.add(patientId);
+      if (patientEmail) {
+        const emailSubscriptions = await supabase
+          .from('push_subscriptions')
+          .select('user_id')
+          .ilike('user_email', patientEmail)
+          .limit(20);
+        if (!emailSubscriptions.error) {
+          (emailSubscriptions.data || []).forEach((row: any) => {
+            const userId = sanitizeString(row?.user_id, 120);
+            if (isUuid(userId)) recipientUserIds.add(userId);
+          });
+        }
+
+        const profiles = await supabase
+          .from('profiles')
+          .select('id,user_id,email')
+          .ilike('email', patientEmail)
+          .limit(10);
+        if (!profiles.error) {
+          (profiles.data || []).forEach((profile: any) => {
+            const profileId = sanitizeString(profile?.id, 120);
+            const userId = sanitizeString(profile?.user_id, 120);
+            if (isUuid(profileId)) recipientUserIds.add(profileId);
+            if (isUuid(userId)) recipientUserIds.add(userId);
+          });
+        }
+      }
+
+      if (!recipientUserIds.size) {
+        return res.json({ success: true, sent: 0, failed: 0, warning: 'Nenhuma assinatura push localizada para este paciente.' });
+      }
+
       const { data: subscriptions, error } = await supabase
         .from('push_subscriptions')
         .select('subscription')
-        .eq('user_id', patientId)
+        .in('user_id', Array.from(recipientUserIds))
         .limit(20);
       if (error) {
         console.warn('[Push] Falha ao buscar assinaturas:', error.message);
@@ -7261,9 +7415,10 @@ async function startServer() {
 
       const payload = JSON.stringify({
         title: 'Lembrete de Consulta - Verto',
-        body: 'Toque para confirmar sua presença.',
+        body: 'Toque para confirmar, remarcar ou cancelar sua consulta.',
         url: targetUrl,
-        appointmentId
+        appointmentId,
+        reminderKind: 'manual'
       });
 
       const results = await Promise.allSettled(

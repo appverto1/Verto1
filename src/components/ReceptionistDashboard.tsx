@@ -1892,7 +1892,7 @@ export const ReceptionistDashboard = ({
                     const statusLabel = isConfirmed
                       ? "Confirmado"
                       : isReschedule
-                        ? "Atenção"
+                        ? "Remarcar"
                         : isCancelled
                           ? "Cancelado"
                           : "Pendente";
@@ -2072,6 +2072,10 @@ export const ReceptionistDashboard = ({
                                     {item.type} â€¢{" "}
                                     {item.status === "confirmed"
                                       ? "Confirmado"
+                                      : item.status === "reschedule"
+                                        ? "Remarcar"
+                                        : item.status === "canceled" || item.status === "cancelled"
+                                          ? "Cancelado"
                                       : "Pendente"}
                                   </p>
                                 </div>
