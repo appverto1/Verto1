@@ -21,11 +21,13 @@ self.addEventListener("push", (event) => {
       renotify: Boolean(appointmentId),
       requireInteraction: true,
       timestamp: Date.now(),
-      actions: [
-        { action: "confirmed", title: "Confirmar" },
-        { action: "reschedule", title: "Remarcar" },
-        { action: "canceled", title: "Cancelar" },
-      ],
+      actions: Array.isArray(payload.actions) && payload.actions.length > 0
+        ? payload.actions
+        : [
+            { action: "confirmed", title: "Confirmar" },
+            { action: "reschedule", title: "Remarcar" },
+            { action: "cancelled", title: "Cancelar" },
+          ],
       data: {
         url: targetUrl,
         appointmentId,
@@ -80,6 +82,7 @@ self.addEventListener("notificationclick", (event) => {
   const statusByAction = {
     confirmed: "confirmed",
     reschedule: "reschedule",
+    cancelled: "canceled",
     canceled: "canceled",
   };
 

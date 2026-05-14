@@ -1051,37 +1051,73 @@ export default function App() {
     return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
   };
 
+  const bufferSourceToUint8Array = (value: ArrayBuffer | ArrayBufferView) => {
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  };
+
+  const applicationServerKeyMatches = (
+    existingKey: ArrayBuffer | ArrayBufferView | null | undefined,
+    expectedKey: Uint8Array,
+  ) => {
+    if (!existingKey) return true;
+    const current = bufferSourceToUint8Array(existingKey);
+    if (current.length !== expectedKey.length) return false;
+    return current.every((value, index) => value === expectedKey[index]);
+  };
+
+  const createAppointmentId = () => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (token) => {
+      const random = Math.floor(Math.random() * 16);
+      const value = token === 'x' ? random : (random & 0x3) | 0x8;
+      return value.toString(16);
+    });
+  };
+
   useEffect(() => {
     if (!user || typeof window === 'undefined') return;
+    if (String(user.role || '').toLowerCase() !== 'patient') return;
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
 
     let cancelled = false;
 
     const registerPush = async () => {
       try {
-        const registration = await navigator.serviceWorker.register('/sw.js');
+        const keyResponse = await fetch('/api/push/vapid-public-key', { credentials: 'include' });
+        const keyPayload = await keyResponse.json().catch(() => ({}));
+        if (!keyResponse.ok || !keyPayload?.publicKey) return;
+        const applicationServerKey = urlBase64ToUint8Array(String(keyPayload.publicKey));
+
         if (Notification.permission === 'default') {
           await Notification.requestPermission();
         }
         if (cancelled || Notification.permission !== 'granted') return;
 
-        const keyResponse = await fetch('/api/push/vapid-public-key', { credentials: 'include' });
-        const keyPayload = await keyResponse.json().catch(() => ({}));
-        if (!keyResponse.ok || !keyPayload?.publicKey) return;
-
-        const existingSubscription = await registration.pushManager.getSubscription();
+        const registration = await navigator.serviceWorker.register('/sw.js');
+        await navigator.serviceWorker.ready;
+        let existingSubscription = await registration.pushManager.getSubscription();
+        if (
+          existingSubscription &&
+          !applicationServerKeyMatches((existingSubscription as any)?.options?.applicationServerKey, applicationServerKey)
+        ) {
+          await existingSubscription.unsubscribe();
+          existingSubscription = null;
+        }
         const subscription =
           existingSubscription ||
           (await registration.pushManager.subscribe({
             userVisibleOnly: true,
-            applicationServerKey: urlBase64ToUint8Array(String(keyPayload.publicKey)),
+            applicationServerKey,
           }));
 
         await fetch('/api/push/subscribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({ subscription }),
+          body: JSON.stringify({ subscription: subscription.toJSON() }),
         });
       } catch (error) {
         console.warn('Push registration failed:', error);
@@ -2176,7 +2212,7 @@ export default function App() {
       const immediateDate = data.date || todayStr;
       const immediateTime = data.time || '08:00';
       setTherapistAgenda(prev => [...prev, {
-        id: newId,
+        id: createAppointmentId(),
         patientId: newId,
         patientEmail: data.email || null,
         patient_email: data.email || null,
@@ -2194,7 +2230,7 @@ export default function App() {
     const rollbackOptimisticPatient = () => {
       setAllPatients(prev => prev.filter((p: any) => String(p.id) !== String(newId)));
       setClinicalRecords(prev => prev.filter((r: any) => String(r.patientId) !== String(newId)));
-      setTherapistAgenda(prev => prev.filter((a: any) => String(a.id) !== String(newId)));
+      setTherapistAgenda(prev => prev.filter((a: any) => String(a.id) !== String(newId) && String(a.patientId) !== String(newId)));
     };
 
     // Sync to Backend
@@ -2342,6 +2378,18 @@ export default function App() {
               : r,
           ),
         );
+        setTherapistAgenda((prev) =>
+          prev.map((a: any) =>
+            String(a.patientId) === String(newId)
+              ? {
+                  ...a,
+                  patientId: matchedPatient.id,
+                  patientEmail: matchedPatient.email || data.email || a.patientEmail || null,
+                  patient_email: matchedPatient.email || data.email || a.patient_email || null,
+                }
+              : a,
+          ),
+        );
       } else {
         alert(
           "Paciente já existe na clínica, mas não foi possível reconciliar o ID para concluir o prontuário agora. Atualize a página para sincronizar.",
@@ -2367,6 +2415,12 @@ export default function App() {
         [{ ...newPatient, id: realId }]
       ));
       setClinicalRecords(prev => prev.map(r => r.patientId === newId ? { ...r, patientId: realId } : r));
+      setTherapistAgenda(prev => prev.map((a: any) => String(a.patientId) === String(newId) ? {
+        ...a,
+        patientId: realId,
+        patientEmail: data.email || a.patientEmail || null,
+        patient_email: data.email || a.patient_email || null
+      } : a));
       persistedPatientId = realId;
       resolvedPersistedPatientId = true;
     }
@@ -2585,7 +2639,7 @@ export default function App() {
 
       if (conflicts.length === 0) {
         newItems.push({
-          id: Date.now() + i, // Unique ID for each session
+          id: createAppointmentId(),
           patientId: pid,
           patientEmail: patientForSession?.email || null,
           patient_email: patientForSession?.email || null,
@@ -3462,7 +3516,7 @@ export default function App() {
           roomReservations={roomReservations}
           onDeleteRoomReservation={(id) => {
             const agendaId = id.replace('res-', '');
-            handleUpdateAgendaStatus(Number(agendaId), 'canceled');
+            handleUpdateAgendaStatus(agendaId, 'canceled');
           }}
           protocols={protocols}
           setProtocols={setProtocols}

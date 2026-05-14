@@ -23,7 +23,13 @@ import {
   syncAllClinicsActivePatientAddonQuantity,
   syncClinicActivePatientAddonQuantity
 } from './services/stripeService';
-import { startAppointmentReminderCron } from './services/cronService';
+import { startAppointmentReminderCron, triggerAppointmentReminderScan } from './services/cronService';
+import {
+  removePatientPushSubscription,
+  resolvePatientIdsForPush,
+  savePatientPushSubscription,
+  sendAppointmentNotification
+} from './services/pushNotificationService';
 import {
   buildActivationEmailTemplate,
   buildPasswordRecoveryEmailTemplate
@@ -106,7 +112,7 @@ function getResend() {
 const vapidPublicKey = sanitizeString(process.env.VAPID_PUBLIC_KEY || '', 500);
 const vapidPrivateKey = sanitizeString(process.env.VAPID_PRIVATE_KEY || '', 500);
 const vapidSubject =
-  sanitizeString(process.env.VAPID_SUBJECT || process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '', 500) ||
+  sanitizeString(process.env.VAPID_EMAIL || process.env.VAPID_SUBJECT || process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '', 500) ||
   'mailto:suporte@appverto.com.br';
 
 if (vapidPublicKey && vapidPrivateKey) {
@@ -2648,6 +2654,169 @@ async function resolvePatientIdForRequest(
 
   if (createError || !created?.id) return null;
   return sanitizeString(created.id, 120);
+}
+
+function normalizeAppointmentStatusForTable(status: unknown): string {
+  const normalized = sanitizeString(status || 'scheduled', 40).toLowerCase();
+  if (normalized === 'pending') return 'scheduled';
+  if (normalized === 'canceled') return 'cancelled';
+  if (normalized === 'reschedule') return 'rescheduled';
+  if (normalized === 'confirmed' || normalized === 'completed' || normalized === 'cancelled' || normalized === 'rescheduled') {
+    return normalized;
+  }
+  return 'scheduled';
+}
+
+function normalizeAppointmentStatusForUi(status: unknown): string {
+  const normalized = sanitizeString(status || 'pending', 40).toLowerCase();
+  if (normalized === 'scheduled') return 'pending';
+  if (normalized === 'cancelled') return 'canceled';
+  if (normalized === 'rescheduled') return 'reschedule';
+  return normalized || 'pending';
+}
+
+function buildAppointmentScheduledAt(appointment: any): string | null {
+  const explicit = sanitizeString(appointment?.scheduled_at || appointment?.scheduledAt, 80);
+  if (explicit) {
+    const parsed = new Date(explicit);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+
+  const date = sanitizeDate(appointment?.date);
+  const time = sanitizeString(appointment?.time, 10);
+  if (!date || !/^\d{2}:\d{2}$/.test(time)) return null;
+
+  const parsed = new Date(`${date}T${time}:00-03:00`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
+async function upsertAppointmentMirrorRow(row: Record<string, any>, logger: Pick<Console, 'warn'> = console) {
+  let payload: Record<string, any> = cleanObject(row);
+  let triedLegacyPendingStatus = false;
+
+  while (Object.keys(payload).length > 0) {
+    const { error } = await supabase
+      .from('appointments')
+      .upsert([payload], { onConflict: 'id' });
+
+    if (!error) return true;
+
+    const missingColumn = extractMissingColumnName(error);
+    if (missingColumn && missingColumn in payload) {
+      delete payload[missingColumn];
+      continue;
+    }
+
+    if (!triedLegacyPendingStatus && /status|check constraint/i.test(String(error.message || ''))) {
+      triedLegacyPendingStatus = true;
+      payload.status = normalizeAppointmentStatusForUi(payload.status);
+      continue;
+    }
+
+    logger.warn('[Appointments] Falha ao espelhar agenda na tabela appointments.', {
+      appointmentId: row?.id,
+      message: error.message
+    });
+    return false;
+  }
+
+  return false;
+}
+
+async function syncAppointmentsTableFromClinicState(params: {
+  clinicId: string | null;
+  appointments: any[];
+  actorId: string;
+  specialtySettings?: Record<string, any>;
+}) {
+  const clinicId = sanitizeString(params.clinicId, 120);
+  const actorId = sanitizeString(params.actorId, 120);
+  if (!isUuid(clinicId) || !Array.isArray(params.appointments)) return { mirrored: 0, skipped: 0 };
+
+  let mirrored = 0;
+  let skipped = 0;
+
+  for (const appointment of params.appointments) {
+    const appointmentId = sanitizeString(appointment?.id, 120);
+    const scheduledAt = buildAppointmentScheduledAt(appointment);
+    const rawPatientId = sanitizeString(appointment?.patientId || appointment?.patient_id, 120);
+    const patientEmail = sanitizeEmail(appointment?.patientEmail || appointment?.patient_email);
+    const resolvedPatientIds = isUuid(rawPatientId)
+      ? [rawPatientId]
+      : await resolvePatientIdsForPush({
+          supabase,
+          patientEmail,
+          clinicId
+        });
+    const patientId = resolvedPatientIds[0] || '';
+
+    if (!isUuid(appointmentId) || !scheduledAt || !isUuid(patientId)) {
+      skipped += 1;
+      continue;
+    }
+
+    const therapistIdCandidates = [
+      appointment?.therapistId,
+      appointment?.therapist_id,
+      appointment?.professionalId,
+      appointment?.professional_id,
+      actorId
+    ];
+    const therapistId = therapistIdCandidates
+      .map((value) => sanitizeString(value, 120))
+      .find((value) => isUuid(value));
+    if (!therapistId) {
+      skipped += 1;
+      continue;
+    }
+
+    const approach = sanitizeString(appointment?.type || appointment?.approach, 120);
+    const configuredDuration = Number(params.specialtySettings?.[approach]);
+    const duration = Number(appointment?.duration_minutes || appointment?.durationMinutes || configuredDuration || 50);
+    const statusForTable = normalizeAppointmentStatusForTable(appointment?.status);
+    const patientResponse =
+      sanitizeString(appointment?.patient_response || appointment?.patientResponse, 40) ||
+      (
+        ['confirmed', 'reschedule', 'cancelled', 'canceled'].includes(normalizeAppointmentStatusForUi(appointment?.status))
+          ? normalizeAppointmentStatusForUi(appointment?.status)
+          : null
+      );
+
+    const row = {
+      id: appointmentId,
+      clinic_id: clinicId,
+      patient_id: patientId,
+      therapist_id: therapistId,
+      scheduled_at: scheduledAt,
+      duration_minutes: Number.isFinite(duration) && duration > 0 ? Math.round(duration) : 50,
+      status: statusForTable,
+      notes: sanitizeString(appointment?.notes || appointment?.note, 2000) || null,
+      patient_response: patientResponse === 'canceled' ? 'cancelled' : patientResponse,
+      patient_responded_at: appointment?.patient_responded_at || appointment?.patientRespondedAt || appointment?.patientConfirmationAt || null,
+      notification_24h_sent_at: appointment?.notification_24h_sent_at || appointment?.notification24hSentAt || appointment?.notification_sent_at || null,
+      notification_12h_sent_at: appointment?.notification_12h_sent_at || appointment?.notification12hSentAt || null,
+      notification_sent: Boolean(appointment?.notification_sent || appointment?.notification_24h_sent_at || appointment?.notification24hSentAt),
+      notification_sent_at: appointment?.notification_sent_at || appointment?.notification_24h_sent_at || appointment?.notification24hSentAt || null,
+      notification_12h_sent: Boolean(appointment?.notification_12h_sent || appointment?.notification_12h_sent_at || appointment?.notification12hSentAt),
+      patient_confirmation_status: appointment?.patientConfirmationStatus || appointment?.patient_confirmation_status || patientResponse || null,
+      patient_confirmation_at: appointment?.patientConfirmationAt || appointment?.patient_confirmation_at || appointment?.patient_responded_at || null,
+      patient_confirmation_by: appointment?.patientConfirmationBy || appointment?.patient_confirmation_by || null,
+      patient_confirmation_source: appointment?.patientConfirmationSource || appointment?.patient_confirmation_source || null,
+      patient_email: patientEmail || null,
+      patient_name: sanitizeString(appointment?.patientName || appointment?.name || appointment?.patient_name, 180) || null,
+      therapist_name: sanitizeString(appointment?.therapistName || appointment?.professional || appointment?.therapist_name, 180) || null,
+      source_payload: appointment,
+      is_active: !['cancelled', 'canceled'].includes(statusForTable),
+      updated_at: new Date().toISOString()
+    };
+
+    const ok = await upsertAppointmentMirrorRow(row);
+    if (ok) mirrored += 1;
+    else skipped += 1;
+  }
+
+  return { mirrored, skipped };
 }
 
 async function fetchUserWorkspaces(userId: string) {
@@ -6885,6 +7054,27 @@ async function startServer() {
         throw error;
       }
 
+      if (nextAppointments !== undefined) {
+        void syncAppointmentsTableFromClinicState({
+          clinicId,
+          appointments: Array.isArray(data.appointments) ? data.appointments : nextAppointments,
+          actorId,
+          specialtySettings:
+            data.specialty_settings && typeof data.specialty_settings === 'object'
+              ? data.specialty_settings
+              : nextSpecialtySettings || {}
+        })
+          .then((summary) => {
+            if (summary.mirrored > 0) {
+              console.log('[Appointments] Agenda espelhada na tabela appointments.', summary);
+            }
+            triggerAppointmentReminderScan('clinic_state_saved');
+          })
+          .catch((mirrorError: any) => {
+            console.warn('[Appointments] Espelhamento da agenda falhou sem bloquear salvamento.', mirrorError?.message || String(mirrorError));
+          });
+      }
+
       const prevData = previous.data || {};
       if (nextRooms !== undefined && JSON.stringify(prevData.rooms || []) !== JSON.stringify(nextRooms)) {
         void persistActivityLog({
@@ -6943,7 +7133,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/push/vapid-public-key', (_req, res) => {
+  const handleVapidPublicKey = (_req: any, res: any) => {
     if (!vapidPublicKey || !vapidPrivateKey) {
       return res.status(503).json({
         success: false,
@@ -6952,54 +7142,94 @@ async function startServer() {
       });
     }
     return res.json({ success: true, publicKey: vapidPublicKey });
-  });
+  };
 
-  app.post('/api/push/subscribe', checkAuth, async (req: any, res) => {
+  const handlePushSubscribe = async (req: any, res: any) => {
     try {
-      const subscription = req.body?.subscription;
+      const subscription = req.body?.subscription || req.body;
       const endpoint = sanitizeString(subscription?.endpoint, 2000);
       if (!endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
         return res.status(400).json({ success: false, error: 'Inscrição push inválida.' });
       }
 
       const user = req.session.user;
-      const payload = cleanObject({
-        user_id: sanitizeString(user?.id, 120),
-        user_email: sanitizeEmail(user?.email),
-        clinic_id: currentClinicId(user),
-        role: sanitizeString(user?.role, 40),
-        endpoint,
-        subscription,
-        updated_at: new Date().toISOString()
-      });
-
-      let { error } = await supabase
-        .from('push_subscriptions')
-        .upsert([payload], { onConflict: 'endpoint' });
-
-      if (error && String(error.message || '').toLowerCase().includes('user_email')) {
-        const fallbackPayload = { ...payload };
-        delete (fallbackPayload as any).user_email;
-        const retry = await supabase
-          .from('push_subscriptions')
-          .upsert([fallbackPayload], { onConflict: 'endpoint' });
-        error = retry.error;
-      }
-
-      if (error) {
-        console.warn('[Push] Não foi possível persistir assinatura push:', error.message);
-        return res.json({
+      const role = sanitizeString(user?.role, 40).toLowerCase();
+      if (role !== 'patient') {
+        return res.status(403).json({
           success: false,
-          warning: 'Tabela push_subscriptions não encontrada ou indisponível.'
+          error: 'Notificações push de consulta são exclusivas do login do paciente.'
         });
       }
 
-      return res.json({ success: true });
+      const patientIds = await resolvePatientIdsForPush({
+        supabase,
+        patientId: sanitizeString(req.body?.patientId || req.body?.patient_id, 120),
+        patientEmail: sanitizeEmail(req.body?.patientEmail || req.body?.patient_email || user?.email),
+        userId: sanitizeString(user?.id, 120),
+        clinicId: currentClinicId(user)
+      });
+      const patientId = patientIds[0];
+
+      if (!patientId) {
+        return res.status(409).json({
+          success: false,
+          error: 'Não encontrei o cadastro de paciente vinculado a este login. Verifique se o e-mail do paciente na clínica é o mesmo usado no app.'
+        });
+      }
+
+      const result = await savePatientPushSubscription({
+        supabase,
+        subscription,
+        patientId,
+        userId: sanitizeString(user?.id, 120),
+        userEmail: sanitizeEmail(user?.email),
+        clinicId: currentClinicId(user),
+        role
+      });
+
+      if (!result.success) {
+        console.warn('[Push] Não foi possível persistir assinatura push:', result.error);
+        return res.status(500).json({ success: false, error: result.error || 'Erro ao salvar inscrição push.' });
+      }
+
+      return res.json({ success: true, patientId });
     } catch (error: any) {
       console.error('[Push] subscribe error:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Erro ao salvar inscrição push.' });
     }
-  });
+  };
+
+  const handlePushUnsubscribe = async (req: any, res: any) => {
+    try {
+      const subscription = req.body?.subscription || req.body;
+      const endpoint = sanitizeString(subscription?.endpoint, 2000);
+      const user = req.session.user;
+      const patientIds = await resolvePatientIdsForPush({
+        supabase,
+        patientId: sanitizeString(req.body?.patientId || req.body?.patient_id, 120),
+        patientEmail: sanitizeEmail(req.body?.patientEmail || req.body?.patient_email || user?.email),
+        userId: sanitizeString(user?.id, 120),
+        clinicId: currentClinicId(user)
+      });
+      const result = await removePatientPushSubscription({
+        supabase,
+        patientId: patientIds[0] || '',
+        endpoint
+      });
+      if (!result.success) return res.status(500).json({ success: false, error: result.error });
+      return res.json({ success: true });
+    } catch (error: any) {
+      console.error('[Push] unsubscribe error:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Erro ao remover inscrição push.' });
+    }
+  };
+
+  app.get('/api/push/vapid-public-key', handleVapidPublicKey);
+  app.get('/api/notifications/vapid-key', handleVapidPublicKey);
+  app.post('/api/push/subscribe', checkAuth, handlePushSubscribe);
+  app.post('/api/notifications/subscribe', checkAuth, handlePushSubscribe);
+  app.delete('/api/push/subscribe', checkAuth, handlePushUnsubscribe);
+  app.delete('/api/notifications/subscribe', checkAuth, handlePushUnsubscribe);
 
   app.patch('/api/patient/self/profile', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
@@ -7138,8 +7368,15 @@ async function startServer() {
         const actorEmail = sanitizeEmail(actor?.email);
         const appointmentPatientId = sanitizeString(foundAppointment?.patientId || foundAppointment?.patient_id, 120);
         const appointmentPatientEmail = sanitizeEmail(foundAppointment?.patientEmail || foundAppointment?.patient_email);
+        const actorPatientIds = await resolvePatientIdsForPush({
+          supabase,
+          patientEmail: actorEmail,
+          userId: actorId,
+          clinicId
+        });
         if (
           appointmentPatientId !== actorId &&
+          !actorPatientIds.includes(appointmentPatientId) &&
           (!actorEmail || appointmentPatientEmail !== actorEmail)
         ) {
           return res.status(403).json({ success: false, error: 'Consulta não pertence a este paciente.' });
@@ -7154,9 +7391,19 @@ async function startServer() {
           time: foundAppointment.time || null,
           scheduledAt: foundAppointment.scheduledAt || foundAppointment.scheduled_at || null,
           patientName: foundAppointment.name || foundAppointment.patientName || foundAppointment.patient_name || null,
-          status: foundAppointment.status || 'pending',
-          patientConfirmationStatus: foundAppointment.patientConfirmationStatus || foundAppointment.patient_confirmation_status || null,
-          patientConfirmationAt: foundAppointment.patientConfirmationAt || foundAppointment.patient_confirmation_at || null,
+          status: normalizeAppointmentStatusForUi(foundAppointment.status || 'pending'),
+          patientConfirmationStatus:
+            foundAppointment.patientResponse ||
+            foundAppointment.patient_response ||
+            foundAppointment.patientConfirmationStatus ||
+            foundAppointment.patient_confirmation_status ||
+            null,
+          patientConfirmationAt:
+            foundAppointment.patientRespondedAt ||
+            foundAppointment.patient_responded_at ||
+            foundAppointment.patientConfirmationAt ||
+            foundAppointment.patient_confirmation_at ||
+            null,
           source: foundInAppointmentsTable ? 'appointments' : 'clinic_state'
         }
       });
@@ -7166,16 +7413,23 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/appointments/:appointmentId/status', checkAuth, async (req: any, res) => {
+  const handleAppointmentStatusUpdate = async (req: any, res: any) => {
     try {
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();
-      const allowedStatuses = new Set(['pending', 'confirmed', 'reschedule', 'cancelled', 'canceled']);
+      const allowedStatuses = new Set(['pending', 'scheduled', 'confirmed', 'reschedule', 'rescheduled', 'cancelled', 'canceled']);
       if (!appointmentId || !allowedStatuses.has(requestedStatus)) {
         return res.status(400).json({ success: false, error: 'Status de consulta inválido.' });
       }
 
-      const normalizedStatus = requestedStatus === 'cancelled' ? 'canceled' : requestedStatus;
+      const normalizedStatus = normalizeAppointmentStatusForUi(requestedStatus);
+      const tableStatus = normalizeAppointmentStatusForTable(normalizedStatus);
+      const patientResponseForTable =
+        normalizedStatus === 'canceled'
+          ? 'cancelled'
+          : normalizedStatus === 'reschedule' || normalizedStatus === 'confirmed'
+            ? normalizedStatus
+            : null;
       const actor = req.session.user;
       const actorRole = sanitizeString(actor?.role, 40).toLowerCase();
       const actorId = sanitizeString(actor?.id, 120);
@@ -7184,11 +7438,15 @@ async function startServer() {
       const now = new Date().toISOString();
 
       const updateAppointmentsTableStatus = async () => {
+        if (!isUuid(appointmentId)) return null;
         const patchWithConfirmation: any = {
-          status: normalizedStatus
+          status: tableStatus,
+          updated_at: now
         };
         if (isPatientActor) {
           Object.assign(patchWithConfirmation, {
+            patient_response: patientResponseForTable,
+            patient_responded_at: now,
             patient_confirmation_status: normalizedStatus,
             patient_confirmation_at: now,
             patient_confirmation_by: actorId,
@@ -7196,29 +7454,35 @@ async function startServer() {
           });
         }
 
-        let { data: updatedTableAppointment, error: tableUpdateError } = await supabase
-          .from('appointments')
-          .update(patchWithConfirmation)
-          .eq('id', appointmentId)
-          .select('*')
-          .maybeSingle();
-
-        if (tableUpdateError && /patient_confirmation_/i.test(String(tableUpdateError.message || ''))) {
-          const retry = await supabase
+        let safePatch: Record<string, any> = cleanObject(patchWithConfirmation);
+        let triedLegacyStatus = false;
+        while (Object.keys(safePatch).length > 0) {
+          let { data: updatedTableAppointment, error: tableUpdateError } = await supabase
             .from('appointments')
-            .update({ status: normalizedStatus })
+            .update(safePatch)
             .eq('id', appointmentId)
             .select('*')
             .maybeSingle();
-          updatedTableAppointment = retry.data;
-          tableUpdateError = retry.error;
-        }
 
-        if (tableUpdateError) {
+          if (!tableUpdateError) return updatedTableAppointment || null;
+
+          const missingColumn = extractMissingColumnName(tableUpdateError);
+          if (missingColumn && missingColumn in safePatch) {
+            delete safePatch[missingColumn];
+            continue;
+          }
+
+          if (!triedLegacyStatus && /status|check constraint/i.test(String(tableUpdateError.message || ''))) {
+            triedLegacyStatus = true;
+            safePatch.status = normalizedStatus;
+            continue;
+          }
+
           console.warn('[Appointments] status table sync failed:', tableUpdateError.message);
           return null;
         }
-        return updatedTableAppointment || null;
+
+        return null;
       };
 
       const clinicStateQuery = supabase
@@ -7265,19 +7529,30 @@ async function startServer() {
         const actorEmail = sanitizeEmail(actor?.email);
         const appointmentPatientId = sanitizeString(foundAppointment?.patientId || foundAppointment?.patient_id, 120);
         const appointmentPatientEmail = sanitizeEmail(foundAppointment?.patientEmail || foundAppointment?.patient_email);
+        const actorPatientIds = await resolvePatientIdsForPush({
+          supabase,
+          patientEmail: actorEmail,
+          userId: actorId,
+          clinicId
+        });
         if (
           appointmentPatientId !== actorId &&
+          !actorPatientIds.includes(appointmentPatientId) &&
           (!actorEmail || appointmentPatientEmail !== actorEmail)
         ) {
           return res.status(403).json({ success: false, error: 'Consulta não pertence a este paciente.' });
         }
 
         const currentStatus = sanitizeString(foundAppointment?.status || 'pending', 40).toLowerCase() || 'pending';
+        const isStillAwaitingResponse = currentStatus === 'pending' || currentStatus === 'scheduled';
         const currentPatientResponse = sanitizeString(
-          foundAppointment?.patientConfirmationStatus || foundAppointment?.patient_confirmation_status,
+          foundAppointment?.patientResponse ||
+            foundAppointment?.patient_response ||
+            foundAppointment?.patientConfirmationStatus ||
+            foundAppointment?.patient_confirmation_status,
           40
         );
-        if (currentStatus !== 'pending' || currentPatientResponse) {
+        if (!isStillAwaitingResponse || currentPatientResponse) {
           return res.json({
             success: true,
             alreadyAnswered: true,
@@ -7298,6 +7573,18 @@ async function startServer() {
             status: normalizedStatus,
             statusUpdatedAt: now,
             statusUpdatedBy: actorId,
+            patientResponse: isPatientActor
+              ? normalizedStatus
+              : appointment?.patientResponse,
+            patient_response: isPatientActor
+              ? patientResponseForTable
+              : appointment?.patient_response,
+            patientRespondedAt: isPatientActor
+              ? now
+              : appointment?.patientRespondedAt,
+            patient_responded_at: isPatientActor
+              ? now
+              : appointment?.patient_responded_at,
             patientConfirmationStatus: isPatientActor
               ? normalizedStatus
               : appointment?.patientConfirmationStatus,
@@ -7335,6 +7622,10 @@ async function startServer() {
           ...foundAppointment,
           status: normalizedStatus,
           ...(isPatientActor ? {
+            patientResponse: normalizedStatus,
+            patient_response: patientResponseForTable,
+            patientRespondedAt: now,
+            patient_responded_at: now,
             patientConfirmationStatus: normalizedStatus,
             patient_confirmation_status: normalizedStatus,
             patientConfirmationAt: now,
@@ -7353,6 +7644,26 @@ async function startServer() {
       console.error('[Appointments] status update error:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Erro ao atualizar status da consulta.' });
     }
+  };
+
+  app.patch('/api/appointments/:appointmentId/status', checkAuth, handleAppointmentStatusUpdate);
+  app.post('/api/notifications/appointments/:appointmentId/respond', checkAuth, async (req: any, res: any) => {
+    const action = sanitizeString(req.body?.action || req.body?.status, 40).toLowerCase();
+    const actionToStatus: Record<string, string> = {
+      confirmed: 'confirmed',
+      reschedule: 'reschedule',
+      cancelled: 'canceled',
+      canceled: 'canceled'
+    };
+    if (!actionToStatus[action]) {
+      return res.status(400).json({ success: false, error: 'Ação inválida.' });
+    }
+    req.body = {
+      ...req.body,
+      status: actionToStatus[action],
+      source: sanitizeString(req.body?.source, 80) || 'notification_action'
+    };
+    return handleAppointmentStatusUpdate(req, res);
   });
 
   app.post('/api/push/appointment-reminder', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
@@ -7364,74 +7675,32 @@ async function startServer() {
       const appointmentId = sanitizeString(req.body?.appointmentId, 120);
       const patientId = sanitizeString(req.body?.patientId, 120);
       const patientEmail = sanitizeEmail(req.body?.patientEmail || req.body?.patient_email);
-      const targetUrl = `/consulta?appointment_id=${encodeURIComponent(appointmentId)}`;
       if (!appointmentId || !patientId) {
         return res.status(400).json({ success: false, error: 'appointmentId e patientId são obrigatórios.' });
       }
 
-      const recipientUserIds = new Set<string>();
-      if (isUuid(patientId)) recipientUserIds.add(patientId);
-      if (patientEmail) {
-        const emailSubscriptions = await supabase
-          .from('push_subscriptions')
-          .select('user_id')
-          .ilike('user_email', patientEmail)
-          .limit(20);
-        if (!emailSubscriptions.error) {
-          (emailSubscriptions.data || []).forEach((row: any) => {
-            const userId = sanitizeString(row?.user_id, 120);
-            if (isUuid(userId)) recipientUserIds.add(userId);
-          });
-        }
-
-        const profiles = await supabase
-          .from('profiles')
-          .select('id,user_id,email')
-          .ilike('email', patientEmail)
-          .limit(10);
-        if (!profiles.error) {
-          (profiles.data || []).forEach((profile: any) => {
-            const profileId = sanitizeString(profile?.id, 120);
-            const userId = sanitizeString(profile?.user_id, 120);
-            if (isUuid(profileId)) recipientUserIds.add(profileId);
-            if (isUuid(userId)) recipientUserIds.add(userId);
-          });
-        }
-      }
-
-      if (!recipientUserIds.size) {
-        return res.json({ success: true, sent: 0, failed: 0, warning: 'Nenhuma assinatura push localizada para este paciente.' });
-      }
-
-      const { data: subscriptions, error } = await supabase
-        .from('push_subscriptions')
-        .select('subscription')
-        .in('user_id', Array.from(recipientUserIds))
-        .limit(20);
-      if (error) {
-        console.warn('[Push] Falha ao buscar assinaturas:', error.message);
-        return res.json({ success: false, warning: 'Tabela push_subscriptions indisponível.' });
-      }
-
-      const payload = JSON.stringify({
+      const result = await sendAppointmentNotification({
+        supabase,
+        patientId,
+        patientEmail,
+        appointment: {
+          id: appointmentId,
+          scheduledAt: sanitizeString(req.body?.scheduledAt || req.body?.scheduled_at, 80) || null,
+          timeLabel: sanitizeString(req.body?.timeLabel || req.body?.time_label, 80) || null,
+          dateLabel: sanitizeString(req.body?.dateLabel || req.body?.date_label, 80) || null,
+          reminderKind: 'manual'
+        },
         title: 'Lembrete de Consulta - Verto',
         body: 'Toque para confirmar, remarcar ou cancelar sua consulta.',
-        url: targetUrl,
-        appointmentId,
-        reminderKind: 'manual'
+        reminderKind: 'manual',
+        logger: console
       });
-
-      const results = await Promise.allSettled(
-        (subscriptions || [])
-          .map((row: any) => row?.subscription)
-          .filter(Boolean)
-          .map((subscription: any) => webpush.sendNotification(subscription, payload))
-      );
 
       return res.json({
         success: true,
-        sent: results.filter((result) => result.status === 'fulfilled').length,
-        failed: results.filter((result) => result.status === 'rejected').length
+        sent: result.sent,
+        failed: result.failed,
+        ...(result.sent === 0 ? { warning: 'Nenhuma assinatura push localizada para este paciente.' } : {})
       });
     } catch (error: any) {
       console.error('[Push] appointment reminder error:', error?.message || String(error));

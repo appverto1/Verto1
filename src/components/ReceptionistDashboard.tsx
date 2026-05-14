@@ -910,7 +910,7 @@ export const ReceptionistDashboard = ({
               reservations={roomReservations}
               onDeleteReservation={(id) => {
                 const appointmentId = id.replace("res-", "");
-                onUpdateAgendaStatus(Number(appointmentId), "canceled");
+                onUpdateAgendaStatus(appointmentId, "canceled");
               }}
               onBack={() => handleSetView("home")}
             />
@@ -2215,10 +2215,10 @@ export const ReceptionistDashboard = ({
                     reservations={roomReservations}
                     selectedDate={new Date().toISOString().split("T")[0]}
                     user={user}
-                    onDeleteReservation={(id) => {
-                      const appointmentId = id.replace("res-", "");
-                      onUpdateAgendaStatus(Number(appointmentId), "canceled");
-                    }}
+                      onDeleteReservation={(id) => {
+                        const appointmentId = id.replace("res-", "");
+                      onUpdateAgendaStatus(appointmentId, "canceled");
+                      }}
                   />
                 </div>
               </div>

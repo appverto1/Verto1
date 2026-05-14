@@ -96,8 +96,8 @@ interface CoordinatorDashboardProps {
   activityLogs: any[];
   onAddActivityLog: (title: string, content: string, type?: string) => void;
   onScheduleSession: (session: any) => any;
-  onUpdateAppointment: (id: number, updates: any) => void;
-  onUpdateAgendaStatus: (id: number, status: string) => void;
+  onUpdateAppointment: (id: any, updates: any) => void;
+  onUpdateAgendaStatus: (id: any, status: string) => void;
   onAddPatient: (patient: any) => Promise<any> | any;
   patientsHistory: any[];
   therapistNotes: any[];
@@ -1831,7 +1831,7 @@ export function CoordinatorDashboard({
   const handleCancelAppointmentFromAgenda = useCallback(
     (appointment: any) => {
       closeAgendaActionModal();
-      handleStatusUpdate(Number(appointment?.id), "canceled");
+      handleStatusUpdate(appointment?.id, "canceled");
     },
     [closeAgendaActionModal, handleStatusUpdate],
   );

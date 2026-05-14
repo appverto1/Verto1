@@ -1,8 +1,8 @@
 import cron from 'node-cron';
-import webpush from 'web-push';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
+import { sendAppointmentNotification } from './pushNotificationService';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -14,64 +14,76 @@ type CronServiceOptions = {
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
 };
 
+type ReminderKind = '24h' | '12h';
+
 type ReminderAppointment = {
-  source: 'appointments_table' | 'clinic_state';
-  clinicId?: string;
   appointmentId: string;
+  clinicId?: string | null;
   patientId: string;
   patientEmail?: string | null;
   scheduledAt: string;
   status?: string | null;
+  patientResponse?: string | null;
   patientConfirmationStatus?: string | null;
-  notification_sent?: boolean | null;
-  notification_12h_sent?: boolean | null;
+  notification24SentAt?: string | null;
+  notification12SentAt?: string | null;
+  legacyNotification24Sent?: boolean | null;
+  legacyNotification12Sent?: boolean | null;
+  hasAppointmentsTableSource: boolean;
+  hasClinicStateSource: boolean;
 };
 
 const BRAZIL_TIMEZONE = 'America/Sao_Paulo';
 const CRON_LOOKBACK_MINUTES = 180;
+const QUERY_AHEAD_HOURS = 28;
+
 const REMINDER_STEPS = [
   {
-    kind: '24h',
+    kind: '24h' as ReminderKind,
     hoursBefore: 24,
-    sentColumn: 'notification_sent',
-    sentAtColumn: 'notification_sent_at',
-    requiresPreviousSent: false,
-    requiresNoPatientResponse: false,
-    title: 'Lembrete de consulta - 24h',
-    body: 'Sua consulta pela Verto e amanha. Clique para confirmar presenca, remarcar ou cancelar.'
+    title: 'Confirmacao de consulta - Verto',
+    fallbackBody: 'Voce tem uma consulta amanha pela Verto. Confirme, remarque ou cancele pelo app.'
   },
   {
-    kind: '12h',
+    kind: '12h' as ReminderKind,
     hoursBefore: 12,
-    sentColumn: 'notification_12h_sent',
-    sentAtColumn: 'notification_12h_sent_at',
-    requiresPreviousSent: false,
-    requiresNoPatientResponse: true,
-    title: 'Lembrete de consulta - 12h',
-    body: 'Sua consulta esta chegando. Clique para confirmar presenca, remarcar ou cancelar.'
+    title: 'Consulta chegando - Verto',
+    fallbackBody: 'Sua consulta esta chegando. Confirme, remarque ou cancele pelo app.'
   }
-] as const;
+];
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+
 let started = false;
 let running = false;
+let activeOptions: Required<CronServiceOptions> | null = null;
 
 const sanitizeText = (value: unknown, maxLength = 240) =>
   String(value ?? '').trim().slice(0, maxLength);
 
-const sanitizeEmail = (value: unknown) =>
-  String(value ?? '').trim().toLowerCase().slice(0, 320);
-
-const isUuid = (value: unknown) =>
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    String(value || '').trim(),
-  );
-
-const isGonePushError = (error: any) => {
-  const statusCode = Number(error?.statusCode ?? error?.status);
-  return statusCode === 404 || statusCode === 410;
+const sanitizeEmail = (value: unknown) => {
+  const email = sanitizeText(value, 320).toLowerCase();
+  return email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
 };
 
-const resolveAdjustedReminderTimeUtc = (scheduledAt: string, hoursBefore: number) => {
-  return dayjs(scheduledAt).tz(BRAZIL_TIMEZONE).subtract(hoursBefore, 'hour').utc();
+const isUuid = (value: unknown) => UUID_REGEX.test(sanitizeText(value, 120));
+
+const isActiveAppointmentStatus = (status: unknown) => {
+  const normalized = sanitizeText(status || 'scheduled', 40).toLowerCase();
+  return ![
+    'confirmed',
+    'cancelled',
+    'canceled',
+    'completed',
+    'rescheduled',
+    'reschedule'
+  ].includes(normalized);
+};
+
+const hasResponse = (appointment: ReminderAppointment) => {
+  const patientResponse = sanitizeText(appointment.patientResponse, 40).toLowerCase();
+  const legacyResponse = sanitizeText(appointment.patientConfirmationStatus, 40).toLowerCase();
+  return Boolean(patientResponse || legacyResponse);
 };
 
 const buildScheduledAtFromClinicStateAppointment = (appointment: any) => {
@@ -79,160 +91,166 @@ const buildScheduledAtFromClinicStateAppointment = (appointment: any) => {
     appointment?.scheduled_at || appointment?.scheduledAt,
     80,
   );
-  if (explicit) return explicit;
+  if (explicit && dayjs(explicit).isValid()) return dayjs(explicit).toISOString();
 
   const date = sanitizeText(appointment?.date, 20);
   const time = sanitizeText(appointment?.time, 10);
   if (!date || !time) return '';
 
   const candidate = dayjs.tz(`${date} ${time}`, 'YYYY-MM-DD HH:mm', BRAZIL_TIMEZONE);
-  if (!candidate.isValid()) return '';
-  return candidate.utc().toISOString();
+  return candidate.isValid() ? candidate.utc().toISOString() : '';
 };
 
-const formatAppointmentReminderBody = (scheduledAt: string, fallbackBody: string) => {
+const formatReminderBody = (scheduledAt: string, fallback: string) => {
   const scheduled = dayjs(scheduledAt).tz(BRAZIL_TIMEZONE);
-  if (!scheduled.isValid()) return fallbackBody;
-  const date = scheduled.format('DD/MM/YYYY');
-  const time = scheduled.format('HH:mm');
-  return `Sua consulta pela Verto esta agendada para o dia ${date}, as ${time}. Confirme presenca, solicite remarcacao ou cancele pelo app.`;
+  if (!scheduled.isValid()) return fallback;
+  return `Voce tem consulta em ${scheduled.format('DD/MM')} as ${scheduled.format('HH:mm')}. O que deseja fazer?`;
 };
 
-async function deleteInvalidSubscription(supabase: any, endpoint: string, logger: CronServiceOptions['logger']) {
-  const safeEndpoint = sanitizeText(endpoint, 2000);
-  if (!safeEndpoint) return;
+const getReminderDueUtc = (scheduledAt: string, hoursBefore: number) =>
+  dayjs(scheduledAt).tz(BRAZIL_TIMEZONE).subtract(hoursBefore, 'hour').utc();
 
-  const { error } = await supabase
-    .from('push_subscriptions')
-    .delete()
-    .eq('endpoint', safeEndpoint);
+const mergeAppointment = (
+  appointments: Map<string, ReminderAppointment>,
+  incoming: ReminderAppointment,
+) => {
+  const existing = appointments.get(incoming.appointmentId);
+  if (!existing) {
+    appointments.set(incoming.appointmentId, incoming);
+    return;
+  }
+
+  appointments.set(incoming.appointmentId, {
+    ...existing,
+    clinicId: existing.clinicId || incoming.clinicId,
+    patientId: existing.patientId || incoming.patientId,
+    patientEmail: existing.patientEmail || incoming.patientEmail,
+    scheduledAt: existing.scheduledAt || incoming.scheduledAt,
+    status: existing.status || incoming.status,
+    patientResponse: existing.patientResponse || incoming.patientResponse,
+    patientConfirmationStatus: existing.patientConfirmationStatus || incoming.patientConfirmationStatus,
+    notification24SentAt: existing.notification24SentAt || incoming.notification24SentAt,
+    notification12SentAt: existing.notification12SentAt || incoming.notification12SentAt,
+    legacyNotification24Sent: Boolean(existing.legacyNotification24Sent || incoming.legacyNotification24Sent),
+    legacyNotification12Sent: Boolean(existing.legacyNotification12Sent || incoming.legacyNotification12Sent),
+    hasAppointmentsTableSource: existing.hasAppointmentsTableSource || incoming.hasAppointmentsTableSource,
+    hasClinicStateSource: existing.hasClinicStateSource || incoming.hasClinicStateSource
+  });
+};
+
+async function fetchAppointmentsTable(
+  options: Required<CronServiceOptions>,
+  queryScheduledStartUtc: dayjs.Dayjs,
+  queryScheduledEndUtc: dayjs.Dayjs,
+) {
+  const appointments = new Map<string, ReminderAppointment>();
+  const { data, error } = await options.supabase
+    .from('appointments')
+    .select('*')
+    .gte('scheduled_at', queryScheduledStartUtc.toISOString())
+    .lt('scheduled_at', queryScheduledEndUtc.toISOString())
+    .order('scheduled_at', { ascending: true })
+    .limit(500);
 
   if (error) {
-    logger?.warn?.('[Appointment Reminder Cron] Falha ao remover push subscription invalida.', {
-      endpoint: safeEndpoint.slice(0, 80),
+    options.logger.warn('[Appointment Reminder Cron] Query appointments falhou.', {
       message: error.message
     });
+    return appointments;
   }
+
+  for (const row of data || []) {
+    const appointmentId = sanitizeText(row?.id, 120);
+    const patientId = sanitizeText(row?.patient_id, 120);
+    const scheduledAt = sanitizeText(row?.scheduled_at, 80);
+    if (!appointmentId || !patientId || !scheduledAt) continue;
+    if (!isActiveAppointmentStatus(row?.status)) continue;
+    if (row?.is_active === false || row?.deleted_at) continue;
+
+    mergeAppointment(appointments, {
+      appointmentId,
+      patientId,
+      patientEmail: sanitizeEmail(row?.patient_email),
+      scheduledAt,
+      status: sanitizeText(row?.status, 40).toLowerCase(),
+      patientResponse: sanitizeText(row?.patient_response, 40).toLowerCase(),
+      patientConfirmationStatus: sanitizeText(row?.patient_confirmation_status, 40).toLowerCase(),
+      notification24SentAt: sanitizeText(row?.notification_24h_sent_at || row?.notification_sent_at, 80) || null,
+      notification12SentAt: sanitizeText(row?.notification_12h_sent_at, 80) || null,
+      legacyNotification24Sent: Boolean(row?.notification_sent),
+      legacyNotification12Sent: Boolean(row?.notification_12h_sent),
+      hasAppointmentsTableSource: true,
+      hasClinicStateSource: false
+    });
+  }
+
+  return appointments;
 }
 
-async function sendReminderToPatient(params: {
-  supabase: any;
-  appointmentId: string;
-  patientId: string;
-  patientEmail?: string | null;
-  scheduledAt: string;
-  reminderKind: string;
-  title: string;
-  body: string;
-  logger: CronServiceOptions['logger'];
-}) {
-  const { supabase, appointmentId, patientId, patientEmail, scheduledAt, reminderKind, title, body, logger } = params;
-  const scheduled = dayjs(scheduledAt).tz(BRAZIL_TIMEZONE);
-  const dateLabel = scheduled.isValid() ? scheduled.format('DD/MM/YYYY') : '';
-  const timeLabel = scheduled.isValid() ? scheduled.format('HH:mm') : '';
-  const recipientUserIds = new Set<string>();
-  const safeEmail = sanitizeEmail(patientEmail);
-
-  if (isUuid(patientId)) {
-    recipientUserIds.add(patientId);
-  }
-
-  if (safeEmail) {
-    const { data: emailSubscriptions, error: emailSubscriptionError } = await supabase
-      .from('push_subscriptions')
-      .select('user_id')
-      .ilike('user_email', safeEmail)
-      .limit(20);
-
-    if (!emailSubscriptionError) {
-      for (const row of emailSubscriptions || []) {
-        const userId = sanitizeText(row?.user_id, 120);
-        if (isUuid(userId)) recipientUserIds.add(userId);
-      }
-    }
-
-    const { data: profiles, error: profilesError } = await supabase
-      .from('profiles')
-      .select('id,user_id,email')
-      .ilike('email', safeEmail)
-      .limit(10);
-
-    if (!profilesError) {
-      for (const profile of profiles || []) {
-        const profileId = sanitizeText(profile?.id, 120);
-        const userId = sanitizeText(profile?.user_id, 120);
-        if (isUuid(profileId)) recipientUserIds.add(profileId);
-        if (isUuid(userId)) recipientUserIds.add(userId);
-      }
-    }
-  }
-
-  if (!recipientUserIds.size) {
-    logger?.warn?.('[Appointment Reminder Cron] Nenhum usuario push resolvido para o paciente.', {
-      appointmentId,
-      patientId,
-      patientEmail: safeEmail || null
-    });
-    return { sent: 0, failed: 0 };
-  }
-
-  const { data: subscriptions, error } = await supabase
-    .from('push_subscriptions')
-    .select('endpoint, subscription')
-    .in('user_id', Array.from(recipientUserIds))
-    .limit(20);
+async function fetchClinicStateAppointments(
+  options: Required<CronServiceOptions>,
+  queryScheduledStartUtc: dayjs.Dayjs,
+  queryScheduledEndUtc: dayjs.Dayjs,
+) {
+  const appointments = new Map<string, ReminderAppointment>();
+  const { data, error } = await options.supabase
+    .from('clinic_state')
+    .select('clinic_id, appointments')
+    .limit(500);
 
   if (error) {
-    logger?.warn?.('[Appointment Reminder Cron] Nao foi possivel buscar inscricoes push.', {
-      appointmentId,
-      patientId,
+    options.logger.warn('[Appointment Reminder Cron] Query clinic_state falhou.', {
       message: error.message
     });
-    return { sent: 0, failed: 0 };
+    return appointments;
   }
 
-  const rows = Array.isArray(subscriptions) ? subscriptions : [];
-  if (!rows.length) return { sent: 0, failed: 0 };
+  for (const state of data || []) {
+    const clinicId = sanitizeText(state?.clinic_id, 120);
+    const rows = Array.isArray(state?.appointments) ? state.appointments : [];
+    for (const appointment of rows) {
+      const appointmentId = sanitizeText(appointment?.id, 120);
+      const patientId = sanitizeText(appointment?.patientId || appointment?.patient_id, 120);
+      const scheduledAt = buildScheduledAtFromClinicStateAppointment(appointment);
+      const scheduled = dayjs(scheduledAt);
+      if (!appointmentId || !patientId || !scheduled.isValid()) continue;
+      if (!isActiveAppointmentStatus(appointment?.status)) continue;
+      if (scheduled.isBefore(queryScheduledStartUtc) || !scheduled.isBefore(queryScheduledEndUtc)) continue;
 
-  const payload = JSON.stringify({
-    title,
-    body: formatAppointmentReminderBody(scheduledAt, body),
-    url: `/consulta?appointment_id=${encodeURIComponent(appointmentId)}`,
-    appointmentId,
-    reminderKind,
-    scheduledAt,
-    dateLabel,
-    timeLabel
-  });
-
-  let sent = 0;
-  let failed = 0;
-
-  const uniqueRows = Array.from(
-    new Map(rows.map((row: any) => [sanitizeText(row?.endpoint, 2000), row])).values(),
-  );
-
-  for (const row of uniqueRows) {
-    try {
-      if (!row?.subscription) continue;
-      await webpush.sendNotification(row.subscription, payload);
-      sent += 1;
-    } catch (error: any) {
-      failed += 1;
-      logger?.warn?.('[Appointment Reminder Cron] Falha em uma inscricao push. Continuando fila.', {
+      mergeAppointment(appointments, {
         appointmentId,
+        clinicId,
         patientId,
-        statusCode: error?.statusCode ?? error?.status ?? null,
-        message: error?.message || String(error)
+        patientEmail: sanitizeEmail(appointment?.patientEmail || appointment?.patient_email),
+        scheduledAt,
+        status: sanitizeText(appointment?.status || 'pending', 40).toLowerCase(),
+        patientResponse: sanitizeText(appointment?.patientResponse || appointment?.patient_response, 40).toLowerCase(),
+        patientConfirmationStatus: sanitizeText(
+          appointment?.patientConfirmationStatus || appointment?.patient_confirmation_status,
+          40,
+        ).toLowerCase(),
+        notification24SentAt:
+          sanitizeText(
+            appointment?.notification_24h_sent_at ||
+              appointment?.notification24hSentAt ||
+              appointment?.notification_sent_at,
+            80,
+          ) || null,
+        notification12SentAt:
+          sanitizeText(
+            appointment?.notification_12h_sent_at ||
+              appointment?.notification12hSentAt,
+            80,
+          ) || null,
+        legacyNotification24Sent: Boolean(appointment?.notification_sent),
+        legacyNotification12Sent: Boolean(appointment?.notification_12h_sent),
+        hasAppointmentsTableSource: false,
+        hasClinicStateSource: true
       });
-
-      if (isGonePushError(error)) {
-        await deleteInvalidSubscription(supabase, row?.endpoint, logger);
-      }
     }
   }
 
-  return { sent, failed };
+  return appointments;
 }
 
 async function fetchReminderAppointments(
@@ -240,148 +258,87 @@ async function fetchReminderAppointments(
   queryScheduledStartUtc: dayjs.Dayjs,
   queryScheduledEndUtc: dayjs.Dayjs,
 ) {
-  const appointmentsToNotify = new Map<string, ReminderAppointment>();
+  const tableAppointments = await fetchAppointmentsTable(
+    options,
+    queryScheduledStartUtc,
+    queryScheduledEndUtc,
+  );
+  const clinicAppointments = await fetchClinicStateAppointments(
+    options,
+    queryScheduledStartUtc,
+    queryScheduledEndUtc,
+  );
 
-  const { data: tableAppointments, error: tableError } = await options.supabase
-    .from('appointments')
-    .select('*')
-    .neq('status', 'cancelled')
-    .neq('status', 'canceled')
-    .neq('status', 'reschedule')
-    .neq('status', 'confirmed')
-    .eq('is_active', true)
-    .is('deleted_at', null)
-    .or('notification_sent.is.false,notification_sent.is.null,notification_12h_sent.is.false,notification_12h_sent.is.null')
-    .gte('scheduled_at', queryScheduledStartUtc.toISOString())
-    .lt('scheduled_at', queryScheduledEndUtc.toISOString())
-    .order('scheduled_at', { ascending: true })
-    .limit(250);
-
-  if (tableError) {
-    options.logger.warn('[Appointment Reminder Cron] Query de agendamentos na tabela appointments falhou.', {
-      message: tableError.message
-    });
-  } else {
-    for (const appointment of tableAppointments || []) {
-      const appointmentId = sanitizeText(appointment?.id, 120);
-      const patientId = sanitizeText(appointment?.patient_id, 120);
-      const scheduledAt = sanitizeText(appointment?.scheduled_at, 80);
-      if (!appointmentId || !patientId || !scheduledAt) continue;
-
-      appointmentsToNotify.set(`table:${appointmentId}`, {
-        source: 'appointments_table',
-        appointmentId,
-        patientId,
-        patientEmail: sanitizeEmail(appointment?.patient_email || appointment?.patientEmail),
-        scheduledAt,
-        status: sanitizeText(appointment?.status, 40).toLowerCase(),
-        patientConfirmationStatus: sanitizeText(appointment?.patient_confirmation_status, 40).toLowerCase(),
-        notification_sent: Boolean(appointment?.notification_sent),
-        notification_12h_sent: Boolean(appointment?.notification_12h_sent)
-      });
-    }
+  for (const appointment of clinicAppointments.values()) {
+    mergeAppointment(tableAppointments, appointment);
   }
 
-  const { data: clinicStates, error: clinicStateError } = await options.supabase
-    .from('clinic_state')
-    .select('clinic_id, appointments')
-    .limit(200);
-
-  if (clinicStateError) {
-    options.logger.warn('[Appointment Reminder Cron] Query de clinic_state falhou.', {
-      message: clinicStateError.message
-    });
-  } else {
-    for (const state of clinicStates || []) {
-      const clinicId = sanitizeText(state?.clinic_id, 120);
-      const appointments = Array.isArray(state?.appointments) ? state.appointments : [];
-
-      for (const appointment of appointments) {
-        const appointmentId = sanitizeText(appointment?.id, 120);
-        const patientId = sanitizeText(appointment?.patientId || appointment?.patient_id, 120);
-        const scheduledAt = buildScheduledAtFromClinicStateAppointment(appointment);
-        const status = sanitizeText(appointment?.status, 40).toLowerCase();
-        if (!appointmentId || !patientId || !scheduledAt) continue;
-        if (status === 'canceled' || status === 'cancelled' || status === 'reschedule' || status === 'confirmed') continue;
-
-        const scheduledMoment = dayjs(scheduledAt);
-        if (
-          scheduledMoment.isBefore(queryScheduledStartUtc) ||
-          !scheduledMoment.isBefore(queryScheduledEndUtc)
-        ) {
-          continue;
-        }
-
-        appointmentsToNotify.delete(`table:${appointmentId}`);
-        if (Boolean(appointment?.notification_sent) && Boolean(appointment?.notification_12h_sent)) {
-          continue;
-        }
-
-        appointmentsToNotify.set(`clinic:${clinicId}:${appointmentId}`, {
-          source: 'clinic_state',
-          clinicId,
-          appointmentId,
-        patientId,
-        patientEmail: sanitizeEmail(appointment?.patientEmail || appointment?.patient_email),
-        scheduledAt,
-          status,
-          patientConfirmationStatus: sanitizeText(
-            appointment?.patientConfirmationStatus || appointment?.patient_confirmation_status,
-            40,
-          ).toLowerCase(),
-          notification_sent: Boolean(appointment?.notification_sent),
-          notification_12h_sent: Boolean(appointment?.notification_12h_sent)
-        });
-      }
-    }
-  }
-
-  return Array.from(appointmentsToNotify.values()).sort((a, b) =>
+  return Array.from(tableAppointments.values()).sort((a, b) =>
     a.scheduledAt.localeCompare(b.scheduledAt),
   );
 }
 
-async function markReminderAsSent(params: {
+async function updateAppointmentsTableMarker(params: {
   supabase: any;
-  appointment: ReminderAppointment;
-  sentColumn: string;
-  sentAtColumn: string;
-  logger: CronServiceOptions['logger'];
+  appointmentId: string;
+  kind: ReminderKind;
+  sentAt: string;
+  logger: Required<CronServiceOptions>['logger'];
 }) {
-  const { supabase, appointment, sentColumn, sentAtColumn, logger } = params;
-  const sentAt = dayjs().utc().toISOString();
+  if (!isUuid(params.appointmentId)) return;
 
-  if (appointment.source === 'appointments_table') {
-    const { error } = await supabase
+  let payload: Record<string, any> =
+    params.kind === '24h'
+      ? {
+          notification_24h_sent_at: params.sentAt,
+          notification_sent: true,
+          notification_sent_at: params.sentAt,
+          updated_at: params.sentAt
+        }
+      : {
+          notification_12h_sent_at: params.sentAt,
+          notification_12h_sent: true,
+          updated_at: params.sentAt
+        };
+
+  while (Object.keys(payload).length > 0) {
+    const { error } = await params.supabase
       .from('appointments')
-      .update({
-        [sentColumn]: true,
-        [sentAtColumn]: sentAt
-      })
-      .eq('id', appointment.appointmentId);
+      .update(payload)
+      .eq('id', params.appointmentId);
+    if (!error) return;
 
-    if (error) {
-      logger?.warn?.('[Appointment Reminder Cron] Push enviado, mas update do marcador na tabela appointments falhou.', {
-        appointmentId: appointment.appointmentId,
-        reminderKind: sentColumn,
+    const missingColumn = String(error.message || '').match(/column\s+"([^"]+)"/i)?.[1];
+    if (!missingColumn || !(missingColumn in payload)) {
+      params.logger.warn('[Appointment Reminder Cron] Marcador appointments falhou.', {
+        appointmentId: params.appointmentId,
+        kind: params.kind,
         message: error.message
       });
+      return;
     }
-    return;
+    delete payload[missingColumn];
   }
+}
 
-  if (appointment.source !== 'clinic_state' || !appointment.clinicId) return;
-
-  const { data, error } = await supabase
+async function updateClinicStateMarker(params: {
+  supabase: any;
+  clinicId: string;
+  appointmentId: string;
+  kind: ReminderKind;
+  sentAt: string;
+  logger: Required<CronServiceOptions>['logger'];
+}) {
+  const { data, error } = await params.supabase
     .from('clinic_state')
     .select('appointments')
-    .eq('clinic_id', appointment.clinicId)
+    .eq('clinic_id', params.clinicId)
     .maybeSingle();
 
   if (error) {
-    logger?.warn?.('[Appointment Reminder Cron] Falha ao reler clinic_state para marcar notificacao.', {
-      clinicId: appointment.clinicId,
-      appointmentId: appointment.appointmentId,
+    params.logger.warn('[Appointment Reminder Cron] Falha ao reler clinic_state.', {
+      clinicId: params.clinicId,
+      appointmentId: params.appointmentId,
       message: error.message
     });
     return;
@@ -389,49 +346,96 @@ async function markReminderAsSent(params: {
 
   const appointments = Array.isArray(data?.appointments) ? data.appointments : [];
   const nextAppointments = appointments.map((row: any) => {
-    if (sanitizeText(row?.id, 120) !== appointment.appointmentId) return row;
+    if (sanitizeText(row?.id, 120) !== params.appointmentId) return row;
+    if (params.kind === '24h') {
+      return {
+        ...row,
+        notification_24h_sent_at: params.sentAt,
+        notification24hSentAt: params.sentAt,
+        notification_sent: true,
+        notification_sent_at: params.sentAt
+      };
+    }
     return {
       ...row,
-      [sentColumn]: true,
-      [sentAtColumn]: sentAt
+      notification_12h_sent_at: params.sentAt,
+      notification12hSentAt: params.sentAt,
+      notification_12h_sent: true,
+      notification_12h_sent_at: params.sentAt
     };
   });
 
-  const { error: updateError } = await supabase
+  const { error: updateError } = await params.supabase
     .from('clinic_state')
     .update({
       appointments: nextAppointments,
-      updated_at: sentAt
+      updated_at: params.sentAt
     })
-    .eq('clinic_id', appointment.clinicId);
+    .eq('clinic_id', params.clinicId);
 
   if (updateError) {
-    logger?.warn?.('[Appointment Reminder Cron] Push enviado, mas update do marcador em clinic_state falhou.', {
-      clinicId: appointment.clinicId,
-      appointmentId: appointment.appointmentId,
-      reminderKind: sentColumn,
+    params.logger.warn('[Appointment Reminder Cron] Marcador clinic_state falhou.', {
+      clinicId: params.clinicId,
+      appointmentId: params.appointmentId,
+      kind: params.kind,
       message: updateError.message
-    });
-    return;
-  }
-
-  const { error: tableMirrorError } = await supabase
-    .from('appointments')
-    .update({
-      [sentColumn]: true,
-      [sentAtColumn]: sentAt
-    })
-    .eq('id', appointment.appointmentId);
-
-  if (tableMirrorError && !String(tableMirrorError.message || '').toLowerCase().includes('appointments')) {
-    logger?.warn?.('[Appointment Reminder Cron] Marcador em clinic_state salvo, mas espelho appointments falhou.', {
-      clinicId: appointment.clinicId,
-      appointmentId: appointment.appointmentId,
-      reminderKind: sentColumn,
-      message: tableMirrorError.message
     });
   }
 }
+
+async function markReminderAsSent(params: {
+  supabase: any;
+  appointment: ReminderAppointment;
+  kind: ReminderKind;
+  logger: Required<CronServiceOptions>['logger'];
+}) {
+  const sentAt = dayjs().utc().toISOString();
+  await updateAppointmentsTableMarker({
+    supabase: params.supabase,
+    appointmentId: params.appointment.appointmentId,
+    kind: params.kind,
+    sentAt,
+    logger: params.logger
+  });
+
+  if (params.appointment.hasClinicStateSource && params.appointment.clinicId) {
+    await updateClinicStateMarker({
+      supabase: params.supabase,
+      clinicId: params.appointment.clinicId,
+      appointmentId: params.appointment.appointmentId,
+      kind: params.kind,
+      sentAt,
+      logger: params.logger
+    });
+  }
+}
+
+const chooseDueReminder = (
+  appointment: ReminderAppointment,
+  reminderWindowStartUtc: dayjs.Dayjs,
+  reminderWindowEndUtc: dayjs.Dayjs,
+) => {
+  for (const step of REMINDER_STEPS) {
+    const alreadySent =
+      step.kind === '24h'
+        ? Boolean(appointment.notification24SentAt || appointment.legacyNotification24Sent)
+        : Boolean(appointment.notification12SentAt || appointment.legacyNotification12Sent);
+    if (alreadySent) continue;
+
+    if (step.kind === '12h') {
+      const had24h =
+        Boolean(appointment.notification24SentAt || appointment.legacyNotification24Sent);
+      if (!had24h || hasResponse(appointment)) continue;
+    }
+
+    const dueUtc = getReminderDueUtc(appointment.scheduledAt, step.hoursBefore);
+    if (!dueUtc.isValid()) continue;
+    if (!dueUtc.isBefore(reminderWindowStartUtc) && !dueUtc.isAfter(reminderWindowEndUtc)) {
+      return step;
+    }
+  }
+  return null;
+};
 
 async function runAppointmentReminderJob(options: Required<CronServiceOptions>, trigger: string) {
   if (running) return;
@@ -439,55 +443,47 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
 
   try {
     const nowUtc = dayjs().utc();
-    const nowBrazil = nowUtc.tz(BRAZIL_TIMEZONE);
     const reminderWindowStartUtc = nowUtc.subtract(CRON_LOOKBACK_MINUTES, 'minute');
-    const reminderWindowEndUtc = nowUtc.add(1, 'minute');
+    const reminderWindowEndUtc = nowUtc.add(2, 'minute');
     const queryScheduledStartUtc = nowUtc;
-    const queryScheduledEndUtc = nowUtc.add(28, 'hour');
+    const queryScheduledEndUtc = nowUtc.add(QUERY_AHEAD_HOURS, 'hour');
     const appointments = await fetchReminderAppointments(
       options,
       queryScheduledStartUtc,
       queryScheduledEndUtc,
     );
 
-    for (const appointment of appointments || []) {
-      const appointmentId = sanitizeText(appointment?.appointmentId, 120);
-      const patientId = sanitizeText(appointment?.patientId, 120);
-      const scheduledAt = sanitizeText(appointment?.scheduledAt, 80);
-      if (!appointmentId || !patientId || !scheduledAt) continue;
-      const appointmentStatus = sanitizeText(appointment?.status || 'pending', 40).toLowerCase() || 'pending';
-      if (appointmentStatus !== 'pending') continue;
+    let sent24h = 0;
+    let sent12h = 0;
+    let failed = 0;
 
-      const dueReminder = REMINDER_STEPS.find((step) => {
-        const alreadySent = Boolean((appointment as any)?.[step.sentColumn]);
-        if (alreadySent) return false;
-        if (step.requiresPreviousSent && !Boolean(appointment?.notification_sent)) return false;
-        if (step.requiresNoPatientResponse) {
-          const patientResponse = sanitizeText(appointment?.patientConfirmationStatus, 40).toLowerCase();
-          if (patientResponse) {
-            return false;
-          }
-        }
+    for (const appointment of appointments) {
+      if (!appointment.appointmentId || !appointment.patientId || !appointment.scheduledAt) continue;
+      if (!isActiveAppointmentStatus(appointment.status)) continue;
 
-        const adjustedReminderUtc = resolveAdjustedReminderTimeUtc(scheduledAt, step.hoursBefore);
-        return (
-          !adjustedReminderUtc.isBefore(reminderWindowStartUtc) &&
-          !adjustedReminderUtc.isAfter(reminderWindowEndUtc)
-        );
-      });
-
+      const dueReminder = chooseDueReminder(
+        appointment,
+        reminderWindowStartUtc,
+        reminderWindowEndUtc,
+      );
       if (!dueReminder) continue;
 
       try {
-        const result = await sendReminderToPatient({
+        const scheduled = dayjs(appointment.scheduledAt).tz(BRAZIL_TIMEZONE);
+        const result = await sendAppointmentNotification({
           supabase: options.supabase,
-          appointmentId,
-          patientId,
+          patientId: appointment.patientId,
           patientEmail: appointment.patientEmail,
-          scheduledAt,
-          reminderKind: dueReminder.kind,
+          appointment: {
+            id: appointment.appointmentId,
+            scheduledAt: appointment.scheduledAt,
+            reminderKind: dueReminder.kind,
+            dateLabel: scheduled.isValid() ? scheduled.format('DD/MM/YYYY') : null,
+            timeLabel: scheduled.isValid() ? scheduled.format('HH:mm') : null
+          },
           title: dueReminder.title,
-          body: dueReminder.body,
+          body: formatReminderBody(appointment.scheduledAt, dueReminder.fallbackBody),
+          reminderKind: dueReminder.kind,
           logger: options.logger
         });
 
@@ -495,28 +491,32 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
           await markReminderAsSent({
             supabase: options.supabase,
             appointment,
-            sentColumn: dueReminder.sentColumn,
-            sentAtColumn: dueReminder.sentAtColumn,
+            kind: dueReminder.kind,
             logger: options.logger
           });
+          if (dueReminder.kind === '24h') sent24h += result.sent;
+          if (dueReminder.kind === '12h') sent12h += result.sent;
         }
-      } catch (appointmentError: any) {
-        options.logger.error('[Appointment Reminder Cron] Erro isolado em agendamento. Continuando loop.', {
-          appointmentId,
-          patientId,
-          message: appointmentError?.message || String(appointmentError)
+        failed += result.failed;
+      } catch (error: any) {
+        failed += 1;
+        options.logger.error('[Appointment Reminder Cron] Erro isolado em consulta.', {
+          appointmentId: appointment.appointmentId,
+          patientId: appointment.patientId,
+          message: error?.message || String(error)
         });
       }
     }
 
     options.logger.log('[Appointment Reminder Cron] Execucao concluida.', {
       trigger,
+      totalCandidates: appointments.length,
+      sent24h,
+      sent12h,
+      failed,
       reminderWindowStartUtc: reminderWindowStartUtc.toISOString(),
       reminderWindowEndUtc: reminderWindowEndUtc.toISOString(),
-      queryScheduledStartUtc: queryScheduledStartUtc.toISOString(),
-      queryScheduledEndUtc: queryScheduledEndUtc.toISOString(),
-      nowBrazil: nowBrazil.format(),
-      total: appointments?.length || 0
+      businessTimezone: BRAZIL_TIMEZONE
     });
   } catch (error: any) {
     options.logger.error('[Appointment Reminder Cron] Falha geral nao bloqueante.', {
@@ -526,6 +526,12 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
   } finally {
     running = false;
   }
+}
+
+export function triggerAppointmentReminderScan(trigger = 'manual_trigger') {
+  if (!activeOptions) return false;
+  void runAppointmentReminderJob(activeOptions, trigger);
+  return true;
 }
 
 export function startAppointmentReminderCron(options: CronServiceOptions) {
@@ -547,7 +553,7 @@ export function startAppointmentReminderCron(options: CronServiceOptions) {
   }
 
   started = true;
-  const safeOptions: Required<CronServiceOptions> = {
+  activeOptions = {
     supabase: options.supabase,
     vapidPublicKey: options.vapidPublicKey,
     vapidPrivateKey: options.vapidPrivateKey,
@@ -557,14 +563,14 @@ export function startAppointmentReminderCron(options: CronServiceOptions) {
   cron.schedule(
     '*/15 * * * *',
     () => {
-      void runAppointmentReminderJob(safeOptions, 'node_cron_15_minutes');
+      void runAppointmentReminderJob(activeOptions as Required<CronServiceOptions>, 'node_cron_15_minutes');
     },
     { timezone: 'UTC' }
   );
 
   setTimeout(() => {
-    void runAppointmentReminderJob(safeOptions, 'startup_warmup');
-  }, 120 * 1000);
+    void runAppointmentReminderJob(activeOptions as Required<CronServiceOptions>, 'startup_warmup');
+  }, 20 * 1000);
 
   logger.log('[Appointment Reminder Cron] Servico iniciado no backend Node.js a cada 15 minutos.', {
     timezone: 'UTC',

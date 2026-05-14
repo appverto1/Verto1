@@ -51,6 +51,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
     return Notification.permission;
   });
+  const [notificationSubscriptionReady, setNotificationSubscriptionReady] = useState(false);
 
   const [isUploading, setIsUploading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -115,6 +116,44 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
   };
 
+  const bufferSourceToUint8Array = (value: ArrayBuffer | ArrayBufferView) => {
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  };
+
+  const applicationServerKeyMatches = (
+    existingKey: ArrayBuffer | ArrayBufferView | null | undefined,
+    expectedKey: Uint8Array,
+  ) => {
+    if (!existingKey) return true;
+    const current = bufferSourceToUint8Array(existingKey);
+    if (current.length !== expectedKey.length) return false;
+    return current.every((value, index) => value === expectedKey[index]);
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setNotificationSubscriptionReady(false);
+      return;
+    }
+
+    let cancelled = false;
+    const checkSubscription = async () => {
+      try {
+        const registration = await navigator.serviceWorker.getRegistration('/sw.js');
+        const subscription = await registration?.pushManager.getSubscription();
+        if (!cancelled) setNotificationSubscriptionReady(Boolean(subscription));
+      } catch {
+        if (!cancelled) setNotificationSubscriptionReady(false);
+      }
+    };
+
+    void checkSubscription();
+    return () => {
+      cancelled = true;
+    };
+  }, [notificationStatus, isSettingsOpen]);
+
   const enablePatientNotifications = async () => {
     if (typeof window === 'undefined' || !('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
       setNotificationStatus('unsupported');
@@ -125,47 +164,61 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setIsEnablingNotifications(true);
     setSettingsMessage('');
     try {
+      const keyResponse = await fetch('/api/push/vapid-public-key', { credentials: 'include' });
+      const keyPayload = await keyResponse.json().catch(() => ({}));
+      if (!keyResponse.ok || !keyPayload?.publicKey) {
+        setNotificationSubscriptionReady(false);
+        setSettingsMessage('As notificações ainda não estão configuradas no servidor.');
+        return false;
+      }
+      const applicationServerKey = urlBase64ToUint8Array(String(keyPayload.publicKey));
+
       const permission = Notification.permission === 'granted'
         ? 'granted'
         : await Notification.requestPermission();
       setNotificationStatus(permission);
       if (permission !== 'granted') {
+        setNotificationSubscriptionReady(false);
         setSettingsMessage('As notificações não foram liberadas. Se você bloqueou antes, habilite nas configurações do navegador.');
         return false;
       }
 
       const registration = await navigator.serviceWorker.register('/sw.js');
-      const keyResponse = await fetch('/api/push/vapid-public-key', { credentials: 'include' });
-      const keyPayload = await keyResponse.json().catch(() => ({}));
-      if (!keyResponse.ok || !keyPayload?.publicKey) {
-        setSettingsMessage('As notificações ainda não estão configuradas no servidor.');
-        return false;
+      await navigator.serviceWorker.ready;
+      let existingSubscription = await registration.pushManager.getSubscription();
+      if (
+        existingSubscription &&
+        !applicationServerKeyMatches((existingSubscription as any)?.options?.applicationServerKey, applicationServerKey)
+      ) {
+        await existingSubscription.unsubscribe();
+        existingSubscription = null;
       }
-
-      const existingSubscription = await registration.pushManager.getSubscription();
       const subscription =
         existingSubscription ||
         (await registration.pushManager.subscribe({
           userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(String(keyPayload.publicKey)),
+          applicationServerKey,
         }));
 
       const response = await fetch('/api/push/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ subscription }),
+        body: JSON.stringify({ subscription: subscription.toJSON() }),
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || result?.success === false) {
+        setNotificationSubscriptionReady(false);
         setSettingsMessage(result?.error || result?.warning || 'Não foi possível ativar as notificações agora.');
         return false;
       }
 
+      setNotificationSubscriptionReady(true);
       setSettingsMessage('Notificações ativadas neste dispositivo.');
       return true;
     } catch (error: any) {
       console.warn('Patient notification permission failed:', error);
+      setNotificationSubscriptionReady(false);
       setSettingsMessage(error?.message || 'Não foi possível ativar as notificações.');
       return false;
     } finally {
@@ -1043,8 +1096,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <input
                 type="checkbox"
                 className="mt-1 h-5 w-5 rounded border-emerald-300 text-emerald-600 accent-emerald-500"
-                checked={notificationStatus === 'granted'}
-                disabled={notificationStatus === 'granted' || isEnablingNotifications || notificationStatus === 'unsupported'}
+                checked={notificationStatus === 'granted' && notificationSubscriptionReady}
+                disabled={notificationSubscriptionReady || isEnablingNotifications || notificationStatus === 'unsupported'}
                 onChange={() => void enablePatientNotifications()}
               />
               <span>
