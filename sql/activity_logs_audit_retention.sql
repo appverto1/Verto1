@@ -9,6 +9,7 @@ create table if not exists public.activity_logs (
   title text not null,
   content text not null,
   type text not null default 'management',
+  action text not null default 'activity_logged',
   action_type text,
   payload_details text,
   idempotency_key text,
@@ -30,6 +31,7 @@ alter table public.activity_logs add column if not exists actor_name text;
 alter table public.activity_logs add column if not exists title text;
 alter table public.activity_logs add column if not exists content text;
 alter table public.activity_logs add column if not exists type text default 'management';
+alter table public.activity_logs add column if not exists action text default 'activity_logged';
 alter table public.activity_logs add column if not exists action_type text;
 alter table public.activity_logs add column if not exists payload_details text;
 alter table public.activity_logs add column if not exists idempotency_key text;
@@ -49,6 +51,7 @@ set
   title = coalesce(title, action_type, 'Atividade registrada'),
   content = coalesce(content, payload_details, 'Ação registrada no sistema.'),
   type = coalesce(type, 'management'),
+  action = coalesce(nullif(action, ''), nullif(action_type, ''), 'activity_logged'),
   status = coalesce(status, 'active'),
   timestamp = coalesce(timestamp, created_at, now()),
   created_at = coalesce(created_at, timestamp, now()),
@@ -56,6 +59,8 @@ set
 where title is null
    or content is null
    or type is null
+   or action is null
+   or action = ''
    or status is null
    or timestamp is null
    or created_at is null
@@ -64,6 +69,8 @@ where title is null
 alter table public.activity_logs alter column title set not null;
 alter table public.activity_logs alter column content set not null;
 alter table public.activity_logs alter column type set not null;
+alter table public.activity_logs alter column action set default 'activity_logged';
+alter table public.activity_logs alter column action set not null;
 alter table public.activity_logs alter column status set not null;
 alter table public.activity_logs alter column timestamp set not null;
 alter table public.activity_logs alter column created_at set not null;
@@ -84,3 +91,6 @@ create index if not exists activity_logs_status_timestamp_idx
 
 create index if not exists activity_logs_action_type_timestamp_idx
   on public.activity_logs (action_type, timestamp desc);
+
+create index if not exists activity_logs_action_timestamp_idx
+  on public.activity_logs (action, timestamp desc);

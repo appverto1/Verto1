@@ -9,8 +9,9 @@ import { DrawingCanvas } from './DrawingCanvas';
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
 import { calculateDomainMastery } from '../utils/clinicalMath';
+import { ensureFreshSession } from '../lib/supabase';
 
-export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false }: any) => { 
+export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false, patientPortalId = '' }: any) => { 
   const [selectedBaseDate, setSelectedBaseDate] = useState("");
   const [selectedCompareDate, setSelectedCompareDate] = useState("");
   const [selectedSnapshotDate, setSelectedSnapshotDate] = useState("all");
@@ -131,6 +132,19 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return current.every((value, index) => value === expectedKey[index]);
   };
 
+  const buildPushRequestHeaders = async (): Promise<Record<string, string>> => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    try {
+      const session = await ensureFreshSession();
+      if (session?.access_token) {
+        headers.Authorization = `Bearer ${session.access_token}`;
+      }
+    } catch {
+      // A sessão por cookie ainda pode autenticar o request no backend.
+    }
+    return headers;
+  };
+
   useEffect(() => {
     if (typeof window === 'undefined' || !('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
       setNotificationSubscriptionReady(false);
@@ -200,11 +214,23 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           applicationServerKey,
         }));
 
+      const patientIdForPush = String(patientPortalId || user?.patientId || user?.patient_id || '').trim();
+      const safePatientIdForPush =
+        patientIdForPush && patientIdForPush !== String(user?.id || '').trim()
+          ? patientIdForPush
+          : '';
+      const patientEmailForPush = String(user?.email || '').trim().toLowerCase();
       const response = await fetch('/api/push/subscribe', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await buildPushRequestHeaders(),
         credentials: 'include',
-        body: JSON.stringify({ subscription: subscription.toJSON() }),
+        body: JSON.stringify({
+          subscription: subscription.toJSON(),
+          patientId: safePatientIdForPush || undefined,
+          patient_id: safePatientIdForPush || undefined,
+          patientEmail: patientEmailForPush || undefined,
+          patient_email: patientEmailForPush || undefined,
+        }),
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || result?.success === false) {

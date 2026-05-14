@@ -409,6 +409,17 @@ export default function App() {
   const buildAuthHeader = (token?: string | null): Record<string, string> =>
     token ? { Authorization: `Bearer ${token}` } : {};
 
+  const buildJsonAuthHeaders = async (): Promise<Record<string, string>> => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    try {
+      const session = await ensureFreshSession();
+      Object.assign(headers, buildAuthHeader(session?.access_token || null));
+    } catch (error) {
+      console.warn('[push] Não foi possível anexar bearer token; tentando sessão por cookie.');
+    }
+    return headers;
+  };
+
   const uploadProfileAssetIfNeeded = async (
     maybeDataUrl: unknown,
     kind: 'profile' | 'signature' | 'logo',
@@ -1113,12 +1124,33 @@ export default function App() {
             applicationServerKey,
           }));
 
-        await fetch('/api/push/subscribe', {
+        const patientIdForPush = String(
+          resolvedPatientPortalId ||
+            (user as any)?.patientId ||
+            (user as any)?.patient_id ||
+            ''
+        ).trim();
+        const safePatientIdForPush =
+          patientIdForPush && patientIdForPush !== String(user?.id || '').trim()
+            ? patientIdForPush
+            : '';
+        const patientEmailForPush = String(user?.email || '').trim().toLowerCase();
+        const response = await fetch('/api/push/subscribe', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await buildJsonAuthHeaders(),
           credentials: 'include',
-          body: JSON.stringify({ subscription: subscription.toJSON() }),
+          body: JSON.stringify({
+            subscription: subscription.toJSON(),
+            patientId: safePatientIdForPush || undefined,
+            patient_id: safePatientIdForPush || undefined,
+            patientEmail: patientEmailForPush || undefined,
+            patient_email: patientEmailForPush || undefined,
+          }),
         });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result?.success === false) {
+          console.warn('[push] Falha ao persistir subscription do paciente:', result);
+        }
       } catch (error) {
         console.warn('Push registration failed:', error);
       }
@@ -1129,7 +1161,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [user?.id, user?.role, user?.email, resolvedPatientPortalId]);
 
   useEffect(() => {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
@@ -3503,6 +3535,7 @@ export default function App() {
           protocols={protocols} 
           onAddFamilyNote={handleAddFamilyNote}
           isReadOnlyMode={patientIsReadOnlyMode}
+          patientPortalId={resolvedPatientPortalId}
           />
       ) : user.role === 'coordinator' || user.role === 'receptionist' || user.role === 'therapist' ? (
         <CoordinatorDashboard 

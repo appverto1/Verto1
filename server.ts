@@ -2742,13 +2742,12 @@ async function syncAppointmentsTableFromClinicState(params: {
     const scheduledAt = buildAppointmentScheduledAt(appointment);
     const rawPatientId = sanitizeString(appointment?.patientId || appointment?.patient_id, 120);
     const patientEmail = sanitizeEmail(appointment?.patientEmail || appointment?.patient_email);
-    const resolvedPatientIds = isUuid(rawPatientId)
-      ? [rawPatientId]
-      : await resolvePatientIdsForPush({
-          supabase,
-          patientEmail,
-          clinicId
-        });
+    const resolvedPatientIds = await resolvePatientIdsForPush({
+      supabase,
+      patientId: rawPatientId,
+      patientEmail,
+      clinicId
+    });
     const patientId = resolvedPatientIds[0] || '';
 
     if (!isUuid(appointmentId) || !scheduledAt || !isUuid(patientId)) {
@@ -4037,8 +4036,22 @@ async function startServer() {
     res.status(401).json({ error: 'Unauthorized - No valid session or token' });
   };
 
-  const normalizeActivityActionLabel = (value: unknown) =>
+  const repairActivityLabelText = (value: unknown) =>
     sanitizeString(value, 220)
+      .replace(/Ã§/g, 'ç')
+      .replace(/Ã£/g, 'ã')
+      .replace(/Ã¡/g, 'á')
+      .replace(/Ã©/g, 'é')
+      .replace(/Ãª/g, 'ê')
+      .replace(/Ã­/g, 'í')
+      .replace(/Ã³/g, 'ó')
+      .replace(/Ãµ/g, 'õ')
+      .replace(/Ãº/g, 'ú')
+      .replace(/Ã /g, 'à')
+      .replace(/Ã‡/g, 'Ç');
+
+  const normalizeActivityActionLabel = (value: unknown) =>
+    repairActivityLabelText(value)
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/�/g, '')
@@ -4279,6 +4292,7 @@ async function startServer() {
         [
           'clinic_id',
           'actor_name',
+          'action',
           'action_type',
           'payload_details',
           'idempotency_key',
@@ -4343,6 +4357,14 @@ async function startServer() {
     const content =
       sanitizeString(body?.content || body?.details || body?.description || body?.message, 4000) ||
       'Ação registrada no sistema.';
+    const type = sanitizeString(body?.type || body?.category, 40) || 'management';
+    const actionType = sanitizeString(body?.action_type || body?.action || title, 180) || title;
+    const action = resolveActivityLogAction({
+      action: body?.action,
+      actionType: body?.action_type,
+      title,
+      type
+    });
     const idFromBody = sanitizeString(body?.id, 120);
     const idempotencyKey = sanitizeString(
       body?.idempotencyKey || body?.idempotency_key || req?.headers?.['x-idempotency-key'],
@@ -4356,8 +4378,9 @@ async function startServer() {
       actor_name: sanitizeString(currentUser?.name || currentUser?.email || body?.actor_name || body?.professional, 180) || null,
       title,
       content,
-      type: sanitizeString(body?.type || body?.category, 40) || 'management',
-      action_type: sanitizeString(body?.action_type || body?.action || title, 180) || title,
+      type,
+      action,
+      action_type: actionType || action,
       payload_details:
         sanitizeString(body?.payload_details || body?.payloadDetails || body?.details || content, 4000) || content,
       timestamp: sanitizeString(body?.timestamp, 40) || nowIso,
@@ -11033,11 +11056,34 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
       }
 
+      const nextTitle =
+        req.body?.title !== undefined ? sanitizeString(req.body.title, 180) : sanitizeString(existing?.title, 180);
+      const nextType =
+        req.body?.type !== undefined ? sanitizeString(req.body.type, 40) : sanitizeString(existing?.type, 40);
+      const nextActionType =
+        req.body?.action_type !== undefined
+          ? sanitizeString(req.body.action_type, 180)
+          : sanitizeString(existing?.action_type, 180);
+      const actionTouched =
+        req.body?.action !== undefined ||
+        req.body?.action_type !== undefined ||
+        req.body?.title !== undefined ||
+        req.body?.type !== undefined;
+
       let updatePayload: Record<string, any> = cleanObject({
-        title: req.body?.title !== undefined ? sanitizeString(req.body.title, 180) : undefined,
+        title: req.body?.title !== undefined ? nextTitle : undefined,
         content: req.body?.content !== undefined ? sanitizeString(req.body.content, 4000) : undefined,
-        type: req.body?.type !== undefined ? sanitizeString(req.body.type, 40) : undefined,
-        action_type: req.body?.action_type !== undefined ? sanitizeString(req.body.action_type, 180) : undefined,
+        type: req.body?.type !== undefined ? nextType : undefined,
+        action:
+          actionTouched
+            ? resolveActivityLogAction({
+                action: req.body?.action !== undefined ? req.body.action : existing?.action,
+                actionType: nextActionType,
+                title: nextTitle,
+                type: nextType
+              })
+            : undefined,
+        action_type: req.body?.action_type !== undefined ? nextActionType : undefined,
         payload_details:
           req.body?.payload_details !== undefined ? sanitizeString(req.body.payload_details, 4000) : undefined,
         status: req.body?.status !== undefined ? sanitizeString(req.body.status, 40) : undefined,

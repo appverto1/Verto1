@@ -78,6 +78,29 @@ const isGonePushError = (error: any) => {
   return statusCode === 404 || statusCode === 410;
 };
 
+const isDuplicatePushError = (error: any) => {
+  const code = String(error?.code || '');
+  const message = String(error?.message || '').toLowerCase();
+  return code === '23505' || message.includes('duplicate key');
+};
+
+const isRemovablePushColumn = (column: string | null) =>
+  Boolean(
+    column &&
+      [
+        'patient_id',
+        'p256dh',
+        'auth',
+        'subscription',
+        'user_id',
+        'user_email',
+        'clinic_id',
+        'role',
+        'created_at',
+        'updated_at'
+      ].includes(column)
+  );
+
 const safeJsonSubscription = (value: any): PushSubscriptionInput | null => {
   if (!value) return null;
   if (typeof value === 'string') {
@@ -112,7 +135,25 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
   const email = sanitizeEmail(params.patientEmail);
   const clinicId = sanitizeText(params.clinicId, 120);
 
-  if (isUuid(explicitPatientId)) ids.add(explicitPatientId);
+  const addPatientRows = (rows: any[]) => {
+    for (const row of rows || []) {
+      const id = sanitizeText(row?.id, 120);
+      if (isUuid(id)) ids.add(id);
+    }
+  };
+
+  if (isUuid(explicitPatientId)) {
+    let query = params.supabase
+      .from('patients')
+      .select('id, clinic_id')
+      .eq('id', explicitPatientId)
+      .limit(1);
+    if (clinicId && isUuid(clinicId)) {
+      query = query.eq('clinic_id', clinicId);
+    }
+    const { data, error } = await query;
+    if (!error) addPatientRows(data || []);
+  }
 
   if (email) {
     let query = params.supabase
@@ -125,12 +166,7 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
     }
 
     const { data, error } = await query;
-    if (!error) {
-      for (const row of data || []) {
-        const id = sanitizeText(row?.id, 120);
-        if (isUuid(id)) ids.add(id);
-      }
-    }
+    if (!error) addPatientRows(data || []);
 
     if (!ids.size && clinicId && isUuid(clinicId)) {
       const fallback = await params.supabase
@@ -138,12 +174,7 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
         .select('id')
         .ilike('email', email)
         .limit(100);
-      if (!fallback.error) {
-        for (const row of fallback.data || []) {
-          const id = sanitizeText(row?.id, 120);
-          if (isUuid(id)) ids.add(id);
-        }
-      }
+      if (!fallback.error) addPatientRows(fallback.data || []);
     }
   }
 
@@ -185,18 +216,60 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
     updated_at: now
   };
 
+  const removeMissingColumn = (error: any) => {
+    const missingColumn = extractMissingColumnName(error);
+    if (!missingColumn || !(missingColumn in payload) || !isRemovablePushColumn(missingColumn)) {
+      return false;
+    }
+    delete payload[missingColumn];
+    return true;
+  };
+
+  const updateExisting = async () => {
+    for (let attempt = 0; attempt < 16 && Object.keys(payload).length > 0; attempt += 1) {
+      const updatePayload = { ...payload, updated_at: now };
+      delete updatePayload.created_at;
+      const { data, error } = await params.supabase
+        .from('push_subscriptions')
+        .update(updatePayload)
+        .eq('endpoint', normalized.endpoint)
+        .select('endpoint')
+        .limit(1);
+
+      if (!error) {
+        return { success: true, updated: Array.isArray(data) && data.length > 0, error: null };
+      }
+      if (removeMissingColumn(error)) continue;
+      return { success: false, updated: false, error };
+    }
+    return { success: false, updated: false, error: new Error('Nao foi possivel montar payload push.') };
+  };
+
+  const existing = await updateExisting();
+  if (existing.success && existing.updated) {
+    return { success: true, patientId, endpoint: normalized.endpoint };
+  }
+  if (!existing.success) {
+    return { success: false, error: existing.error?.message || 'Erro ao atualizar inscricao push.' };
+  }
+
   while (Object.keys(payload).length > 0) {
     const { error } = await params.supabase
       .from('push_subscriptions')
-      .upsert([payload], { onConflict: 'endpoint' });
+      .insert([payload]);
 
     if (!error) return { success: true, patientId, endpoint: normalized.endpoint };
+    if (isDuplicatePushError(error)) {
+      const retryUpdate = await updateExisting();
+      if (retryUpdate.success) {
+        return { success: true, patientId, endpoint: normalized.endpoint };
+      }
+      return { success: false, error: retryUpdate.error?.message || error.message || 'Erro ao salvar inscricao push.' };
+    }
 
-    const missingColumn = extractMissingColumnName(error);
-    if (!missingColumn || !(missingColumn in payload)) {
+    if (!removeMissingColumn(error)) {
       return { success: false, error: error.message || 'Erro ao salvar inscricao push.' };
     }
-    delete payload[missingColumn];
   }
 
   return { success: false, error: 'Nao foi possivel montar payload push.' };
