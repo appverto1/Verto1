@@ -7154,6 +7154,7 @@ async function startServer() {
 
       const user = req.session.user;
       const role = sanitizeString(user?.role, 40).toLowerCase();
+      const isPatientRole = role === 'patient';
       if (role !== 'patient') {
         return res.status(403).json({
           success: false,
@@ -7166,7 +7167,7 @@ async function startServer() {
         patientId: sanitizeString(req.body?.patientId || req.body?.patient_id, 120),
         patientEmail: sanitizeEmail(req.body?.patientEmail || req.body?.patient_email || user?.email),
         userId: sanitizeString(user?.id, 120),
-        clinicId: currentClinicId(user)
+        clinicId: isPatientRole ? null : currentClinicId(user)
       });
       const patientId = patientIds[0];
 
@@ -7204,12 +7205,13 @@ async function startServer() {
       const subscription = req.body?.subscription || req.body;
       const endpoint = sanitizeString(subscription?.endpoint, 2000);
       const user = req.session.user;
+      const isPatientRole = sanitizeString(user?.role, 40).toLowerCase() === 'patient';
       const patientIds = await resolvePatientIdsForPush({
         supabase,
         patientId: sanitizeString(req.body?.patientId || req.body?.patient_id, 120),
         patientEmail: sanitizeEmail(req.body?.patientEmail || req.body?.patient_email || user?.email),
         userId: sanitizeString(user?.id, 120),
-        clinicId: currentClinicId(user)
+        clinicId: isPatientRole ? null : currentClinicId(user)
       });
       const result = await removePatientPushSubscription({
         supabase,
