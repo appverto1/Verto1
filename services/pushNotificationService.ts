@@ -272,16 +272,45 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
     return { success: false, error: 'Inscricao push invalida.' };
   }
 
-  const patientId = sanitizeText(params.patientId, 120);
+  let patientId = sanitizeText(params.patientId, 120);
+  const safeClinicId = sanitizeText(params.clinicId, 120);
+  const safeUserEmail = sanitizeEmail(params.userEmail);
+  if (!isUuid(patientId) && isUuid(safeClinicId) && safeUserEmail) {
+    const { data, error } = await params.supabase
+      .from('patients')
+      .select('id, clinic_id')
+      .eq('clinic_id', safeClinicId)
+      .ilike('email', safeUserEmail)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .limit(1);
+    const resolvedId = sanitizeText(data?.[0]?.id, 120);
+    params.logger?.log?.('[PushSubscriptionSave] patient_id revalidado por clinic_id.', {
+      originalPatientId: patientId || null,
+      resolvedPatientId: resolvedId || null,
+      clinicId: safeClinicId,
+      userEmail: safeUserEmail,
+      error: error?.message || null
+    });
+    if (!error && isUuid(resolvedId)) {
+      patientId = resolvedId;
+    }
+  }
+
   if (!isUuid(patientId)) {
+    params.logger?.warn?.('[PushSubscriptionSave] paciente invalido apos revalidacao.', {
+      patientId: patientId || null,
+      clinicId: safeClinicId || null,
+      userEmail: safeUserEmail || null
+    });
     return { success: false, error: 'Paciente invalido para inscricao push.' };
   }
 
   params.logger?.log?.('[PushSubscriptionSave] start', {
     patientId,
     userId: sanitizeText(params.userId, 120) || null,
-    userEmail: sanitizeEmail(params.userEmail) || null,
-    clinicId: sanitizeText(params.clinicId, 120) || null,
+    userEmail: safeUserEmail || null,
+    clinicId: safeClinicId || null,
     role: sanitizeText(params.role, 40) || null,
     endpointPrefix: normalized.endpoint.slice(0, 80),
     hasP256dh: Boolean(normalized.keys.p256dh),
@@ -296,8 +325,8 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
     auth: normalized.keys.auth,
     subscription: normalized,
     user_id: isUuid(params.userId) ? sanitizeText(params.userId, 120) : null,
-    user_email: sanitizeEmail(params.userEmail) || null,
-    clinic_id: sanitizeText(params.clinicId, 120) || null,
+    user_email: safeUserEmail || null,
+    clinic_id: safeClinicId || null,
     role: sanitizeText(params.role, 40) || null,
     created_at: now,
     updated_at: now
