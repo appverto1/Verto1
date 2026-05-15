@@ -2677,8 +2677,8 @@ function normalizeAppointmentStatusForUi(status: unknown): string {
 
 function normalizeAppointmentResponseAction(action: unknown): 'confirmed' | 'reschedule' | 'canceled' | '' {
   const normalized = sanitizeString(action, 40).toLowerCase();
-  if (['confirm', 'confirmed', 'confirmar', 'accepted', 'accept'].includes(normalized)) return 'confirmed';
-  if (['reschedule', 'rescheduled', 'remarcar', 'remarcado'].includes(normalized)) return 'reschedule';
+  if (['verto_confirm_appointment', 'confirm', 'confirmed', 'confirmar', 'accepted', 'accept'].includes(normalized)) return 'confirmed';
+  if (['verto_reschedule_appointment', 'reschedule', 'rescheduled', 'remarcar', 'remarcado'].includes(normalized)) return 'reschedule';
   if (['cancel', 'canceled', 'cancelled', 'cancelar', 'cancelado'].includes(normalized)) return 'canceled';
   return '';
 }

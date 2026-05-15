@@ -571,8 +571,8 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
     dateLabel,
     timeLabel,
     actions: [
-      { action: 'confirm', title: 'Confirmar' },
-      { action: 'reschedule', title: 'Remarcar' }
+      { action: 'verto_confirm_appointment', title: 'Confirmar' },
+      { action: 'verto_reschedule_appointment', title: 'Remarcar' }
     ]
   });
 

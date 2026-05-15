@@ -1,3 +1,7 @@
+const SW_VERSION = "appointments-actions-v3";
+const CONFIRM_ACTION = "verto_confirm_appointment";
+const RESCHEDULE_ACTION = "verto_reschedule_appointment";
+
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());
 });
@@ -32,13 +36,14 @@ self.addEventListener("push", (event) => {
       actions: Array.isArray(payload.actions) && payload.actions.length > 0
         ? payload.actions
         : [
-            { action: "confirm", title: "Confirmar" },
-            { action: "reschedule", title: "Remarcar" },
+            { action: CONFIRM_ACTION, title: "Confirmar" },
+            { action: RESCHEDULE_ACTION, title: "Remarcar" },
           ],
       data: {
         url: targetUrl,
         appointmentId,
         reminderKind,
+        swVersion: SW_VERSION,
       },
       vibrate: [120, 60, 120],
     }),
@@ -57,12 +62,12 @@ const focusOrOpen = async (targetUrl) => {
   return self.clients.openWindow(destination);
 };
 
-const persistAppointmentResponse = async (appointmentId, action, source, reminderKind) => {
+const persistAppointmentResponse = async (appointmentId, action, status, source, reminderKind) => {
   const response = await fetch(`/api/notifications/appointments/${encodeURIComponent(appointmentId)}/respond`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, source, reminderKind }),
+    body: JSON.stringify({ action, status, source, reminderKind, swVersion: SW_VERSION }),
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || !payload?.success) {
@@ -88,26 +93,29 @@ self.addEventListener("notificationclick", (event) => {
   const targetUrl = event.notification?.data?.url || "/";
   const reminderKind = event.notification?.data?.reminderKind || "reminder";
   
-  // Map notification action to appointment status - MUST BE EXACT
+  // Only current explicit action ids persist automatically.
+  // Legacy/generic action ids open the app to avoid cross-mapped buttons.
   const actionToStatusMap = {
-    confirm: "confirmed",        // User clicked "Confirmar"
-    confirmed: "confirmed",      // Backward compatibility
-    reschedule: "reschedule",    // User clicked "Remarcar"
-    cancel: "canceled",          // User clicked "Cancelar"
-    cancelled: "canceled",       // Backward compatibility
-    canceled: "canceled"         // Fallback for normalized form
+    [CONFIRM_ACTION]: "confirmed",
+    [RESCHEDULE_ACTION]: "reschedule",
   };
 
   const patientStatus = actionToStatusMap[action];
   event.notification.close();
 
-  if (!action || !patientStatus || !appointmentId) {
+  if (!action || !appointmentId) {
     event.waitUntil(focusOrOpen(targetUrl));
     return;
   }
 
+  if (!patientStatus) {
+    const fallbackUrl = `${targetUrl}${targetUrl.includes("?") ? "&" : "?"}notification_action=${encodeURIComponent(action)}`;
+    event.waitUntil(focusOrOpen(fallbackUrl));
+    return;
+  }
+
   event.waitUntil(
-    persistAppointmentResponse(appointmentId, action, "push_notification_action", reminderKind)
+    persistAppointmentResponse(appointmentId, action, patientStatus, "push_notification_action", reminderKind)
       .then(() => {
         // Send feedback notification with correct message for what user chose
         const feedbackMap = {
