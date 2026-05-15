@@ -2782,16 +2782,6 @@ async function syncAppointmentsTableFromClinicState(params: {
           : null
       );
 
-    // Reset notification markers when appointment is rescheduled so new 24h/12h reminders are sent
-    const statusUi = normalizeAppointmentStatusForUi(appointment?.status);
-    let notification24hSentAt = appointment?.notification_24h_sent_at || appointment?.notification24hSentAt || appointment?.notification_sent_at || null;
-    let notification12hSentAt = appointment?.notification_12h_sent_at || appointment?.notification12hSentAt || null;
-    
-    if (statusUi === 'reschedule') {
-      notification24hSentAt = null;
-      notification12hSentAt = null;
-    }
-
     const row = {
       id: appointmentId,
       clinic_id: clinicId,
@@ -2803,11 +2793,11 @@ async function syncAppointmentsTableFromClinicState(params: {
       notes: sanitizeString(appointment?.notes || appointment?.note, 2000) || null,
       patient_response: patientResponse === 'canceled' ? 'cancelled' : patientResponse,
       patient_responded_at: appointment?.patient_responded_at || appointment?.patientRespondedAt || appointment?.patientConfirmationAt || null,
-      notification_24h_sent_at: notification24hSentAt,
-      notification_12h_sent_at: notification12hSentAt,
-      notification_sent: Boolean(notification24hSentAt),
-      notification_sent_at: notification24hSentAt || null,
-      notification_12h_sent: Boolean(notification12hSentAt),
+      notification_24h_sent_at: appointment?.notification_24h_sent_at || appointment?.notification24hSentAt || appointment?.notification_sent_at || null,
+      notification_12h_sent_at: appointment?.notification_12h_sent_at || appointment?.notification12hSentAt || null,
+      notification_sent: (appointment?.notification_24h_sent_at || appointment?.notification24hSentAt || appointment?.notification_sent_at) ? true : false,
+      notification_sent_at: appointment?.notification_24h_sent_at || appointment?.notification24hSentAt || appointment?.notification_sent_at || null,
+      notification_12h_sent: (appointment?.notification_12h_sent_at || appointment?.notification12hSentAt) ? true : false,
       patient_confirmation_status: appointment?.patientConfirmationStatus || appointment?.patient_confirmation_status || patientResponse || null,
       patient_confirmation_at: appointment?.patientConfirmationAt || appointment?.patient_confirmation_at || appointment?.patient_responded_at || null,
       patient_confirmation_by: appointment?.patientConfirmationBy || appointment?.patient_confirmation_by || null,
@@ -7693,6 +7683,15 @@ async function startServer() {
           status: tableStatus,
           updated_at: now
         };
+        
+        // If rescheduled, reset notification markers
+        if (normalizedStatus === 'reschedule') {
+          patchWithConfirmation.notification_24h_sent_at = null;
+          patchWithConfirmation.notification_12h_sent_at = null;
+          patchWithConfirmation.notification_sent = false;
+          patchWithConfirmation.notification_12h_sent = false;
+        }
+        
         if (isPatientActor) {
           Object.assign(patchWithConfirmation, {
             patient_response: patientResponseForTable,
@@ -7818,7 +7817,8 @@ async function startServer() {
       if (ownerState) {
         nextAppointments = appointments.map((appointment: any) => {
           if (String(appointment?.id) !== appointmentId) return appointment;
-          return {
+          
+          const updated = {
             ...appointment,
             status: normalizedStatus,
             statusUpdatedAt: now,
@@ -7848,6 +7848,19 @@ async function startServer() {
               ? (sanitizeString(req.body?.source, 80) || 'appointment_confirmation_popup')
               : appointment?.patientConfirmationSource
           };
+          
+          // If appointment was rescheduled, reset notification markers so new 24h/12h reminders are sent
+          if (normalizedStatus === 'reschedule') {
+            updated.notification_24h_sent_at = null;
+            updated.notification24hSentAt = null;
+            updated.notification_sent_at = null;
+            updated.notification_12h_sent_at = null;
+            updated.notification12hSentAt = null;
+            updated.notification_sent = false;
+            updated.notification_12h_sent = false;
+          }
+          
+          return updated;
         });
 
         const { data: updated, error: updateError } = await supabase

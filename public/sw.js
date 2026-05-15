@@ -81,12 +81,12 @@ self.addEventListener("notificationclick", (event) => {
   const targetUrl = event.notification?.data?.url || "/";
   const reminderKind = event.notification?.data?.reminderKind || "reminder";
   
-  // Map action to status explicitly
+  // Map notification action to appointment status - MUST BE EXACT
   const actionToStatusMap = {
-    confirmed: "confirmed",
-    reschedule: "reschedule",
-    cancelled: "canceled",
-    canceled: "canceled",
+    confirmed: "confirmed",      // User clicked "Confirmar"
+    reschedule: "reschedule",    // User clicked "Remarcar"
+    cancelled: "canceled",       // User clicked "Cancelar"
+    canceled: "canceled"         // Fallback for normalized form
   };
 
   const patientStatus = actionToStatusMap[action];
@@ -98,10 +98,10 @@ self.addEventListener("notificationclick", (event) => {
   }
 
   event.waitUntil(
-    persistAppointmentStatus(appointmentId, patientStatus, "system_notification_action")
+    persistAppointmentStatus(appointmentId, patientStatus, "push_notification_action")
       .then(() => {
-        // Map action to feedback message
-        const feedbackMessageMap = {
+        // Send feedback notification with correct message for what user chose
+        const feedbackMap = {
           confirmed: {
             title: "Presença Confirmada - Verto",
             body: "Sua presença foi confirmada. A clínica foi notificada.",
@@ -110,17 +110,13 @@ self.addEventListener("notificationclick", (event) => {
             title: "Reagendamento Solicitado - Verto",
             body: "Solicitação de reagendamento registrada. A recepção entrará em contato.",
           },
-          cancelled: {
-            title: "Consulta Cancelada - Verto",
-            body: "Sua consulta foi cancelada e o horário foi liberado.",
-          },
           canceled: {
             title: "Consulta Cancelada - Verto",
             body: "Sua consulta foi cancelada e o horário foi liberado.",
-          },
+          }
         };
 
-        const feedback = feedbackMessageMap[action] || {
+        const feedback = feedbackMap[patientStatus] || {
           title: "Resposta Registrada - Verto",
           body: "Sua resposta foi registrada com sucesso.",
         };
