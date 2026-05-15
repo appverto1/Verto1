@@ -51,6 +51,12 @@ import {
 } from "./RoomReservation";
 import { RECEPTIONIST_ALLOWED_VIEWS } from "../constants/roleCapabilities";
 import { dataService } from "../services/dataService";
+import {
+  getAgendaViewPreferenceKey,
+  readAgendaViewPreference,
+  writeAgendaViewPreference,
+  type AgendaView,
+} from "../utils/agendaViewPreference";
 import { formatProfessionalRegistry } from "../utils/professionalRegistry";
 import {
   getDefaultAnamnesisTemplate,
@@ -335,7 +341,20 @@ export const ReceptionistDashboard = ({
   const [sessionRoom, setSessionRoom] = useState("");
   const [sessionProfessional, setSessionProfessional] = useState("Dra. Raísa");
   const [sessionNumSessions, setSessionNumSessions] = useState(1);
-  const [agendaView, setAgendaView] = useState("day");
+  const agendaViewPreferenceKey = useMemo(
+    () => getAgendaViewPreferenceKey(user),
+    [user?.id, user?.email, user?.activeWorkspaceId, user?.clinicId],
+  );
+  const [agendaView, setAgendaView] = useState<AgendaView>(() =>
+    readAgendaViewPreference(agendaViewPreferenceKey),
+  );
+  useEffect(() => {
+    setAgendaView(readAgendaViewPreference(agendaViewPreferenceKey));
+  }, [agendaViewPreferenceKey]);
+  const handleAgendaViewChange = (nextView: AgendaView) => {
+    setAgendaView(nextView);
+    writeAgendaViewPreference(agendaViewPreferenceKey, nextView);
+  };
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [isDayDetailsModalOpen, setIsDayDetailsModalOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -1822,21 +1841,21 @@ export const ReceptionistDashboard = ({
               >
                 <button
                   id="agenda-day-btn"
-                  onClick={() => setAgendaView("day")}
+                  onClick={() => handleAgendaViewChange("day")}
                   className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-2 ${agendaView === "day" ? "bg-white text-[#7a32fc] shadow-sm" : "text-gray-500"}`}
                 >
                   <Calendar size={14} /> Dia
                 </button>
                 <button
                   id="agenda-week-btn"
-                  onClick={() => setAgendaView("week")}
+                  onClick={() => handleAgendaViewChange("week")}
                   className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-2 ${agendaView === "week" ? "bg-white text-[#7a32fc] shadow-sm" : "text-gray-500"}`}
                 >
                   <CalendarRange size={14} /> Semana
                 </button>
                 <button
                   id="agenda-month-btn"
-                  onClick={() => setAgendaView("month")}
+                  onClick={() => handleAgendaViewChange("month")}
                   className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-2 ${agendaView === "month" ? "bg-white text-[#7a32fc] shadow-sm" : "text-gray-500"}`}
                 >
                   <CalendarDays size={14} /> Mês

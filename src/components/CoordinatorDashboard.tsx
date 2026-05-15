@@ -75,6 +75,12 @@ import {
 } from "recharts";
 import { SafeResponsiveContainer } from "./SafeResponsiveContainer";
 import { dataService } from "../services/dataService";
+import {
+  getAgendaViewPreferenceKey,
+  readAgendaViewPreference,
+  writeAgendaViewPreference,
+  type AgendaView,
+} from "../utils/agendaViewPreference";
 import { ROLE_CAPABILITY_SECTIONS } from "../constants/roleCapabilities";
 import {
   getDefaultAnamnesisTemplate,
@@ -420,8 +426,25 @@ export function CoordinatorDashboard({
   const [newRoom, setNewRoom] = useState({ name: "", specialties: "" });
   const [editingRoom, setEditingRoom] = useState<any>(null);
 
+  const agendaViewPreferenceKey = useMemo(
+    () => getAgendaViewPreferenceKey(user),
+    [user?.id, user?.email, user?.activeWorkspaceId, user?.clinicId],
+  );
+
   // Agenda State
-  const [agendaView, setAgendaView] = useState<"day" | "week" | "month">("day");
+  const [agendaView, setAgendaView] = useState<AgendaView>(() =>
+    readAgendaViewPreference(agendaViewPreferenceKey),
+  );
+  useEffect(() => {
+    setAgendaView(readAgendaViewPreference(agendaViewPreferenceKey));
+  }, [agendaViewPreferenceKey]);
+  const handleAgendaViewChange = useCallback(
+    (nextView: AgendaView) => {
+      setAgendaView(nextView);
+      writeAgendaViewPreference(agendaViewPreferenceKey, nextView);
+    },
+    [agendaViewPreferenceKey],
+  );
   const [professionalFilter, setProfessionalFilter] = useState("all");
   const [isAddSessionModalOpen, setIsAddSessionModalOpen] = useState(false);
   const [isQuickRegisterModalOpen, setIsQuickRegisterModalOpen] = useState(false);
@@ -1745,7 +1768,48 @@ export function CoordinatorDashboard({
   };
 
   const openPatientProfileModal = (patient: any) => {
-    setSelectedPatientProfile(patient);
+    const profile = patient && typeof patient === "object" ? patient : {};
+    const anamnesisData =
+      profile?.anamnesisData && typeof profile.anamnesisData === "object"
+        ? profile.anamnesisData
+        : {};
+    const address =
+      profile?.address && typeof profile.address === "object"
+        ? profile.address
+        : {};
+    const readFirstText = (...values: any[]) => {
+      for (const value of values) {
+        if (typeof value === "string") {
+          const trimmed = value.trim();
+          if (trimmed) return trimmed;
+        }
+      }
+      return "";
+    };
+
+    setSelectedPatientProfile({
+      ...profile,
+      name: readFirstText(profile?.name, anamnesisData?.nome),
+      socialName: readFirstText(profile?.socialName, profile?.nomeSocial, anamnesisData?.nomeSocial),
+      phone: readFirstText(profile?.phone, anamnesisData?.telefone),
+      email: readFirstText(profile?.email, anamnesisData?.email),
+      insuranceType: readFirstText(profile?.insuranceType, anamnesisData?.convenioTipo),
+      insuranceName: readFirstText(profile?.insuranceName, anamnesisData?.convenioNome),
+      cardNumber: readFirstText(profile?.cardNumber, anamnesisData?.convenioCarteirinha),
+      rg: readFirstText(profile?.rg, anamnesisData?.rg),
+      cpf: readFirstText(profile?.cpf, anamnesisData?.cpf),
+      anamnesisRenewalMonths:
+        profile?.anamnesisRenewalMonths ?? anamnesisData?.anamnesisRenewalMonths ?? "6",
+      address: {
+        cep: readFirstText(address?.cep, profile?.cep, anamnesisData?.cep),
+        logradouro: readFirstText(address?.logradouro, profile?.logradouro, anamnesisData?.logradouro),
+        numero: readFirstText(address?.numero, profile?.numero, anamnesisData?.numero),
+        complemento: readFirstText(address?.complemento, profile?.complemento, anamnesisData?.complemento),
+        bairro: readFirstText(address?.bairro, profile?.bairro, anamnesisData?.bairro),
+        cidade: readFirstText(address?.cidade, profile?.cidade, anamnesisData?.cidade),
+      },
+      notes: readFirstText(profile?.notes, profile?.outrasInformacoes, anamnesisData?.outrasInformacoes),
+    });
     setIsPatientProfileModalOpen(true);
   };
 
@@ -1782,9 +1846,50 @@ export function CoordinatorDashboard({
   }, []);
 
   const openAgendaActionModal = useCallback((appointment: any) => {
+    const therapistId = String(
+      appointment?.professionalId ||
+        appointment?.therapistId ||
+        appointment?.professional_id ||
+        appointment?.therapist_id ||
+        "",
+    ).trim();
+    const therapist =
+      therapistMembersById[therapistId] ||
+      Object.values(therapistMembersById).find((member: any) => {
+        const memberName = String(
+          member?.full_name || member?.fullName || member?.name || member?.email || "",
+        ).trim();
+        return memberName && memberName === String(appointment?.therapistName || appointment?.professional || "").trim();
+      }) ||
+      null;
+    const resolvedTherapistName = normalizeUtf8Text(
+      String(
+        therapist?.full_name ||
+          therapist?.fullName ||
+          therapist?.name ||
+          appointment?.therapistName ||
+          appointment?.professional ||
+          "Profissional",
+      ),
+    );
+    const roomId = String(
+      appointment?.roomId || appointment?.room_id || appointment?.room || "",
+    ).trim();
+    const roomMatch =
+      rooms.find((room: any) => String(room?.id || "").trim() === roomId) ||
+      rooms.find((room: any) => String(room?.name || "").trim() === roomId) ||
+      null;
+    const resolvedRoomName = normalizeUtf8Text(
+      String(roomMatch?.name || appointment?.roomName || appointment?.room || ""),
+    ).trim();
+
     setIsDayDetailsModalOpen(false);
-    setSelectedAgendaAppointment(appointment);
-  }, []);
+    setSelectedAgendaAppointment({
+      ...appointment,
+      therapistDisplayName: resolvedTherapistName,
+      roomDisplayName: resolvedRoomName,
+    });
+  }, [rooms, therapistMembersById]);
 
   const openAppointmentProfileFromAgenda = useCallback(
     (appointment: any) => {
@@ -1858,18 +1963,54 @@ export function CoordinatorDashboard({
                 .trim()
                 .toLowerCase() === normalizedAgendaPatientName,
           );
+        const therapistId = String(
+          item?.professionalId ||
+            item?.therapistId ||
+            item?.professional_id ||
+            item?.therapist_id ||
+            "",
+        ).trim();
+        const therapist =
+          therapistMembersById[therapistId] ||
+          Object.values(therapistMembersById).find((member: any) => {
+            const memberName = String(
+              member?.full_name || member?.fullName || member?.name || member?.email || "",
+            ).trim();
+            return memberName && memberName === String(item?.therapistName || item?.professional || "").trim();
+          }) ||
+          null;
+        const roomId = String(
+          item?.roomId || item?.room_id || item?.room || "",
+        ).trim();
+        const roomMatch =
+          rooms.find((room: any) => String(room?.id || "").trim() === roomId) ||
+          rooms.find((room: any) => String(room?.name || "").trim() === roomId) ||
+          null;
+        const therapistDisplayName = normalizeUtf8Text(
+          String(
+            therapist?.full_name ||
+              therapist?.fullName ||
+              therapist?.name ||
+              item.therapistName ||
+              item.professional ||
+              "Profissional",
+          ),
+        );
+        const roomDisplayName = normalizeUtf8Text(
+          String(roomMatch?.name || item?.roomName || item?.room || ""),
+        ).trim();
 
         return {
           ...item,
           patientName: agendaPatientName,
-          therapistName: normalizeUtf8Text(
-            item.therapistName || item.professional || "Profissional",
-          ),
+          therapistName: therapistDisplayName,
+          therapistDisplayName,
+          roomDisplayName,
           type: normalizeUtf8Text(item.type || item.approach || "Sessão"),
           anamnesisPending: isPatientPendingAnamnesis(resolvedPatient),
         };
       }),
-    [therapistAgenda, allPatients],
+    [therapistAgenda, allPatients, rooms, therapistMembersById],
   );
 
   const todayAgendaKey = useMemo(() => {
@@ -2299,7 +2440,7 @@ export function CoordinatorDashboard({
                               </span>
                             </div>
                             <p className={`text-[10px] ${statusVisual.meta}`}>
-                              {item.therapistName} • Sala {item.room || "--"}
+                              {item.therapistDisplayName || item.therapistName} • Sala {item.roomDisplayName || "--"}
                             </p>
                           </button>
                         );
@@ -2722,19 +2863,19 @@ export function CoordinatorDashboard({
           </div>
           <div className={`${softPanelClass} p-1 rounded-xl flex gap-1 w-full sm:w-auto`}>
             <button
-              onClick={() => setAgendaView("day")}
+              onClick={() => handleAgendaViewChange("day")}
               className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === "day" ? activeTabClass : "text-slate-400"}`}
             >
               <Calendar size={14} /> Dia
             </button>
             <button
-              onClick={() => setAgendaView("week")}
+              onClick={() => handleAgendaViewChange("week")}
               className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === "week" ? activeTabClass : "text-slate-400"}`}
             >
               <CalendarRange size={14} /> Semana
             </button>
             <button
-              onClick={() => setAgendaView("month")}
+              onClick={() => handleAgendaViewChange("month")}
               className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === "month" ? activeTabClass : "text-slate-400"}`}
             >
               <CalendarDays size={14} /> Mês
@@ -6081,7 +6222,7 @@ export function CoordinatorDashboard({
               <div><span className="text-slate-400">RG:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.rg || "-"}</p></div>
               <div><span className="text-slate-400">CPF:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.cpf || "-"}</p></div>
               <div><span className="text-slate-400">Renovação da anamnese:</span> <p className="font-semibold text-slate-800">{normalizeAnamnesisRenewalMonths(selectedPatientProfile.anamnesisRenewalMonths)} meses</p></div>
-              <div className="md:col-span-2"><span className="text-slate-400">Endereço:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.address?.logradouro || "-"} {selectedPatientProfile.address?.numero || ""} - {selectedPatientProfile.address?.bairro || ""} - {selectedPatientProfile.address?.cidade || ""}</p></div>
+              <div className="md:col-span-2"><span className="text-slate-400">Endereço:</span> <p className="font-semibold text-slate-800">{[selectedPatientProfile.address?.logradouro, selectedPatientProfile.address?.numero, selectedPatientProfile.address?.complemento, selectedPatientProfile.address?.bairro, selectedPatientProfile.address?.cidade].filter(Boolean).join(" - ") || "-"}</p></div>
               <div className="md:col-span-2"><span className="text-slate-400">Observações:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.notes || "-"}</p></div>
             </div>
           </div>
@@ -6109,8 +6250,11 @@ export function CoordinatorDashboard({
                 </h3>
                 <p className="text-sm text-slate-500 mt-1">
                   {selectedAgendaAppointment.date} às {selectedAgendaAppointment.time}
-                  {selectedAgendaAppointment.room
-                    ? ` • Sala ${selectedAgendaAppointment.room}`
+                  {selectedAgendaAppointment.therapistDisplayName
+                    ? ` • ${selectedAgendaAppointment.therapistDisplayName}`
+                    : ""}
+                  {selectedAgendaAppointment.roomDisplayName
+                    ? ` • Sala ${selectedAgendaAppointment.roomDisplayName}`
                     : ""}
                 </p>
               </div>
