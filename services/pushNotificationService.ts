@@ -171,7 +171,7 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
   const addPatientRows = (rows: any[]) => {
     for (const row of rows || []) {
       const id = sanitizeText(row?.id, 120);
-      if (isUuid(id)) ids.add(id);
+      if (id) ids.add(id);
     }
   };
 
@@ -241,7 +241,7 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
         accepted: summarizePatientRows(acceptedMatches),
         ignoredDeleted: summarizePatientRows((fuzzy.data || []).filter((row: any) => hasDeletedAt(row) || row?.is_active === false))
       });
-      if (!fuzzy.error) addPatientRows(acceptedMatches);
+      addPatientRows(acceptedMatches);
     }
   }
 
