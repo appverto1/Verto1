@@ -1,6 +1,7 @@
-const SW_VERSION = "appointments-actions-v3";
+const SW_VERSION = "appointments-click-v4";
 const CONFIRM_ACTION = "verto_confirm_appointment";
 const RESCHEDULE_ACTION = "verto_reschedule_appointment";
+const APPOINTMENT_NOTIFICATION_CTA = "Clique nesta notificacao para confirmar, remarcar ou cancelar.";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());
@@ -26,19 +27,13 @@ self.addEventListener("push", (event) => {
 
   event.waitUntil(
     self.registration.showNotification(payload.title || "Lembrete de Consulta - Verto", {
-      body: payload.body || "Voce tem uma consulta agendada. Confirme, remarque ou clique neste aviso para cancelar.",
+      body: payload.body || `Voce tem uma consulta agendada. ${APPOINTMENT_NOTIFICATION_CTA}`,
       icon: "/verto-3d-transparent.png",
       badge: "/verto-3d-transparent.png",
       tag: appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined,
       renotify: Boolean(appointmentId),
       requireInteraction: true,
       timestamp: Date.now(),
-      actions: Array.isArray(payload.actions) && payload.actions.length > 0
-        ? payload.actions
-        : [
-            { action: CONFIRM_ACTION, title: "Confirmar" },
-            { action: RESCHEDULE_ACTION, title: "Remarcar" },
-          ],
       data: {
         url: targetUrl,
         appointmentId,
@@ -93,8 +88,8 @@ self.addEventListener("notificationclick", (event) => {
   const targetUrl = event.notification?.data?.url || "/";
   const reminderKind = event.notification?.data?.reminderKind || "reminder";
   
-  // Only current explicit action ids persist automatically.
-  // Legacy/generic action ids open the app to avoid cross-mapped buttons.
+  // Older notifications may still carry button action ids until the new
+  // service worker replaces every client.
   const actionToStatusMap = {
     [CONFIRM_ACTION]: "confirmed",
     [RESCHEDULE_ACTION]: "reschedule",

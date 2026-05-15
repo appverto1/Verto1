@@ -66,6 +66,11 @@ const sanitizeEmail = (value: unknown) => {
   return email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
 };
 
+const sanitizeOptionalId = (value: unknown, maxLength = 120) => {
+  const text = sanitizeText(value, maxLength);
+  return ['null', 'undefined'].includes(text.toLowerCase()) ? '' : text;
+};
+
 const isUuid = (value: unknown) => UUID_REGEX.test(sanitizeText(value, 120));
 
 const extractMissingColumnName = (error: any): string | null => {
@@ -103,6 +108,8 @@ const isRemovablePushColumn = (column: string | null) =>
         'updated_at'
       ].includes(column)
   );
+
+const APPOINTMENT_NOTIFICATION_CTA = 'Clique nesta notificacao para confirmar, remarcar ou cancelar.';
 
 const safeJsonSubscription = (value: any): PushSubscriptionInput | null => {
   if (!value) return null;
@@ -274,11 +281,17 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
   }
 
   let patientId = sanitizeText(params.patientId, 120);
-  const safeSessionClinicId = sanitizeText(params.clinicId, 120);
-  const safeResolvedPatientClinicId = sanitizeText(params.resolvedPatientClinicId, 120);
-  const safeClinicId = isUuid(safeSessionClinicId)
-    ? safeSessionClinicId
-    : (isUuid(safeResolvedPatientClinicId) ? safeResolvedPatientClinicId : safeSessionClinicId || safeResolvedPatientClinicId);
+  const safeSessionClinicId = sanitizeOptionalId(params.clinicId, 120);
+  const safeResolvedPatientClinicId = sanitizeOptionalId(params.resolvedPatientClinicId, 120);
+  const clinicIdCandidates = Array.from(
+    new Set([
+      isUuid(safeSessionClinicId) ? safeSessionClinicId : '',
+      isUuid(safeResolvedPatientClinicId) ? safeResolvedPatientClinicId : '',
+      safeResolvedPatientClinicId,
+      safeSessionClinicId
+    ].filter(Boolean))
+  );
+  const safeClinicId = clinicIdCandidates[0] || '';
   const safeUserEmail = sanitizeEmail(params.userEmail);
 
   // Define validation functions for patient rows
@@ -291,31 +304,35 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
     hasDeletedAt(row) === false &&
     hasClinicId(row);
 
-  if (!isUuid(patientId) && isUuid(safeClinicId) && safeUserEmail) {
-    const { data, error } = await params.supabase
-      .from('patients')
-      .select('id, clinic_id, is_active, deleted_at')
-      .eq('clinic_id', safeClinicId)
-      .ilike('email', safeUserEmail)
-      .eq('is_active', true)
-      .is('deleted_at', null)
-      .limit(1);
-    
-    const validPatients = (data || []).filter(isValidPatientRow);
-    const resolvedId = sanitizeText(validPatients?.[0]?.id, 120);
-    
-    params.logger?.log?.('[PushSubscriptionSave] patient_id revalidado por clinic_id.', {
-      originalPatientId: patientId || null,
-      resolvedPatientId: resolvedId || null,
-      clinicId: safeClinicId,
-      sessionClinicId: safeSessionClinicId || null,
-      resolvedPatientClinicId: safeResolvedPatientClinicId || null,
-      userEmail: safeUserEmail,
-      error: error?.message || null,
-      validCount: validPatients.length
-    });
-    if (!error && isUuid(resolvedId)) {
-      patientId = resolvedId;
+  if (!isUuid(patientId) && safeUserEmail) {
+    for (const clinicId of clinicIdCandidates) {
+      const { data, error } = await params.supabase
+        .from('patients')
+        .select('id, clinic_id, is_active, deleted_at')
+        .eq('clinic_id', clinicId)
+        .ilike('email', safeUserEmail)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .limit(1);
+
+      const validPatients = (data || []).filter(isValidPatientRow);
+      const resolvedId = sanitizeText(validPatients?.[0]?.id, 120);
+
+      params.logger?.log?.('[PushSubscriptionSave] patient_id revalidado por clinic_id.', {
+        originalPatientId: patientId || null,
+        resolvedPatientId: resolvedId || null,
+        clinicId,
+        effectiveClinicId: safeClinicId || null,
+        sessionClinicId: safeSessionClinicId || null,
+        resolvedPatientClinicId: safeResolvedPatientClinicId || null,
+        userEmail: safeUserEmail,
+        error: error?.message || null,
+        validCount: validPatients.length
+      });
+      if (!error && isUuid(resolvedId)) {
+        patientId = resolvedId;
+        break;
+      }
     }
   }
 
@@ -565,18 +582,14 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
     body:
       params.body ||
       (whenLabel
-        ? `Voce tem uma consulta agendada em ${whenLabel}. Confirme, remarque ou clique neste aviso para cancelar.`
-        : 'Voce tem uma consulta agendada pela Verto. Confirme, remarque ou clique neste aviso para cancelar.'),
+        ? `Voce tem uma consulta agendada em ${whenLabel}. ${APPOINTMENT_NOTIFICATION_CTA}`
+        : `Voce tem uma consulta agendada pela Verto. ${APPOINTMENT_NOTIFICATION_CTA}`),
     url: `/consulta?appointment_id=${encodeURIComponent(params.appointment.id)}`,
     appointmentId: params.appointment.id,
     scheduledAt: params.appointment.scheduledAt || null,
     reminderKind,
     dateLabel,
-    timeLabel,
-    actions: [
-      { action: 'verto_confirm_appointment', title: 'Confirmar' },
-      { action: 'verto_reschedule_appointment', title: 'Remarcar' }
-    ]
+    timeLabel
   });
 
   let sent = 0;

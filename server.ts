@@ -8174,7 +8174,7 @@ async function startServer() {
           reminderKind: 'manual'
         },
         title: 'Lembrete de Consulta - Verto',
-        body: 'Voce tem uma consulta agendada. Confirme, remarque ou clique neste aviso para cancelar.',
+        body: 'Voce tem uma consulta agendada. Clique nesta notificacao para confirmar, remarcar ou cancelar.',
         reminderKind: 'manual',
         logger: console
       });

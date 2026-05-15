@@ -37,19 +37,20 @@ const BRAZIL_TIMEZONE = 'America/Sao_Paulo';
 const CRON_LOOKBACK_MINUTES = 180;
 const QUERY_AHEAD_HOURS = 28;
 const REMINDER_DEDUPE_TTL_MS = 30 * 60 * 60 * 1000;
+const APPOINTMENT_NOTIFICATION_CTA = 'Clique nesta notificacao para confirmar, remarcar ou cancelar.';
 
 const REMINDER_STEPS = [
   {
     kind: '24h' as ReminderKind,
     hoursBefore: 24,
     title: 'Confirmacao de consulta - Verto',
-    fallbackBody: 'Voce tem uma consulta agendada amanha pela Verto. Confirme, remarque ou clique neste aviso para cancelar.'
+    fallbackBody: `Voce tem uma consulta agendada amanha pela Verto. ${APPOINTMENT_NOTIFICATION_CTA}`
   },
   {
     kind: '12h' as ReminderKind,
     hoursBefore: 12,
     title: 'Consulta chegando - Verto',
-    fallbackBody: 'Sua consulta esta chegando. Confirme, remarque ou clique neste aviso para cancelar.'
+    fallbackBody: `Sua consulta esta chegando. ${APPOINTMENT_NOTIFICATION_CTA}`
   }
 ];
 
@@ -110,7 +111,7 @@ const formatReminderBody = (scheduledAt: string, fallback: string) => {
   const dateLabel = scheduled.format('YYYY-MM-DD') === tomorrow
     ? 'amanha'
     : `em ${scheduled.format('DD/MM')}`;
-  return `Voce tem uma consulta agendada ${dateLabel} as ${scheduled.format('HH:mm')}. Confirme, remarque ou clique neste aviso para cancelar.`;
+  return `Voce tem uma consulta agendada ${dateLabel} as ${scheduled.format('HH:mm')}. ${APPOINTMENT_NOTIFICATION_CTA}`;
 };
 
 const getReminderDueUtc = (scheduledAt: string, hoursBefore: number) =>
