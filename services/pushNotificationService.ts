@@ -280,16 +280,30 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
     ? safeSessionClinicId
     : (isUuid(safeResolvedPatientClinicId) ? safeResolvedPatientClinicId : safeSessionClinicId || safeResolvedPatientClinicId);
   const safeUserEmail = sanitizeEmail(params.userEmail);
+
+  // Define validation functions for patient rows
+  const hasDeletedAt = (row: any) =>
+    row?.deleted_at !== null && row?.deleted_at !== undefined && row?.deleted_at !== '';
+  const hasClinicId = (row: any) =>
+    row?.clinic_id !== null && row?.clinic_id !== undefined && String(row.clinic_id).trim() !== '';
+  const isValidPatientRow = (row: any) =>
+    row?.is_active === true &&
+    hasDeletedAt(row) === false &&
+    hasClinicId(row);
+
   if (!isUuid(patientId) && isUuid(safeClinicId) && safeUserEmail) {
     const { data, error } = await params.supabase
       .from('patients')
-      .select('id, clinic_id')
+      .select('id, clinic_id, is_active, deleted_at')
       .eq('clinic_id', safeClinicId)
       .ilike('email', safeUserEmail)
       .eq('is_active', true)
       .is('deleted_at', null)
       .limit(1);
-    const resolvedId = sanitizeText(data?.[0]?.id, 120);
+    
+    const validPatients = (data || []).filter(isValidPatientRow);
+    const resolvedId = sanitizeText(validPatients?.[0]?.id, 120);
+    
     params.logger?.log?.('[PushSubscriptionSave] patient_id revalidado por clinic_id.', {
       originalPatientId: patientId || null,
       resolvedPatientId: resolvedId || null,
@@ -297,13 +311,15 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
       sessionClinicId: safeSessionClinicId || null,
       resolvedPatientClinicId: safeResolvedPatientClinicId || null,
       userEmail: safeUserEmail,
-      error: error?.message || null
+      error: error?.message || null,
+      validCount: validPatients.length
     });
     if (!error && isUuid(resolvedId)) {
       patientId = resolvedId;
     }
   }
 
+  // Final validation: patient must be a valid UUID and have been found (with same criteria as resolvePatientIdsForPush)
   if (!isUuid(patientId)) {
     params.logger?.warn?.('[PushSubscriptionSave] paciente invalido apos revalidacao.', {
       patientId: patientId || null,
