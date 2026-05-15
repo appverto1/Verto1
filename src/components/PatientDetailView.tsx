@@ -1,5 +1,6 @@
 ﻿import React, { useState, useMemo, useEffect } from 'react';
 import { ChevronLeft, MessageCircle, FileText, SlidersHorizontal, ChevronDown, Calendar, FileOutput, Download, EyeOff, Share2, Eye, Edit, X, UploadCloud, FileUp, File, Trash2, Activity, Search, Plus, Filter, Target, Zap, Info, BarChart2, CheckCircle2, RotateCcw, Clock, StopCircle } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import { TutorialOverlay } from './Tutorial';
 import { AnamnesisModal } from './Anamnesis';
 import { ComparisonBarChart, EvolutionBarChart } from './Charts';
@@ -3196,7 +3197,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           </div> 
         </div> 
       )} 
-      {showSessionStartConfirm && (
+      {showSessionStartConfirm && typeof document !== 'undefined' && createPortal(
         <div className="fixed inset-0 z-[120] flex items-start justify-center p-4 pt-6 sm:pt-10 bg-black/30 backdrop-blur-sm animate-fade-in">
           <div className="bg-white dark:bg-[#101b2e] rounded-[32px] p-7 shadow-2xl max-w-md w-full animate-pop border border-violet-100 dark:border-violet-500/30">
             <div className="w-14 h-14 bg-[#7a32fc]/10 rounded-2xl flex items-center justify-center mb-5 text-[#7a32fc]">
@@ -3232,9 +3233,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
-      {showSessionEndConfirm && (
+      {showSessionEndConfirm && typeof document !== 'undefined' && createPortal(
         <div className="fixed inset-0 z-[130] flex items-start justify-center p-4 pt-6 sm:pt-10 bg-black/30 backdrop-blur-sm animate-fade-in">
           <div className="bg-white dark:bg-[#101b2e] rounded-[32px] p-7 shadow-2xl max-w-md w-full animate-pop border border-red-100 dark:border-red-500/30">
             <div className="w-14 h-14 bg-red-50 rounded-2xl flex items-center justify-center mb-5 text-red-500">
@@ -3263,7 +3265,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
       {editingTask && ( 
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in"> 
@@ -4101,12 +4104,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         ) : activeTab === 'plan' ? ( 
           <div className="space-y-6 animate-fade-in"> 
             {isKidsProfile && (
-              <div className="bg-white dark:bg-[#101b2e] p-6 rounded-[32px] shadow-sm border border-gray-100 dark:border-slate-700 mb-6 relative overflow-hidden">
+              <div className={`p-6 rounded-[32px] shadow-sm border mb-6 relative overflow-hidden transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>
                 <div className="absolute top-0 right-0 w-32 h-32 bg-[#05CD99]/5 rounded-bl-full -z-0"></div>
                 <div className="flex items-center justify-between mb-6 relative z-10">
                   <div>
-                    <h3 className="text-xl font-semibold text-gray-800 dark:text-slate-50 tracking-tight">PEI - Plano de Ensino Individualizado</h3>
-                    <p className="text-xs text-gray-500 dark:text-slate-300 font-semibold uppercase tracking-widest mt-1">Metas e Objetivos de Intervenção</p>
+                    <h3 className={`text-xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-gray-800'}`}>PEI - Plano de Ensino Individualizado</h3>
+                    <p className={`text-xs font-semibold uppercase tracking-widest mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Metas e Objetivos de Intervenção</p>
                   </div>
                   <div className="flex gap-2">
                     {patient.pei?.some((g: any) => g.isPriority || g.status === 'in_progress') && (
@@ -4233,14 +4236,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               {term === 'short' ? 'Curto Prazo' : term === 'medium' ? 'Médio Prazo' : 'Longo Prazo'}
                             </h5>
                             {termGoals.sort((a: any, b: any) => (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0)).map((goal: any) => (
-                              <div key={goal.id} className="bg-white dark:bg-[#101b2e] p-5 rounded-2xl border border-gray-100 dark:border-slate-700 shadow-sm group hover:shadow-md transition-all">
+                              <div key={goal.id} className={`p-5 rounded-2xl border shadow-sm group hover:shadow-md transition-all ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>
                                 <div className="flex justify-between items-start mb-3">
                                   <div>
                                     <div className="flex items-center gap-2 mb-1">
                                       <span className="text-[9px] font-semibold text-[#05CD99] bg-[#05CD99]/10 px-2 py-0.5 rounded-full uppercase">{goal.protocolTitle}</span>
-                                      <span className="text-[9px] font-semibold text-gray-400 dark:text-slate-300 uppercase">{goal.domainName}</span>
+                                      <span className={`text-[9px] font-semibold uppercase ${isPanelDark ? 'text-slate-300' : 'text-gray-400'}`}>{goal.domainName}</span>
                                       <select 
-                                        className="text-[9px] font-semibold bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-200 px-2 py-0.5 rounded-full uppercase outline-none"
+                                        className={`text-[9px] font-semibold px-2 py-0.5 rounded-full uppercase outline-none transition-colors ${isPanelDark ? 'bg-slate-800 text-slate-200' : 'bg-gray-100 text-gray-500'}`}
                                         value={goal.term}
                                         onChange={(e) => {
                                           const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, term: e.target.value } : g);
@@ -4252,7 +4255,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                         <option value="long">Longo Prazo</option>
                                       </select>
                                     </div>
-                                    <h4 className="font-semibold text-gray-800 dark:text-slate-50 text-base flex items-center gap-2">
+                                    <h4 className={`font-semibold text-base flex items-center gap-2 ${isPanelDark ? 'text-slate-50' : 'text-gray-800'}`}>
                                       {goal.name}
                                       <button 
                                         onClick={() => {
@@ -4270,14 +4273,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                         <MasteryDots count={getMasteryProgress(goal) || 0} status={goal.status} target={getGoalMasteryTarget(goal)} />
                                       </div>
                                     )}
-                                    <p className="text-xs text-gray-500 dark:text-slate-300 mt-1">{goal.objective}</p>
+                                    <p className={`text-xs mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>{goal.objective}</p>
                                   </div>
                                     <div className="flex items-center gap-2">
                                       <select 
                                         className={`text-[10px] font-semibold px-3 py-1.5 rounded-xl outline-none appearance-none uppercase tracking-wider border-2 transition-all ${
                                           goal.status === 'completed' ? 'bg-green-100 dark:bg-emerald-500/15 text-green-600 dark:text-emerald-200 border-green-200 dark:border-emerald-400/30' : 
                                           goal.status === 'in_progress' ? 'bg-blue-100 dark:bg-blue-500/15 text-blue-600 dark:text-blue-200 border-blue-200 dark:border-blue-400/30' : 
-                                          'bg-gray-100 dark:bg-slate-800 text-gray-400 dark:text-slate-300 border-gray-200 dark:border-slate-700'
+                                          isPanelDark ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-gray-100 text-gray-400 border-gray-200'
                                         }`}
                                         value={goal.status}
                                         onChange={(e) => {
@@ -4718,18 +4721,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           </div> 
         ) : activeTab === 'session' && isKidsProfile ? (
           <div className="space-y-6 animate-fade-in">
-            <div className="bg-white dark:bg-[#101b2e] p-8 rounded-[40px] shadow-sm border border-gray-100 dark:border-slate-700 relative overflow-hidden">
+            <div className={`p-8 rounded-[40px] shadow-sm border relative overflow-hidden transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>
               <div className="absolute top-0 right-0 w-32 h-32 bg-[#7a32fc]/5 rounded-bl-full -z-0"></div>
               <div className="flex items-center justify-between mb-8 relative z-10">
                 <div>
-                  <h3 className="text-2xl font-semibold text-gray-800 dark:text-slate-50 tracking-tight">Registro de Sessão</h3>
-                  <p className="text-xs text-gray-500 dark:text-slate-300 font-semibold uppercase tracking-widest mt-1">Pontuação DinÃ¢mica de Metas Prioritárias</p>
+                  <h3 className={`text-2xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-gray-800'}`}>Registro de Sessão</h3>
+                  <p className={`text-xs font-semibold uppercase tracking-widest mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Pontuação Dinâmica de Metas Prioritárias</p>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-3">
                   {activeSession && (
-                    <div className="rounded-2xl border border-violet-100 dark:border-violet-400/30 bg-violet-50 dark:bg-violet-500/10 px-4 py-2 text-right">
+                    <div className={`rounded-2xl border px-4 py-2 text-right transition-colors ${isPanelDark ? 'border-violet-400/30 bg-violet-500/10' : 'border-violet-100 bg-violet-50'}`}>
                       <p className="text-[9px] font-semibold uppercase tracking-widest text-[#7a32fc]">Sessão em andamento</p>
-                      <p className="text-xl font-semibold text-gray-900 dark:text-slate-50">{formatSessionCountdown(remainingSessionSeconds)}</p>
+                      <p className={`text-xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-gray-900'}`}>{formatSessionCountdown(remainingSessionSeconds)}</p>
                     </div>
                   )}
                   {activeSession && (
@@ -4753,14 +4756,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               <div className="space-y-6">
                 {patient.pei?.filter((g: any) => g.isPriority || g.status === 'in_progress').length > 0 ? (
                   patient.pei.filter((g: any) => g.isPriority || g.status === 'in_progress').map((goal: any) => (
-                      <div key={goal.id} className="bg-gray-50 dark:bg-slate-800 p-6 rounded-[32px] border border-gray-100 dark:border-slate-700 relative group">
+                      <div key={goal.id} className={`p-6 rounded-[32px] border relative group transition-colors ${isPanelDark ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
                         {showTrialConfirmation && lastRecordedGoalId === goal.id && (
-                          <div className="absolute inset-x-0 bottom-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-t border-gray-100 dark:border-slate-700 p-4 animate-slide-up rounded-b-[32px]">
+                          <div className={`absolute inset-x-0 bottom-0 z-30 backdrop-blur-sm border-t p-4 animate-slide-up rounded-b-[32px] transition-colors ${isPanelDark ? 'bg-slate-900/95 border-slate-700' : 'bg-white/95 border-gray-100'}`}>
                             <div className="flex items-center gap-3">
                               <div className="flex-1">
                                 <input 
                                   type="text"
-                                  className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-green-500 transition-all text-slate-800 dark:text-slate-100"
+                                  className={`w-full border rounded-xl px-3 py-2 text-[11px] outline-none focus:border-green-500 transition-all ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-gray-50 border-gray-200 text-slate-800'}`}
                                   placeholder="Anotações do Profissional (opcional)..."
                                   value={trialObservation}
                                   onChange={(e) => setTrialObservation(e.target.value)}
@@ -4789,13 +4792,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                             <span className="text-[9px] font-semibold text-[#7a32fc] bg-[#7a32fc]/10 px-3 py-1 rounded-full uppercase tracking-widest mb-2 inline-block">
                               {goal.domainName}
                             </span>
-                            <h4 className="text-xl font-semibold text-gray-800 dark:text-slate-50 tracking-tight">{goal.name}</h4>
+                            <h4 className={`text-xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-gray-800'}`}>{goal.name}</h4>
                             {patientCategory === 'Criança' && (
                               <div className="mt-2">
                                 <MasteryDots count={getMasteryProgress(goal) || 0} status={goal.status} target={getGoalMasteryTarget(goal)} />
                               </div>
                             )}
-                            <p className="text-xs text-gray-500 dark:text-slate-300 mt-1 font-medium">{goal.objective}</p>
+                            <p className={`text-xs mt-1 font-medium ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>{goal.objective}</p>
                           </div>
                         </div>
 
@@ -4839,8 +4842,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                         </div>
                       
                       <div className="mt-4 flex items-center justify-center gap-2">
-                        <Info size={12} className="text-gray-300 dark:text-slate-500" />
-                        <p className="text-[10px] font-semibold text-gray-400 dark:text-slate-300 uppercase tracking-widest">
+                        <Info size={12} className={isPanelDark ? 'text-slate-500' : 'text-gray-300'} />
+                        <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-300' : 'text-gray-400'}`}>
                           Critério: {goal.criteria || "Nenhum critério definido"}
                         </p>
                       </div>

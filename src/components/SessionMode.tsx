@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronLeft, Info, Zap, Camera, Clock, StopCircle } from 'lucide-react';
 import { SecureImage } from './SecureMedia';
 
@@ -81,7 +82,7 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
   };
 
   if (sessionGoals.length === 0) {
-    return (
+    const emptyStateContent = (
       <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6">
         <button onClick={onClose} className="absolute top-6 left-6 p-2 hover:bg-gray-100 rounded-full transition-all">
           <ChevronLeft size={32} className="text-gray-400" />
@@ -96,9 +97,11 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
         <p className="text-gray-500 text-center mt-2">Altere o status de uma meta para "Em Treino" ou marque como prioridade para iniciar a sessão.</p>
       </div>
     );
+    if (typeof document === 'undefined') return emptyStateContent;
+    return createPortal(emptyStateContent, document.body);
   }
 
-  return (
+  const sessionModeContent = (
     <div className="fixed inset-0 z-[100] bg-[#F4F7FE] flex flex-col overflow-hidden animate-fade-in">
       {/* Header */}
       <div className="bg-white px-8 py-6 shadow-sm flex items-center justify-between shrink-0">
@@ -328,4 +331,6 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
 
     </div>
   );
+  if (typeof document === 'undefined') return sessionModeContent;
+  return createPortal(sessionModeContent, document.body);
 };

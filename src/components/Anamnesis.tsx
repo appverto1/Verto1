@@ -1,5 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, Pencil, RotateCcw, Plus, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import {
   AnamnesisProfileType,
   AnamnesisQuestion,
@@ -595,7 +596,7 @@ export const AnamnesisModal = ({
     onClose();
   };
 
-  return (
+  const modalContent = (
     <div className="fixed inset-0 z-[170] bg-black/45 backdrop-blur-sm p-3 sm:p-6 flex items-start justify-center overflow-y-auto">
       <div className="w-full max-w-6xl max-h-[calc(100vh-1.5rem)] sm:max-h-[calc(100vh-3rem)] overflow-y-auto rounded-3xl bg-white shadow-2xl">
         <div className="sticky top-0 z-20 bg-white border-b border-slate-200 px-5 sm:px-8 py-4 flex items-center justify-between">
@@ -905,4 +906,7 @@ export const AnamnesisModal = ({
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') return modalContent;
+  return createPortal(modalContent, document.body);
 };
