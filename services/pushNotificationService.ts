@@ -505,16 +505,19 @@ export async function findPushSubscriptionsForPatient(params: {
   }
 
   const rows = Array.isArray(data) ? data : [];
-  const matches = rows.filter((row: any) => {
+  const exactMatches = rows.filter((row: any) => {
     const rowPatientId = sanitizeText(row?.patient_id, 120);
     const rowUserId = sanitizeText(row?.user_id, 120);
-    const rowEmail = sanitizeEmail(row?.user_email);
     return (
       (rowPatientId && patientIds.has(rowPatientId)) ||
-      (rowUserId && (patientIds.has(rowUserId) || legacyUserIds.has(rowUserId))) ||
-      (patientEmail && rowEmail === patientEmail)
+      (rowUserId && (patientIds.has(rowUserId) || legacyUserIds.has(rowUserId)))
     );
   });
+  const emailMatches = rows.filter((row: any) => {
+    const rowEmail = sanitizeEmail(row?.user_email);
+    return Boolean(patientEmail && rowEmail === patientEmail);
+  });
+  const matches = exactMatches.length > 0 ? exactMatches : emailMatches;
 
   return Array.from(
     new Map(

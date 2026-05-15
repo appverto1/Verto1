@@ -2683,6 +2683,12 @@ function normalizeAppointmentResponseAction(action: unknown): 'confirmed' | 'res
   return '';
 }
 
+function isTrustedPushNotificationAction(action: unknown): boolean {
+  return ['verto_confirm_appointment', 'verto_reschedule_appointment'].includes(
+    sanitizeString(action, 80).toLowerCase()
+  );
+}
+
 function buildAppointmentScheduledAt(appointment: any): string | null {
   const explicit = sanitizeString(appointment?.scheduled_at || appointment?.scheduledAt, 80);
   if (explicit) {
@@ -2795,6 +2801,35 @@ async function syncAppointmentsTableFromClinicState(params: {
 
   let mirrored = 0;
   let skipped = 0;
+  const appointmentIds = Array.from(
+    new Set(
+      params.appointments
+        .map((appointment: any) => sanitizeString(appointment?.id, 120))
+        .filter((id: string) => isUuid(id))
+    )
+  );
+  const existingById = new Map<string, any>();
+  if (appointmentIds.length > 0) {
+    const { data: existingRows, error: existingError } = await supabase
+      .from('appointments')
+      .select('id, status, patient_response, patient_responded_at, patient_confirmation_status, patient_confirmation_at, patient_confirmation_by, patient_confirmation_source, notification_24h_sent_at, notification_12h_sent_at, notification_sent, notification_sent_at, notification_12h_sent')
+      .in('id', appointmentIds);
+    if (!existingError) {
+      for (const row of existingRows || []) {
+        existingById.set(sanitizeString(row?.id, 120), row);
+      }
+    }
+  }
+  const hasOwn = (source: any, key: string) =>
+    Object.prototype.hasOwnProperty.call(source || {}, key);
+  const hasAnyOwn = (source: any, keys: string[]) =>
+    keys.some((key) => hasOwn(source, key));
+  const firstOwnValue = (source: any, keys: string[]) => {
+    for (const key of keys) {
+      if (hasOwn(source, key)) return source?.[key];
+    }
+    return undefined;
+  };
 
   for (const appointment of params.appointments) {
     const appointmentId = sanitizeString(appointment?.id, 120);
@@ -2840,6 +2875,78 @@ async function syncAppointmentsTableFromClinicState(params: {
           ? normalizeAppointmentStatusForUi(appointment?.status)
           : null
       );
+    const existing = existingById.get(appointmentId) || {};
+    const hasIncomingPatientResponse = hasAnyOwn(appointment, [
+      'patient_response',
+      'patientResponse',
+      'patientConfirmationStatus',
+      'patient_confirmation_status',
+      'patientRespondedAt',
+      'patient_responded_at',
+      'patientConfirmationAt',
+      'patient_confirmation_at'
+    ]) || Boolean(patientResponse);
+    const existingResponseStatus =
+      normalizeAppointmentResponseAction(existing.patient_response || existing.patient_confirmation_status) ||
+      normalizeAppointmentStatusForUi(existing.status);
+    const incomingUiStatus = normalizeAppointmentStatusForUi(appointment?.status);
+    const shouldPreserveExistingResponseStatus =
+      !hasIncomingPatientResponse &&
+      ['confirmed', 'reschedule', 'canceled'].includes(existingResponseStatus) &&
+      (incomingUiStatus === 'pending' || incomingUiStatus === 'scheduled');
+    const effectiveStatusForTable = shouldPreserveExistingResponseStatus
+      ? normalizeAppointmentStatusForTable(existingResponseStatus)
+      : statusForTable;
+    const resolvedPatientResponse = hasIncomingPatientResponse
+      ? (patientResponse === 'canceled' ? 'cancelled' : patientResponse)
+      : (existing.patient_response || null);
+    const resolvedPatientRespondedAt = hasIncomingPatientResponse
+      ? (appointment?.patient_responded_at || appointment?.patientRespondedAt || appointment?.patientConfirmationAt || null)
+      : (existing.patient_responded_at || null);
+    const resolvedPatientConfirmationStatus = hasIncomingPatientResponse
+      ? (appointment?.patientConfirmationStatus || appointment?.patient_confirmation_status || patientResponse || null)
+      : (existing.patient_confirmation_status || null);
+    const resolvedPatientConfirmationAt = hasIncomingPatientResponse
+      ? (appointment?.patientConfirmationAt || appointment?.patient_confirmation_at || appointment?.patient_responded_at || null)
+      : (existing.patient_confirmation_at || null);
+    const resolvedPatientConfirmationBy = hasIncomingPatientResponse
+      ? (appointment?.patientConfirmationBy || appointment?.patient_confirmation_by || null)
+      : (existing.patient_confirmation_by || null);
+    const resolvedPatientConfirmationSource = hasIncomingPatientResponse
+      ? (appointment?.patientConfirmationSource || appointment?.patient_confirmation_source || null)
+      : (existing.patient_confirmation_source || null);
+    const hasIncoming24hMarker = hasAnyOwn(appointment, [
+      'notification_24h_sent_at',
+      'notification24hSentAt',
+      'notification_sent_at',
+      'notification_sent'
+    ]);
+    const incoming24hSentAt = firstOwnValue(appointment, [
+      'notification_24h_sent_at',
+      'notification24hSentAt',
+      'notification_sent_at'
+    ]);
+    const resolved24hSentAt = hasIncoming24hMarker
+      ? (incoming24hSentAt || null)
+      : (existing.notification_24h_sent_at || existing.notification_sent_at || null);
+    const resolvedNotificationSent = hasIncoming24hMarker
+      ? (hasOwn(appointment, 'notification_sent') ? Boolean(appointment.notification_sent) : Boolean(resolved24hSentAt))
+      : Boolean(existing.notification_sent || existing.notification_24h_sent_at || existing.notification_sent_at);
+    const hasIncoming12hMarker = hasAnyOwn(appointment, [
+      'notification_12h_sent_at',
+      'notification12hSentAt',
+      'notification_12h_sent'
+    ]);
+    const incoming12hSentAt = firstOwnValue(appointment, [
+      'notification_12h_sent_at',
+      'notification12hSentAt'
+    ]);
+    const resolved12hSentAt = hasIncoming12hMarker
+      ? (incoming12hSentAt || null)
+      : (existing.notification_12h_sent_at || null);
+    const resolvedNotification12hSent = hasIncoming12hMarker
+      ? (hasOwn(appointment, 'notification_12h_sent') ? Boolean(appointment.notification_12h_sent) : Boolean(resolved12hSentAt))
+      : Boolean(existing.notification_12h_sent || existing.notification_12h_sent_at);
 
     const row = {
       id: appointmentId,
@@ -2848,24 +2955,24 @@ async function syncAppointmentsTableFromClinicState(params: {
       therapist_id: therapistId,
       scheduled_at: scheduledAt,
       duration_minutes: Number.isFinite(duration) && duration > 0 ? Math.round(duration) : 50,
-      status: statusForTable,
+      status: effectiveStatusForTable,
       notes: sanitizeString(appointment?.notes || appointment?.note, 2000) || null,
-      patient_response: patientResponse === 'canceled' ? 'cancelled' : patientResponse,
-      patient_responded_at: appointment?.patient_responded_at || appointment?.patientRespondedAt || appointment?.patientConfirmationAt || null,
-      notification_24h_sent_at: appointment?.notification_24h_sent_at || appointment?.notification24hSentAt || appointment?.notification_sent_at || null,
-      notification_12h_sent_at: appointment?.notification_12h_sent_at || appointment?.notification12hSentAt || null,
-      notification_sent: (appointment?.notification_24h_sent_at || appointment?.notification24hSentAt || appointment?.notification_sent_at) ? true : false,
-      notification_sent_at: appointment?.notification_24h_sent_at || appointment?.notification24hSentAt || appointment?.notification_sent_at || null,
-      notification_12h_sent: (appointment?.notification_12h_sent_at || appointment?.notification12hSentAt) ? true : false,
-      patient_confirmation_status: appointment?.patientConfirmationStatus || appointment?.patient_confirmation_status || patientResponse || null,
-      patient_confirmation_at: appointment?.patientConfirmationAt || appointment?.patient_confirmation_at || appointment?.patient_responded_at || null,
-      patient_confirmation_by: appointment?.patientConfirmationBy || appointment?.patient_confirmation_by || null,
-      patient_confirmation_source: appointment?.patientConfirmationSource || appointment?.patient_confirmation_source || null,
+      patient_response: resolvedPatientResponse,
+      patient_responded_at: resolvedPatientRespondedAt,
+      notification_24h_sent_at: resolved24hSentAt,
+      notification_12h_sent_at: resolved12hSentAt,
+      notification_sent: resolvedNotificationSent,
+      notification_sent_at: resolved24hSentAt,
+      notification_12h_sent: resolvedNotification12hSent,
+      patient_confirmation_status: resolvedPatientConfirmationStatus,
+      patient_confirmation_at: resolvedPatientConfirmationAt,
+      patient_confirmation_by: resolvedPatientConfirmationBy,
+      patient_confirmation_source: resolvedPatientConfirmationSource,
       patient_email: patientEmail || null,
       patient_name: sanitizeString(appointment?.patientName || appointment?.name || appointment?.patient_name, 180) || null,
       therapist_name: sanitizeString(appointment?.therapistName || appointment?.professional || appointment?.therapist_name, 180) || null,
       source_payload: appointment,
-      is_active: !['cancelled', 'canceled'].includes(statusForTable),
+      is_active: !['cancelled', 'canceled'].includes(effectiveStatusForTable),
       updated_at: new Date().toISOString()
     };
 
@@ -7744,6 +7851,27 @@ async function startServer() {
       const isPatientActor = actorRole === 'patient';
       const clinicId = currentClinicId(actor);
       const now = new Date().toISOString();
+      const safeSource = sanitizeString(req.body?.source, 80) || 'appointment_confirmation_popup';
+      const notificationAction = sanitizeString(req.body?.notificationAction || req.body?.action, 80).toLowerCase();
+      const isPushNotificationAction = safeSource === 'push_notification_action';
+
+      if (
+        isPatientActor &&
+        isPushNotificationAction &&
+        normalizedStatus === 'reschedule' &&
+        !isTrustedPushNotificationAction(notificationAction)
+      ) {
+        console.warn('[Appointments] Ignorando action push legada de remarcacao.', {
+          appointmentId,
+          notificationAction: notificationAction || null,
+          requestedStatus,
+          source: safeSource
+        });
+        return res.status(409).json({
+          success: false,
+          error: 'Ação de notificação expirada. Abra o app para responder.'
+        });
+      }
 
       const updateAppointmentsTableStatus = async () => {
         if (!isUuid(appointmentId)) return null;
@@ -7767,7 +7895,7 @@ async function startServer() {
             patient_confirmation_status: normalizedStatus,
             patient_confirmation_at: now,
             patient_confirmation_by: actorId,
-            patient_confirmation_source: sanitizeString(req.body?.source, 80) || 'appointment_confirmation_popup'
+            patient_confirmation_source: safeSource
           });
         }
 
@@ -7869,7 +7997,15 @@ async function startServer() {
             foundAppointment?.patient_confirmation_status,
           40
         );
-        if (!isStillAwaitingResponse || currentPatientResponse) {
+        const normalizedCurrentPatientResponse =
+          normalizeAppointmentResponseAction(currentPatientResponse) ||
+          normalizeAppointmentStatusForUi(currentPatientResponse);
+        const canConfirmOverReschedule =
+          normalizedStatus === 'confirmed' &&
+          (currentStatus === 'reschedule' ||
+            currentStatus === 'rescheduled' ||
+            normalizedCurrentPatientResponse === 'reschedule');
+        if ((!isStillAwaitingResponse || currentPatientResponse) && !canConfirmOverReschedule) {
           return res.json({
             success: true,
             alreadyAnswered: true,
@@ -7913,7 +8049,7 @@ async function startServer() {
               ? actorId
               : appointment?.patientConfirmationBy,
             patientConfirmationSource: isPatientActor
-              ? (sanitizeString(req.body?.source, 80) || 'appointment_confirmation_popup')
+              ? safeSource
               : appointment?.patientConfirmationSource
           };
           
@@ -7984,15 +8120,31 @@ async function startServer() {
   app.patch('/api/appointments/:appointmentId/status', checkAuth, handleAppointmentStatusUpdate);
   app.post('/api/notifications/appointments/:appointmentId/respond', checkAuth, async (req: any, res: any) => {
     const action = sanitizeString(req.body?.action || req.body?.status, 40).toLowerCase();
+    const source = sanitizeString(req.body?.source, 80) || 'notification_action';
     const normalizedStatus = normalizeAppointmentResponseAction(action);
     if (!normalizedStatus) {
       return res.status(400).json({ success: false, error: 'Ação inválida.' });
+    }
+    if (
+      source === 'push_notification_action' &&
+      normalizedStatus === 'reschedule' &&
+      !isTrustedPushNotificationAction(action)
+    ) {
+      console.warn('[Appointments] Bloqueando resposta push legada de remarcacao.', {
+        appointmentId: sanitizeString(req.params.appointmentId, 120),
+        action,
+        status: sanitizeString(req.body?.status, 40) || null
+      });
+      return res.status(409).json({
+        success: false,
+        error: 'Ação de notificação expirada. Abra o app para responder.'
+      });
     }
     req.body = {
       ...req.body,
       status: normalizedStatus,
       notificationAction: action,
-      source: sanitizeString(req.body?.source, 80) || 'notification_action'
+      source
     };
     return handleAppointmentStatusUpdate(req, res);
   });

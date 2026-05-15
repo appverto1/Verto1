@@ -36,6 +36,7 @@ type ReminderAppointment = {
 const BRAZIL_TIMEZONE = 'America/Sao_Paulo';
 const CRON_LOOKBACK_MINUTES = 180;
 const QUERY_AHEAD_HOURS = 28;
+const REMINDER_DEDUPE_TTL_MS = 30 * 60 * 60 * 1000;
 
 const REMINDER_STEPS = [
   {
@@ -57,6 +58,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-
 let started = false;
 let running = false;
 let activeOptions: Required<CronServiceOptions> | null = null;
+const recentlySentReminders = new Map<string, number>();
 
 const sanitizeText = (value: unknown, maxLength = 240) =>
   String(value ?? '').trim().slice(0, maxLength);
@@ -113,6 +115,23 @@ const formatReminderBody = (scheduledAt: string, fallback: string) => {
 
 const getReminderDueUtc = (scheduledAt: string, hoursBefore: number) =>
   dayjs(scheduledAt).tz(BRAZIL_TIMEZONE).subtract(hoursBefore, 'hour').utc();
+
+const reminderDedupeKey = (appointment: ReminderAppointment, kind: ReminderKind) =>
+  `${appointment.appointmentId}:${kind}`;
+
+const pruneRecentReminderMemory = (nowMs: number) => {
+  for (const [key, sentAtMs] of recentlySentReminders.entries()) {
+    if (nowMs - sentAtMs > REMINDER_DEDUPE_TTL_MS) {
+      recentlySentReminders.delete(key);
+    }
+  }
+};
+
+const wasReminderRecentlySent = (appointment: ReminderAppointment, kind: ReminderKind, nowMs: number) => {
+  pruneRecentReminderMemory(nowMs);
+  const sentAtMs = recentlySentReminders.get(reminderDedupeKey(appointment, kind));
+  return Boolean(sentAtMs && nowMs - sentAtMs <= REMINDER_DEDUPE_TTL_MS);
+};
 
 const mergeAppointment = (
   appointments: Map<string, ReminderAppointment>,
@@ -481,6 +500,17 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
         reminderWindowEndUtc,
       );
       if (!dueReminder) continue;
+      const nowMs = Date.now();
+      const dedupeKey = reminderDedupeKey(appointment, dueReminder.kind);
+      if (wasReminderRecentlySent(appointment, dueReminder.kind, nowMs)) {
+        options.logger?.log?.('[Appointment Reminder Cron] Lembrete duplicado ignorado em memoria.', {
+          appointmentId: appointment.appointmentId,
+          patientId: appointment.patientId,
+          reminderKind: dueReminder.kind
+        });
+        continue;
+      }
+      recentlySentReminders.set(dedupeKey, nowMs);
 
       try {
         const scheduled = dayjs(appointment.scheduledAt).tz(BRAZIL_TIMEZONE);
@@ -527,8 +557,12 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
             });
           }
         }
+        if (result.sent <= 0) {
+          recentlySentReminders.delete(dedupeKey);
+        }
         failed += result.failed;
       } catch (error: any) {
+        recentlySentReminders.delete(dedupeKey);
         failed += 1;
         options.logger.error('[Appointment Reminder Cron] Erro isolado em consulta.', {
           appointmentId: appointment.appointmentId,
