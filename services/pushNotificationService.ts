@@ -146,6 +146,23 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
       is_active: row?.is_active ?? null,
       has_deleted_at: Boolean(row?.deleted_at)
     }));
+  const isDeletedPatientRow = (row: any) =>
+    Boolean(row?.deleted_at || row?.has_deleted_at);
+  const hasPatientClinic = (row: any) =>
+    Boolean(sanitizeText(row?.clinic_id, 120));
+  const isPreferredActivePatientRow = (row: any) =>
+    row?.is_active === true && !isDeletedPatientRow(row) && hasPatientClinic(row);
+  const chooseUsablePatientRows = (rows: any[]) => {
+    const validRows = (rows || []).filter((row: any) => isUuid(sanitizeText(row?.id, 120)));
+    const preferred = validRows.filter(isPreferredActivePatientRow);
+    if (preferred.length > 0) return preferred;
+
+    return validRows.filter((row: any) => {
+      if (isDeletedPatientRow(row)) return false;
+      if (row?.is_active === false) return false;
+      return true;
+    });
+  };
   const logLookup = (phase: string, details: Record<string, any>) => {
     params.logger?.log?.('[PushPatientResolve]', {
       phase,
@@ -167,7 +184,7 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
   if (isUuid(explicitPatientId)) {
     let query = params.supabase
       .from('patients')
-      .select('id, clinic_id')
+      .select('id, email, clinic_id, status, is_active, deleted_at')
       .eq('id', explicitPatientId)
       .limit(1);
     if (clinicId && isUuid(clinicId)) {
@@ -178,7 +195,7 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
       error: error?.message || null,
       returned: summarizePatientRows(data || [])
     });
-    if (!error) addPatientRows(data || []);
+    if (!error) addPatientRows(chooseUsablePatientRows(data || []));
   }
 
   if (email) {
@@ -194,9 +211,10 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
     const { data, error } = await query;
     logLookup('email_exact_ilike', {
       error: error?.message || null,
-      returned: summarizePatientRows(data || [])
+      returned: summarizePatientRows(data || []),
+      accepted: summarizePatientRows(chooseUsablePatientRows(data || []))
     });
-    if (!error) addPatientRows(data || []);
+    if (!error) addPatientRows(chooseUsablePatientRows(data || []));
 
     if (!ids.size && clinicId && isUuid(clinicId)) {
       const fallback = await params.supabase
@@ -206,9 +224,10 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
         .limit(100);
       logLookup('email_across_clinics_after_scoped_miss', {
         error: fallback.error?.message || null,
-        returned: summarizePatientRows(fallback.data || [])
+        returned: summarizePatientRows(fallback.data || []),
+        accepted: summarizePatientRows(chooseUsablePatientRows(fallback.data || []))
       });
-      if (!fallback.error) addPatientRows(fallback.data || []);
+      if (!fallback.error) addPatientRows(chooseUsablePatientRows(fallback.data || []));
     }
 
     if (!ids.size) {
@@ -222,12 +241,14 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
       }
       const fuzzy = await fuzzyQuery;
       const trimmedMatches = (fuzzy.data || []).filter((row: any) => sanitizeEmail(row?.email) === email);
+      const acceptedMatches = chooseUsablePatientRows(trimmedMatches);
       logLookup('email_trimmed_fallback', {
         error: fuzzy.error?.message || null,
         returned: summarizePatientRows(fuzzy.data || []),
-        accepted: summarizePatientRows(trimmedMatches)
+        accepted: summarizePatientRows(acceptedMatches),
+        ignoredDeleted: summarizePatientRows(trimmedMatches.filter((row: any) => isDeletedPatientRow(row) || row?.is_active === false))
       });
-      if (!fuzzy.error) addPatientRows(trimmedMatches);
+      if (!fuzzy.error) addPatientRows(acceptedMatches);
     }
   }
 
@@ -239,9 +260,10 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
       .limit(1);
     logLookup('auth_user_id_as_patient_id', {
       error: error?.message || null,
-      returned: summarizePatientRows(data || [])
+      returned: summarizePatientRows(data || []),
+      accepted: summarizePatientRows(chooseUsablePatientRows(data || []))
     });
-    if (!error && data?.[0]?.id) ids.add(sanitizeText(data[0].id, 120));
+    if (!error) addPatientRows(chooseUsablePatientRows(data || []));
   }
 
   logLookup('resolved', {
