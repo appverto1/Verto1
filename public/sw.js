@@ -22,7 +22,7 @@ self.addEventListener("push", (event) => {
 
   event.waitUntil(
     self.registration.showNotification(payload.title || "Lembrete de Consulta - Verto", {
-      body: payload.body || "Toque para confirmar, remarcar ou cancelar.",
+      body: payload.body || "Voce tem uma consulta agendada. Confirme, remarque ou clique neste aviso para cancelar.",
       icon: "/verto-3d-transparent.png",
       badge: "/verto-3d-transparent.png",
       tag: appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined,
@@ -34,7 +34,6 @@ self.addEventListener("push", (event) => {
         : [
             { action: "confirm", title: "Confirmar" },
             { action: "reschedule", title: "Remarcar" },
-            { action: "cancel", title: "Cancelar" },
           ],
       data: {
         url: targetUrl,

@@ -8022,7 +8022,7 @@ async function startServer() {
           reminderKind: 'manual'
         },
         title: 'Lembrete de Consulta - Verto',
-        body: 'Toque para confirmar, remarcar ou cancelar sua consulta.',
+        body: 'Voce tem uma consulta agendada. Confirme, remarque ou clique neste aviso para cancelar.',
         reminderKind: 'manual',
         logger: console
       });
@@ -15138,5 +15138,3 @@ startServer().catch(err => {
   console.error('FATAL ERROR STARTING SERVER:', err);
   process.exit(1);
 });
-
-

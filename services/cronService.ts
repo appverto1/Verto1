@@ -42,13 +42,13 @@ const REMINDER_STEPS = [
     kind: '24h' as ReminderKind,
     hoursBefore: 24,
     title: 'Confirmacao de consulta - Verto',
-    fallbackBody: 'Voce tem uma consulta amanha pela Verto. Confirme, remarque ou cancele pelo app.'
+    fallbackBody: 'Voce tem uma consulta agendada amanha pela Verto. Confirme, remarque ou clique neste aviso para cancelar.'
   },
   {
     kind: '12h' as ReminderKind,
     hoursBefore: 12,
     title: 'Consulta chegando - Verto',
-    fallbackBody: 'Sua consulta esta chegando. Confirme, remarque ou cancele pelo app.'
+    fallbackBody: 'Sua consulta esta chegando. Confirme, remarque ou clique neste aviso para cancelar.'
   }
 ];
 
@@ -104,7 +104,11 @@ const buildScheduledAtFromClinicStateAppointment = (appointment: any) => {
 const formatReminderBody = (scheduledAt: string, fallback: string) => {
   const scheduled = dayjs(scheduledAt).tz(BRAZIL_TIMEZONE);
   if (!scheduled.isValid()) return fallback;
-  return `Voce tem consulta em ${scheduled.format('DD/MM')} as ${scheduled.format('HH:mm')}. O que deseja fazer?`;
+  const tomorrow = dayjs().tz(BRAZIL_TIMEZONE).add(1, 'day').format('YYYY-MM-DD');
+  const dateLabel = scheduled.format('YYYY-MM-DD') === tomorrow
+    ? 'amanha'
+    : `em ${scheduled.format('DD/MM')}`;
+  return `Voce tem uma consulta agendada ${dateLabel} as ${scheduled.format('HH:mm')}. Confirme, remarque ou clique neste aviso para cancelar.`;
 };
 
 const getReminderDueUtc = (scheduledAt: string, hoursBefore: number) =>

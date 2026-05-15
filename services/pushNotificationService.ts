@@ -562,8 +562,8 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
     body:
       params.body ||
       (whenLabel
-        ? `Voce tem consulta em ${whenLabel}. O que deseja fazer?`
-        : 'Voce tem uma consulta pela Verto. O que deseja fazer?'),
+        ? `Voce tem uma consulta agendada em ${whenLabel}. Confirme, remarque ou clique neste aviso para cancelar.`
+        : 'Voce tem uma consulta agendada pela Verto. Confirme, remarque ou clique neste aviso para cancelar.'),
     url: `/consulta?appointment_id=${encodeURIComponent(params.appointment.id)}`,
     appointmentId: params.appointment.id,
     scheduledAt: params.appointment.scheduledAt || null,
@@ -572,8 +572,7 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
     timeLabel,
     actions: [
       { action: 'confirm', title: 'Confirmar' },
-      { action: 'reschedule', title: 'Remarcar' },
-      { action: 'cancel', title: 'Cancelar' }
+      { action: 'reschedule', title: 'Remarcar' }
     ]
   });
 
