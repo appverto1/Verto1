@@ -320,6 +320,15 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
   }
 
   // Final validation: patient must be a valid UUID and have been found (with same criteria as resolvePatientIdsForPush)
+  params.logger?.log?.('[PushSubscriptionSave] pre-validation check', {
+    patientIdValue: patientId,
+    patientIdType: typeof patientId,
+    patientIdLength: patientId?.length,
+    isUuidResult: isUuid(patientId),
+    sanitizedValue: sanitizeText(patientId, 120),
+    isRegexMatch: UUID_REGEX.test(sanitizeText(patientId, 120))
+  });
+
   if (!isUuid(patientId)) {
     params.logger?.warn?.('[PushSubscriptionSave] paciente invalido apos revalidacao.', {
       patientId: patientId || null,
