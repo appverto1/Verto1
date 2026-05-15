@@ -736,7 +736,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       }
     };
     loadAssignedTasks();
-  }, [patient?.id, patientAgeYears]);
+  }, [patient?.id, patientAgeYears, activeTab]);
 
   const resolveProtocolAgeRange = (protocol: any): { min: number; max: number | null } => {
     const explicitMin = Number(
@@ -1636,6 +1636,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       .replace(/Ãº/g, 'ú')
       .replace(/Ã£/g, 'ã')
       .replace(/Ã§/g, 'ç')
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
       .replace(/Â/g, '')
       .trim();
 
@@ -3488,38 +3492,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                 </div>
               </div>
             )}
-            {!isKidsProfile && (
-              <div className={`border p-5 rounded-3xl shadow-sm transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className={`text-sm font-semibold tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Próximas Atividades Agendadas</h3>
-                  <span className={`text-[10px] font-semibold px-2.5 py-1 rounded-full uppercase tracking-wide border ${isPanelDark ? 'text-violet-200 bg-violet-500/10 border-violet-400/30' : 'text-[#7a32fc] bg-indigo-50 border-indigo-100'}`}>
-                    Painel Profissional
-                  </span>
-                </div>
-                {adultScheduledTasks.length > 0 ? (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                    {adultScheduledTasks.map((task: any) => (
-                      <div key={`adult-home-${task.id}`} className={`rounded-2xl border px-4 py-3 shadow-sm transition-colors ${isPanelDark ? 'border-slate-700 bg-[#14233a]' : 'border-slate-200 bg-slate-50'}`}>
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{task.title}</p>
-                            {task.description ? <p className={`text-xs mt-1 line-clamp-2 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{task.description}</p> : null}
-                          </div>
-                          <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase ${task.type === 'reinforcement' ? 'bg-yellow-100 text-yellow-700' : task.type === 'intervention' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
-                            {task.type === 'reinforcement' ? 'Reforço' : task.type === 'intervention' ? 'Intervenção' : 'Avaliação'}
-                          </span>
-                        </div>
-                        <p className={`text-[11px] mt-2 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
-                          {task.eventDate.toLocaleDateString('pt-BR')} às {task.eventDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className={`text-sm italic ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Nenhuma atividade de casa cadastrada no momento.</p>
-                )}
-              </div>
-            )}
+
             {!isKidsProfile && (
               <div className={`border p-5 rounded-3xl shadow-sm transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
                 <h3 className={`text-sm font-semibold tracking-tight mb-4 ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Histórico Adulto (Auditoria Clínica)</h3>
@@ -3557,7 +3530,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                             </p>
                             <div className={`border rounded-xl p-3 mt-3 transition-colors ${isPanelDark ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'}`}>
                               <p className={`text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Anotação de Evolução</p>
-                              <p className={`text-sm whitespace-pre-wrap ${isPanelDark ? 'text-slate-100' : 'text-slate-700'}`}>{event.evolutionNote || 'Sem anotação técnica registrada.'}</p>
+                              <p className={`text-sm whitespace-pre-wrap ${isPanelDark ? 'text-slate-100' : 'text-slate-700'}`}>{normalizeNoteText(event.evolutionNote) || 'Sem anotação técnica registrada.'}</p>
                             </div>
                             {isReviewable && event.professionalScore === null && (
                               <div className="bg-white dark:bg-slate-800/80 border border-orange-100 dark:border-orange-400/20 rounded-xl p-3 mt-3 space-y-3 transition-colors">
@@ -4013,7 +3986,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                         <p className="text-sm font-semibold text-gray-800">{task.taskTitle}</p>
                         <p className="text-xs text-gray-600 mt-1">Esforço: {task.patientEffort}%</p>
                         <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap mt-2">
-                          {task.evolutionNote || 'Sem anotação técnica registrada.'}
+                          {normalizeNoteText(task.evolutionNote) || 'Sem anotação técnica registrada.'}
                         </p>
                       </div>
                     ))}
@@ -4061,7 +4034,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                             </div>
                             <p className={`text-xs font-semibold ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>{task.taskTitle}</p>
                             <p className={`text-[11px] mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Esforço {task.patientEffort}% • Nota {task.professionalScore ?? '-'} / {task.maxScore}</p>
-                            <p className={`text-xs line-clamp-2 mt-1 ${isPanelDark ? 'text-slate-200' : 'text-gray-600'}`}>{task.evolutionNote || 'Sem anotação técnica.'}</p>
+                            <p className={`text-xs line-clamp-2 mt-1 ${isPanelDark ? 'text-slate-200' : 'text-gray-600'}`}>{normalizeNoteText(task.evolutionNote) || 'Sem anotação técnica.'}</p>
                           </div>
                         );
                       })}
