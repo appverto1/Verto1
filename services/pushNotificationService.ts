@@ -56,7 +56,7 @@ type SendAppointmentNotificationParams = {
   logger?: Logger;
 };
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const sanitizeText = (value: unknown, maxLength = 240) =>
   String(value ?? '').trim().slice(0, maxLength);
@@ -320,15 +320,6 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
   }
 
   // Final validation: patient must be a valid UUID and have been found (with same criteria as resolvePatientIdsForPush)
-  params.logger?.log?.('[PushSubscriptionSave] pre-validation check', {
-    patientIdValue: patientId,
-    patientIdType: typeof patientId,
-    patientIdLength: patientId?.length,
-    isUuidResult: isUuid(patientId),
-    sanitizedValue: sanitizeText(patientId, 120),
-    isRegexMatch: UUID_REGEX.test(sanitizeText(patientId, 120))
-  });
-
   if (!isUuid(patientId)) {
     params.logger?.warn?.('[PushSubscriptionSave] paciente invalido apos revalidacao.', {
       patientId: patientId || null,
