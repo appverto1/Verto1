@@ -7347,7 +7347,8 @@ async function startServer() {
 
       const requestedPatientId = sanitizeString(req.body?.patientId || req.body?.patient_id, 120);
       const requestedPatientEmail = sanitizeEmail(req.body?.patientEmail || req.body?.patient_email || user?.email);
-      const lookupClinicId = isPatientRole ? null : currentClinicId(user);
+      const sessionClinicId = currentClinicId(user);
+      const lookupClinicId = isPatientRole ? null : sessionClinicId;
       console.log('[Push] subscribe received.', {
         role,
         authUserId: sanitizeString(user?.id, 120) || null,
@@ -7382,7 +7383,7 @@ async function startServer() {
         });
       }
 
-      let resolvedPatientClinicId = currentClinicId(user);
+      let resolvedPatientClinicId = sessionClinicId;
       if (!resolvedPatientClinicId && isUuid(patientId)) {
         const { data: patientRow, error: patientClinicError } = await supabase
           .from('patients')
@@ -7402,7 +7403,7 @@ async function startServer() {
 
       console.log('[Push] subscribe resolved patient clinic.', {
         patientId,
-        sessionClinicId: currentClinicId(user),
+        sessionClinicId,
         resolvedPatientClinicId
       });
 
@@ -7412,7 +7413,8 @@ async function startServer() {
         patientId,
         userId: sanitizeString(user?.id, 120),
         userEmail: sanitizeEmail(user?.email),
-        clinicId: resolvedPatientClinicId,
+        clinicId: sessionClinicId,
+        resolvedPatientClinicId,
         role,
         logger: console
       });

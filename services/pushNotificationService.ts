@@ -34,6 +34,7 @@ type SavePushSubscriptionParams = {
   userId?: string | null;
   userEmail?: string | null;
   clinicId?: string | null;
+  resolvedPatientClinicId?: string | null;
   role?: string | null;
   logger?: Logger;
 };
@@ -273,7 +274,11 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
   }
 
   let patientId = sanitizeText(params.patientId, 120);
-  const safeClinicId = sanitizeText(params.clinicId, 120);
+  const safeSessionClinicId = sanitizeText(params.clinicId, 120);
+  const safeResolvedPatientClinicId = sanitizeText(params.resolvedPatientClinicId, 120);
+  const safeClinicId = isUuid(safeSessionClinicId)
+    ? safeSessionClinicId
+    : (isUuid(safeResolvedPatientClinicId) ? safeResolvedPatientClinicId : safeSessionClinicId || safeResolvedPatientClinicId);
   const safeUserEmail = sanitizeEmail(params.userEmail);
   if (!isUuid(patientId) && isUuid(safeClinicId) && safeUserEmail) {
     const { data, error } = await params.supabase
@@ -289,6 +294,8 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
       originalPatientId: patientId || null,
       resolvedPatientId: resolvedId || null,
       clinicId: safeClinicId,
+      sessionClinicId: safeSessionClinicId || null,
+      resolvedPatientClinicId: safeResolvedPatientClinicId || null,
       userEmail: safeUserEmail,
       error: error?.message || null
     });
@@ -301,6 +308,8 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
     params.logger?.warn?.('[PushSubscriptionSave] paciente invalido apos revalidacao.', {
       patientId: patientId || null,
       clinicId: safeClinicId || null,
+      sessionClinicId: safeSessionClinicId || null,
+      resolvedPatientClinicId: safeResolvedPatientClinicId || null,
       userEmail: safeUserEmail || null
     });
     return { success: false, error: 'Paciente invalido para inscricao push.' };
@@ -311,6 +320,8 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
     userId: sanitizeText(params.userId, 120) || null,
     userEmail: safeUserEmail || null,
     clinicId: safeClinicId || null,
+    sessionClinicId: safeSessionClinicId || null,
+    resolvedPatientClinicId: safeResolvedPatientClinicId || null,
     role: sanitizeText(params.role, 40) || null,
     endpointPrefix: normalized.endpoint.slice(0, 80),
     hasP256dh: Boolean(normalized.keys.p256dh),
