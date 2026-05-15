@@ -1,3 +1,11 @@
+self.addEventListener("install", (event) => {
+  event.waitUntil(self.skipWaiting());
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
 self.addEventListener("push", (event) => {
   let payload = {};
   try {
@@ -24,9 +32,9 @@ self.addEventListener("push", (event) => {
       actions: Array.isArray(payload.actions) && payload.actions.length > 0
         ? payload.actions
         : [
-            { action: "confirmed", title: "Confirmar" },
+            { action: "confirm", title: "Confirmar" },
             { action: "reschedule", title: "Remarcar" },
-            { action: "cancelled", title: "Cancelar" },
+            { action: "cancel", title: "Cancelar" },
           ],
       data: {
         url: targetUrl,
@@ -50,12 +58,12 @@ const focusOrOpen = async (targetUrl) => {
   return self.clients.openWindow(destination);
 };
 
-const persistAppointmentStatus = async (appointmentId, status, source) => {
-  const response = await fetch(`/api/appointments/${encodeURIComponent(appointmentId)}/status`, {
-    method: "PATCH",
+const persistAppointmentResponse = async (appointmentId, action, source, reminderKind) => {
+  const response = await fetch(`/api/notifications/appointments/${encodeURIComponent(appointmentId)}/respond`, {
+    method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ status, source }),
+    body: JSON.stringify({ action, source, reminderKind }),
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || !payload?.success) {
@@ -83,9 +91,11 @@ self.addEventListener("notificationclick", (event) => {
   
   // Map notification action to appointment status - MUST BE EXACT
   const actionToStatusMap = {
-    confirmed: "confirmed",      // User clicked "Confirmar"
+    confirm: "confirmed",        // User clicked "Confirmar"
+    confirmed: "confirmed",      // Backward compatibility
     reschedule: "reschedule",    // User clicked "Remarcar"
-    cancelled: "canceled",       // User clicked "Cancelar"
+    cancel: "canceled",          // User clicked "Cancelar"
+    cancelled: "canceled",       // Backward compatibility
     canceled: "canceled"         // Fallback for normalized form
   };
 
@@ -98,7 +108,7 @@ self.addEventListener("notificationclick", (event) => {
   }
 
   event.waitUntil(
-    persistAppointmentStatus(appointmentId, patientStatus, "push_notification_action")
+    persistAppointmentResponse(appointmentId, action, "push_notification_action", reminderKind)
       .then(() => {
         // Send feedback notification with correct message for what user chose
         const feedbackMap = {

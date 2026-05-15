@@ -571,9 +571,9 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
     dateLabel,
     timeLabel,
     actions: [
-      { action: 'confirmed', title: 'Confirmar' },
+      { action: 'confirm', title: 'Confirmar' },
       { action: 'reschedule', title: 'Remarcar' },
-      { action: 'cancelled', title: 'Cancelar' }
+      { action: 'cancel', title: 'Cancelar' }
     ]
   });
 

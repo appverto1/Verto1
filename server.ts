@@ -2675,6 +2675,14 @@ function normalizeAppointmentStatusForUi(status: unknown): string {
   return normalized || 'pending';
 }
 
+function normalizeAppointmentResponseAction(action: unknown): 'confirmed' | 'reschedule' | 'canceled' | '' {
+  const normalized = sanitizeString(action, 40).toLowerCase();
+  if (['confirm', 'confirmed', 'confirmar', 'accepted', 'accept'].includes(normalized)) return 'confirmed';
+  if (['reschedule', 'rescheduled', 'remarcar', 'remarcado'].includes(normalized)) return 'reschedule';
+  if (['cancel', 'canceled', 'cancelled', 'cancelar', 'cancelado'].includes(normalized)) return 'canceled';
+  return '';
+}
+
 function buildAppointmentScheduledAt(appointment: any): string | null {
   const explicit = sanitizeString(appointment?.scheduled_at || appointment?.scheduledAt, 80);
   if (explicit) {
@@ -2689,6 +2697,57 @@ function buildAppointmentScheduledAt(appointment: any): string | null {
   const parsed = new Date(`${date}T${time}:00-03:00`);
   if (Number.isNaN(parsed.getTime())) return null;
   return parsed.toISOString();
+}
+
+function resetAppointmentReminderStateAfterScheduleChange(appointment: any) {
+  return {
+    ...appointment,
+    status: 'pending',
+    patientResponse: null,
+    patient_response: null,
+    patientRespondedAt: null,
+    patient_responded_at: null,
+    patientConfirmationStatus: null,
+    patient_confirmation_status: null,
+    patientConfirmationAt: null,
+    patient_confirmation_at: null,
+    patientConfirmationBy: null,
+    patient_confirmation_by: null,
+    patientConfirmationSource: null,
+    patient_confirmation_source: null,
+    notification_24h_sent_at: null,
+    notification24hSentAt: null,
+    notification_sent_at: null,
+    notification_sent: false,
+    notification_12h_sent_at: null,
+    notification12hSentAt: null,
+    notification_12h_sent: false
+  };
+}
+
+function resetRescheduledAppointmentsForNewReminderCycle(nextAppointments: any[], previousAppointments: any[]) {
+  const previousById = new Map(
+    (previousAppointments || [])
+      .map((appointment: any) => [sanitizeString(appointment?.id, 120), appointment])
+      .filter(([id]) => Boolean(id))
+  );
+
+  return (nextAppointments || []).map((appointment: any) => {
+    const appointmentId = sanitizeString(appointment?.id, 120);
+    const previous = previousById.get(appointmentId);
+    if (!previous) return appointment;
+
+    const previousScheduledAt = buildAppointmentScheduledAt(previous);
+    const nextScheduledAt = buildAppointmentScheduledAt(appointment);
+    const scheduleChanged =
+      Boolean(previousScheduledAt && nextScheduledAt && previousScheduledAt !== nextScheduledAt) ||
+      sanitizeDate(previous?.date) !== sanitizeDate(appointment?.date) ||
+      sanitizeString(previous?.time, 10) !== sanitizeString(appointment?.time, 10);
+
+    return scheduleChanged
+      ? resetAppointmentReminderStateAfterScheduleChange(appointment)
+      : appointment;
+  });
 }
 
 async function upsertAppointmentMirrorRow(row: Record<string, any>, logger: Pick<Console, 'warn'> = console) {
@@ -7211,10 +7270,18 @@ async function startServer() {
         .eq('clinic_id', clinicId)
         .maybeSingle();
 
+      const appointmentsForPayload =
+        nextAppointments !== undefined
+          ? resetRescheduledAppointmentsForNewReminderCycle(
+              nextAppointments,
+              Array.isArray(previous.data?.appointments) ? previous.data.appointments : []
+            )
+          : undefined;
+
       const payload = cleanObject({
         clinic_id: clinicId,
         rooms: nextRooms,
-        appointments: nextAppointments,
+        appointments: appointmentsForPayload,
         protocols: nextProtocols,
         specialty_settings: nextSpecialtySettings,
         updated_by: actorId,
@@ -7240,7 +7307,7 @@ async function startServer() {
       if (nextAppointments !== undefined) {
         void syncAppointmentsTableFromClinicState({
           clinicId,
-          appointments: Array.isArray(data.appointments) ? data.appointments : nextAppointments,
+          appointments: Array.isArray(data.appointments) ? data.appointments : appointmentsForPayload || nextAppointments,
           actorId,
           specialtySettings:
             data.specialty_settings && typeof data.specialty_settings === 'object'
@@ -7657,12 +7724,13 @@ async function startServer() {
     try {
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();
+      const normalizedResponseStatus = normalizeAppointmentResponseAction(requestedStatus);
       const allowedStatuses = new Set(['pending', 'scheduled', 'confirmed', 'reschedule', 'rescheduled', 'cancelled', 'canceled']);
-      if (!appointmentId || !allowedStatuses.has(requestedStatus)) {
+      if (!appointmentId || (!allowedStatuses.has(requestedStatus) && !normalizedResponseStatus)) {
         return res.status(400).json({ success: false, error: 'Status de consulta inválido.' });
       }
 
-      const normalizedStatus = normalizeAppointmentStatusForUi(requestedStatus);
+      const normalizedStatus = normalizedResponseStatus || normalizeAppointmentStatusForUi(requestedStatus);
       const tableStatus = normalizeAppointmentStatusForTable(normalizedStatus);
       const patientResponseForTable =
         normalizedStatus === 'canceled'
@@ -7878,7 +7946,7 @@ async function startServer() {
       }
 
       const updatedTableAppointment = await updateAppointmentsTableStatus();
-      const updatedAppointment =
+      const rawUpdatedAppointment =
         nextAppointments.find((appointment: any) => String(appointment?.id) === appointmentId) ||
         updatedTableAppointment ||
         {
@@ -7897,6 +7965,10 @@ async function startServer() {
             patient_confirmation_by: actorId
           } : {})
         };
+      const updatedAppointment = {
+        ...rawUpdatedAppointment,
+        status: normalizeAppointmentStatusForUi(rawUpdatedAppointment?.status || normalizedStatus)
+      };
 
       return res.json({
         success: true,
@@ -7912,18 +7984,14 @@ async function startServer() {
   app.patch('/api/appointments/:appointmentId/status', checkAuth, handleAppointmentStatusUpdate);
   app.post('/api/notifications/appointments/:appointmentId/respond', checkAuth, async (req: any, res: any) => {
     const action = sanitizeString(req.body?.action || req.body?.status, 40).toLowerCase();
-    const actionToStatus: Record<string, string> = {
-      confirmed: 'confirmed',
-      reschedule: 'reschedule',
-      cancelled: 'canceled',
-      canceled: 'canceled'
-    };
-    if (!actionToStatus[action]) {
+    const normalizedStatus = normalizeAppointmentResponseAction(action);
+    if (!normalizedStatus) {
       return res.status(400).json({ success: false, error: 'Ação inválida.' });
     }
     req.body = {
       ...req.body,
-      status: actionToStatus[action],
+      status: normalizedStatus,
+      notificationAction: action,
       source: sanitizeString(req.body?.source, 80) || 'notification_action'
     };
     return handleAppointmentStatusUpdate(req, res);
@@ -15070,9 +15138,5 @@ startServer().catch(err => {
   console.error('FATAL ERROR STARTING SERVER:', err);
   process.exit(1);
 });
-
-
-
-
 
 

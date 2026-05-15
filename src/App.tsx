@@ -1108,6 +1108,7 @@ export default function App() {
         if (cancelled || Notification.permission !== 'granted') return;
 
         const registration = await navigator.serviceWorker.register('/sw.js');
+        await registration.update().catch(() => undefined);
         await navigator.serviceWorker.ready;
         let existingSubscription = await registration.pushManager.getSubscription();
         if (
@@ -1181,7 +1182,8 @@ export default function App() {
       const data = event.data || {};
       if (data?.type !== 'APPOINTMENT_STATUS_UPDATED') return;
       const appointmentId = String(data.appointmentId || '');
-      const status = String(data.status || '').toLowerCase();
+      const rawStatus = String(data.status || '').toLowerCase();
+      const status = rawStatus === 'cancelled' ? 'canceled' : rawStatus;
       if (!appointmentId || !status) return;
       setTherapistAgenda(prev =>
         prev.map(item =>
@@ -2197,11 +2199,39 @@ export default function App() {
       };
     }
 
+    const scheduleChanged =
+      String(currentAppointment.date || '') !== String(nextDate || '') ||
+      String(currentAppointment.time || '') !== String(nextTime || '');
     const nextScheduledAt = new Date(`${nextDate}T${nextTime}:00`).toISOString();
+    const reminderReset = scheduleChanged
+      ? {
+          status: 'pending',
+          patientResponse: null,
+          patient_response: null,
+          patientRespondedAt: null,
+          patient_responded_at: null,
+          patientConfirmationStatus: null,
+          patient_confirmation_status: null,
+          patientConfirmationAt: null,
+          patient_confirmation_at: null,
+          patientConfirmationBy: null,
+          patient_confirmation_by: null,
+          patientConfirmationSource: null,
+          patient_confirmation_source: null,
+          notification_24h_sent_at: null,
+          notification24hSentAt: null,
+          notification_sent_at: null,
+          notification_sent: false,
+          notification_12h_sent_at: null,
+          notification12hSentAt: null,
+          notification_12h_sent: false,
+        }
+      : {};
     const normalizedUpdates = {
       ...updates,
       scheduledAt: nextScheduledAt,
       scheduled_at: nextScheduledAt,
+      ...reminderReset,
     };
     setTherapistAgenda(prev => prev.map(item => item.id === id ? { ...item, ...normalizedUpdates } : item));
     onAddActivityLog("EdiÃ§Ã£o de Agendamento", `Agendamento ID ${id} atualizado: ${JSON.stringify(updates)}`, 'management');
@@ -3341,6 +3371,12 @@ export default function App() {
 
   const handleAppointmentConfirmationChoice = async (status: 'confirmed' | 'reschedule' | 'canceled') => {
     if (!appointmentConfirmation?.appointmentId) return;
+    const action =
+      status === 'confirmed'
+        ? 'confirm'
+        : status === 'reschedule'
+          ? 'reschedule'
+          : 'cancel';
     const feedback =
       status === 'reschedule'
         ? 'Solicitação de remarcação registrada. A recepção entrará em contato.'
@@ -3350,11 +3386,11 @@ export default function App() {
 
     setAppointmentConfirmation((prev) => prev ? { ...prev, isUpdating: true, message: '' } : prev);
     try {
-      const response = await fetch(`/api/appointments/${encodeURIComponent(appointmentConfirmation.appointmentId)}/status`, {
-        method: 'PATCH',
+      const response = await fetch(`/api/notifications/appointments/${encodeURIComponent(appointmentConfirmation.appointmentId)}/respond`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ status, source: 'appointment_reminder_popup' })
+        body: JSON.stringify({ action, source: 'appointment_reminder_popup' })
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result?.success) {

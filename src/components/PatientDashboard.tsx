@@ -198,6 +198,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       }
 
       const registration = await navigator.serviceWorker.register('/sw.js');
+      await registration.update().catch(() => undefined);
       await navigator.serviceWorker.ready;
       let existingSubscription = await registration.pushManager.getSubscription();
       if (
