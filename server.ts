@@ -2782,6 +2782,17 @@ async function syncAppointmentsTableFromClinicState(params: {
           : null
       );
 
+    // Check if scheduled_at changed to determine if we need to reset notification markers
+    let notification24hSentAt = appointment?.notification_24h_sent_at || appointment?.notification24hSentAt || appointment?.notification_sent_at || null;
+    let notification12hSentAt = appointment?.notification_12h_sent_at || appointment?.notification12hSentAt || null;
+    
+    // If appointment was rescheduled (status = 'reschedule'/'rescheduled'), reset notifications
+    // so 24h and 12h reminders are sent for the new appointment time
+    if (normalizeAppointmentStatusForUi(appointment?.status) === 'reschedule') {
+      notification24hSentAt = null;
+      notification12hSentAt = null;
+    }
+
     const row = {
       id: appointmentId,
       clinic_id: clinicId,
@@ -2793,11 +2804,11 @@ async function syncAppointmentsTableFromClinicState(params: {
       notes: sanitizeString(appointment?.notes || appointment?.note, 2000) || null,
       patient_response: patientResponse === 'canceled' ? 'cancelled' : patientResponse,
       patient_responded_at: appointment?.patient_responded_at || appointment?.patientRespondedAt || appointment?.patientConfirmationAt || null,
-      notification_24h_sent_at: appointment?.notification_24h_sent_at || appointment?.notification24hSentAt || appointment?.notification_sent_at || null,
-      notification_12h_sent_at: appointment?.notification_12h_sent_at || appointment?.notification12hSentAt || null,
-      notification_sent: Boolean(appointment?.notification_sent || appointment?.notification_24h_sent_at || appointment?.notification24hSentAt),
-      notification_sent_at: appointment?.notification_sent_at || appointment?.notification_24h_sent_at || appointment?.notification24hSentAt || null,
-      notification_12h_sent: Boolean(appointment?.notification_12h_sent || appointment?.notification_12h_sent_at || appointment?.notification12hSentAt),
+      notification_24h_sent_at: notification24hSentAt,
+      notification_12h_sent_at: notification12hSentAt,
+      notification_sent: notification24hSentAt ? true : false,
+      notification_sent_at: notification24hSentAt || null,
+      notification_12h_sent: notification12hSentAt ? true : false,
       patient_confirmation_status: appointment?.patientConfirmationStatus || appointment?.patient_confirmation_status || patientResponse || null,
       patient_confirmation_at: appointment?.patientConfirmationAt || appointment?.patient_confirmation_at || appointment?.patient_responded_at || null,
       patient_confirmation_by: appointment?.patientConfirmationBy || appointment?.patient_confirmation_by || null,

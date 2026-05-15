@@ -425,7 +425,17 @@ const chooseDueReminder = (
     if (step.kind === '12h') {
       const had24h =
         Boolean(appointment.notification24SentAt || appointment.legacyNotification24Sent);
-      if (!had24h || hasResponse(appointment)) continue;
+      const hasPatientResponse = hasResponse(appointment);
+      
+      // Send 12h reminder only if 24h was sent AND patient hasn't responded yet
+      if (!had24h) {
+        // Skip 12h if 24h was never sent
+        continue;
+      }
+      if (hasPatientResponse) {
+        // Skip 12h if patient already responded to 24h
+        continue;
+      }
     }
 
     const dueUtc = getReminderDueUtc(appointment.scheduledAt, step.hoursBefore);
@@ -494,8 +504,24 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
             kind: dueReminder.kind,
             logger: options.logger
           });
-          if (dueReminder.kind === '24h') sent24h += result.sent;
-          if (dueReminder.kind === '12h') sent12h += result.sent;
+          
+          if (dueReminder.kind === '24h') {
+            sent24h += result.sent;
+            options.logger?.log?.('[Appointment Reminder] Notificacao 24h enviada.', {
+              appointmentId: appointment.appointmentId,
+              patientId: appointment.patientId,
+              patientEmail: appointment.patientEmail
+            });
+          }
+          if (dueReminder.kind === '12h') {
+            sent12h += result.sent;
+            options.logger?.log?.('[Appointment Reminder] Notificacao 12h enviada (24h nao respondida).', {
+              appointmentId: appointment.appointmentId,
+              patientId: appointment.patientId,
+              patientEmail: appointment.patientEmail,
+              notification24hSentAt: appointment.notification24SentAt
+            });
+          }
         }
         failed += result.failed;
       } catch (error: any) {

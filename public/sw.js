@@ -79,40 +79,64 @@ self.addEventListener("notificationclick", (event) => {
   const action = event.action || "";
   const appointmentId = event.notification?.data?.appointmentId || "";
   const targetUrl = event.notification?.data?.url || "/";
-  const statusByAction = {
+  const reminderKind = event.notification?.data?.reminderKind || "reminder";
+  
+  // Map action to status explicitly
+  const actionToStatusMap = {
     confirmed: "confirmed",
     reschedule: "reschedule",
     cancelled: "canceled",
     canceled: "canceled",
   };
 
+  const patientStatus = actionToStatusMap[action];
   event.notification.close();
 
-  if (!action || !statusByAction[action] || !appointmentId) {
+  if (!action || !patientStatus || !appointmentId) {
     event.waitUntil(focusOrOpen(targetUrl));
     return;
   }
 
   event.waitUntil(
-    persistAppointmentStatus(appointmentId, statusByAction[action], "system_notification_action")
-      .then(() =>
-        Promise.all([
-          broadcastAppointmentStatus(appointmentId, statusByAction[action]),
-          self.registration.showNotification("Resposta registrada - Verto", {
-          body:
-            action === "confirmed"
-              ? "Presença confirmada na agenda da clínica."
-              : action === "reschedule"
-                ? "A recepção verá a consulta como Remarcar."
-                : "Consulta cancelada e horário liberado na agenda.",
-          icon: "/verto-3d-transparent.png",
-          badge: "/verto-3d-transparent.png",
-          tag: `appointment-response-${appointmentId}`,
-          requireInteraction: false,
-          data: { url: targetUrl, appointmentId },
+    persistAppointmentStatus(appointmentId, patientStatus, "system_notification_action")
+      .then(() => {
+        // Map action to feedback message
+        const feedbackMessageMap = {
+          confirmed: {
+            title: "Presença Confirmada - Verto",
+            body: "Sua presença foi confirmada. A clínica foi notificada.",
+          },
+          reschedule: {
+            title: "Reagendamento Solicitado - Verto",
+            body: "Solicitação de reagendamento registrada. A recepção entrará em contato.",
+          },
+          cancelled: {
+            title: "Consulta Cancelada - Verto",
+            body: "Sua consulta foi cancelada e o horário foi liberado.",
+          },
+          canceled: {
+            title: "Consulta Cancelada - Verto",
+            body: "Sua consulta foi cancelada e o horário foi liberado.",
+          },
+        };
+
+        const feedback = feedbackMessageMap[action] || {
+          title: "Resposta Registrada - Verto",
+          body: "Sua resposta foi registrada com sucesso.",
+        };
+
+        return Promise.all([
+          broadcastAppointmentStatus(appointmentId, patientStatus),
+          self.registration.showNotification(feedback.title, {
+            body: feedback.body,
+            icon: "/verto-3d-transparent.png",
+            badge: "/verto-3d-transparent.png",
+            tag: `appointment-response-${appointmentId}`,
+            requireInteraction: false,
+            data: { url: targetUrl, appointmentId },
           }),
-        ]),
-      )
+        ]);
+      })
       .catch(() => {
         const fallbackUrl = `${targetUrl}${targetUrl.includes("?") ? "&" : "?"}action=${encodeURIComponent(action)}`;
         return focusOrOpen(fallbackUrl);
