@@ -2366,6 +2366,30 @@ function currentClinicId(user: any): string | null {
   return id || null;
 }
 
+function currentClinicTimeZone(user: any): string {
+  return sanitizeString(
+    user?.clinicTimeZone ||
+      user?.clinic_timezone ||
+      user?.timezone ||
+      user?.time_zone ||
+      process.env.DEFAULT_CLINIC_TIMEZONE ||
+      'America/Sao_Paulo',
+    80
+  ) || 'America/Sao_Paulo';
+}
+
+function dateGroupForClinic(value: unknown, user: any): string {
+  const date = value ? new Date(String(value)) : new Date();
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: currentClinicTimeZone(user),
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  return formatter.format(safeDate);
+}
+
 function hasGlobalClinicAccess(user: any): boolean {
   const role = sanitizeString(user?.role, 40).toLowerCase();
   return role === 'admin' || role === 'owner';
@@ -9727,6 +9751,7 @@ async function startServer() {
       if (!fileBuffer.length || fileBuffer.length > 10 * 1024 * 1024) {
         return res.status(400).json({ success: false, error: 'Arquivo inválido ou acima de 10MB.' });
       }
+      const fileSha256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
 
       const uploadContext: UploadContext = source === 'anamnesis' ? 'anamnesis-document' : 'image-or-pdf';
       const validation = validateBinaryUpload(fileBuffer, mimeFromDataUrl, uploadContext);
@@ -9760,6 +9785,32 @@ async function startServer() {
 
       const bucketName = 'patient-files-private';
       const storagePath = `${clinicId}/${patientId}/${Date.now()}_${safeName}`;
+      if (source === 'anamnesis') {
+        const { data: duplicateFile, error: duplicateError } = await supabase
+          .from('patient_files')
+          .select('*')
+          .eq('patient_id', patientId)
+          .eq('clinic_id', clinicId)
+          .eq('source', 'anamnesis')
+          .eq('metadata->>fileSha256', fileSha256)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (!duplicateError && duplicateFile) {
+          const { data: signedDuplicate } = await supabase.storage
+            .from(sanitizeString(duplicateFile?.bucket, 120) || 'patient-files-private')
+            .createSignedUrl(sanitizeString(duplicateFile?.storage_path, 800), 60 * 10);
+          return res.status(200).json({
+            success: true,
+            deduped: true,
+            data: {
+              ...duplicateFile,
+              signedUrl: signedDuplicate?.signedUrl || null,
+              url: signedDuplicate?.signedUrl || null
+            }
+          });
+        }
+      }
 
       const persistInlineFallback = async (reason: string) => {
         const fallbackId = crypto.randomUUID();
@@ -9782,6 +9833,7 @@ async function startServer() {
           createdAt,
           metadata: {
             ...metadata,
+            fileSha256,
             storageFallbackReason: reason
           },
           ...(inlineContent ? { content: inlineContent, dataUrl: inlineContent } : {})
@@ -9852,7 +9904,10 @@ async function startServer() {
         mime_type: resolvedMime,
         file_size_bytes: fileBuffer.length,
         source,
-        metadata
+        metadata: {
+          ...metadata,
+          fileSha256
+        }
       };
 
       const { data: inserted, error: insertError } = await supabase
@@ -9882,7 +9937,10 @@ async function startServer() {
           size: fileBuffer.length,
           source,
           createdAt: new Date().toISOString(),
-          metadata
+          metadata: {
+            ...metadata,
+            fileSha256
+          }
         };
 
         try {
@@ -10923,6 +10981,8 @@ async function startServer() {
         therapist_id: sanitizeString(req.session.user.id, 120),
         created_at: sanitizeString(req.body?.created_at, 40) || new Date().toISOString()
       });
+      const docCreatedAt = sanitizeString(docData.created_at, 40) || new Date().toISOString();
+      docData.date_group = dateGroupForClinic(docCreatedAt, req.session.user);
 
       if (!docData.patient_id || !docData.title) {
         return res.status(400).json({ error: 'patient_id e título são obrigatórios.' });
@@ -10943,6 +11003,18 @@ async function startServer() {
       if (error && /image_path/i.test(String(error?.message || ''))) {
         const fallbackDocData = { ...docData } as any;
         delete fallbackDocData.image_path;
+        const retry = await supabase
+          .from('history')
+          .upsert([fallbackDocData], { onConflict: 'id' })
+          .select()
+          .single();
+        data = retry.data;
+        error = retry.error;
+      }
+
+      if (error && /date_group/i.test(String(error?.message || ''))) {
+        const fallbackDocData = { ...docData } as any;
+        delete fallbackDocData.date_group;
         const retry = await supabase
           .from('history')
           .upsert([fallbackDocData], { onConflict: 'id' })
@@ -11079,7 +11151,8 @@ async function startServer() {
         note: sanitizeTextField(fallbackValue?.note || fallbackValue?.comment || '', 12000),
         icon: sanitizeString(fallbackValue?.icon, 40),
         therapist_id: professionalId || null,
-        created_at: timestamp
+        created_at: timestamp,
+        date_group: dateGroupForClinic(timestamp, req.session.user)
       });
 
       const retry = await supabase
@@ -12803,7 +12876,8 @@ async function startServer() {
           note: sanitizeTextField(data?.patient_comment, 12000),
           icon: sanitizeString(taskData?.icon, 40) || '📌',
           therapist_id: sanitizeString(data?.professional_id, 120),
-          created_at: data?.completed_at || new Date().toISOString()
+          created_at: data?.completed_at || new Date().toISOString(),
+          date_group: dateGroupForClinic(data?.completed_at || new Date().toISOString(), req.session.user)
         });
         await supabase
           .from('history')

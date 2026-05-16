@@ -69,6 +69,66 @@ async function handleDataError(error: unknown, operationType: OperationType, pat
   throw new Error(errInfo.error);
 }
 
+async function fileToDataUrl(file: Blob): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Falha ao ler arquivo para upload'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function compressImageDataUrl(
+  input: File | Blob | string,
+  options: { maxDimension?: number; quality?: number; mimeType?: string } = {}
+): Promise<{ dataUrl: string; contentType: string }> {
+  const maxDimension = options.maxDimension || 800;
+  const quality = options.quality ?? 0.75;
+  const sourceDataUrl = typeof input === 'string' ? input : await fileToDataUrl(input);
+  const image = new Image();
+  image.decoding = 'async';
+  const loaded = new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error('Falha ao processar imagem para compressão'));
+  });
+  image.src = sourceDataUrl;
+  await loaded;
+
+  const originalWidth = image.naturalWidth || image.width;
+  const originalHeight = image.naturalHeight || image.height;
+  if (!originalWidth || !originalHeight) {
+    return {
+      dataUrl: sourceDataUrl,
+      contentType: options.mimeType || sourceDataUrl.match(/^data:([^;]+);base64,/)?.[1] || 'image/jpeg'
+    };
+  }
+
+  const scale = Math.min(1, maxDimension / Math.max(originalWidth, originalHeight));
+  const targetWidth = Math.max(1, Math.round(originalWidth * scale));
+  const targetHeight = Math.max(1, Math.round(originalHeight * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas indisponível para compressão de imagem');
+  ctx.drawImage(image, 0, 0, targetWidth, targetHeight);
+
+  const outputType = options.mimeType || 'image/jpeg';
+  return {
+    dataUrl: canvas.toDataURL(outputType, quality),
+    contentType: outputType
+  };
+}
+
+async function sha256Hex(blob: Blob): Promise<string | null> {
+  if (!crypto?.subtle) return null;
+  const buffer = await blob.arrayBuffer();
+  const digest = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 async function getAuthHeaders(includeBearer = true) {
   const headers: any = {
     'Content-Type': 'application/json; charset=utf-8',
@@ -562,8 +622,13 @@ export const dataService = {
         formData.append('fileName', normalizedFileName);
         formData.append('contentType', safeMime);
         formData.append('source', String(payload?.source || 'upload'));
-        if (payload?.metadata && typeof payload.metadata === 'object') {
-          formData.append('metadata', JSON.stringify(payload.metadata));
+        const fileHash = await sha256Hex(payload.fileBlob);
+        const metadataWithHash = {
+          ...(payload?.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}),
+          ...(fileHash ? { fileSha256: fileHash } : {})
+        };
+        if (Object.keys(metadataWithHash).length > 0) {
+          formData.append('metadata', JSON.stringify(metadataWithHash));
         }
 
         const authHeaders = await getAuthHeaders();
@@ -1290,12 +1355,10 @@ export const dataService = {
     // Sensible uploads (patient photos) must always pass through backend auth checks.
     if (bucket === 'patient-photos') {
       try {
-        const toBase64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result || ''));
-          reader.onerror = () => reject(new Error('Falha ao ler arquivo para upload'));
-          reader.readAsDataURL(file);
-        });
+        const shouldCompress = !String(path || '').startsWith('onboarding/');
+        const prepared = shouldCompress
+          ? await compressImageDataUrl(file, { maxDimension: 800, quality: 0.75, mimeType: 'image/jpeg' })
+          : { dataUrl: await fileToDataUrl(file), contentType: file.type || 'application/octet-stream' };
 
         const response = await fetch('/api/storage/upload', {
           method: 'POST',
@@ -1304,8 +1367,8 @@ export const dataService = {
           body: JSON.stringify({
             bucket,
             path,
-            contentType: file.type || 'application/octet-stream',
-            fileBase64: toBase64
+            contentType: prepared.contentType,
+            fileBase64: prepared.dataUrl
           })
         });
 
@@ -1397,6 +1460,10 @@ export const dataService = {
 
   async uploadDataUrl(bucket: string, path: string, dataUrl: string, contentTypeHint?: string) {
     try {
+      const shouldCompressPatientPhoto = bucket === 'patient-photos' && !String(path || '').startsWith('onboarding/');
+      const prepared = shouldCompressPatientPhoto
+        ? await compressImageDataUrl(dataUrl, { maxDimension: 800, quality: 0.75, mimeType: 'image/jpeg' })
+        : { dataUrl, contentType: contentTypeHint || 'image/png' };
       const response = await fetch('/api/storage/upload', {
         method: 'POST',
         headers: await getAuthHeaders(),
@@ -1404,8 +1471,8 @@ export const dataService = {
         body: JSON.stringify({
           bucket,
           path,
-          contentType: contentTypeHint || 'image/png',
-          fileBase64: dataUrl
+          contentType: prepared.contentType,
+          fileBase64: prepared.dataUrl
         })
       });
 
@@ -1840,11 +1907,13 @@ export const dataService = {
           ? new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
           : '',
         dateGroup:
-          h?.created_at && new Date(h.created_at).toDateString() === new Date().toDateString()
+          h?.date_group ||
+          h?.dateGroup ||
+          (h?.created_at && new Date(h.created_at).toDateString() === new Date().toDateString()
             ? 'Hoje'
             : h?.created_at
               ? new Date(h.created_at).toLocaleDateString()
-              : ''
+              : '')
       }));
       const patientTasks = ensureArray(tasksRes?.data).map((t: any) => ({
         ...t,

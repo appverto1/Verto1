@@ -419,6 +419,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [anamnesisFileName, setAnamnesisFileName] = useState("");
   const [anamnesisFileDate, setAnamnesisFileDate] = useState(new Date().toISOString().slice(0, 10));
   const [isPreparingAnamnesisSave, setIsPreparingAnamnesisSave] = useState(false);
+  const [isSavingAnamnesisFile, setIsSavingAnamnesisFile] = useState(false);
   const [resolvedClinicContext, setResolvedClinicContext] = useState<any>(clinicContext || {});
   const [previewFile, setPreviewFile] = useState<any>(null);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
@@ -2739,7 +2740,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   };
 
   const handleConfirmAnamnesisFile = () => {
-    if (!pendingAnamnesisPayload) return;
+    if (!pendingAnamnesisPayload || isSavingAnamnesisFile) return;
     const fileName = (anamnesisFileName || `Ficha_Anamnese_${patient.name}`).trim();
     const normalizedName = fileName.toLowerCase().endsWith(".pdf")
       ? fileName
@@ -2750,6 +2751,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       : new Date().toLocaleDateString("pt-BR");
 
     const persist = async () => {
+      setIsSavingAnamnesisFile(true);
       let uploadResult: any = null;
       let uploadErrorMessage = '';
       let generatedPdfBlob: Blob | null = null;
@@ -2867,6 +2869,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       } catch (error) {
         console.error('Falha ao persistir ficha de anamnese em arquivos:', error);
         alert('A ficha não foi perdida: os dados principais da anamnese foram mantidos. Tente salvar o arquivo novamente.');
+      } finally {
+        setIsSavingAnamnesisFile(false);
       }
     };
 
@@ -4970,9 +4974,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
               </button>
               <button
                 onClick={handleConfirmAnamnesisFile}
-                className="px-4 py-2.5 rounded-xl bg-[#7a32fc] text-white font-semibold text-sm"
+                disabled={isSavingAnamnesisFile}
+                className="px-4 py-2.5 rounded-xl bg-[#7a32fc] text-white font-semibold text-sm disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Salvar em Arquivos
+                {isSavingAnamnesisFile ? 'Salvando...' : 'Salvar em Arquivos'}
               </button>
             </div>
           </div>

@@ -1660,11 +1660,13 @@ export default function App() {
                 ? new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                 : '',
               dateGroup:
-                h?.created_at && new Date(h.created_at).toDateString() === new Date().toDateString()
+                h?.date_group ||
+                h?.dateGroup ||
+                (h?.created_at && new Date(h.created_at).toDateString() === new Date().toDateString()
                   ? 'Hoje'
                   : h?.created_at
                     ? new Date(h.created_at).toLocaleDateString()
-                    : ''
+                    : '')
             }))
           : []
       );
@@ -2337,7 +2339,7 @@ export default function App() {
               ...h,
               patientId: newId, // Link to the temporary ID, will be updated to realId later
               time: new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              dateGroup: new Date(h.created_at).toDateString() === new Date().toDateString() ? "Hoje" : new Date(h.created_at).toLocaleDateString()
+              dateGroup: h?.date_group || h?.dateGroup || (new Date(h.created_at).toDateString() === new Date().toDateString() ? "Hoje" : new Date(h.created_at).toLocaleDateString())
             }));
             setHistory(prev => [...prev, ...existingHistory]);
           }
@@ -2882,11 +2884,13 @@ export default function App() {
                   ? new Date(persistedHistory.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                   : time,
                 dateGroup:
-                  persistedHistory?.created_at && new Date(persistedHistory.created_at).toDateString() === new Date().toDateString()
+                  persistedHistory?.date_group ||
+                  persistedHistory?.dateGroup ||
+                  (persistedHistory?.created_at && new Date(persistedHistory.created_at).toDateString() === new Date().toDateString()
                     ? 'Hoje'
                     : persistedHistory?.created_at
                       ? new Date(persistedHistory.created_at).toLocaleDateString()
-                      : 'Hoje'
+                      : 'Hoje')
               },
               ...withoutDuplicates
             ];
