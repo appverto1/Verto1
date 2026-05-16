@@ -71,7 +71,33 @@ export function toTrustedMediaUrl(rawUrl?: string | null): string | null {
 export function sanitizeDescriptionForDisplay(input?: string | null): string {
   const source = typeof input === "string" ? input : "";
   if (!source) return "";
-  return source.replace(
+  // Desescapa entidades HTML comuns que podem ter sido escapadas múltiplas vezes
+  let unescaped = source
+    .replace(/&quot;/g, '"')
+    .replace(/&#34;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ');
+  
+  // Repete a desescapagem para lidar com HTML escapado múltiplas vezes
+  let previousValue = "";
+  while (previousValue !== unescaped) {
+    previousValue = unescaped;
+    unescaped = unescaped
+      .replace(/&quot;/g, '"')
+      .replace(/&#34;/g, '"')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&#39;/g, "'")
+      .replace(/&apos;/g, "'")
+      .replace(/&nbsp;/g, ' ');
+  }
+  
+  return unescaped.replace(
     /https?:\/\/[^\s)]+/gi,
     "[link externo bloqueado por segurança]"
   );

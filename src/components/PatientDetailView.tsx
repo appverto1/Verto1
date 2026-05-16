@@ -15,6 +15,7 @@ import { SecureImage, SecureIframe } from './SecureMedia';
 import { calculateDomainMastery, normalizeScoreToPercent } from '../utils/clinicalMath';
 import { prepareElementForPdfCapture } from '../utils/pdfCapture';
 import { formatProfessionalRegistry } from '../utils/professionalRegistry';
+import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
 import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
 import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
@@ -4185,7 +4186,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                 <div className="flex justify-between items-center">
                                   <div>
                                     <p className="text-sm font-semibold text-gray-800">{s.name}</p>
-                                    <p className="text-[10px] text-gray-500 mt-1">{s.objective}</p>
+                                    <p className="text-[10px] text-gray-500 mt-1">{sanitizeDescriptionForDisplay(s.objective)}</p>
                                   </div>
                                   <Plus size={16} className="text-gray-300 group-hover:text-[#05CD99]" />
                                 </div>
@@ -4246,7 +4247,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                         <MasteryDots count={getMasteryProgress(goal) || 0} status={goal.status} target={getGoalMasteryTarget(goal)} />
                                       </div>
                                     )}
-                                    <p className={`text-xs mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>{goal.objective}</p>
+                                    <p className={`text-xs mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>{sanitizeDescriptionForDisplay(goal.objective)}</p>
                                   </div>
                                     <div className="flex items-center gap-2">
                                       <select 
@@ -4771,7 +4772,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                 <MasteryDots count={getMasteryProgress(goal) || 0} status={goal.status} target={getGoalMasteryTarget(goal)} />
                               </div>
                             )}
-                            <p className={`text-xs mt-1 font-medium ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>{goal.objective}</p>
+                            <p className={`text-xs mt-1 font-medium ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>{sanitizeDescriptionForDisplay(goal.objective)}</p>
                           </div>
                         </div>
 

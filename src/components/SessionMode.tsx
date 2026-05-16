@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, Info, Zap, Camera, Clock, StopCircle } from 'lucide-react';
 import { SecureImage } from './SecureMedia';
+import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 
 export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, remainingSeconds = 0, formatCountdown, onRequestEndSession, onSessionRecordSaved }: any) => {
   const sessionGoals = (patient.pei?.filter((g: any) => g.isPriority || g.status === 'in_progress') || [])
@@ -189,34 +190,42 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
               {patient.age <= 12 && (() => {
                 const masteryTarget = getMasteryTarget(goal);
                 const masteryCount = getConsecutiveMasteryCount(goal);
-                const dotSize = masteryTarget > 30 ? 'w-2 h-2' : masteryTarget > 12 ? 'w-3 h-3' : 'w-4 h-4';
+                const dotSize = masteryTarget > 30 ? 'w-2.5 h-2.5' : masteryTarget > 12 ? 'w-3.5 h-3.5' : 'w-5 h-5';
 
                 return (
-                  <div className="flex gap-2 mb-8 items-center flex-wrap">
-                    {Array.from({ length: masteryTarget }, (_, index) => index + 1).map((i) => {
-                    const isMastered = goal.status === 'completed';
-                    const isActive = i <= masteryCount || isMastered;
+                  <div className="mb-8">
+                    {/* Progress Bar with visual feedback */}
+                    <div className="flex gap-1.5 mb-3 items-center flex-wrap">
+                      {Array.from({ length: masteryTarget }, (_, index) => index + 1).map((i) => {
+                      const isMastered = goal.status === 'completed';
+                      const isActive = i <= masteryCount || isMastered;
 
-                    return (
-                      <div 
-                        key={i} 
-                        className={`${dotSize} rounded-full transition-all duration-500 ${
-                          isMastered ? 'bg-green-500 shadow-lg shadow-green-200' : 
-                          isActive ? 'bg-[#7a32fc] scale-110 shadow-lg shadow-blue-200' : 
-                          'bg-gray-100'
-                        }`}
-                      ></div>
-                    );
-                  })}
-                  <span className="text-xs font-bold text-gray-400 ml-2 uppercase tracking-widest">
-                    {goal.status === 'completed' ? 'Adquirida' : 'Progresso de Maestria'}
-                  </span>
-                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                    {masteryCount}/{masteryTarget}
-                  </span>
+                      return (
+                        <div 
+                          key={i} 
+                          className={`${dotSize} rounded-full transition-all duration-300 ${
+                            isMastered ? 'bg-green-500 shadow-lg shadow-green-400/60 ring-2 ring-green-200' : 
+                            isActive ? 'bg-[#7a32fc] scale-110 shadow-lg shadow-purple-400/60 ring-2 ring-purple-200' : 
+                            'bg-gray-300 shadow-sm'
+                          }`}
+                        ></div>
+                      );
+                    })}
+                    </div>
+                    
+                    {/* Progress text and counter */}
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-gray-600 uppercase tracking-widest">
+                        {goal.status === 'completed' ? '✓ Adquirida' : 'Progresso de Maestria'}
+                      </span>
+                      <span className="text-sm font-bold text-[#7a32fc] bg-[#7a32fc]/10 px-3 py-1 rounded-full">
+                        {masteryCount}/{masteryTarget}
+                      </span>
+                    </div>
                   </div>
                 );
               })()}
+
 
               {/* Scoring Buttons */}
               <div className={`grid gap-6 relative ${(goal.maxScore || 1) > 1 || ((goal.maxScore || 1) === 1 && patient.age > 12) ? 'grid-cols-5' : 'grid-cols-3'}`}>
@@ -244,7 +253,7 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 w-64 bg-[#1B254B] text-white p-6 rounded-3xl shadow-2xl animate-pop z-20">
                           <p className="text-[10px] font-bold text-blue-300 uppercase tracking-widest mb-2">Critério Pontuação 0.5</p>
                           <p className="text-sm font-medium leading-relaxed">
-                            {goal.criteria || "Faz com ajuda física ou verbal parcial."}
+                            {sanitizeDescriptionForDisplay(goal.criteria) || "Faz com ajuda física ou verbal parcial."}
                           </p>
                           <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-[#1B254B]"></div>
                         </div>

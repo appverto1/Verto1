@@ -28,6 +28,7 @@ import {
 } from 'recharts';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { LogoVerto } from './Common';
+import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { getSupabase } from '../lib/supabase';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
 import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
@@ -1050,7 +1051,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                           <div className="mt-3 grid gap-3 md:grid-cols-2">
                             <div className="rounded-2xl bg-white p-3 border border-slate-100">
                               <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Objetivo</p>
-                              <p className="mt-1 text-xs font-bold text-slate-700">{skill.objective || 'Sem objetivo preenchido.'}</p>
+                              <p className="mt-1 text-xs font-bold text-slate-700">{sanitizeDescriptionForDisplay(skill.objective) || 'Sem objetivo preenchido.'}</p>
                             </div>
                             <div className="rounded-2xl bg-white p-3 border border-slate-100">
                               <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Pergunta</p>
