@@ -8762,8 +8762,15 @@ async function startServer() {
       const mimeFromDataUrl = matches?.[1] || contentType;
       const fileBuffer = Buffer.from(base64Payload, 'base64');
 
-      if (!fileBuffer.length || fileBuffer.length > 5 * 1024 * 1024) {
-        return res.status(400).json({ success: false, error: 'Arquivo inválido ou acima de 5MB.' });
+      // Guard por tamanho: patient-photos (não-onboarding) máximo 1MB, onboarding máximo 5MB
+      const maxSizeBytes = isOnboardingUpload ? 5 * 1024 * 1024 : 1 * 1024 * 1024;
+      const maxSizeMb = isOnboardingUpload ? '5MB' : '1MB';
+      
+      if (!fileBuffer.length || fileBuffer.length > maxSizeBytes) {
+        const errorMsg = fileBuffer.length > maxSizeBytes
+          ? `Arquivo acima de ${maxSizeMb}. Comprima a imagem antes de enviar (máximo ${maxSizeMb}, qualidade recomendada 0.75-0.80).`
+          : 'Arquivo inválido ou vazio.';
+        return res.status(fileBuffer.length > maxSizeBytes ? 413 : 400).json({ success: false, error: errorMsg });
       }
 
       const validation = validateBinaryUpload(fileBuffer, mimeFromDataUrl, 'image-only');

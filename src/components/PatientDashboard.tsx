@@ -1023,15 +1023,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       }) === index;
     });
 
-    if (!isConventionalAdult) return deduped;
-
-    return deduped.filter((item: any) => {
-      const directScore = parseScore(item?.score);
-      const proScore = parseScore(item?.pro_score);
-      const nestedScore = parseScore(item?.task_data?.pro_score ?? item?.task_data?.score);
-      const hasProfessionalScore = directScore !== null || proScore !== null || nestedScore !== null;
-      return !hasProfessionalScore;
-    });
+    return deduped;
   }, [history, selectedSnapshotDate, isConventionalAdult]);
 
   const groupedHistory = filteredHistoryList.reduce((groups: any, item: any) => { const group = groups[item.dateGroup] || []; group.push(item); group.sort((a: any, b: any) => b.id - a.id); groups[item.dateGroup] = group; return groups; }, {}); 

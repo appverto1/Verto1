@@ -1267,6 +1267,17 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
 
+  const decodeStoredText = (value: any) =>
+    String(value ?? '')
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#34;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&apos;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .trim();
+
   const normalizeAndDecorateNotes = (rawNotes: any[]) => {
     const normalized = (Array.isArray(rawNotes) ? rawNotes : []).map((n: any) => {
       const rawVisibility = String(n?.visibility || '').toLowerCase();
@@ -1291,6 +1302,9 @@ export default function App() {
         ...n,
         id: n?.id,
         patientId: n?.patientId || n?.patient_id,
+        text: decodeStoredText(n?.text ?? n?.content ?? ''),
+        content: decodeStoredText(n?.content ?? n?.text ?? ''),
+        subject: decodeStoredText(n?.subject ?? ''),
         originalId: n?.originalId || n?.original_id || null,
         visibility,
         type: n?.type || fallbackType,

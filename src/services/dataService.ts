@@ -82,8 +82,8 @@ async function compressImageDataUrl(
   input: File | Blob | string,
   options: { maxDimension?: number; quality?: number; mimeType?: string } = {}
 ): Promise<{ dataUrl: string; contentType: string }> {
-  const maxDimension = options.maxDimension || 800;
-  const quality = options.quality ?? 0.75;
+  const maxDimension = options.maxDimension || 1200; // 1200px max (vs 800px antes)
+  const initialQuality = options.quality ?? 0.78; // 0.78 (vs 0.75 antes)
   const sourceDataUrl = typeof input === 'string' ? input : await fileToDataUrl(input);
   const image = new Image();
   image.decoding = 'async';
@@ -114,8 +114,30 @@ async function compressImageDataUrl(
   ctx.drawImage(image, 0, 0, targetWidth, targetHeight);
 
   const outputType = options.mimeType || 'image/jpeg';
+  const MAX_COMPRESSED_SIZE_BYTES = 500 * 1024; // 500KB max post-compression
+
+  // Try initial quality
+  let dataUrl = canvas.toDataURL(outputType, initialQuality);
+  let compressedSize = Math.ceil((dataUrl.length - dataUrl.indexOf(',') - 1) * 0.75); // Estimate base64 to binary size
+  
+  // If exceeds 500KB, retry with lower quality (0.60)
+  if (compressedSize > MAX_COMPRESSED_SIZE_BYTES && initialQuality > 0.60) {
+    console.warn(
+      `[Compression] Initial quality ${initialQuality} resulted in ${(compressedSize / 1024).toFixed(2)}KB. Retrying with quality 0.60...`
+    );
+    dataUrl = canvas.toDataURL(outputType, 0.60);
+    compressedSize = Math.ceil((dataUrl.length - dataUrl.indexOf(',') - 1) * 0.75);
+  }
+
+  // If still exceeds limit after fallback, warn but continue (backend will enforce 1MB limit)
+  if (compressedSize > MAX_COMPRESSED_SIZE_BYTES) {
+    console.warn(
+      `[Compression] Warning: Final size ${(compressedSize / 1024).toFixed(2)}KB exceeds 500KB target. Backend will enforce 1MB limit before upload.`
+    );
+  }
+
   return {
-    dataUrl: canvas.toDataURL(outputType, quality),
+    dataUrl,
     contentType: outputType
   };
 }
@@ -1355,10 +1377,11 @@ export const dataService = {
     // Sensible uploads (patient photos) must always pass through backend auth checks.
     if (bucket === 'patient-photos') {
       try {
-        const shouldCompress = !String(path || '').startsWith('onboarding/');
-        const prepared = shouldCompress
-          ? await compressImageDataUrl(file, { maxDimension: 800, quality: 0.75, mimeType: 'image/jpeg' })
-          : { dataUrl: await fileToDataUrl(file), contentType: file.type || 'application/octet-stream' };
+        const prepared = await compressImageDataUrl(file, {
+          maxDimension: 1200,
+          quality: 0.78,
+          mimeType: 'image/jpeg'
+        });
 
         const response = await fetch('/api/storage/upload', {
           method: 'POST',
@@ -1460,9 +1483,9 @@ export const dataService = {
 
   async uploadDataUrl(bucket: string, path: string, dataUrl: string, contentTypeHint?: string) {
     try {
-      const shouldCompressPatientPhoto = bucket === 'patient-photos' && !String(path || '').startsWith('onboarding/');
+      const shouldCompressPatientPhoto = bucket === 'patient-photos';
       const prepared = shouldCompressPatientPhoto
-        ? await compressImageDataUrl(dataUrl, { maxDimension: 800, quality: 0.75, mimeType: 'image/jpeg' })
+        ? await compressImageDataUrl(dataUrl, { maxDimension: 1200, quality: 0.78, mimeType: 'image/jpeg' })
         : { dataUrl, contentType: contentTypeHint || 'image/png' };
       const response = await fetch('/api/storage/upload', {
         method: 'POST',
@@ -2021,4 +2044,3 @@ export const dataService = {
     };
   }
 };
-

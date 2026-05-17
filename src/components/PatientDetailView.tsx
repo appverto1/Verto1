@@ -1638,8 +1638,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       .replace(/Ãº/g, 'ú')
       .replace(/Ã£/g, 'ã')
       .replace(/Ã§/g, 'ç')
-      .replace(/&quot;/g, '"')
       .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#34;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&apos;/g, "'")
       .replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>')
       .replace(/Â/g, '')
@@ -1809,7 +1812,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
   const adultCompletedTasks = useMemo(() => {
     const deduped = new Map<string, any>();
-    (assignedTasks || [])
+    const isLegacyCompletedTask = (task: any) => {
+      const status = String(task?.status || '').toLowerCase();
+      if (status) return status === 'completed' || status === 'done';
+      if (typeof task?.is_completed === 'boolean') return task.is_completed;
+      if (typeof task?.done === 'boolean') return task.done;
+      if (typeof task?.completed === 'boolean') return task.completed;
+      return false;
+    };
+
+    const completedAssigned = (assignedTasks || [])
       .filter((task: any) => String(task?.status || '').toLowerCase() === 'completed')
       .map((task: any) => {
         const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
@@ -1832,8 +1844,30 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           professionalScore: task?.pro_score === null || task?.pro_score === undefined ? null : Number(task.pro_score),
           evolutionNote: String(task?.pro_review_note || '')
         };
-      })
-      .forEach((task: any) => {
+      });
+
+    const completedLegacy = (patientTasks || [])
+      .filter((task: any) => isLegacyCompletedTask(task))
+      .map((task: any) => {
+        const eventDateRaw = task?.completed_at || task?.updated_at || task?.scheduled_at || task?.created_at;
+        const eventDate = eventDateRaw ? new Date(eventDateRaw) : new Date();
+        const safeMaxScore = Math.max(1, Number(task?.maxScore ?? task?.max_score ?? 4) || 4);
+        return {
+          ...task,
+          taskData: task?.taskData && typeof task.taskData === 'object' ? task.taskData : {},
+          eventDate,
+          eventDateRaw,
+          taskTitle: String(task?.title || 'Tarefa'),
+          taskType: String(task?.type || task?.task_type || 'task'),
+          maxScore: safeMaxScore,
+          patientEffort: Number(task?.patient_effort ?? task?.energy ?? 0) || 0,
+          patientComment: String(task?.patient_comment || task?.note || ''),
+          professionalScore: task?.pro_score === null || task?.pro_score === undefined ? null : Number(task.pro_score),
+          evolutionNote: String(task?.pro_review_note || task?.evolutionNote || task?.evalComment || '')
+        };
+      });
+
+    [...completedAssigned, ...completedLegacy].forEach((task: any) => {
         const key = String(task?.assignedTaskId || task?.id || '') || [
           String(task?.patient_id || task?.patientId || ''),
           String(task?.taskTitle || ''),
@@ -1846,7 +1880,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       });
 
     return Array.from(deduped.values()).sort((a: any, b: any) => b.eventDate.getTime() - a.eventDate.getTime());
-  }, [assignedTasks]);
+  }, [assignedTasks, patientTasks]);
 
   const adultScheduledTasks = useMemo(() => {
     if (isKidsProfile) return [];
@@ -3528,7 +3562,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               Esforço percebido: <span className={`font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{event.patientEffort}%</span>
                             </p>
                             <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                              Comentário do paciente: {event.patientComment || 'Sem comentário.'}
+                              Comentário do paciente: {normalizeNoteText(event.patientComment) || 'Sem comentário.'}
                             </p>
                             <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
                               Nota final do profissional: <span className={`font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{event.professionalScore ?? '-'} / {event.maxScore}</span>
