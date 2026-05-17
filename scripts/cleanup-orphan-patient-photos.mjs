@@ -147,7 +147,7 @@ async function loadReferencedPaths() {
   while (true) {
     const { data, error } = await supabaseAdmin
       .from('history')
-      .select('id,image,image_path')
+      .select('id,image')
       .eq('type', 'photo')
       .is('deleted_at', null)
       .range(from, from + pageSize - 1);
@@ -156,8 +156,8 @@ async function loadReferencedPaths() {
 
     const rows = Array.isArray(data) ? data : [];
     for (const row of rows) {
-      const direct = extractHistoryStoragePath(row?.image_path);
-      if (direct) referenced.add(direct);
+      
+      
       const fromImage = extractHistoryStoragePath(row?.image);
       if (fromImage) referenced.add(fromImage);
     }
