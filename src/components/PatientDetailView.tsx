@@ -3102,7 +3102,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     return Math.min(count, target);
   };
 
+  const isGoalAcquired = (goal: any) =>
+    ['completed', 'acquired', 'adquirido'].includes(String(goal?.status || '').toLowerCase());
+
   const getGoalProgressPercent = (goal: any) => {
+    if (isGoalAcquired(goal)) return 100;
+
     const storedProgress = Number(goal?.progress);
     if (patientCategory !== 'Criança') {
       return Number.isFinite(storedProgress) ? Math.min(Math.max(Math.round(storedProgress), 0), 100) : 0;
@@ -4116,7 +4121,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         ) : activeTab === 'plan' ? ( 
           <div className="space-y-6 animate-fade-in"> 
             {isKidsProfile && (
-              <div className={`p-6 rounded-[32px] shadow-sm border mb-6 relative overflow-hidden transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>
+              <div className={`p-6 rounded-[32px] shadow-sm border mb-6 relative overflow-hidden transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
                 <div className="absolute top-0 right-0 w-32 h-32 bg-[#05CD99]/5 rounded-bl-full -z-0"></div>
                 <div className="flex items-center justify-between mb-6 relative z-10">
                   <div>
@@ -4140,10 +4145,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
 
                 <div className="space-y-4 mb-8">
                   <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Metas Ativas</h4>
+                    <h4 className={`text-xs font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Metas Ativas</h4>
                     <button 
                       onClick={() => setIsAddingPEIGoal(!isAddingPEIGoal)}
-                      className="text-xs font-semibold text-[#05CD99] bg-[#05CD99]/10 px-4 py-2 rounded-xl hover:bg-[#05CD99]/20 transition-all flex items-center gap-2"
+                      className={`text-xs font-bold px-4 py-2 rounded-xl transition-all flex items-center gap-2 shadow-sm ${
+                        isPanelDark
+                          ? 'text-emerald-200 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/20'
+                          : 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200'
+                      }`}
                     >
                       {isAddingPEIGoal ? <X size={14} /> : <Plus size={14} />}
                       {isAddingPEIGoal ? "Cancelar" : "Adicionar Meta do Protocolo"}
@@ -4248,7 +4257,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               {term === 'short' ? 'Curto Prazo' : term === 'medium' ? 'Médio Prazo' : 'Longo Prazo'}
                             </h5>
                             {termGoals.sort((a: any, b: any) => (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0)).map((goal: any) => (
-                              <div key={goal.id} className={`p-5 rounded-2xl border shadow-sm group hover:shadow-md transition-all ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>
+                              <div key={goal.id} className={`p-5 rounded-2xl border shadow-sm group hover:shadow-md transition-all relative overflow-hidden ${
+                                isGoalAcquired(goal)
+                                  ? isPanelDark
+                                    ? 'bg-gradient-to-br from-emerald-950/70 via-[#101b2e] to-teal-950/50 border-emerald-400/50 ring-1 ring-emerald-400/20 shadow-emerald-950/20'
+                                    : 'bg-gradient-to-br from-emerald-50 via-white to-teal-50 border-emerald-300 ring-2 ring-emerald-100 shadow-emerald-100'
+                                  : isPanelDark
+                                    ? 'bg-[#101b2e] border-slate-700'
+                                    : 'bg-white border-slate-200'
+                              }`}>
+                                {isGoalAcquired(goal) && (
+                                  <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-emerald-400 via-green-500 to-teal-400 pointer-events-none" />
+                                )}
                                 <div className="flex justify-between items-start mb-3">
                                   <div>
                                     <div className="flex items-center gap-2 mb-1">
@@ -4274,7 +4294,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                           const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, isPriority: !g.isPriority } : g);
                                           onUpdatePatient({ ...patient, pei: updatedPEI });
                                         }}
-                                        className={`p-1 rounded-md transition-all ${goal.isPriority ? 'text-orange-500 bg-orange-50' : 'text-gray-300 hover:text-orange-300'}`}
+                                        className={`p-1 rounded-md transition-all ${goal.isPriority ? 'text-orange-500 bg-orange-50' : isPanelDark ? 'text-slate-400 hover:text-orange-300 hover:bg-slate-800' : 'text-slate-400 hover:text-orange-500 hover:bg-orange-50'}`}
                                         title={goal.isPriority ? "Remover Prioridade" : "Marcar como Prioridade para Sessão"}
                                       >
                                         <Zap size={14} fill={goal.isPriority ? "currentColor" : "none"} />
@@ -4290,11 +4310,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                     <div className="flex items-center gap-2">
                                       <select 
                                         className={`text-[10px] font-semibold px-3 py-1.5 rounded-xl outline-none appearance-none uppercase tracking-wider border-2 transition-all ${
-                                          goal.status === 'completed' ? 'bg-green-100 dark:bg-emerald-500/15 text-green-600 dark:text-emerald-200 border-green-200 dark:border-emerald-400/30' : 
-                                          goal.status === 'in_progress' ? 'bg-blue-100 dark:bg-blue-500/15 text-blue-600 dark:text-blue-200 border-blue-200 dark:border-blue-400/30' : 
-                                          isPanelDark ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-gray-100 text-gray-400 border-gray-200'
+                                          isGoalAcquired(goal) ? isPanelDark ? 'bg-emerald-500/20 text-emerald-100 border-emerald-300/40 shadow-sm shadow-emerald-950/20' : 'bg-emerald-500 text-white border-emerald-500 shadow-md shadow-emerald-200' :
+                                          goal.status === 'in_progress' ? isPanelDark ? 'bg-blue-500/15 text-blue-200 border-blue-400/30' : 'bg-blue-50 text-blue-700 border-blue-200' : 
+                                          isPanelDark ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-slate-100 text-slate-600 border-slate-200'
                                         }`}
-                                        value={goal.status}
+                                        value={isGoalAcquired(goal) ? 'completed' : goal.status}
                                         onChange={(e) => {
                                           const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, status: e.target.value } : g);
                                           onUpdatePatient({ ...patient, pei: updatedPEI });
@@ -4312,7 +4332,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                               onUpdatePatient({ ...patient, pei: updatedPEI });
                                             }
                                           }}
-                                          className="p-2 text-gray-300 hover:text-orange-500 hover:bg-orange-50 rounded-xl transition-all"
+                                          className={`p-2 rounded-xl transition-all ${isPanelDark ? 'text-slate-400 hover:text-orange-300 hover:bg-slate-800' : 'text-slate-400 hover:text-orange-500 hover:bg-orange-50'}`}
                                           title="Zerar Progresso de Maestria"
                                         >
                                           <RotateCcw size={16} />
@@ -4323,7 +4343,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                           const updatedPEI = patient.pei.filter((g: any) => g.id !== goal.id);
                                           onUpdatePatient({ ...patient, pei: updatedPEI });
                                         }}
-                                        className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                                        className={`p-2 rounded-xl transition-all ${isPanelDark ? 'text-slate-400 hover:text-red-300 hover:bg-red-500/10' : 'text-slate-400 hover:text-red-500 hover:bg-red-50'}`}
                                       >
                                         <Trash2 size={16} />
                                       </button>
@@ -4331,17 +4351,26 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                 </div>
                                 <div className="space-y-2">
                                   <div className="flex justify-between items-center">
-                                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Progresso da Meta</span>
+                                    <span className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Progresso da Meta</span>
                                     <span className={`text-xs font-semibold px-2 py-0.5 rounded-lg ${
-                                      getGoalProgressPercent(goal) >= 100 ? 'bg-green-100 dark:bg-emerald-500/15 text-green-600 dark:text-emerald-200 border border-green-200 dark:border-emerald-400/30' : 
-                                      getGoalProgressPercent(goal) >= 60 ? 'bg-blue-100 dark:bg-blue-500/15 text-blue-600 dark:text-blue-200 border border-blue-200 dark:border-blue-400/30' : 
-                                      'bg-gray-100 dark:bg-violet-500/15 text-gray-600 dark:text-violet-100 border border-gray-200 dark:border-violet-400/30'
+                                      isGoalAcquired(goal) ? isPanelDark ? 'bg-emerald-500/20 text-emerald-100 border border-emerald-300/40' : 'bg-emerald-500 text-white border border-emerald-500 shadow-sm shadow-emerald-200' :
+                                      getGoalProgressPercent(goal) >= 60 ? isPanelDark ? 'bg-blue-500/15 text-blue-200 border border-blue-400/30' : 'bg-blue-50 text-blue-700 border border-blue-200' : 
+                                      isPanelDark ? 'bg-violet-500/15 text-violet-100 border border-violet-400/30' : 'bg-slate-100 text-slate-700 border border-slate-200'
                                     }`}>{getGoalProgressPercent(goal)}%</span>
                                   </div>
-                                  <div className="relative w-full h-4 bg-gray-100 dark:bg-slate-800 rounded-full overflow-hidden shadow-inner border border-gray-200/50 dark:border-slate-700">
+                                  <div className={`relative w-full h-5 rounded-full overflow-hidden shadow-inner border ${
+                                    isGoalAcquired(goal)
+                                      ? isPanelDark
+                                        ? 'bg-emerald-950/60 border-emerald-400/30'
+                                        : 'bg-emerald-100 border-emerald-200'
+                                      : isPanelDark
+                                        ? 'bg-slate-800 border-slate-700'
+                                        : 'bg-slate-100 border-slate-200'
+                                  }`}>
                                     {/* Progress Fill with Gradient */}
                                     <div 
                                       className={`absolute top-0 left-0 h-full transition-all duration-1000 ease-out ${
+                                        isGoalAcquired(goal) ? 'bg-gradient-to-r from-emerald-400 via-green-500 to-teal-500 shadow-lg shadow-emerald-300/40' :
                                         getGoalProgressPercent(goal) >= 100 ? 'bg-gradient-to-r from-green-400 to-emerald-600' :
                                         getGoalProgressPercent(goal) >= 80 ? 'bg-gradient-to-r from-blue-400 to-indigo-500' :
                                         getGoalProgressPercent(goal) >= 60 ? 'bg-gradient-to-r from-cyan-400 to-blue-500' :
@@ -4352,7 +4381,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                       style={{ width: `${getGoalProgressPercent(goal)}%` }}
                                     >
                                       {/* Animated Shine Effect */}
-                                      <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -skew-x-12 animate-pulse"></div>
+                                      <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/35 to-transparent -skew-x-12 animate-pulse"></div>
                                     </div>
                                     
                                     {/* Milestone Markers */}
@@ -4366,6 +4395,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                     <input 
                                       type="range" 
                                       className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                                      disabled={isGoalAcquired(goal)}
                                       value={getGoalProgressPercent(goal)}
                                       onChange={(e) => {
                                         const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, progress: parseInt(e.target.value) } : g);
@@ -4373,6 +4403,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                       }}
                                     />
                                   </div>
+                                  {isGoalAcquired(goal) && (
+                                    <div className={`flex items-center gap-2 rounded-2xl px-3 py-2 text-xs font-bold ${
+                                      isPanelDark
+                                        ? 'bg-emerald-500/10 text-emerald-100 border border-emerald-300/20'
+                                        : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                    }`}>
+                                      <CheckCircle2 size={15} />
+                                      Habilidade adquirida. Progresso concluído com 100%.
+                                    </div>
+                                  )}
                                   {patientCategory === 'Criança' && (
                                     <div className="flex justify-between px-1">
                                       <span className="text-[8px] font-semibold text-gray-300 dark:text-slate-400 uppercase">Início</span>
