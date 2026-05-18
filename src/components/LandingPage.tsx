@@ -7,8 +7,7 @@ import {
   ArrowRight, 
   Star, 
   Heart, 
-  Brain, 
-  Activity,
+  Brain,
   Image,
   Pencil,
   BarChart3,
@@ -688,27 +687,10 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
             <div className="relative min-h-[360px] overflow-hidden lg:min-h-full">
               <img
-                src="/Gemini_Generated_Image_m804z0m804z0m804.jpg"
-                alt="Profissional escrevendo em caderno clínico, simbolizando acompanhamento terapêutico contínuo."
-                className="absolute inset-0 h-full w-full object-cover"
+                src="/hero-verto-family-diary.png"
+                alt="Interface da Verto com diário da família no celular e painel de evolução do paciente."
+                className="absolute inset-0 h-full w-full object-cover object-center"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-[#160f2d]/70 via-[#160f2d]/20 to-transparent" />
-              <div className="absolute bottom-6 left-6 right-6 md:bottom-8 md:left-8 md:right-8">
-                <div className="max-w-md rounded-[28px] border border-white/20 bg-white/92 p-5 shadow-2xl backdrop-blur-md">
-                  <div className="flex items-center gap-4">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#7a32fc] text-white shadow-lg shadow-purple-500/30">
-                      <Activity size={22} />
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">Fluxo clínico visível</p>
-                      <p className="text-base font-semibold text-slate-900">Acompanhamento entre sessões</p>
-                    </div>
-                  </div>
-                  <p className="mt-4 text-sm font-medium leading-6 text-slate-500">
-                    Registros do cotidiano, tarefas e evolução chegam estruturados para o profissional decidir com mais contexto e menos ruído.
-                  </p>
-                </div>
-              </div>
             </div>
           </div>
         </div>
