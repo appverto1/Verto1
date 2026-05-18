@@ -4723,10 +4723,96 @@ async function startServer() {
     return false;
   };
 
-  const filterVisibleActivityLogs = (rows: any[]) =>
+  const appointmentAgendaLogActions = new Set([
+    'appointment_confirmed',
+    'appointment_reschedule_requested',
+    'appointment_cancelled'
+  ]);
+
+  const patientNonAgendaLogActions = new Set([
+    'patient_history_read_without_active_treatment',
+    'patient_login',
+    'patient_login_mfa'
+  ]);
+
+  const parseActivityPayloadDetails = (entry: any) => {
+    const raw = sanitizeString(entry?.payload_details || entry?.payloadDetails, 4000);
+    if (!raw || (!raw.startsWith('{') && !raw.startsWith('['))) return {};
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  };
+
+  const resolveActivityEntryAction = (entry: any) => {
+    const direct = sanitizeString(entry?.action, 180);
+    if (direct) return toActivityActionSlug(direct);
+    return resolveActivityLogAction({
+      action: entry?.action,
+      actionType: entry?.action_type || entry?.actionType,
+      title: entry?.title,
+      type: entry?.type
+    });
+  };
+
+  const isAppointmentAgendaInteractionLogEntry = (entry: any) => {
+    const action = resolveActivityEntryAction(entry);
+    if (appointmentAgendaLogActions.has(action)) return true;
+
+    const joined = normalizeActivityActionLabel([
+      entry?.title,
+      entry?.content,
+      entry?.details,
+      entry?.action_type,
+      entry?.payload_details
+    ].map((value) => sanitizeString(value, 1200)).filter(Boolean).join(' '));
+
+    const mentionsAppointment = joined.includes('consulta') || joined.includes('agendamento') || joined.includes('agenda');
+    const mentionsAllowedStatus =
+      joined.includes('confirm') ||
+      joined.includes('remarc') ||
+      joined.includes('cancel');
+
+    return mentionsAppointment && mentionsAllowedStatus;
+  };
+
+  const isPatientNonAgendaActivityLogEntry = (entry: any, currentUser?: any) => {
+    const action = resolveActivityEntryAction(entry);
+    if (isAppointmentAgendaInteractionLogEntry(entry)) return false;
+
+    const payload = parseActivityPayloadDetails(entry);
+    const actorRole = sanitizeString(
+      payload?.actorRole ||
+        payload?.actor_role ||
+        entry?.actorRole ||
+        entry?.actor_role ||
+        currentUser?.role,
+      40
+    ).toLowerCase();
+    const joined = normalizeActivityActionLabel([
+      entry?.title,
+      entry?.content,
+      entry?.details,
+      entry?.action_type,
+      entry?.payload_details
+    ].map((value) => sanitizeString(value, 1200)).filter(Boolean).join(' '));
+
+    return (
+      actorRole === 'patient' ||
+      patientNonAgendaLogActions.has(action) ||
+      joined.includes('leitura de historico sem tratamento ativo') ||
+      joined.includes('paciente acessou o historico') ||
+      joined.includes('login de paciente') ||
+      joined.includes('acesso do paciente registrado')
+    );
+  };
+
+  const filterVisibleActivityLogs = (rows: any[], currentUser?: any) =>
     (Array.isArray(rows) ? rows : [])
       .filter((row: any) => sanitizeString(row?.status, 40).toLowerCase() !== 'archived')
-      .filter((row: any) => !isTechnicalActivityLogEntry(row));
+      .filter((row: any) => !isTechnicalActivityLogEntry(row))
+      .filter((row: any) => !isPatientNonAgendaActivityLogEntry(row, currentUser));
 
   const persistActivityLog = async ({
     userId,
@@ -5494,17 +5580,6 @@ async function startServer() {
         workspaces
       };
 
-      if (roleForSession === 'patient') {
-        void persistActivityLog({
-          userId: sanitizeString(user.id, 120),
-          clinicId: sanitizeString(clinicForSession || user.id, 120),
-          actorName: sanitizeString(profile.name || user.email || 'Paciente', 180),
-          title: 'Login de paciente (MFA)',
-          content: `Acesso do paciente via MFA registrado com status ${treatmentStatus}.`,
-          type: 'security'
-        });
-      }
-      
       req.session.user = buildSessionUserPayload(userData);
       res.json({ success: true, user: userData });
     } catch (err: any) {
@@ -6743,17 +6818,6 @@ async function startServer() {
         clinicSettings: user.user_metadata?.clinic_settings || null,
         workspaces
       };
-
-      if (roleForSession === 'patient') {
-        void persistActivityLog({
-          userId: sanitizeString(user.id, 120),
-          clinicId: sanitizeString(clinicForSession || user.id, 120),
-          actorName: sanitizeString(profile.name || user.email || 'Paciente', 180),
-          title: 'Login de paciente',
-          content: `Acesso do paciente registrado com status ${treatmentStatus}.`,
-          type: 'security'
-        });
-      }
 
       req.session.user = buildSessionUserPayload(userData);
       console.log(`[Auth] Saving session for ${user.email}. Session ID: ${req.sessionID}`);
@@ -11299,15 +11363,6 @@ async function startServer() {
       req.session.user = buildSessionUserPayload(req.session.user);
       void req.session.save(() => {});
 
-      void persistActivityLog({
-        userId: sanitizeString(req.session.user?.id, 120),
-        clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
-        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Paciente', 180),
-        title: 'Leitura de histórico sem tratamento ativo',
-        content: `Paciente acessou o histórico consolidado com status ${treatmentStatus}.`,
-        type: 'security'
-      });
-
       res.json({ success: true, data: enrichedHistory, treatmentStatus });
     } catch (error) {
       res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
@@ -11462,14 +11517,16 @@ async function startServer() {
       }
 
       if (error) throw error;
-      void persistActivityLog({
-        userId: sanitizeString(req.session.user?.id, 120),
-        clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
-        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
-        title: 'Registro de evolução salvo',
-        content: `${docData.title} foi salvo no histórico do paciente ${docData.patient_id}.`,
-        type: 'clinical'
-      });
+      if (sanitizeString(req.session.user?.role, 40).toLowerCase() !== 'patient') {
+        void persistActivityLog({
+          userId: sanitizeString(req.session.user?.id, 120),
+          clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
+          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+          title: 'Registro de evolução salvo',
+          content: `${docData.title} foi salvo no histórico do paciente ${docData.patient_id}.`,
+          type: 'clinical'
+        });
+      }
       res.json({ success: true, data });
     } catch (error) {
       res.status(500).json({ error: 'Erro interno do servidor.' });
@@ -11699,14 +11756,12 @@ async function startServer() {
             if (!merged.has(id)) merged.set(id, row);
           });
 
-          data = Array.from(merged.values())
+          data = filterVisibleActivityLogs(Array.from(merged.values())
             .sort((a: any, b: any) => {
               const ta = new Date(a?.timestamp || a?.created_at || 0).getTime();
               const tb = new Date(b?.timestamp || b?.created_at || 0).getTime();
               return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
-            })
-            .filter((row: any) => !isTechnicalActivityLogEntry(row))
-            .filter((row: any) => sanitizeString(row?.status, 40).toLowerCase() !== 'archived')
+            }), currentUser)
             .slice(0, limit);
         } catch (queryError: any) {
           error = queryError;
@@ -11721,7 +11776,7 @@ async function startServer() {
             .is('deleted_at', null)
             .order('timestamp', { ascending: false })
             .limit(limit);
-          data = filterVisibleActivityLogs(result.data || []);
+          data = filterVisibleActivityLogs(result.data || [], currentUser);
           error = result.error;
         } catch (queryError: any) {
           error = queryError;
@@ -11787,6 +11842,9 @@ async function startServer() {
       const payload = buildActivityLogPayload(currentUser, req.body, req);
       if (isTechnicalActivityLogEntry(payload)) {
         return res.json({ success: true, ignored: true, reason: 'technical_activity_log' });
+      }
+      if (isPatientNonAgendaActivityLogEntry(payload, currentUser)) {
+        return res.json({ success: true, ignored: true, reason: 'patient_non_agenda_activity_log' });
       }
       const { data, error } = await writeActivityLogWithFallback(payload, { upsert: true, select: true });
 

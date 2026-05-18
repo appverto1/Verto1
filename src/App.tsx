@@ -1427,7 +1427,27 @@ export default function App() {
   const manualLogoutInProgressRef = useRef(false);
   const AUTO_LOGOUT_IDLE_MS = 15 * 60 * 1000;
 
+  const isAgendaStatusInteractionLog = (action: string, details: string) => {
+    const normalized = `${action || ""} ${details || ""}`
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+    const mentionsAgenda =
+      normalized.includes("consulta") ||
+      normalized.includes("agendamento") ||
+      normalized.includes("agenda");
+    const mentionsStatus =
+      normalized.includes("confirm") ||
+      normalized.includes("remarc") ||
+      normalized.includes("cancel");
+    return mentionsAgenda && mentionsStatus;
+  };
+
   const onAddActivityLog = async (action: string, details: string, category: 'clinical' | 'management' | 'system' = 'clinical') => {
+    if (String(user?.role || "").toLowerCase() === "patient" && !isAgendaStatusInteractionLog(action, details)) {
+      return;
+    }
+
     const newLog = normalizeActivityLog({
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),

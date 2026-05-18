@@ -1715,6 +1715,22 @@ export function CoordinatorDashboard({
     setIsAddSessionModalOpen(true);
   };
 
+  const formatAgendaRoomDisplayName = useCallback((value: any) => {
+    const roomName = normalizeUtf8Text(String(value || ""))
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!roomName) return "";
+
+    const withoutRepeatedPrefix = roomName.replace(/^(sala\s+)+/i, "Sala ");
+    if (/^sala\b/i.test(withoutRepeatedPrefix)) {
+      return withoutRepeatedPrefix.replace(/^sala\b/i, "Sala");
+    }
+    if (/^\d+[a-z]?$/i.test(withoutRepeatedPrefix)) {
+      return `Sala ${withoutRepeatedPrefix}`;
+    }
+    return withoutRepeatedPrefix;
+  }, []);
+
   const onPatientClick = (
     patientId: any,
     options?: {
@@ -1891,9 +1907,9 @@ export function CoordinatorDashboard({
       rooms.find((room: any) => String(room?.id || "").trim() === roomId) ||
       rooms.find((room: any) => String(room?.name || "").trim() === roomId) ||
       null;
-    const resolvedRoomName = normalizeUtf8Text(
-      String(roomMatch?.name || appointment?.roomName || appointment?.room || ""),
-    ).trim();
+    const resolvedRoomName = formatAgendaRoomDisplayName(
+      roomMatch?.name || appointment?.roomName || appointment?.room || "",
+    );
 
     setIsDayDetailsModalOpen(false);
     setSelectedAgendaAppointment({
@@ -1911,7 +1927,7 @@ export function CoordinatorDashboard({
           "",
       ),
     );
-  }, [rooms, therapistMembersById]);
+  }, [formatAgendaRoomDisplayName, rooms, therapistMembersById]);
 
   const openAppointmentProfileFromAgenda = useCallback(
     (appointment: any) => {
@@ -2032,9 +2048,9 @@ export function CoordinatorDashboard({
               "Profissional",
           ),
         );
-        const roomDisplayName = normalizeUtf8Text(
-          String(roomMatch?.name || item?.roomName || item?.room || ""),
-        ).trim();
+        const roomDisplayName = formatAgendaRoomDisplayName(
+          roomMatch?.name || item?.roomName || item?.room || "",
+        );
 
         return {
           ...item,
@@ -2046,7 +2062,7 @@ export function CoordinatorDashboard({
           anamnesisPending: isPatientPendingAnamnesis(resolvedPatient),
         };
       }),
-    [therapistAgenda, allPatients, rooms, therapistMembersById],
+    [therapistAgenda, allPatients, rooms, therapistMembersById, formatAgendaRoomDisplayName],
   );
 
   const todayAgendaKey = useMemo(() => {
@@ -2476,7 +2492,7 @@ export function CoordinatorDashboard({
                               </span>
                             </div>
                             <p className={`text-[10px] ${statusVisual.meta}`}>
-                              {item.therapistDisplayName || item.therapistName} • Sala {item.roomDisplayName || "--"}
+                              {item.therapistDisplayName || item.therapistName} • {item.roomDisplayName || "--"}
                             </p>
                           </button>
                         );
@@ -6034,7 +6050,7 @@ export function CoordinatorDashboard({
                     ? ` • ${selectedAgendaAppointment.therapistDisplayName}`
                     : ""}
                   {selectedAgendaAppointment.roomDisplayName
-                    ? ` • Sala ${selectedAgendaAppointment.roomDisplayName}`
+                    ? ` • ${selectedAgendaAppointment.roomDisplayName}`
                     : ""}
                 </p>
               </div>
