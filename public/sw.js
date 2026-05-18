@@ -23,9 +23,14 @@ self.addEventListener("push", (event) => {
 
   const appointmentId = payload.appointmentId || "";
   const reminderKind = payload.reminderKind || "reminder";
+  const fallbackQuery = new URLSearchParams({
+    ...(appointmentId ? { appointment_id: appointmentId } : {}),
+    ...(payload.dateLabel ? { appointment_date: payload.dateLabel } : {}),
+    ...(payload.timeLabel ? { appointment_time: payload.timeLabel } : {}),
+  }).toString();
   const targetUrl =
     payload.url ||
-    `/${appointmentId ? `?appointment_id=${encodeURIComponent(appointmentId)}` : ""}`;
+    `/${fallbackQuery ? `?${fallbackQuery}` : ""}`;
 
   event.waitUntil(
     self.registration.showNotification(payload.title || "Lembrete de Consulta - Verto", {

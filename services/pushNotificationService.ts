@@ -575,8 +575,15 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
 
   const timeLabel = sanitizeText(params.appointment.timeLabel, 80);
   const dateLabel = sanitizeText(params.appointment.dateLabel, 80);
+  const scheduledAt = sanitizeText(params.appointment.scheduledAt, 120);
   const whenLabel = [dateLabel, timeLabel].filter(Boolean).join(' as ');
   const reminderKind = sanitizeText(params.reminderKind || params.appointment.reminderKind || 'appointment', 40);
+  const appointmentQuery = new URLSearchParams({
+    appointment_id: String(params.appointment.id || ''),
+    ...(dateLabel ? { appointment_date: dateLabel } : {}),
+    ...(timeLabel ? { appointment_time: timeLabel } : {}),
+    ...(scheduledAt ? { scheduled_at: scheduledAt } : {})
+  }).toString();
   const payload = JSON.stringify({
     title: params.title || 'Confirmacao de Consulta - Verto',
     body:
@@ -584,11 +591,11 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
       (whenLabel
         ? `Voce tem uma consulta agendada em ${whenLabel}. ${APPOINTMENT_NOTIFICATION_CTA}`
         : `Voce tem uma consulta agendada pela Verto. ${APPOINTMENT_NOTIFICATION_CTA}`),
-    url: `/?appointment_id=${encodeURIComponent(params.appointment.id)}`,
+    url: `/?${appointmentQuery}`,
     icon: '/verto-3d-transparent.png',
     badge: '/verto-3d-transparent.png',
     appointmentId: params.appointment.id,
-    scheduledAt: params.appointment.scheduledAt || null,
+    scheduledAt: scheduledAt || null,
     reminderKind,
     dateLabel,
     timeLabel

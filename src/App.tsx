@@ -1006,6 +1006,28 @@ export default function App() {
     return toMinutes(startA) < toMinutes(endB) && toMinutes(endA) > toMinutes(startB);
   };
 
+  const parseBrazilianDate = (value: string, timeValue = '00:00') => {
+    const safeDate = String(value || '').trim();
+    const safeTime = String(timeValue || '00:00').slice(0, 5);
+    const match = safeDate.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
+    if (!match) return null;
+    const day = Number(match[1]);
+    const month = Number(match[2]);
+    const rawYear = match[3] ? Number(match[3]) : new Date().getFullYear();
+    const year = rawYear < 100 ? 2000 + rawYear : rawYear;
+    const [hours, minutes] = safeTime.split(':').map((part) => Number(part) || 0);
+    const date = new Date(year, month - 1, day, hours, minutes);
+    if (
+      Number.isNaN(date.getTime()) ||
+      date.getFullYear() !== year ||
+      date.getMonth() !== month - 1 ||
+      date.getDate() !== day
+    ) {
+      return null;
+    }
+    return date;
+  };
+
   const formatAppointmentConfirmationDateTime = (appointment: any) => {
     const scheduledAt = appointment?.scheduledAt || appointment?.scheduled_at;
     const explicitDate = String(appointment?.date || '').trim();
@@ -1015,7 +1037,12 @@ export default function App() {
       const scheduled = new Date(scheduledAt);
       if (!Number.isNaN(scheduled.getTime())) {
         return {
-          dateLabel: scheduled.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+          dateLabel: scheduled.toLocaleDateString('pt-BR', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            timeZone: 'America/Sao_Paulo'
+          }),
           timeLabel: scheduled.toLocaleTimeString('pt-BR', {
             hour: '2-digit',
             minute: '2-digit',
@@ -1026,16 +1053,65 @@ export default function App() {
     }
 
     if (explicitDate) {
-      const localDate = new Date(`${explicitDate}T${explicitTime || '00:00'}:00`);
+      const localDate = parseBrazilianDate(explicitDate, explicitTime) || new Date(`${explicitDate}T${explicitTime || '00:00'}:00`);
       if (!Number.isNaN(localDate.getTime())) {
         return {
-          dateLabel: localDate.toLocaleDateString('pt-BR'),
-          timeLabel: explicitTime || localDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+          dateLabel: localDate.toLocaleDateString('pt-BR', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric'
+          }),
+          timeLabel: (explicitTime || localDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })).slice(0, 5),
         };
       }
     }
 
     return { dateLabel: '', timeLabel: '' };
+  };
+
+  const buildAppointmentFallbackFromUrl = (params: URLSearchParams) => {
+    const scheduledAt = params.get('scheduled_at') || params.get('scheduledAt') || '';
+    const appointmentDate = params.get('appointment_date') || params.get('date') || params.get('dateLabel') || '';
+    const appointmentTime = params.get('appointment_time') || params.get('time') || params.get('timeLabel') || '';
+    return formatAppointmentConfirmationDateTime({
+      scheduledAt,
+      date: appointmentDate,
+      time: appointmentTime
+    });
+  };
+
+  const decorateAppointmentDateLabel = (dateLabel: string) => {
+    const safeDate = String(dateLabel || '').trim();
+    if (!safeDate) return '';
+    const [day, month, year] = safeDate.split('/').map((part) => Number(part));
+    const shortDate = day && month ? `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}` : safeDate;
+    if (!day || !month || !year) return shortDate;
+    const appointmentDate = new Date(year, month - 1, day);
+    const today = new Date();
+    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+    const targetStart = new Date(appointmentDate.getFullYear(), appointmentDate.getMonth(), appointmentDate.getDate()).getTime();
+    const diffDays = Math.round((targetStart - todayStart) / 86400000);
+    if (diffDays === 0) return `${shortDate} (hoje)`;
+    if (diffDays === 1) return `${shortDate} (amanhã)`;
+    return shortDate;
+  };
+
+  const buildAppointmentConfirmationSubtitle = () => {
+    if (!appointmentConfirmation) return 'Como deseja responder à consulta agendada?';
+    const dateLabel = decorateAppointmentDateLabel(appointmentConfirmation.dateLabel);
+    const timeLabel = appointmentConfirmation.timeLabel;
+    if (dateLabel && timeLabel) return `Consulta dia ${dateLabel} às ${timeLabel}.`;
+    if (dateLabel) return `Consulta dia ${dateLabel}`;
+    return 'Como deseja responder à consulta agendada?';
+  };
+
+  const getFriendlyAppointmentLoadMessage = (raw: any) => {
+    const text = String(raw || '').trim();
+    if (!text) return '';
+    if (/unauthorized|no valid session|token|sess[aã]o/i.test(text)) {
+      return '';
+    }
+    return text;
   };
 
   const roomReservations = useMemo(() => {
@@ -1210,11 +1286,12 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const appointmentId = params.get('appointment_id');
     if (!appointmentId) return;
+    const fallbackLabels = buildAppointmentFallbackFromUrl(params);
+    const hasFallbackDateTime = Boolean(fallbackLabels.dateLabel && fallbackLabels.timeLabel);
     setAppointmentConfirmation({
       appointmentId,
-      dateLabel: '',
-      timeLabel: '',
-      isLoading: true,
+      ...fallbackLabels,
+      isLoading: !hasFallbackDateTime,
       isUpdating: false,
       message: '',
     });
@@ -1237,18 +1314,20 @@ export default function App() {
                   ...prev,
                   ...labels,
                   isLoading: false,
+                  message: '',
                 }
               : prev,
           );
         }
       } catch (error: any) {
+        const friendlyMessage = getFriendlyAppointmentLoadMessage(error?.message);
         if (!cancelled) {
           setAppointmentConfirmation((prev) =>
             prev && prev.appointmentId === appointmentId
               ? {
                   ...prev,
                   isLoading: false,
-                  message: error?.message || 'Não foi possível carregar os dados da consulta.',
+                  message: friendlyMessage,
                 }
               : prev,
           );
@@ -3435,12 +3514,15 @@ export default function App() {
       window.history.replaceState({}, document.title, window.location.pathname);
       window.setTimeout(() => setAppointmentConfirmation(null), 1800);
     } catch (error: any) {
+      const friendlyMessage =
+        getFriendlyAppointmentLoadMessage(error?.message) ||
+        'Não foi possível registrar sua resposta agora. Abra o app com o acesso do paciente e tente novamente.';
       setAppointmentConfirmation((prev) =>
         prev
           ? {
               ...prev,
               isUpdating: false,
-              message: error?.message || 'Não foi possível atualizar a consulta.',
+              message: friendlyMessage,
             }
           : prev,
       );
@@ -3476,13 +3558,11 @@ export default function App() {
               </div>
               <h2 className="text-2xl font-black tracking-tight">Lembrete de Consulta - Verto</h2>
               <p className="mt-2 text-sm font-semibold text-white/90">
-                {appointmentConfirmation.dateLabel && appointmentConfirmation.timeLabel
-                  ? `Consulta no dia ${appointmentConfirmation.dateLabel}, às ${appointmentConfirmation.timeLabel}. Como deseja responder?`
-                  : 'Como deseja responder à consulta agendada?'}
+                {buildAppointmentConfirmationSubtitle()}
               </p>
             </div>
             <div className="space-y-3 p-5">
-              {appointmentConfirmation.isLoading && (
+              {appointmentConfirmation.isLoading && !appointmentConfirmation.dateLabel && (
                 <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-500">
                   Carregando dados da consulta...
                 </div>
