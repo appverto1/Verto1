@@ -2897,6 +2897,49 @@ function resetAppointmentReminderStateAfterScheduleChange(appointment: any) {
   };
 }
 
+function formatAppointmentLogDate(date: unknown) {
+  const safeDate = sanitizeDate(date);
+  if (!safeDate) return '';
+  const [, month, day] = safeDate.split('-');
+  return `${day}/${month}`;
+}
+
+function buildAppointmentLogWhen(appointment: any) {
+  const dateLabel = formatAppointmentLogDate(appointment?.date);
+  const timeLabel = sanitizeString(appointment?.time, 10);
+  if (dateLabel && timeLabel) return `para o dia ${dateLabel} às ${timeLabel}`;
+  if (dateLabel) return `para o dia ${dateLabel}`;
+  if (timeLabel) return `às ${timeLabel}`;
+  return '';
+}
+
+function appointmentStatusLabelForLog(status: unknown) {
+  const normalized = normalizeAppointmentStatusForUi(status);
+  if (normalized === 'confirmed') return { title: 'Consulta confirmada', verb: 'confirmou', actionType: 'appointment_confirmed' };
+  if (normalized === 'reschedule') return { title: 'Consulta marcada para remarcação', verb: 'solicitou remarcação da', actionType: 'appointment_reschedule_requested' };
+  if (normalized === 'canceled') return { title: 'Consulta cancelada', verb: 'cancelou', actionType: 'appointment_cancelled' };
+  return { title: 'Consulta atualizada', verb: 'atualizou', actionType: 'appointment_status_updated' };
+}
+
+function buildAppointmentStatusLogContent(params: {
+  actorName?: string | null;
+  isPatientActor?: boolean;
+  patientName?: string | null;
+  appointment?: any;
+  status?: string | null;
+  note?: string | null;
+}) {
+  const patientName = sanitizeString(params.patientName, 180) || 'paciente';
+  const when = buildAppointmentLogWhen(params.appointment);
+  const statusInfo = appointmentStatusLabelForLog(params.status || params.appointment?.status);
+  const note = sanitizeString(params.note, 800);
+  const actorName = sanitizeString(params.actorName, 180);
+  const content = params.isPatientActor
+    ? `Paciente ${patientName} ${statusInfo.verb} consulta${when ? ` ${when}` : ''}.`
+    : `${actorName || 'Equipe'} ${statusInfo.verb} a consulta de ${patientName}${when ? ` ${when}` : ''}.`;
+  return note ? `${content} Observação: ${note}` : content;
+}
+
 function resetRescheduledAppointmentsForNewReminderCycle(nextAppointments: any[], previousAppointments: any[]) {
   const previousById = new Map(
     (previousAppointments || [])
@@ -8487,31 +8530,22 @@ async function startServer() {
         updatedAppointment?.patientName || updatedAppointment?.patient_name || updatedAppointment?.name || foundAppointment?.patientName || foundAppointment?.name,
         180
       ) || 'paciente';
-      const appointmentDate = sanitizeString(updatedAppointment?.date || foundAppointment?.date, 40);
-      const appointmentTime = sanitizeString(updatedAppointment?.time || foundAppointment?.time, 40);
-      const statusLabel =
-        normalizedStatus === 'confirmed'
-          ? 'confirmado'
-          : normalizedStatus === 'reschedule'
-            ? 'marcado para remarcação'
-            : normalizedStatus === 'canceled'
-              ? 'cancelado'
-              : normalizedStatus;
+      const statusInfo = appointmentStatusLabelForLog(normalizedStatus);
       void persistActivityLog({
         userId: actorId || '',
         clinicId: sanitizeString(foundClinicId || clinicId || updatedAppointment?.clinic_id || foundAppointment?.clinic_id, 120),
         actorName: sanitizeString(actor?.name || actor?.email || (isPatientActor ? 'Paciente' : 'Equipe'), 180),
-        title: 'Status de consulta atualizado',
-        content: `Agendamento de ${patientName}${appointmentDate || appointmentTime ? ` em ${[appointmentDate, appointmentTime].filter(Boolean).join(' às ')}` : ''} foi ${statusLabel}.${appointmentNote ? ` Observação: ${appointmentNote}` : ''}`,
+        title: statusInfo.title,
+        content: buildAppointmentStatusLogContent({
+          actorName: actor?.name || actor?.email || null,
+          isPatientActor,
+          patientName,
+          appointment: updatedAppointment || foundAppointment,
+          status: normalizedStatus,
+          note: appointmentNote
+        }),
         type: 'management',
-        actionType:
-          normalizedStatus === 'confirmed'
-            ? 'appointment_confirmed'
-            : normalizedStatus === 'reschedule'
-              ? 'appointment_reschedule_requested'
-              : normalizedStatus === 'canceled'
-                ? 'appointment_cancelled'
-                : 'appointment_status_updated',
+        actionType: statusInfo.actionType,
         payloadDetails: JSON.stringify({
           appointmentId,
           status: normalizedStatus,
