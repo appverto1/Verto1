@@ -5144,9 +5144,9 @@ export function CoordinatorDashboard({
                     </div>
                   </div>
 
-                  <div className="mb-8 p-5 rounded-[24px] border border-violet-100 bg-violet-50/60 text-slate-700">
+                  <div className="mb-8 p-6 rounded-[28px] border border-violet-100 bg-violet-50/70 text-slate-700">
                     <p className="text-[10px] font-bold text-violet-500 uppercase tracking-widest mb-1">
-                      Cobrança Variável
+                      Cobrança por uso
                     </p>
                     <p className="text-sm font-semibold text-slate-800">
                       {billingSummaryLoading
@@ -5155,18 +5155,18 @@ export function CoordinatorDashboard({
                     </p>
                     <p className="text-xs text-violet-500 mt-1">
                       {billingSummary?.requiresNegotiation
-                        ? `Estimativa calculada até ${billingSummary?.includedForEstimate ?? 50} pacientes. Acima de 50 exige negociação comercial antes da cobrança.`
-                        : `Preço médio por paciente ativo: R$ {(billingSummary?.averageUnitPrice ?? billingSummary?.unitPrice ?? 0).toFixed(2).replace(".", ",")}`}
+                        ? `Estimativa calculada até ${billingSummary?.includedForEstimate ?? 50} pacientes. Acima de 50 pacientes, a cobrança fica sob negociação comercial.`
+                        : `Preço médio por paciente ativo: R$ ${(billingSummary?.averageUnitPrice ?? billingSummary?.unitPrice ?? 0).toFixed(2).replace(".", ",")}`}
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
                     <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
-                        Plano Atual
+                        Modelo atual
                       </p>
                       <h4 className="text-xl font-bold text-slate-900">
-                        {normalizedPlanName}
+                        Por paciente ativo
                       </h4>
                       <p className="text-emerald-500 text-xs font-bold mt-2 flex items-center gap-1">
                         <CheckCircle2 size={12} /> Ativo
@@ -5174,331 +5174,65 @@ export function CoordinatorDashboard({
                     </div>
                     <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
-                        Próximo Vencimento
+                        Colaboradores
                       </p>
                       <h4 className="text-xl font-bold text-slate-900">
-                        15/05/2026
+                        Inclusos
                       </h4>
                       <p className="text-slate-400 text-xs font-medium mt-2">
-                        Renovação automática
+                        Sem cobrança por membro da equipe
                       </p>
                     </div>
                     <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
-                        Valor Mensal
+                        Estimativa mensal
                       </p>
                       <h4 className="text-xl font-bold text-slate-900">
-                        R${" "}
-                        {user.planPrice?.toFixed(2).replace(".", ",") ||
-                          "149,90"}
+                        R$ {(billingSummary?.estimatedAmount ?? billingSummary?.additionalCost ?? 0).toFixed(2).replace(".", ",")}
                       </h4>
-                      <p
-                        className="text-blue-500 text-xs font-bold mt-2 cursor-pointer hover:underline"
-                        onClick={() =>
-                          setShowBillingDetails(!showBillingDetails)
-                        }
-                      >
-                        {showBillingDetails
-                          ? "Ocultar detalhes"
-                          : "Ver detalhes"}
+                      <p className="text-slate-400 text-xs font-medium mt-2">
+                        Calculada pelos pacientes ativos atuais
                       </p>
                     </div>
                   </div>
 
-                  {showBillingDetails && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: "auto" }}
-                      className="mb-12 space-y-6 overflow-hidden"
-                    >
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="bg-slate-50 p-6 rounded-[32px] border border-slate-100">
-                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">
-                            Histórico de Pagamentos
-                          </h4>
-                          <div className="space-y-3">
-                            {billingHistory.map((bill, i) => (
-                              <div
-                                key={i}
-                                className="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-100"
-                              >
-                                <div>
-                                  <p className="text-sm font-bold text-slate-900">
-                                    {bill.date}
-                                  </p>
-                                  <p className="text-[10px] text-slate-400 font-medium">
-                                    {bill.method}
-                                  </p>
-                                </div>
-                                <div className="text-right">
-                                  <p className="text-sm font-bold text-slate-900">
-                                    R${" "}
-                                    {bill.amount.toFixed(2).replace(".", ",")}
-                                  </p>
-                                  <span className="text-[8px] font-bold text-green-500 uppercase">
-                                    Pago
-                                  </span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="bg-slate-50 p-6 rounded-[32px] border border-slate-100">
-                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">
-                            Próximos Vencimentos
-                          </h4>
-                          <div className="space-y-3">
-                            {upcomingBills.map((bill, i) => (
-                              <div
-                                key={i}
-                                className="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-100"
-                              >
-                                <div>
-                                  <p className="text-sm font-bold text-slate-900">
-                                    {bill.date}
-                                  </p>
-                                  <p className="text-[10px] text-slate-400 font-medium">
-                                    Renovação Automática
-                                  </p>
-                                </div>
-                                <div className="text-right">
-                                  <p className="text-sm font-bold text-slate-900">
-                                    R${" "}
-                                    {bill.amount.toFixed(2).replace(".", ",")}
-                                  </p>
-                                  <span className="text-[8px] font-bold text-blue-500 uppercase">
-                                    Agendado
-                                  </span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
-
-                  <h4 className="text-lg font-bold text-slate-900 mb-6">
-                    Gestão de Plano
-                  </h4>
-                  <div className="mb-6 grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <button
-                      onClick={handleOpenCustomerPortal}
-                      disabled={loading}
-                      className="w-full py-3 rounded-2xl font-bold text-sm bg-slate-100 text-slate-800 hover:bg-slate-200 transition-all"
-                    >
-                      Trocar Cartão / Faturamento
-                    </button>
-                    <button
-                      onClick={() => handleCheckout("Essencial")}
-                      disabled={loading || normalizedPlanName === "Essencial"}
-                      className={`w-full py-3 rounded-2xl font-bold text-sm transition-all ${
-                        normalizedPlanName === "Essencial"
-                          ? "bg-slate-100 text-slate-400 cursor-not-allowed"
-                          : "bg-white border border-[#7a32fc]/30 text-[#7a32fc] hover:bg-[#f6f0ff]"
-                      }`}
-                    >
-                      {normalizedPlanName === "Essencial" ? "Plano atual já é Essencial" : "Migrar para Essencial (downgrade)"}
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    <div
-                      className={`p-8 rounded-[40px] border-2 transition-all ${
-                        normalizedPlanName === "Essencial"
-                          ? "border-[#7a32fc] bg-blue-50/30"
-                          : "border-slate-100 hover:border-blue-200"
-                      }`}
-                    >
-                      <div className="flex justify-between items-start mb-6">
-                        <div>
-                          <h5 className="text-xl font-bold text-slate-900">Essencial</h5>
-                          <p className="text-slate-500 text-sm">Para início da operação</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-2xl font-black text-[#4318FF]">R$ 149,90</p>
-                          <p className="text-[10px] font-bold text-slate-400 uppercase">por mês</p>
-                        </div>
-                      </div>
-                      <ul className="space-y-3 mb-8">
-                        {[
-                          "Até 2 profissionais",
-                          "Prontuário e histórico clínico centralizados por paciente",
-                          "Agenda clínica completa (dia/semana/mês) com gestão de salas",
-                          "Portal do Paciente com participação ativa no tratamento",
-                          "Portal da Família (Kids) com registro em texto + foto",
-                        ].map((feat) => (
-                          <li key={feat} className="flex items-center gap-2 text-sm text-slate-600 font-medium">
-                            <CheckCircle2 size={16} className="text-emerald-500" /> {feat}
-                          </li>
-                        ))}
-                      </ul>
+                  <div className="mb-10">
+                    <div className="flex items-center justify-between gap-3 mb-4">
+                      <h4 className="text-lg font-bold text-slate-900">
+                        Faixas de cobrança
+                      </h4>
                       <button
-                        onClick={() => handleCheckout("Essencial")}
-                        disabled={loading || normalizedPlanName === "Essencial"}
-                        className={`w-full py-4 rounded-2xl font-bold text-sm transition-all ${
-                          normalizedPlanName === "Essencial"
-                            ? "bg-slate-100 text-slate-400 cursor-not-allowed"
-                            : "bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20 hover:scale-[1.02]"
-                        }`}
+                        onClick={handleOpenCustomerPortal}
+                        disabled={loading}
+                        className="px-4 py-2 rounded-2xl font-bold text-sm bg-slate-100 text-slate-800 hover:bg-slate-200 transition-all"
                       >
-                        {normalizedPlanName === "Essencial" ? "Plano Atual" : "Escolher Essencial"}
+                        Cartão e faturas
                       </button>
                     </div>
-                    <div
-                      className={`p-8 rounded-[40px] border-2 transition-all ${user.planName === "Crescimento" ? "border-[#7a32fc] bg-blue-50/30" : "border-slate-100 hover:border-blue-200"}`}
-                    >
-                      <div className="flex justify-between items-start mb-6">
-                        <div>
-                          <h5 className="text-xl font-bold text-slate-900">
-                            Crescimento
-                          </h5>
-                          <p className="text-slate-500 text-sm">
-                            Para clínicas em crescimento
-                          </p>
+                    <div className="overflow-hidden rounded-[28px] border border-slate-100">
+                      {[
+                        ["1 a 5 pacientes", "R$ 40,00 por paciente"],
+                        ["6 a 10 pacientes", "R$ 32,00 por paciente"],
+                        ["11 a 20 pacientes", "R$ 26,00 por paciente"],
+                        ["21 a 30 pacientes", "R$ 22,00 por paciente"],
+                        ["31 a 40 pacientes", "R$ 19,00 por paciente"],
+                        ["41 a 50 pacientes", "R$ 17,00 por paciente"],
+                        ["51+ pacientes", "Sob negociação"],
+                      ].map(([range, price], index) => (
+                        <div
+                          key={range}
+                          className={`flex items-center justify-between gap-4 px-5 py-4 ${
+                            index % 2 === 0 ? "bg-white" : "bg-slate-50"
+                          }`}
+                        >
+                          <span className="text-sm font-bold text-slate-700">{range}</span>
+                          <span className="text-sm font-black text-[#4318FF]">{price}</span>
                         </div>
-                        <div className="text-right">
-                          <p className="text-2xl font-black text-[#4318FF]">
-                            R$ 399,90
-                          </p>
-                          <p className="text-[10px] font-bold text-slate-400 uppercase">
-                            por mês
-                          </p>
-                        </div>
-                      </div>
-                      <ul className="space-y-3 mb-8">
-                        {[
-                          "3 a 7 Profissionais",
-                          "Plano terapêutico inteligente com evolução por domínio",
-                          "Relatórios visuais de evolução (comparativos por período)",
-                          "Fluxos por perfil profissional (coordenação, terapeuta, assistente)",
-                          "Compartilhamento de anotações com controle de visibilidade",
-                          "Cadastro e ativação digital de pacientes por e-mail",
-                        ].map((feat) => (
-                          <li
-                            key={feat}
-                            className="flex items-center gap-2 text-sm text-slate-600 font-medium"
-                          >
-                            <CheckCircle2
-                              size={16}
-                              className="text-emerald-500"
-                            />{" "}
-                            {feat}
-                          </li>
-                        ))}
-                      </ul>
-                      <button
-                        onClick={() => handleCheckout("growth_plan_id")}
-                        disabled={loading || user.planName === "Crescimento"}
-                        className={`w-full py-4 rounded-2xl font-bold text-sm transition-all ${user.planName === "Crescimento" ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20 hover:scale-[1.02]"}`}
-                      >
-                        {user.planName === "Crescimento"
-                          ? "Plano Atual"
-                          : "Fazer Upgrade"}
-                      </button>
+                      ))}
                     </div>
-
-                    <div
-                      className={`p-8 rounded-[40px] border-2 transition-all ${user.planName === "Avançado" ? "border-[#7a32fc] bg-blue-50/30" : "border-slate-100 hover:border-blue-200"}`}
-                    >
-                      <div className="flex justify-between items-start mb-6">
-                        <div>
-                          <h5 className="text-xl font-bold text-slate-900">
-                            Avançado
-                          </h5>
-                          <p className="text-slate-500 text-sm">
-                            Para clínicas estabelecidas
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-2xl font-black text-[#4318FF]">
-                            R$ 679,90
-                          </p>
-                          <p className="text-[10px] font-bold text-slate-400 uppercase">
-                            por mês
-                          </p>
-                        </div>
-                      </div>
-                      <ul className="space-y-3 mb-8">
-                        {[
-                          "7 a 12 Profissionais",
-                          "Fluxo Adulto com tarefas de casa e devolutiva do paciente",
-                          "Estrelinhas e marcos de progresso para engajamento infantil",
-                          "Multi-clínica/workspace para operação organizada",
-                          "LGPD e segurança clínica avançada (HIPAA)",
-                        ].map((feat) => (
-                          <li
-                            key={feat}
-                            className="flex items-center gap-2 text-sm text-slate-600 font-medium"
-                          >
-                            <CheckCircle2
-                              size={16}
-                              className="text-emerald-500"
-                            />{" "}
-                            {feat}
-                          </li>
-                        ))}
-                      </ul>
-                      <button
-                        onClick={() => handleCheckout("advanced_plan_id")}
-                        disabled={loading || user.planName === "Avançado"}
-                        className={`w-full py-4 rounded-2xl font-bold text-sm transition-all ${user.planName === "Avançado" ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-[#7a32fc] text-white shadow-lg shadow-purple-500/30 hover:scale-[1.02]"}`}
-                      >
-                        {user.planName === "Avançado"
-                          ? "Plano Atual"
-                          : "Fazer Upgrade"}
-                      </button>
-                    </div>
-
-                    <div className="p-8 rounded-[40px] border-2 border-slate-100 hover:border-blue-200 transition-all bg-slate-50/30">
-                      <div className="flex justify-between items-start mb-6">
-                        <div>
-                          <h5 className="text-xl font-bold text-slate-900">
-                            Enterprise
-                          </h5>
-                          <p className="text-slate-500 text-sm">
-                            Para grandes redes
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-2xl font-black text-slate-900">
-                            Sob Consulta
-                          </p>
-                          <p className="text-[10px] font-bold text-slate-400 uppercase">
-                            Personalizado
-                          </p>
-                        </div>
-                      </div>
-                      <ul className="space-y-3 mb-8">
-                        {[
-                          "12+ Profissionais",
-                          "Tudo dos planos anteriores com expansão operacional",
-                          "Arquitetura pronta para múltiplas unidades",
-                          "Acompanhamento estratégico para implantação",
-                          "Condições comerciais personalizadas por operação",
-                          "Suporte dedicado para escala clínica",
-                        ].map((feat) => (
-                          <li
-                            key={feat}
-                            className="flex items-center gap-2 text-sm text-slate-600 font-medium"
-                          >
-                            <CheckCircle2
-                              size={16}
-                              className="text-emerald-500"
-                            />{" "}
-                            {feat}
-                          </li>
-                        ))}
-                      </ul>
-                      <button
-                        onClick={() =>
-                          window.open("https://wa.me/5511999999999", "_blank")
-                        }
-                        className="w-full py-4 bg-white border-2 border-[#7a32fc] text-[#7a32fc] rounded-2xl font-bold text-sm hover:bg-[#7a32fc] hover:text-white transition-all flex items-center justify-center gap-2"
-                      >
-                        <MessageCircle size={18} />
-                        Falar com Especialista
-                      </button>
-                    </div>
+                    <p className="text-xs text-slate-400 font-medium mt-3">
+                      A cobrança mensal usa a quantidade de pacientes ativos da clínica no fechamento do ciclo.
+                    </p>
                   </div>
                 </div>
               </motion.div>

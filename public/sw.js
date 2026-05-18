@@ -1,7 +1,9 @@
-const SW_VERSION = "appointments-click-v4";
+const SW_VERSION = "appointments-click-v5";
 const CONFIRM_ACTION = "verto_confirm_appointment";
 const RESCHEDULE_ACTION = "verto_reschedule_appointment";
+const CANCEL_ACTION = "verto_cancel_appointment";
 const APPOINTMENT_NOTIFICATION_CTA = "Clique nesta notificacao para confirmar, remarcar ou cancelar.";
+const VERTO_ICON = "/verto-3d-transparent.png";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());
@@ -23,17 +25,22 @@ self.addEventListener("push", (event) => {
   const reminderKind = payload.reminderKind || "reminder";
   const targetUrl =
     payload.url ||
-    `/consulta${appointmentId ? `?appointment_id=${encodeURIComponent(appointmentId)}` : ""}`;
+    `/${appointmentId ? `?appointment_id=${encodeURIComponent(appointmentId)}` : ""}`;
 
   event.waitUntil(
     self.registration.showNotification(payload.title || "Lembrete de Consulta - Verto", {
       body: payload.body || `Voce tem uma consulta agendada. ${APPOINTMENT_NOTIFICATION_CTA}`,
-      icon: "/verto-3d-transparent.png",
-      badge: "/verto-3d-transparent.png",
+      icon: new URL(payload.icon || VERTO_ICON, self.location.origin).href,
+      badge: new URL(payload.badge || VERTO_ICON, self.location.origin).href,
       tag: appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined,
       renotify: Boolean(appointmentId),
       requireInteraction: true,
       timestamp: Date.now(),
+      actions: [
+        { action: CONFIRM_ACTION, title: "Confirmar" },
+        { action: RESCHEDULE_ACTION, title: "Remarcar" },
+        { action: CANCEL_ACTION, title: "Cancelar" },
+      ],
       data: {
         url: targetUrl,
         appointmentId,
@@ -87,12 +94,11 @@ self.addEventListener("notificationclick", (event) => {
   const appointmentId = event.notification?.data?.appointmentId || "";
   const targetUrl = event.notification?.data?.url || "/";
   const reminderKind = event.notification?.data?.reminderKind || "reminder";
-  
-  // Older notifications may still carry button action ids until the new
-  // service worker replaces every client.
+
   const actionToStatusMap = {
     [CONFIRM_ACTION]: "confirmed",
     [RESCHEDULE_ACTION]: "reschedule",
+    [CANCEL_ACTION]: "canceled",
   };
 
   const patientStatus = actionToStatusMap[action];
@@ -112,20 +118,19 @@ self.addEventListener("notificationclick", (event) => {
   event.waitUntil(
     persistAppointmentResponse(appointmentId, action, patientStatus, "push_notification_action", reminderKind)
       .then(() => {
-        // Send feedback notification with correct message for what user chose
         const feedbackMap = {
           confirmed: {
-            title: "Presença Confirmada - Verto",
-            body: "Sua presença foi confirmada. A clínica foi notificada.",
+            title: "Presenca Confirmada - Verto",
+            body: "Sua presenca foi confirmada. A clinica foi notificada.",
           },
           reschedule: {
             title: "Reagendamento Solicitado - Verto",
-            body: "Solicitação de reagendamento registrada. A recepção entrará em contato.",
+            body: "Solicitacao de reagendamento registrada. A recepcao entrara em contato.",
           },
           canceled: {
             title: "Consulta Cancelada - Verto",
-            body: "Sua consulta foi cancelada e o horário foi liberado.",
-          }
+            body: "Sua consulta foi cancelada e o horario foi liberado.",
+          },
         };
 
         const feedback = feedbackMap[patientStatus] || {
@@ -137,8 +142,8 @@ self.addEventListener("notificationclick", (event) => {
           broadcastAppointmentStatus(appointmentId, patientStatus),
           self.registration.showNotification(feedback.title, {
             body: feedback.body,
-            icon: "/verto-3d-transparent.png",
-            badge: "/verto-3d-transparent.png",
+            icon: new URL(VERTO_ICON, self.location.origin).href,
+            badge: new URL(VERTO_ICON, self.location.origin).href,
             tag: `appointment-response-${appointmentId}`,
             requireInteraction: false,
             data: { url: targetUrl, appointmentId },

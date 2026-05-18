@@ -584,7 +584,9 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
       (whenLabel
         ? `Voce tem uma consulta agendada em ${whenLabel}. ${APPOINTMENT_NOTIFICATION_CTA}`
         : `Voce tem uma consulta agendada pela Verto. ${APPOINTMENT_NOTIFICATION_CTA}`),
-    url: `/consulta?appointment_id=${encodeURIComponent(params.appointment.id)}`,
+    url: `/?appointment_id=${encodeURIComponent(params.appointment.id)}`,
+    icon: '/verto-3d-transparent.png',
+    badge: '/verto-3d-transparent.png',
     appointmentId: params.appointment.id,
     scheduledAt: params.appointment.scheduledAt || null,
     reminderKind,
