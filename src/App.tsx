@@ -2249,16 +2249,25 @@ export default function App() {
       }
     }
   };
-  const handleUpdateAgendaStatus = async (id: any, status: string) => {
+  const handleUpdateAgendaStatus = async (id: any, status: string, details: any = {}) => {
     const normalizedStatus = status === 'cancelled' ? 'canceled' : status;
-    setTherapistAgenda(prev => prev.map(item => String(item.id) === String(id) ? { ...item, status: normalizedStatus } : item));
+    const note = String(details?.note ?? details?.notes ?? details?.observation ?? '').trim();
+    setTherapistAgenda(prev => prev.map(item => String(item.id) === String(id) ? { ...item, status: normalizedStatus, ...(note ? { notes: note, note, observation: note } : {}) } : item));
     try {
-      await fetch(`/api/appointments/${encodeURIComponent(String(id))}/status`, {
+      const response = await fetch(`/api/appointments/${encodeURIComponent(String(id))}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ status: normalizedStatus })
+        body: JSON.stringify({
+          status: normalizedStatus,
+          note,
+          source: details?.source || 'agenda_management'
+        })
       });
+      const result = await response.json().catch(() => ({}));
+      if (response.ok && result?.appointment) {
+        setTherapistAgenda(prev => prev.map(item => String(item.id) === String(id) ? { ...item, ...result.appointment } : item));
+      }
     } catch (error) {
       console.warn('Falha ao persistir status da consulta imediatamente:', error);
     }

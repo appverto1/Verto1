@@ -28,23 +28,19 @@ interface Member {
   created_at: string;
 }
 
-const PLAN_LIMITS: Record<string, number> = {
-  'Essencial': 2,
-  'Crescimento': 7,
-  'Avançado': 12,
-  'Enterprise': 999,
-  'Premium': 999,
-  'Paciente': 0
-};
+const PROFESSIONALS_PER_ACTIVE_PATIENT = 10;
+const MIN_TEAM_ACCESS_LIMIT = 10;
 
 export function TeamManagement({
   user,
   onRequestUpgrade,
+  activePatientCount = 0,
   memberSessionDurations = {},
   onUpdateMemberSessionDuration,
 }: {
   user: any;
   onRequestUpgrade?: () => void;
+  activePatientCount?: number;
   memberSessionDurations?: Record<string, string>;
   onUpdateMemberSessionDuration?: (member: Member, duration: string) => void;
 }) {
@@ -64,12 +60,9 @@ export function TeamManagement({
 
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
-  const rawPlanName = String(user?.planName || '').trim();
-  const planName =
-    !rawPlanName || rawPlanName === 'Verto Pro' || rawPlanName === 'Plano Pro'
-      ? 'Essencial'
-      : rawPlanName;
-  const inviteLimit = PLAN_LIMITS[planName] || 2;
+  void onRequestUpgrade;
+  const normalizedActivePatientCount = Math.max(0, Number(activePatientCount) || 0);
+  const inviteLimit = Math.max(MIN_TEAM_ACCESS_LIMIT, normalizedActivePatientCount * PROFESSIONALS_PER_ACTIVE_PATIENT);
   const totalUsed = (members?.length || 0) + (invitations?.filter(i => i.status === 'pending').length || 0);
   const canInvite = totalUsed < inviteLimit;
 
@@ -119,7 +112,7 @@ export function TeamManagement({
     setSuccess(null);
 
     if (!canInvite) {
-      setError(`Seu plano ${planName} permite no máximo ${inviteLimit} membros. Faça upgrade para convidar mais.`);
+      setError(`Limite saudável atingido: ${inviteLimit} acessos de equipe para ${normalizedActivePatientCount} paciente(s) ativo(s).`);
       setIsAssigning(false);
       return;
     }
@@ -253,19 +246,11 @@ export function TeamManagement({
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Gestão da Equipe</h1>
           <p className="text-slate-500 text-sm">
-            Plano {planName}: {totalUsed} de {inviteLimit === 999 ? 'Ilimitado' : inviteLimit} vagas utilizadas
+            Limite saudável: {totalUsed} de {inviteLimit} acessos usados • {normalizedActivePatientCount} paciente(s) ativo(s)
           </p>
         </div>
         
         <div className="flex items-center gap-3">
-          {!canInvite && (
-            <button 
-              onClick={() => onRequestUpgrade?.()}
-              className="px-4 py-2 bg-gradient-to-r from-[#6D28FF] to-[#9F67FF] text-white rounded-xl text-xs font-bold uppercase shadow-lg shadow-purple-500/30 hover:scale-105 transition-all"
-            >
-              Fazer Upgrade
-            </button>
-          )}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
             <input 
@@ -407,7 +392,7 @@ export function TeamManagement({
             <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mb-6">
               <UserPlus size={24} />
             </div>
-            <h2 className="text-lg font-bold text-slate-900 mb-2">Atribuir Novo Papel</h2>
+            <h2 className="text-lg font-bold text-slate-900 mb-2">Convidar Colaborador</h2>
             <p className="text-slate-500 text-xs mb-6">Se o colaborador ainda não tiver conta, ele poderá criar pelo próprio convite via e-mail.</p>
 
             <form onSubmit={handleInvite} className="space-y-4">
@@ -439,7 +424,7 @@ export function TeamManagement({
                     </div>
                     <div>
                       <p className="text-sm font-bold text-slate-900">Terapeuta</p>
-                      <p className="text-[10px] text-slate-500">Prontuários e Agendas</p>
+                      <p className="text-[10px] text-slate-500">Pacientes atribuídos e agendas</p>
                     </div>
                   </button>
 
@@ -474,16 +459,15 @@ export function TeamManagement({
               )}
 
               <button
-                type={!canInvite ? "button" : "submit"}
-                disabled={isAssigning}
+                type="submit"
+                disabled={isAssigning || !canInvite}
                 className={`w-full py-4 rounded-2xl font-bold text-sm shadow-lg transition-all ${
                   !canInvite
-                    ? 'bg-gradient-to-r from-[#6D28FF] to-[#9F67FF] text-white cursor-pointer shadow-purple-500/30'
+                    ? 'bg-slate-200 text-slate-500 cursor-not-allowed shadow-none'
                     : 'bg-gradient-to-r from-[#6D28FF] to-[#9F67FF] text-white shadow-purple-500/30 hover:scale-[1.02] active:scale-[0.98]'
                 } disabled:opacity-50 disabled:scale-100`}
-                onClick={!canInvite ? () => onRequestUpgrade?.() : undefined}
               >
-                {isAssigning ? 'Enviando...' : !canInvite ? 'Upgrade' : 'Enviar Convite'}
+                {isAssigning ? 'Enviando...' : !canInvite ? 'Limite atingido' : 'Enviar Convite'}
               </button>
             </form>
 

@@ -103,7 +103,7 @@ interface CoordinatorDashboardProps {
   onAddActivityLog: (title: string, content: string, type?: string) => void;
   onScheduleSession: (session: any) => any;
   onUpdateAppointment: (id: any, updates: any) => void;
-  onUpdateAgendaStatus: (id: any, status: string) => void;
+  onUpdateAgendaStatus: (id: any, status: string, details?: any) => void;
   onAddPatient: (patient: any) => Promise<any> | any;
   patientsHistory: any[];
   therapistNotes: any[];
@@ -509,6 +509,8 @@ export function CoordinatorDashboard({
   const [selectedPatientProfile, setSelectedPatientProfile] = useState<any>(null);
   const [selectedAgendaAppointment, setSelectedAgendaAppointment] =
     useState<any>(null);
+  const [agendaAppointmentObservation, setAgendaAppointmentObservation] =
+    useState("");
   const [filteredPatients, setFilteredPatients] = useState<any[]>([]);
   const dashboardHeadlineMessage = useMemo(() => {
     const todayKey = new Date().toISOString().slice(0, 10);
@@ -1278,11 +1280,11 @@ export function CoordinatorDashboard({
     );
   };
 
-  const handleStatusUpdate = (id: number, status: string) => {
-    onUpdateAgendaStatus(id, status);
+  const handleStatusUpdate = (id: number, status: string, details: any = {}) => {
+    onUpdateAgendaStatus(id, status, details);
     onAddActivityLog(
       "Status de agenda atualizado",
-      `Agendamento ${id} atualizado para ${status}.`,
+      `Agendamento ${id} atualizado para ${status}.${details?.note ? ` Observação: ${details.note}` : ""}`,
       "management",
     );
   };
@@ -1851,6 +1853,7 @@ export function CoordinatorDashboard({
 
   const closeAgendaActionModal = useCallback(() => {
     setSelectedAgendaAppointment(null);
+    setAgendaAppointmentObservation("");
   }, []);
 
   const openAgendaActionModal = useCallback((appointment: any) => {
@@ -1897,6 +1900,16 @@ export function CoordinatorDashboard({
       therapistDisplayName: resolvedTherapistName,
       roomDisplayName: resolvedRoomName,
     });
+    setAgendaAppointmentObservation(
+      String(
+        appointment?.notes ||
+          appointment?.note ||
+          appointment?.observation ||
+          appointment?.appointmentObservation ||
+          appointment?.appointment_observation ||
+          "",
+      ),
+    );
   }, [rooms, therapistMembersById]);
 
   const openAppointmentProfileFromAgenda = useCallback(
@@ -1944,9 +1957,23 @@ export function CoordinatorDashboard({
   const handleCancelAppointmentFromAgenda = useCallback(
     (appointment: any) => {
       closeAgendaActionModal();
-      handleStatusUpdate(appointment?.id, "canceled");
+      handleStatusUpdate(appointment?.id, "canceled", {
+        note: agendaAppointmentObservation,
+        source: "agenda_modal",
+      });
     },
-    [closeAgendaActionModal, handleStatusUpdate],
+    [agendaAppointmentObservation, closeAgendaActionModal, handleStatusUpdate],
+  );
+
+  const handleConfirmAppointmentFromAgenda = useCallback(
+    (appointment: any) => {
+      closeAgendaActionModal();
+      handleStatusUpdate(appointment?.id, "confirmed", {
+        note: agendaAppointmentObservation,
+        source: "agenda_modal",
+      });
+    },
+    [agendaAppointmentObservation, closeAgendaActionModal, handleStatusUpdate],
   );
 
   const normalizedAgenda = useMemo(
@@ -3259,6 +3286,7 @@ export function CoordinatorDashboard({
             <TeamManagement
               user={user}
               onRequestUpgrade={() => navigateToTab("billing")}
+              activePatientCount={(allPatients || []).filter((patient: any) => String(patient?.status || "active").toLowerCase() !== "inactive").length}
               memberSessionDurations={professionalSessionDurations}
               onUpdateMemberSessionDuration={(member, duration) =>
                 setProfessionalSessionDurations((prev) => ({
@@ -4440,6 +4468,7 @@ export function CoordinatorDashboard({
                 <TeamManagement
                   user={user}
                   onRequestUpgrade={() => navigateToTab("billing")}
+                  activePatientCount={(allPatients || []).filter((patient: any) => String(patient?.status || "active").toLowerCase() !== "inactive").length}
                   memberSessionDurations={professionalSessionDurations}
                   onUpdateMemberSessionDuration={(member, duration) =>
                     setProfessionalSessionDurations((prev) => ({
@@ -6027,7 +6056,30 @@ export function CoordinatorDashboard({
               })()}
             </div>
 
+            <div className="mb-5">
+              <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                Observação da consulta
+              </label>
+              <textarea
+                value={agendaAppointmentObservation}
+                onChange={(event) => setAgendaAppointmentObservation(event.target.value)}
+                maxLength={1200}
+                rows={3}
+                placeholder="Registre informações importantes sobre este agendamento..."
+                className="w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700 outline-none transition-all placeholder:text-slate-400 focus:border-[#7a32fc] focus:ring-4 focus:ring-[#7a32fc]/10"
+              />
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                onClick={() =>
+                  handleConfirmAppointmentFromAgenda(selectedAgendaAppointment)
+                }
+                className="flex items-center gap-2 rounded-2xl border border-emerald-200 px-4 py-3 text-sm font-semibold text-emerald-600 hover:bg-emerald-50 transition-all"
+              >
+                <CheckCircle2 size={16} />
+                Confirmar
+              </button>
               <button
                 onClick={() =>
                   handleRescheduleAppointmentFromAgenda(selectedAgendaAppointment)

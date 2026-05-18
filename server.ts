@@ -2488,6 +2488,55 @@ function hasGlobalClinicAccess(user: any): boolean {
   return role === 'admin' || role === 'owner';
 }
 
+const TEAM_ACCESS_PER_ACTIVE_PATIENT = 10;
+const MIN_TEAM_ACCESS_LIMIT = 10;
+
+async function getClinicTeamAccessUsage(clinicId: string) {
+  const safeClinicId = sanitizeString(clinicId, 120);
+  if (!safeClinicId) {
+    return {
+      activePatients: 0,
+      activeMembers: 0,
+      pendingInvitations: 0,
+      limit: MIN_TEAM_ACCESS_LIMIT,
+      used: 0
+    };
+  }
+
+  const [patientsResult, membersResult, invitationsResult] = await Promise.all([
+    supabase
+      .from('patients')
+      .select('id', { count: 'exact', head: true })
+      .eq('clinic_id', safeClinicId)
+      .eq('is_active', true)
+      .is('deleted_at', null),
+    supabase
+      .from('clinic_memberships')
+      .select('user_id', { count: 'exact', head: true })
+      .eq('clinic_id', safeClinicId)
+      .eq('status', 'active')
+      .in('role', ['coordinator', 'therapist', 'receptionist']),
+    supabase
+      .from('invitations')
+      .select('id', { count: 'exact', head: true })
+      .eq('clinic_id', safeClinicId)
+      .eq('status', 'pending')
+      .in('role', ['coordinator', 'therapist', 'receptionist'])
+  ]);
+
+  const activePatients = Math.max(0, Number(patientsResult.count || 0));
+  const activeMembers = Math.max(0, Number(membersResult.count || 0));
+  const pendingInvitations = Math.max(0, Number(invitationsResult.count || 0));
+  const limit = Math.max(MIN_TEAM_ACCESS_LIMIT, activePatients * TEAM_ACCESS_PER_ACTIVE_PATIENT);
+  return {
+    activePatients,
+    activeMembers,
+    pendingInvitations,
+    limit,
+    used: activeMembers + pendingInvitations
+  };
+}
+
 async function findDuplicatePatientInClinic(params: {
   clinicId?: unknown;
   email?: unknown;
@@ -3336,6 +3385,8 @@ async function canAccessPatientInCurrentClinic(patientId: string, user: any): Pr
   if (!isUuid(patientId)) return false;
   if (hasGlobalClinicAccess(user)) return true;
   const clinicId = currentClinicId(user);
+  const role = sanitizeString(user?.role, 40).toLowerCase();
+  const userId = sanitizeString(user?.id, 120);
   let query = supabase
     .from('patients')
     .select('id, therapist_id, clinic_id')
@@ -3347,12 +3398,14 @@ async function canAccessPatientInCurrentClinic(patientId: string, user: any): Pr
   }
   const { data, error } = await query.maybeSingle();
   if (error) return false;
-  if (data?.id) return true;
+  if (data?.id) {
+    if (role === 'coordinator') return true;
+    if (role === 'therapist' && sanitizeString(data?.therapist_id, 120) === userId) return true;
+    return false;
+  }
 
   // Fallback robusto: se contexto de clínica não estiver pronto na sessão,
   // terapeuta responsável ainda pode acessar seu próprio paciente.
-  const role = sanitizeString(user?.role, 40).toLowerCase();
-  const userId = sanitizeString(user?.id, 120);
   if (role === 'therapist' && isUuid(userId)) {
     const { data: byTherapist, error: byTherapistError } = await supabase
       .from('patients')
@@ -5060,8 +5113,13 @@ async function startServer() {
         return next();
       }
 
-      // If in the same clinic, allow access (for coordination)
-      if (patient.clinic_id && patient.clinic_id === currentClinicId(user)) {
+      // Same-clinic access is reserved for clinic coordination.
+      const userRole = sanitizeString(user?.role, 40).toLowerCase();
+      if (
+        patient.clinic_id &&
+        patient.clinic_id === currentClinicId(user) &&
+        (userRole === 'coordinator' || hasGlobalClinicAccess(user))
+      ) {
         return next();
       }
 
@@ -6836,6 +6894,24 @@ async function startServer() {
         .maybeSingle();
       let reusedExistingInvitation = false;
       let existingInvitationId = sanitizeString(existing?.id, 120);
+      if (!existing) {
+        const usage = await getClinicTeamAccessUsage(clinicId);
+        if (usage.used >= usage.limit) {
+          return res.status(409).json({
+            success: false,
+            code: 'TEAM_ACCESS_LIMIT_REACHED',
+            error: `Limite saudável atingido: ${usage.used} de ${usage.limit} acessos de equipe em uso para ${usage.activePatients} paciente(s) ativo(s).`,
+            details: {
+              activePatients: usage.activePatients,
+              activeMembers: usage.activeMembers,
+              pendingInvitations: usage.pendingInvitations,
+              limit: usage.limit,
+              used: usage.used,
+              professionalsPerActivePatient: TEAM_ACCESS_PER_ACTIVE_PATIENT
+            }
+          });
+        }
+      }
       if (existing) {
         reusedExistingInvitation = true;
         // Keep invitation fresh and allow role correction on resend.
@@ -8098,6 +8174,10 @@ async function startServer() {
       const clinicId = currentClinicId(actor);
       const now = new Date().toISOString();
       const safeSource = sanitizeString(req.body?.source, 80) || 'appointment_confirmation_popup';
+      const appointmentNote = sanitizeString(
+        req.body?.note || req.body?.notes || req.body?.observation || req.body?.appointmentObservation,
+        1200
+      );
       const notificationAction = sanitizeString(req.body?.notificationAction || req.body?.action, 80).toLowerCase();
       const isPushNotificationAction = safeSource === 'push_notification_action';
 
@@ -8125,6 +8205,9 @@ async function startServer() {
           status: tableStatus,
           updated_at: now
         };
+        if (appointmentNote) {
+          patchWithConfirmation.notes = appointmentNote;
+        }
         
         // If rescheduled, reset notification markers
         if (normalizedStatus === 'reschedule') {
@@ -8273,6 +8356,11 @@ async function startServer() {
             status: normalizedStatus,
             statusUpdatedAt: now,
             statusUpdatedBy: actorId,
+            notes: appointmentNote || appointment?.notes || appointment?.note || null,
+            note: appointmentNote || appointment?.note || appointment?.notes || null,
+            observation: appointmentNote || appointment?.observation || null,
+            appointmentObservation: appointmentNote || appointment?.appointmentObservation || null,
+            appointment_observation: appointmentNote || appointment?.appointment_observation || null,
             patientResponse: isPatientActor
               ? normalizedStatus
               : appointment?.patientResponse,
@@ -8351,6 +8439,45 @@ async function startServer() {
         ...rawUpdatedAppointment,
         status: normalizeAppointmentStatusForUi(rawUpdatedAppointment?.status || normalizedStatus)
       };
+
+      const patientName = sanitizeString(
+        updatedAppointment?.patientName || updatedAppointment?.patient_name || updatedAppointment?.name || foundAppointment?.patientName || foundAppointment?.name,
+        180
+      ) || 'paciente';
+      const appointmentDate = sanitizeString(updatedAppointment?.date || foundAppointment?.date, 40);
+      const appointmentTime = sanitizeString(updatedAppointment?.time || foundAppointment?.time, 40);
+      const statusLabel =
+        normalizedStatus === 'confirmed'
+          ? 'confirmado'
+          : normalizedStatus === 'reschedule'
+            ? 'marcado para remarcação'
+            : normalizedStatus === 'canceled'
+              ? 'cancelado'
+              : normalizedStatus;
+      void persistActivityLog({
+        userId: actorId || '',
+        clinicId: sanitizeString(foundClinicId || clinicId || updatedAppointment?.clinic_id || foundAppointment?.clinic_id, 120),
+        actorName: sanitizeString(actor?.name || actor?.email || (isPatientActor ? 'Paciente' : 'Equipe'), 180),
+        title: 'Status de consulta atualizado',
+        content: `Agendamento de ${patientName}${appointmentDate || appointmentTime ? ` em ${[appointmentDate, appointmentTime].filter(Boolean).join(' às ')}` : ''} foi ${statusLabel}.${appointmentNote ? ` Observação: ${appointmentNote}` : ''}`,
+        type: 'management',
+        actionType:
+          normalizedStatus === 'confirmed'
+            ? 'appointment_confirmed'
+            : normalizedStatus === 'reschedule'
+              ? 'appointment_reschedule_requested'
+              : normalizedStatus === 'canceled'
+                ? 'appointment_cancelled'
+                : 'appointment_status_updated',
+        payloadDetails: JSON.stringify({
+          appointmentId,
+          status: normalizedStatus,
+          source: safeSource,
+          actorRole,
+          patientId: updatedAppointment?.patientId || updatedAppointment?.patient_id || null,
+          note: appointmentNote || null
+        })
+      });
 
       return res.json({
         success: true,
@@ -9433,11 +9560,12 @@ async function startServer() {
       const canChangeClinic = hasGlobalClinicAccess(req.session.user);
       const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
       const scopedClinicId = currentClinicId(req.session.user);
-      const canUnlinkInCurrentClinic =
-        role === 'coordinator' ||
-        role === 'receptionist' ||
-        role === 'therapist' ||
-        hasGlobalClinicAccess(req.session.user);
+      if (role === 'receptionist') {
+        return res.status(403).json({
+          success: false,
+          error: 'Apenas o coordenador da clínica ou o profissional responsável pode gerenciar este paciente.'
+        });
+      }
       const rawEmail = req.body?.email;
       const rawPhone = req.body?.phone;
       const safeEmail = rawEmail !== undefined ? sanitizeEmail(rawEmail) : undefined;
@@ -9485,8 +9613,11 @@ async function startServer() {
       if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
         patientUpdateQuery = patientUpdateQuery.eq('clinic_id', scopedClinicId);
       }
+      if (role === 'therapist') {
+        patientUpdateQuery = patientUpdateQuery.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
+      }
       const { data: updatedPatient, error } = await patientUpdateQuery
-        .select('id, clinic_id, status, email')
+        .select('id, clinic_id, status, email, therapist_id')
         .maybeSingle();
       
       if (error) throw error;
