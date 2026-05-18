@@ -4656,6 +4656,35 @@ async function startServer() {
     }
   };
 
+  const isTechnicalActivityLogEntry = (entry: any) => {
+    const fields = [
+      entry?.title,
+      entry?.content,
+      entry?.details,
+      entry?.action,
+      entry?.action_type,
+      entry?.payload_details,
+      entry?.request_path,
+      entry?.request_method
+    ]
+      .map((value) => sanitizeString(value, 4000).toLowerCase())
+      .filter(Boolean);
+    const joined = fields.join(' ');
+    const title = sanitizeString(entry?.title, 240).toLowerCase();
+    const type = sanitizeString(entry?.type, 80).toLowerCase();
+
+    if (joined.includes('/api/clinic/state') || joined.includes('/clinic/state')) return true;
+    if (joined.includes('http ') && joined.includes('payload=')) return true;
+    if (type === 'audit' && (joined.includes(' no endpoint ') || title.includes('registrada em '))) return true;
+    if (/^(criou|atualizou|removeu|alterou)\s+\//i.test(title)) return true;
+    return false;
+  };
+
+  const filterVisibleActivityLogs = (rows: any[]) =>
+    (Array.isArray(rows) ? rows : [])
+      .filter((row: any) => sanitizeString(row?.status, 40).toLowerCase() !== 'archived')
+      .filter((row: any) => !isTechnicalActivityLogEntry(row));
+
   const persistActivityLog = async ({
     userId,
     clinicId,
@@ -4696,6 +4725,18 @@ async function startServer() {
       });
       const resolvedPayloadDetails =
         sanitizeString(payloadDetails || stringifyActivityPayload(payload) || details || safeContent, 4000) || null;
+      if (
+        isTechnicalActivityLogEntry({
+          title: safeTitle,
+          content: safeContent,
+          action,
+          action_type: actionType,
+          payload_details: resolvedPayloadDetails,
+          type
+        })
+      ) {
+        return;
+      }
       const basePayload: any = {
         id: crypto.randomUUID(),
         user_id: isUuid(safeUserId) ? safeUserId : null,
@@ -4962,6 +5003,7 @@ async function startServer() {
       path.startsWith('/logs') ||
       path.startsWith('/tasks') ||
       path.startsWith('/notes') ||
+      path.startsWith('/clinic/state') ||
       path.startsWith('/stripe/webhook') ||
       path.startsWith('/health');
     if (!shouldAuditMethod || isExcludedPath) return next();
@@ -5042,6 +5084,7 @@ async function startServer() {
       req.path !== '/auth/signup-direct' &&
       req.path !== '/auth/verify-2fa' &&
       req.path !== '/logs' &&
+      req.path !== '/clinic/state' &&
       req.path !== '/config';
 
     if (!shouldAudit) return next();
@@ -11628,6 +11671,7 @@ async function startServer() {
               const tb = new Date(b?.timestamp || b?.created_at || 0).getTime();
               return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
             })
+            .filter((row: any) => !isTechnicalActivityLogEntry(row))
             .filter((row: any) => sanitizeString(row?.status, 40).toLowerCase() !== 'archived')
             .slice(0, limit);
         } catch (queryError: any) {
@@ -11643,7 +11687,7 @@ async function startServer() {
             .is('deleted_at', null)
             .order('timestamp', { ascending: false })
             .limit(limit);
-          data = (result.data || []).filter((row: any) => sanitizeString(row?.status, 40).toLowerCase() !== 'archived');
+          data = filterVisibleActivityLogs(result.data || []);
           error = result.error;
         } catch (queryError: any) {
           error = queryError;
@@ -11707,6 +11751,9 @@ async function startServer() {
       }
 
       const payload = buildActivityLogPayload(currentUser, req.body, req);
+      if (isTechnicalActivityLogEntry(payload)) {
+        return res.json({ success: true, ignored: true, reason: 'technical_activity_log' });
+      }
       const { data, error } = await writeActivityLogWithFallback(payload, { upsert: true, select: true });
 
       if (error) {
@@ -11753,6 +11800,9 @@ async function startServer() {
         sanitizeString(data?.clinic_id, 120) === sanitizeString(currentClinicId(user), 120);
       if (!sameUser && !(isManager && sameClinic)) {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+      if (isTechnicalActivityLogEntry(data)) {
+        return res.status(404).json({ success: false, error: 'Log não encontrado.' });
       }
 
       return res.json({ success: true, data });

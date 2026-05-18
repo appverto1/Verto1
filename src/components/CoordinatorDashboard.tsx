@@ -5318,7 +5318,7 @@ export function CoordinatorDashboard({
               <div className="space-y-6 animate-fade-in">
                 <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100">
                   <h3 className="text-xl font-bold text-slate-900 mb-6">
-                    Registros de Atividades do Sistema
+                    Registros de Atividades da Clínica
                   </h3>
                   <div className="space-y-4">
                     {activityLogs && activityLogs.length > 0 ? (
@@ -5373,7 +5373,7 @@ export function CoordinatorDashboard({
                           Nenhuma atividade registrada
                         </h4>
                         <p className="text-sm text-slate-400 max-w-xs mx-auto">
-                          As ações realizadas no sistema aparecerão aqui para
+                          As ações clínicas relevantes aparecerão aqui para
                           acompanhamento da coordenação.
                         </p>
                       </div>

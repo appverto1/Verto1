@@ -52,6 +52,36 @@ function stripEphemeralProfileMedia(result: any) {
   };
 }
 
+function isTechnicalActivityLog(log: any): boolean {
+  const fields = [
+    log?.title,
+    log?.content,
+    log?.details,
+    log?.action,
+    log?.action_type,
+    log?.payload_details,
+    log?.request_path,
+    log?.request_method
+  ]
+    .map((value) => String(value || '').toLowerCase())
+    .filter(Boolean);
+  const joined = fields.join(' ');
+  const title = String(log?.title || '').toLowerCase();
+  const type = String(log?.type || '').toLowerCase();
+
+  if (joined.includes('/api/clinic/state') || joined.includes('/clinic/state')) return true;
+  if (joined.includes('http ') && joined.includes('payload=')) return true;
+  if (type === 'audit' && (joined.includes(' no endpoint ') || title.includes('registrada em '))) return true;
+  return /^(criou|atualizou|removeu|alterou)\s+\//i.test(title);
+}
+
+function filterActivityLogsForClinicView(logs: any[]): any[] {
+  return (Array.isArray(logs) ? logs : []).filter((log) => {
+    if (String(log?.status || '').toLowerCase() === 'archived') return false;
+    return !isTechnicalActivityLog(log);
+  });
+}
+
 async function handleDataError(error: unknown, operationType: OperationType, path: string | null) {
   const supabase = await getSupabase();
   const { data: { user } } = await supabase.auth.getUser();
@@ -508,6 +538,9 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
 
 export const dataService = {
   async saveActivityLog(log: any) {
+    if (isTechnicalActivityLog(log)) {
+      return { success: true, ignored: true };
+    }
     const id = log.id || generateId();
     const data = { ...log, id, timestamp: log.timestamp || new Date().toISOString() };
     return await saveOfflineFirst(id, data, 'log', '/api/logs');
@@ -773,7 +806,7 @@ export const dataService = {
   async getActivityLogs() {
     const endpoint = '/api/logs?limit=2000';
     try {
-      const localLogs = await getLocalRecordsData('log');
+      const localLogs = filterActivityLogsForClinicView(await getLocalRecordsData('log'));
       const response = await fetch(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'log'),
         credentials: 'include'
@@ -783,7 +816,7 @@ export const dataService = {
       }
       if (response.ok) {
         const result = await response.json();
-        const remoteLogs = ensureArray(result.data);
+        const remoteLogs = filterActivityLogsForClinicView(ensureArray(result.data));
         let latest = 0;
         for (const l of remoteLogs) {
           const timestampMs = l?.timestamp ? new Date(l.timestamp).getTime() : Date.now();
@@ -804,7 +837,7 @@ export const dataService = {
     } catch (error) {
       console.log('Fetching logs from local storage...');
     }
-    return { success: true, data: mergeRecordsById([], await getLocalRecordsData('log')) };
+    return { success: true, data: filterActivityLogsForClinicView(mergeRecordsById([], await getLocalRecordsData('log'))) };
   },
 
   async updateActivityLog(id: string, updates: any) {
