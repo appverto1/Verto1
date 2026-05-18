@@ -19,7 +19,9 @@ import webpush from 'web-push';
 import { generateSecret, verifySync, generateURI } from 'otplib';
 import QRCode from 'qrcode';
 import {
+  createClinicMeteredSubscription,
   getClinicBillingSummary,
+  reportAllClinicsActivePatientUsage,
   syncAllClinicsActivePatientAddonQuantity,
   syncClinicActivePatientAddonQuantity
 } from './services/stripeService';
@@ -183,10 +185,22 @@ function resolveActivePatientPriceId(): string {
   return sanitizeString(process.env.STRIPE_ACTIVE_PATIENT_PRICE_ID || '', 120);
 }
 
+function isMeteredActivePatientBilling(): boolean {
+  const mode = sanitizeString(process.env.STRIPE_ACTIVE_PATIENT_BILLING_MODE || 'metered', 40).toLowerCase();
+  return mode !== 'legacy_quantity';
+}
+
 function queueActivePatientSync(clinicId: string | null | undefined, trigger: string) {
   const safeClinicId = sanitizeString(clinicId, 120);
   const activePatientPriceId = resolveActivePatientPriceId();
   if (!safeClinicId || !activePatientPriceId) return;
+  if (isMeteredActivePatientBilling()) {
+    console.log('[Stripe Usage] Billing metered ativo; sync imediato de quantidade ignorado até o fechamento mensal.', {
+      clinicId: safeClinicId,
+      trigger
+    });
+    return;
+  }
 
   try {
     const stripe = getStripe();
@@ -370,6 +384,85 @@ async function persistStripeCustomerReference(params: {
       updated_at: new Date().toISOString()
     });
   }
+}
+
+async function persistStripeSubscriptionReference(params: {
+  subscriptionId?: string | null;
+  subscriptionItemId?: string | null;
+  customerId?: string | null;
+  email?: string | null;
+  userId?: string | null;
+  clinicId?: string | null;
+  status?: string | null;
+}) {
+  const subscriptionId = sanitizeString(params.subscriptionId, 200);
+  const subscriptionItemId = sanitizeString(params.subscriptionItemId, 200);
+  const customerId = sanitizeString(params.customerId, 200);
+  const userId = sanitizeString(params.userId, 120);
+  const clinicId = sanitizeString(params.clinicId, 120);
+  const safeEmail = sanitizeEmail(params.email);
+  const status = normalizeSubscriptionStatusFromStripe(sanitizeString(params.status, 80));
+  const patch = cleanObject({
+    stripe_subscription_id: subscriptionId || undefined,
+    stripe_subscription_item_id: subscriptionItemId || undefined,
+    stripe_customer_id: customerId || undefined,
+    stripe_customer_email: safeEmail || undefined,
+    subscription_status: status,
+    updated_at: new Date().toISOString()
+  });
+
+  if (clinicId) {
+    await patchTableSafely('clinics', { column: 'id', value: clinicId }, patch);
+  }
+  if (userId) {
+    await patchTableSafely('users', { column: 'id', value: userId }, patch);
+  } else if (safeEmail) {
+    await patchTableSafely('users', { column: 'email', value: safeEmail }, patch);
+  }
+}
+
+async function markClinicPaymentFailed(params: {
+  clinicId?: string | null;
+  userId?: string | null;
+  email?: string | null;
+  invoiceId?: string | null;
+}) {
+  const blockedAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
+  const payload = {
+    subscription_status: 'delinquent',
+    stripe_payment_failed_at: new Date().toISOString(),
+    stripe_access_block_at: blockedAt,
+    stripe_last_failed_invoice_id: sanitizeString(params.invoiceId, 200) || undefined,
+    updated_at: new Date().toISOString()
+  };
+  const clinicId = sanitizeString(params.clinicId, 120);
+  const userId = sanitizeString(params.userId, 120);
+  const email = sanitizeEmail(params.email);
+
+  if (clinicId) await patchTableSafely('clinics', { column: 'id', value: clinicId }, payload);
+  if (userId) await patchTableSafely('users', { column: 'id', value: userId }, payload);
+  if (!userId && email) await patchTableSafely('users', { column: 'email', value: email }, payload);
+}
+
+async function clearClinicPaymentFailure(params: {
+  clinicId?: string | null;
+  userId?: string | null;
+  email?: string | null;
+}) {
+  const payload = {
+    subscription_status: 'active',
+    stripe_payment_failed_at: null,
+    stripe_access_block_at: null,
+    stripe_last_failed_invoice_id: null,
+    updated_at: new Date().toISOString()
+  };
+  const clinicId = sanitizeString(params.clinicId, 120);
+  const userId = sanitizeString(params.userId, 120);
+  const email = sanitizeEmail(params.email);
+
+  if (clinicId) await patchTableSafely('clinics', { column: 'id', value: clinicId }, payload);
+  if (userId) await patchTableSafely('users', { column: 'id', value: userId }, payload);
+  if (!userId && email) await patchTableSafely('users', { column: 'email', value: email }, payload);
 }
 
 async function resolvePersistedStripeCustomerId(params: {
@@ -3767,11 +3860,26 @@ async function startServer() {
             try {
               const subscriptionId = sanitizeString(String(session.subscription), 120);
               if (subscriptionId) {
-                await stripe.subscriptions.update(subscriptionId, {
+                const subscription = await stripe.subscriptions.update(subscriptionId, {
                   metadata: {
                     ...(userId ? { userId } : {}),
                     ...(clinicId ? { clinicId } : {})
-                  }
+                  },
+                  expand: ['items.data.price']
+                } as any);
+                const activePatientPriceId = resolveActivePatientPriceId();
+                const subscriptionItem =
+                  activePatientPriceId
+                    ? subscription.items.data.find((item) => sanitizeString((item.price as any)?.id, 120) === activePatientPriceId)
+                    : subscription.items.data[0];
+                await persistStripeSubscriptionReference({
+                  subscriptionId,
+                  subscriptionItemId: sanitizeString(subscriptionItem?.id, 120),
+                  customerId: stripeCustomerId,
+                  email: customerEmail,
+                  userId,
+                  clinicId,
+                  status: subscription.status
                 });
               }
             } catch (metadataError: any) {
@@ -3885,7 +3993,7 @@ async function startServer() {
         }
         case 'invoice.payment_failed': {
           const invoice = event.data.object as Stripe.Invoice;
-          const subscriptionId = sanitizeString(String(invoice.subscription || ''), 120);
+          const subscriptionId = sanitizeString(String((invoice as any).subscription || ''), 120);
           const customerEmail = sanitizeEmail(invoice.customer_email);
           let clinicId = '';
           let userId = '';
@@ -3900,11 +4008,17 @@ async function startServer() {
             email: customerEmail,
             status: 'delinquent'
           });
+          await markClinicPaymentFailed({
+            clinicId,
+            userId,
+            email: customerEmail,
+            invoiceId: sanitizeString(invoice.id, 200)
+          });
           break;
         }
-        case 'invoice.paid': {
+        case 'invoice.created': {
           const invoice = event.data.object as Stripe.Invoice;
-          const subscriptionId = sanitizeString(String(invoice.subscription || ''), 120);
+          const subscriptionId = sanitizeString(String((invoice as any).subscription || ''), 120);
           const customerEmail = sanitizeEmail(invoice.customer_email);
           let clinicId = '';
           let userId = '';
@@ -3913,12 +4027,59 @@ async function startServer() {
             clinicId = sanitizeString((subscription.metadata as any)?.clinicId, 120);
             userId = sanitizeString((subscription.metadata as any)?.userId, 120);
           }
+          console.log('[Stripe Webhook] Fatura criada.', {
+            invoiceId: sanitizeString(invoice.id, 200),
+            subscriptionId,
+            clinicId,
+            userId,
+            email: customerEmail ? maskEmail(customerEmail) : null,
+            amountDue: Number((invoice as any).amount_due || 0),
+            currency: sanitizeString((invoice as any).currency, 20)
+          });
+          if (clinicId || userId || customerEmail) {
+            await persistStripeSubscriptionReference({
+              subscriptionId,
+              customerId: sanitizeString(String((invoice as any).customer || ''), 200),
+              email: customerEmail,
+              userId,
+              clinicId,
+              status: 'pending'
+            });
+          }
+          break;
+        }
+        case 'invoice.paid': {
+          const invoice = event.data.object as Stripe.Invoice;
+          const subscriptionId = sanitizeString(String((invoice as any).subscription || ''), 120);
+          const customerEmail = sanitizeEmail(invoice.customer_email);
+          let clinicId = '';
+          let userId = '';
+          if (subscriptionId) {
+            const subscription = await stripe.subscriptions.retrieve(subscriptionId, { expand: ['items.data.price'] });
+            clinicId = sanitizeString((subscription.metadata as any)?.clinicId, 120);
+            userId = sanitizeString((subscription.metadata as any)?.userId, 120);
+            const activePatientPriceId = resolveActivePatientPriceId();
+            const subscriptionItem =
+              activePatientPriceId
+                ? subscription.items.data.find((item) => sanitizeString((item.price as any)?.id, 120) === activePatientPriceId)
+                : subscription.items.data[0];
+            await persistStripeSubscriptionReference({
+              subscriptionId,
+              subscriptionItemId: sanitizeString(subscriptionItem?.id, 120),
+              customerId: sanitizeString(String((invoice as any).customer || subscription.customer || ''), 200),
+              email: customerEmail,
+              userId,
+              clinicId,
+              status: subscription.status
+            });
+          }
           await updateClinicSubscriptionStatus({
             clinicId,
             userId,
             email: customerEmail,
             status: 'active'
           });
+          await clearClinicPaymentFailure({ clinicId, userId, email: customerEmail });
           break;
         }
         case 'customer.subscription.updated':
@@ -3927,6 +4088,19 @@ async function startServer() {
           const clinicId = sanitizeString((subscription.metadata as any)?.clinicId, 120);
           const userId = sanitizeString((subscription.metadata as any)?.userId, 120);
           const mappedStatus = normalizeSubscriptionStatusFromStripe(subscription.status);
+          const activePatientPriceId = resolveActivePatientPriceId();
+          const subscriptionItem =
+            activePatientPriceId
+              ? subscription.items.data.find((item) => sanitizeString((item.price as any)?.id, 120) === activePatientPriceId)
+              : subscription.items.data[0];
+          await persistStripeSubscriptionReference({
+            subscriptionId: subscription.id,
+            subscriptionItemId: sanitizeString(subscriptionItem?.id, 120),
+            customerId: sanitizeString(String(subscription.customer || ''), 200),
+            userId,
+            clinicId,
+            status: subscription.status
+          });
           await updateClinicSubscriptionStatus({
             clinicId,
             userId,
@@ -4115,6 +4289,42 @@ async function startServer() {
     return next();
   };
 
+  const isBillingAccessBlocked = async (user: any): Promise<boolean> => {
+    const role = sanitizeString(user?.role, 40).toLowerCase();
+    if (!['coordinator', 'therapist', 'receptionist', 'admin'].includes(role)) return false;
+    const userId = sanitizeString(user?.id, 120);
+    const clinicId = sanitizeString(currentClinicId(user), 120);
+    const now = Date.now();
+
+    const hasExpiredBlock = (row: any) => {
+      const status = sanitizeString(row?.subscription_status, 40).toLowerCase();
+      const blockAt = sanitizeString(row?.stripe_access_block_at, 80);
+      return status === 'delinquent' && blockAt && new Date(blockAt).getTime() <= now;
+    };
+
+    try {
+      if (clinicId) {
+        const { data } = await supabase
+          .from('clinics')
+          .select('subscription_status,stripe_access_block_at')
+          .eq('id', clinicId)
+          .maybeSingle();
+        if (hasExpiredBlock(data)) return true;
+      }
+      if (userId) {
+        const { data } = await supabase
+          .from('users')
+          .select('subscription_status,stripe_access_block_at')
+          .eq('id', userId)
+          .maybeSingle();
+        if (hasExpiredBlock(data)) return true;
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  };
+
   const checkAuth = async (req: any, res: any, next: any) => {
     const isPendingPatientActivation = (candidate: any) => {
       const role = sanitizeString(candidate?.role, 40).toLowerCase();
@@ -4150,6 +4360,12 @@ async function startServer() {
         return res.status(403).json({
           error: 'EMAIL_NOT_CONFIRMED',
           message: 'Confirme seu e-mail para acessar funcionalidades sensíveis.'
+        });
+      }
+      if (await isBillingAccessBlocked(req.session.user)) {
+        return res.status(402).json({
+          error: 'BILLING_ACCESS_BLOCKED',
+          message: 'Acesso bloqueado por inadimplência. Regularize o pagamento para continuar.'
         });
       }
       return next();
@@ -4212,6 +4428,12 @@ async function startServer() {
               return res.status(403).json({
                 error: 'EMAIL_NOT_CONFIRMED',
                 message: 'Confirme seu e-mail para acessar funcionalidades sensíveis.'
+              });
+            }
+            if (await isBillingAccessBlocked(req.session.user)) {
+              return res.status(402).json({
+                error: 'BILLING_ACCESS_BLOCKED',
+                message: 'Acesso bloqueado por inadimplência. Regularize o pagamento para continuar.'
               });
             }
             return next();
@@ -11653,6 +11875,40 @@ async function startServer() {
             address,
             updated_at: new Date().toISOString()
           }], { onConflict: 'id' });
+
+        const activePatientPriceId = resolveActivePatientPriceId();
+        const coordinatorEmail = sanitizeEmail(req.session.user?.email);
+        if (activePatientPriceId && coordinatorEmail) {
+          try {
+            const subscription = await createClinicMeteredSubscription({
+              supabase,
+              stripe: getStripe(),
+              clinicId,
+              coordinatorUserId: userId,
+              email: coordinatorEmail,
+              clinicName: clinicName || 'Minha Clinica',
+              activePatientPriceId,
+              logger: console
+            });
+            if (subscription) {
+              await persistStripeSubscriptionReference({
+                customerId: subscription.customerId,
+                subscriptionId: subscription.subscriptionId,
+                subscriptionItemId: subscription.subscriptionItemId,
+                email: coordinatorEmail,
+                userId,
+                clinicId,
+                status: subscription.status
+              });
+            }
+          } catch (billingError: any) {
+            console.error('[Stripe Billing] Falha ao criar assinatura metered no onboarding (não bloqueante).', {
+              clinicId,
+              userId,
+              message: billingError?.message || String(billingError)
+            });
+          }
+        }
       }
 
       const nextClinicSettings = cleanObject({
@@ -14867,12 +15123,17 @@ async function startServer() {
 
       const stripe = getStripe();
       const origin = req.headers.origin || `${req.protocol}://${req.get('host')}`;
-      const stripePriceId = resolveProfessionalPlanPriceId(requestedPlan);
+      const activePatientPriceId = resolveActivePatientPriceId();
+      const stripePriceId = activePatientPriceId || resolveProfessionalPlanPriceId(requestedPlan);
       const lineItem: Stripe.Checkout.SessionCreateParams.LineItem = stripePriceId
-        ? {
-            price: stripePriceId,
-            quantity: 1
-          }
+        ? activePatientPriceId
+          ? {
+              price: stripePriceId
+            }
+          : {
+              price: stripePriceId,
+              quantity: 1
+            }
         : {
             price_data: {
               currency: 'brl',
@@ -15043,6 +15304,7 @@ async function startServer() {
           'Crescimento': 39990,
           'Avançado': 67990
         };
+        const activePatientPriceId = resolveActivePatientPriceId();
         
         let planName = normalizeProfessionalPlan(requestedPlan) || requestedPlan;
         
@@ -15060,11 +15322,11 @@ async function startServer() {
           planName = normalizeProfessionalPlan(profile?.plan_name) || profile?.plan_name || null;
         }
 
-        if (!planName) {
+        if (!planName && !activePatientPriceId) {
           return res.status(400).json({ error: 'Selecione um plano para continuar.' });
         }
 
-        if (!planPrices[planName]) {
+        if (planName && !planPrices[planName]) {
           return res.status(400).json({ error: 'Plano invalido para checkout.' });
         }
 
@@ -15087,9 +15349,9 @@ async function startServer() {
           }
         }
         
-        amount = planPrices[planName];
-        description = `Plano ${planName} - Verto`;
-        checkoutPlanName = planName;
+        amount = planName ? planPrices[planName] : 0;
+        description = activePatientPriceId ? 'Cobrança por paciente ativo - Verto' : `Plano ${planName} - Verto`;
+        checkoutPlanName = planName || 'Pacientes Ativos';
       }
 
       console.log('Checkout details:', { amount, description });
@@ -15118,12 +15380,17 @@ async function startServer() {
         email: sanitizeEmail(user.email)
       });
 
-      const professionalPriceId = user.role === 'patient' ? '' : resolveProfessionalPlanPriceId(checkoutPlanName);
+      const activePatientPriceId = user.role === 'patient' ? '' : resolveActivePatientPriceId();
+      const professionalPriceId = user.role === 'patient' ? '' : (activePatientPriceId || resolveProfessionalPlanPriceId(checkoutPlanName));
       const lineItem: Stripe.Checkout.SessionCreateParams.LineItem = professionalPriceId
-        ? {
-            price: professionalPriceId,
-            quantity: 1
-          }
+        ? activePatientPriceId
+          ? {
+              price: professionalPriceId
+            }
+          : {
+              price: professionalPriceId,
+              quantity: 1
+            }
         : {
             price_data: {
               currency: 'brl',
@@ -15286,6 +15553,50 @@ async function startServer() {
     }
   });
 
+  app.post('/api/billing/report-usage', async (req: any, res) => {
+    try {
+      const cronSecret = sanitizeString(process.env.BILLING_CRON_SECRET || '', 240);
+      const providedSecret = sanitizeString(req.headers['x-cron-secret'] || req.body?.secret, 240);
+      const sessionRole = sanitizeString(req.session?.user?.role, 40).toLowerCase();
+      const authorizedBySecret = Boolean(
+        cronSecret &&
+        providedSecret &&
+        Buffer.byteLength(cronSecret) === Buffer.byteLength(providedSecret) &&
+        crypto.timingSafeEqual(Buffer.from(cronSecret), Buffer.from(providedSecret))
+      );
+      const authorizedBySession = ['owner', 'admin'].includes(sessionRole);
+      if (!authorizedBySecret && !authorizedBySession) {
+        return res.status(403).json({ success: false, error: 'Acesso negado para reportar uso de billing.' });
+      }
+
+      const activePatientPriceId = resolveActivePatientPriceId();
+      if (!activePatientPriceId) {
+        return res.status(400).json({ success: false, error: 'STRIPE_ACTIVE_PATIENT_PRICE_ID não configurado.' });
+      }
+
+      const results = await reportAllClinicsActivePatientUsage({
+        supabase,
+        stripe: getStripe(),
+        activePatientPriceId,
+        trigger: sanitizeString(req.body?.trigger, 80) || 'manual_endpoint',
+        allowOverNegotiationLimit: sanitizeString(process.env.STRIPE_ALLOW_OVER_50_USAGE || '', 10).toLowerCase() === 'true',
+        logger: console
+      });
+
+      return res.json({
+        success: true,
+        reported: results.filter((item) => item.reported).length,
+        skipped: results.filter((item) => !item.reported).length,
+        results
+      });
+    } catch (error: any) {
+      console.error('[Stripe Usage] Endpoint report-usage falhou:', {
+        message: error?.message || String(error)
+      });
+      return res.status(500).json({ success: false, error: 'Falha ao reportar uso mensal.' });
+    }
+  });
+
   // Catch-all for API routes that don't exist to prevent falling through to Vite/SPA fallback
   app.all('/api/*', (req, res) => {
     res.status(404).json({ error: `API route not found: ${req.method} ${req.path}` });
@@ -15327,7 +15638,30 @@ async function startServer() {
 
   const activePatientPriceId = resolveActivePatientPriceId();
   if (activePatientPriceId) {
-    const runDailyBillingSync = async (trigger: string) => {
+    const runMonthlyUsageReport = async (trigger: string) => {
+      try {
+        const results = await reportAllClinicsActivePatientUsage({
+          supabase,
+          stripe: getStripe(),
+          activePatientPriceId,
+          trigger,
+          allowOverNegotiationLimit: sanitizeString(process.env.STRIPE_ALLOW_OVER_50_USAGE || '', 10).toLowerCase() === 'true',
+          logger: console
+        });
+        console.log('[Stripe Usage] Reporte mensal concluído.', {
+          trigger,
+          reported: results.filter((item) => item.reported).length,
+          skipped: results.filter((item) => !item.reported).length
+        });
+      } catch (error: any) {
+        console.error('[CRITICAL] Falha no reporte mensal de uso Stripe (não bloqueante).', {
+          trigger,
+          message: error?.message || String(error)
+        });
+      }
+    };
+
+    const runLegacyDailyBillingSync = async (trigger: string) => {
       try {
         await syncAllClinicsActivePatientAddonQuantity({
           supabase,
@@ -15344,13 +15678,35 @@ async function startServer() {
       }
     };
 
-    setTimeout(() => {
-      void runDailyBillingSync('startup_warmup');
-    }, 90 * 1000);
+    if (isMeteredActivePatientBilling()) {
+      let lastMonthlyUsageReportKey = '';
+      const shouldRunMonthlyUsageReport = () => {
+        const now = new Date();
+        const saoPauloDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+        const tomorrow = new Date(saoPauloDate);
+        tomorrow.setDate(saoPauloDate.getDate() + 1);
+        const isLastDay = tomorrow.getMonth() !== saoPauloDate.getMonth();
+        const isReportWindow = saoPauloDate.getHours() === 23 && saoPauloDate.getMinutes() < 15;
+        const key = `${saoPauloDate.getFullYear()}-${String(saoPauloDate.getMonth() + 1).padStart(2, '0')}`;
+        if (!isLastDay || !isReportWindow || lastMonthlyUsageReportKey === key) return false;
+        lastMonthlyUsageReportKey = key;
+        return true;
+      };
 
-    setInterval(() => {
-      void runDailyBillingSync('daily_interval');
-    }, 24 * 60 * 60 * 1000);
+      setInterval(() => {
+        if (shouldRunMonthlyUsageReport()) {
+          void runMonthlyUsageReport('monthly_last_day_23h');
+        }
+      }, 15 * 60 * 1000);
+    } else {
+      setTimeout(() => {
+        void runLegacyDailyBillingSync('startup_warmup');
+      }, 90 * 1000);
+
+      setInterval(() => {
+        void runLegacyDailyBillingSync('daily_interval');
+      }, 24 * 60 * 60 * 1000);
+    }
   } else {
     console.warn('[Stripe Sync] STRIPE_ACTIVE_PATIENT_PRICE_ID não configurado. Sync de pacientes ativos desabilitado.');
   }

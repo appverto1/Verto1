@@ -170,6 +170,10 @@ export function CoordinatorDashboard({
     activePatients: number;
     unitPrice: number;
     additionalCost: number;
+    estimatedAmount?: number;
+    averageUnitPrice?: number;
+    requiresNegotiation?: boolean;
+    includedForEstimate?: number;
   };
 
   const role = String(user?.role || "coordinator");
@@ -751,8 +755,12 @@ export function CoordinatorDashboard({
         if (!cancelled && response.ok && data?.success && data?.data) {
           setBillingSummary({
             activePatients: Number(data.data.activePatients || 0),
-            unitPrice: Number(data.data.unitPrice || 0),
-            additionalCost: Number(data.data.additionalCost || 0),
+            unitPrice: Number(data.data.averageUnitPrice ?? data.data.unitPrice ?? 0),
+            additionalCost: Number(data.data.estimatedAmount ?? data.data.additionalCost ?? 0),
+            estimatedAmount: Number(data.data.estimatedAmount ?? data.data.additionalCost ?? 0),
+            averageUnitPrice: Number(data.data.averageUnitPrice ?? data.data.unitPrice ?? 0),
+            requiresNegotiation: Boolean(data.data.requiresNegotiation),
+            includedForEstimate: Number(data.data.includedForEstimate ?? data.data.activePatients ?? 0),
           });
         }
       } catch (error) {
@@ -5143,10 +5151,12 @@ export function CoordinatorDashboard({
                     <p className="text-sm font-semibold text-slate-800">
                       {billingSummaryLoading
                         ? "Calculando pacientes ativos..."
-                        : `Pacientes Ativos: ${billingSummary?.activePatients ?? 0} | Custo Adicional: R$ ${(billingSummary?.additionalCost ?? 0).toFixed(2).replace(".", ",")}`}
+                        : `Pacientes ativos: ${billingSummary?.activePatients ?? 0} | Próxima fatura estimada: R$ ${(billingSummary?.estimatedAmount ?? billingSummary?.additionalCost ?? 0).toFixed(2).replace(".", ",")}`}
                     </p>
                     <p className="text-xs text-violet-500 mt-1">
-                      Valor unitário por paciente ativo: R$ {(billingSummary?.unitPrice ?? 4.9).toFixed(2).replace(".", ",")}
+                      {billingSummary?.requiresNegotiation
+                        ? `Estimativa calculada até ${billingSummary?.includedForEstimate ?? 50} pacientes. Acima de 50 exige negociação comercial antes da cobrança.`
+                        : `Preço médio por paciente ativo: R$ {(billingSummary?.averageUnitPrice ?? billingSummary?.unitPrice ?? 0).toFixed(2).replace(".", ",")}`}
                     </p>
                   </div>
 

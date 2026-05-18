@@ -3,7 +3,16 @@ import type Stripe from 'stripe';
 
 type SupabaseClientLike = any;
 
-const ACTIVE_PATIENT_PRICE_BRL = 4.9;
+export const ACTIVE_PATIENT_BILLING_TIERS = [
+  { upTo: 5, unitAmount: 4000 },
+  { upTo: 10, unitAmount: 3200 },
+  { upTo: 20, unitAmount: 2600 },
+  { upTo: 30, unitAmount: 2200 },
+  { upTo: 40, unitAmount: 1900 },
+  { upTo: 50, unitAmount: 1700 }
+] as const;
+
+const ACTIVE_PATIENT_NEGOTIATION_THRESHOLD = 50;
 const ACTIVE_PATIENT_STATUSES = new Set([
   'active',
   'ativo',
@@ -33,6 +42,45 @@ function buildIdempotencyKey(seed: string): string {
   return crypto.createHash('sha256').update(seed).digest('hex');
 }
 
+function formatBillingPeriod(date = new Date()): string {
+  return date.toISOString().slice(0, 7);
+}
+
+function resolveMeterEventName(): string {
+  return toSafeString(process.env.STRIPE_ACTIVE_PATIENT_METER_EVENT_NAME || 'verto_active_patients_monthly', 100);
+}
+
+export function estimateGraduatedActivePatientBilling(activePatients: number): {
+  activePatients: number;
+  estimatedAmount: number;
+  estimatedAmountCents: number;
+  averageUnitPrice: number;
+  requiresNegotiation: boolean;
+  includedForEstimate: number;
+} {
+  const safePatients = Math.max(0, Math.floor(Number(activePatients || 0)));
+  const billablePatients = Math.min(safePatients, ACTIVE_PATIENT_NEGOTIATION_THRESHOLD);
+  let previousLimit = 0;
+  let totalCents = 0;
+
+  for (const tier of ACTIVE_PATIENT_BILLING_TIERS) {
+    const tierLimit = Math.min(tier.upTo, billablePatients);
+    const quantityInTier = Math.max(0, tierLimit - previousLimit);
+    totalCents += quantityInTier * tier.unitAmount;
+    previousLimit = tier.upTo;
+    if (billablePatients <= tier.upTo) break;
+  }
+
+  return {
+    activePatients: safePatients,
+    estimatedAmount: Number((totalCents / 100).toFixed(2)),
+    estimatedAmountCents: totalCents,
+    averageUnitPrice: billablePatients ? Number((totalCents / billablePatients / 100).toFixed(2)) : 0,
+    requiresNegotiation: safePatients > ACTIVE_PATIENT_NEGOTIATION_THRESHOLD,
+    includedForEstimate: billablePatients
+  };
+}
+
 async function countActivePatientsByClinic(
   supabase: SupabaseClientLike,
   clinicId: string
@@ -47,6 +95,15 @@ async function countActivePatientsByClinic(
 
   if (error) throw error;
   return (data || []).filter((patient: any) => isActivePatientStatus(patient?.status)).length;
+}
+
+function resolveSubscriptionItemByPriceId(subscription: Stripe.Subscription, priceId: string): Stripe.SubscriptionItem | null {
+  return (
+    subscription.items.data.find((item) => {
+      const itemPriceId = toSafeString((item.price as any)?.id, 120);
+      return itemPriceId === priceId;
+    }) || null
+  );
 }
 
 async function resolveClinicEmails(
@@ -128,15 +185,6 @@ async function findSubscriptionForClinic(params: {
   return null;
 }
 
-function findAddonItemByPriceId(subscription: Stripe.Subscription, priceId: string): Stripe.SubscriptionItem | null {
-  return (
-    subscription.items.data.find((item) => {
-      const itemPriceId = toSafeString((item.price as any)?.id, 120);
-      return itemPriceId === priceId;
-    }) || null
-  );
-}
-
 export async function syncClinicActivePatientAddonQuantity(params: {
   supabase: SupabaseClientLike;
   stripe: Stripe;
@@ -170,7 +218,7 @@ export async function syncClinicActivePatientAddonQuantity(params: {
     return { success: true, activePatients, synced: false, reason: 'subscription_not_found' };
   }
 
-  const item = findAddonItemByPriceId(subscription, priceId);
+  const item = resolveSubscriptionItemByPriceId(subscription, priceId);
   const idempotencySeed = `${clinicId}:${subscription.id}:${priceId}:${activePatients}:${params.trigger}:${new Date().toISOString().slice(0, 13)}`;
   const idempotencyKey = buildIdempotencyKey(idempotencySeed);
 
@@ -199,6 +247,242 @@ export async function syncClinicActivePatientAddonQuantity(params: {
   });
 
   return { success: true, activePatients, synced: true };
+}
+
+export async function reportClinicActivePatientUsage(params: {
+  supabase: SupabaseClientLike;
+  stripe: Stripe;
+  clinicId: string;
+  activePatientPriceId: string;
+  trigger: string;
+  allowOverNegotiationLimit?: boolean;
+  logger?: Pick<Console, 'log' | 'warn' | 'error'>;
+}): Promise<{
+  success: boolean;
+  clinicId: string;
+  activePatients: number;
+  subscriptionId?: string;
+  subscriptionItemId?: string;
+  reported: boolean;
+  reason?: string;
+}> {
+  const logger = params.logger || console;
+  const clinicId = toSafeString(params.clinicId, 120);
+  const priceId = toSafeString(params.activePatientPriceId, 120);
+  if (!clinicId || !priceId) {
+    return { success: false, clinicId, activePatients: 0, reported: false, reason: 'clinic_or_price_missing' };
+  }
+
+  const activePatients = await countActivePatientsByClinic(params.supabase, clinicId);
+  if (activePatients > ACTIVE_PATIENT_NEGOTIATION_THRESHOLD && !params.allowOverNegotiationLimit) {
+    logger.warn('[Stripe Usage] Clínica ultrapassou 50 pacientes ativos; uso mensal bloqueado para negociação manual.', {
+      clinicId,
+      activePatients
+    });
+    return { success: true, clinicId, activePatients, reported: false, reason: 'requires_manual_negotiation' };
+  }
+
+  let subscriptionId = '';
+  let subscriptionItemId = '';
+  let customerId = '';
+  const { data: clinicRows } = await params.supabase
+    .from('clinics')
+    .select('stripe_customer_id,stripe_subscription_id,stripe_subscription_item_id,stripe_customer_email')
+    .eq('id', clinicId)
+    .limit(1);
+  customerId = toSafeString(clinicRows?.[0]?.stripe_customer_id, 200);
+  subscriptionId = toSafeString(clinicRows?.[0]?.stripe_subscription_id, 120);
+  subscriptionItemId = toSafeString(clinicRows?.[0]?.stripe_subscription_item_id, 120);
+
+  if (!customerId || !subscriptionId || !subscriptionItemId) {
+    const clinicEmails = await resolveClinicEmails(params.supabase, clinicId);
+    const subscription = await findSubscriptionForClinic({
+      stripe: params.stripe,
+      clinicId,
+      clinicEmails,
+      logger
+    });
+    if (!subscription) {
+      return { success: true, clinicId, activePatients, reported: false, reason: 'subscription_not_found' };
+    }
+    subscriptionId = subscription.id;
+    customerId = toSafeString(String(subscription.customer || ''), 200);
+    const item = resolveSubscriptionItemByPriceId(subscription, priceId);
+    if (!item?.id) {
+      return { success: true, clinicId, activePatients, subscriptionId, reported: false, reason: 'subscription_item_not_found' };
+    }
+    subscriptionItemId = item.id;
+  }
+
+  if (!customerId) {
+    return { success: true, clinicId, activePatients, subscriptionId, subscriptionItemId, reported: false, reason: 'customer_not_found' };
+  }
+
+  const period = formatBillingPeriod();
+  const identifier = buildIdempotencyKey(`${clinicId}:${customerId}:${period}:active_patients`);
+  await (params.stripe.billing as any).meterEvents.create({
+    event_name: resolveMeterEventName(),
+    payload: {
+      stripe_customer_id: customerId,
+      value: String(activePatients)
+    },
+    identifier,
+    timestamp: Math.floor(Date.now() / 1000)
+  });
+
+  const reportPayload = {
+    stripe_customer_id: customerId,
+    stripe_subscription_id: subscriptionId,
+    stripe_subscription_item_id: subscriptionItemId,
+    stripe_last_reported_active_patients: activePatients,
+    stripe_last_usage_reported_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+  try {
+    await params.supabase.from('clinics').update(reportPayload).eq('id', clinicId);
+  } catch {
+    // Persistência auxiliar; o usage record já foi enviado ao Stripe.
+  }
+
+  logger.log('[Stripe Usage] Uso mensal de pacientes ativos reportado.', {
+    clinicId,
+    customerId,
+    subscriptionId,
+    subscriptionItemId,
+    activePatients,
+    trigger: params.trigger
+  });
+
+  return {
+    success: true,
+    clinicId,
+    activePatients,
+    subscriptionId,
+    subscriptionItemId,
+    reported: true
+  };
+}
+
+export async function reportAllClinicsActivePatientUsage(params: {
+  supabase: SupabaseClientLike;
+  stripe: Stripe;
+  activePatientPriceId: string;
+  trigger: string;
+  allowOverNegotiationLimit?: boolean;
+  logger?: Pick<Console, 'log' | 'warn' | 'error'>;
+}): Promise<Array<Awaited<ReturnType<typeof reportClinicActivePatientUsage>>>> {
+  const logger = params.logger || console;
+  const clinicsResult = await params.supabase
+    .from('clinics')
+    .select('id,subscription_status,stripe_subscription_id,stripe_subscription_item_id')
+    .in('subscription_status', ['active', 'trialing', 'past_due', 'delinquent'])
+    .limit(10000);
+
+  if (clinicsResult.error) {
+    throw clinicsResult.error;
+  }
+
+  const results: Array<Awaited<ReturnType<typeof reportClinicActivePatientUsage>>> = [];
+  for (const clinic of clinicsResult.data || []) {
+    const clinicId = toSafeString((clinic as any)?.id, 120);
+    if (!clinicId) continue;
+    try {
+      results.push(await reportClinicActivePatientUsage({
+        supabase: params.supabase,
+        stripe: params.stripe,
+        clinicId,
+        activePatientPriceId: params.activePatientPriceId,
+        trigger: params.trigger,
+        allowOverNegotiationLimit: params.allowOverNegotiationLimit,
+        logger
+      }));
+    } catch (error: any) {
+      logger.error('[Stripe Usage] Falha ao reportar uso mensal da clínica.', {
+        clinicId,
+        message: error?.message || String(error)
+      });
+      results.push({ success: false, clinicId, activePatients: 0, reported: false, reason: error?.message || String(error) });
+    }
+  }
+  return results;
+}
+
+export async function createClinicMeteredSubscription(params: {
+  supabase: SupabaseClientLike;
+  stripe: Stripe;
+  clinicId: string;
+  coordinatorUserId: string;
+  email: string;
+  clinicName: string;
+  activePatientPriceId: string;
+  logger?: Pick<Console, 'log' | 'warn' | 'error'>;
+}): Promise<{ customerId: string; subscriptionId: string; subscriptionItemId: string; status: string } | null> {
+  const logger = params.logger || console;
+  const clinicId = toSafeString(params.clinicId, 120);
+  const coordinatorUserId = toSafeString(params.coordinatorUserId, 120);
+  const email = toSafeString(params.email, 320).toLowerCase();
+  const clinicName = toSafeString(params.clinicName, 180) || 'Clínica Verto';
+  const priceId = toSafeString(params.activePatientPriceId, 120);
+  if (!clinicId || !email || !priceId) return null;
+
+  const { data: clinicRows } = await params.supabase
+    .from('clinics')
+    .select('stripe_customer_id,stripe_subscription_id,stripe_subscription_item_id')
+    .eq('id', clinicId)
+    .limit(1);
+  const existingSubscriptionId = toSafeString(clinicRows?.[0]?.stripe_subscription_id, 120);
+  const existingItemId = toSafeString(clinicRows?.[0]?.stripe_subscription_item_id, 120);
+  if (existingSubscriptionId && existingItemId) {
+    return {
+      customerId: toSafeString(clinicRows?.[0]?.stripe_customer_id, 200),
+      subscriptionId: existingSubscriptionId,
+      subscriptionItemId: existingItemId,
+      status: 'existing'
+    };
+  }
+
+  let customerId = toSafeString(clinicRows?.[0]?.stripe_customer_id, 200);
+  if (!customerId) {
+    const customer = await params.stripe.customers.create({
+      email,
+      name: clinicName,
+      metadata: {
+        clinicId,
+        userId: coordinatorUserId,
+        billingModel: 'active_patient_metered_graduated'
+      }
+    });
+    customerId = customer.id;
+  }
+
+  const subscription = await params.stripe.subscriptions.create({
+    customer: customerId,
+    items: [{ price: priceId }],
+    payment_behavior: 'default_incomplete',
+    collection_method: 'charge_automatically',
+    metadata: {
+      clinicId,
+      userId: coordinatorUserId,
+      billingModel: 'active_patient_metered_graduated'
+    },
+    expand: ['items.data.price', 'latest_invoice']
+  } as any);
+
+  const item = resolveSubscriptionItemByPriceId(subscription, priceId) || subscription.items.data[0] || null;
+  const subscriptionItemId = toSafeString(item?.id, 120);
+  if (!subscriptionItemId) {
+    logger.warn('[Stripe Billing] Subscription criada sem item mensurável identificado.', {
+      clinicId,
+      subscriptionId: subscription.id
+    });
+  }
+
+  return {
+    customerId,
+    subscriptionId: subscription.id,
+    subscriptionItemId,
+    status: subscription.status
+  };
 }
 
 export async function syncAllClinicsActivePatientAddonQuantity(params: {
@@ -259,12 +543,28 @@ export async function syncAllClinicsActivePatientAddonQuantity(params: {
 export async function getClinicBillingSummary(params: {
   supabase: SupabaseClientLike;
   clinicId: string;
-}): Promise<{ activePatients: number; unitPrice: number; additionalCost: number }> {
+}): Promise<{
+  activePatients: number;
+  unitPrice: number;
+  additionalCost: number;
+  estimatedAmount: number;
+  estimatedAmountCents: number;
+  averageUnitPrice: number;
+  requiresNegotiation: boolean;
+  includedForEstimate: number;
+  tiers: typeof ACTIVE_PATIENT_BILLING_TIERS;
+}> {
   const activePatients = await countActivePatientsByClinic(params.supabase, params.clinicId);
-  const unitPrice = ACTIVE_PATIENT_PRICE_BRL;
+  const estimate = estimateGraduatedActivePatientBilling(activePatients);
   return {
     activePatients,
-    unitPrice,
-    additionalCost: Number((activePatients * unitPrice).toFixed(2))
+    unitPrice: estimate.averageUnitPrice,
+    additionalCost: estimate.estimatedAmount,
+    estimatedAmount: estimate.estimatedAmount,
+    estimatedAmountCents: estimate.estimatedAmountCents,
+    averageUnitPrice: estimate.averageUnitPrice,
+    requiresNegotiation: estimate.requiresNegotiation,
+    includedForEstimate: estimate.includedForEstimate,
+    tiers: ACTIVE_PATIENT_BILLING_TIERS
   };
 }
