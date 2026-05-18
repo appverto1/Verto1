@@ -35,6 +35,17 @@ import { getSupabase } from '../lib/supabase';
 import { dataService } from '../services/dataService';
 import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 
+const heroStories = [
+  {
+    src: '/hero-story-progress.webp',
+    alt: 'Tela do paciente na Verto mostrando evolução, registros recentes e gráfico de progresso.'
+  },
+  {
+    src: '/hero-story-diary.webp',
+    alt: 'Tela do diário da família na Verto para registrar texto e foto no histórico.'
+  }
+];
+
 export const LandingPage = ({ onLogin, setUser }: any) => {
   const registerPasswordInputRef = React.useRef<HTMLInputElement | null>(null);
   const [showLogin, setShowLogin] = useState(false);
@@ -73,6 +84,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   const [recoveryLoading, setRecoveryLoading] = useState(false);
   const [recoveryMessage, setRecoveryMessage] = useState('');
   const [recoveryError, setRecoveryError] = useState('');
+  const [activeHeroStory, setActiveHeroStory] = useState(0);
 
   const parseApiResponse = async (response: Response) => {
     const text = await response.text();
@@ -318,6 +330,14 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     if (utmSource) {
       setAcquisitionChannel(utmSource);
     }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setActiveHeroStory((current) => (current + 1) % heroStories.length);
+    }, 4200);
+
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -685,12 +705,41 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               </div>
             </div>
 
-            <div className="relative min-h-[360px] overflow-hidden lg:min-h-full">
-              <img
-                src="/hero-verto-family-diary.png"
-                alt="Interface da Verto com diário da família no celular e painel de evolução do paciente."
-                className="absolute inset-0 h-full w-full object-cover object-center"
-              />
+            <div className="relative flex min-h-[520px] items-center justify-center overflow-hidden bg-gradient-to-br from-[#eef6ff] via-white to-[#f4efff] px-6 py-8 lg:min-h-full lg:px-8">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_18%,rgba(122,50,252,0.12),transparent_32%),radial-gradient(circle_at_88%_22%,rgba(5,205,153,0.14),transparent_30%)]" />
+              <div className="relative w-full max-w-[360px]">
+                <div className="mb-4 flex gap-2 px-1">
+                  {heroStories.map((story, index) => (
+                    <button
+                      key={story.src}
+                      type="button"
+                      aria-label={`Ver imagem ${index + 1} da hero`}
+                      onClick={() => setActiveHeroStory(index)}
+                      className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200"
+                    >
+                      <span
+                        className={`block h-full rounded-full bg-[#7a32fc] transition-all duration-700 ${
+                          index === activeHeroStory ? 'w-full' : 'w-0'
+                        }`}
+                      />
+                    </button>
+                  ))}
+                </div>
+                <div className="relative aspect-[9/16] overflow-hidden rounded-[38px] border border-white/80 bg-white shadow-2xl shadow-purple-500/15">
+                  {heroStories.map((story, index) => (
+                    <img
+                      key={story.src}
+                      src={story.src}
+                      alt={story.alt}
+                      className={`absolute inset-0 h-full w-full object-contain transition-all duration-700 ${
+                        index === activeHeroStory
+                          ? 'scale-100 opacity-100'
+                          : 'scale-[1.03] opacity-0'
+                      }`}
+                    />
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         </div>
