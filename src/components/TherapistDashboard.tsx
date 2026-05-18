@@ -39,6 +39,7 @@ import { DayDetailsModal, CalendarWidget } from "./Calendar";
 import { ProtocolManagementSystem } from "./Protocols";
 import { PatientRegistry } from "./PatientRegistry";
 import { PatientDetailView } from "./PatientDetailView";
+import { PatientInternalChatPreview } from "./PatientInternalChatPreview";
 import { TeamManagement } from "./TeamManagement";
 import { SettingsMenu } from "./SettingsMenu";
 import { InvitationModal } from "./InvitationModal";
@@ -2044,15 +2045,21 @@ export const TherapistDashboard = ({
                                 {patientItem.type}
                               </p>
                             </div>
-                            <a
-                              href={`https://wa.me/${(patientData?.phone || "").replace(/\D/g, "")}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="mb-1 p-1.5 bg-green-50 text-green-500 rounded-xl hover:bg-green-500 hover:text-white transition-all shadow-sm"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <MessageCircle size={14} />
-                            </a>
+                            <div className="mb-1 flex items-center gap-1">
+                              <PatientInternalChatPreview
+                                patientName={patientItem.name}
+                                compact
+                              />
+                              <a
+                                href={`https://wa.me/${(patientData?.phone || "").replace(/\D/g, "")}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="p-1.5 bg-green-50 text-green-500 rounded-xl hover:bg-green-500 hover:text-white transition-all shadow-sm"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <MessageCircle size={14} />
+                              </a>
+                            </div>
                           </div>
                         </div>
                       </div>

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ChevronLeft, Filter, ChevronDown, Search, User, Activity, Brain, Phone, MessageCircle, ChevronRight, Edit2 } from 'lucide-react';
+import { PatientInternalChatPreview } from './PatientInternalChatPreview';
 
 export const PatientRegistry = ({ patients, clinicalRecords, onBack, onSelectPatient, userRole }: any) => { 
   const [filterName, setFilterName] = useState(""); 
@@ -110,7 +111,7 @@ export const PatientRegistry = ({ patients, clinicalRecords, onBack, onSelectPat
                     <div className="flex items-center gap-2 text-xs text-gray-600"> <Phone size={14} className="text-gray-400"/> <span>{p.phone}</span> </div> 
                   </div> 
                   <div className="mt-4 pt-3 border-t border-gray-50 flex justify-between items-center">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <a 
                         href={`https://wa.me/${p.phone.replace(/\D/g, '')}`} 
                         target="_blank" 
@@ -120,6 +121,7 @@ export const PatientRegistry = ({ patients, clinicalRecords, onBack, onSelectPat
                       >
                         <MessageCircle size={16} /> WhatsApp
                       </a>
+                      <PatientInternalChatPreview patientName={p.name} compact />
                       {userRole === 'receptionist' && (
                         <button 
                           onClick={(e) => { e.stopPropagation(); onSelectPatient(p.id, true); }}

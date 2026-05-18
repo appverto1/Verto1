@@ -602,36 +602,33 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   };
 
   return (
-    <div className="min-h-screen bg-[#1d1f1c] font-sans text-[#f5f2ec] overflow-x-hidden">
-      {/* Navigation */}
-      <nav className="fixed top-0 left-0 right-0 z-50 bg-[#1d1f1c]/90 backdrop-blur-md border-b border-white/10">
-        <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <LogoVerto size={40} showText={true} />
+    <div className="min-h-screen bg-white font-sans text-gray-900 overflow-x-hidden">
+      <nav className="fixed top-0 left-0 right-0 z-50 border-b border-gray-100 bg-white/90 backdrop-blur-md">
+        <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-6">
+          <LogoVerto size={40} showText={true} />
+          <div className="hidden items-center gap-8 md:flex">
+            <a href="#ecossistema" className="text-sm font-semibold text-gray-500 transition-colors hover:text-[#7a32fc]">Ecossistema</a>
+            <a href="#operacao" className="text-sm font-semibold text-gray-500 transition-colors hover:text-[#7a32fc]">Operação</a>
+            <a href="#contato" className="text-sm font-semibold text-gray-500 transition-colors hover:text-[#7a32fc]">Contato</a>
           </div>
-          <div className="hidden md:flex items-center gap-8">
-            <a href="#ecossistema" className="text-sm font-semibold text-[#bdb8ae] hover:text-white transition-colors">Ecossistema</a>
-            <a href="#operacao" className="text-sm font-semibold text-[#bdb8ae] hover:text-white transition-colors">Operação</a>
-            <a href="#contato" className="text-sm font-semibold text-[#bdb8ae] hover:text-white transition-colors">Contato</a>
-          </div>
-          <div className="flex items-center gap-4">
-            <button 
+          <div className="flex items-center gap-3">
+            <button
               onClick={() => {
                 setLoginType('patient');
                 setLoginStep('email');
                 setShowLogin(true);
               }}
-              className="text-[#bdb8ae] font-semibold text-sm hover:text-white transition-colors"
+              className="hidden text-sm font-semibold text-gray-500 transition-colors hover:text-pink-500 sm:block"
             >
               Sou Paciente
             </button>
-            <button 
+            <button
               onClick={() => {
                 setLoginType('professional');
                 setLoginStep('email');
                 setShowLogin(true);
               }}
-              className="bg-[#7a32fc] text-white px-6 py-2.5 rounded-full font-semibold text-sm shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all active:scale-95"
+              className="rounded-full bg-[#7a32fc] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-purple-500/20 transition-all hover:opacity-90 active:scale-95"
             >
               Sou Profissional
             </button>
@@ -639,167 +636,244 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         </div>
       </nav>
 
-      {/* Hero Section */}
-      <section className="pt-36 pb-20 px-6">
-        <div className="mx-auto max-w-7xl">
-          <span className="mb-8 inline-flex rounded-md bg-emerald-100 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-emerald-800">
-            1 · Hero
-          </span>
-          <h1 className="max-w-5xl text-4xl font-semibold leading-tight tracking-tight text-white md:text-6xl">
-            A terapia não termina quando a sessão acaba.
-          </h1>
-          <p className="mt-8 max-w-5xl text-xl font-semibold leading-relaxed text-[#c9c3b8] md:text-2xl">
-            A Verto cria um ecossistema de cuidado contínuo entre paciente, família e profissional — para que cada semana de vida do paciente alimente o trabalho dentro do consultório.
-          </p>
-          <button
-            onClick={() => window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer')}
-            className="mt-10 inline-flex rounded-xl border border-white/30 px-8 py-4 text-base font-bold text-white transition-all hover:border-white hover:bg-white hover:text-[#1d1f1c]"
-          >
-            Quero saber mais
-          </button>
+      <section className="px-6 pb-16 pt-28 md:pb-20 md:pt-32">
+        <div className="mx-auto max-w-7xl overflow-hidden rounded-[40px] bg-[#f7f5ff] shadow-sm ring-1 ring-purple-100">
+          <div className="grid min-h-[720px] grid-cols-1 lg:min-h-[760px] lg:grid-cols-[1.05fr_0.95fr]">
+            <div className="flex flex-col justify-between px-8 py-10 md:px-12 md:py-12 lg:px-14 lg:py-14">
+              <div>
+                <span className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-[11px] font-semibold uppercase tracking-widest text-[#7a32fc] shadow-sm ring-1 ring-purple-100">
+                  <Rocket size={14} />
+                  Ecossistema de cuidado contínuo
+                </span>
+                <h1 className="mt-8 max-w-3xl text-4xl font-semibold tracking-tight text-slate-900 md:text-6xl md:leading-[0.95]">
+                  A terapia não termina quando a sessão acaba.
+                </h1>
+                <p className="mt-6 max-w-2xl text-base font-medium leading-8 text-slate-500 md:text-xl md:leading-9">
+                  A Verto cria um ecossistema de cuidado contínuo entre paciente, família e profissional — para que cada semana de vida do paciente alimente o trabalho dentro do consultório.
+                </p>
+                <div className="mt-10 flex flex-col gap-3 sm:flex-row">
+                  <button
+                    onClick={() => window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer')}
+                    className="inline-flex items-center justify-center gap-3 rounded-2xl bg-[#7a32fc] px-7 py-4 text-sm font-semibold text-white shadow-2xl shadow-purple-500/20 transition-all hover:opacity-90"
+                  >
+                    Quero saber mais
+                    <ArrowRight size={18} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      setRegisterType('professional');
+                      setRegisterStep(2);
+                      setShowRegister(true);
+                    }}
+                    className="inline-flex items-center justify-center rounded-2xl border border-purple-200 bg-white px-7 py-4 text-sm font-semibold text-[#7a32fc] transition-colors hover:bg-purple-50"
+                  >
+                    Criar conta da clínica
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-10 grid gap-3 md:grid-cols-3">
+                {[
+                  { label: 'Crianças e famílias', value: 'Diário, estrelinhas e evolução visível' },
+                  { label: 'Pacientes adultos', value: 'Tarefas, humor e histórico portátil' },
+                  { label: 'Clínica e equipe', value: 'Agenda, confirmações e workspaces' }
+                ].map((item) => (
+                  <div key={item.label} className="rounded-3xl bg-white px-5 py-4 shadow-sm ring-1 ring-gray-100">
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{item.label}</p>
+                    <p className="mt-2 text-sm font-semibold leading-6 text-slate-700">{item.value}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="relative min-h-[360px] overflow-hidden lg:min-h-full">
+              <img
+                src="/Gemini_Generated_Image_m804z0m804z0m804.jpg"
+                alt="Profissional escrevendo em caderno clínico, simbolizando acompanhamento terapêutico contínuo."
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#160f2d]/70 via-[#160f2d]/20 to-transparent" />
+              <div className="absolute bottom-6 left-6 right-6 md:bottom-8 md:left-8 md:right-8">
+                <div className="max-w-md rounded-[28px] border border-white/20 bg-white/92 p-5 shadow-2xl backdrop-blur-md">
+                  <div className="flex items-center gap-4">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#7a32fc] text-white shadow-lg shadow-purple-500/30">
+                      <Activity size={22} />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">Fluxo clínico visível</p>
+                      <p className="text-base font-semibold text-slate-900">Acompanhamento entre sessões</p>
+                    </div>
+                  </div>
+                  <p className="mt-4 text-sm font-medium leading-6 text-slate-500">
+                    Registros do cotidiano, tarefas e evolução chegam estruturados para o profissional decidir com mais contexto e menos ruído.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
-      <section id="ecossistema" className="px-6 py-12">
-        <div className="mx-auto max-w-7xl space-y-16">
-          <div className="max-w-6xl">
-            <h2 className="text-3xl font-semibold tracking-tight text-white md:text-4xl">
-              Uma hora por semana não dá conta sozinha.
-            </h2>
-            <p className="mt-7 text-lg font-semibold leading-relaxed text-[#c9c3b8] md:text-xl">
-              O progresso terapêutico acontece no cotidiano — nas reações, nos padrões, nas pequenas conquistas do dia a dia. Sem registro e sem continuidade, esse material se perde antes de chegar ao consultório.
-            </p>
-            <p className="mt-6 text-lg font-semibold leading-relaxed text-[#c9c3b8] md:text-xl">
-              Para crianças com TEA, o desafio é ainda maior: o avanço depende de reforço consistente fora da sessão, e os pais precisam ser parte ativa do processo — mas quase sempre ficam de fora.
-            </p>
-          </div>
+      <section id="ecossistema" className="px-6 py-20">
+        <div className="mx-auto max-w-7xl">
+          <div className="grid gap-16 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
+            <div>
+              <span className="inline-flex rounded-full bg-emerald-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-emerald-700">
+                Ecossistema
+              </span>
+              <h2 className="mt-5 text-3xl font-semibold tracking-tight text-slate-900 md:text-5xl">
+                Uma hora por semana não dá conta sozinha.
+              </h2>
+              <p className="mt-6 text-lg font-medium leading-8 text-slate-500">
+                O progresso terapêutico acontece no cotidiano — nas reações, nos padrões, nas pequenas conquistas do dia a dia. Sem registro e sem continuidade, esse material se perde antes de chegar ao consultório.
+              </p>
+              <p className="mt-5 text-lg font-medium leading-8 text-slate-500">
+                Para crianças com TEA, o desafio é ainda maior: o avanço depende de reforço consistente fora da sessão, e os pais precisam ser parte ativa do processo — mas quase sempre ficam de fora.
+              </p>
+            </div>
 
-          <div>
-            <p className="mb-8 max-w-6xl text-xl font-semibold leading-relaxed text-[#d8d2c8] md:text-2xl">
-              Com área lúdica, registros diários e reforço positivo com estrelinhas, a Verto transforma o acompanhamento terapêutico em algo que a criança quer fazer.
-            </p>
-            <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-5 md:grid-cols-2">
               {[
                 {
-                  icon: <Image />,
+                  icon: <Image size={22} />,
                   title: 'Foto diária personalizada',
                   desc: 'A criança envia uma foto por dia e a personaliza com um editor criativo antes de compartilhar com a família.'
                 },
                 {
-                  icon: <Pencil />,
+                  icon: <Pencil size={22} />,
                   title: 'Mural da família',
                   desc: 'Pais e criança fazem registros diários em texto. Um espaço compartilhado que mantém o cuidado vivo entre as sessões.'
                 },
                 {
-                  icon: <Star />,
+                  icon: <Star size={22} />,
                   title: 'Estrelinhas e marcos',
                   desc: 'O terapeuta pontua o engajamento da criança. A clínica cria premiações ao atingir marcos — reforço positivo integrado ao tratamento.'
                 },
                 {
-                  icon: <BarChart3 />,
+                  icon: <BarChart3 size={22} />,
                   title: 'Gráfico de progresso',
                   desc: 'A família acompanha a evolução da criança em tempo real — visibilidade que fortalece o vínculo com o tratamento.'
                 }
               ].map((item) => (
-                <div key={item.title} className="rounded-xl border border-white/12 bg-white/[0.06] p-6">
-                  <div className="mb-5 text-[#aaa69f]">
-                    {React.cloneElement(item.icon as React.ReactElement, { size: 26 })}
+                <div key={item.title} className="rounded-[32px] border border-gray-100 bg-white p-6 shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#f4f0ff] text-[#7a32fc]">
+                    {item.icon}
                   </div>
-                  <h3 className="text-xl font-bold leading-tight text-white">{item.title}</h3>
-                  <p className="mt-4 text-base font-semibold leading-relaxed text-[#c9c3b8]">{item.desc}</p>
+                  <h3 className="mt-5 text-xl font-semibold tracking-tight text-slate-900">{item.title}</h3>
+                  <p className="mt-3 text-sm font-medium leading-7 text-slate-500">{item.desc}</p>
                 </div>
               ))}
             </div>
           </div>
+        </div>
+      </section>
 
-          <div className="max-w-6xl">
-            <h2 className="text-3xl font-semibold tracking-tight text-white md:text-4xl">
-              Para adultos, o registro vira parte da terapia.
-            </h2>
-            <p className="mt-7 text-lg font-semibold leading-relaxed text-[#c9c3b8] md:text-xl">
-              Humor, tarefas e registros do dia a dia — tudo organizado no app e disponível para o profissional na sessão. O paciente chega com material. O terapeuta chega com contexto.
-            </p>
-            <p className="mt-6 text-lg font-semibold leading-relaxed text-[#c9c3b8] md:text-xl">
-              O histórico de evolução fica na palma da mão do paciente — acessível, portátil e contínuo, independentemente de qual clínica ou profissional o atende.
-            </p>
-          </div>
+      <section className="bg-[#f9fafc] px-6 py-20">
+        <div className="mx-auto max-w-7xl">
+          <div className="grid gap-8 lg:grid-cols-2">
+            <div className="rounded-[36px] bg-white p-8 shadow-sm ring-1 ring-gray-100 md:p-10">
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-orange-50 text-orange-500">
+                <Zap size={26} />
+              </div>
+              <h2 className="mt-6 text-3xl font-semibold tracking-tight text-slate-900">Para adultos, o registro vira parte da terapia.</h2>
+              <p className="mt-5 text-base font-medium leading-8 text-slate-500">
+                Humor, tarefas e registros do dia a dia — tudo organizado no app e disponível para o profissional na sessão. O paciente chega com material. O terapeuta chega com contexto.
+              </p>
+              <p className="mt-4 text-base font-medium leading-8 text-slate-500">
+                O histórico de evolução fica na palma da mão do paciente — acessível, portátil e contínuo, independentemente de qual clínica ou profissional o atende.
+              </p>
+            </div>
 
-          <div className="max-w-6xl">
-            <h2 className="text-3xl font-semibold tracking-tight text-white md:text-4xl">
-              O profissional recebe tudo organizado. A clínica opera sem ruído.
-            </h2>
-            <p className="mt-7 text-lg font-semibold leading-relaxed text-[#c9c3b8] md:text-xl">
-              Registros do paciente adulto chegam estruturados para discussão na sessão. Para o paciente kids, o terapeuta acompanha o engajamento e pontua com estrelinhas — alimentando o ciclo de reforço positivo.
-            </p>
-            <p className="mt-6 text-lg font-semibold leading-relaxed text-[#c9c3b8] md:text-xl">
-              O psicólogo que atende em mais de uma clínica acessa todos os seus pacientes em um único login, com controle total sobre quais workspaces gerenciar.
-            </p>
+            <div className="rounded-[36px] bg-slate-900 p-8 text-white shadow-sm md:p-10">
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10 text-emerald-300">
+                <Users size={26} />
+              </div>
+              <h2 className="mt-6 text-3xl font-semibold tracking-tight">O profissional recebe tudo organizado. A clínica opera sem ruído.</h2>
+              <p className="mt-5 text-base font-medium leading-8 text-slate-300">
+                Registros do paciente adulto chegam estruturados para discussão na sessão. Para o paciente kids, o terapeuta acompanha o engajamento e pontua com estrelinhas — alimentando o ciclo de reforço positivo.
+              </p>
+              <p className="mt-4 text-base font-medium leading-8 text-slate-300">
+                O psicólogo que atende em mais de uma clínica acessa todos os seus pacientes em um único login, com controle total sobre quais workspaces gerenciar.
+              </p>
+            </div>
           </div>
         </div>
       </section>
 
-      <section id="operacao" className="px-6 py-16">
+      <section id="operacao" className="px-6 py-20">
         <div className="mx-auto max-w-7xl">
-          <div className="mb-10 rounded-xl border-l-2 border-emerald-400 bg-white/[0.05] px-8 py-8">
-            <h2 className="max-w-5xl text-2xl font-bold leading-relaxed text-white md:text-3xl">
+          <div className="max-w-4xl">
+            <span className="inline-flex rounded-full bg-[#f4f0ff] px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">
+              Operação clínica
+            </span>
+            <h2 className="mt-5 text-3xl font-semibold tracking-tight text-slate-900 md:text-5xl">
               Para que o ecossistema funcione, a Verto também cuida da operação da sua clínica.
             </h2>
           </div>
 
-          <div className="divide-y divide-white/10">
+          <div className="mt-12 grid gap-5 md:grid-cols-2">
             {[
               {
-                icon: <CalendarCheck />,
+                icon: <CalendarCheck size={22} />,
                 title: 'Confirmação inteligente de consulta',
                 desc: 'Notificação 24h antes — e outra 12h antes, se necessário. Sempre dentro do horário respeitoso (8h–21h). O paciente confirma, remarca ou cancela, e a agenda da clínica se atualiza automaticamente.'
               },
               {
-                icon: <Users />,
+                icon: <Users size={22} />,
                 title: 'Gestão de equipe e papéis',
                 desc: 'Convite por e-mail, atribuição de pacientes e controle de acesso por papel. O coordenador mantém a operação organizada sem depender de processos manuais.'
               },
               {
-                icon: <Building />,
+                icon: <Building size={22} />,
                 title: 'Múltiplos workspaces',
                 desc: 'O profissional que atende em mais de uma clínica decide quais pacientes gerenciar em cada ambiente — sem confusão e sem trocas de conta.'
               },
               {
-                icon: <Shield />,
+                icon: <Shield size={22} />,
                 title: 'Histórico portátil e seguro',
                 desc: 'Os dados do paciente são dele. O histórico permanece acessível mesmo que o profissional ou a clínica mude — com segurança em padrão HIPAA.'
               }
             ].map((item) => (
-              <div key={item.title} className="grid gap-5 py-7 md:grid-cols-[32px_1fr]">
-                <div className="pt-1 text-[#aaa69f]">
-                  {React.cloneElement(item.icon as React.ReactElement, { size: 24 })}
+              <div key={item.title} className="rounded-[32px] border border-gray-100 bg-white p-7 shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
+                  {item.icon}
                 </div>
-                <div>
-                  <h3 className="text-2xl font-bold text-white">{item.title}</h3>
-                  <p className="mt-3 max-w-5xl text-lg font-semibold leading-relaxed text-[#c9c3b8]">
-                    {item.desc}
-                  </p>
-                </div>
+                <h3 className="mt-5 text-xl font-semibold tracking-tight text-slate-900">{item.title}</h3>
+                <p className="mt-3 text-sm font-medium leading-7 text-slate-500">{item.desc}</p>
               </div>
             ))}
           </div>
         </div>
       </section>
 
-      <section id="contato" className="px-6 py-20">
-        <div className="mx-auto max-w-7xl">
-          <div className="max-w-5xl">
-            <h2 className="text-3xl font-semibold tracking-tight text-white md:text-4xl">
+      <section id="contato" className="px-6 pb-20 pt-10">
+        <div className="mx-auto max-w-7xl rounded-[40px] bg-slate-900 px-8 py-10 text-white shadow-sm md:px-12 md:py-14">
+          <div className="max-w-4xl">
+            <h2 className="text-3xl font-semibold tracking-tight md:text-5xl">
               Pronto para estruturar o cuidado contínuo na sua clínica?
             </h2>
-            <p className="mt-6 text-xl font-semibold leading-relaxed text-[#c9c3b8]">
+            <p className="mt-5 text-lg font-medium leading-8 text-slate-300">
               Conheça a Verto e veja como o ecossistema funciona na prática.
             </p>
-            <button
-              onClick={() => window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer')}
-              className="mt-10 inline-flex rounded-xl border border-white/30 px-8 py-4 text-base font-bold text-white transition-all hover:border-white hover:bg-white hover:text-[#1d1f1c]"
-            >
-              Quero saber mais
-            </button>
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+              <button
+                onClick={() => window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer')}
+                className="inline-flex items-center justify-center gap-3 rounded-2xl bg-white px-7 py-4 text-sm font-semibold text-slate-900 transition-colors hover:bg-slate-100"
+              >
+                Quero saber mais
+                <ArrowRight size={18} />
+              </button>
+              <button
+                onClick={() => {
+                  setLoginType('professional');
+                  setLoginStep('email');
+                  setShowLogin(true);
+                }}
+                className="inline-flex items-center justify-center rounded-2xl border border-white/20 px-7 py-4 text-sm font-semibold text-white transition-colors hover:bg-white/10"
+              >
+                Entrar na Verto
+              </button>
+            </div>
           </div>
         </div>
       </section>

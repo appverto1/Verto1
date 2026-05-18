@@ -51,6 +51,7 @@ import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
 import { SettingsMenu } from "./SettingsMenu";
 import { PatientDetailView } from "./PatientDetailView";
+import { PatientInternalChatPreview } from "./PatientInternalChatPreview";
 import { AnamnesisModal } from "./Anamnesis";
 import { RoomReservation } from "./RoomReservation";
 import { ProtocolManagementSystem } from "./Protocols";
@@ -5075,12 +5076,18 @@ export function CoordinatorDashboard({
                               : "Paciente Ativo"}
                           </span>
                         </div>
-                        <div className="px-2 py-1 bg-slate-100 text-slate-500 rounded-lg text-[8px] font-bold uppercase">
-                          {patient.type === "kids_tea"
-                            ? "Kids TEA"
-                            : patient.type === "adult_tea"
-                              ? "Adulto TEA"
-                              : "Adulto Convencional"}
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <PatientInternalChatPreview
+                            patientName={patient.name}
+                            compact
+                          />
+                          <div className="px-2 py-1 bg-slate-100 text-slate-500 rounded-lg text-[8px] font-bold uppercase">
+                            {patient.type === "kids_tea"
+                              ? "Kids TEA"
+                              : patient.type === "adult_tea"
+                                ? "Adulto TEA"
+                                : "Adulto Convencional"}
+                          </div>
                         </div>
                       </div>
                       {isReceptionist ? (
