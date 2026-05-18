@@ -15611,10 +15611,25 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, {
+      setHeaders: (res, filePath) => {
+        const normalizedPath = filePath.replace(/\\/g, '/');
+        if (normalizedPath.endsWith('/index.html') || normalizedPath.endsWith('/sw.js')) {
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+          return;
+        }
+        if (normalizedPath.includes('/assets/')) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      }
+    }));
+    app.get('/assets/*', (_req, res) => {
+      res.status(404).type('text/plain').send('Asset não encontrado. Atualize a página para carregar a versão mais recente.');
+    });
     app.get('*', (req, res) => {
       const indexPath = path.join(distPath, 'index.html');
       if (fs.existsSync(indexPath)) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         res.sendFile(indexPath);
       } else {
         res.status(404).send('Frontend não encontrado. Certifique-se de que o build foi executado corretamente.');
