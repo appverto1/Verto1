@@ -678,12 +678,6 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                     Quero saber mais
                     <ArrowRight size={18} />
                   </button>
-                  <button
-                    onClick={() => window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer')}
-                    className="inline-flex items-center justify-center rounded-2xl border border-purple-200 bg-white px-7 py-4 text-sm font-semibold text-[#7a32fc] transition-colors hover:bg-purple-50"
-                  >
-                    Quero saber mais
-                  </button>
                 </div>
               </div>
 
@@ -889,12 +883,6 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               >
                 Quero saber mais
                 <ArrowRight size={18} />
-              </button>
-              <button
-                onClick={() => window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer')}
-                className="inline-flex items-center justify-center rounded-2xl border border-white/20 px-7 py-4 text-sm font-semibold text-white transition-colors hover:bg-white/10"
-              >
-                Quero saber mais
               </button>
             </div>
           </div>
