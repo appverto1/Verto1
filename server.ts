@@ -4344,6 +4344,11 @@ async function startServer() {
     throw new Error('SESSION_STORE_UNAVAILABLE: PostgreSQL session store is required in production.');
   }
 
+  const sessionMaxAgeDays = Math.max(
+    1,
+    Math.min(90, Number(process.env.SESSION_MAX_AGE_DAYS || 30) || 30)
+  );
+
   app.use(session({
     store: sessionStore,
     secret: process.env.SESSION_SECRET || (() => { throw new Error('SESSION_SECRET must be set'); })(),
@@ -4355,7 +4360,7 @@ async function startServer() {
     cookie: { 
       secure: isProd,
       httpOnly: true,
-      maxAge: 15 * 60 * 1000, 
+      maxAge: sessionMaxAgeDays * 24 * 60 * 60 * 1000,
       sameSite: 'lax'
     }
   }));

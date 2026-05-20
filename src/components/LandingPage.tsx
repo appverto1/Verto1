@@ -518,6 +518,12 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     return `https://wa.me/5511959348563?text=${encodeURIComponent(message)}`;
   };
 
+  const audienceCards = [
+    { label: 'Crianças e famílias', value: 'Diário, estrelinhas e evolução visível' },
+    { label: 'Pacientes adultos', value: 'Tarefas, humor e histórico portátil' },
+    { label: 'Clínica e equipe', value: 'Agenda, confirmações e workspaces' }
+  ];
+
   const handleRegister = async (e: React.FormEvent, planOverride?: string) => {
     e.preventDefault();
     setRegisterError('');
@@ -623,21 +629,21 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   return (
     <div className="min-h-screen bg-white font-sans text-gray-900 overflow-x-hidden">
       <nav className="fixed top-0 left-0 right-0 z-50 border-b border-gray-100 bg-white/90 backdrop-blur-md">
-        <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-6">
+        <div className="mx-auto flex h-20 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
           <LogoVerto size={40} showText={true} />
           <div className="hidden items-center gap-8 md:flex">
             <a href="#ecossistema" className="text-sm font-semibold text-gray-500 transition-colors hover:text-[#7a32fc]">Ecossistema</a>
             <a href="#operacao" className="text-sm font-semibold text-gray-500 transition-colors hover:text-[#7a32fc]">Operação</a>
             <a href="#contato" className="text-sm font-semibold text-gray-500 transition-colors hover:text-[#7a32fc]">Contato</a>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <button
               onClick={() => {
                 setLoginType('patient');
                 setLoginStep('email');
                 setShowLogin(true);
               }}
-              className="hidden text-sm font-semibold text-gray-500 transition-colors hover:text-pink-500 sm:block"
+              className="whitespace-nowrap rounded-full border border-purple-100 bg-white px-3 py-2 text-xs font-semibold text-[#7a32fc] shadow-sm transition-colors hover:border-[#7a32fc] hover:bg-purple-50 sm:px-4 sm:text-sm"
             >
               Sou Paciente
             </button>
@@ -647,7 +653,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 setLoginStep('email');
                 setShowLogin(true);
               }}
-              className="rounded-full bg-[#7a32fc] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-purple-500/20 transition-all hover:opacity-90 active:scale-95"
+              className="whitespace-nowrap rounded-full bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white shadow-lg shadow-purple-500/20 transition-all hover:opacity-90 active:scale-95 sm:px-5 sm:py-2.5 sm:text-sm"
             >
               Sou Profissional
             </button>
@@ -681,12 +687,8 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 </div>
               </div>
 
-              <div className="mt-10 grid gap-3 md:grid-cols-3">
-                {[
-                  { label: 'Crianças e famílias', value: 'Diário, estrelinhas e evolução visível' },
-                  { label: 'Pacientes adultos', value: 'Tarefas, humor e histórico portátil' },
-                  { label: 'Clínica e equipe', value: 'Agenda, confirmações e workspaces' }
-                ].map((item) => (
+              <div className="mt-10 hidden gap-3 lg:grid lg:grid-cols-3">
+                {audienceCards.map((item) => (
                   <div key={item.label} className="rounded-3xl bg-white px-5 py-4 shadow-sm ring-1 ring-gray-100">
                     <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{item.label}</p>
                     <p className="mt-2 text-sm font-semibold leading-6 text-slate-700">{item.value}</p>
@@ -695,7 +697,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               </div>
             </div>
 
-            <div className="relative flex min-h-[520px] items-center justify-center overflow-hidden bg-gradient-to-br from-[#eef6ff] via-white to-[#f4efff] px-6 py-8 lg:min-h-full lg:px-8">
+            <div className="relative flex min-h-[520px] flex-col items-center justify-center overflow-hidden bg-gradient-to-br from-[#eef6ff] via-white to-[#f4efff] px-6 py-8 lg:min-h-full lg:px-8">
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_18%,rgba(122,50,252,0.12),transparent_32%),radial-gradient(circle_at_88%_22%,rgba(5,205,153,0.14),transparent_30%)]" />
               <div className="relative w-full max-w-[360px]">
                 <div className="mb-4 flex gap-2 px-1">
@@ -729,6 +731,14 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                     />
                   ))}
                 </div>
+              </div>
+              <div className="relative mt-8 grid w-full max-w-[360px] gap-3 lg:hidden">
+                {audienceCards.map((item) => (
+                  <div key={item.label} className="rounded-3xl bg-white px-6 py-5 shadow-sm ring-1 ring-gray-100">
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{item.label}</p>
+                    <p className="mt-2 text-base font-semibold leading-6 text-slate-700">{item.value}</p>
+                  </div>
+                ))}
               </div>
             </div>
           </div>

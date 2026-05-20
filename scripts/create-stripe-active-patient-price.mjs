@@ -34,21 +34,35 @@ const product = await stripe.products.create({
   }
 });
 
-const meter = await stripe.billing.meters.create({
-  display_name: 'Verto - Pacientes ativos no mes',
-  event_name: eventName,
-  default_aggregation: {
-    // Equivale ao antigo usage record com action=set: usa o ultimo valor reportado no periodo.
-    formula: 'last'
-  },
-  customer_mapping: {
-    type: 'by_id',
-    event_payload_key: 'stripe_customer_id'
-  },
-  value_settings: {
-    event_payload_key: 'value'
+async function resolveMeter() {
+  try {
+    return await stripe.billing.meters.create({
+      display_name: 'Verto - Pacientes ativos no mes',
+      event_name: eventName,
+      default_aggregation: {
+        // Equivale ao antigo usage record com action=set: usa o ultimo valor reportado no periodo.
+        formula: 'last'
+      },
+      customer_mapping: {
+        type: 'by_id',
+        event_payload_key: 'stripe_customer_id'
+      },
+      value_settings: {
+        event_payload_key: 'value'
+      }
+    });
+  } catch (error) {
+    const message = String(error?.message || '');
+    if (!message.includes('An active meter already exists')) throw error;
+
+    const meters = await stripe.billing.meters.list({ limit: 100 });
+    const existing = meters.data.find((meter) => meter.event_name === eventName && meter.status === 'active');
+    if (!existing) throw error;
+    return existing;
   }
-});
+}
+
+const meter = await resolveMeter();
 
 const price = await stripe.prices.create({
   product: product.id,
