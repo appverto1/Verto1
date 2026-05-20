@@ -167,16 +167,6 @@ export function CoordinatorDashboard({
     if (digits.length <= 12) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8)}`;
     return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
   };
-  type ClinicBillingSummary = {
-    activePatients: number;
-    unitPrice: number;
-    additionalCost: number;
-    estimatedAmount?: number;
-    averageUnitPrice?: number;
-    requiresNegotiation?: boolean;
-    includedForEstimate?: number;
-  };
-
   const role = String(user?.role || "coordinator");
   const capabilityRole: "coordinator" | "receptionist" | "therapist" =
     role === "therapist"
@@ -665,8 +655,6 @@ export function CoordinatorDashboard({
   const canManageProtocolLibrary = capabilityStatusForRole("protocol-library") === "full";
   const canManageClinicSettings = capabilityStatusForRole("clinic-settings") !== "none";
   const canManageBilling = capabilityStatusForRole("billing-management") !== "none";
-  const [billingSummary, setBillingSummary] = useState<ClinicBillingSummary | null>(null);
-  const [billingSummaryLoading, setBillingSummaryLoading] = useState<boolean>(false);
   const canEditAnamnesisTemplate = canManageClinicSettings;
   const DAY_GRID_SLOT_HEIGHT_PX = 66;
   const DAY_GRID_START_HOUR = 7;
@@ -744,39 +732,6 @@ export function CoordinatorDashboard({
     const timeout = setTimeout(() => setToast(null), 3200);
     return () => clearTimeout(timeout);
   }, [toast]);
-
-  useEffect(() => {
-    if (!canManageBilling) return;
-    let cancelled = false;
-    const loadBillingSummary = async () => {
-      setBillingSummaryLoading(true);
-      try {
-        const response = await fetch("/api/stripe/clinic-billing-summary", {
-          credentials: "include",
-        });
-        const data = await response.json().catch(() => ({}));
-        if (!cancelled && response.ok && data?.success && data?.data) {
-          setBillingSummary({
-            activePatients: Number(data.data.activePatients || 0),
-            unitPrice: Number(data.data.averageUnitPrice ?? data.data.unitPrice ?? 0),
-            additionalCost: Number(data.data.estimatedAmount ?? data.data.additionalCost ?? 0),
-            estimatedAmount: Number(data.data.estimatedAmount ?? data.data.additionalCost ?? 0),
-            averageUnitPrice: Number(data.data.averageUnitPrice ?? data.data.unitPrice ?? 0),
-            requiresNegotiation: Boolean(data.data.requiresNegotiation),
-            includedForEstimate: Number(data.data.includedForEstimate ?? data.data.activePatients ?? 0),
-          });
-        }
-      } catch (error) {
-        console.error("Erro ao carregar resumo de cobrança:", error);
-      } finally {
-        if (!cancelled) setBillingSummaryLoading(false);
-      }
-    };
-    void loadBillingSummary();
-    return () => {
-      cancelled = true;
-    };
-  }, [canManageBilling, allPatients.length]);
 
   const [newPatientForm, setNewPatientForm] = useState<any>({
     nome: "",
@@ -5196,55 +5151,55 @@ export function CoordinatorDashboard({
                     </div>
                   </div>
 
-                  <div className="mb-8 p-6 rounded-[28px] border border-violet-100 bg-violet-50/70 text-slate-700">
-                    <p className="text-[10px] font-bold text-violet-500 uppercase tracking-widest mb-1">
-                      Cobrança por uso
-                    </p>
-                    <p className="text-sm font-semibold text-slate-800">
-                      {billingSummaryLoading
-                        ? "Calculando pacientes ativos..."
-                        : `Pacientes ativos: ${billingSummary?.activePatients ?? 0} | Próxima fatura estimada: R$ ${(billingSummary?.estimatedAmount ?? billingSummary?.additionalCost ?? 0).toFixed(2).replace(".", ",")}`}
-                    </p>
-                    <p className="text-xs text-violet-500 mt-1">
-                      {billingSummary?.requiresNegotiation
-                        ? `Estimativa calculada até ${billingSummary?.includedForEstimate ?? 50} pacientes. Acima de 50 pacientes, a cobrança fica sob negociação comercial.`
-                        : `Preço médio por paciente ativo: R$ ${(billingSummary?.averageUnitPrice ?? billingSummary?.unitPrice ?? 0).toFixed(2).replace(".", ",")}`}
-                    </p>
-                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="p-6 bg-slate-50 rounded-[28px] border border-slate-100">
+                      <div className="flex items-start gap-4">
+                        <div className="p-3 rounded-2xl bg-white text-[#7a32fc] border border-slate-100">
+                          <FileText size={22} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                            Faturas
+                          </p>
+                          <h4 className="text-xl font-bold text-slate-900">
+                            Faturas por cartão
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={handleOpenCustomerPortal}
+                            disabled={loading}
+                            className="mt-5 inline-flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-5 py-3 text-sm font-bold text-white shadow-lg shadow-violet-200 transition hover:bg-[#6926df] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <FileText size={16} />
+                            Abrir faturas
+                          </button>
+                        </div>
+                      </div>
+                    </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-                    <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
-                        Modelo atual
-                      </p>
-                      <h4 className="text-xl font-bold text-slate-900">
-                        Por paciente ativo
-                      </h4>
-                      <p className="text-emerald-500 text-xs font-bold mt-2 flex items-center gap-1">
-                        <CheckCircle2 size={12} /> Ativo
-                      </p>
-                    </div>
-                    <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
-                        Colaboradores
-                      </p>
-                      <h4 className="text-xl font-bold text-slate-900">
-                        Inclusos
-                      </h4>
-                      <p className="text-slate-400 text-xs font-medium mt-2">
-                        Sem cobrança por membro da equipe
-                      </p>
-                    </div>
-                    <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
-                        Estimativa mensal
-                      </p>
-                      <h4 className="text-xl font-bold text-slate-900">
-                        R$ {(billingSummary?.estimatedAmount ?? billingSummary?.additionalCost ?? 0).toFixed(2).replace(".", ",")}
-                      </h4>
-                      <p className="text-slate-400 text-xs font-medium mt-2">
-                        Calculada pelos pacientes ativos atuais
-                      </p>
+                    <div className="p-6 bg-slate-50 rounded-[28px] border border-slate-100">
+                      <div className="flex items-start gap-4">
+                        <div className="p-3 rounded-2xl bg-white text-[#7a32fc] border border-slate-100">
+                          <CreditCard size={22} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                            Pagamento
+                          </p>
+                          <h4 className="text-xl font-bold text-slate-900">
+                            Cartão de crédito
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={handleOpenCustomerPortal}
+                            disabled={loading}
+                            className="mt-5 inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-800 shadow-sm transition hover:border-[#7a32fc] hover:text-[#7a32fc] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <CreditCard size={16} />
+                            Trocar cartão
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
