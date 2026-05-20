@@ -5248,44 +5248,6 @@ export function CoordinatorDashboard({
                     </div>
                   </div>
 
-                  <div className="mb-10">
-                    <div className="flex items-center justify-between gap-3 mb-4">
-                      <h4 className="text-lg font-bold text-slate-900">
-                        Faixas de cobrança
-                      </h4>
-                      <button
-                        onClick={handleOpenCustomerPortal}
-                        disabled={loading}
-                        className="px-4 py-2 rounded-2xl font-bold text-sm bg-slate-100 text-slate-800 hover:bg-slate-200 transition-all"
-                      >
-                        Cartão e faturas
-                      </button>
-                    </div>
-                    <div className="overflow-hidden rounded-[28px] border border-slate-100">
-                      {[
-                        ["1 a 5 pacientes", "R$ 40,00 por paciente"],
-                        ["6 a 10 pacientes", "R$ 32,00 por paciente"],
-                        ["11 a 20 pacientes", "R$ 26,00 por paciente"],
-                        ["21 a 30 pacientes", "R$ 22,00 por paciente"],
-                        ["31 a 40 pacientes", "R$ 19,00 por paciente"],
-                        ["41 a 50 pacientes", "R$ 17,00 por paciente"],
-                        ["51+ pacientes", "Sob negociação"],
-                      ].map(([range, price], index) => (
-                        <div
-                          key={range}
-                          className={`flex items-center justify-between gap-4 px-5 py-4 ${
-                            index % 2 === 0 ? "bg-white" : "bg-slate-50"
-                          }`}
-                        >
-                          <span className="text-sm font-bold text-slate-700">{range}</span>
-                          <span className="text-sm font-black text-[#4318FF]">{price}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="text-xs text-slate-400 font-medium mt-3">
-                      A cobrança mensal usa a quantidade de pacientes ativos da clínica no fechamento do ciclo.
-                    </p>
-                  </div>
                 </div>
               </motion.div>
             )}
