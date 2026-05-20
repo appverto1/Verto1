@@ -6,6 +6,11 @@ import { syncOfflineData } from './services/localDb';
 import { dataService } from './services/dataService';
 import { formatProfessionalRegistry } from './utils/professionalRegistry';
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
+};
+
 const LandingPage = React.lazy(() =>
   import('./components/LandingPage').then((m) => ({ default: m.LandingPage }))
 );
@@ -39,7 +44,11 @@ export default function App() {
   const [user, setUser] = useState<any>(null); 
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+  const [installPromptUnavailable, setInstallPromptUnavailable] = useState(false);
   const LAST_ACTIVE_WORKSPACE_KEY = 'last_active_workspace_id';
+  const INSTALL_PROMPT_DISMISSED_KEY = 'verto_pwa_install_prompt_dismissed_at';
 
   const getLastActiveWorkspaceId = () =>
     String(localStorage.getItem(LAST_ACTIVE_WORKSPACE_KEY) || '').trim();
@@ -108,6 +117,50 @@ export default function App() {
     return shouldPromptWorkspaceSelection(candidateUser);
   };
 
+  const isRunningStandalone = () => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.matchMedia?.('(display-mode: standalone)')?.matches ||
+      (window.navigator as any)?.standalone === true
+    );
+  };
+
+  const wasInstallPromptDismissedRecently = () => {
+    if (typeof window === 'undefined') return true;
+    const dismissedAt = Number(localStorage.getItem(INSTALL_PROMPT_DISMISSED_KEY) || 0);
+    if (!dismissedAt) return false;
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    return Date.now() - dismissedAt < sevenDaysMs;
+  };
+
+  const dismissInstallPrompt = () => {
+    localStorage.setItem(INSTALL_PROMPT_DISMISSED_KEY, String(Date.now()));
+    setShowInstallPrompt(false);
+    setInstallPromptUnavailable(false);
+  };
+
+  const handleInstallPwa = async () => {
+    if (!deferredInstallPrompt) {
+      setInstallPromptUnavailable(true);
+      return;
+    }
+
+    try {
+      await deferredInstallPrompt.prompt();
+      const choice = await deferredInstallPrompt.userChoice;
+      setDeferredInstallPrompt(null);
+      setShowInstallPrompt(false);
+      if (choice.outcome === 'dismissed') {
+        localStorage.setItem(INSTALL_PROMPT_DISMISSED_KEY, String(Date.now()));
+      } else {
+        localStorage.removeItem(INSTALL_PROMPT_DISMISSED_KEY);
+      }
+    } catch (error) {
+      console.warn('PWA install prompt failed:', error);
+      setInstallPromptUnavailable(true);
+    }
+  };
+
   const restoreWorkspaceContextIfNeeded = async (candidateUser: any) => {
     if (!candidateUser) return candidateUser;
     if (hasValidWorkspaceContext(candidateUser)) return candidateUser;
@@ -130,6 +183,61 @@ export default function App() {
 
     return candidateUser;
   };
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.register('/sw.js').catch((error) => {
+      console.warn('Service worker registration for PWA failed:', error);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setDeferredInstallPrompt(event as BeforeInstallPromptEvent);
+      if (user && !isRunningStandalone() && !wasInstallPromptDismissedRecently()) {
+        setShowInstallPrompt(true);
+      }
+    };
+
+    const handleAppInstalled = () => {
+      setDeferredInstallPrompt(null);
+      setShowInstallPrompt(false);
+      localStorage.removeItem(INSTALL_PROMPT_DISMISSED_KEY);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || isRunningStandalone() || wasInstallPromptDismissedRecently()) {
+      setShowInstallPrompt(false);
+      return;
+    }
+    if (deferredInstallPrompt) {
+      const timer = window.setTimeout(() => setShowInstallPrompt(true), 900);
+      return () => window.clearTimeout(timer);
+    }
+
+    const isMobileSafari =
+      /iphone|ipad|ipod/i.test(window.navigator.userAgent) &&
+      /safari/i.test(window.navigator.userAgent) &&
+      !/crios|fxios|edgios/i.test(window.navigator.userAgent);
+    if (isMobileSafari) {
+      const timer = window.setTimeout(() => {
+        setInstallPromptUnavailable(true);
+        setShowInstallPrompt(true);
+      }, 1200);
+      return () => window.clearTimeout(timer);
+    }
+  }, [user, deferredInstallPrompt]);
 
   const isUuidLike = (value: unknown) =>
     typeof value === 'string' &&
@@ -3624,6 +3732,46 @@ export default function App() {
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-rose-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-rose-500/25 transition hover:bg-rose-600 disabled:opacity-60"
               >
                 Cancelar agendamento
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showInstallPrompt && user && !isRunningStandalone() && (
+        <div className="fixed inset-0 z-[9998] flex items-end justify-center bg-slate-950/45 px-4 pb-4 backdrop-blur-sm sm:items-center sm:pb-0">
+          <div className="w-full max-w-md rounded-[28px] border border-white/70 bg-white p-5 shadow-2xl">
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#7a32fc]/10 text-[#7a32fc]">
+                <LayoutDashboard size={24} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-base font-black text-slate-900">Instalar Verto no celular?</p>
+                <p className="mt-1 text-sm font-medium leading-6 text-slate-500">
+                  Crie um atalho na tela inicial para abrir a Verto como aplicativo, sem precisar procurar pelo navegador.
+                </p>
+              </div>
+            </div>
+
+            {installPromptUnavailable ? (
+              <div className="mt-4 rounded-2xl bg-violet-50 p-4 text-sm font-medium leading-6 text-slate-700">
+                No iPhone/Safari, toque no botão de compartilhar do navegador e escolha <strong>Adicionar à Tela de Início</strong>.
+              </div>
+            ) : null}
+
+            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={dismissInstallPrompt}
+                className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-500 transition hover:bg-slate-50"
+              >
+                Agora não
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleInstallPwa()}
+                className="rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-black text-white shadow-lg shadow-purple-500/20 transition hover:opacity-90"
+              >
+                {installPromptUnavailable ? 'Entendi' : 'Instalar Verto'}
               </button>
             </div>
           </div>
