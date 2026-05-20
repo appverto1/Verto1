@@ -1249,13 +1249,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     }
   };
 
-  const availableSnapshots = useMemo(() => {
-    const dates = (history || [])
-      .filter((h: any) => h.patientId === patient.id && h.type === 'task' && h.score !== undefined)
-      .map((h: any) => h.dateGroup);
-    return Array.from(new Set(dates));
-  }, [history, patient.id]);
-
   const patientCategory = useMemo(() => (isKidsProfile ? 'Criança' : 'Adulto'), [isKidsProfile]);
   const normalizeClinicalTaskKey = (value: any) =>
     String(value || '')
@@ -1272,6 +1265,26 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     if (!left || !right) return false;
     return left === right || left.includes(right) || right.includes(left);
   };
+
+  const resolveHistorySnapshotKey = (item: any) => {
+    const raw = String(item?.dateGroup || item?.date_group || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    const brDate = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (brDate) return `${brDate[3]}-${brDate[2]}-${brDate[1]}`;
+    const date = new Date(item?.created_at || item?.date || '');
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toISOString().slice(0, 10);
+  };
+
+  const availableSnapshots = useMemo(() => {
+    const dates = (history || [])
+      .filter((h: any) => String(h?.patientId || h?.patient_id || '') === String(patient.id))
+      .filter((h: any) => String(h?.type || '').toLowerCase() === 'task')
+      .filter((h: any) => h?.score !== undefined && h?.score !== null)
+      .map(resolveHistorySnapshotKey)
+      .filter(Boolean);
+    return Array.from(new Set(dates)).sort((a: any, b: any) => String(b).localeCompare(String(a)));
+  }, [history, patient.id]);
 
   const evaluationSkills = useMemo(() => {
     const skills: any[] = [];
@@ -1731,46 +1744,77 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     if (!selectedProto) return [];
 
     const uniqueDates = Array.from(new Set((history || [])
-      .filter((h: any) => h.patientId === patient.id && h.score !== undefined)
-      .map((h: any) => h.dateGroup || h.date)
-      .filter(Boolean)));
+      .filter((h: any) => String(h?.patientId || h?.patient_id || '') === String(patient.id))
+      .filter((h: any) => String(h?.type || '').toLowerCase() === 'task')
+      .filter((h: any) => h?.score !== undefined && h?.score !== null)
+      .map(resolveHistorySnapshotKey)
+      .filter(Boolean)))
+      .sort((a: any, b: any) => String(b).localeCompare(String(a)));
     const fallbackDates = uniqueDates.slice(0, 2);
     const d1 = comparisonDate1 || fallbackDates[0] || '';
-    const d2 = comparisonDate2 || fallbackDates[1] || fallbackDates[0] || '';
+    const d2 = comparisonDate2 || fallbackDates.find((date: any) => String(date) !== String(d1)) || fallbackDates[0] || '';
     if (!d1 || !d2) return [];
 
-    const normalizePercent = (score: number, maxScore: number) => {
-      const safeMax = Math.max(1, Number(maxScore) || 1);
-      const safeScore = Math.max(0, Math.min(safeMax, Number(score) || 0));
-      return (safeScore / safeMax) * 100;
+    const scoredEvents = (history || [])
+      .filter((h: any) => String(h?.patientId || h?.patient_id || '') === String(patient.id))
+      .filter((h: any) => String(h?.type || '').toLowerCase() === 'task')
+      .filter((h: any) => h?.score !== undefined && h?.score !== null)
+      .map((h: any) => {
+        const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
+        const title = String(h?.title || h?.taskTitle || h?.task_data?.title || '').trim();
+        const score = Math.max(0, Math.min(1, Number(h?.score ?? 0) || 0));
+        return {
+          ...h,
+          _timestamp: ts,
+          _title: title,
+          _score: score,
+          _domain: String(h?.domain || h?.domainName || h?.task_data?.domain || h?.task_data?.domainName || '').trim()
+        };
+      })
+      .filter((h: any) => h._title)
+      .sort((a: any, b: any) => a._timestamp - b._timestamp);
+
+    const resolveCutoffTimestamp = (dateKey: string) => {
+      const parsed = new Date(`${dateKey}T23:59:59.999`).getTime();
+      return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
     };
 
+    const isVbMappProtocol = /vb[\s-]?mapp/i.test(String(selectedProto?.title || ''));
+    const vbmappCriterion = Number((selectedProto as any)?.masteryCriterion ?? (selectedProto as any)?.vbmapp_mastery_criterion ?? 5) || 5;
+
     const getDomainScoresForDate = (date: string) => {
-      const dateHistory = history.filter((h: any) => (h.dateGroup === date || h.date === date) && h.patientId === patient.id && h.score !== undefined);
+      const cutoffTs = resolveCutoffTimestamp(date);
 
       return selectedProto.data.map((domain: any) => {
-        const latestBySkill = new Map<string, number>();
-        const maxBySkill = new Map<string, number>();
-        const domainSkills = domain.skills || [];
+        const domainName = String(domain?.name || '').trim();
+        const domainTasks = (Array.isArray(domain?.skills) ? domain.skills : [])
+          .map((skill: any) => ({
+            name: String(skill?.name || '').trim(),
+            maxScore: Math.max(1, Number(skill?.maxScore ?? skill?.max_score ?? 1) || 1),
+            meta_sucessos: skill?.meta_sucessos ?? skill?.metaSucessos ?? skill?.masteryTarget ?? skill?.mastery_target
+          }))
+          .filter((skill: any) => skill.name);
 
-        dateHistory.forEach((h: any) => {
-          const hTitle = String(h?.title || '').trim().toLowerCase();
-          const skill = domainSkills.find((s: any) => String(s?.name || '').trim().toLowerCase() === hTitle);
-          if (!skill) return;
-          const key = String(skill.name);
-          latestBySkill.set(key, Number(h?.score ?? 0) || 0);
-          maxBySkill.set(key, Math.max(1, Number(skill?.maxScore ?? 1) || 1));
-        });
+        const domainEvents = scoredEvents
+          .filter((event: any) => event._timestamp <= cutoffTs)
+          .filter((event: any) => {
+            const matchesDomain = domainName && normalizeClinicalTaskKey(event?._domain || '') === normalizeClinicalTaskKey(domainName);
+            const matchesSkill = domainTasks.some((task: any) => isSameClinicalTask(task.name, event?._title || ''));
+            return matchesDomain || matchesSkill;
+          })
+          .map((event: any) => ({
+            title: event?._title || '',
+            score: event?._score,
+            maxScore: 1,
+            consecutive_successes: event?.consecutive_successes,
+            created_at: event?.created_at || event?.date || null
+          }));
 
-        let obtained = 0;
-        let possible = 0;
-        latestBySkill.forEach((score, key) => {
-          const skillMax = maxBySkill.get(key) || 1;
-          obtained += Math.max(0, Math.min(skillMax, score));
-          possible += skillMax;
+        return calculateDomainMastery(domainEvents, domainTasks, {
+          mode: 'latest',
+          protocolKind: isVbMappProtocol ? 'vbmapp' : 'other',
+          vbmappMasteryCriterion: vbmappCriterion
         });
-        if (possible <= 0) return 0;
-        return Number(normalizePercent(obtained, possible).toFixed(2));
       });
     };
 
@@ -1825,8 +1869,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       .filter((task: any) => String(task?.status || '').toLowerCase() === 'completed')
       .map((task: any) => {
         const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
-        const eventDateRaw = task?.completed_at || task?.reviewed_at || task?.scheduled_at || task?.created_at;
+        const professionalScore = task?.pro_score === null || task?.pro_score === undefined ? null : Number(task.pro_score);
+        const executionDateRaw = task?.completed_at || task?.scheduled_at || task?.created_at;
+        const reviewDateRaw = task?.reviewed_at || task?.updated_at || executionDateRaw;
+        const eventDateRaw = professionalScore === null ? executionDateRaw : reviewDateRaw;
         const eventDate = eventDateRaw ? new Date(eventDateRaw) : new Date();
+        const executionDate = executionDateRaw ? new Date(executionDateRaw) : eventDate;
+        const reviewDate = reviewDateRaw ? new Date(reviewDateRaw) : null;
         const safeMaxScore = Math.max(
           1,
           Number(taskData?.maxScore ?? taskData?.max_score ?? task?.max_score ?? 4) || 4
@@ -1836,12 +1885,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           taskData,
           eventDate,
           eventDateRaw,
+          executionDate,
+          executionDateRaw,
+          reviewDate,
+          reviewDateRaw,
           taskTitle: String(taskData?.title || task?.title || 'Tarefa'),
           taskType: String(task?.task_type || task?.type || 'task'),
           maxScore: safeMaxScore,
           patientEffort: Number(task?.patient_effort ?? 0) || 0,
           patientComment: String(task?.patient_comment || ''),
-          professionalScore: task?.pro_score === null || task?.pro_score === undefined ? null : Number(task.pro_score),
+          professionalScore,
           evolutionNote: String(task?.pro_review_note || '')
         };
       });
@@ -1849,20 +1902,29 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const completedLegacy = (patientTasks || [])
       .filter((task: any) => isLegacyCompletedTask(task))
       .map((task: any) => {
-        const eventDateRaw = task?.completed_at || task?.updated_at || task?.scheduled_at || task?.created_at;
+        const professionalScore = task?.pro_score === null || task?.pro_score === undefined ? null : Number(task.pro_score);
+        const executionDateRaw = task?.completed_at || task?.scheduled_at || task?.created_at;
+        const reviewDateRaw = task?.reviewed_at || task?.updated_at || executionDateRaw;
+        const eventDateRaw = professionalScore === null ? executionDateRaw : reviewDateRaw;
         const eventDate = eventDateRaw ? new Date(eventDateRaw) : new Date();
+        const executionDate = executionDateRaw ? new Date(executionDateRaw) : eventDate;
+        const reviewDate = reviewDateRaw ? new Date(reviewDateRaw) : null;
         const safeMaxScore = Math.max(1, Number(task?.maxScore ?? task?.max_score ?? 4) || 4);
         return {
           ...task,
           taskData: task?.taskData && typeof task.taskData === 'object' ? task.taskData : {},
           eventDate,
           eventDateRaw,
+          executionDate,
+          executionDateRaw,
+          reviewDate,
+          reviewDateRaw,
           taskTitle: String(task?.title || 'Tarefa'),
           taskType: String(task?.type || task?.task_type || 'task'),
           maxScore: safeMaxScore,
           patientEffort: Number(task?.patient_effort ?? task?.energy ?? 0) || 0,
           patientComment: String(task?.patient_comment || task?.note || ''),
-          professionalScore: task?.pro_score === null || task?.pro_score === undefined ? null : Number(task.pro_score),
+          professionalScore,
           evolutionNote: String(task?.pro_review_note || task?.evolutionNote || task?.evalComment || '')
         };
       });
@@ -1971,6 +2033,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const adultProtocolTasks = useMemo(() => {
     if (isKidsProfile || !selectedChartProtocol) return [];
     return adultCompletedTasks.filter((task: any) => {
+      if (!Number.isFinite(Number(task?.professionalScore))) return false;
       const protocol = resolveTaskProtocol(task);
       return protocol && String(protocol.id) === String(selectedChartProtocol.id);
     });
@@ -2290,7 +2353,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         selectedSkill?.meta_sucessos ?? selectedSkill?.metaSucessos ?? selectedSkill?.masteryTarget ?? selectedSkill?.mastery_target
       );
       const resolvedTaskMaxScore = isCreatingNewTask
-        ? Math.max(1, Number(isKidsProfile ? newTaskMaxScore : 4) || 4)
+        ? Math.max(1, Number(newTaskMaxScore || 4) || 4)
         : Math.max(1, Number(selectedSkillMaxScore) || 4);
       const taskPayload = { 
         id: Date.now() + (isCreatingNewTask ? 1 : 0), 
@@ -2302,6 +2365,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         type: planType, 
         scheduledAt: scheduledAt, 
         description: finalTaskSubtitle,
+        objective: selectedSkill?.objective || newTaskObjective || finalTaskSubtitle || '',
+        question: selectedSkill?.question || '',
+        example: selectedSkill?.example || newTaskExample || '',
+        criteria: selectedSkill?.criteria || newTaskCriteria || '',
+        comment: selectedSkill?.comment || newTaskComment || '',
+        code: selectedSkill?.code || newTaskCode || '',
+        sourcePage: selectedSkill?.sourcePage || selectedSkill?.source_page || null,
+        sourceDomain: selectedSkill?.sourceDomain || selectedSkill?.source_domain || selectedDomain?.name || null,
         maxScore: resolvedTaskMaxScore,
         meta_sucessos: Number.isFinite(selectedSkillMasteryTarget) && selectedSkillMasteryTarget > 0 ? Math.floor(selectedSkillMasteryTarget) : undefined,
         protocolId: selectedProtocol?.id || null,
@@ -2341,10 +2412,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           id: Date.now(),
           name: newTaskName,
           code: newTaskCode,
-          maxScore: isKidsProfile ? parseInt(newTaskMaxScore as any) : undefined,
+          maxScore: resolvedTaskMaxScore,
           objective: newTaskObjective,
           example: newTaskExample,
-          criteria: isKidsProfile ? newTaskCriteria : '',
+          criteria: newTaskCriteria,
           comment: newTaskComment
         }; 
         if (addToProtocolMode === 'existing') { 
@@ -2414,7 +2485,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
             domainName: taskPayload.domainName || undefined,
             skillId: selectedSkill?.id || undefined,
             skillName: selectedSkill?.name || taskPayload.title || undefined,
+            skillCode: taskPayload.code || undefined,
+            objective: taskPayload.objective || undefined,
+            question: taskPayload.question || undefined,
+            example: taskPayload.example || undefined,
+            criteria: taskPayload.criteria || undefined,
+            comment: taskPayload.comment || undefined,
+            sourcePage: taskPayload.sourcePage || undefined,
+            sourceDomain: taskPayload.sourceDomain || undefined,
             maxScore: resolvedTaskMaxScore,
+            max_score: resolvedTaskMaxScore,
+            meta_sucessos: taskPayload.meta_sucessos,
             noRealtimeScoring: true
           }
         };
@@ -2509,6 +2590,89 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       return Math.max(1, Number(context.skill?.maxScore ?? context.skill?.max_score ?? 1) || 1);
     }
     return Math.max(1, Number(taskData?.maxScore ?? taskData?.max_score ?? task?.max_score ?? 4) || 4);
+  };
+
+  const resolveAssignedReviewDetails = (task: any, context?: any) => {
+    const taskData =
+      task?.task_data && typeof task.task_data === 'object'
+        ? task.task_data
+        : task?.taskData && typeof task.taskData === 'object'
+          ? task.taskData
+          : {};
+    const skill = context?.skill || {};
+    const domain = context?.domain || {};
+    const protocol = context?.protocol || {};
+    const clean = (value: any) => normalizeNoteText(String(value || ''));
+    return {
+      protocolTitle: clean(taskData?.protocolTitle || taskData?.protocol_name || protocol?.title || protocol?.name),
+      domainName: clean(taskData?.domainName || taskData?.domain_name || domain?.name || skill?.sourceDomain || skill?.source_domain),
+      code: clean(taskData?.skillCode || taskData?.code || skill?.code),
+      objective: clean(taskData?.objective || skill?.objective || taskData?.description),
+      question: clean(taskData?.question || skill?.question),
+      example: clean(taskData?.example || skill?.example),
+      criteria: clean(taskData?.criteria || skill?.criteria),
+      comment: clean(taskData?.comment || skill?.comment),
+      sourcePage: taskData?.sourcePage || taskData?.source_page || skill?.sourcePage || skill?.source_page || null
+    };
+  };
+
+  const renderAssignedReviewCriteriaPanel = (task: any, context?: any) => {
+    const details = resolveAssignedReviewDetails(task, context);
+    const meta = [
+      details.protocolTitle,
+      details.domainName,
+      details.code ? `Código ${details.code}` : '',
+      details.sourcePage ? `p. ${details.sourcePage}` : ''
+    ].filter(Boolean).join(' • ');
+    const hasDetails = Boolean(
+      details.objective ||
+      details.question ||
+      details.criteria ||
+      details.example ||
+      details.comment ||
+      meta
+    );
+    if (!hasDetails) return null;
+
+    return (
+      <div className={`border rounded-xl p-3 space-y-2 ${isPanelDark ? 'bg-slate-900/50 border-slate-700' : 'bg-indigo-50/40 border-indigo-100'}`}>
+        <div>
+          <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-violet-200' : 'text-[#7a32fc]'}`}>
+            Critérios para pontuação
+          </p>
+          {meta && (
+            <p className={`text-[11px] font-semibold mt-1 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+              {meta}
+            </p>
+          )}
+        </div>
+        {details.objective && (
+          <p className={`text-xs leading-relaxed ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>
+            <span className="font-semibold">Objetivo:</span> {details.objective}
+          </p>
+        )}
+        {details.question && (
+          <p className={`text-xs leading-relaxed ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>
+            <span className="font-semibold">Pergunta:</span> {details.question}
+          </p>
+        )}
+        {details.criteria && (
+          <p className={`text-xs leading-relaxed whitespace-pre-wrap ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>
+            <span className="font-semibold">Escala:</span> {details.criteria}
+          </p>
+        )}
+        {details.example && (
+          <p className={`text-xs leading-relaxed ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
+            <span className="font-semibold">Exemplo:</span> {details.example}
+          </p>
+        )}
+        {details.comment && (
+          <p className={`text-xs leading-relaxed ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
+            <span className="font-semibold">Observação:</span> {details.comment}
+          </p>
+        )}
+      </div>
+    );
   };
 
   const pendingAssignedReviews = useMemo(
@@ -3561,14 +3725,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               </span>
                             </div>
                             <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
-                              Execução: {event.eventDate.toLocaleDateString('pt-BR')} às {event.eventDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                              Execução: {(event.executionDate || event.eventDate).toLocaleDateString('pt-BR')} às {(event.executionDate || event.eventDate).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                             </p>
+                            {event.professionalScore !== null && event.reviewDate && (
+                              <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                                Pontuação em sessão: {event.reviewDate.toLocaleDateString('pt-BR')} às {event.reviewDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                            )}
                             <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
                               Esforço percebido: <span className={`font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{event.patientEffort}%</span>
                             </p>
                             <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
                               Comentário do paciente: {normalizeNoteText(event.patientComment) || 'Sem comentário.'}
                             </p>
+                            {renderAssignedReviewCriteriaPanel(event, reviewContext)}
                             <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
                               Nota final do profissional: <span className={`font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{event.professionalScore ?? '-'} / {event.maxScore}</span>
                             </p>
@@ -4726,9 +4896,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                             </div>
                             {task?.patient_comment && (
                               <p className="text-xs text-gray-600 bg-gray-50 border border-gray-100 rounded-xl p-3 whitespace-pre-wrap">
-                                {task.patient_comment}
+                                {normalizeNoteText(task.patient_comment)}
                               </p>
                             )}
+                            {renderAssignedReviewCriteriaPanel(task, reviewContext)}
                             <div className="grid grid-cols-1 md:grid-cols-[140px_1fr] gap-2">
                               <select
                                 value={draft.score}

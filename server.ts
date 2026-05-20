@@ -13494,7 +13494,8 @@ async function startServer() {
         pro_review_note: reviewNote,
         task_data: {
           ...existingTaskData,
-          maxScore: maxScoreFromTask
+          maxScore: maxScoreFromTask,
+          max_score: maxScoreFromTask
         },
         reviewed_at: new Date().toISOString()
       };
