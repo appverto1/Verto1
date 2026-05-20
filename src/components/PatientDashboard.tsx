@@ -1483,7 +1483,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         ? interventionDetails
         : taskNote;
       setTimeout(() => { 
-        onCompleteTask(selectedTask, isConventionalAdult ? null : taskEnergy, finalNote); 
+        onCompleteTask(selectedTask, taskEnergy, finalNote); 
         setShowTaskSuccess(false); 
         setSelectedTask(null); 
         setInterventionResponse("");

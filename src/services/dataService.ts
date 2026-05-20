@@ -1992,7 +1992,23 @@ export const dataService = {
           scheduledAt: t?.scheduled_at || null,
           scheduled_at: t?.scheduled_at || null,
           status: t?.status || 'pending',
+          completed: String(t?.status || '').toLowerCase() === 'completed',
+          completed_at: t?.completed_at || null,
+          reviewed_at: t?.reviewed_at || null,
+          patient_effort: t?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? null,
+          patientEffort: t?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? null,
+          patient_effort_emoji: t?.patient_effort_emoji ?? taskData?.patientEffortEmoji ?? taskData?.patient_effort_emoji ?? null,
+          patientEffortEmoji: t?.patient_effort_emoji ?? taskData?.patientEffortEmoji ?? taskData?.patient_effort_emoji ?? null,
+          patient_effort_label: t?.patient_effort_label ?? taskData?.patientEffortLabel ?? taskData?.patient_effort_label ?? null,
+          patientEffortLabel: t?.patient_effort_label ?? taskData?.patientEffortLabel ?? taskData?.patient_effort_label ?? null,
+          patient_comment: t?.patient_comment ?? '',
+          pro_score: t?.pro_score ?? taskData?.pro_score ?? taskData?.proScore ?? null,
+          professionalScore: t?.pro_score ?? taskData?.pro_score ?? taskData?.proScore ?? null,
+          max_score: t?.max_score ?? taskData?.max_score ?? taskData?.maxScore ?? null,
+          pro_review_note: t?.pro_review_note ?? taskData?.pro_review_note ?? taskData?.proReviewNote ?? '',
+          consecutive_successes: t?.consecutive_successes ?? taskData?.consecutive_successes ?? null,
           task_data: taskData,
+          taskData,
           created_at: t?.created_at || t?.scheduled_at || null
         };
       });

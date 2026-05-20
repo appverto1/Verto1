@@ -1917,6 +1917,23 @@ export default function App() {
                   scheduled_at: t?.scheduled_at || null,
                   status: t?.status || 'pending',
                   completed: status === 'completed',
+                  completed_at: t?.completed_at || null,
+                  reviewed_at: t?.reviewed_at || null,
+                  patient_effort: t?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? null,
+                  patientEffort: t?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? null,
+                  energy: t?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? null,
+                  patient_effort_emoji: t?.patient_effort_emoji ?? taskData?.patientEffortEmoji ?? taskData?.patient_effort_emoji ?? null,
+                  patientEffortEmoji: t?.patient_effort_emoji ?? taskData?.patientEffortEmoji ?? taskData?.patient_effort_emoji ?? null,
+                  patient_effort_label: t?.patient_effort_label ?? taskData?.patientEffortLabel ?? taskData?.patient_effort_label ?? null,
+                  patientEffortLabel: t?.patient_effort_label ?? taskData?.patientEffortLabel ?? taskData?.patient_effort_label ?? null,
+                  patient_comment: t?.patient_comment ?? '',
+                  pro_score: t?.pro_score ?? taskData?.pro_score ?? taskData?.proScore ?? null,
+                  professionalScore: t?.pro_score ?? taskData?.pro_score ?? taskData?.proScore ?? null,
+                  max_score: t?.max_score ?? taskData?.max_score ?? taskData?.maxScore ?? null,
+                  pro_review_note: t?.pro_review_note ?? taskData?.pro_review_note ?? taskData?.proReviewNote ?? '',
+                  consecutive_successes: t?.consecutive_successes ?? taskData?.consecutive_successes ?? null,
+                  task_data: taskData,
+                  taskData,
                   professional_id: t?.professional_id || null,
                   professionalId: t?.professional_id || null
                 };
@@ -3033,7 +3050,7 @@ export default function App() {
     const normalizedEffort = typeof e === 'number' && Number.isFinite(e) ? e : null;
     const energyValue = isKid
       ? ((normalizedEffort ?? 0) / (t.maxScore || 1) * 100)
-      : (isConventionalAdult ? null : normalizedEffort);
+      : normalizedEffort;
     const newHistoryItem = { 
       id: Date.now(), 
       patientId: targetPatientId, 
@@ -3058,7 +3075,17 @@ export default function App() {
         String(x?.assignedTaskId || '') === String(t?.assignedTaskId || '') ||
         String(x?.id || '') === String(t?.id || '') ||
         String(x?.id || '') === `assigned-${String(t?.assignedTaskId || '')}`;
-      return matchesAssignedTask ? { ...x, completed: true, status: 'completed' } : x;
+      return matchesAssignedTask
+        ? {
+            ...x,
+            completed: true,
+            status: 'completed',
+            patient_effort: energyValue,
+            energy: energyValue,
+            patient_comment: n || '',
+            completed_at: new Date().toISOString()
+          }
+        : x;
     })); 
     
     if (isKid) {
@@ -3078,7 +3105,7 @@ export default function App() {
         const completionPayload: any = {
           patient_comment: n || ''
         };
-        if (typeof normalizedEffort === 'number' && Number.isFinite(normalizedEffort) && !isConventionalAdult) {
+        if (typeof normalizedEffort === 'number' && Number.isFinite(normalizedEffort)) {
           completionPayload.patient_effort = Math.max(0, Math.min(100, normalizedEffort));
         } else {
           completionPayload.patient_effort = null;

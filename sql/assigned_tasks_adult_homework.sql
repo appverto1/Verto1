@@ -13,15 +13,23 @@ create table if not exists public.assigned_tasks (
   task_data jsonb not null default '{}'::jsonb,
   scheduled_at timestamptz not null default now(),
   patient_effort integer check (patient_effort between 0 and 100),
+  patient_effort_emoji text,
+  patient_effort_label text,
   patient_comment text,
-  pro_score integer check (pro_score between 0 and 4),
+  pro_score integer,
+  max_score integer not null default 4 check (max_score between 1 and 100),
   pro_review_note text,
+  reviewed_by text,
   status text not null default 'pending' check (status in ('pending', 'completed')),
   completed_at timestamptz,
   reviewed_at timestamptz,
+  last_history_event_id uuid,
+  last_private_note_id uuid,
   parent_assigned_task_id uuid references public.assigned_tasks(id) on delete set null,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint assigned_tasks_pro_score_range
+    check (pro_score is null or (pro_score >= 0 and pro_score <= greatest(max_score, 1)))
 );
 
 create index if not exists idx_assigned_tasks_patient on public.assigned_tasks(patient_id);

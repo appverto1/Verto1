@@ -1854,6 +1854,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     annual: 'Anual'
   };
 
+  const getEffortEmoji = (value: any) => {
+    const percent = Number(value);
+    if (!Number.isFinite(percent)) return '😐';
+    if (percent < 20) return '😫';
+    if (percent < 40) return '😕';
+    if (percent < 60) return '😐';
+    if (percent < 80) return '🙂';
+    return '🤩';
+  };
+
+  const normalizeEffortPercent = (value: any) => {
+    const percent = Number(value);
+    if (!Number.isFinite(percent)) return 0;
+    return Math.max(0, Math.min(100, Math.round(percent)));
+  };
+
   const adultCompletedTasks = useMemo(() => {
     const deduped = new Map<string, any>();
     const isLegacyCompletedTask = (task: any) => {
@@ -1892,7 +1908,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           taskTitle: String(taskData?.title || task?.title || 'Tarefa'),
           taskType: String(task?.task_type || task?.type || 'task'),
           maxScore: safeMaxScore,
-          patientEffort: Number(task?.patient_effort ?? 0) || 0,
+          patientEffort: normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? task?.energy ?? 0),
+          patientEffortEmoji: String(task?.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || getEffortEmoji(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? task?.energy ?? 0)),
+          patientEffortLabel: String(task?.patient_effort_label || taskData?.patientEffortLabel || taskData?.patient_effort_label || ''),
           patientComment: String(task?.patient_comment || ''),
           professionalScore,
           evolutionNote: String(task?.pro_review_note || '')
@@ -1910,9 +1928,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         const executionDate = executionDateRaw ? new Date(executionDateRaw) : eventDate;
         const reviewDate = reviewDateRaw ? new Date(reviewDateRaw) : null;
         const safeMaxScore = Math.max(1, Number(task?.maxScore ?? task?.max_score ?? 4) || 4);
+        const taskData = task?.taskData && typeof task.taskData === 'object'
+          ? task.taskData
+          : task?.task_data && typeof task.task_data === 'object'
+            ? task.task_data
+            : {};
         return {
           ...task,
-          taskData: task?.taskData && typeof task.taskData === 'object' ? task.taskData : {},
+          taskData,
           eventDate,
           eventDateRaw,
           executionDate,
@@ -1922,7 +1945,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           taskTitle: String(task?.title || 'Tarefa'),
           taskType: String(task?.type || task?.task_type || 'task'),
           maxScore: safeMaxScore,
-          patientEffort: Number(task?.patient_effort ?? task?.energy ?? 0) || 0,
+          patientEffort: normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? task?.energy ?? 0),
+          patientEffortEmoji: String(task?.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || getEffortEmoji(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? task?.energy ?? 0)),
+          patientEffortLabel: String(task?.patient_effort_label || taskData?.patientEffortLabel || taskData?.patient_effort_label || ''),
           patientComment: String(task?.patient_comment || task?.note || ''),
           professionalScore,
           evolutionNote: String(task?.pro_review_note || task?.evolutionNote || task?.evalComment || '')
@@ -1992,7 +2017,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   );
 
   const resolveTaskProtocol = (task: any) => {
-    const taskData = task?.taskData && typeof task.taskData === 'object' ? task.taskData : {};
+    const taskData = task?.taskData && typeof task.taskData === 'object'
+      ? task.taskData
+      : task?.task_data && typeof task.task_data === 'object'
+        ? task.task_data
+        : {};
     const explicitProtocolId = String(
       taskData?.protocolId ||
       taskData?.protocol_id ||
@@ -3732,9 +3761,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                                 Pontuação em sessão: {event.reviewDate.toLocaleDateString('pt-BR')} às {event.reviewDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                               </p>
                             )}
-                            <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                              Esforço percebido: <span className={`font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{event.patientEffort}%</span>
-                            </p>
+                            <div className={`rounded-2xl border p-3 ${isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-white border-slate-200'}`}>
+                              <div className="flex items-center justify-between gap-3 mb-2">
+                                <span className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                                  Esforço percebido
+                                </span>
+                                <span className={`text-sm font-semibold flex items-center gap-2 ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>
+                                  <span className="text-lg">{event.patientEffortEmoji || getEffortEmoji(event.patientEffort)}</span>
+                                  {event.patientEffort}%
+                                </span>
+                              </div>
+                              <div className={`h-2 rounded-full overflow-hidden ${isPanelDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                                <div
+                                  className="h-full rounded-full bg-gradient-to-r from-[#7a32fc] to-[#05CD99]"
+                                  style={{ width: `${normalizeEffortPercent(event.patientEffort)}%` }}
+                                />
+                              </div>
+                            </div>
                             <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
                               Comentário do paciente: {normalizeNoteText(event.patientComment) || 'Sem comentário.'}
                             </p>
@@ -4198,7 +4241,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                           </span>
                         </div>
                         <p className="text-sm font-semibold text-gray-800">{task.taskTitle}</p>
-                        <p className="text-xs text-gray-600 mt-1">Esforço: {task.patientEffort}%</p>
+                        <p className="text-xs text-gray-600 mt-1">
+                          Esforço: <span className="font-semibold">{task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}%</span>
+                        </p>
                         <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap mt-2">
                           {normalizeNoteText(task.evolutionNote) || 'Sem anotação técnica registrada.'}
                         </p>
@@ -4247,7 +4292,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                               {selected && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
                             </div>
                             <p className={`text-xs font-semibold ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>{task.taskTitle}</p>
-                            <p className={`text-[11px] mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Esforço {task.patientEffort}% • Nota {task.professionalScore ?? '-'} / {task.maxScore}</p>
+                            <p className={`text-[11px] mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>
+                              Esforço {task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}% • Nota {task.professionalScore ?? '-'} / {task.maxScore}
+                            </p>
                             <p className={`text-xs line-clamp-2 mt-1 ${isPanelDark ? 'text-slate-200' : 'text-gray-600'}`}>{normalizeNoteText(task.evolutionNote) || 'Sem anotação técnica.'}</p>
                           </div>
                         );
@@ -4881,9 +4928,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                             <div className="flex items-start justify-between gap-3">
                               <div>
                                 <p className="font-semibold text-gray-800 text-sm tracking-tight">{displayedTitle}</p>
-                                <p className="text-xs text-gray-500">
-                                  Esforço informado: {Number(task?.patient_effort ?? 0)}%
-                                </p>
+                                <div className="mt-2 w-full max-w-xs rounded-xl border border-slate-100 bg-slate-50 p-2">
+                                  <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
+                                    <span>Esforço informado</span>
+                                    <span className="font-semibold text-slate-800 flex items-center gap-1">
+                                      <span>{String(task?.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || getEffortEmoji(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0))}</span>
+                                      {normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0)}%
+                                    </span>
+                                  </div>
+                                  <div className="h-1.5 bg-white rounded-full overflow-hidden">
+                                    <div
+                                      className="h-full rounded-full bg-gradient-to-r from-[#7a32fc] to-[#05CD99]"
+                                      style={{ width: `${normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0)}%` }}
+                                    />
+                                  </div>
+                                </div>
                                 {reviewContext?.protocol && (
                                   <p className="text-[11px] text-[#7a32fc] font-semibold mt-1">
                                     {String(reviewContext.protocol?.title || reviewContext.protocol?.name || 'Protocolo')} • 0-{dynamicMaxScore}

@@ -702,6 +702,15 @@ function hashIdentifier(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
+function uuidFromStableString(value: string): string {
+  const hex = crypto.createHash('sha256').update(value).digest('hex').slice(0, 32).split('');
+  hex[12] = '5';
+  const variant = Number.parseInt(hex[16] || '8', 16);
+  hex[16] = ((variant & 0x3) | 0x8).toString(16);
+  const joined = hex.join('');
+  return `${joined.slice(0, 8)}-${joined.slice(8, 12)}-${joined.slice(12, 16)}-${joined.slice(16, 20)}-${joined.slice(20)}`;
+}
+
 function generate6DigitOtp(): string {
   return String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
 }
@@ -2041,6 +2050,26 @@ function asSafeNumber(value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): n
 
 function cleanObject<T extends Record<string, any>>(input: T): Partial<T> {
   return Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
+
+function effortEmojiForPercent(value: number | null | undefined): string | null {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return null;
+  const percent = Number(value);
+  if (percent < 20) return '😫';
+  if (percent < 40) return '😕';
+  if (percent < 60) return '😐';
+  if (percent < 80) return '🙂';
+  return '🤩';
+}
+
+function effortLabelForPercent(value: number | null | undefined): string | null {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return null;
+  const percent = Number(value);
+  if (percent < 20) return 'Muito difícil';
+  if (percent < 40) return 'Difícil';
+  if (percent < 60) return 'Moderado';
+  if (percent < 80) return 'Leve';
+  return 'Muito leve';
 }
 
 function isVbMappTask(taskLike: any): boolean {
@@ -10759,6 +10788,61 @@ async function startServer() {
     return { data: null, error: { message: 'Falha ao atualizar anotação após fallback de schema.' }, payload: candidate };
   };
 
+  const upsertHistoryWithSchemaFallback = async (basePayload: Record<string, any>) => {
+    let candidate = { ...basePayload };
+    const triedMissingColumns = new Set<string>();
+
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const { data, error } = await supabase
+        .from('history')
+        .upsert([candidate], { onConflict: 'id' })
+        .select('*')
+        .single();
+
+      if (!error) return { data, error: null, payload: candidate };
+
+      const missingColumn = extractMissingColumnName(error);
+      if (!missingColumn || triedMissingColumns.has(missingColumn)) {
+        return { data: null, error, payload: candidate };
+      }
+
+      triedMissingColumns.add(missingColumn);
+      const nextCandidate = { ...candidate };
+      delete nextCandidate[missingColumn];
+      candidate = nextCandidate;
+    }
+
+    return { data: null, error: { message: 'Falha ao salvar histórico após fallback de schema.' }, payload: candidate };
+  };
+
+  const updateAssignedTaskWithSchemaFallback = async (taskId: string, baseUpdates: Record<string, any>) => {
+    let candidate = { ...baseUpdates };
+    const triedMissingColumns = new Set<string>();
+
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const { data, error } = await supabase
+        .from('assigned_tasks')
+        .update(candidate)
+        .eq('id', taskId)
+        .select('*')
+        .single();
+
+      if (!error) return { data, error: null, payload: candidate };
+
+      const missingColumn = extractMissingColumnName(error);
+      if (!missingColumn || triedMissingColumns.has(missingColumn)) {
+        return { data: null, error, payload: candidate };
+      }
+
+      triedMissingColumns.add(missingColumn);
+      const nextCandidate = { ...candidate };
+      delete nextCandidate[missingColumn];
+      candidate = nextCandidate;
+    }
+
+    return { data: null, error: { message: 'Falha ao atualizar tarefa adulta após fallback de schema.' }, payload: candidate };
+  };
+
   // Notes
   app.get('/api/notes/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
     try {
@@ -11285,7 +11369,18 @@ async function startServer() {
           energy: task.patient_effort ?? null,
           note: task.patient_comment || task.pro_review_note || '',
           icon: taskData.icon || '📌',
-          created_at: task.completed_at || task.updated_at || task.created_at
+          created_at: task.completed_at || task.updated_at || task.created_at,
+          assigned_task_id: task.id,
+          source: 'assigned_task_completion',
+          task_data: cleanObject({
+            ...taskData,
+            patientEffort: task.patient_effort ?? taskData?.patientEffort ?? null,
+            patient_effort: task.patient_effort ?? taskData?.patient_effort ?? null,
+            patientEffortEmoji: task.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || effortEmojiForPercent(asSafeNumber(task.patient_effort, 0, 100)),
+            patient_effort_emoji: task.patient_effort_emoji || taskData?.patient_effort_emoji || taskData?.patientEffortEmoji || effortEmojiForPercent(asSafeNumber(task.patient_effort, 0, 100)),
+            patientEffortLabel: task.patient_effort_label || taskData?.patientEffortLabel || taskData?.patient_effort_label || effortLabelForPercent(asSafeNumber(task.patient_effort, 0, 100)),
+            patient_effort_label: task.patient_effort_label || taskData?.patient_effort_label || taskData?.patientEffortLabel || effortLabelForPercent(asSafeNumber(task.patient_effort, 0, 100))
+          })
         };
       });
 
@@ -13385,30 +13480,56 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
       }
 
-      if (String(existing?.status || '').toLowerCase() === 'completed' && existing?.completed_at) {
+      const submittedEffort = asSafeNumber(
+        req.body?.patient_effort ?? req.body?.energy ?? req.body?.effort,
+        0,
+        100
+      );
+      const submittedComment = sanitizeTextField(req.body?.patient_comment, 4000);
+      const hasCompletionDetails =
+        submittedEffort !== null ||
+        submittedComment.length > 0 ||
+        sanitizeString(req.body?.patient_effort_emoji || req.body?.effort_emoji, 20).length > 0;
+      if (String(existing?.status || '').toLowerCase() === 'completed' && existing?.completed_at && !hasCompletionDetails) {
         return res.json({ success: true, data: existing, skipped: true });
       }
 
+      const existingTaskData = existing?.task_data && typeof existing.task_data === 'object' ? existing.task_data : {};
+      const effortEmoji =
+        sanitizeString(req.body?.patient_effort_emoji || req.body?.effort_emoji, 20) ||
+        effortEmojiForPercent(submittedEffort) ||
+        effortEmojiForPercent(asSafeNumber(existing?.patient_effort, 0, 100));
+      const effortLabel =
+        sanitizeString(req.body?.patient_effort_label || req.body?.effort_label, 80) ||
+        effortLabelForPercent(submittedEffort) ||
+        effortLabelForPercent(asSafeNumber(existing?.patient_effort, 0, 100));
+      const completedAt = existing?.completed_at || new Date().toISOString();
       const updatePayload = cleanObject({
-        patient_effort: asSafeNumber(req.body?.patient_effort, 0, 100),
-        patient_comment: sanitizeTextField(req.body?.patient_comment, 4000),
+        patient_effort: submittedEffort,
+        patient_effort_emoji: effortEmoji || null,
+        patient_effort_label: effortLabel || null,
+        patient_comment: submittedComment,
+        task_data: {
+          ...existingTaskData,
+          patientEffort: submittedEffort,
+          patient_effort: submittedEffort,
+          patientEffortEmoji: effortEmoji || null,
+          patient_effort_emoji: effortEmoji || null,
+          patientEffortLabel: effortLabel || null,
+          patient_effort_label: effortLabel || null
+        },
         status: 'completed',
-        completed_at: new Date().toISOString()
+        completed_at: completedAt
       });
 
-      const { data, error } = await supabase
-        .from('assigned_tasks')
-        .update(updatePayload)
-        .eq('id', taskId)
-        .select('*')
-        .single();
+      const { data, error } = await updateAssignedTaskWithSchemaFallback(taskId, updatePayload);
       if (error) throw error;
 
       const taskData = data?.task_data && typeof data.task_data === 'object' ? data.task_data : {};
       let historyEntry: any = null;
       try {
         historyEntry = cleanObject({
-          id: crypto.randomUUID(),
+          id: uuidFromStableString(`adult-assigned-task-completion-history:${taskId}`),
           patient_id: sanitizeString(data?.patient_id, 120),
           patient_email: sanitizeEmail(data?.patient_email),
           type: sanitizeString(data?.task_type, 80) || 'task',
@@ -13419,11 +13540,20 @@ async function startServer() {
           icon: sanitizeString(taskData?.icon, 40) || '📌',
           therapist_id: sanitizeString(data?.professional_id, 120),
           created_at: data?.completed_at || new Date().toISOString(),
-          date_group: dateGroupForClinic(data?.completed_at || new Date().toISOString(), req.session.user)
+          date_group: dateGroupForClinic(data?.completed_at || new Date().toISOString(), req.session.user),
+          assigned_task_id: sanitizeString(data?.id, 120),
+          source: 'assigned_task_completion',
+          task_data: cleanObject({
+            ...taskData,
+            patientEffortEmoji: effortEmoji || taskData?.patientEffortEmoji || null,
+            patient_effort_emoji: effortEmoji || taskData?.patient_effort_emoji || null,
+            patientEffortLabel: effortLabel || taskData?.patientEffortLabel || null,
+            patient_effort_label: effortLabel || taskData?.patient_effort_label || null
+          })
         });
-        await supabase
-          .from('history')
-          .insert([historyEntry]);
+        const historyResult = await upsertHistoryWithSchemaFallback(historyEntry);
+        if (historyResult.error) throw historyResult.error;
+        historyEntry = historyResult.data || historyEntry;
       } catch (historyInsertError: any) {
         console.warn('[AssignedTasks] Falha ao criar histórico automático:', historyInsertError?.message || String(historyInsertError));
       }
@@ -13441,6 +13571,8 @@ async function startServer() {
             completed: true,
             effort: asSafeNumber(data?.patient_effort, 0, 100),
             energy: asSafeNumber(data?.patient_effort, 0, 100),
+            effortEmoji: effortEmoji || null,
+            effortLabel: effortLabel || null,
             note: sanitizeTextField(data?.patient_comment, 4000),
             icon: sanitizeString(taskData?.icon, 40) || '📌'
           }),
@@ -13469,6 +13601,9 @@ async function startServer() {
         .maybeSingle();
       if (fetchError) throw fetchError;
       if (!existing) return res.status(404).json({ success: false, error: 'Tarefa não encontrada.' });
+      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
 
       const existingTaskData = existing.task_data && typeof existing.task_data === 'object' ? existing.task_data : {};
       const isVbMapp = isVbMappTask(existingTaskData) || isVbMappTask(existing);
@@ -13495,42 +13630,187 @@ async function startServer() {
         : existingConsecutive;
 
       const reviewNote = sanitizeTextField(req.body?.pro_review_note, 4000);
+      const reviewedAt = new Date().toISOString();
+      const patientEffort = asSafeNumber(
+        existing?.patient_effort ??
+          existingTaskData?.patientEffort ??
+          existingTaskData?.patient_effort,
+        0,
+        100
+      );
+      const patientEffortEmoji =
+        sanitizeString(existing?.patient_effort_emoji || existingTaskData?.patientEffortEmoji || existingTaskData?.patient_effort_emoji, 20) ||
+        effortEmojiForPercent(patientEffort);
+      const patientEffortLabel =
+        sanitizeString(existing?.patient_effort_label || existingTaskData?.patientEffortLabel || existingTaskData?.patient_effort_label, 80) ||
+        effortLabelForPercent(patientEffort);
+      const reviewMetadata = cleanObject({
+        protocolId: sanitizeString(existingTaskData?.protocolId || existingTaskData?.protocol_id, 120) || null,
+        protocolTitle: sanitizeTextField(existingTaskData?.protocolTitle || existingTaskData?.protocol_name, 240) || null,
+        protocolCategory: sanitizeString(existingTaskData?.protocolCategory, 80) || null,
+        domainId: sanitizeString(existingTaskData?.domainId || existingTaskData?.domain_id, 120) || null,
+        domainName: sanitizeTextField(existingTaskData?.domainName || existingTaskData?.domain_name || existingTaskData?.sourceDomain || existingTaskData?.source_domain, 240) || null,
+        skillId: sanitizeString(existingTaskData?.skillId || existingTaskData?.skill_id, 120) || null,
+        skillName: sanitizeTextField(existingTaskData?.skillName || existingTaskData?.skill_name || existingTaskData?.title, 240) || null,
+        skillCode: sanitizeString(existingTaskData?.skillCode || existingTaskData?.code, 80) || null,
+        sourcePage: existingTaskData?.sourcePage || existingTaskData?.source_page || null
+      });
       let reviewPayload: any = {
         pro_score: proScore,
+        max_score: maxScoreFromTask,
         pro_review_note: reviewNote,
         task_data: {
           ...existingTaskData,
           maxScore: maxScoreFromTask,
-          max_score: maxScoreFromTask
+          max_score: maxScoreFromTask,
+          proScore,
+          pro_score: proScore,
+          proReviewNote: reviewNote,
+          pro_review_note: reviewNote,
+          reviewedAt,
+          reviewed_at: reviewedAt,
+          patientEffort,
+          patient_effort: patientEffort,
+          patientEffortEmoji,
+          patient_effort_emoji: patientEffortEmoji,
+          patientEffortLabel,
+          patient_effort_label: patientEffortLabel
         },
-        reviewed_at: new Date().toISOString()
+        reviewed_at: reviewedAt,
+        reviewed_by: sanitizeString(req.session.user?.id, 120)
       };
       if (isVbMapp) {
         reviewPayload.consecutive_successes = nextConsecutive;
       }
 
-      let updateResult = await supabase
-        .from('assigned_tasks')
-        .update(reviewPayload)
-        .eq('id', taskId)
-        .select('*')
-        .single();
+      const { data, error } = await updateAssignedTaskWithSchemaFallback(taskId, reviewPayload);
+      if (error) throw error;
 
-      if (updateResult.error) {
-        const missingColumn = extractMissingColumnName(updateResult.error);
-        if (missingColumn && missingColumn in reviewPayload) {
-          delete reviewPayload[missingColumn];
-          updateResult = await supabase
-            .from('assigned_tasks')
-            .update(reviewPayload)
-            .eq('id', taskId)
-            .select('*')
-            .single();
-        }
+      const savedTaskData = data?.task_data && typeof data.task_data === 'object' ? data.task_data : existingTaskData;
+      const taskTitle = sanitizeTextField(savedTaskData?.title || existingTaskData?.title || existing?.title || 'Tarefa adulta', 180);
+      const historyId = uuidFromStableString(`adult-assigned-task-review-history:${taskId}`);
+      const noteId = uuidFromStableString(`adult-assigned-task-review-note:${taskId}`);
+      let historyEntry: any = null;
+      let privateNote: any = null;
+
+      const reviewTextLines = [
+        'REVISÃO PROFISSIONAL DE TAREFA ADULTA',
+        `Tarefa: ${taskTitle}`,
+        reviewMetadata.protocolTitle ? `Protocolo: ${reviewMetadata.protocolTitle}` : '',
+        reviewMetadata.domainName ? `Domínio: ${reviewMetadata.domainName}` : '',
+        `Pontuação profissional: ${proScore} / ${maxScoreFromTask}`,
+        patientEffort !== null ? `Esforço percebido pelo paciente: ${patientEffort}% ${patientEffortEmoji || ''}`.trim() : '',
+        sanitizeTextField(existing?.patient_comment, 4000) ? `Comentário do paciente: ${sanitizeTextField(existing?.patient_comment, 4000)}` : '',
+        reviewNote ? `Anotação técnica: ${reviewNote}` : 'Anotação técnica: Sem anotação técnica registrada.'
+      ].filter(Boolean);
+
+      try {
+        const historyPayload = cleanObject({
+          id: historyId,
+          patient_id: sanitizeString(data?.patient_id || existing?.patient_id, 120),
+          patient_email: sanitizeEmail(data?.patient_email || existing?.patient_email),
+          type: 'task',
+          title: taskTitle,
+          score: proScore,
+          pro_score: proScore,
+          max_score: maxScoreFromTask,
+          energy: patientEffort,
+          note: reviewNote,
+          icon: sanitizeString(savedTaskData?.icon || existingTaskData?.icon, 40) || '📋',
+          therapist_id: sanitizeString(req.session.user?.id || data?.professional_id || existing?.professional_id, 120),
+          created_at: reviewedAt,
+          date_group: dateGroupForClinic(reviewedAt, req.session.user),
+          assigned_task_id: sanitizeString(taskId, 120),
+          source: 'assigned_task_review',
+          protocol_id: reviewMetadata.protocolId,
+          protocol_title: reviewMetadata.protocolTitle,
+          domain_id: reviewMetadata.domainId,
+          domain_name: reviewMetadata.domainName,
+          skill_id: reviewMetadata.skillId,
+          skill_name: reviewMetadata.skillName,
+          task_data: {
+            ...savedTaskData,
+            ...reviewMetadata,
+            professionalScore: proScore,
+            pro_score: proScore,
+            maxScore: maxScoreFromTask,
+            max_score: maxScoreFromTask,
+            patientEffort,
+            patient_effort: patientEffort,
+            patientEffortEmoji,
+            patient_effort_emoji: patientEffortEmoji,
+            patientEffortLabel,
+            patient_effort_label: patientEffortLabel,
+            reviewNote
+          }
+        });
+        const historyResult = await upsertHistoryWithSchemaFallback(historyPayload);
+        if (historyResult.error) throw historyResult.error;
+        historyEntry = historyResult.data || historyPayload;
+      } catch (historyError: any) {
+        console.warn('[AssignedTasks] Falha ao persistir revisão no histórico:', historyError?.message || String(historyError));
       }
 
-      const { data, error } = updateResult;
-      if (error) throw error;
+      try {
+        const notePayload = cleanObject({
+          id: noteId,
+          patient_id: sanitizeString(data?.patient_id || existing?.patient_id, 120),
+          patient_email: sanitizeEmail(data?.patient_email || existing?.patient_email),
+          text: reviewTextLines.join('\n'),
+          content: reviewTextLines.join('\n'),
+          visibility: 'private',
+          type: 'private',
+          subject: 'Revisão profissional - tarefa adulta',
+          score: proScore,
+          assigned_task_id: sanitizeString(taskId, 120),
+          source: 'assigned_task_review',
+          therapist_id: sanitizeString(req.session.user?.id, 120),
+          user_id: sanitizeString(req.session.user?.id, 120),
+          created_at: reviewedAt
+        });
+        const noteResult = await upsertNoteWithSchemaFallback(notePayload);
+        if (noteResult.error) throw noteResult.error;
+        privateNote = noteResult.data || notePayload;
+      } catch (noteError: any) {
+        console.warn('[AssignedTasks] Falha ao persistir anotação privada da revisão:', noteError?.message || String(noteError));
+      }
+
+      try {
+        await supabase
+          .from('adult_task_reviews')
+          .upsert([cleanObject({
+            assigned_task_id: sanitizeString(taskId, 120),
+            clinic_id: sanitizeString(data?.clinic_id || existing?.clinic_id, 120),
+            patient_id: sanitizeString(data?.patient_id || existing?.patient_id, 120),
+            patient_email: sanitizeEmail(data?.patient_email || existing?.patient_email),
+            professional_id: sanitizeString(req.session.user?.id || data?.professional_id || existing?.professional_id, 120),
+            protocol_id: reviewMetadata.protocolId,
+            protocol_title: reviewMetadata.protocolTitle,
+            domain_id: reviewMetadata.domainId,
+            domain_name: reviewMetadata.domainName,
+            skill_id: reviewMetadata.skillId,
+            skill_name: reviewMetadata.skillName,
+            task_title: taskTitle,
+            patient_effort: patientEffort,
+            patient_effort_emoji: patientEffortEmoji,
+            patient_effort_label: patientEffortLabel,
+            patient_comment: sanitizeTextField(existing?.patient_comment, 4000),
+            pro_score: proScore,
+            max_score: maxScoreFromTask,
+            pro_review_note: reviewNote,
+            completed_at: sanitizeString(data?.completed_at || existing?.completed_at, 40) || null,
+            reviewed_at: reviewedAt,
+            history_id: historyEntry?.id || historyId,
+            note_id: privateNote?.id || noteId,
+            review_payload: {
+              taskData: savedTaskData,
+              metadata: reviewMetadata
+            },
+            updated_at: reviewedAt
+          })], { onConflict: 'assigned_task_id' });
+      } catch (reviewAuditError: any) {
+        console.warn('[AssignedTasks] Falha ao persistir auditoria adult_task_reviews:', reviewAuditError?.message || String(reviewAuditError));
+      }
 
       let suggestedTask: any = null;
       if (proScore <= 2) {
@@ -13569,7 +13849,21 @@ async function startServer() {
         };
       }
 
-      return res.json({ success: true, data, suggestedTask });
+      return res.json({
+        success: true,
+        data,
+        suggestedTask,
+        historyEntry,
+        privateNote,
+        mastery_feedback: isVbMapp
+          ? {
+              protocol: 'VB-MAPP',
+              consecutive_successes: nextConsecutive,
+              criterion: taskMasteryCriterion,
+              progress_text: `Sucesso consecutivo: ${Math.min(nextConsecutive, taskMasteryCriterion)} de ${taskMasteryCriterion}`
+            }
+          : null
+      });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || String(error) });
     }
@@ -15547,15 +15841,7 @@ async function startServer() {
 
       return res.json({
         success: true,
-        data,
-        mastery_feedback: isVbMapp
-          ? {
-              protocol: 'VB-MAPP',
-              consecutive_successes: nextConsecutive,
-              criterion: taskMasteryCriterion,
-              progress_text: `Sucesso consecutivo: ${Math.min(nextConsecutive, taskMasteryCriterion)} de ${taskMasteryCriterion}`
-            }
-          : null
+        data
       });
     } catch (error) {
       return res.status(500).json({ error: 'Erro interno do servidor.' });
