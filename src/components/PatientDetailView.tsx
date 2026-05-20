@@ -3764,7 +3764,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
                             <div className={`rounded-2xl border p-3 ${isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-white border-slate-200'}`}>
                               <div className="flex items-center justify-between gap-3 mb-2">
                                 <span className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                                  Esforço percebido
+                                  Energia restante após a tarefa
                                 </span>
                                 <span className={`text-sm font-semibold flex items-center gap-2 ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>
                                   <span className="text-lg">{event.patientEffortEmoji || getEffortEmoji(event.patientEffort)}</span>
