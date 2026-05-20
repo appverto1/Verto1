@@ -25,7 +25,6 @@
     "@types/qrcode": "^1.5.6",
     "@types/web-push": "^3.6.4",
     "@vitejs/plugin-react": "^5.0.4",
-    "better-sqlite3": "^12.4.1",
     "chart.js": "^4.5.1",
     "clsx": "^2.1.1",
     "connect-pg-simple": "^10.0.0",
