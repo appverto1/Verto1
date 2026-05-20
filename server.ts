@@ -13686,7 +13686,35 @@ async function startServer() {
       const { data, error } = await updateAssignedTaskWithSchemaFallback(taskId, reviewPayload);
       if (error) throw error;
 
-      const savedTaskData = data?.task_data && typeof data.task_data === 'object' ? data.task_data : existingTaskData;
+      const returnedTaskData = data?.task_data && typeof data.task_data === 'object' ? data.task_data : {};
+      const savedTaskData = {
+        ...existingTaskData,
+        ...returnedTaskData,
+        maxScore: maxScoreFromTask,
+        max_score: maxScoreFromTask,
+        proScore,
+        pro_score: proScore,
+        proReviewNote: reviewNote,
+        pro_review_note: reviewNote,
+        reviewedAt,
+        reviewed_at: reviewedAt,
+        patientEffort,
+        patient_effort: patientEffort,
+        patientEffortEmoji,
+        patient_effort_emoji: patientEffortEmoji,
+        patientEffortLabel,
+        patient_effort_label: patientEffortLabel
+      };
+      const normalizedReviewedTask = {
+        ...existing,
+        ...data,
+        pro_score: proScore,
+        max_score: maxScoreFromTask,
+        pro_review_note: reviewNote,
+        reviewed_at: reviewedAt,
+        reviewed_by: sanitizeString(req.session.user?.id, 120),
+        task_data: savedTaskData
+      };
       const taskTitle = sanitizeTextField(savedTaskData?.title || existingTaskData?.title || existing?.title || 'Tarefa adulta', 180);
       const historyId = uuidFromStableString(`adult-assigned-task-review-history:${taskId}`);
       const noteId = uuidFromStableString(`adult-assigned-task-review-note:${taskId}`);
@@ -13851,7 +13879,7 @@ async function startServer() {
 
       return res.json({
         success: true,
-        data,
+        data: normalizedReviewedTask,
         suggestedTask,
         historyEntry,
         privateNote,

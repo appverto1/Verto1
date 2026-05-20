@@ -368,28 +368,74 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return "🤩";
   };
 
-  const getSnapshotKey = (item: any) => {
-    const raw = String(item?.dateGroup || '').trim();
-    if (raw && raw !== 'Hoje' && raw !== 'Ontem') return raw;
-    const dt = new Date(item?.created_at || item?.date || 0);
-    if (Number.isNaN(dt.getTime())) return '';
-    const y = dt.getFullYear();
-    const m = String(dt.getMonth() + 1).padStart(2, '0');
-    const d = String(dt.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
+  const toLocalDateKey = (value: any) => {
+    if (!value) return '';
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) return '';
+      const y = value.getFullYear();
+      const m = String(value.getMonth() + 1).padStart(2, '0');
+      const d = String(value.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+
+    const isoDateOnly = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoDateOnly) return `${isoDateOnly[1]}-${isoDateOnly[2]}-${isoDateOnly[3]}`;
+
+    const brDate = raw.match(/^(\d{2})[/-](\d{2})[/-](\d{4})$/);
+    if (brDate) return `${brDate[3]}-${brDate[2]}-${brDate[1]}`;
+
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return toLocalDateKey(parsed);
+  };
+
+  const getHistoryDateKey = (item: any) => {
+    const rawGroup = String(item?.dateGroup || item?.date_group || '').trim();
+    if (/^hoje$/i.test(rawGroup)) return toLocalDateKey(new Date());
+    if (rawGroup && !/^ontem$/i.test(rawGroup)) {
+      const fromGroup = toLocalDateKey(rawGroup);
+      if (fromGroup) return fromGroup;
+    }
+    return toLocalDateKey(item?.created_at || item?.completed_at || item?.date || item?.scheduled_at);
+  };
+
+  const getSnapshotKey = (item: any) => getHistoryDateKey(item);
+
+  const formatHistoryDateLabel = (value: string) => {
+    const key = toLocalDateKey(value);
+    if (!key) return String(value || '').trim();
+    if (key === toLocalDateKey(new Date())) return 'Hoje';
+    const [year, month, day] = key.split('-');
+    return `${day}-${month}-${year}`;
+  };
+
+  const getHistoryItemSortTime = (item: any) => {
+    const raw = item?.created_at || item?.completed_at || item?.date || item?.scheduled_at || '';
+    const parsed = new Date(raw).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+    const time = String(item?.time || '').trim();
+    const match = time.match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return 0;
+    const dateKey = getHistoryDateKey(item);
+    const base = dateKey ? new Date(`${dateKey}T00:00:00`).getTime() : 0;
+    return base + Number(match[1]) * 60 * 60 * 1000 + Number(match[2]) * 60 * 1000;
   };
 
   const formatFilterDate = (value: string) => {
     const raw = String(value || '').trim();
     if (!raw) return '';
-    if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) return raw;
+    if (/^\d{2}[/-]\d{2}[/-]\d{4}$/.test(raw)) return raw.replace(/\//g, '-');
     if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
       const [year, month, day] = raw.split('-');
-      return `${day}/${month}/${year}`;
+      return `${day}-${month}-${year}`;
     }
     const parsed = new Date(raw);
     if (Number.isNaN(parsed.getTime())) return raw;
-    return parsed.toLocaleDateString('pt-BR');
+    const key = toLocalDateKey(parsed);
+    return formatHistoryDateLabel(key);
   };
 
   const parseScore = (value: any): number | null => {
@@ -997,37 +1043,72 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const scopedByDate =
       selectedSnapshotDate === "all"
         ? history
-        : history.filter((h: any) => h.dateGroup === selectedSnapshotDate);
+        : history.filter((h: any) => getHistoryDateKey(h) === selectedSnapshotDate);
 
-    const deduped = scopedByDate.filter((item: any, index: number, array: any[]) => {
-      const itemKey = [
-        String(item?.patient_id || item?.patientId || user?.id || ''),
-        String(item?.type || ''),
-        String(item?.title || ''),
-        String(item?.note || ''),
-        String(item?.created_at || item?.date || ''),
-        String(item?.energy ?? ''),
-        String(item?.score ?? ''),
-      ].join('|');
-      return array.findIndex((candidate: any) => {
-        const candidateKey = [
-          String(candidate?.patient_id || candidate?.patientId || user?.id || ''),
-          String(candidate?.type || ''),
-          String(candidate?.title || ''),
-          String(candidate?.note || ''),
-          String(candidate?.created_at || candidate?.date || ''),
-          String(candidate?.energy ?? ''),
-          String(candidate?.score ?? ''),
-        ].join('|');
-        return candidateKey === itemKey;
-      }) === index;
+    const normalizeTextKey = (value: any) =>
+      String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+
+    const normalized = (Array.isArray(scopedByDate) ? scopedByDate : []).map((item: any) => {
+      const dateKey = getHistoryDateKey(item);
+      return {
+        ...item,
+        _dateKey: dateKey,
+        _sortTime: getHistoryItemSortTime(item),
+        dateGroup: formatHistoryDateLabel(dateKey)
+      };
     });
 
-    return deduped;
+    const deduped = new Map<string, any>();
+    normalized.forEach((item: any) => {
+      const taskRef = String(
+        item?.assigned_task_id ||
+          item?.assignedTaskId ||
+          item?.task_id ||
+          item?.taskId ||
+          item?.sourceRef ||
+          item?.source_ref ||
+          ''
+      ).trim();
+      const itemKey = taskRef
+        ? `task-ref:${taskRef}`
+        : [
+            String(item?.patient_id || item?.patientId || user?.id || ''),
+            normalizeTextKey(item?.type),
+            normalizeTextKey(item?.title),
+            normalizeTextKey(item?.note || item?.text),
+            item?._dateKey,
+            String(item?.time || new Date(item?._sortTime || 0).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })),
+            String(item?.energy ?? item?.patientEffort ?? ''),
+            String(item?.score ?? ''),
+          ].join('|');
+
+      const previous = deduped.get(itemKey);
+      if (!previous || Number(item?._sortTime || 0) >= Number(previous?._sortTime || 0)) {
+        deduped.set(itemKey, item);
+      }
+    });
+
+    return Array.from(deduped.values()).sort((a: any, b: any) => Number(b?._sortTime || 0) - Number(a?._sortTime || 0));
   }, [history, selectedSnapshotDate, isConventionalAdult]);
 
-  const groupedHistory = filteredHistoryList.reduce((groups: any, item: any) => { const group = groups[item.dateGroup] || []; group.push(item); group.sort((a: any, b: any) => b.id - a.id); groups[item.dateGroup] = group; return groups; }, {}); 
-  const sortedDateKeys = Object.keys(groupedHistory).sort((a, b) => { if (a === "Hoje") return -1; if (b === "Hoje") return 1; if (a === "Ontem") return -1; if (b === "Ontem") return 1; return b.localeCompare(a); }); 
+  const groupedHistory = filteredHistoryList.reduce((groups: any, item: any) => {
+    const groupKey = item.dateGroup || formatHistoryDateLabel(item?._dateKey || getHistoryDateKey(item));
+    const group = groups[groupKey] || [];
+    group.push(item);
+    group.sort((a: any, b: any) => Number(b?._sortTime || 0) - Number(a?._sortTime || 0));
+    groups[groupKey] = group;
+    return groups;
+  }, {});
+  const sortedDateKeys = Object.keys(groupedHistory).sort((a, b) => {
+    const aKey = a === 'Hoje' ? toLocalDateKey(new Date()) : toLocalDateKey(a);
+    const bKey = b === 'Hoje' ? toLocalDateKey(new Date()) : toLocalDateKey(b);
+    return String(bKey || b).localeCompare(String(aKey || a));
+  });
   const kidsTimelineHistory = useMemo(() => {
     return filteredHistoryList.filter((item: any) => item.type !== 'family_note' && item.type !== 'photo');
   }, [filteredHistoryList]);
@@ -1698,7 +1779,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             {sortedDateKeys.length > 0 ? sortedDateKeys.map(dateKey => ( 
               <div key={dateKey} className="relative animate-slide-up"> 
                 <div className="absolute -left-[31px] top-0 w-4 h-4 rounded-full bg-[#4318FF] border-2 border-white ring-4 ring-blue-50"></div> 
-                <h3 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 bg-gray-50 px-3 py-1 rounded-full w-fit">{dateKey}</h3> 
+                <h3 className="text-[10px] font-semibold text-gray-400 tracking-widest mb-4 bg-gray-50 px-3 py-1 rounded-full w-fit">{dateKey}</h3> 
                 <div className="space-y-4"> 
                   {groupedHistory[dateKey].map((item: any) => ( 
                     <HistoryCard 

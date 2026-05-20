@@ -44,7 +44,7 @@ const isVbMappProtocol = (protocol: any) => {
   return source.includes('vb-mapp') || source.includes('vbmapp') || source.includes('vb mapp');
 };
 
-export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode }: any) => { 
+export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode }: any) => {
   const safeSetProtocols =
     typeof setProtocols === 'function' ? setProtocols : null;
   const coalescePatientText = (...values: any[]) => {
@@ -427,6 +427,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [assignedTasks, setAssignedTasks] = useState<any[]>([]);
   const [isLoadingAssignedTasks, setIsLoadingAssignedTasks] = useState(false);
   const [assignedReviewDrafts, setAssignedReviewDrafts] = useState<Record<string, { score: string; note: string }>>({});
+  const [generatedReviewNotes, setGeneratedReviewNotes] = useState<any[]>([]);
   const [lastRecordedTrialId, setLastRecordedTrialId] = useState<any>(null);
   const [lastRecordedGoalId, setLastRecordedGoalId] = useState<any>(null);
   const [pendingTrial, setPendingTrial] = useState<any>(null);
@@ -460,6 +461,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const [showSessionStartConfirm, setShowSessionStartConfirm] = useState(false);
   const [showSessionEndConfirm, setShowSessionEndConfirm] = useState(false);
   const [pendingSessionAction, setPendingSessionAction] = useState<'tab' | 'fullscreen'>('tab');
+  const notes = useMemo(() => {
+    const baseNotes = Array.isArray(externalNotes) ? externalNotes : [];
+    if (!generatedReviewNotes.length) return baseNotes;
+    const existingIds = new Set(baseNotes.map((note: any) => String(note?.id || '')));
+    const localOnly = generatedReviewNotes.filter((note: any) => !existingIds.has(String(note?.id || '')));
+    return [...localOnly, ...baseNotes];
+  }, [externalNotes, generatedReviewNotes]);
 
   useEffect(() => {
     setResolvedClinicContext(clinicContext || {});
@@ -468,6 +476,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   useEffect(() => {
     setSessionDurationInput(String(configuredDefaultSessionMinutes));
   }, [configuredDefaultSessionMinutes, patient?.id]);
+
+  useEffect(() => {
+    setGeneratedReviewNotes([]);
+  }, [patient?.id]);
 
   const formatSessionCountdown = (totalSeconds: number) => {
     const safeSeconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
@@ -1870,6 +1882,99 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     return Math.max(0, Math.min(100, Math.round(percent)));
   };
 
+  const getAssignedTaskData = (task: any) =>
+    task?.task_data && typeof task.task_data === 'object'
+      ? task.task_data
+      : task?.taskData && typeof task.taskData === 'object'
+        ? task.taskData
+        : {};
+
+  const resolveAssignedTaskNumber = (...values: any[]) => {
+    for (const value of values) {
+      if (value === null || value === undefined || value === '') continue;
+      const numeric = Number(value);
+      if (Number.isFinite(numeric)) return numeric;
+    }
+    return null;
+  };
+
+  const resolveAssignedTaskProfessionalScore = (task: any) => {
+    const taskData = getAssignedTaskData(task);
+    return resolveAssignedTaskNumber(
+      task?.pro_score,
+      task?.professionalScore,
+      taskData?.pro_score,
+      taskData?.proScore
+    );
+  };
+
+  const resolveAssignedTaskReviewNote = (task: any) => {
+    const taskData = getAssignedTaskData(task);
+    return String(
+      task?.pro_review_note ??
+      task?.proReviewNote ??
+      taskData?.pro_review_note ??
+      taskData?.proReviewNote ??
+      taskData?.reviewNote ??
+      task?.evolutionNote ??
+      ''
+    );
+  };
+
+  const normalizeReviewedAssignedTask = (incomingTask: any, fallbackTask: any = {}) => {
+    const fallbackTaskData = getAssignedTaskData(fallbackTask);
+    const incomingTaskData = getAssignedTaskData(incomingTask);
+    const taskData = {
+      ...fallbackTaskData,
+      ...incomingTaskData
+    };
+    const mergedTask = {
+      ...fallbackTask,
+      ...incomingTask,
+      task_data: taskData,
+      taskData
+    };
+    const score = resolveAssignedTaskProfessionalScore(mergedTask);
+    const maxScore =
+      resolveAssignedTaskNumber(mergedTask?.max_score, mergedTask?.maxScore, taskData?.max_score, taskData?.maxScore) ??
+      resolveAssignedTaskMaxScore(mergedTask);
+    const note = resolveAssignedTaskReviewNote(mergedTask);
+    const reviewedAt = mergedTask?.reviewed_at || taskData?.reviewed_at || taskData?.reviewedAt || new Date().toISOString();
+    return {
+      ...mergedTask,
+      pro_score: score,
+      professionalScore: score,
+      max_score: maxScore,
+      maxScore,
+      pro_review_note: note,
+      proReviewNote: note,
+      reviewed_at: reviewedAt,
+      status: mergedTask?.status || 'completed',
+      task_data: {
+        ...taskData,
+        pro_score: score,
+        proScore: score,
+        max_score: maxScore,
+        maxScore,
+        pro_review_note: note,
+        proReviewNote: note,
+        reviewed_at: reviewedAt,
+        reviewedAt
+      },
+      taskData: {
+        ...taskData,
+        pro_score: score,
+        proScore: score,
+        max_score: maxScore,
+        maxScore,
+        pro_review_note: note,
+        proReviewNote: note,
+        reviewed_at: reviewedAt,
+        reviewedAt
+      }
+    };
+  };
+
   const adultCompletedTasks = useMemo(() => {
     const deduped = new Map<string, any>();
     const isLegacyCompletedTask = (task: any) => {
@@ -1884,8 +1989,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
     const completedAssigned = (assignedTasks || [])
       .filter((task: any) => String(task?.status || '').toLowerCase() === 'completed')
       .map((task: any) => {
-        const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
-        const professionalScore = task?.pro_score === null || task?.pro_score === undefined ? null : Number(task.pro_score);
+        const taskData = getAssignedTaskData(task);
+        const professionalScore = resolveAssignedTaskProfessionalScore(task);
         const executionDateRaw = task?.completed_at || task?.scheduled_at || task?.created_at;
         const reviewDateRaw = task?.reviewed_at || task?.updated_at || executionDateRaw;
         const eventDateRaw = professionalScore === null ? executionDateRaw : reviewDateRaw;
@@ -1913,14 +2018,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           patientEffortLabel: String(task?.patient_effort_label || taskData?.patientEffortLabel || taskData?.patient_effort_label || ''),
           patientComment: String(task?.patient_comment || ''),
           professionalScore,
-          evolutionNote: String(task?.pro_review_note || '')
+          evolutionNote: resolveAssignedTaskReviewNote(task)
         };
       });
 
     const completedLegacy = (patientTasks || [])
       .filter((task: any) => isLegacyCompletedTask(task))
       .map((task: any) => {
-        const professionalScore = task?.pro_score === null || task?.pro_score === undefined ? null : Number(task.pro_score);
+        const professionalScore = resolveAssignedTaskProfessionalScore(task);
         const executionDateRaw = task?.completed_at || task?.scheduled_at || task?.created_at;
         const reviewDateRaw = task?.reviewed_at || task?.updated_at || executionDateRaw;
         const eventDateRaw = professionalScore === null ? executionDateRaw : reviewDateRaw;
@@ -1950,7 +2055,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
           patientEffortLabel: String(task?.patient_effort_label || taskData?.patientEffortLabel || taskData?.patient_effort_label || ''),
           patientComment: String(task?.patient_comment || task?.note || ''),
           professionalScore,
-          evolutionNote: String(task?.pro_review_note || task?.evolutionNote || task?.evalComment || '')
+          evolutionNote: resolveAssignedTaskReviewNote(task) || String(task?.evolutionNote || task?.evalComment || '')
         };
       });
 
@@ -2567,7 +2672,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   }; 
 
   const resolveAssignedTaskEvaluationContext = (task: any) => {
-    const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
+    const taskData = getAssignedTaskData(task);
     const taskType = String(task?.task_type || task?.type || '').toLowerCase();
     if (taskType !== 'task') return null;
 
@@ -2613,7 +2718,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
   const isAssignedTaskReviewable = (task: any) => Boolean(resolveAssignedTaskEvaluationContext(task));
 
   const resolveAssignedTaskMaxScore = (task: any) => {
-    const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
+    const taskData = getAssignedTaskData(task);
     const context = resolveAssignedTaskEvaluationContext(task);
     if (context?.skill) {
       return Math.max(1, Number(context.skill?.maxScore ?? context.skill?.max_score ?? 1) || 1);
@@ -2710,7 +2815,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         (task: any) =>
           isAssignedTaskReviewable(task) &&
           String(task?.status || '').toLowerCase() === 'completed' &&
-          (task?.pro_score === null || task?.pro_score === undefined)
+          resolveAssignedTaskProfessionalScore(task) === null
       ),
     [assignedTasks, protocols]
   );
@@ -2721,8 +2826,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
         (task: any) =>
           isAssignedTaskReviewable(task) &&
           String(task?.status || '').toLowerCase() === 'completed' &&
-          task?.pro_score !== null &&
-          task?.pro_score !== undefined
+          resolveAssignedTaskProfessionalScore(task) !== null
       ),
     [assignedTasks, protocols]
   );
@@ -2758,12 +2862,35 @@ export const PatientDetailView = ({ patient, onBack, history, notes, onAddNote, 
       return;
     }
 
-    setAssignedTasks((prev) => prev.map((item: any) => (String(item.id) === taskId ? result.data : item)));
+    const reviewedTask = normalizeReviewedAssignedTask(result.data, task);
+    setAssignedTasks((prev) => prev.map((item: any) => (String(item.id) === taskId ? reviewedTask : item)));
     setAssignedReviewDrafts((prev) => {
       const next = { ...prev };
       delete next[taskId];
       return next;
     });
+
+    const returnedNote = result?.privateNote;
+    if (returnedNote) {
+      const noteCreatedAt = returnedNote?.created_at || reviewedTask?.reviewed_at || new Date().toISOString();
+      setGeneratedReviewNotes((prev) => {
+        const noteId = String(returnedNote?.id || `assigned-review-note-${taskId}`);
+        const nextNote = {
+          ...returnedNote,
+          id: noteId,
+          patientId: returnedNote?.patient_id || reviewedTask?.patient_id || patient?.id,
+          patient_id: returnedNote?.patient_id || reviewedTask?.patient_id || patient?.id,
+          text: normalizeNoteText(returnedNote?.text || returnedNote?.content || ''),
+          content: normalizeNoteText(returnedNote?.content || returnedNote?.text || ''),
+          date: new Date(noteCreatedAt).toLocaleString(),
+          created_at: noteCreatedAt,
+          visibility: returnedNote?.visibility || returnedNote?.type || 'private',
+          type: returnedNote?.type || returnedNote?.visibility || 'private',
+          subject: returnedNote?.subject || 'Revisão profissional - tarefa adulta'
+        };
+        return [nextNote, ...prev.filter((note: any) => String(note?.id) !== noteId)];
+      });
+    }
 
     if (result?.mastery_feedback?.protocol === 'VB-MAPP') {
       alert(result.mastery_feedback.progress_text || 'Sucesso consecutivo registrado no VB-MAPP.');
