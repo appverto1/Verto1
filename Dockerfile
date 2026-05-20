@@ -17,7 +17,7 @@ FROM node:20-bookworm-slim AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=8080
 
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
@@ -29,6 +29,6 @@ COPY --from=build /app/src/services ./src/services
 COPY --from=build /app/server.ts ./server.ts
 COPY --from=build /app/tsconfig.json ./tsconfig.json
 
-EXPOSE 3000
+EXPOSE 8080
 
 CMD ["npm", "run", "start"]

@@ -3649,8 +3649,8 @@ if (!encryptionKey) {
 
 async function startServer() {
   const app = express();
-  const parsedPort = Number.parseInt(String(process.env.PORT || '3000'), 10);
-  const PORT = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 3000;
+  const parsedPort = Number.parseInt(String(process.env.PORT || '8080'), 10);
+  const PORT = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 8080;
   const isProd = process.env.NODE_ENV === 'production';
 
   const validateCoreDataTables = async () => {
