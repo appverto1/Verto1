@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "start": "tsx server.ts",
     "test:security": "node tests/security.regression.test.mjs",
+    "stripe:create-active-patient-price": "node scripts/create-stripe-active-patient-price.mjs",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"
   },

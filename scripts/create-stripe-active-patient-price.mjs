@@ -11,20 +11,31 @@ if (!secretKey) {
 
 const stripe = new Stripe(secretKey);
 
-const productName = process.env.STRIPE_ACTIVE_PATIENT_PRODUCT_NAME || 'Verto - Paciente ativo';
-const lookupKey = process.env.STRIPE_ACTIVE_PATIENT_LOOKUP_KEY || 'verto_active_patient_metered_graduated_brl_monthly';
+const productName = process.env.STRIPE_ACTIVE_PATIENT_PRODUCT_NAME || 'Verto - Planos por pacientes ativos';
+const lookupKey = process.env.STRIPE_ACTIVE_PATIENT_LOOKUP_KEY || 'verto_active_patient_packages_brl_monthly';
 const eventName = process.env.STRIPE_ACTIVE_PATIENT_METER_EVENT_NAME || 'verto_active_patients_monthly';
+
+const packageTiers = [
+  { name: 'Verto Start', upTo: 5, amount: 49900 },
+  { name: 'Verto Essencial', upTo: 10, amount: 89900 },
+  { name: 'Verto Growth', upTo: 20, amount: 159900 },
+  { name: 'Verto Clinic 50', upTo: 50, amount: 349900 },
+  { name: 'Verto Clinic 100', upTo: 100, amount: 599900 },
+  { name: 'Verto Clinic 150', upTo: 150, amount: 824900 },
+  { name: 'Verto Clinic 200', upTo: 200, amount: 999900 },
+  { name: 'Verto Clinic 299', upTo: 299, amount: 1349900 }
+];
 
 const product = await stripe.products.create({
   name: productName,
   metadata: {
-    billingModel: 'active_patient_metered_graduated',
-    negotiationRequiredAfter: '50'
+    billingModel: 'active_patient_package_volume',
+    enterpriseRequiredAfter: '299'
   }
 });
 
 const meter = await stripe.billing.meters.create({
-  display_name: 'Verto - Pacientes ativos no mês',
+  display_name: 'Verto - Pacientes ativos no mes',
   event_name: eventName,
   default_aggregation: {
     // Equivale ao antigo usage record com action=set: usa o ultimo valor reportado no periodo.
@@ -48,24 +59,23 @@ const price = await stripe.prices.create({
     meter: meter.id
   },
   billing_scheme: 'tiered',
-  tiers_mode: 'graduated',
+  tiers_mode: 'volume',
   lookup_key: lookupKey,
   transfer_lookup_key: true,
   tiers: [
-    { up_to: 5, unit_amount: 4000 },
-    { up_to: 10, unit_amount: 3200 },
-    { up_to: 20, unit_amount: 2600 },
-    { up_to: 30, unit_amount: 2200 },
-    { up_to: 40, unit_amount: 1900 },
-    { up_to: 50, unit_amount: 1700 },
+    ...packageTiers.map((tier) => ({
+      up_to: tier.upTo,
+      flat_amount: tier.amount
+    })),
     // Stripe exige uma faixa final infinita em precos tiered.
-    // O app bloqueia reporte acima de 50 por padrao, ate negociacao comercial.
-    { up_to: 'inf', unit_amount: 0 }
+    // O app bloqueia reporte acima de 299 por padrao, ate contrato Enterprise.
+    { up_to: 'inf', flat_amount: 0 }
   ],
   metadata: {
-    billingModel: 'active_patient_metered_graduated',
-    negotiationRequiredAfter: '50',
-    over50BlockedByAppDefault: 'true'
+    billingModel: 'active_patient_package_volume',
+    enterpriseRequiredAfter: '299',
+    over299BlockedByAppDefault: 'true',
+    tiers: packageTiers.map((tier) => `${tier.name}:${tier.upTo}:${tier.amount}`).join('|')
   }
 });
 
@@ -75,8 +85,14 @@ console.log(JSON.stringify({
   meterEventName: eventName,
   priceId: price.id,
   lookupKey,
+  tiers: packageTiers.map((tier) => ({
+    name: tier.name,
+    upTo: tier.upTo,
+    monthlyAmount: Number((tier.amount / 100).toFixed(2))
+  })),
   env: [
     `STRIPE_ACTIVE_PATIENT_PRICE_ID=${price.id}`,
-    `STRIPE_ACTIVE_PATIENT_METER_EVENT_NAME=${eventName}`
+    `STRIPE_ACTIVE_PATIENT_METER_EVENT_NAME=${eventName}`,
+    'STRIPE_ACTIVE_PATIENT_BILLING_MODE=metered'
   ].join('\n')
 }, null, 2));

@@ -15853,7 +15853,7 @@ async function startServer() {
         stripe: getStripe(),
         activePatientPriceId,
         trigger: sanitizeString(req.body?.trigger, 80) || 'manual_endpoint',
-        allowOverNegotiationLimit: sanitizeString(process.env.STRIPE_ALLOW_OVER_50_USAGE || '', 10).toLowerCase() === 'true',
+        allowOverNegotiationLimit: sanitizeString(process.env.STRIPE_ALLOW_OVER_299_USAGE || process.env.STRIPE_ALLOW_OVER_50_USAGE || '', 10).toLowerCase() === 'true',
         logger: console
       });
 
@@ -15934,7 +15934,7 @@ async function startServer() {
           stripe: getStripe(),
           activePatientPriceId,
           trigger,
-          allowOverNegotiationLimit: sanitizeString(process.env.STRIPE_ALLOW_OVER_50_USAGE || '', 10).toLowerCase() === 'true',
+          allowOverNegotiationLimit: sanitizeString(process.env.STRIPE_ALLOW_OVER_299_USAGE || process.env.STRIPE_ALLOW_OVER_50_USAGE || '', 10).toLowerCase() === 'true',
           logger: console
         });
         console.log('[Stripe Usage] Reporte mensal concluído.', {

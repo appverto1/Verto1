@@ -4,15 +4,17 @@ import type Stripe from 'stripe';
 type SupabaseClientLike = any;
 
 export const ACTIVE_PATIENT_BILLING_TIERS = [
-  { upTo: 5, unitAmount: 4000 },
-  { upTo: 10, unitAmount: 3200 },
-  { upTo: 20, unitAmount: 2600 },
-  { upTo: 30, unitAmount: 2200 },
-  { upTo: 40, unitAmount: 1900 },
-  { upTo: 50, unitAmount: 1700 }
+  { name: 'Verto Start', upTo: 5, amount: 49900 },
+  { name: 'Verto Essencial', upTo: 10, amount: 89900 },
+  { name: 'Verto Growth', upTo: 20, amount: 159900 },
+  { name: 'Verto Clinic 50', upTo: 50, amount: 349900 },
+  { name: 'Verto Clinic 100', upTo: 100, amount: 599900 },
+  { name: 'Verto Clinic 150', upTo: 150, amount: 824900 },
+  { name: 'Verto Clinic 200', upTo: 200, amount: 999900 },
+  { name: 'Verto Clinic 299', upTo: 299, amount: 1349900 }
 ] as const;
 
-const ACTIVE_PATIENT_NEGOTIATION_THRESHOLD = 50;
+const ACTIVE_PATIENT_NEGOTIATION_THRESHOLD = 299;
 const ACTIVE_PATIENT_STATUSES = new Set([
   'active',
   'ativo',
@@ -52,6 +54,8 @@ function resolveMeterEventName(): string {
 
 export function estimateGraduatedActivePatientBilling(activePatients: number): {
   activePatients: number;
+  planName: string;
+  patientLimit: number | null;
   estimatedAmount: number;
   estimatedAmountCents: number;
   averageUnitPrice: number;
@@ -59,25 +63,20 @@ export function estimateGraduatedActivePatientBilling(activePatients: number): {
   includedForEstimate: number;
 } {
   const safePatients = Math.max(0, Math.floor(Number(activePatients || 0)));
-  const billablePatients = Math.min(safePatients, ACTIVE_PATIENT_NEGOTIATION_THRESHOLD);
-  let previousLimit = 0;
-  let totalCents = 0;
-
-  for (const tier of ACTIVE_PATIENT_BILLING_TIERS) {
-    const tierLimit = Math.min(tier.upTo, billablePatients);
-    const quantityInTier = Math.max(0, tierLimit - previousLimit);
-    totalCents += quantityInTier * tier.unitAmount;
-    previousLimit = tier.upTo;
-    if (billablePatients <= tier.upTo) break;
-  }
+  const requiresNegotiation = safePatients > ACTIVE_PATIENT_NEGOTIATION_THRESHOLD;
+  const billablePatients = Math.min(Math.max(1, safePatients), ACTIVE_PATIENT_NEGOTIATION_THRESHOLD);
+  const selectedTier = ACTIVE_PATIENT_BILLING_TIERS.find((tier) => billablePatients <= tier.upTo);
+  const totalCents = selectedTier?.amount || 0;
 
   return {
     activePatients: safePatients,
+    planName: selectedTier?.name || 'Verto Enterprise',
+    patientLimit: selectedTier?.upTo || null,
     estimatedAmount: Number((totalCents / 100).toFixed(2)),
     estimatedAmountCents: totalCents,
     averageUnitPrice: billablePatients ? Number((totalCents / billablePatients / 100).toFixed(2)) : 0,
-    requiresNegotiation: safePatients > ACTIVE_PATIENT_NEGOTIATION_THRESHOLD,
-    includedForEstimate: billablePatients
+    requiresNegotiation,
+    includedForEstimate: selectedTier?.upTo || ACTIVE_PATIENT_NEGOTIATION_THRESHOLD
   };
 }
 
@@ -275,7 +274,7 @@ export async function reportClinicActivePatientUsage(params: {
 
   const activePatients = await countActivePatientsByClinic(params.supabase, clinicId);
   if (activePatients > ACTIVE_PATIENT_NEGOTIATION_THRESHOLD && !params.allowOverNegotiationLimit) {
-    logger.warn('[Stripe Usage] Clínica ultrapassou 50 pacientes ativos; uso mensal bloqueado para negociação manual.', {
+    logger.warn('[Stripe Usage] Clínica ultrapassou 299 pacientes ativos; uso mensal bloqueado para negociação manual.', {
       clinicId,
       activePatients
     });
@@ -545,6 +544,8 @@ export async function getClinicBillingSummary(params: {
   clinicId: string;
 }): Promise<{
   activePatients: number;
+  planName: string;
+  patientLimit: number | null;
   unitPrice: number;
   additionalCost: number;
   estimatedAmount: number;
@@ -558,6 +559,8 @@ export async function getClinicBillingSummary(params: {
   const estimate = estimateGraduatedActivePatientBilling(activePatients);
   return {
     activePatients,
+    planName: estimate.planName,
+    patientLimit: estimate.patientLimit,
     unitPrice: estimate.averageUnitPrice,
     additionalCost: estimate.estimatedAmount,
     estimatedAmount: estimate.estimatedAmount,
