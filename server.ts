@@ -1395,6 +1395,41 @@ function sanitizeClinicalPayload(input: any, depth = 0): any {
   return safe;
 }
 
+const PATIENT_FINANCIAL_PAYLOAD_KEYS = new Set([
+  'financialPlans',
+  'monthlyTreatmentValue',
+  'monthlyFee',
+  'billingDueDay',
+  'billingMethod',
+  'paymentMethod',
+  'payerType',
+  'baseAmount',
+  'additionalAmount',
+  'specialtyAmount',
+  'specialtyValues',
+  'dreMetrics'
+]);
+
+function redactPatientFinancialPayload(input: any, user: any): any {
+  if (canAccessClinicFinance(user)) return input;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+
+  const redacted: Record<string, any> = { ...input };
+  for (const key of PATIENT_FINANCIAL_PAYLOAD_KEYS) {
+    delete redacted[key];
+  }
+
+  if (redacted.anamnese && typeof redacted.anamnese === 'object' && !Array.isArray(redacted.anamnese)) {
+    const safeAnamnesis = { ...redacted.anamnese };
+    for (const key of PATIENT_FINANCIAL_PAYLOAD_KEYS) {
+      delete safeAnamnesis[key];
+    }
+    redacted.anamnese = safeAnamnesis;
+  }
+
+  return redacted;
+}
+
 function isAllowedScreenshotDataUrl(value: unknown): value is string {
   return typeof value === 'string'
     && /^data:image\/(png|jpeg|jpg|webp);base64,[a-z0-9+/=\s]+$/i.test(value)
@@ -1454,6 +1489,8 @@ function getTrustedMediaHosts(): Set<string> {
 }
 
 const trustedMediaHosts = getTrustedMediaHosts();
+const SAFE_IMAGE_DATA_URL_PATTERN = /^data:image\/(png|jpeg|jpg|webp);base64,[a-z0-9+/=\s]+$/i;
+const SAFE_PDF_DATA_URL_PATTERN = /^data:application\/pdf;base64,[a-z0-9+/=\s]+$/i;
 
 function isTrustedRemoteMediaUrl(rawUrl: string): boolean {
   try {
@@ -1484,7 +1521,7 @@ function sanitizeUrl(value: unknown): string | null {
     // Data URLs (logo/assinatura/foto) podem passar de 2k caracteres.
     // Mantemos limite de 1MB para evitar payloads abusivos.
     if (url.length > 1_000_000) return null;
-    return url;
+    return SAFE_IMAGE_DATA_URL_PATTERN.test(url) ? url : null;
   }
   return null;
 }
@@ -1492,9 +1529,13 @@ function sanitizeUrl(value: unknown): string | null {
 function sanitizeReceiptUrl(value: unknown): string | null {
   const url = typeof value === 'string' ? value.trim() : '';
   if (!url) return null;
-  if (url.startsWith('data:image/') || url.startsWith('data:application/pdf')) {
+  if (url.startsWith('data:image/')) {
     if (url.length > 2_000_000) return null;
-    return url;
+    return SAFE_IMAGE_DATA_URL_PATTERN.test(url) ? url : null;
+  }
+  if (url.startsWith('data:application/pdf')) {
+    if (url.length > 2_000_000) return null;
+    return SAFE_PDF_DATA_URL_PATTERN.test(url) ? url : null;
   }
   return sanitizeUrl(url);
 }
@@ -2525,6 +2566,11 @@ function dateGroupForClinic(value: unknown, user: any): string {
 function hasGlobalClinicAccess(user: any): boolean {
   const role = sanitizeString(user?.role, 40).toLowerCase();
   return role === 'admin' || role === 'owner';
+}
+
+function canAccessClinicFinance(user: any): boolean {
+  const role = sanitizeString(user?.role, 40).toLowerCase();
+  return role === 'coordinator' || role === 'admin' || role === 'owner';
 }
 
 const TEAM_ACCESS_PER_ACTIVE_PATIENT = 10;
@@ -9976,7 +10022,8 @@ async function startServer() {
       });
       if (!patientId) return res.status(400).json({ error: 'patientId inválido' });
 
-      const payloadRaw = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
+      const payloadRawBase = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
+      const payloadRaw = redactPatientFinancialPayload(payloadRawBase, req.session.user);
       const payload = sanitizeClinicalPayload(payloadRaw);
       let existingQuery = supabase
         .from('patient_records')
@@ -10774,7 +10821,7 @@ async function startServer() {
           ? {
               patientId: data.patient_id,
               pseudonymId: data.pseudonym_id,
-              payload: decryptedPayload,
+              payload: redactPatientFinancialPayload(decryptedPayload, req.session.user),
               payloadPreview: data.payload_preview,
               updatedAt: data.updated_at,
               decryptionError: Boolean(encryptedPayload && !decryptedPayload)
@@ -14006,7 +14053,7 @@ async function startServer() {
   });
 
   // Payments
-  app.get('/api/payments', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/payments', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const scopedClinicId = currentClinicId(req.session.user);
       let query = supabase
@@ -14027,7 +14074,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/payments', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/payments', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const receiptUrl = sanitizeReceiptUrl(req.body?.receipt_url);
       const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();
@@ -14103,7 +14150,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/payments/:paymentId', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/payments/:paymentId', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const paymentId = sanitizeString(req.params.paymentId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -14174,7 +14221,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/financial/professional-payments', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/financial/professional-payments', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const scopedClinicId = currentClinicId(req.session.user);
       let query = supabase
@@ -14195,13 +14242,14 @@ async function startServer() {
     }
   });
 
-  app.post('/api/financial/professional-payments', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/financial/professional-payments', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase() || 'pending';
       const payload = cleanObject({
         clinic_id: sanitizeString(currentClinicId(req.session.user), 120),
         professional_id: sanitizeString(req.body?.professional_id || req.body?.professionalId, 120),
         professional_name: sanitizeString(req.body?.professional_name || req.body?.professionalName, 180),
+        specialty: sanitizeString(req.body?.specialty, 120),
         amount: asSafeNumber(req.body?.amount, 0, 1_000_000),
         payment_date: sanitizeDate(req.body?.payment_date) || sanitizeDate(req.body?.paymentDate) || new Date().toISOString().slice(0, 10),
         due_date: sanitizeDate(req.body?.due_date) || sanitizeDate(req.body?.dueDate) || sanitizeDate(req.body?.payment_date) || new Date().toISOString().slice(0, 10),
@@ -14253,7 +14301,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/financial/professional-payments/:paymentId', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/financial/professional-payments/:paymentId', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const paymentId = sanitizeString(req.params.paymentId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -14266,6 +14314,7 @@ async function startServer() {
         professional_name: req.body?.professional_name !== undefined || req.body?.professionalName !== undefined
           ? sanitizeString(req.body?.professional_name || req.body?.professionalName, 180)
           : undefined,
+        specialty: req.body?.specialty !== undefined ? sanitizeString(req.body?.specialty, 120) : undefined,
         amount: req.body?.amount !== undefined ? asSafeNumber(req.body?.amount, 0, 1_000_000) : undefined,
         payment_date: req.body?.payment_date !== undefined || req.body?.paymentDate !== undefined
           ? sanitizeDate(req.body?.payment_date) || sanitizeDate(req.body?.paymentDate)
@@ -14307,7 +14356,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/financial/entries', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/financial/entries', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const scopedClinicId = currentClinicId(req.session.user);
       let query = supabase
@@ -14328,7 +14377,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/financial/feature-survey', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/financial/feature-survey', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const user = req.session.user;
       const clinicId = currentClinicId(user);
@@ -14350,7 +14399,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/financial/feature-survey', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/financial/feature-survey', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const user = req.session.user;
       const clinicId = currentClinicId(user);

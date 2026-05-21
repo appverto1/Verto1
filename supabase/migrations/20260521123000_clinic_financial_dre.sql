@@ -49,6 +49,7 @@ create table if not exists public.professional_payments (
   clinic_id text not null,
   professional_id text,
   professional_name text not null,
+  specialty text,
   amount numeric(14,2) not null check (amount >= 0),
   due_date date not null default current_date,
   payment_date date,
@@ -62,6 +63,8 @@ create table if not exists public.professional_payments (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.professional_payments add column if not exists specialty text;
 
 create table if not exists public.clinic_financial_entries (
   id uuid primary key default gen_random_uuid(),
@@ -104,8 +107,13 @@ using (
     where u.id = auth.uid()
       and (
         u.role in ('owner', 'admin')
-        or u.clinic_id::text = payments.clinic_id
-        or u.id::text = payments.clinic_id
+        or (
+          u.role = 'coordinator'
+          and (
+            u.clinic_id::text = payments.clinic_id
+            or u.id::text = payments.clinic_id
+          )
+        )
       )
   )
 );
@@ -122,8 +130,13 @@ using (
     where u.id = auth.uid()
       and (
         u.role in ('owner', 'admin')
-        or u.clinic_id::text = payments.clinic_id
-        or u.id::text = payments.clinic_id
+        or (
+          u.role = 'coordinator'
+          and (
+            u.clinic_id::text = payments.clinic_id
+            or u.id::text = payments.clinic_id
+          )
+        )
       )
   )
 )
@@ -134,8 +147,13 @@ with check (
     where u.id = auth.uid()
       and (
         u.role in ('owner', 'admin')
-        or u.clinic_id::text = payments.clinic_id
-        or u.id::text = payments.clinic_id
+        or (
+          u.role = 'coordinator'
+          and (
+            u.clinic_id::text = payments.clinic_id
+            or u.id::text = payments.clinic_id
+          )
+        )
       )
   )
 );
@@ -152,8 +170,13 @@ using (
     where u.id = auth.uid()
       and (
         u.role in ('owner', 'admin')
-        or u.clinic_id::text = professional_payments.clinic_id
-        or u.id::text = professional_payments.clinic_id
+        or (
+          u.role = 'coordinator'
+          and (
+            u.clinic_id::text = professional_payments.clinic_id
+            or u.id::text = professional_payments.clinic_id
+          )
+        )
       )
   )
 )
@@ -164,8 +187,13 @@ with check (
     where u.id = auth.uid()
       and (
         u.role in ('owner', 'admin')
-        or u.clinic_id::text = professional_payments.clinic_id
-        or u.id::text = professional_payments.clinic_id
+        or (
+          u.role = 'coordinator'
+          and (
+            u.clinic_id::text = professional_payments.clinic_id
+            or u.id::text = professional_payments.clinic_id
+          )
+        )
       )
   )
 );
@@ -182,8 +210,13 @@ using (
     where u.id = auth.uid()
       and (
         u.role in ('owner', 'admin')
-        or u.clinic_id::text = clinic_financial_entries.clinic_id
-        or u.id::text = clinic_financial_entries.clinic_id
+        or (
+          u.role = 'coordinator'
+          and (
+            u.clinic_id::text = clinic_financial_entries.clinic_id
+            or u.id::text = clinic_financial_entries.clinic_id
+          )
+        )
       )
   )
 )
@@ -194,8 +227,13 @@ with check (
     where u.id = auth.uid()
       and (
         u.role in ('owner', 'admin')
-        or u.clinic_id::text = clinic_financial_entries.clinic_id
-        or u.id::text = clinic_financial_entries.clinic_id
+        or (
+          u.role = 'coordinator'
+          and (
+            u.clinic_id::text = clinic_financial_entries.clinic_id
+            or u.id::text = clinic_financial_entries.clinic_id
+          )
+        )
       )
   )
 );

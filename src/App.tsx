@@ -333,6 +333,23 @@ export default function App() {
     return '';
   };
 
+  const canAccessClinicFinance = (role: any) =>
+    ['coordinator', 'admin', 'owner'].includes(String(role || '').toLowerCase());
+
+  const stripPatientFinancialFields = (patient: any) => {
+    if (!patient || typeof patient !== 'object') return patient;
+    const safePatient = { ...patient };
+    delete safePatient.financialPlans;
+    delete safePatient.monthlyTreatmentValue;
+    delete safePatient.monthlyFee;
+    delete safePatient.billingDueDay;
+    delete safePatient.billingMethod;
+    delete safePatient.paymentMethod;
+    delete safePatient.specialtyValues;
+    delete safePatient.dreMetrics;
+    return safePatient;
+  };
+
   const calculateAgeFromBirthDate = (birthDate: string) => {
     const normalized = String(birthDate || '').trim();
     if (!normalized) return null;
@@ -1610,7 +1627,7 @@ export default function App() {
 
   const handleEnterpriseContact = (currentUser: any) => {
     const message = `OlÃ¡! Tenho interesse no plano Enterprise da Verto.\n\nNome: ${currentUser?.name || ''}\nEmail: ${currentUser?.email || ''}`;
-    window.open(`https://wa.me/5511959348563?text=${encodeURIComponent(message)}`, '_blank');
+    window.open(`https://wa.me/5511959348563?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
   };
 
   const SubscriptionRequired = ({ user, onLogout }: { user: any, onLogout: () => void }) => (
@@ -1741,9 +1758,12 @@ export default function App() {
           : {},
       );
       const hydratedPatients = Array.isArray(hydrated.patients) ? hydrated.patients : [];
+      const visiblePatients = canAccessClinicFinance(nextUser?.role)
+        ? hydratedPatients
+        : hydratedPatients.map(stripPatientFinancialFields);
       const scopedPatients = nextUser?.role === 'therapist'
-        ? hydratedPatients.filter((p: any) => String(p?.therapist_id || p?.professional_id || '').trim() === String(nextUser?.id || '').trim())
-        : hydratedPatients;
+        ? visiblePatients.filter((p: any) => String(p?.therapist_id || p?.professional_id || '').trim() === String(nextUser?.id || '').trim())
+        : visiblePatients;
       setAllPatients(scopedPatients);
       setTherapistNotes(normalizeAndDecorateNotes(Array.isArray(hydrated.notes) ? hydrated.notes : []));
       setHistory(Array.isArray(hydrated.history) ? hydrated.history : []);
@@ -2958,22 +2978,31 @@ export default function App() {
       !String(persistedPatientId).startsWith("temp_");
 
     if (canPersistPatientRecord) {
-      await dataService.savePatientRecord(String(persistedPatientId), {
-      workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
-      ...buildPatientAnamnesisSnapshot(data, data.anamnesisData),
-      anamnesisRenewalMonths: [2, 3, 6, 12].includes(Number(data.anamnesisRenewalMonths))
-        ? Number(data.anamnesisRenewalMonths)
-        : 6,
-      lastAnamnesisAt: data.lastAnamnesisAt || null,
-      patientProfileType: resolvedPortalType,
-      diagnosis: data.diagnosis || "",
-      pei: Array.isArray(data.pei) ? data.pei : [],
-      evaluationLinks:
-        data.evaluationLinks && typeof data.evaluationLinks === 'object' ? data.evaluationLinks : {},
-      interventionTaskLinks:
-        data.interventionTaskLinks && typeof data.interventionTaskLinks === 'object' ? data.interventionTaskLinks : {},
-      anamnese: buildPatientAnamnesisSnapshot(data, data.anamnesisData)
+      const patientRecordResult = await dataService.savePatientRecord(String(persistedPatientId), {
+        workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+        ...buildPatientAnamnesisSnapshot(data, data.anamnesisData),
+        anamnesisRenewalMonths: [2, 3, 6, 12].includes(Number(data.anamnesisRenewalMonths))
+          ? Number(data.anamnesisRenewalMonths)
+          : 6,
+        lastAnamnesisAt: data.lastAnamnesisAt || null,
+        financialPlans: Array.isArray(data.financialPlans) ? data.financialPlans : [],
+        monthlyTreatmentValue: Number(data.monthlyTreatmentValue || 0) || 0,
+        billingDueDay: data.billingDueDay || null,
+        billingMethod: data.billingMethod || null,
+        patientProfileType: resolvedPortalType,
+        diagnosis: data.diagnosis || "",
+        pei: Array.isArray(data.pei) ? data.pei : [],
+        evaluationLinks:
+          data.evaluationLinks && typeof data.evaluationLinks === 'object' ? data.evaluationLinks : {},
+        interventionTaskLinks:
+          data.interventionTaskLinks && typeof data.interventionTaskLinks === 'object' ? data.interventionTaskLinks : {},
+        anamnese: buildPatientAnamnesisSnapshot(data, data.anamnesisData)
       });
+      if (!patientRecordResult?.success) {
+        const errorMessage = toReadableError(patientRecordResult?.error || patientRecordResult?.warning || 'Falha ao persistir prontuário financeiro.');
+        alert(`Paciente criado, mas os dados financeiros do prontuário não foram confirmados no banco: ${errorMessage}`);
+        return { success: false, error: errorMessage };
+      }
     }
     return {
       success: true,
@@ -3118,7 +3147,10 @@ export default function App() {
           });
         }
 
-        await dataService.savePatientRecord(String(updatedData.id), recordPayload);
+        const patientRecordResult = await dataService.savePatientRecord(String(updatedData.id), recordPayload);
+        if (!patientRecordResult?.success) {
+          alert(`Não foi possível confirmar a persistência do prontuário financeiro: ${toReadableError(patientRecordResult?.error || patientRecordResult?.warning || 'Erro desconhecido')}`);
+        }
       }
     }
   };

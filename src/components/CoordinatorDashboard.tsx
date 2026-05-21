@@ -176,6 +176,7 @@ export function CoordinatorDashboard({
         : "coordinator";
   const isTherapist = capabilityRole === "therapist";
   const isReceptionist = capabilityRole === "receptionist";
+  const canAccessClinicFinance = ["coordinator", "admin", "owner"].includes(role.toLowerCase());
   const canCreatePatients = !isTherapist;
   const canManageRooms = !isTherapist;
   const dashboardResumeKey = useMemo(() => {
@@ -219,6 +220,7 @@ export function CoordinatorDashboard({
   };
 
   const canAccessTab = (tabId: string) => {
+    if (tabId === "financial") return canAccessClinicFinance;
     const capability = capabilityForTab(tabId);
     if (!capability) return true;
     const status = capabilityStatusForRole(capability);
@@ -228,11 +230,7 @@ export function CoordinatorDashboard({
 
   const filterTabsByRole = <T extends { id: string }>(items: T[]) =>
     items.filter((item) => {
-      const capability = capabilityForTab(item.id);
-      if (!capability) return true;
-      const capabilityStatus = capabilityStatusForRole(capability);
-      if (capabilityStatus === "none") return false;
-      return true;
+      return canAccessTab(item.id);
     });
 
   const [activeTab, setActiveTab] = useState<
@@ -326,12 +324,20 @@ export function CoordinatorDashboard({
 
   const therapistFilterOptions = useMemo(() => {
     const entries = Object.entries(therapistMembersById as Record<string, any>)
-      .map(([id, member]: [string, any]) => ({
-        id,
-        label: String(
-          member?.full_name || member?.fullName || member?.name || member?.email || id,
-        ).trim(),
-      }))
+      .map(([id, member]: [string, any]) => {
+        const specialties = Array.isArray(member?.specialties)
+          ? member.specialties
+          : String(member?.specialties || member?.specialty || member?.professionalSpecialty || "")
+              .split(/[,;|]/);
+        const specialty = String(specialties.find((item: any) => String(item || "").trim()) || "").trim();
+        return {
+          id,
+          label: String(
+            member?.full_name || member?.fullName || member?.name || member?.email || id,
+          ).trim(),
+          specialty,
+        };
+      })
       .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
     return entries;
   }, [therapistMembersById]);
@@ -950,6 +956,7 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     const fetchFinancialData = async () => {
+      if (!canAccessClinicFinance) return;
       const [paymentsResult, professionalResult, entriesResult] = await Promise.all([
         dataService.getPayments(),
         dataService.getProfessionalPayments(),
@@ -959,10 +966,10 @@ export function CoordinatorDashboard({
       if (professionalResult.success) setProfessionalPayments(professionalResult.data || []);
       if (entriesResult.success) setFinancialEntries(entriesResult.data || []);
     };
-    if (activeTab === "financial") {
+    if (activeTab === "financial" && canAccessClinicFinance) {
       fetchFinancialData();
     }
-  }, [activeTab]);
+  }, [activeTab, canAccessClinicFinance]);
 
   useEffect(() => {
     setTherapistCrp(String(user?.crp || ""));
@@ -1118,7 +1125,7 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     const fetchFinancialSurvey = async () => {
-      if (activeTab !== "financial" || isReceptionist) return;
+      if (activeTab !== "financial" || !canAccessClinicFinance) return;
       try {
         const response = await fetch("/api/financial/feature-survey", {
           credentials: "include",
@@ -1134,7 +1141,7 @@ export function CoordinatorDashboard({
       }
     };
     fetchFinancialSurvey();
-  }, [activeTab, isReceptionist]);
+  }, [activeTab, canAccessClinicFinance]);
 
   const handleAddPayment = async () => {
     if (!selectedPaymentPatient || !paymentAmount)
@@ -1345,6 +1352,7 @@ export function CoordinatorDashboard({
       const patch = {
         professional_id: member.id,
         professional_name: member.label,
+        specialty: member.specialty || editingProfessionalPayment?.specialty || null,
         amount: amount + additionalAmount,
         base_amount: amount,
         additional_amount: additionalAmount,
@@ -1387,6 +1395,7 @@ export function CoordinatorDashboard({
       return {
         professional_id: member.id,
         professional_name: member.label,
+        specialty: member.specialty || null,
         amount: amount + (shouldApplyAdditional ? additionalAmount : 0),
         base_amount: amount,
         additional_amount: shouldApplyAdditional ? additionalAmount : 0,
@@ -1959,20 +1968,22 @@ export function CoordinatorDashboard({
     const renewalMonths = normalizeAnamnesisRenewalMonths(
       newPatientForm.anamnesisRenewalMonths,
     );
-    const financialPlans = normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm)
-      .map((plan: any) => ({
-        ...plan,
-        specialty: String(plan.specialty || "Terapia").trim(),
-        amount: Number(String(plan.amount || "").replace(",", ".")) || 0,
-        dueDay: String(Math.min(31, Math.max(1, Number(plan.dueDay) || 10))),
-        billingMethod: plan.billingMethod || "pix",
-        payerType: plan.payerType || newPatientForm.convenioTipo || "particular",
-        insuranceName:
-          (plan.payerType || newPatientForm.convenioTipo) === "convenio"
-            ? plan.insuranceName || newPatientForm.convenioNome || ""
-            : "",
-      }))
-      .filter((plan: any) => plan.specialty || plan.amount > 0);
+    const financialPlans = canAccessClinicFinance
+      ? normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm)
+          .map((plan: any) => ({
+            ...plan,
+            specialty: String(plan.specialty || "Terapia").trim(),
+            amount: Number(String(plan.amount || "").replace(",", ".")) || 0,
+            dueDay: String(Math.min(31, Math.max(1, Number(plan.dueDay) || 10))),
+            billingMethod: plan.billingMethod || "pix",
+            payerType: plan.payerType || newPatientForm.convenioTipo || "particular",
+            insuranceName:
+              (plan.payerType || newPatientForm.convenioTipo) === "convenio"
+                ? plan.insuranceName || newPatientForm.convenioNome || ""
+                : "",
+          }))
+          .filter((plan: any) => plan.specialty || plan.amount > 0)
+      : [];
     const monthlyTreatmentValue = financialPlans.reduce(
       (sum: number, plan: any) => sum + (Number(plan.amount) || 0),
       0,
@@ -2019,10 +2030,14 @@ export function CoordinatorDashboard({
         : null,
       type: newPatientForm.patientProfileType || "adult_conventional",
       anamnesisRenewalMonths: renewalMonths,
-      financialPlans,
-      monthlyTreatmentValue,
-      billingDueDay: financialPlans[0]?.dueDay || "10",
-      billingMethod: financialPlans[0]?.billingMethod || "pix",
+      ...(canAccessClinicFinance
+        ? {
+            financialPlans,
+            monthlyTreatmentValue,
+            billingDueDay: financialPlans[0]?.dueDay || "10",
+            billingMethod: financialPlans[0]?.billingMethod || "pix",
+          }
+        : {}),
       lastAnamnesisAt: existingPatient?.lastAnamnesisAt || null,
       anamnesisPending: existingPatient
         ? isPatientPendingAnamnesis({
@@ -2784,8 +2799,8 @@ export function CoordinatorDashboard({
     }).length;
   }, [allPatients]);
 
-  const dashboardDailyStats = useMemo(
-    () => [
+  const dashboardDailyStats = useMemo(() => {
+    const stats = [
       {
         id: "agenda",
         label: "Consultas hoje",
@@ -2816,7 +2831,10 @@ export function CoordinatorDashboard({
         color: "text-sky-600",
         iconBg: theme === "dark" ? "bg-sky-400/15" : "bg-sky-50",
       },
-      {
+    ];
+
+    if (canAccessClinicFinance) {
+      stats.push({
         id: "financial",
         label: "Inadimplentes",
         value: overduePatientPayments.length,
@@ -2825,10 +2843,18 @@ export function CoordinatorDashboard({
         accent: "bg-amber-500",
         color: "text-amber-600",
         iconBg: theme === "dark" ? "bg-amber-400/15" : "bg-amber-50",
-      },
-    ],
-    [birthdayTodayCount, canceledTodayCount, confirmedTodayCount, overduePatientPayments.length, theme],
-  );
+      });
+    }
+
+    return stats;
+  }, [
+    birthdayTodayCount,
+    canceledTodayCount,
+    canAccessClinicFinance,
+    confirmedTodayCount,
+    overduePatientPayments.length,
+    theme,
+  ]);
 
   useEffect(() => {
     const uniqueProfessionals = Array.from(
@@ -3489,6 +3515,7 @@ export function CoordinatorDashboard({
 
   const financialDashboard = useMemo(() => {
     const clinicPatientIds = new Set((allPatients || []).map((patient: any) => String(patient?.id)));
+    const patientById = new Map((allPatients || []).map((patient: any) => [String(patient?.id), patient]));
     const activePatients = (allPatients || []).filter(isPatientFinanciallyActive);
     const inactivePatients = (allPatients || []).filter((patient: any) => !isPatientFinanciallyActive(patient));
     const normalizeStatus = (status: any) => {
@@ -3531,12 +3558,68 @@ export function CoordinatorDashboard({
     const billingMethodMap = new Map<string, any>();
     const dueRows: any[] = [];
 
+    const ensureSpecialtyRow = (label: string) => {
+      const safeLabel = String(label || "Não informado").trim() || "Não informado";
+      const current = specialtyMap.get(safeLabel) || {
+        label: safeLabel,
+        amount: 0,
+        projected: 0,
+        realized: 0,
+        pending: 0,
+        overdue: 0,
+        professionalPaid: 0,
+        allocatedOperationalExpenses: 0,
+        contributionProfit: 0,
+        netProfit: 0,
+        contributionMarginPct: 0,
+        netMarginPct: 0,
+        averageTicket: 0,
+        realizedTicket: 0,
+        patients: new Set<string>(),
+        paidPatients: new Set<string>(),
+      };
+      specialtyMap.set(safeLabel, current);
+      return current;
+    };
+
+    const addSpecialtyMetric = (
+      specialty: string,
+      amount: number,
+      field: "projected" | "realized" | "pending" | "overdue" | "professionalPaid",
+      patientId?: any,
+    ) => {
+      const row = ensureSpecialtyRow(specialty);
+      row[field] += amount;
+      if (field === "projected") row.amount += amount;
+      if (patientId) {
+        row.patients.add(String(patientId));
+        if (field === "realized") row.paidPatients.add(String(patientId));
+      }
+    };
+
+    const distributePatientAmountBySpecialty = (patient: any, amount: number, explicitSpecialty?: any) => {
+      const safeAmount = Number(amount) || 0;
+      const specialty = String(explicitSpecialty || "").trim();
+      if (specialty) {
+        return [{ specialty, amount: safeAmount }];
+      }
+      const plans = getPatientPlans(patient);
+      if (!plans.length) return [{ specialty: "Não informado", amount: safeAmount }];
+      if (plans.length === 1) return [{ specialty: plans[0].specialty, amount: safeAmount }];
+      const total = plans.reduce((sum: number, plan: any) => sum + (Number(plan.amount) || 0), 0);
+      if (total <= 0) return [{ specialty: plans[0].specialty, amount: safeAmount }];
+      return plans.map((plan: any) => ({
+        specialty: plan.specialty,
+        amount: safeAmount * ((Number(plan.amount) || 0) / total),
+      }));
+    };
+
     let projection = 0;
     activePatients.forEach((patient: any) => {
       const plans = getPatientPlans(patient);
       plans.forEach((plan: any) => {
         projection += plan.amount;
-        addToMap(specialtyMap, plan.specialty, plan.amount, { patientId: patient.id });
+        addSpecialtyMetric(plan.specialty, plan.amount, "projected", patient.id);
         addToMap(payerMap, plan.payerType === "convenio" ? "Convênio" : "Particular", plan.amount, { patientId: patient.id });
         if (plan.payerType === "convenio") {
           addToMap(insuranceMap, plan.insuranceName || "Convênio não informado", plan.amount, { patientId: patient.id });
@@ -3588,6 +3671,54 @@ export function CoordinatorDashboard({
     const contributionMarginPct = realized > 0 ? (contributionMarginValue / realized) * 100 : 0;
     const netProfit = realized - professionalPaid - operationalExpenses;
     const netMarginPct = realized > 0 ? (netProfit / realized) * 100 : 0;
+
+    paidPayments.forEach((payment: any) => {
+      const patientId = payment?.patient_id || payment?.patientId;
+      const patient = patientById.get(String(patientId));
+      distributePatientAmountBySpecialty(patient, parseCurrencyValue(payment?.amount), payment?.specialty)
+        .forEach((entry: any) => addSpecialtyMetric(entry.specialty, entry.amount, "realized", patientId));
+    });
+    pendingPayments.forEach((payment: any) => {
+      const patientId = payment?.patient_id || payment?.patientId;
+      const patient = patientById.get(String(patientId));
+      const paymentKey = String(payment?.id || "").trim();
+      const isOverdue = overduePayments.some((overdue: any) =>
+        overdue === payment || (paymentKey && String(overdue?.id || "").trim() === paymentKey),
+      );
+      distributePatientAmountBySpecialty(patient, parseCurrencyValue(payment?.amount), payment?.specialty)
+        .forEach((entry: any) => {
+          addSpecialtyMetric(entry.specialty, entry.amount, "pending", patientId);
+          if (isOverdue) addSpecialtyMetric(entry.specialty, entry.amount, "overdue", patientId);
+        });
+    });
+    paidProfessionalPayments.forEach((payment: any) => {
+      const professionalId = String(payment?.professional_id || payment?.professionalId || "").trim();
+      const professional = therapistMembersById[professionalId] || {};
+      const professionalSpecialties = Array.isArray(professional?.specialties)
+        ? professional.specialties
+        : String(professional?.specialties || professional?.specialty || professional?.professionalSpecialty || "")
+            .split(/[,;|]/);
+      const specialty = String(
+        payment?.specialty ||
+        professionalSpecialties.find((item: any) => String(item || "").trim()) ||
+        "Não informado",
+      ).trim();
+      addSpecialtyMetric(specialty, parseCurrencyValue(payment?.amount), "professionalPaid");
+    });
+
+    const specialtyBasisTotal = realized > 0 ? realized : projection;
+    Array.from(specialtyMap.values()).forEach((row: any) => {
+      const basis = realized > 0 ? row.realized : row.projected;
+      row.allocatedOperationalExpenses = specialtyBasisTotal > 0
+        ? operationalExpenses * (basis / specialtyBasisTotal)
+        : 0;
+      row.contributionProfit = row.realized - row.professionalPaid;
+      row.netProfit = row.realized - row.professionalPaid - row.allocatedOperationalExpenses;
+      row.contributionMarginPct = row.realized > 0 ? (row.contributionProfit / row.realized) * 100 : 0;
+      row.netMarginPct = row.realized > 0 ? (row.netProfit / row.realized) * 100 : 0;
+      row.averageTicket = row.patients.size ? row.projected / row.patients.size : 0;
+      row.realizedTicket = row.paidPatients.size ? row.realized / row.paidPatients.size : 0;
+    });
 
     const dreRows = [
       { label: "Faturamento projetado", value: projection, type: "income", info: "Soma das mensalidades cadastradas nos pacientes ativos." },
@@ -3652,7 +3783,13 @@ export function CoordinatorDashboard({
       cancellationValue,
       dreRows,
       revenueRows,
-      specialtyRows: Array.from(specialtyMap.values()).map((row: any) => ({ ...row, patients: row.patients.size })).sort((a, b) => b.amount - a.amount),
+      specialtyRows: Array.from(specialtyMap.values())
+        .map((row: any) => ({
+          ...row,
+          patients: row.patients.size,
+          paidPatients: row.paidPatients.size,
+        }))
+        .sort((a, b) => b.projected - a.projected),
       payerRows: Array.from(payerMap.values()).map((row: any) => ({ ...row, patients: row.patients.size })).sort((a, b) => b.amount - a.amount),
       insuranceRows: Array.from(insuranceMap.values()).map((row: any) => ({ ...row, patients: row.patients.size })).sort((a, b) => b.amount - a.amount),
       billingMethodRows: Array.from(billingMethodMap.values()).map((row: any) => ({ ...row, patients: row.patients.size })).sort((a, b) => b.amount - a.amount),
@@ -3664,7 +3801,7 @@ export function CoordinatorDashboard({
       paidProfessionalPayments,
       pendingProfessionalPayments,
     };
-  }, [allPatients, financialEntries, financialMonth, payments, professionalPayments]);
+  }, [allPatients, financialEntries, financialMonth, payments, professionalPayments, therapistMembersById]);
 
   const dreData = financialDashboard.dreRows;
   const revenueHistory = financialDashboard.revenueRows;
@@ -4096,7 +4233,7 @@ export function CoordinatorDashboard({
             </button>
           ))}
         </div>
-        {overduePatientPayments.length > 0 && (
+        {canAccessClinicFinance && overduePatientPayments.length > 0 && (
           <button
             type="button"
             onClick={() => navigateToTab("financial")}
@@ -4184,7 +4321,7 @@ export function CoordinatorDashboard({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-            Financeiro (DRE)
+            Financeiro
           </h2>
           <p className="text-slate-400 text-sm font-medium hidden sm:block">
             Visão detalhada da saúde financeira da clínica
@@ -4474,7 +4611,7 @@ export function CoordinatorDashboard({
               },
               {
                 id: "financial",
-                label: "Financeiro (DRE)",
+                label: "Financeiro",
                 icon: DollarSign,
               },
               {
@@ -4680,7 +4817,7 @@ export function CoordinatorDashboard({
                       },
                       {
                         id: "financial",
-                        label: "Financeiro (DRE)",
+                        label: "Financeiro",
                         icon: DollarSign,
                         badge: "BETA",
                       },
@@ -4713,7 +4850,7 @@ export function CoordinatorDashboard({
                         <item.icon size={18} />
                         {item.label}
                         {item.badge && (
-                          <span className="ml-auto text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">
+                          <span className="ml-auto rounded-full bg-amber-400 px-1.5 py-0.5 text-[8px] font-black text-amber-950 shadow-sm shadow-amber-300/50 ring-1 ring-amber-500/30">
                             {item.badge}
                           </span>
                         )}
@@ -4839,7 +4976,6 @@ export function CoordinatorDashboard({
         { id: "patients", label: "Pacientes", icon: ClipboardList },
         { id: "agenda", label: "Agenda", icon: CalendarDays },
         { id: "rooms", label: "Salas", icon: DoorOpen },
-        { id: "financial", label: "Recebimentos", icon: DollarSign },
         { id: "logs", label: "Log de Atividades", icon: History },
         { id: "settings", label: "Configurações", icon: Settings },
       ]
@@ -4851,7 +4987,7 @@ export function CoordinatorDashboard({
         { id: "settings", label: "Configurações", icon: Settings },
         {
           id: "financial",
-          label: "Financeiro (DRE)",
+          label: "Financeiro",
           icon: DollarSign,
           badge: "BETA",
         },
@@ -4870,7 +5006,6 @@ export function CoordinatorDashboard({
         { id: "patients", label: "Pacientes", icon: ClipboardList },
         { id: "agenda", label: "Agenda", icon: CalendarDays },
         { id: "rooms", label: "Salas", icon: DoorOpen },
-        { id: "financial", label: "Recebimentos", icon: DollarSign },
         { id: "logs", label: "Registros", icon: History },
         { id: "settings", label: "Configurações", icon: Settings },
       ]
@@ -4947,7 +5082,7 @@ export function CoordinatorDashboard({
                 <>
                   {item.label}
                   {item.badge && (
-                    <span className="ml-auto text-[8px] bg-purple-100 text-[#7a32fc] px-1.5 py-0.5 rounded-full">
+                    <span className="ml-auto rounded-full bg-amber-400 px-1.5 py-0.5 text-[8px] font-black text-amber-950 shadow-sm shadow-amber-300/50 ring-1 ring-amber-500/30">
                       {item.badge}
                     </span>
                   )}
@@ -5137,7 +5272,7 @@ export function CoordinatorDashboard({
                       <item.icon size={18} />
                       {item.label}
                       {item.badge && (
-                        <span className="ml-auto text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">
+                        <span className="ml-auto rounded-full bg-amber-400 px-1.5 py-0.5 text-[8px] font-black text-amber-950 shadow-sm shadow-amber-300/50 ring-1 ring-amber-500/30">
                           {item.badge}
                         </span>
                       )}
@@ -5718,7 +5853,7 @@ export function CoordinatorDashboard({
                 />
               </motion.div>
             )}
-            {activeTab === "financial" && (
+            {canAccessClinicFinance && activeTab === "financial" && (
               <motion.div
                 key="financial"
                 initial={{ opacity: 0, y: 20 }}
@@ -5863,10 +5998,92 @@ export function CoordinatorDashboard({
                           </div>
                         </div>
 
+                        <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                            <div>
+                              <h4 className="font-bold text-slate-900">
+                                DRE por especialidade
+                              </h4>
+                              <p className="mt-1 text-xs font-medium text-slate-500">
+                                Projeção vem do cadastro financeiro do paciente. Quando o pagamento não informa especialidade, o valor é distribuído conforme as especialidades cadastradas no paciente.
+                              </p>
+                            </div>
+                            <span className="w-fit rounded-full bg-violet-50 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">
+                              Visão gerencial
+                            </span>
+                          </div>
+                          <div className="mt-5 space-y-4">
+                            {financialDashboard.specialtyRows.length ? (
+                              financialDashboard.specialtyRows.map((row: any) => {
+                                const netPositive = row.netProfit >= 0;
+                                return (
+                                  <div key={row.label} className="rounded-[28px] border border-slate-100 bg-slate-50 p-5">
+                                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                      <div>
+                                        <p className="text-base font-black text-slate-900">{row.label}</p>
+                                        <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                                          {row.patients} paciente(s) ativo(s) • {row.paidPatients} com pagamento realizado no mês
+                                        </p>
+                                      </div>
+                                      <div className={`rounded-2xl px-4 py-2 text-right ${netPositive ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+                                        <p className="text-[10px] font-black uppercase tracking-widest">Lucro estimado</p>
+                                        <p className="text-lg font-black">{formatCurrency(row.netProfit)}</p>
+                                      </div>
+                                    </div>
+
+                                    <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
+                                      <div className="rounded-2xl bg-white p-4">
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Faturamento projetado</p>
+                                        <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(row.projected)}</p>
+                                      </div>
+                                      <div className="rounded-2xl bg-white p-4">
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Realizado</p>
+                                        <p className="mt-1 text-lg font-black text-[#7a32fc]">{formatCurrency(row.realized)}</p>
+                                      </div>
+                                      <div className="rounded-2xl bg-white p-4">
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Ticket médio</p>
+                                        <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(row.averageTicket)}</p>
+                                      </div>
+                                      <div className="rounded-2xl bg-white p-4">
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Margem líquida</p>
+                                        <p className={`mt-1 text-lg font-black ${netPositive ? "text-emerald-600" : "text-rose-600"}`}>
+                                          {row.netMarginPct.toFixed(1)}%
+                                        </p>
+                                      </div>
+                                    </div>
+
+                                    <div className="mt-4 grid grid-cols-1 gap-2 text-[11px] font-bold text-slate-500 sm:grid-cols-2 xl:grid-cols-5">
+                                      <div className="rounded-2xl bg-white/70 px-3 py-2">
+                                        Ticket realizado: <span className="text-[#7a32fc]">{formatCurrency(row.realizedTicket)}</span>
+                                      </div>
+                                      <div className="rounded-2xl bg-white/70 px-3 py-2">
+                                        Pendente: <span className="text-amber-600">{formatCurrency(row.pending)}</span>
+                                      </div>
+                                      <div className="rounded-2xl bg-white/70 px-3 py-2">
+                                        Inadimplente: <span className="text-rose-600">{formatCurrency(row.overdue)}</span>
+                                      </div>
+                                      <div className="rounded-2xl bg-white/70 px-3 py-2">
+                                        Repasses: <span className="text-slate-800">{formatCurrency(row.professionalPaid)}</span>
+                                      </div>
+                                      <div className="rounded-2xl bg-white/70 px-3 py-2">
+                                        Desp. aloc.: <span className="text-slate-800">{formatCurrency(row.allocatedOperationalExpenses)}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })
+                            ) : (
+                              <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">
+                                Nenhuma mensalidade cadastrada nos pacientes ativos.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
                         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
                           <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
                             <h4 className="font-bold text-slate-900">
-                              Mensalidades por especialidade
+                              Ranking de faturamento por especialidade
                             </h4>
                             <div className="mt-5 space-y-3">
                               {financialDashboard.specialtyRows.length ? (
@@ -5875,10 +6092,15 @@ export function CoordinatorDashboard({
                                     <div>
                                       <p className="text-sm font-black text-slate-800">{row.label}</p>
                                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                                        {row.patients} paciente(s)
+                                        {row.patients} paciente(s) • ticket {formatCurrency(row.averageTicket)}
                                       </p>
                                     </div>
-                                    <p className="text-sm font-black text-[#7a32fc]">{formatCurrency(row.amount)}</p>
+                                    <div className="text-right">
+                                      <p className="text-sm font-black text-[#7a32fc]">{formatCurrency(row.projected)}</p>
+                                      <p className="text-[10px] font-bold text-slate-400">
+                                        {formatCurrency(row.realized)} realizado
+                                      </p>
+                                    </div>
                                   </div>
                                 ))
                               ) : (
@@ -7696,94 +7918,96 @@ export function CoordinatorDashboard({
                 ))}
               </select>
               <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Carteirinha do convênio" value={newPatientForm.convenioCarteirinha} onChange={(e) => handlePatientFormChange("convenioCarteirinha", e.target.value)} />
-              <div className="md:col-span-2 xl:col-span-3 rounded-3xl border border-slate-100 bg-slate-50/70 p-4">
-                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-xs font-black uppercase tracking-widest text-slate-500">
-                      Plano financeiro do tratamento
-                    </p>
-                    <p className="text-[11px] font-medium text-slate-400">
-                      Cadastre mensalidades por especialidade para alimentar a projeção do DRE.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={addFinancialPlanRow}
-                    className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white px-4 py-2 text-xs font-bold text-[#7a32fc] shadow-sm transition-all hover:bg-violet-50"
-                  >
-                    <Plus size={14} /> Especialidade
-                  </button>
-                </div>
-                <div className="space-y-3">
-                  {normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm).map((plan: any) => (
-                    <div key={plan.id} className="grid grid-cols-1 gap-3 rounded-2xl bg-white p-3 shadow-sm md:grid-cols-6">
-                      <input
-                        className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-2"
-                        placeholder="Especialidade"
-                        value={plan.specialty}
-                        onChange={(e) => handleFinancialPlanChange(plan.id, "specialty", e.target.value)}
-                      />
-                      <input
-                        className="rounded-xl bg-slate-50 p-3 text-sm"
-                        placeholder="Mensalidade R$"
-                        inputMode="decimal"
-                        value={plan.amount}
-                        onChange={(e) => handleFinancialPlanChange(plan.id, "amount", e.target.value)}
-                      />
-                      <input
-                        className="rounded-xl bg-slate-50 p-3 text-sm"
-                        placeholder="Venc. dia"
-                        type="number"
-                        min={1}
-                        max={31}
-                        value={plan.dueDay}
-                        onChange={(e) => handleFinancialPlanChange(plan.id, "dueDay", e.target.value)}
-                      />
-                      <select
-                        className="rounded-xl bg-slate-50 p-3 text-sm"
-                        value={plan.billingMethod}
-                        onChange={(e) => handleFinancialPlanChange(plan.id, "billingMethod", e.target.value)}
-                      >
-                        <option value="pix">PIX</option>
-                        <option value="card">Cartão</option>
-                        <option value="cash">Dinheiro</option>
-                        <option value="boleto">Boleto</option>
-                        <option value="transfer">Transferência</option>
-                      </select>
-                      <div className="flex items-center gap-2">
-                        <select
-                          className="min-w-0 flex-1 rounded-xl bg-slate-50 p-3 text-sm"
-                          value={plan.payerType}
-                          onChange={(e) => handleFinancialPlanChange(plan.id, "payerType", e.target.value)}
-                        >
-                          <option value="particular">Particular</option>
-                          <option value="convenio">Convênio</option>
-                        </select>
-                        <button
-                          type="button"
-                          onClick={() => removeFinancialPlanRow(plan.id)}
-                          className="rounded-xl p-3 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500"
-                          title="Remover especialidade"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                      {plan.payerType === "convenio" && (
-                        <select
-                          className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-6"
-                          value={plan.insuranceName}
-                          onChange={(e) => handleFinancialPlanChange(plan.id, "insuranceName", e.target.value)}
-                        >
-                          <option value="">Convênio desta especialidade</option>
-                          {insuranceOptions.map((ins) => (
-                            <option key={`plan-${plan.id}-${ins}`} value={ins}>{ins}</option>
-                          ))}
-                        </select>
-                      )}
+              {canAccessClinicFinance && (
+                <div className="md:col-span-2 xl:col-span-3 rounded-3xl border border-slate-100 bg-slate-50/70 p-4">
+                  <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-widest text-slate-500">
+                        Plano financeiro do tratamento
+                      </p>
+                      <p className="text-[11px] font-medium text-slate-400">
+                        Cadastre mensalidades por especialidade para alimentar a projeção do DRE.
+                      </p>
                     </div>
-                  ))}
+                    <button
+                      type="button"
+                      onClick={addFinancialPlanRow}
+                      className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white px-4 py-2 text-xs font-bold text-[#7a32fc] shadow-sm transition-all hover:bg-violet-50"
+                    >
+                      <Plus size={14} /> Especialidade
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    {normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm).map((plan: any) => (
+                      <div key={plan.id} className="grid grid-cols-1 gap-3 rounded-2xl bg-white p-3 shadow-sm md:grid-cols-6">
+                        <input
+                          className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-2"
+                          placeholder="Especialidade"
+                          value={plan.specialty}
+                          onChange={(e) => handleFinancialPlanChange(plan.id, "specialty", e.target.value)}
+                        />
+                        <input
+                          className="rounded-xl bg-slate-50 p-3 text-sm"
+                          placeholder="Mensalidade R$"
+                          inputMode="decimal"
+                          value={plan.amount}
+                          onChange={(e) => handleFinancialPlanChange(plan.id, "amount", e.target.value)}
+                        />
+                        <input
+                          className="rounded-xl bg-slate-50 p-3 text-sm"
+                          placeholder="Venc. dia"
+                          type="number"
+                          min={1}
+                          max={31}
+                          value={plan.dueDay}
+                          onChange={(e) => handleFinancialPlanChange(plan.id, "dueDay", e.target.value)}
+                        />
+                        <select
+                          className="rounded-xl bg-slate-50 p-3 text-sm"
+                          value={plan.billingMethod}
+                          onChange={(e) => handleFinancialPlanChange(plan.id, "billingMethod", e.target.value)}
+                        >
+                          <option value="pix">PIX</option>
+                          <option value="card">Cartão</option>
+                          <option value="cash">Dinheiro</option>
+                          <option value="boleto">Boleto</option>
+                          <option value="transfer">Transferência</option>
+                        </select>
+                        <div className="flex items-center gap-2">
+                          <select
+                            className="min-w-0 flex-1 rounded-xl bg-slate-50 p-3 text-sm"
+                            value={plan.payerType}
+                            onChange={(e) => handleFinancialPlanChange(plan.id, "payerType", e.target.value)}
+                          >
+                            <option value="particular">Particular</option>
+                            <option value="convenio">Convênio</option>
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => removeFinancialPlanRow(plan.id)}
+                            className="rounded-xl p-3 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                            title="Remover especialidade"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                        {plan.payerType === "convenio" && (
+                          <select
+                            className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-6"
+                            value={plan.insuranceName}
+                            onChange={(e) => handleFinancialPlanChange(plan.id, "insuranceName", e.target.value)}
+                          >
+                            <option value="">Convênio desta especialidade</option>
+                            {insuranceOptions.map((ins) => (
+                              <option key={`plan-${plan.id}-${ins}`} value={ins}>{ins}</option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
               <select className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.comoConheceu} onChange={(e) => handlePatientFormChange("comoConheceu", e.target.value)}>
                 <option value="">Como conheceu a clínica?</option>
                 <option value="google">Google</option>

@@ -3423,6 +3423,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       a.href = href;
       a.download = file.name || "arquivo";
       a.target = "_blank";
+      a.rel = "noopener noreferrer";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
