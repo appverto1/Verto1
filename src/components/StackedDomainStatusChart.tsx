@@ -11,6 +11,7 @@ type StackedDomainStatusChartProps = {
 
 type DomainRow = {
   name: string;
+  order: number;
   acquired: number;
   in_acquisition: number;
   not_started: number;
@@ -120,7 +121,35 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 
 export const StackedDomainStatusChart = ({ protocols = [], history = [], patients = [] }: StackedDomainStatusChartProps) => {
   const [isMounted, setIsMounted] = useState(false);
+  const [selectedProtocolId, setSelectedProtocolId] = useState('');
   useEffect(() => setIsMounted(true), []);
+
+  const protocolOptions = useMemo(() => {
+    return (Array.isArray(protocols) ? protocols : [])
+      .filter((protocol) => (protocol?.category === 'evaluation' || !protocol?.category) && Array.isArray(protocol?.data) && protocol.data.length > 0)
+      .map((protocol, index) => ({
+        id: String(protocol?.id ?? protocol?.canonicalKey ?? protocol?.title ?? index),
+        title: String(protocol?.title || protocol?.name || `Protocolo ${index + 1}`),
+        protocol
+      }));
+  }, [protocols]);
+
+  useEffect(() => {
+    if (!protocolOptions.length) {
+      setSelectedProtocolId('');
+      return;
+    }
+
+    setSelectedProtocolId((prev) => {
+      if (prev && protocolOptions.some((option) => option.id === prev)) return prev;
+      return protocolOptions[0].id;
+    });
+  }, [protocolOptions]);
+
+  const selectedProtocols = useMemo(() => {
+    const selected = protocolOptions.find((option) => option.id === selectedProtocolId) || protocolOptions[0];
+    return selected ? [selected.protocol] : [];
+  }, [protocolOptions, selectedProtocolId]);
 
   const chartData = useMemo<DomainRow[]>(() => {
     const patientIds = Array.from(
@@ -159,17 +188,19 @@ export const StackedDomainStatusChart = ({ protocols = [], history = [], patient
       }
     });
 
-    const domains = new Map<string, { name: string; acquired: number; inAcquisition: number; notStarted: number; total: number }>();
-    (Array.isArray(protocols) ? protocols : [])
+    const domains = new Map<string, { name: string; order: number; acquired: number; inAcquisition: number; notStarted: number; total: number }>();
+    let domainOrder = 0;
+    selectedProtocols
       .filter((protocol) => protocol?.category === 'evaluation' || !protocol?.category)
       .forEach((protocol) => {
         (Array.isArray(protocol?.data) ? protocol.data : []).forEach((domain: any) => {
           const domainName = String(domain?.name || 'Domínio').trim();
-          const domainKey = normalizeText(domainName);
+          const domainKey = normalizeText(`${protocol?.id || protocol?.canonicalKey || protocol?.title || ''}:${domainName}`);
           if (!domainKey) return;
 
           const current = domains.get(domainKey) || {
             name: domainName,
+            order: domainOrder++,
             acquired: 0,
             inAcquisition: 0,
             notStarted: 0,
@@ -206,6 +237,7 @@ export const StackedDomainStatusChart = ({ protocols = [], history = [], patient
       .filter((domain) => domain.total > 0)
       .map((domain) => ({
         name: domain.name,
+        order: domain.order,
         acquiredAbs: domain.acquired,
         inAcquisitionAbs: domain.inAcquisition,
         notStartedAbs: domain.notStarted,
@@ -214,8 +246,8 @@ export const StackedDomainStatusChart = ({ protocols = [], history = [], patient
         in_acquisition: Number(((domain.inAcquisition / domain.total) * 100).toFixed(2)),
         not_started: Number(((domain.notStarted / domain.total) * 100).toFixed(2))
       }))
-      .sort((a, b) => b.total - a.total);
-  }, [history, patients, protocols]);
+      .sort((a, b) => a.order - b.order);
+  }, [history, patients, selectedProtocols]);
 
   if (!chartData.length) {
     return (
@@ -230,7 +262,7 @@ export const StackedDomainStatusChart = ({ protocols = [], history = [], patient
 
   return (
     <div className="rounded-[36px] border border-slate-100 bg-white p-5 shadow-sm sm:p-8">
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h3 className="flex items-center gap-2 text-xl font-black tracking-tight text-slate-900">
             <BarChart2 size={22} className="text-[#7a32fc]" />
@@ -240,9 +272,29 @@ export const StackedDomainStatusChart = ({ protocols = [], history = [], patient
             Visão consolidada exclusiva da coordenação clínica
           </p>
         </div>
-        <div className="flex items-center gap-2 rounded-2xl bg-slate-50 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
-          <Info size={14} />
-          Eixo Y em %
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          {protocolOptions.length > 1 && (
+            <div className="min-w-[280px]">
+              <label className="mb-1 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+                Filtrar protocolo
+              </label>
+              <select
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-700 outline-none transition-all focus:border-[#7a32fc] focus:ring-4 focus:ring-[#7a32fc]/10"
+                value={selectedProtocolId}
+                onChange={(event) => setSelectedProtocolId(event.target.value)}
+              >
+                {protocolOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="flex items-center gap-2 rounded-2xl bg-slate-50 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-slate-500 sm:mb-1.5">
+            <Info size={14} />
+            Eixo Y em %
+          </div>
         </div>
       </div>
 
@@ -250,7 +302,7 @@ export const StackedDomainStatusChart = ({ protocols = [], history = [], patient
         <div className="h-[460px] rounded-l-2xl bg-white">
           {isMounted ? (
             <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={360}>
-              <BarChart data={chartData} margin={{ top: 12, right: 0, left: 0, bottom: 112 }}>
+              <BarChart data={chartData} margin={{ top: 52, right: 0, left: 0, bottom: 112 }}>
                 <XAxis dataKey="name" hide />
                 <YAxis
                   axisLine={false}
@@ -269,7 +321,7 @@ export const StackedDomainStatusChart = ({ protocols = [], history = [], patient
           <div className="h-[460px]" style={{ minWidth }}>
           {isMounted ? (
             <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={360}>
-              <BarChart data={chartData} margin={{ top: 12, right: 24, left: 0, bottom: 112 }} barCategoryGap="30%">
+              <BarChart data={chartData} margin={{ top: 52, right: 24, left: 0, bottom: 112 }} barCategoryGap="30%">
                 <CartesianGrid stroke="#F1F5F9" strokeDasharray="3 3" vertical={false} />
                 <XAxis
                   dataKey="name"
