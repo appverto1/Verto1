@@ -555,22 +555,15 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
             </h1>
           </div>
           <div className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">
-            Fonte: {financial.source === 'supabase_financial_views' ? 'SQL financeiro ativo' : 'fallback automatico'}
+            Fonte: {financial.source === 'supabase_financial_views' ? 'SQL financeiro ativo' : 'sem dados fictícios'}
           </div>
         </div>
 
         {financial.source !== 'supabase_financial_views' && (
-          <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
             <p className="text-sm font-bold text-amber-800">
-              Sua base financeira ainda esta vazia. Clique para criar dados iniciais automaticamente.
+              A base financeira real ainda não possui lançamentos suficientes. Dados fictícios e estimativas automáticas foram desativados.
             </p>
-            <button
-              onClick={handleBootstrapFinance}
-              disabled={bootstrapping}
-              className="px-4 py-2 rounded-xl bg-amber-500 text-white text-xs font-black uppercase tracking-[0.12em] disabled:opacity-70"
-            >
-              {bootstrapping ? 'Criando base...' : 'Criar base inicial'}
-            </button>
           </div>
         )}
 
@@ -1305,7 +1298,6 @@ const SidebarItem = ({ icon, label, active, onClick }: any) => (
     {icon} <span className="text-sm">{label}</span>
   </button>
 );
-
 
 
 

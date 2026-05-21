@@ -279,7 +279,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
           <SidebarItem 
             icon={<BarChart3 size={20} />} 
             label={isSidebarExpanded ? "Financeiro (DRE)" : ""} 
-            badge={isSidebarExpanded ? "EM BREVE" : ""}
+            badge={isSidebarExpanded ? "BETA" : ""}
             active={activeTab === 'financial'} 
             onClick={() => setActiveTab('financial')} 
             isExpanded={isSidebarExpanded}
@@ -599,8 +599,8 @@ export const AdminDashboard = ({ onLogout }: any) => {
               <DollarSign size={40} />
             </div>
             <h3 className="text-2xl font-bold text-gray-800 tracking-tight mb-2">DRE e GestÃ£o Financeira</h3>
-            <p className="text-gray-500 font-medium mb-8">Esta funcionalidade estÃ¡ sendo preparada para vocÃª.</p>
-            <span className="px-6 py-2 bg-[#7a32fc] text-white rounded-full text-xs font-bold uppercase tracking-widest shadow-lg shadow-purple-200">Em Breve</span>
+            <p className="text-gray-500 font-medium mb-8">Módulo financeiro em beta, conectado a dados reais quando disponíveis.</p>
+            <span className="px-6 py-2 bg-[#7a32fc] text-white rounded-full text-xs font-bold uppercase tracking-widest shadow-lg shadow-purple-200">Beta</span>
           </div>
         )}
 

@@ -477,6 +477,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [showSessionStartConfirm, setShowSessionStartConfirm] = useState(false);
   const [showSessionEndConfirm, setShowSessionEndConfirm] = useState(false);
   const [pendingSessionAction, setPendingSessionAction] = useState<'tab' | 'fullscreen'>('tab');
+  const [restoreSessionData, setRestoreSessionData] = useState(false);
   const notes = useMemo(() => {
     const baseNotes = Array.isArray(externalNotes) ? externalNotes : [];
     if (!generatedReviewNotes.length) return baseNotes;
@@ -579,6 +580,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
     setPendingSessionAction(nextAction);
     setSessionDurationInput(String(configuredDefaultSessionMinutes));
+    setRestoreSessionData(false);
     if (nextAction === 'tab') setActiveTab('session');
     setShowSessionStartConfirm(true);
   };
@@ -586,6 +588,38 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const handleConfirmSessionStart = () => {
     const durationMinutes = Math.max(5, Math.min(240, Math.round(Number(sessionDurationInput) || configuredDefaultSessionMinutes)));
     const startedAt = new Date();
+    const resetAt = startedAt.getTime();
+    if (restoreSessionData && isKidsProfile && Array.isArray(patient?.pei) && onUpdatePatient) {
+      const updatedPei = patient.pei.map((goal: any) => {
+        if (isGoalAcquired(goal)) return goal;
+        return {
+          ...goal,
+          progress: 0,
+          progressResetAt: resetAt,
+          sessionProgressResetAt: resetAt,
+          masteryResetAt: resetAt,
+          status: String(goal?.status || '').toLowerCase() === 'not_started'
+            ? 'not_started'
+            : 'in_progress'
+        };
+      });
+      onUpdatePatient({
+        ...patient,
+        id: patient.id,
+        pei: updatedPei
+      });
+      onAddNote?.(
+        patient.id,
+        `Dados de preenchimento do PEI restaurados em ${startedAt.toLocaleString('pt-BR')}. O plano estruturado foi mantido e os novos registros passam a contar a partir desta sessão.`,
+        'private',
+        'Sessão'
+      );
+      onAddActivityLog?.(
+        'Dados de sessão restaurados',
+        `Preenchimento do PEI de ${patient?.name || 'paciente'} reiniciado sem apagar o plano estruturado.`,
+        'clinical'
+      );
+    }
     const endsAt = new Date(startedAt.getTime() + durationMinutes * 60 * 1000);
     const nextSession = {
       id: `session-${String(patient?.id || 'patient')}-${startedAt.getTime()}`,
@@ -600,6 +634,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     };
     persistActiveSession(nextSession);
     setShowSessionStartConfirm(false);
+    setRestoreSessionData(false);
     onAddActivityLog?.(
       'Sessão iniciada',
       `Sessão de ${patient?.name || 'paciente'} iniciada com duração prevista de ${durationMinutes} minutos.`,
@@ -3531,6 +3566,25 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return 5;
   };
 
+  const getGoalProgressResetMarker = (goal: any) => {
+    const explicitReset = Number(
+      goal?.sessionProgressResetAt ??
+      goal?.progressResetAt ??
+      goal?.masteryResetAt ??
+      goal?.progress_reset_at
+    );
+    if (Number.isFinite(explicitReset) && explicitReset > 0) return explicitReset;
+    const legacyGoalId = Number(goal?.id);
+    return Number.isFinite(legacyGoalId) ? legacyGoalId : 0;
+  };
+
+  const getHistoryProgressMarker = (entry: any) => {
+    const numericId = Number(entry?.id);
+    if (Number.isFinite(numericId) && numericId > 0) return numericId;
+    const createdAt = new Date(entry?.created_at || entry?.date || entry?.time || 0).getTime();
+    return Number.isFinite(createdAt) ? createdAt : 0;
+  };
+
   const getMasteryProgress = (goalOrName: any) => {
     if (patientCategory !== 'Criança') return null;
     const goal = typeof goalOrName === 'string'
@@ -3538,9 +3592,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       : goalOrName;
     const skillName = typeof goalOrName === 'string' ? goalOrName : goalOrName?.name;
     const target = getGoalMasteryTarget(goal);
+    const resetMarker = getGoalProgressResetMarker(goal);
     const skillHistory = history
-      .filter((h: any) => h.patientId === patient.id && h.title === skillName && h.type === 'task' && (!goal || h.id > goal.id))
-      .sort((a: any, b: any) => b.id - a.id);
+      .filter((h: any) =>
+        String(h.patientId ?? h.patient_id ?? '') === String(patient.id) &&
+        h.title === skillName &&
+        h.type === 'task' &&
+        (!goal || getHistoryProgressMarker(h) > resetMarker)
+      )
+      .sort((a: any, b: any) => getHistoryProgressMarker(b) - getHistoryProgressMarker(a));
     
     let count = 0;
     for (const h of skillHistory) {
@@ -3717,11 +3777,32 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               max={240}
               value={sessionDurationInput}
               onChange={(event) => setSessionDurationInput(event.target.value)}
-              className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-2xl px-4 py-3 text-lg font-semibold text-gray-800 dark:text-slate-50 outline-none focus:border-[#7a32fc] mb-6"
+              className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-2xl px-4 py-3 text-lg font-semibold text-gray-800 dark:text-slate-50 outline-none focus:border-[#7a32fc]"
             />
+            {isKidsProfile && (
+              <label className="my-5 flex items-start gap-3 rounded-2xl border border-violet-100 bg-violet-50/70 p-4 dark:border-violet-500/30 dark:bg-violet-500/10">
+                <input
+                  type="checkbox"
+                  checked={restoreSessionData}
+                  onChange={(event) => setRestoreSessionData(event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-violet-200 text-[#7a32fc]"
+                />
+                <span>
+                  <span className="block text-sm font-semibold text-gray-900 dark:text-slate-50">
+                    Restaurar dados de sessão
+                  </span>
+                  <span className="mt-1 block text-xs leading-relaxed text-gray-500 dark:text-slate-300">
+                    Mantém o PEI estruturado ativo, zera o preenchimento atual das metas e passa a contar novos registros a partir desta sessão.
+                  </span>
+                </span>
+              </label>
+            )}
             <div className="flex gap-3">
               <button
-                onClick={() => setShowSessionStartConfirm(false)}
+                onClick={() => {
+                  setRestoreSessionData(false);
+                  setShowSessionStartConfirm(false);
+                }}
                 className="flex-1 py-3 rounded-2xl bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-200 font-semibold hover:bg-gray-200 dark:hover:bg-slate-700 transition-all"
               >
                 Cancelar

@@ -381,6 +381,17 @@ export default function App() {
       convenioTipo: coalescePatientText(source?.insuranceType, existing?.convenioTipo) || 'particular',
       convenioNome: coalescePatientText(source?.insuranceName, existing?.convenioNome),
       convenioCarteirinha: coalescePatientText(source?.cardNumber, existing?.convenioCarteirinha),
+      financialPlans: Array.isArray(source?.financialPlans)
+        ? source.financialPlans
+        : Array.isArray(existing?.financialPlans)
+          ? existing.financialPlans
+          : [],
+      monthlyTreatmentValue:
+        typeof source?.monthlyTreatmentValue !== 'undefined'
+          ? source.monthlyTreatmentValue
+          : existing?.monthlyTreatmentValue || 0,
+      billingDueDay: coalescePatientText(source?.billingDueDay, existing?.billingDueDay),
+      billingMethod: coalescePatientText(source?.billingMethod, existing?.billingMethod),
       grupo: coalescePatientText(source?.group, existing?.grupo),
       comoConheceu: coalescePatientText(source?.source, existing?.comoConheceu),
       rg: coalescePatientText(source?.rg, existing?.rg),
@@ -2424,67 +2435,201 @@ export default function App() {
       return { success: false, errors: ['Agendamento não encontrado.'] };
     }
 
-    const nextDate = updates.date || currentAppointment.date;
-    const nextTime = updates.time || currentAppointment.time;
-    const nextApproach = updates.type || updates.approach || currentAppointment.type || 'Consulta Padrão';
-    const nextEndTime = calculateEndTime(nextTime, nextApproach);
-    const nextPatientId = currentAppointment.patientId;
+    const { recurrenceScope = 'single', ...appointmentUpdates } = updates || {};
+    const nextDate = appointmentUpdates.date || currentAppointment.date;
+    const nextTime = appointmentUpdates.time || currentAppointment.time;
+    const recurrenceGroupId = String(
+      currentAppointment.recurrenceGroupId || currentAppointment.recurrence_group_id || '',
+    ).trim();
+    const shouldUpdateFutureRecurrence =
+      recurrenceScope === 'future' && Boolean(recurrenceGroupId);
+    const getRecurrenceIndex = (appointment: any) =>
+      Number(appointment?.recurrenceIndex ?? appointment?.recurrence_index ?? 0) || 0;
+    const currentRecurrenceIndex = getRecurrenceIndex(currentAppointment);
+    const parseDateKey = (value: any) => {
+      const [year, month, day] = String(value || '').split('-').map(Number);
+      if (!year || !month || !day) return null;
+      return new Date(year, month - 1, day);
+    };
+    const formatDateKey = (date: Date) =>
+      `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    const addDaysToDateKey = (value: any, days: number) => {
+      const date = parseDateKey(value);
+      if (!date) return String(value || '');
+      date.setDate(date.getDate() + days);
+      return formatDateKey(date);
+    };
+    const daysBetween = (from: any, to: any) => {
+      const start = parseDateKey(from);
+      const end = parseDateKey(to);
+      if (!start || !end) return 0;
+      return Math.round((end.getTime() - start.getTime()) / 86400000);
+    };
+    const isCanceledAppointment = (appointment: any) =>
+      ['canceled', 'cancelled'].includes(String(appointment?.status || '').toLowerCase());
+    const isSameRecurrenceGroup = (appointment: any) =>
+      recurrenceGroupId &&
+      String(appointment?.recurrenceGroupId || appointment?.recurrence_group_id || '').trim() === recurrenceGroupId;
+    const isFutureOccurrence = (appointment: any) => {
+      if (String(appointment?.id) === String(id)) return true;
+      const appointmentIndex = getRecurrenceIndex(appointment);
+      if (currentRecurrenceIndex > 0 && appointmentIndex > 0) {
+        return appointmentIndex >= currentRecurrenceIndex;
+      }
+      return daysBetween(currentAppointment.date, appointment?.date) >= 0;
+    };
+    const appointmentsToUpdate = shouldUpdateFutureRecurrence
+      ? therapistAgenda.filter(
+          (appointment) =>
+            isSameRecurrenceGroup(appointment) &&
+            isFutureOccurrence(appointment) &&
+            (String(appointment?.id) === String(id) || !isCanceledAppointment(appointment)),
+        )
+      : [currentAppointment];
+    const targetIds = new Set(appointmentsToUpdate.map((appointment) => String(appointment.id)));
+    const resolveDateForOccurrence = (appointment: any) => {
+      if (!shouldUpdateFutureRecurrence || String(appointment?.id) === String(id)) {
+        return nextDate;
+      }
+      const appointmentIndex = getRecurrenceIndex(appointment);
+      if (currentRecurrenceIndex > 0 && appointmentIndex > 0) {
+        return addDaysToDateKey(nextDate, (appointmentIndex - currentRecurrenceIndex) * 7);
+      }
+      return addDaysToDateKey(nextDate, daysBetween(currentAppointment.date, appointment?.date));
+    };
+    const buildReminderReset = (scheduleChanged: boolean) =>
+      scheduleChanged
+        ? {
+            status: 'pending',
+            patientResponse: null,
+            patient_response: null,
+            patientRespondedAt: null,
+            patient_responded_at: null,
+            patientConfirmationStatus: null,
+            patient_confirmation_status: null,
+            patientConfirmationAt: null,
+            patient_confirmation_at: null,
+            patientConfirmationBy: null,
+            patient_confirmation_by: null,
+            patientConfirmationSource: null,
+            patient_confirmation_source: null,
+            notification_24h_sent_at: null,
+            notification24hSentAt: null,
+            notification_sent_at: null,
+            notification_sent: false,
+            notification_12h_sent_at: null,
+            notification12hSentAt: null,
+            notification_12h_sent: false,
+          }
+        : {};
+    const addConflict = (errors: string[], message: string) => {
+      if (!errors.includes(message)) errors.push(message);
+    };
+    const conflicts: string[] = [];
+    const patchesById = new Map<string, any>();
 
-    const patientConflict = therapistAgenda.find((item) => {
-      if (String(item.id) === String(id)) return false;
-      if (item.status === 'canceled') return false;
-      if (String(item.patientId || '') !== String(nextPatientId || '')) return false;
-      if (item.date !== nextDate) return false;
-      const itemEndTime = calculateEndTime(item.time, item.type || item.approach || 'Consulta Padrão');
-      return appointmentTimesOverlap(nextTime, nextEndTime, item.time, itemEndTime);
+    appointmentsToUpdate.forEach((appointment) => {
+      const targetDate = resolveDateForOccurrence(appointment);
+      const targetTime = nextTime;
+      const targetApproach =
+        appointmentUpdates.type ||
+        appointmentUpdates.approach ||
+        appointment.type ||
+        appointment.approach ||
+        'Consulta Padrão';
+      const targetRoom = appointmentUpdates.room ?? appointment.room;
+      const targetProfessional =
+        appointmentUpdates.professional ??
+        appointment.professional ??
+        appointment.therapistName ??
+        appointment.therapist_name ??
+        '';
+      const targetPatientId = appointment.patientId || appointment.patient_id || currentAppointment.patientId;
+      const targetPatientName = String(
+        appointment.name || appointment.patientName || currentAppointment.name || currentAppointment.patientName || '',
+      ).trim();
+      const targetEndTime = calculateEndTime(targetTime, targetApproach);
+
+      therapistAgenda.forEach((item) => {
+        if (targetIds.has(String(item.id))) return false;
+        if (isCanceledAppointment(item)) return false;
+        if (item.date !== targetDate) return false;
+        const itemEndTime = calculateEndTime(item.time, item.type || item.approach || 'Consulta Padrão');
+        if (!appointmentTimesOverlap(targetTime, targetEndTime, item.time, itemEndTime)) return false;
+
+        const samePatient =
+          targetPatientId &&
+          String(item.patientId || item.patient_id || '') === String(targetPatientId);
+        const samePatientByName =
+          !targetPatientId &&
+          targetPatientName &&
+          String(item.name || item.patientName || '').trim() === targetPatientName;
+        const sameRoom =
+          targetRoom &&
+          String(item.room || item.roomId || '') === String(targetRoom);
+        const sameProfessional =
+          targetProfessional &&
+          String(item.professional || item.therapistName || '').trim() ===
+            String(targetProfessional).trim();
+
+        if (samePatient || samePatientByName) {
+          addConflict(
+            conflicts,
+            `Conflito de Paciente: ${targetPatientName || 'Paciente'} já possui sessão em ${targetDate} às ${item.time}.`,
+          );
+        }
+        if (sameRoom) {
+          addConflict(
+            conflicts,
+            `Conflito de Sala: a sala ${targetRoom} já está reservada em ${targetDate} às ${item.time}.`,
+          );
+        }
+        if (sameProfessional) {
+          addConflict(
+            conflicts,
+            `Conflito de Profissional: ${targetProfessional} já possui sessão em ${targetDate} às ${item.time}.`,
+          );
+        }
+        return false;
+      });
+
+      const scheduleChanged =
+        String(appointment.date || '') !== String(targetDate || '') ||
+        String(appointment.time || '') !== String(targetTime || '');
+      const targetScheduledAt = new Date(`${targetDate}T${targetTime}:00`).toISOString();
+      patchesById.set(String(appointment.id), {
+        ...appointmentUpdates,
+        date: targetDate,
+        time: targetTime,
+        scheduledAt: targetScheduledAt,
+        scheduled_at: targetScheduledAt,
+        ...buildReminderReset(scheduleChanged),
+      });
     });
 
-    if (patientConflict) {
-      return {
-        success: false,
-        errors: [
-          `Conflito de Paciente: ${currentAppointment.name || 'Paciente'} já possui sessão em ${nextDate} às ${patientConflict.time}.`,
-        ],
-      };
+    if (conflicts.length > 0) {
+      return { success: false, errors: conflicts };
     }
 
-    const scheduleChanged =
-      String(currentAppointment.date || '') !== String(nextDate || '') ||
-      String(currentAppointment.time || '') !== String(nextTime || '');
-    const nextScheduledAt = new Date(`${nextDate}T${nextTime}:00`).toISOString();
-    const reminderReset = scheduleChanged
-      ? {
-          status: 'pending',
-          patientResponse: null,
-          patient_response: null,
-          patientRespondedAt: null,
-          patient_responded_at: null,
-          patientConfirmationStatus: null,
-          patient_confirmation_status: null,
-          patientConfirmationAt: null,
-          patient_confirmation_at: null,
-          patientConfirmationBy: null,
-          patient_confirmation_by: null,
-          patientConfirmationSource: null,
-          patient_confirmation_source: null,
-          notification_24h_sent_at: null,
-          notification24hSentAt: null,
-          notification_sent_at: null,
-          notification_sent: false,
-          notification_12h_sent_at: null,
-          notification12hSentAt: null,
-          notification_12h_sent: false,
-        }
-      : {};
-    const normalizedUpdates = {
-      ...updates,
-      scheduledAt: nextScheduledAt,
-      scheduled_at: nextScheduledAt,
-      ...reminderReset,
-    };
-    setTherapistAgenda(prev => prev.map(item => item.id === id ? { ...item, ...normalizedUpdates } : item));
-    onAddActivityLog("EdiÃ§Ã£o de Agendamento", `Agendamento ID ${id} atualizado: ${JSON.stringify(updates)}`, 'management');
-    return { success: true };
+    setTherapistAgenda(prev =>
+      prev
+        .map(item => {
+          const patch = patchesById.get(String(item.id));
+          return patch ? { ...item, ...patch } : item;
+        })
+        .sort((a, b) => {
+          if (a.date !== b.date) return String(a.date || '').localeCompare(String(b.date || ''));
+          return String(a.time || '').localeCompare(String(b.time || ''));
+        }),
+    );
+    onAddActivityLog(
+      "Edição de Agendamento",
+      shouldUpdateFutureRecurrence
+        ? `${appointmentsToUpdate.length} agendamentos recorrentes atualizados a partir de ${nextDate} às ${nextTime}.`
+        : `Agendamento ID ${id} atualizado: ${JSON.stringify(appointmentUpdates)}`,
+      'management',
+    );
+    return { success: true, updatedCount: appointmentsToUpdate.length };
   };
 
   const handleAddPatient = async (data: any) => { 
@@ -2515,6 +2660,10 @@ export default function App() {
       anamnesisRenewalMonths: [2, 3, 6, 12].includes(Number(data.anamnesisRenewalMonths))
         ? Number(data.anamnesisRenewalMonths)
         : 6,
+      financialPlans: Array.isArray(data.financialPlans) ? data.financialPlans : [],
+      monthlyTreatmentValue: Number(data.monthlyTreatmentValue || 0) || 0,
+      billingDueDay: data.billingDueDay || null,
+      billingMethod: data.billingMethod || null,
       lastAnamnesisAt: data.lastAnamnesisAt || null,
     };
 
@@ -2878,6 +3027,10 @@ export default function App() {
           interventionTaskLinks !== undefined ||
           updatedData?.anamnesisRenewalMonths !== undefined ||
           updatedData?.lastAnamnesisAt !== undefined
+          || updatedData?.financialPlans !== undefined
+          || updatedData?.monthlyTreatmentValue !== undefined
+          || updatedData?.billingDueDay !== undefined
+          || updatedData?.billingMethod !== undefined
         )
       ) {
         const recordPayload: any = {
@@ -2890,6 +3043,14 @@ export default function App() {
           lastAnamnesisAt: updatedData?.lastAnamnesisAt || null,
           ...(diagnosis !== undefined && { diagnosis: diagnosis || "" }),
           ...(updatedData?.type !== undefined && { patientProfileType: updatedData.type }),
+          ...(updatedData?.financialPlans !== undefined && {
+            financialPlans: Array.isArray(updatedData.financialPlans) ? updatedData.financialPlans : [],
+          }),
+          ...(updatedData?.monthlyTreatmentValue !== undefined && {
+            monthlyTreatmentValue: Number(updatedData.monthlyTreatmentValue || 0) || 0,
+          }),
+          ...(updatedData?.billingDueDay !== undefined && { billingDueDay: updatedData.billingDueDay || null }),
+          ...(updatedData?.billingMethod !== undefined && { billingMethod: updatedData.billingMethod || null }),
           ...(pei !== undefined && { pei }),
           ...(evaluationLinks !== undefined && { evaluationLinks }),
           ...(interventionTaskLinks !== undefined && { interventionTaskLinks }),
@@ -2909,7 +3070,8 @@ export default function App() {
   const handleScheduleSession = (sess: any) => { 
     const patientForSession = allPatients.find(p => p.name === sess.patientName);
     const pid = patientForSession?.id || Date.now(); 
-    const numSessions = sess.numSessions || 1;
+    const numSessions = Math.min(52, Math.max(1, Number(sess.numSessions) || 1));
+    const recurrenceGroupId = numSessions > 1 ? createAppointmentId() : null;
     const newItems = [];
     const conflicts: string[] = [];
     
@@ -2961,21 +3123,52 @@ export default function App() {
       }
 
       if (conflicts.length === 0) {
+        const appointmentId = createAppointmentId();
+        const scheduledAt = new Date(`${dateStr}T${sess.time}:00`).toISOString();
         newItems.push({
-          id: createAppointmentId(),
+          id: appointmentId,
           patientId: pid,
           patientEmail: patientForSession?.email || null,
           patient_email: patientForSession?.email || null,
           name: sess.patientName, 
           date: dateStr, 
           time: sess.time, 
-          scheduledAt: new Date(`${dateStr}T${sess.time}:00`).toISOString(),
-          scheduled_at: new Date(`${dateStr}T${sess.time}:00`).toISOString(),
+          scheduledAt,
+          scheduled_at: scheduledAt,
           status: 'pending', 
           type: sess.approach, 
           color: 'bg-blue-100 text-blue-600',
           professional: sess.professional,
-          room: sess.room
+          room: sess.room,
+          isRecurring: numSessions > 1,
+          is_recurring: numSessions > 1,
+          recurrenceGroupId,
+          recurrence_group_id: recurrenceGroupId,
+          recurrenceIndex: i + 1,
+          recurrence_index: i + 1,
+          recurrenceTotal: numSessions,
+          recurrence_total: numSessions,
+          recurrenceFrequency: numSessions > 1 ? 'weekly' : null,
+          recurrence_frequency: numSessions > 1 ? 'weekly' : null,
+          patientResponse: null,
+          patient_response: null,
+          patientRespondedAt: null,
+          patient_responded_at: null,
+          patientConfirmationStatus: null,
+          patient_confirmation_status: null,
+          patientConfirmationAt: null,
+          patient_confirmation_at: null,
+          patientConfirmationBy: null,
+          patient_confirmation_by: null,
+          patientConfirmationSource: null,
+          patient_confirmation_source: null,
+          notification_24h_sent_at: null,
+          notification24hSentAt: null,
+          notification_sent_at: null,
+          notification_sent: false,
+          notification_12h_sent_at: null,
+          notification12hSentAt: null,
+          notification_12h_sent: false
         });
       }
     }
@@ -3186,20 +3379,21 @@ export default function App() {
     }
 
     const newId = Date.now();
-    const sessionReferenceDate = sessionMeta?.sessionStartedAt || new Date().toISOString();
+    const recordedAt = new Date().toISOString();
+    const sessionStartedAt = sessionMeta?.sessionStartedAt || recordedAt;
     const newHistoryItem = {
       id: newId,
       patientId: pid,
       type: 'task',
       title: title,
-      time: new Date().toLocaleTimeString(),
+      time: new Date(recordedAt).toLocaleTimeString(),
       score: finalScore,
       evalComment: evalComment || "",
       dateGroup: "Hoje",
       icon: "🎯",
       sessionId: sessionMeta?.sessionId || null,
-      sessionReferenceDate: sessionMeta?.sessionReferenceDate || sessionReferenceDate.slice(0, 10),
-      created_at: sessionReferenceDate
+      sessionReferenceDate: sessionMeta?.sessionReferenceDate || sessionStartedAt.slice(0, 10),
+      created_at: recordedAt
     };
     
     // Add a note about the trial
@@ -3219,7 +3413,7 @@ export default function App() {
         score: finalScore,
         note: evalComment || "",
         icon: "🎯",
-        created_at: sessionReferenceDate
+        created_at: recordedAt
       });
     } catch (error) {
       console.error('Falha ao persistir registro de sessão:', error);
@@ -3237,9 +3431,31 @@ export default function App() {
 
     if (isKid && sourcePei.length > 0) {
       const peiGoal = sourcePei.find((g: any) => g.name === title);
+      const progressResetMarker = (() => {
+        const explicitReset = Number(
+          peiGoal?.sessionProgressResetAt ??
+          peiGoal?.progressResetAt ??
+          peiGoal?.masteryResetAt ??
+          peiGoal?.progress_reset_at
+        );
+        if (Number.isFinite(explicitReset) && explicitReset > 0) return explicitReset;
+        const legacyGoalId = Number(peiGoal?.id);
+        return Number.isFinite(legacyGoalId) ? legacyGoalId : 0;
+      })();
+      const historyProgressMarker = (entry: any) => {
+        const numericId = Number(entry?.id);
+        if (Number.isFinite(numericId) && numericId > 0) return numericId;
+        const createdAt = new Date(entry?.created_at || entry?.date || entry?.time || 0).getTime();
+        return Number.isFinite(createdAt) ? createdAt : 0;
+      };
       const skillHistory = updatedHistory
-        .filter((h: any) => h.patientId === pid && h.title === title && h.type === 'task' && (!peiGoal || h.id > peiGoal.id))
-        .sort((a: any, b: any) => Number(b.id) - Number(a.id));
+        .filter((h: any) =>
+          String(h.patientId ?? h.patient_id ?? '') === String(pid) &&
+          h.title === title &&
+          h.type === 'task' &&
+          (!peiGoal || historyProgressMarker(h) > progressResetMarker)
+        )
+        .sort((a: any, b: any) => historyProgressMarker(b) - historyProgressMarker(a));
 
       let consecutiveCount = 0;
       for (const h of skillHistory) {

@@ -1322,6 +1322,47 @@ export const dataService = {
     return await saveOfflineFirst(id, payment, 'payment', '/api/payments');
   },
 
+  async updatePayment(paymentId: string, updates: any) {
+    return await saveOfflineFirst(
+      String(paymentId),
+      updates,
+      'payment',
+      `/api/payments/${encodeURIComponent(String(paymentId))}`,
+      'PATCH'
+    );
+  },
+
+  async getProfessionalPayments() {
+    try {
+      const response = await fetch('/api/financial/professional-payments', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      if (response.ok) return await response.json();
+    } catch (error) {
+      console.error('Error fetching professional payments:', error);
+    }
+    return { success: true, data: [] };
+  },
+
+  async saveProfessionalPayment(payment: any) {
+    const id = generateId();
+    return await saveOfflineFirst(id, payment, 'payment', '/api/financial/professional-payments');
+  },
+
+  async getClinicFinancialEntries() {
+    try {
+      const response = await fetch('/api/financial/entries', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      if (response.ok) return await response.json();
+    } catch (error) {
+      console.error('Error fetching clinic financial entries:', error);
+    }
+    return { success: true, data: [] };
+  },
+
   async saveUserProfile(userId: string, profile: any) {
     const data = { ...profile, updated_at: profile.updated_at || new Date().toISOString() };
     try {
@@ -2044,6 +2085,14 @@ export const dataService = {
           ? Number(recordPayload.anamnesisRenewalMonths)
           : Number(patient?.anamnesisRenewalMonths || 6),
         lastAnamnesisAt: recordPayload?.lastAnamnesisAt || patient?.lastAnamnesisAt || null,
+        financialPlans: Array.isArray(recordPayload?.financialPlans)
+          ? recordPayload.financialPlans
+          : Array.isArray(patient?.financialPlans)
+            ? patient.financialPlans
+            : [],
+        monthlyTreatmentValue: Number(recordPayload?.monthlyTreatmentValue ?? patient?.monthlyTreatmentValue ?? 0) || 0,
+        billingDueDay: recordPayload?.billingDueDay || patient?.billingDueDay || null,
+        billingMethod: recordPayload?.billingMethod || patient?.billingMethod || null,
       });
 
       clinicalRecords.push({

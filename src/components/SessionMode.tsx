@@ -35,10 +35,34 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
     return Number.isFinite(target) && target > 0 ? Math.floor(target) : 5;
   };
 
+  const getGoalProgressResetMarker = (goal: any) => {
+    const explicitReset = Number(
+      goal?.sessionProgressResetAt ??
+      goal?.progressResetAt ??
+      goal?.masteryResetAt ??
+      goal?.progress_reset_at
+    );
+    if (Number.isFinite(explicitReset) && explicitReset > 0) return explicitReset;
+    const legacyGoalId = Number(goal?.id);
+    return Number.isFinite(legacyGoalId) ? legacyGoalId : 0;
+  };
+
+  const getHistoryProgressMarker = (entry: any) => {
+    const numericId = Number(entry?.id);
+    if (Number.isFinite(numericId) && numericId > 0) return numericId;
+    const createdAt = new Date(entry?.created_at || entry?.date || entry?.time || 0).getTime();
+    return Number.isFinite(createdAt) ? createdAt : 0;
+  };
+
   const getConsecutiveMasteryCount = (goal: any) => {
+    const resetMarker = getGoalProgressResetMarker(goal);
     const skillHistory = (patient.history || [])
-      .filter((h: any) => h.title === goal.name && h.type === 'task' && h.id > goal.id)
-      .sort((a: any, b: any) => b.id - a.id);
+      .filter((h: any) =>
+        h.title === goal.name &&
+        h.type === 'task' &&
+        getHistoryProgressMarker(h) > resetMarker
+      )
+      .sort((a: any, b: any) => getHistoryProgressMarker(b) - getHistoryProgressMarker(a));
 
     let count = 0;
     for (const h of skillHistory) {

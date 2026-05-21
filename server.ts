@@ -1489,6 +1489,16 @@ function sanitizeUrl(value: unknown): string | null {
   return null;
 }
 
+function sanitizeReceiptUrl(value: unknown): string | null {
+  const url = typeof value === 'string' ? value.trim() : '';
+  if (!url) return null;
+  if (url.startsWith('data:image/') || url.startsWith('data:application/pdf')) {
+    if (url.length > 2_000_000) return null;
+    return url;
+  }
+  return sanitizeUrl(url);
+}
+
 function sanitizeSessionUrl(value: unknown): string | null {
   const url = sanitizeUrl(value);
   if (!url) return null;
@@ -13900,10 +13910,17 @@ async function startServer() {
   // Payments
   app.get('/api/payments', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
     try {
-      const { data, error } = await supabase
+      const scopedClinicId = currentClinicId(req.session.user);
+      let query = supabase
         .from('payments')
         .select('*')
         .order('payment_date', { ascending: false });
+
+      if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
+        query = query.eq('clinic_id', scopedClinicId);
+      }
+
+      const { data, error } = await query;
       
       if (error) throw error;
       res.json({ success: true, data });
@@ -13914,44 +13931,205 @@ async function startServer() {
 
   app.post('/api/payments', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
     try {
-      const status = sanitizeString(req.body?.status, 40).toLowerCase() || 'paid';
-      const payload = cleanObject({
+      const receiptUrl = sanitizeReceiptUrl(req.body?.receipt_url);
+      const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();
+      const status = receiptUrl
+        ? 'paid'
+        : paymentStatuses.has(requestedStatus)
+          ? requestedStatus
+          : 'pending';
+      const payloadBase = cleanObject({
         patient_id: sanitizeString(req.body?.patient_id, 120),
         patient_name: sanitizeString(req.body?.patient_name, 160),
         amount: asSafeNumber(req.body?.amount, 0, 1_000_000),
         payment_date: sanitizeDate(req.body?.payment_date) || new Date().toISOString().slice(0, 10),
+        due_date: sanitizeDate(req.body?.due_date) || sanitizeDate(req.body?.dueDate),
         method: sanitizeString(req.body?.method, 80),
-        status: paymentStatuses.has(status) ? status : 'pending',
-        receipt_url: sanitizeUrl(req.body?.receipt_url),
+        status,
+        receipt_url: receiptUrl,
+        receipt_file_name: sanitizeString(req.body?.receipt_file_name || req.body?.receiptFileName, 240),
+        receipt_content_type: sanitizeString(req.body?.receipt_content_type || req.body?.receiptContentType, 120),
         type: sanitizeString(req.body?.type, 80),
         insurance_name: sanitizeString(req.body?.insurance_name, 120),
+        specialty: sanitizeString(req.body?.specialty, 120),
+        notes: sanitizeString(req.body?.notes, 1200),
         clinic_id: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
         created_by: sanitizeString(req.session.user?.id, 120),
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       });
 
-      if (!payload.patient_id || payload.amount === null) {
+      if (!payloadBase.patient_id || payloadBase.amount === null) {
         return res.status(400).json({ error: 'patient_id e amount são obrigatórios.' });
       }
 
-      const { data, error } = await supabase
-        .from('payments')
-        .insert([payload])
-        .select()
-        .single();
+      let payload: Record<string, any> = { ...payloadBase };
+      let data: any = null;
+      while (Object.keys(payload).length > 0) {
+        const result = await supabase
+          .from('payments')
+          .insert([payload])
+          .select()
+          .single();
+        if (!result.error) {
+          data = result.data;
+          break;
+        }
+        const missingColumn = extractMissingColumnName(result.error);
+        if (missingColumn && missingColumn in payload) {
+          delete payload[missingColumn];
+          continue;
+        }
+        throw result.error;
+      }
       
-      if (error) throw error;
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
         actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
-        title: 'Pagamento registrado',
-        content: `Pagamento de ${payload.amount} para paciente ${payload.patient_name || payload.patient_id} foi salvo (${payload.status}).`,
+        title: status === 'paid' ? 'Pagamento registrado' : 'Cobrança registrada',
+        content: `${status === 'paid' ? 'Pagamento' : 'Cobrança'} de ${payloadBase.amount} para paciente ${payloadBase.patient_name || payloadBase.patient_id} foi salvo (${status}).`,
         type: 'management'
       });
-      res.json({ success: true, data });
+      res.json({ success: true, data: data || payloadBase });
     } catch (error) {
       res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+  });
+
+  app.patch('/api/payments/:paymentId', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const paymentId = sanitizeString(req.params.paymentId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!paymentId) return res.status(400).json({ success: false, error: 'Pagamento inválido.' });
+
+      const receiptUrl = sanitizeReceiptUrl(req.body?.receipt_url);
+      const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();
+      const patchBase = cleanObject({
+        amount: req.body?.amount !== undefined ? asSafeNumber(req.body?.amount, 0, 1_000_000) : undefined,
+        payment_date: req.body?.payment_date !== undefined ? sanitizeDate(req.body?.payment_date) : undefined,
+        due_date: req.body?.due_date !== undefined || req.body?.dueDate !== undefined
+          ? sanitizeDate(req.body?.due_date) || sanitizeDate(req.body?.dueDate)
+          : undefined,
+        method: req.body?.method !== undefined ? sanitizeString(req.body?.method, 80) : undefined,
+        status: receiptUrl
+          ? 'paid'
+          : paymentStatuses.has(requestedStatus)
+            ? requestedStatus
+            : undefined,
+        receipt_url: receiptUrl || undefined,
+        receipt_file_name: req.body?.receipt_file_name !== undefined || req.body?.receiptFileName !== undefined
+          ? sanitizeString(req.body?.receipt_file_name || req.body?.receiptFileName, 240)
+          : undefined,
+        receipt_content_type: req.body?.receipt_content_type !== undefined || req.body?.receiptContentType !== undefined
+          ? sanitizeString(req.body?.receipt_content_type || req.body?.receiptContentType, 120)
+          : undefined,
+        type: req.body?.type !== undefined ? sanitizeString(req.body?.type, 80) : undefined,
+        insurance_name: req.body?.insurance_name !== undefined ? sanitizeString(req.body?.insurance_name, 120) : undefined,
+        specialty: req.body?.specialty !== undefined ? sanitizeString(req.body?.specialty, 120) : undefined,
+        notes: req.body?.notes !== undefined ? sanitizeString(req.body?.notes, 1200) : undefined,
+        updated_at: new Date().toISOString()
+      });
+
+      let safePatch: Record<string, any> = { ...patchBase };
+      while (Object.keys(safePatch).length > 0) {
+        let query = supabase
+          .from('payments')
+          .update(safePatch)
+          .eq('id', paymentId);
+        if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
+        const result = await query.select('*').maybeSingle();
+        if (!result.error) return res.json({ success: true, data: result.data || { id: paymentId, ...safePatch } });
+        const missingColumn = extractMissingColumnName(result.error);
+        if (missingColumn && missingColumn in safePatch) {
+          delete safePatch[missingColumn];
+          continue;
+        }
+        throw result.error;
+      }
+
+      return res.status(400).json({ success: false, error: 'Nada para atualizar.' });
+    } catch (error) {
+      res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/financial/professional-payments', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const scopedClinicId = currentClinicId(req.session.user);
+      let query = supabase
+        .from('professional_payments')
+        .select('*')
+        .order('due_date', { ascending: false });
+      if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
+        query = query.eq('clinic_id', scopedClinicId);
+      }
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      res.json({ success: true, data: data || [] });
+    } catch (error) {
+      res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    }
+  });
+
+  app.post('/api/financial/professional-payments', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase() || 'pending';
+      const payload = cleanObject({
+        clinic_id: sanitizeString(currentClinicId(req.session.user), 120),
+        professional_id: sanitizeString(req.body?.professional_id || req.body?.professionalId, 120),
+        professional_name: sanitizeString(req.body?.professional_name || req.body?.professionalName, 180),
+        amount: asSafeNumber(req.body?.amount, 0, 1_000_000),
+        payment_date: sanitizeDate(req.body?.payment_date) || sanitizeDate(req.body?.paymentDate) || new Date().toISOString().slice(0, 10),
+        due_date: sanitizeDate(req.body?.due_date) || sanitizeDate(req.body?.dueDate) || sanitizeDate(req.body?.payment_date) || new Date().toISOString().slice(0, 10),
+        method: sanitizeString(req.body?.method, 80) || 'pix',
+        status: paymentStatuses.has(requestedStatus) ? requestedStatus : 'pending',
+        notes: sanitizeString(req.body?.notes, 1200),
+        created_by: sanitizeString(req.session.user?.id, 120),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      });
+
+      if (!payload.professional_name || payload.amount === null) {
+        return res.status(400).json({ success: false, error: 'Profissional e valor são obrigatórios.' });
+      }
+
+      const { data, error } = await supabase
+        .from('professional_payments')
+        .insert([payload])
+        .select()
+        .single();
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Tabela professional_payments ainda não aplicada.' });
+        throw error;
+      }
+      res.json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/financial/entries', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const scopedClinicId = currentClinicId(req.session.user);
+      let query = supabase
+        .from('clinic_financial_entries')
+        .select('*')
+        .order('occurred_on', { ascending: false });
+      if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
+        query = query.eq('clinic_id', scopedClinicId);
+      }
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      res.json({ success: true, data: data || [] });
+    } catch (error) {
+      res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }
   });
 
@@ -14139,87 +14317,26 @@ async function startServer() {
 
       if (usersError) throw usersError;
 
-      const dataset = users || [];
-      const revenueNet = dataset
-        .filter((u: any) => u.subscription_status === 'active')
-        .reduce((acc: number, u: any) => acc + Number(u.plan_price || 0), 0);
-      const delinquentUsers = dataset.filter((u: any) => u.subscription_status === 'delinquent');
-      const delinquencyAmount = delinquentUsers.reduce((acc: number, u: any) => acc + Number(u.plan_price || 0), 0);
-      const variableCosts = revenueNet * 0.22;
-      const fixedCosts = revenueNet * 0.18;
-      const contributionMarginValue = revenueNet - variableCosts;
-      const ebitda = contributionMarginValue - fixedCosts;
-
-      const byPlanMap = dataset
-        .filter((u: any) => u.subscription_status === 'active')
-        .reduce((acc: any, u: any) => {
-          const key = u.plan_name || 'Nao definido';
-          if (!acc[key]) acc[key] = { planName: key, customers: 0, revenueNet: 0 };
-          acc[key].customers += 1;
-          acc[key].revenueNet += Number(u.plan_price || 0);
-          return acc;
-        }, {});
-
-      const now = new Date();
-      const monthly = Array.from({ length: 6 }).map((_, index) => {
-        const date = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1);
-        const monthFactor = 0.85 + index * 0.04;
-        return {
-          monthLabel: date.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', ''),
-          revenueNet: Number((revenueNet * monthFactor).toFixed(2)),
-          variableCosts: Number((variableCosts * monthFactor).toFixed(2)),
-          fixedCosts: Number((fixedCosts * monthFactor).toFixed(2)),
-          ebitda: Number((ebitda * monthFactor).toFixed(2)),
-          contributionMarginPct: Number((((contributionMarginValue * monthFactor) / ((revenueNet * monthFactor) || 1)) * 100).toFixed(2)),
-          delinquencyAmount: Number((delinquencyAmount * monthFactor).toFixed(2))
-        };
-      });
-
-      const topCustomers = dataset
-        .map((u: any) => {
-          const customerRevenue = Number(u.subscription_status === 'active' ? u.plan_price || 0 : 0);
-          const estimatedCost = customerRevenue * 0.95 + (u.subscription_status === 'delinquent' ? Number(u.plan_price || 0) : 0);
-          const profit = customerRevenue - estimatedCost;
-          return {
-            customerId: u.id,
-            name: u.name,
-            email: u.email,
-            revenueNet: customerRevenue,
-            totalCost: Number(estimatedCost.toFixed(2)),
-            profit: Number(profit.toFixed(2)),
-            marginPct: customerRevenue > 0 ? Number(((profit / customerRevenue) * 100).toFixed(2)) : 0,
-            status: u.subscription_status
-          };
-        })
-        .sort((a: any, b: any) => a.profit - b.profit)
-        .slice(0, 20);
-
       return res.json({
         success: true,
         data: {
-          source: 'fallback_users',
+          source: 'unconfigured',
           summary: {
-            revenueGross: revenueNet,
+            revenueGross: 0,
             deductions: 0,
-            revenueNet,
-            variableCosts: Number(variableCosts.toFixed(2)),
-            fixedCosts: Number(fixedCosts.toFixed(2)),
-            contributionMarginValue: Number(contributionMarginValue.toFixed(2)),
-            contributionMarginPct: revenueNet > 0 ? Number(((contributionMarginValue / revenueNet) * 100).toFixed(2)) : 0,
-            ebitda: Number(ebitda.toFixed(2)),
-            ebitdaPct: revenueNet > 0 ? Number(((ebitda / revenueNet) * 100).toFixed(2)) : 0,
-            delinquencyAmount: Number(delinquencyAmount.toFixed(2))
+            revenueNet: 0,
+            variableCosts: 0,
+            fixedCosts: 0,
+            contributionMarginValue: 0,
+            contributionMarginPct: 0,
+            ebitda: 0,
+            ebitdaPct: 0,
+            delinquencyAmount: 0
           },
-          monthly,
-          byPlan: Object.values(byPlanMap),
-          topCustomers,
-          delinquentCustomers: delinquentUsers.map((u: any) => ({
-            customerId: u.id,
-            name: u.name,
-            email: u.email,
-            delinquencyAmount: Number(u.plan_price || 0),
-            openTitles: 1
-          }))
+          monthly: [],
+          byPlan: [],
+          topCustomers: [],
+          delinquentCustomers: []
         }
       });
     } catch (error) {
@@ -14242,6 +14359,11 @@ async function startServer() {
 
   app.post('/api/owner/bootstrap-finance', checkAuth, checkOwner, async (req: any, res) => {
     try {
+      return res.json({
+        success: true,
+        skipped: true,
+        message: 'Bootstrap financeiro fictício desativado. Cadastre receitas, custos e pagamentos reais para popular o DRE.'
+      });
       const ownerId = req.session.user?.id;
       const today = new Date();
       const periodStart = new Date(today.getFullYear(), today.getMonth(), 1);

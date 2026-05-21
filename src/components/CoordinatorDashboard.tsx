@@ -103,7 +103,7 @@ interface CoordinatorDashboardProps {
   activityLogs: any[];
   onAddActivityLog: (title: string, content: string, type?: string) => void;
   onScheduleSession: (session: any) => any;
-  onUpdateAppointment: (id: any, updates: any) => void;
+  onUpdateAppointment: (id: any, updates: any) => any;
   onUpdateAgendaStatus: (id: any, status: string, details?: any) => void;
   onAddPatient: (patient: any) => Promise<any> | any;
   patientsHistory: any[];
@@ -486,8 +486,9 @@ export function CoordinatorDashboard({
   const [sessionProfessional, setSessionProfessional] = useState("");
   const [sessionNumSessions, setSessionNumSessions] = useState(1);
   const [editingAppointmentId, setEditingAppointmentId] = useState<
-    number | null
+    string | number | null
   >(null);
+  const [appointmentEditScope, setAppointmentEditScope] = useState<"single" | "future">("single");
   const [selectedPatientId, setSelectedPatientId] = useState<any>(null);
   const [view, setView] = useState<"home" | "patient">("home");
   const [patientOpenTab, setPatientOpenTab] = useState<
@@ -575,7 +576,10 @@ export function CoordinatorDashboard({
   }, [dashboardResumeKey, activeTab, view, selectedPatientId, patientOpenTab]);
 
   const [payments, setPayments] = useState<any[]>([]);
+  const [professionalPayments, setProfessionalPayments] = useState<any[]>([]);
+  const [financialEntries, setFinancialEntries] = useState<any[]>([]);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [isProfessionalPaymentModalOpen, setIsProfessionalPaymentModalOpen] = useState(false);
   const [selectedPaymentPatient, setSelectedPaymentPatient] =
     useState<any>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -583,9 +587,27 @@ export function CoordinatorDashboard({
   const [paymentDate, setPaymentDate] = useState(
     new Date().toISOString().split("T")[0],
   );
+  const [paymentDueDate, setPaymentDueDate] = useState(
+    new Date().toISOString().split("T")[0],
+  );
+  const [paymentSpecialty, setPaymentSpecialty] = useState("");
+  const [financialMonth, setFinancialMonth] = useState(
+    new Date().toISOString().slice(0, 7),
+  );
   const [paymentReceipt, setPaymentReceipt] = useState<string | null>(null);
+  const [paymentReceiptName, setPaymentReceiptName] = useState("");
   const [paymentType, setPaymentType] = useState("particular");
   const [paymentInsurance, setPaymentInsurance] = useState("");
+  const [selectedProfessionalPaymentId, setSelectedProfessionalPaymentId] = useState("");
+  const [professionalPaymentAmount, setProfessionalPaymentAmount] = useState("");
+  const [professionalPaymentDate, setProfessionalPaymentDate] = useState(
+    new Date().toISOString().split("T")[0],
+  );
+  const [professionalPaymentDueDate, setProfessionalPaymentDueDate] = useState(
+    new Date().toISOString().split("T")[0],
+  );
+  const [professionalPaymentMethod, setProfessionalPaymentMethod] = useState("pix");
+  const [professionalPaymentStatus, setProfessionalPaymentStatus] = useState("pending");
   const [defaultSessionDuration, setDefaultSessionDuration] = useState(
     String(user?.clinicSettings?.defaultSessionDuration || "50"),
   );
@@ -733,6 +755,33 @@ export function CoordinatorDashboard({
     return () => clearTimeout(timeout);
   }, [toast]);
 
+  const createPatientFinancialPlan = (overrides: any = {}) => ({
+    id:
+      overrides.id ||
+      `plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    specialty: overrides.specialty || "Terapia",
+    amount: overrides.amount ?? overrides.monthlyFee ?? "",
+    dueDay: String(overrides.dueDay || overrides.due_day || "10"),
+    billingMethod: overrides.billingMethod || overrides.billing_method || "pix",
+    payerType: overrides.payerType || overrides.payer_type || "particular",
+    insuranceName: overrides.insuranceName || overrides.insurance_name || "",
+  });
+
+  const normalizePatientFinancialPlans = (plans: any, fallback: any = {}) => {
+    const list = Array.isArray(plans) ? plans : [];
+    if (list.length) return list.map((plan) => createPatientFinancialPlan(plan));
+    const legacyAmount = fallback.monthlyTreatmentValue ?? fallback.monthlyFee ?? "";
+    return [
+      createPatientFinancialPlan({
+        amount: legacyAmount,
+        dueDay: fallback.billingDueDay || "10",
+        billingMethod: fallback.billingMethod || "pix",
+        payerType: fallback.convenioTipo || fallback.insuranceType || "particular",
+        insuranceName: fallback.convenioNome || fallback.insuranceName || "",
+      }),
+    ];
+  };
+
   const [newPatientForm, setNewPatientForm] = useState<any>({
     nome: "",
     nomeSocial: "",
@@ -761,6 +810,7 @@ export function CoordinatorDashboard({
     responsavelTelefone: "",
     patientProfileType: "adult_conventional",
     anamnesisRenewalMonths: "6",
+    financialPlans: normalizePatientFinancialPlans([]),
   });
   const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
 
@@ -800,14 +850,18 @@ export function CoordinatorDashboard({
   ];
 
   useEffect(() => {
-    const fetchPayments = async () => {
-      const result = await dataService.getPayments();
-      if (result.success) {
-        setPayments(result.data);
-      }
+    const fetchFinancialData = async () => {
+      const [paymentsResult, professionalResult, entriesResult] = await Promise.all([
+        dataService.getPayments(),
+        dataService.getProfessionalPayments(),
+        dataService.getClinicFinancialEntries(),
+      ]);
+      if (paymentsResult.success) setPayments(paymentsResult.data || []);
+      if (professionalResult.success) setProfessionalPayments(professionalResult.data || []);
+      if (entriesResult.success) setFinancialEntries(entriesResult.data || []);
     };
     if (activeTab === "financial") {
-      fetchPayments();
+      fetchFinancialData();
     }
   }, [activeTab]);
 
@@ -986,17 +1040,24 @@ export function CoordinatorDashboard({
   const handleAddPayment = async () => {
     if (!selectedPaymentPatient || !paymentAmount)
       return alert("Preencha todos os campos");
+    const normalizedAmount = parseFloat(String(paymentAmount).replace(",", "."));
+    if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+      return alert("Informe um valor válido.");
+    }
 
     const newPayment = {
       patient_id: selectedPaymentPatient.id,
       patient_name: selectedPaymentPatient.name,
-      amount: parseFloat(paymentAmount),
+      amount: normalizedAmount,
       payment_date: paymentDate,
+      due_date: paymentDueDate || paymentDate,
       method: paymentMethod,
-      status: "paid",
+      status: paymentReceipt ? "paid" : "pending",
       receipt_url: paymentReceipt,
+      receipt_file_name: paymentReceiptName || null,
       type: paymentType,
       insurance_name: paymentType === "convênio" ? paymentInsurance : null,
+      specialty: paymentSpecialty || null,
     };
 
     const result = await dataService.savePayment(newPayment);
@@ -1006,14 +1067,76 @@ export function CoordinatorDashboard({
       setPaymentAmount("");
       setSelectedPaymentPatient(null);
       setPaymentReceipt(null);
-      alert("Pagamento registrado com sucesso!");
+      setPaymentReceiptName("");
+      setPaymentSpecialty("");
+      alert(paymentReceipt ? "Pagamento registrado como pago." : "Cobrança registrada como pendente.");
       onAddActivityLog(
-        "Pagamento registrado",
-        `Pagamento de R$ ${paymentAmount} para ${selectedPaymentPatient?.name || "paciente"}.`,
+        paymentReceipt ? "Pagamento registrado" : "Cobrança registrada",
+        `${paymentReceipt ? "Pagamento" : "Cobrança"} de R$ ${paymentAmount} para ${selectedPaymentPatient?.name || "paciente"}.`,
         "management",
       );
     } else {
       alert("Erro ao salvar pagamento.");
+    }
+  };
+
+  const handleAttachPaymentReceipt = async (payment: any, file: File | null | undefined) => {
+    if (!payment?.id || !file) return;
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      const receiptUrl = String(reader.result || "");
+      if (!receiptUrl) return;
+      const result = await dataService.updatePayment(String(payment.id), {
+        receipt_url: receiptUrl,
+        receipt_file_name: file.name,
+        receipt_content_type: file.type || "application/octet-stream",
+        status: "paid",
+        payment_date: payment.payment_date || new Date().toISOString().slice(0, 10),
+      });
+      if (result?.success) {
+        const updatedPayment = result.data || {
+          ...payment,
+          receipt_url: receiptUrl,
+          receipt_file_name: file.name,
+          status: "paid",
+        };
+        setPayments((prev) =>
+          prev.map((item: any) => (String(item.id) === String(payment.id) ? updatedPayment : item)),
+        );
+        showToast("Comprovante anexado e pagamento marcado como pago.");
+      } else {
+        showToast(result?.error || "Não foi possível anexar o comprovante.", "error");
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleAddProfessionalPayment = async () => {
+    const member = therapistFilterOptions.find((item) => item.id === selectedProfessionalPaymentId);
+    const amount = parseFloat(String(professionalPaymentAmount).replace(",", "."));
+    if (!member || !Number.isFinite(amount) || amount <= 0) {
+      alert("Selecione o profissional e informe um valor válido.");
+      return;
+    }
+    const payload = {
+      professional_id: member.id,
+      professional_name: member.label,
+      amount,
+      payment_date: professionalPaymentDate,
+      due_date: professionalPaymentDueDate || professionalPaymentDate,
+      method: professionalPaymentMethod,
+      status: professionalPaymentStatus,
+    };
+    const result = await dataService.saveProfessionalPayment(payload);
+    if (result?.success) {
+      setProfessionalPayments((prev) => [result.data || payload, ...prev]);
+      setIsProfessionalPaymentModalOpen(false);
+      setSelectedProfessionalPaymentId("");
+      setProfessionalPaymentAmount("");
+      setProfessionalPaymentStatus("pending");
+      showToast("Pagamento profissional registrado.");
+    } else {
+      showToast(result?.error || "Não foi possível salvar o pagamento profissional.", "error");
     }
   };
 
@@ -1040,7 +1163,7 @@ export function CoordinatorDashboard({
       setFinancialSurveySubmitted(true);
       onAddActivityLog(
         "Pesquisa do financeiro enviada",
-        "A clínica enviou as preferências do módulo financeiro (em breve).",
+        "A clínica enviou as preferências do módulo financeiro.",
         "management",
       );
       alert("Pesquisa enviada com sucesso. Obrigado pelo feedback!");
@@ -1118,7 +1241,26 @@ export function CoordinatorDashboard({
     setSessionProfessional("");
     setSessionNumSessions(1);
     setEditingAppointmentId(null);
+    setAppointmentEditScope("single");
   };
+
+  const editingAppointment = useMemo(
+    () =>
+      editingAppointmentId === null
+        ? null
+        : therapistAgenda.find(
+            (appointment: any) =>
+              String(appointment?.id) === String(editingAppointmentId),
+          ) || null,
+    [editingAppointmentId, therapistAgenda],
+  );
+  const isEditingRecurringAppointment = Boolean(
+    editingAppointment &&
+      (editingAppointment.isRecurring ||
+        editingAppointment.is_recurring ||
+        editingAppointment.recurrenceGroupId ||
+        editingAppointment.recurrence_group_id),
+  );
 
   const openNewAppointmentAt = (date: string, time = "08:00") => {
     resetSessionForm();
@@ -1145,6 +1287,9 @@ export function CoordinatorDashboard({
         type: sessionApproach || "Consulta Padrão",
         room: sessionRoom,
         professional: sessionProfessional,
+        recurrenceScope: isEditingRecurringAppointment
+          ? appointmentEditScope
+          : "single",
       };
       const result: any = onUpdateAppointment(editingAppointmentId, updates);
       if (result && !result.success) {
@@ -1154,7 +1299,9 @@ export function CoordinatorDashboard({
       }
       onAddActivityLog(
         "Agendamento editado",
-        `Sessão de ${sessionPatientName} atualizada para ${sessionDate} às ${sessionTime}.`,
+        isEditingRecurringAppointment && appointmentEditScope === "future"
+          ? `Série recorrente de ${sessionPatientName} atualizada a partir de ${sessionDate} às ${sessionTime}.`
+          : `Sessão de ${sessionPatientName} atualizada para ${sessionDate} às ${sessionTime}.`,
         "management",
       );
       setIsAddSessionModalOpen(false);
@@ -1171,7 +1318,7 @@ export function CoordinatorDashboard({
       approach: sessionApproach || "Consulta Padrão",
       room: sessionRoom,
       professional: sessionProfessional,
-      numSessions: sessionNumSessions,
+      numSessions: Math.min(52, Math.max(1, Number(sessionNumSessions) || 1)),
     };
     const result = onScheduleSession(newSession);
     if (result && !result.success) {
@@ -1181,14 +1328,20 @@ export function CoordinatorDashboard({
     }
     onAddActivityLog(
       "Agendamento criado",
-      `Nova sessão agendada para ${sessionPatientName} em ${sessionDate} às ${sessionTime}.`,
+      Number(newSession.numSessions) > 1
+        ? `${newSession.numSessions} sessões semanais agendadas para ${sessionPatientName} a partir de ${sessionDate} às ${sessionTime}.`
+        : `Nova sessão agendada para ${sessionPatientName} em ${sessionDate} às ${sessionTime}.`,
       "management",
     );
 
     setIsAddSessionModalOpen(false);
     resetSessionForm();
     hideProcessing();
-    showToast("Agendamento criado com sucesso!");
+    showToast(
+      Number(newSession.numSessions) > 1
+        ? "Agendamentos recorrentes criados com sucesso!"
+        : "Agendamento criado com sucesso!",
+    );
   };
 
   const handleQuickRegister = async () => {
@@ -1290,7 +1443,73 @@ export function CoordinatorDashboard({
       setNewPatientForm((prev: any) => ({ ...prev, [field]: String(value || "").trim().toLowerCase() }));
       return;
     }
+    if (field === "convenioTipo") {
+      setNewPatientForm((prev: any) => ({
+        ...prev,
+        convenioTipo: value,
+        financialPlans: normalizePatientFinancialPlans(prev.financialPlans, prev).map((plan: any) => ({
+          ...plan,
+          payerType: value,
+          insuranceName: value === "convenio" ? plan.insuranceName || prev.convenioNome || "" : "",
+        })),
+      }));
+      return;
+    }
+    if (field === "convenioNome") {
+      setNewPatientForm((prev: any) => ({
+        ...prev,
+        convenioNome: value,
+        financialPlans: normalizePatientFinancialPlans(prev.financialPlans, prev).map((plan: any) => ({
+          ...plan,
+          insuranceName: plan.payerType === "convenio" ? value : plan.insuranceName,
+        })),
+      }));
+      return;
+    }
     setNewPatientForm((prev: any) => ({ ...prev, [field]: value }));
+  };
+
+  const handleFinancialPlanChange = (planId: string, field: string, value: any) => {
+    setNewPatientForm((prev: any) => ({
+      ...prev,
+      financialPlans: normalizePatientFinancialPlans(prev.financialPlans, prev).map((plan: any) =>
+        plan.id === planId
+          ? {
+              ...plan,
+              [field]: value,
+              ...(field === "payerType" && value !== "convenio" ? { insuranceName: "" } : {}),
+              ...(field === "payerType" && value === "convenio" && !plan.insuranceName
+                ? { insuranceName: prev.convenioNome || "" }
+                : {}),
+            }
+          : plan,
+      ),
+    }));
+  };
+
+  const addFinancialPlanRow = () => {
+    setNewPatientForm((prev: any) => ({
+      ...prev,
+      financialPlans: [
+        ...normalizePatientFinancialPlans(prev.financialPlans, prev),
+        createPatientFinancialPlan({
+          payerType: prev.convenioTipo || "particular",
+          insuranceName: prev.convenioTipo === "convenio" ? prev.convenioNome || "" : "",
+        }),
+      ],
+    }));
+  };
+
+  const removeFinancialPlanRow = (planId: string) => {
+    setNewPatientForm((prev: any) => {
+      const remaining = normalizePatientFinancialPlans(prev.financialPlans, prev).filter(
+        (plan: any) => plan.id !== planId,
+      );
+      return {
+        ...prev,
+        financialPlans: remaining.length ? remaining : normalizePatientFinancialPlans([]),
+      };
+    });
   };
 
   const resetPatientForm = () => {
@@ -1323,6 +1542,7 @@ export function CoordinatorDashboard({
       responsavelTelefone: "",
       patientProfileType: "adult_conventional",
       anamnesisRenewalMonths: "6",
+      financialPlans: normalizePatientFinancialPlans([]),
     });
   };
 
@@ -1405,6 +1625,24 @@ export function CoordinatorDashboard({
     const renewalMonths = normalizeAnamnesisRenewalMonths(
       newPatientForm.anamnesisRenewalMonths,
     );
+    const financialPlans = normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm)
+      .map((plan: any) => ({
+        ...plan,
+        specialty: String(plan.specialty || "Terapia").trim(),
+        amount: Number(String(plan.amount || "").replace(",", ".")) || 0,
+        dueDay: String(Math.min(31, Math.max(1, Number(plan.dueDay) || 10))),
+        billingMethod: plan.billingMethod || "pix",
+        payerType: plan.payerType || newPatientForm.convenioTipo || "particular",
+        insuranceName:
+          (plan.payerType || newPatientForm.convenioTipo) === "convenio"
+            ? plan.insuranceName || newPatientForm.convenioNome || ""
+            : "",
+      }))
+      .filter((plan: any) => plan.specialty || plan.amount > 0);
+    const monthlyTreatmentValue = financialPlans.reduce(
+      (sum: number, plan: any) => sum + (Number(plan.amount) || 0),
+      0,
+    );
 
     const newPatient = {
       id: editingPatientId || crypto.randomUUID(),
@@ -1447,6 +1685,10 @@ export function CoordinatorDashboard({
         : null,
       type: newPatientForm.patientProfileType || "adult_conventional",
       anamnesisRenewalMonths: renewalMonths,
+      financialPlans,
+      monthlyTreatmentValue,
+      billingDueDay: financialPlans[0]?.dueDay || "10",
+      billingMethod: financialPlans[0]?.billingMethod || "pix",
       lastAnamnesisAt: existingPatient?.lastAnamnesisAt || null,
       anamnesisPending: existingPatient
         ? isPatientPendingAnamnesis({
@@ -1558,6 +1800,11 @@ export function CoordinatorDashboard({
       anamnesisRenewalMonths: String(
         normalizeAnamnesisRenewalMonths(patient.anamnesisRenewalMonths),
       ),
+      financialPlans: normalizePatientFinancialPlans(patient.financialPlans, {
+        ...patient,
+        convenioTipo: patient.insuranceType === "convenio" ? "convenio" : "particular",
+        convenioNome: patient.insuranceName || "",
+      }),
     });
     setIsPatientRegistrationModalOpen(true);
   };
@@ -1659,6 +1906,8 @@ export function CoordinatorDashboard({
 
   const handleEditAppointment = (appointment: any) => {
     setEditingAppointmentId(appointment.id);
+    setAppointmentEditScope("single");
+    setSessionNumSessions(1);
     setSessionPatientName(appointment.patientName || appointment.name || "");
     setSessionDate(appointment.date);
     setSessionTime(appointment.time);
@@ -2792,9 +3041,237 @@ export function CoordinatorDashboard({
     return normalizedSavedTemplate;
   };
 
-  const dreData: any[] = [];
-  const revenueHistory: any[] = [];
-  const compensationForecast: any[] = [];
+  const formatCurrency = (value: any) =>
+    (Number(value) || 0).toLocaleString("pt-BR", {
+      style: "currency",
+      currency: "BRL",
+    });
+
+  const parseCurrencyValue = (value: any) => {
+    if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+    const normalized = String(value || "")
+      .replace(/[^\d,.-]/g, "")
+      .replace(/\.(?=\d{3}(?:\D|$))/g, "")
+      .replace(",", ".");
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const isPatientFinanciallyActive = (patient: any) => {
+    const status = String(patient?.status || "active").toLowerCase();
+    return !["inactive", "inativo", "deleted", "cancelled", "canceled", "cancelado"].includes(status) && patient?.clinic_id !== null;
+  };
+
+  const getPatientPlans = (patient: any) =>
+    normalizePatientFinancialPlans(patient?.financialPlans, {
+      monthlyTreatmentValue: patient?.monthlyTreatmentValue,
+      monthlyFee: patient?.monthlyFee,
+      billingDueDay: patient?.billingDueDay,
+      billingMethod: patient?.billingMethod,
+      insuranceType: patient?.insuranceType,
+      insuranceName: patient?.insuranceName,
+    })
+      .map((plan: any) => ({
+        ...plan,
+        amount: parseCurrencyValue(plan.amount),
+        specialty: String(plan.specialty || "Terapia").trim() || "Terapia",
+        dueDay: Math.min(31, Math.max(1, Number(plan.dueDay) || 10)),
+        billingMethod: String(plan.billingMethod || "pix").toLowerCase(),
+        payerType: String(plan.payerType || patient?.insuranceType || "particular").toLowerCase(),
+        insuranceName: String(plan.insuranceName || patient?.insuranceName || "").trim(),
+      }))
+      .filter((plan: any) => plan.amount > 0);
+
+  const isSameFinancialMonth = (dateValue: any, monthKey: string) => {
+    const raw = String(dateValue || "").trim();
+    if (!raw || !monthKey) return false;
+    const date = new Date(raw.length === 10 ? `${raw}T00:00:00` : raw);
+    if (Number.isNaN(date.getTime())) return false;
+    return date.toISOString().slice(0, 7) === monthKey;
+  };
+
+  const addToMap = (map: Map<string, any>, key: string, amount: number, extra: any = {}) => {
+    const safeKey = key || "Não informado";
+    const current = map.get(safeKey) || { label: safeKey, amount: 0, patients: new Set<string>(), ...extra };
+    current.amount += amount;
+    if (extra.patientId) current.patients.add(String(extra.patientId));
+    map.set(safeKey, current);
+  };
+
+  const financialDashboard = useMemo(() => {
+    const clinicPatientIds = new Set((allPatients || []).map((patient: any) => String(patient?.id)));
+    const activePatients = (allPatients || []).filter(isPatientFinanciallyActive);
+    const inactivePatients = (allPatients || []).filter((patient: any) => !isPatientFinanciallyActive(patient));
+    const normalizeStatus = (status: any) => {
+      const normalized = String(status || "").toLowerCase();
+      if (["paid", "pago"].includes(normalized)) return "paid";
+      if (["canceled", "cancelled", "cancelado"].includes(normalized)) return "canceled";
+      return normalized || "pending";
+    };
+    const monthPayments = (payments || []).filter((payment: any) => {
+      const belongsToClinicPatient = clinicPatientIds.has(String(payment?.patient_id || payment?.patientId || ""));
+      const referenceDate =
+        payment?.payment_date ||
+        payment?.paymentDate ||
+        payment?.due_date ||
+        payment?.dueDate;
+      return isSameFinancialMonth(referenceDate, financialMonth) && belongsToClinicPatient;
+    });
+    const paidPayments = monthPayments.filter((payment: any) => normalizeStatus(payment?.status) === "paid");
+    const pendingPayments = monthPayments.filter((payment: any) => normalizeStatus(payment?.status) === "pending");
+    const monthProfessionalPayments = (professionalPayments || []).filter((payment: any) => {
+      const referenceDate =
+        payment?.payment_date ||
+        payment?.paymentDate ||
+        payment?.due_date ||
+        payment?.dueDate;
+      return isSameFinancialMonth(referenceDate, financialMonth);
+    });
+    const paidProfessionalPayments = monthProfessionalPayments.filter((payment: any) => normalizeStatus(payment?.status) === "paid");
+    const pendingProfessionalPayments = monthProfessionalPayments.filter((payment: any) => normalizeStatus(payment?.status) === "pending");
+    const monthFinancialEntries = (financialEntries || []).filter((entry: any) =>
+      isSameFinancialMonth(entry?.occurred_on || entry?.occurredOn || entry?.date, financialMonth),
+    );
+    const operationalExpenses = monthFinancialEntries
+      .filter((entry: any) => String(entry?.entry_type || entry?.type || "expense").toLowerCase() === "expense")
+      .reduce((sum: number, entry: any) => sum + parseCurrencyValue(entry?.amount), 0);
+
+    const specialtyMap = new Map<string, any>();
+    const payerMap = new Map<string, any>();
+    const insuranceMap = new Map<string, any>();
+    const billingMethodMap = new Map<string, any>();
+    const dueRows: any[] = [];
+
+    let projection = 0;
+    activePatients.forEach((patient: any) => {
+      const plans = getPatientPlans(patient);
+      plans.forEach((plan: any) => {
+        projection += plan.amount;
+        addToMap(specialtyMap, plan.specialty, plan.amount, { patientId: patient.id });
+        addToMap(payerMap, plan.payerType === "convenio" ? "Convênio" : "Particular", plan.amount, { patientId: patient.id });
+        if (plan.payerType === "convenio") {
+          addToMap(insuranceMap, plan.insuranceName || "Convênio não informado", plan.amount, { patientId: patient.id });
+        }
+        addToMap(billingMethodMap, plan.billingMethod.toUpperCase(), plan.amount, { patientId: patient.id });
+        const dueDate = new Date(`${financialMonth || new Date().toISOString().slice(0, 7)}-01T00:00:00`);
+        dueDate.setDate(Math.min(plan.dueDay, new Date(dueDate.getFullYear(), dueDate.getMonth() + 1, 0).getDate()));
+        dueRows.push({
+          patientId: patient.id,
+          patientName: patient.name || "Paciente",
+          specialty: plan.specialty,
+          amount: plan.amount,
+          dueDay: plan.dueDay,
+          dueDate: dueDate.toISOString().slice(0, 10),
+          billingMethod: plan.billingMethod.toUpperCase(),
+          payerType: plan.payerType === "convenio" ? "Convênio" : "Particular",
+          insuranceName: plan.insuranceName,
+        });
+      });
+    });
+
+    const realized = paidPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
+    const pendingAmount = pendingPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
+    const professionalPaid = paidProfessionalPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
+    const professionalPending = pendingProfessionalPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
+    const averageTicket = activePatients.length ? projection / activePatients.length : 0;
+    const newPatients = activePatients.filter((patient: any) => isSameFinancialMonth(patient?.created_at || patient?.createdAt, financialMonth));
+    const newEntriesValue = newPatients.reduce(
+      (sum: number, patient: any) => sum + getPatientPlans(patient).reduce((planSum: number, plan: any) => planSum + plan.amount, 0),
+      0,
+    );
+    const cancellations = inactivePatients.filter((patient: any) =>
+      isSameFinancialMonth(patient?.deletedAt || patient?.unlinkedAt || patient?.cancelledAt || patient?.updated_at || patient?.updatedAt, financialMonth),
+    );
+    const cancellationValue = cancellations.reduce(
+      (sum: number, patient: any) => sum + getPatientPlans(patient).reduce((planSum: number, plan: any) => planSum + plan.amount, 0),
+      0,
+    );
+    const outstanding = Math.max(projection - realized, 0);
+    const cashIn = realized;
+    const cashOut = professionalPaid + operationalExpenses;
+    const cashFlow = cashIn - cashOut;
+    const contributionMarginValue = realized - professionalPaid;
+    const contributionMarginPct = realized > 0 ? (contributionMarginValue / realized) * 100 : 0;
+    const netProfit = realized - professionalPaid - operationalExpenses;
+    const netMarginPct = realized > 0 ? (netProfit / realized) * 100 : 0;
+
+    const dreRows = [
+      { label: "Faturamento projetado", value: projection, type: "income", info: "Soma das mensalidades cadastradas nos pacientes ativos." },
+      { label: "Faturamento realizado", value: realized, type: "income", info: "Pagamentos com status pago no mês selecionado." },
+      { label: "Cobranças pendentes registradas", value: pendingAmount, type: "total", info: "Cobranças já lançadas sem comprovante/pagamento." },
+      { label: "A receber projetado", value: outstanding, type: "total", info: "Diferença entre projeção mensal e pagamentos pagos." },
+      { label: "Pagamentos a profissionais", value: -professionalPaid, type: "expense", info: "Repasses profissionais pagos no mês." },
+      { label: "Despesas operacionais", value: -operationalExpenses, type: "expense", info: "Saídas registradas no fluxo de caixa da clínica." },
+      { label: "Fluxo de caixa líquido", value: cashFlow, type: cashFlow >= 0 ? "profit" : "expense", info: "Entradas pagas menos saídas pagas." },
+      { label: "Lucro líquido", value: netProfit, type: netProfit >= 0 ? "profit" : "expense", info: `Margem líquida ${netMarginPct.toFixed(1)}%.` },
+      { label: "Margem de contribuição", value: contributionMarginValue, type: contributionMarginValue >= 0 ? "profit" : "expense", info: `${contributionMarginPct.toFixed(1)}% após repasses profissionais pagos.` },
+      { label: "Novas entradas", value: newEntriesValue, type: "income", info: `${newPatients.length} paciente(s) cadastrados no mês.` },
+      { label: "Cancelamentos", value: -cancellationValue, type: "expense", info: `${cancellations.length} saída(s) no mês selecionado.` },
+      { label: "Ticket médio projetado", value: averageTicket, type: "profit", info: "Projeção dividida pelo número de pacientes ativos." },
+    ];
+
+    const monthDates = Array.from({ length: 6 }, (_, index) => {
+      const base = financialMonth ? new Date(`${financialMonth}-01T00:00:00`) : new Date();
+      base.setMonth(base.getMonth() - (5 - index));
+      return base;
+    });
+    const revenueRows = monthDates.map((date) => {
+      const key = date.toISOString().slice(0, 7);
+      const paid = (payments || [])
+        .filter((payment: any) => String(payment?.status || "paid").toLowerCase() === "paid" && isSameFinancialMonth(payment?.payment_date || payment?.paymentDate, key))
+        .filter((payment: any) => clinicPatientIds.has(String(payment?.patient_id || payment?.patientId || "")))
+        .reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
+      const professional = (professionalPayments || [])
+        .filter((payment: any) => normalizeStatus(payment?.status) === "paid" && isSameFinancialMonth(payment?.payment_date || payment?.paymentDate, key))
+        .reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
+      return {
+        month: date.toLocaleDateString("pt-BR", { month: "short" }).replace(".", ""),
+        revenue: paid,
+        profit: paid - professional,
+      };
+    });
+
+    return {
+      activePatients,
+      patientCount: activePatients.length,
+      projection,
+      realized,
+      pendingAmount,
+      outstanding,
+      cashIn,
+      cashOut,
+      cashFlow,
+      professionalPaid,
+      professionalPending,
+      operationalExpenses,
+      contributionMarginValue,
+      contributionMarginPct,
+      netProfit,
+      netMarginPct,
+      averageTicket,
+      newPatients,
+      newEntriesValue,
+      cancellations,
+      cancellationValue,
+      dreRows,
+      revenueRows,
+      specialtyRows: Array.from(specialtyMap.values()).map((row: any) => ({ ...row, patients: row.patients.size })).sort((a, b) => b.amount - a.amount),
+      payerRows: Array.from(payerMap.values()).map((row: any) => ({ ...row, patients: row.patients.size })).sort((a, b) => b.amount - a.amount),
+      insuranceRows: Array.from(insuranceMap.values()).map((row: any) => ({ ...row, patients: row.patients.size })).sort((a, b) => b.amount - a.amount),
+      billingMethodRows: Array.from(billingMethodMap.values()).map((row: any) => ({ ...row, patients: row.patients.size })).sort((a, b) => b.amount - a.amount),
+      dueRows: dueRows.sort((a, b) => a.dueDay - b.dueDay || a.patientName.localeCompare(b.patientName, "pt-BR")),
+      monthPayments,
+      paidPayments,
+      pendingPayments,
+      professionalPayments: monthProfessionalPayments.sort((a: any, b: any) => String(a.due_date || a.payment_date || '').localeCompare(String(b.due_date || b.payment_date || ''))),
+      paidProfessionalPayments,
+      pendingProfessionalPayments,
+    };
+  }, [allPatients, financialEntries, financialMonth, payments, professionalPayments]);
+
+  const dreData = financialDashboard.dreRows;
+  const revenueHistory = financialDashboard.revenueRows;
+  const compensationForecast = financialDashboard.dueRows.slice(0, 6);
 
   const COLORS = ["#7a32fc", "#6AD2FF", "#EFF4FB", "#A3AED0"];
 
@@ -3780,7 +4257,7 @@ export function CoordinatorDashboard({
                         id: "financial",
                         label: "Financeiro (DRE)",
                         icon: DollarSign,
-                        badge: "EM BREVE",
+                        badge: "BETA",
                       },
                       {
                         id: "flow",
@@ -3950,7 +4427,7 @@ export function CoordinatorDashboard({
           id: "financial",
           label: "Financeiro (DRE)",
           icon: DollarSign,
-          badge: "EM BREVE",
+          badge: "BETA",
         },
         { id: "flow", label: "Verto Flow", icon: Zap, badge: "EM BREVE" },
         {
@@ -3988,7 +4465,7 @@ export function CoordinatorDashboard({
           id: "financial",
           label: "Financeiro",
           icon: DollarSign,
-          badge: "EM BREVE",
+          badge: "BETA",
         },
         {
           id: "flow",
@@ -4289,6 +4766,20 @@ export function CoordinatorDashboard({
                             p.id === parseInt(e.target.value),
                         );
                         setSelectedPaymentPatient(p);
+                        if (p) {
+                          const plans = getPatientPlans(p);
+                          const total = plans.reduce((sum: number, plan: any) => sum + plan.amount, 0);
+                          const primaryPlan = plans[0];
+                          if (total > 0) setPaymentAmount(String(total.toFixed(2)));
+                          setPaymentType(primaryPlan?.payerType === "convenio" ? "convênio" : "particular");
+                          setPaymentInsurance(primaryPlan?.insuranceName || p.insuranceName || "");
+                          if (primaryPlan?.billingMethod) setPaymentMethod(primaryPlan.billingMethod);
+                          setPaymentSpecialty(primaryPlan?.specialty || "");
+                          const dueDay = Math.min(31, Math.max(1, Number(primaryPlan?.dueDay || p.billingDueDay || 10)));
+                          const dueDate = new Date(`${financialMonth || new Date().toISOString().slice(0, 7)}-01T00:00:00`);
+                          dueDate.setDate(Math.min(dueDay, new Date(dueDate.getFullYear(), dueDate.getMonth() + 1, 0).getDate()));
+                          setPaymentDueDate(dueDate.toISOString().slice(0, 10));
+                        }
                       }}
                     >
                       <option value="">Selecione o paciente...</option>
@@ -4328,7 +4819,7 @@ export function CoordinatorDashboard({
                       </div>
                     )}
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                     <div>
                       <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
                         Valor (R$)
@@ -4343,7 +4834,7 @@ export function CoordinatorDashboard({
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                        Data
+                        Data de pagamento
                       </label>
                       <input
                         type="date"
@@ -4352,13 +4843,36 @@ export function CoordinatorDashboard({
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
                       />
                     </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                        Vencimento
+                      </label>
+                      <input
+                        type="date"
+                        value={paymentDueDate}
+                        onChange={(e) => setPaymentDueDate(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                      Especialidade / faturamento
+                    </label>
+                    <input
+                      type="text"
+                      value={paymentSpecialty}
+                      onChange={(e) => setPaymentSpecialty(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                      placeholder="Ex.: Terapia, Fono, Nutrição..."
+                    />
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
                       Método
                     </label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {["pix", "card", "cash"].map((m) => (
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                      {["pix", "card", "cash", "boleto", "transfer"].map((m) => (
                         <button
                           key={m}
                           onClick={() => setPaymentMethod(m)}
@@ -4368,7 +4882,11 @@ export function CoordinatorDashboard({
                             ? "PIX"
                             : m === "card"
                               ? "Cartão"
-                              : "Dinheiro"}
+                              : m === "cash"
+                                ? "Dinheiro"
+                                : m === "boleto"
+                                  ? "Boleto"
+                                  : "Transfer."}
                         </button>
                       ))}
                     </div>
@@ -4397,12 +4915,15 @@ export function CoordinatorDashboard({
                         type="file"
                         id="receipt-upload"
                         className="hidden"
+                        accept="image/*,application/pdf"
                         onChange={(e) => {
                           const file = e.target.files?.[0];
                           if (file) {
                             const reader = new FileReader();
-                            reader.onloadend = () =>
+                            reader.onloadend = () => {
                               setPaymentReceipt(reader.result as string);
+                              setPaymentReceiptName(file.name);
+                            };
                             reader.readAsDataURL(file);
                           }
                         }}
@@ -4413,7 +4934,120 @@ export function CoordinatorDashboard({
                     onClick={handleAddPayment}
                     className="w-full bg-[#7a32fc] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-purple-500/20 mt-4"
                   >
-                    Confirmar Pagamento
+                    {paymentReceipt ? "Confirmar Pagamento" : "Registrar Cobrança Pendente"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          {isProfessionalPaymentModalOpen && (
+            <div
+              className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"
+              onClick={() => setIsProfessionalPaymentModalOpen(false)}
+            >
+              <div
+                className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-pop relative"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  onClick={() => setIsProfessionalPaymentModalOpen(false)}
+                  className="absolute top-6 right-6 text-gray-400 hover:text-gray-600"
+                >
+                  <X size={24} />
+                </button>
+                <h2 className="mb-6 flex items-center gap-2 text-2xl font-bold text-slate-900">
+                  <CreditCard size={24} className="text-[#7a32fc]" /> Pagamento Profissional
+                </h2>
+                <div className="space-y-4">
+                  <div>
+                    <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400">
+                      Profissional
+                    </label>
+                    <select
+                      value={selectedProfessionalPaymentId}
+                      onChange={(e) => setSelectedProfessionalPaymentId(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-700 outline-none"
+                    >
+                      <option value="">Selecione...</option>
+                      {therapistFilterOptions.map((member) => (
+                        <option key={`professional-payment-${member.id}`} value={member.id}>
+                          {member.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400">
+                        Valor (R$)
+                      </label>
+                      <input
+                        value={professionalPaymentAmount}
+                        onChange={(e) => setProfessionalPaymentAmount(e.target.value)}
+                        inputMode="decimal"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-700 outline-none"
+                        placeholder="0,00"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400">
+                        Status
+                      </label>
+                      <select
+                        value={professionalPaymentStatus}
+                        onChange={(e) => setProfessionalPaymentStatus(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-700 outline-none"
+                      >
+                        <option value="pending">Pendente</option>
+                        <option value="paid">Pago</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400">
+                        Vencimento
+                      </label>
+                      <input
+                        type="date"
+                        value={professionalPaymentDueDate}
+                        onChange={(e) => setProfessionalPaymentDueDate(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-700 outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400">
+                        Pagamento
+                      </label>
+                      <input
+                        type="date"
+                        value={professionalPaymentDate}
+                        onChange={(e) => setProfessionalPaymentDate(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-700 outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400">
+                      Método
+                    </label>
+                    <select
+                      value={professionalPaymentMethod}
+                      onChange={(e) => setProfessionalPaymentMethod(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-700 outline-none"
+                    >
+                      <option value="pix">PIX</option>
+                      <option value="transfer">Transferência</option>
+                      <option value="cash">Dinheiro</option>
+                      <option value="card">Cartão</option>
+                      <option value="boleto">Boleto</option>
+                    </select>
+                  </div>
+                  <button
+                    onClick={handleAddProfessionalPayment}
+                    className="mt-4 w-full rounded-2xl bg-[#7a32fc] py-4 text-sm font-bold text-white shadow-lg shadow-purple-500/20"
+                  >
+                    Salvar Pagamento Profissional
                   </button>
                 </div>
               </div>
@@ -4461,85 +5095,72 @@ export function CoordinatorDashboard({
                 exit={{ opacity: 0, y: -20 }}
                 className="space-y-8"
               >
-                <div className="bg-white border border-slate-100 rounded-[32px] p-6 shadow-sm">
-                  <div className="flex items-start justify-between gap-4 mb-4">
+                <div className="rounded-[36px] border border-slate-100 bg-white p-6 shadow-sm">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                     <div>
-                      <h3 className="text-xl font-bold text-slate-900">
-                        Módulo Financeiro (em breve)
+                      <h3 className="text-2xl font-black tracking-tight text-slate-900">
+                        DRE da Clínica
                       </h3>
-                      <p className="text-sm text-slate-500">
-                        Estamos finalizando este módulo. Marque as funcionalidades que sua clínica mais precisa.
+                      <p className="text-sm font-medium text-slate-500">
+                        Projeção pelo cadastro dos pacientes e realizado pelos pagamentos confirmados.
                       </p>
                     </div>
-                    {financialSurveySubmitted && (
-                      <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-widest">
-                        Pesquisa enviada
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                    {financialSurveyOptions.map((feature) => {
-                      const checked = financialSurveySelected.includes(feature);
-                      return (
-                        <label
-                          key={feature}
-                          className={`flex items-center gap-2 p-3 rounded-xl border text-xs font-medium transition-all ${checked ? "border-[#7a32fc] bg-[#7a32fc]/5 text-[#7a32fc]" : "border-slate-200 bg-slate-50 text-slate-600"}`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            disabled={financialSurveySubmitted}
-                            onChange={(e) => {
-                              const isChecked = e.target.checked;
-                              setFinancialSurveySelected((prev) =>
-                                isChecked
-                                  ? [...prev, feature]
-                                  : prev.filter((f) => f !== feature),
-                              );
-                            }}
-                          />
-                          <span>{feature}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-
-                  <textarea
-                    value={financialSurveyNotes}
-                    disabled={financialSurveySubmitted}
-                    onChange={(e) => setFinancialSurveyNotes(e.target.value)}
-                    placeholder="Se quiser, descreva detalhes adicionais..."
-                    className="w-full mt-4 bg-slate-50 rounded-xl p-3 text-sm min-h-[96px] border border-slate-200"
-                  />
-                  {!financialSurveySubmitted && (
-                    <div className="flex justify-end mt-4">
-                      <button
-                        onClick={handleSubmitFinancialSurvey}
-                        className="px-5 py-2.5 rounded-xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-wider shadow-lg shadow-purple-500/20"
-                      >
-                        Enviar pesquisa
-                      </button>
+                    <div className="flex items-center gap-3">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                        Mês
+                      </label>
+                      <input
+                        type="month"
+                        value={financialMonth}
+                        onChange={(e) => setFinancialMonth(e.target.value)}
+                        className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:border-[#7a32fc]"
+                      />
                     </div>
-                  )}
+                  </div>
+
+                  <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    {[
+                      ["Pacientes ativos", financialDashboard.patientCount, "Com plano financeiro ativo"],
+                      ["Projeção mensal", formatCurrency(financialDashboard.projection), "Mensalidades cadastradas"],
+                      ["Realizado", formatCurrency(financialDashboard.realized), "Pagamentos do mês"],
+                      ["Ticket médio", formatCurrency(financialDashboard.averageTicket), "Por paciente ativo"],
+                      ["Fluxo de caixa", formatCurrency(financialDashboard.cashFlow), "Entradas menos saídas pagas"],
+                      ["Lucro líquido", formatCurrency(financialDashboard.netProfit), `${financialDashboard.netMarginPct.toFixed(1)}% de margem líquida`],
+                      ["Margem contribuição", `${financialDashboard.contributionMarginPct.toFixed(1)}%`, formatCurrency(financialDashboard.contributionMarginValue)],
+                      ["Repasses profissionais", formatCurrency(financialDashboard.professionalPaid), `${formatCurrency(financialDashboard.professionalPending)} pendente`],
+                    ].map(([label, value, hint]) => (
+                      <div key={label} className="rounded-3xl bg-slate-50 p-5">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{label}</p>
+                        <p className="mt-2 text-2xl font-black text-slate-900">{value}</p>
+                        <p className="mt-1 text-[11px] font-semibold text-slate-400">{hint}</p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-2xl font-bold text-slate-900 tracking-tight">
-                      Financeiro Operacional da Clínica
+                      Financeiro e DRE Operacional da Clínica
                     </h3>
                     <p className="text-slate-500 font-medium">
-                      Recebimentos, convênios, comprovantes e previsão de
-                      repasses sem DRE.
+                      Recebimentos, convênios, vencimentos, projeção e realizado em um só lugar.
                     </p>
                   </div>
-                  <button
-                    onClick={() => setIsPaymentModalOpen(true)}
-                    className="bg-[#7a32fc] text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-purple-500/20 flex items-center gap-2 hover:scale-105 transition-all"
-                  >
-                    <Plus size={18} /> Registrar Pagamento
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => setIsPaymentModalOpen(true)}
+                      className="bg-[#7a32fc] text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-purple-500/20 flex items-center gap-2 hover:scale-105 transition-all"
+                    >
+                      <Plus size={18} /> Cobrança / Pagamento
+                    </button>
+                    <button
+                      onClick={() => setIsProfessionalPaymentModalOpen(true)}
+                      className="bg-slate-900 text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-slate-500/20 flex items-center gap-2 hover:scale-105 transition-all"
+                    >
+                      <CreditCard size={18} /> Pagamento Profissional
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -4583,12 +5204,71 @@ export function CoordinatorDashboard({
                               </div>
                               <p className="text-lg">
                                 {item.value < 0
-                                  ? `- R$ ${Math.abs(item.value).toLocaleString()}`
-                                  : `R$ ${item.value.toLocaleString()}`}
+                                  ? `- ${formatCurrency(Math.abs(item.value))}`
+                                  : formatCurrency(item.value)}
                               </p>
                             </div>
                           ))}
                         </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                      <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                        <h4 className="font-bold text-slate-900">
+                          Mensalidades por especialidade
+                        </h4>
+                        <div className="mt-5 space-y-3">
+                          {financialDashboard.specialtyRows.length ? (
+                            financialDashboard.specialtyRows.map((row: any) => (
+                              <div key={row.label} className="flex items-center justify-between gap-4 rounded-2xl bg-slate-50 p-4">
+                                <div>
+                                  <p className="text-sm font-black text-slate-800">{row.label}</p>
+                                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                                    {row.patients} paciente(s)
+                                  </p>
+                                </div>
+                                <p className="text-sm font-black text-[#7a32fc]">{formatCurrency(row.amount)}</p>
+                              </div>
+                            ))
+                          ) : (
+                            <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">
+                              Nenhuma mensalidade cadastrada nos pacientes ativos.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                        <h4 className="font-bold text-slate-900">
+                          Particular, convênio e faturamento
+                        </h4>
+                        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          {financialDashboard.payerRows.map((row: any) => (
+                            <div key={row.label} className="rounded-2xl bg-slate-50 p-4">
+                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{row.label}</p>
+                              <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(row.amount)}</p>
+                              <p className="text-[10px] font-semibold text-slate-400">{row.patients} paciente(s)</p>
+                            </div>
+                          ))}
+                          {financialDashboard.billingMethodRows.map((row: any) => (
+                            <div key={row.label} className="rounded-2xl bg-slate-50 p-4">
+                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{row.label}</p>
+                              <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(row.amount)}</p>
+                              <p className="text-[10px] font-semibold text-slate-400">Meio de faturamento</p>
+                            </div>
+                          ))}
+                        </div>
+                        {financialDashboard.insuranceRows.length > 0 && (
+                          <div className="mt-4 space-y-2 border-t border-slate-100 pt-4">
+                            {financialDashboard.insuranceRows.map((row: any) => (
+                              <div key={row.label} className="flex items-center justify-between text-xs font-bold text-slate-500">
+                                <span>{row.label}</span>
+                                <span>{formatCurrency(row.amount)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -4627,8 +5307,8 @@ export function CoordinatorDashboard({
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-50">
-                            {payments.length > 0 ? (
-                              payments.map((p, idx) => (
+                            {financialDashboard.monthPayments.length > 0 ? (
+                              financialDashboard.monthPayments.map((p: any, idx: number) => (
                                 <tr
                                   key={p.id || idx}
                                   className="group hover:bg-slate-50 transition-all"
@@ -4651,11 +5331,11 @@ export function CoordinatorDashboard({
                                     </div>
                                   </td>
                                   <td className="py-4 font-bold text-[#7a32fc]">
-                                    R$ {p.amount.toFixed(2)}
+                                    {formatCurrency(p.amount)}
                                   </td>
                                   <td className="py-4 text-slate-500 text-sm">
                                     {new Date(
-                                      p.payment_date,
+                                      p.payment_date || p.due_date,
                                     ).toLocaleDateString()}
                                   </td>
                                   <td className="py-4">
@@ -4664,11 +5344,31 @@ export function CoordinatorDashboard({
                                     </span>
                                   </td>
                                   <td className="py-4 text-xs font-semibold text-slate-500">
-                                    {p.receipt_url ? "Anexado" : "Sem anexo"}
+                                    {p.receipt_url ? (
+                                      "Anexado"
+                                    ) : (
+                                      <label className="inline-flex cursor-pointer items-center rounded-full bg-violet-50 px-3 py-1 text-[10px] font-black uppercase text-[#7a32fc] hover:bg-violet-100">
+                                        Anexar
+                                        <input
+                                          type="file"
+                                          className="hidden"
+                                          accept="image/*,application/pdf"
+                                          onChange={(event) => {
+                                            const file = event.target.files?.[0];
+                                            void handleAttachPaymentReceipt(p, file);
+                                            event.currentTarget.value = "";
+                                          }}
+                                        />
+                                      </label>
+                                    )}
                                   </td>
                                   <td className="py-4">
-                                    <span className="px-3 py-1 bg-green-100 text-green-600 rounded-full text-[10px] font-bold uppercase">
-                                      Pago
+                                    <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase ${
+                                      String(p.status || "").toLowerCase() === "paid"
+                                        ? "bg-green-100 text-green-600"
+                                        : "bg-amber-100 text-amber-700"
+                                    }`}>
+                                      {String(p.status || "").toLowerCase() === "paid" ? "Pago" : "Pendente"}
                                     </span>
                                   </td>
                                 </tr>
@@ -4692,7 +5392,7 @@ export function CoordinatorDashboard({
                   <div className="space-y-8">
                     <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 p-8">
                       <h4 className="font-bold text-slate-900 mb-6">
-                        Recebimentos e Margem Prevista
+                        Realizado x projeção
                       </h4>
                       <div className="h-64 min-h-[300px]">
               <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
@@ -4738,7 +5438,7 @@ export function CoordinatorDashboard({
 
                     <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 p-8">
                       <h4 className="font-bold text-slate-900 mb-6">
-                        Previsão de Pagamento dos Profissionais
+                        Próximos vencimentos
                       </h4>
                       <div className="space-y-4">
                         {compensationForecast.map((member, i) => (
@@ -4748,28 +5448,74 @@ export function CoordinatorDashboard({
                           >
                             <div>
                               <p className="font-bold text-slate-900 text-sm">
-                                {member.name}
+                                {member.patientName}
                               </p>
                               <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
-                                {member.crp}
+                                {member.specialty}
                               </p>
                               <p className="text-[10px] text-slate-500 font-medium mt-1">
-                                {member.model}
+                                {member.payerType}{member.insuranceName ? ` • ${member.insuranceName}` : ""}
                               </p>
                             </div>
                             <div className="text-right">
                               <p className="font-bold text-slate-900 text-sm">
-                                R$ {member.forecast.toLocaleString()}
+                                {formatCurrency(member.amount)}
                               </p>
                               <p className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest">
-                                Pagamento em {member.payDate}
+                                Vence dia {String(member.dueDay).padStart(2, "0")}
                               </p>
                               <p className="text-[10px] text-slate-400 font-medium">
-                                {member.patients} pacientes ativos
+                                {member.billingMethod}
                               </p>
                             </div>
                           </div>
                         ))}
+                        {!compensationForecast.length && (
+                          <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">
+                            Cadastre mensalidades no paciente para ver vencimentos.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 p-8">
+                      <h4 className="font-bold text-slate-900 mb-6">
+                        Pagamentos de profissionais
+                      </h4>
+                      <div className="space-y-4">
+                        {financialDashboard.professionalPayments.length ? (
+                          financialDashboard.professionalPayments.map((payment: any, index: number) => (
+                            <div key={payment.id || index} className="flex items-center justify-between rounded-2xl bg-slate-50 p-4">
+                              <div>
+                                <p className="text-sm font-bold text-slate-900">
+                                  {payment.professional_name || payment.professionalName || "Profissional"}
+                                </p>
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                                  Vence {new Date(payment.due_date || payment.payment_date).toLocaleDateString("pt-BR")}
+                                </p>
+                                <p className="mt-1 text-[10px] font-medium text-slate-500">
+                                  {payment.method || "pix"}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-sm font-black text-slate-900">
+                                  {formatCurrency(payment.amount)}
+                                </p>
+                                <span className={`inline-flex rounded-full px-3 py-1 text-[10px] font-black uppercase ${
+                                  String(payment.status || "").toLowerCase() === "paid"
+                                    ? "bg-green-100 text-green-600"
+                                    : "bg-amber-100 text-amber-700"
+                                }`}>
+                                  {String(payment.status || "").toLowerCase() === "paid" ? "Pago" : "Pendente"}
+                                </span>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">
+                            Nenhum pagamento profissional registrado no mês.
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -5682,7 +6428,7 @@ export function CoordinatorDashboard({
           onClick={() => setIsAddSessionModalOpen(false)}
         >
           <div
-            className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-pop relative"
+            className="bg-white w-full max-w-md max-h-[90vh] overflow-y-auto rounded-[32px] p-8 shadow-2xl animate-pop relative"
             onClick={(e) => e.stopPropagation()}
           >
             <button
@@ -5806,9 +6552,87 @@ export function CoordinatorDashboard({
                       (member) => member.label === sessionProfessional,
                     ) && (
                       <option value={sessionProfessional}>{sessionProfessional}</option>
-                    )}
+                  )}
                 </select>
               </div>
+              {editingAppointmentId && isEditingRecurringAppointment && (
+                <div className="rounded-3xl border border-violet-100 bg-violet-50 p-4">
+                  <p className="text-sm font-black text-slate-800">
+                    Este agendamento faz parte de uma recorrência.
+                  </p>
+                  <p className="mt-1 text-xs font-medium text-slate-500">
+                    Escolha se a remarcação vale só para esta data ou para esta e as próximas consultas da série.
+                  </p>
+                  <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-white p-1">
+                    <button
+                      type="button"
+                      onClick={() => setAppointmentEditScope("single")}
+                      className={`rounded-xl px-3 py-2 text-xs font-black transition-all ${
+                        appointmentEditScope === "single"
+                          ? "bg-[#7a32fc] text-white shadow-lg shadow-violet-500/20"
+                          : "text-slate-500 hover:bg-slate-50"
+                      }`}
+                    >
+                      Só este dia
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAppointmentEditScope("future")}
+                      className={`rounded-xl px-3 py-2 text-xs font-black transition-all ${
+                        appointmentEditScope === "future"
+                          ? "bg-[#7a32fc] text-white shadow-lg shadow-violet-500/20"
+                          : "text-slate-500 hover:bg-slate-50"
+                      }`}
+                    >
+                      Este e próximos
+                    </button>
+                  </div>
+                </div>
+              )}
+              {!editingAppointmentId && (
+                <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+                  <label className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-[#7a32fc]"
+                      checked={Number(sessionNumSessions) > 1}
+                      onChange={(e) => setSessionNumSessions(e.target.checked ? 4 : 1)}
+                    />
+                    <span>
+                      <span className="block text-sm font-black text-slate-800">
+                        Reservar semanalmente este dia e horário
+                      </span>
+                      <span className="mt-1 block text-xs font-medium text-slate-500">
+                        Cria consultas recorrentes para o mesmo paciente, sala, profissional e horário. Os lembretes seguem separados para cada data.
+                      </span>
+                    </span>
+                  </label>
+                  {Number(sessionNumSessions) > 1 && (
+                    <div className="mt-4 grid grid-cols-[1fr_auto] items-end gap-3">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                          Quantidade de sessões
+                        </label>
+                        <input
+                          type="number"
+                          min={2}
+                          max={52}
+                          className="w-full bg-white border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                          value={sessionNumSessions}
+                          onChange={(e) =>
+                            setSessionNumSessions(
+                              Math.min(52, Math.max(2, Number(e.target.value) || 2)),
+                            )
+                          }
+                        />
+                      </div>
+                      <span className="pb-3 text-xs font-bold text-slate-400">
+                        semanas
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
               <button
                 onClick={handleSessionSubmit}
                 className="w-full bg-[#7a32fc] text-white font-bold py-4 rounded-xl shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all mt-2 active:scale-95 uppercase tracking-widest"
@@ -6131,6 +6955,94 @@ export function CoordinatorDashboard({
                 ))}
               </select>
               <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Carteirinha do convênio" value={newPatientForm.convenioCarteirinha} onChange={(e) => handlePatientFormChange("convenioCarteirinha", e.target.value)} />
+              <div className="md:col-span-2 xl:col-span-3 rounded-3xl border border-slate-100 bg-slate-50/70 p-4">
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-widest text-slate-500">
+                      Plano financeiro do tratamento
+                    </p>
+                    <p className="text-[11px] font-medium text-slate-400">
+                      Cadastre mensalidades por especialidade para alimentar a projeção do DRE.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addFinancialPlanRow}
+                    className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white px-4 py-2 text-xs font-bold text-[#7a32fc] shadow-sm transition-all hover:bg-violet-50"
+                  >
+                    <Plus size={14} /> Especialidade
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  {normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm).map((plan: any) => (
+                    <div key={plan.id} className="grid grid-cols-1 gap-3 rounded-2xl bg-white p-3 shadow-sm md:grid-cols-6">
+                      <input
+                        className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-2"
+                        placeholder="Especialidade"
+                        value={plan.specialty}
+                        onChange={(e) => handleFinancialPlanChange(plan.id, "specialty", e.target.value)}
+                      />
+                      <input
+                        className="rounded-xl bg-slate-50 p-3 text-sm"
+                        placeholder="Mensalidade R$"
+                        inputMode="decimal"
+                        value={plan.amount}
+                        onChange={(e) => handleFinancialPlanChange(plan.id, "amount", e.target.value)}
+                      />
+                      <input
+                        className="rounded-xl bg-slate-50 p-3 text-sm"
+                        placeholder="Venc. dia"
+                        type="number"
+                        min={1}
+                        max={31}
+                        value={plan.dueDay}
+                        onChange={(e) => handleFinancialPlanChange(plan.id, "dueDay", e.target.value)}
+                      />
+                      <select
+                        className="rounded-xl bg-slate-50 p-3 text-sm"
+                        value={plan.billingMethod}
+                        onChange={(e) => handleFinancialPlanChange(plan.id, "billingMethod", e.target.value)}
+                      >
+                        <option value="pix">PIX</option>
+                        <option value="card">Cartão</option>
+                        <option value="cash">Dinheiro</option>
+                        <option value="boleto">Boleto</option>
+                        <option value="transfer">Transferência</option>
+                      </select>
+                      <div className="flex items-center gap-2">
+                        <select
+                          className="min-w-0 flex-1 rounded-xl bg-slate-50 p-3 text-sm"
+                          value={plan.payerType}
+                          onChange={(e) => handleFinancialPlanChange(plan.id, "payerType", e.target.value)}
+                        >
+                          <option value="particular">Particular</option>
+                          <option value="convenio">Convênio</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => removeFinancialPlanRow(plan.id)}
+                          className="rounded-xl p-3 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                          title="Remover especialidade"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                      {plan.payerType === "convenio" && (
+                        <select
+                          className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-6"
+                          value={plan.insuranceName}
+                          onChange={(e) => handleFinancialPlanChange(plan.id, "insuranceName", e.target.value)}
+                        >
+                          <option value="">Convênio desta especialidade</option>
+                          {insuranceOptions.map((ins) => (
+                            <option key={`plan-${plan.id}-${ins}`} value={ins}>{ins}</option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
               <select className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.comoConheceu} onChange={(e) => handlePatientFormChange("comoConheceu", e.target.value)}>
                 <option value="">Como conheceu a clínica?</option>
                 <option value="google">Google</option>
