@@ -14050,6 +14050,14 @@ async function startServer() {
         type: sanitizeString(req.body?.type, 80),
         insurance_name: sanitizeString(req.body?.insurance_name, 120),
         specialty: sanitizeString(req.body?.specialty, 120),
+        base_amount: req.body?.base_amount !== undefined ? asSafeNumber(req.body?.base_amount, 0, 1_000_000) : undefined,
+        additional_amount: req.body?.additional_amount !== undefined ? asSafeNumber(req.body?.additional_amount, 0, 1_000_000) : undefined,
+        additional_scope: sanitizeString(req.body?.additional_scope, 40),
+        is_recurring: Boolean(req.body?.is_recurring || req.body?.isRecurring),
+        recurrence_group_id: sanitizeString(req.body?.recurrence_group_id || req.body?.recurrenceGroupId, 120),
+        recurrence_index: req.body?.recurrence_index !== undefined ? asSafeNumber(req.body?.recurrence_index, 0, 10000) : undefined,
+        recurrence_total: req.body?.recurrence_total !== undefined ? asSafeNumber(req.body?.recurrence_total, 0, 10000) : undefined,
+        recurrence_frequency: sanitizeString(req.body?.recurrence_frequency || req.body?.recurrenceFrequency, 40),
         notes: sanitizeString(req.body?.notes, 1200),
         clinic_id: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
         created_by: sanitizeString(req.session.user?.id, 120),
@@ -14125,6 +14133,20 @@ async function startServer() {
         type: req.body?.type !== undefined ? sanitizeString(req.body?.type, 80) : undefined,
         insurance_name: req.body?.insurance_name !== undefined ? sanitizeString(req.body?.insurance_name, 120) : undefined,
         specialty: req.body?.specialty !== undefined ? sanitizeString(req.body?.specialty, 120) : undefined,
+        base_amount: req.body?.base_amount !== undefined ? asSafeNumber(req.body?.base_amount, 0, 1_000_000) : undefined,
+        additional_amount: req.body?.additional_amount !== undefined ? asSafeNumber(req.body?.additional_amount, 0, 1_000_000) : undefined,
+        additional_scope: req.body?.additional_scope !== undefined ? sanitizeString(req.body?.additional_scope, 40) : undefined,
+        is_recurring: req.body?.is_recurring !== undefined || req.body?.isRecurring !== undefined
+          ? Boolean(req.body?.is_recurring || req.body?.isRecurring)
+          : undefined,
+        recurrence_group_id: req.body?.recurrence_group_id !== undefined || req.body?.recurrenceGroupId !== undefined
+          ? sanitizeString(req.body?.recurrence_group_id || req.body?.recurrenceGroupId, 120)
+          : undefined,
+        recurrence_index: req.body?.recurrence_index !== undefined ? asSafeNumber(req.body?.recurrence_index, 0, 10000) : undefined,
+        recurrence_total: req.body?.recurrence_total !== undefined ? asSafeNumber(req.body?.recurrence_total, 0, 10000) : undefined,
+        recurrence_frequency: req.body?.recurrence_frequency !== undefined || req.body?.recurrenceFrequency !== undefined
+          ? sanitizeString(req.body?.recurrence_frequency || req.body?.recurrenceFrequency, 40)
+          : undefined,
         notes: req.body?.notes !== undefined ? sanitizeString(req.body?.notes, 1200) : undefined,
         updated_at: new Date().toISOString()
       });
@@ -14173,7 +14195,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/financial/professional-payments', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/financial/professional-payments', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase() || 'pending';
       const payload = cleanObject({
@@ -14185,6 +14207,14 @@ async function startServer() {
         due_date: sanitizeDate(req.body?.due_date) || sanitizeDate(req.body?.dueDate) || sanitizeDate(req.body?.payment_date) || new Date().toISOString().slice(0, 10),
         method: sanitizeString(req.body?.method, 80) || 'pix',
         status: paymentStatuses.has(requestedStatus) ? requestedStatus : 'pending',
+        base_amount: req.body?.base_amount !== undefined ? asSafeNumber(req.body?.base_amount, 0, 1_000_000) : undefined,
+        additional_amount: req.body?.additional_amount !== undefined ? asSafeNumber(req.body?.additional_amount, 0, 1_000_000) : undefined,
+        additional_scope: sanitizeString(req.body?.additional_scope, 40),
+        is_recurring: Boolean(req.body?.is_recurring || req.body?.isRecurring),
+        recurrence_group_id: sanitizeString(req.body?.recurrence_group_id || req.body?.recurrenceGroupId, 120),
+        recurrence_index: req.body?.recurrence_index !== undefined ? asSafeNumber(req.body?.recurrence_index, 0, 10000) : undefined,
+        recurrence_total: req.body?.recurrence_total !== undefined ? asSafeNumber(req.body?.recurrence_total, 0, 10000) : undefined,
+        recurrence_frequency: sanitizeString(req.body?.recurrence_frequency || req.body?.recurrenceFrequency, 40),
         notes: sanitizeString(req.body?.notes, 1200),
         created_by: sanitizeString(req.session.user?.id, 120),
         created_at: new Date().toISOString(),
@@ -14195,16 +14225,83 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'Profissional e valor são obrigatórios.' });
       }
 
-      const { data, error } = await supabase
-        .from('professional_payments')
-        .insert([payload])
-        .select()
-        .single();
-      if (error) {
-        if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Tabela professional_payments ainda não aplicada.' });
+      let safePayload: Record<string, any> = { ...payload };
+      let data: any = null;
+      while (Object.keys(safePayload).length > 0) {
+        const { data: inserted, error } = await supabase
+          .from('professional_payments')
+          .insert([safePayload])
+          .select()
+          .single();
+        if (!error) {
+          data = inserted;
+          break;
+        }
+        if (hasMissingFinancialSchema(error)) {
+          return res.status(503).json({ success: false, error: 'Tabela professional_payments ainda não aplicada.' });
+        }
+        const missingColumn = extractMissingColumnName(error);
+        if (missingColumn && missingColumn in safePayload) {
+          delete safePayload[missingColumn];
+          continue;
+        }
         throw error;
       }
-      res.json({ success: true, data });
+      res.json({ success: true, data: data || payload });
+    } catch (error) {
+      res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    }
+  });
+
+  app.patch('/api/financial/professional-payments/:paymentId', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const paymentId = sanitizeString(req.params.paymentId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!paymentId) return res.status(400).json({ success: false, error: 'Pagamento inválido.' });
+      const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();
+      const patchBase = cleanObject({
+        professional_id: req.body?.professional_id !== undefined || req.body?.professionalId !== undefined
+          ? sanitizeString(req.body?.professional_id || req.body?.professionalId, 120)
+          : undefined,
+        professional_name: req.body?.professional_name !== undefined || req.body?.professionalName !== undefined
+          ? sanitizeString(req.body?.professional_name || req.body?.professionalName, 180)
+          : undefined,
+        amount: req.body?.amount !== undefined ? asSafeNumber(req.body?.amount, 0, 1_000_000) : undefined,
+        payment_date: req.body?.payment_date !== undefined || req.body?.paymentDate !== undefined
+          ? sanitizeDate(req.body?.payment_date) || sanitizeDate(req.body?.paymentDate)
+          : undefined,
+        due_date: req.body?.due_date !== undefined || req.body?.dueDate !== undefined
+          ? sanitizeDate(req.body?.due_date) || sanitizeDate(req.body?.dueDate)
+          : undefined,
+        method: req.body?.method !== undefined ? sanitizeString(req.body?.method, 80) : undefined,
+        status: paymentStatuses.has(requestedStatus) ? requestedStatus : undefined,
+        base_amount: req.body?.base_amount !== undefined ? asSafeNumber(req.body?.base_amount, 0, 1_000_000) : undefined,
+        additional_amount: req.body?.additional_amount !== undefined ? asSafeNumber(req.body?.additional_amount, 0, 1_000_000) : undefined,
+        additional_scope: req.body?.additional_scope !== undefined ? sanitizeString(req.body?.additional_scope, 40) : undefined,
+        notes: req.body?.notes !== undefined ? sanitizeString(req.body?.notes, 1200) : undefined,
+        updated_at: new Date().toISOString()
+      });
+
+      let safePatch: Record<string, any> = { ...patchBase };
+      while (Object.keys(safePatch).length > 0) {
+        let query = supabase
+          .from('professional_payments')
+          .update(safePatch)
+          .eq('id', paymentId);
+        if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
+        const result = await query.select('*').maybeSingle();
+        if (!result.error) return res.json({ success: true, data: result.data || { id: paymentId, ...safePatch } });
+        if (hasMissingFinancialSchema(result.error)) {
+          return res.status(503).json({ success: false, error: 'Tabela professional_payments ainda não aplicada.' });
+        }
+        const missingColumn = extractMissingColumnName(result.error);
+        if (missingColumn && missingColumn in safePatch) {
+          delete safePatch[missingColumn];
+          continue;
+        }
+        throw result.error;
+      }
+      return res.status(400).json({ success: false, error: 'Nada para atualizar.' });
     } catch (error) {
       res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }

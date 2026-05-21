@@ -1350,6 +1350,16 @@ export const dataService = {
     return await saveOfflineFirst(id, payment, 'payment', '/api/financial/professional-payments');
   },
 
+  async updateProfessionalPayment(paymentId: string, updates: any) {
+    return await saveOfflineFirst(
+      String(paymentId),
+      updates,
+      'payment',
+      `/api/financial/professional-payments/${encodeURIComponent(String(paymentId))}`,
+      'PATCH'
+    );
+  },
+
   async getClinicFinancialEntries() {
     try {
       const response = await fetch('/api/financial/entries', {

@@ -586,6 +586,10 @@ export function CoordinatorDashboard({
   const [financialEntries, setFinancialEntries] = useState<any[]>([]);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isProfessionalPaymentModalOpen, setIsProfessionalPaymentModalOpen] = useState(false);
+  const [editingPayment, setEditingPayment] = useState<any>(null);
+  const [editingPaymentScope, setEditingPaymentScope] = useState<"single" | "future">("single");
+  const [editingProfessionalPayment, setEditingProfessionalPayment] = useState<any>(null);
+  const [editingProfessionalPaymentScope, setEditingProfessionalPaymentScope] = useState<"single" | "future">("single");
   const [selectedPaymentPatient, setSelectedPaymentPatient] =
     useState<any>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -614,6 +618,16 @@ export function CoordinatorDashboard({
   );
   const [professionalPaymentMethod, setProfessionalPaymentMethod] = useState("pix");
   const [professionalPaymentStatus, setProfessionalPaymentStatus] = useState("pending");
+  const [paymentIsRecurring, setPaymentIsRecurring] = useState(false);
+  const [paymentRecurrenceMonths, setPaymentRecurrenceMonths] = useState("6");
+  const [paymentRecurrenceDueDays, setPaymentRecurrenceDueDays] = useState("");
+  const [paymentAdditionalAmount, setPaymentAdditionalAmount] = useState("");
+  const [paymentAdditionalScope, setPaymentAdditionalScope] = useState<"next" | "future">("next");
+  const [professionalPaymentIsRecurring, setProfessionalPaymentIsRecurring] = useState(false);
+  const [professionalPaymentRecurrenceMonths, setProfessionalPaymentRecurrenceMonths] = useState("6");
+  const [professionalPaymentRecurrenceDueDays, setProfessionalPaymentRecurrenceDueDays] = useState("");
+  const [professionalPaymentAdditionalAmount, setProfessionalPaymentAdditionalAmount] = useState("");
+  const [professionalPaymentAdditionalScope, setProfessionalPaymentAdditionalScope] = useState<"next" | "future">("next");
   const [defaultSessionDuration, setDefaultSessionDuration] = useState(
     String(user?.clinicSettings?.defaultSessionDuration || "50"),
   );
@@ -717,6 +731,85 @@ export function CoordinatorDashboard({
     type: "success" | "error" | "info" = "success",
   ) => {
     setToast({ type, message });
+  };
+
+  const parseMoneyInput = (value: any) => {
+    if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+    const raw = String(value || "").trim();
+    if (!raw) return 0;
+    const normalized = raw
+      .replace(/[^\d,.-]/g, "")
+      .replace(/\.(?=\d{3}(?:\D|$))/g, "")
+      .replace(",", ".");
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const formatMoneyInput = (value: any) => {
+    const parsed = parseMoneyInput(value);
+    if (!parsed) return "";
+    return parsed.toLocaleString("pt-BR", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  };
+
+  const normalizeMoneyInputChange = (value: string) =>
+    value
+      .replace(/[^\d,.]/g, "")
+      .replace(/(\,.*),/g, "$1")
+      .slice(0, 14);
+
+  const createFinancialSeriesId = () => {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+      return crypto.randomUUID();
+    }
+    return `series-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  };
+
+  const clampDueDay = (day: number) =>
+    Math.min(31, Math.max(1, Number(day) || 1));
+
+  const parseDueDays = (value: string, fallbackDate: string) => {
+    const fallbackDay = clampDueDay(
+      Number(String(fallbackDate || "").split("-")[2]) || new Date().getDate(),
+    );
+    const parsed = String(value || "")
+      .split(/[,\s;]+/)
+      .map((item) => clampDueDay(Number(item)))
+      .filter(Boolean);
+    const unique = Array.from(new Set(parsed.length ? parsed : [fallbackDay]));
+    return unique.sort((a, b) => a - b);
+  };
+
+  const buildMonthlyDueDates = (startDate: string, dueDays: number[], months: number) => {
+    const start = new Date(`${startDate || new Date().toISOString().slice(0, 10)}T00:00:00`);
+    const totalMonths = Math.min(60, Math.max(1, Number(months) || 1));
+    const dates: string[] = [];
+    for (let monthIndex = 0; monthIndex < totalMonths; monthIndex += 1) {
+      dueDays.forEach((day) => {
+        const candidate = new Date(start.getFullYear(), start.getMonth() + monthIndex, 1);
+        const lastDay = new Date(candidate.getFullYear(), candidate.getMonth() + 1, 0).getDate();
+        candidate.setDate(Math.min(day, lastDay));
+        dates.push(candidate.toISOString().slice(0, 10));
+      });
+    }
+    return Array.from(new Set(dates)).sort();
+  };
+
+  const getPaymentStatus = (payment: any) =>
+    String(payment?.status || "").trim().toLowerCase();
+
+  const isPaymentPaid = (payment: any) => getPaymentStatus(payment) === "paid";
+
+  const daysUntilDate = (dateValue: any) => {
+    const raw = String(dateValue || "").slice(0, 10);
+    if (!raw) return null;
+    const target = new Date(`${raw}T00:00:00`);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (Number.isNaN(target.getTime())) return null;
+    return Math.round((target.getTime() - today.getTime()) / 86400000);
   };
 
   const ensureTherapistClinicalProfile = () => {
@@ -1025,7 +1118,7 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     const fetchFinancialSurvey = async () => {
-      if (activeTab !== "financial") return;
+      if (activeTab !== "financial" || isReceptionist) return;
       try {
         const response = await fetch("/api/financial/feature-survey", {
           credentials: "include",
@@ -1041,44 +1134,111 @@ export function CoordinatorDashboard({
       }
     };
     fetchFinancialSurvey();
-  }, [activeTab]);
+  }, [activeTab, isReceptionist]);
 
   const handleAddPayment = async () => {
     if (!selectedPaymentPatient || !paymentAmount)
       return alert("Preencha todos os campos");
-    const normalizedAmount = parseFloat(String(paymentAmount).replace(",", "."));
+    const normalizedAmount = parseMoneyInput(paymentAmount);
+    const additionalAmount = parseMoneyInput(paymentAdditionalAmount);
     if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
       return alert("Informe um valor válido.");
     }
 
-    const newPayment = {
-      patient_id: selectedPaymentPatient.id,
-      patient_name: selectedPaymentPatient.name,
-      amount: normalizedAmount,
-      payment_date: paymentDate,
-      due_date: paymentDueDate || paymentDate,
-      method: paymentMethod,
-      status: paymentReceipt ? "paid" : "pending",
-      receipt_url: paymentReceipt,
-      receipt_file_name: paymentReceiptName || null,
-      type: paymentType,
-      insurance_name: paymentType === "convênio" ? paymentInsurance : null,
-      specialty: paymentSpecialty || null,
-    };
-
-    const result = await dataService.savePayment(newPayment);
-    if (result.success) {
-      setPayments((prev) => [result.data || newPayment, ...prev]);
+    if (editingPayment?.id) {
+      const targets = editingPaymentScope === "future"
+        ? getFutureSeriesItems(payments, editingPayment)
+        : [editingPayment];
+      const patch = {
+        amount: normalizedAmount + additionalAmount,
+        base_amount: normalizedAmount,
+        additional_amount: additionalAmount,
+        additional_scope: additionalAmount > 0 ? paymentAdditionalScope : null,
+        payment_date: paymentDate,
+        due_date: paymentDueDate || paymentDate,
+        method: paymentMethod,
+        status: paymentReceipt ? "paid" : editingPayment?.status || "pending",
+        receipt_url: paymentReceipt,
+        receipt_file_name: paymentReceiptName || null,
+        type: paymentType,
+        insurance_name: paymentType === "convênio" ? paymentInsurance : null,
+        specialty: paymentSpecialty || null,
+      };
+      const results = await Promise.all(targets.map((payment: any) => dataService.updatePayment(String(payment.id), patch)));
+      const failed = results.find((result) => !result?.success);
+      if (failed) {
+        showToast(failed?.error || "Não foi possível editar o pagamento.", "error");
+        return;
+      }
+      setPayments((prev) =>
+        prev.map((payment: any) =>
+          targets.some((target: any) => String(target.id) === String(payment.id))
+            ? { ...payment, ...patch }
+            : payment,
+        ),
+      );
       setIsPaymentModalOpen(false);
+      setEditingPayment(null);
+      setPaymentAdditionalAmount("");
+      showToast(editingPaymentScope === "future" ? "Pagamentos futuros atualizados." : "Pagamento atualizado.");
+      return;
+    }
+
+    const dueDays = parseDueDays(paymentRecurrenceDueDays, paymentDueDate || paymentDate);
+    const dueDates = paymentIsRecurring
+      ? buildMonthlyDueDates(paymentDueDate || paymentDate, dueDays, Number(paymentRecurrenceMonths) || 1)
+      : [paymentDueDate || paymentDate];
+    const recurrenceGroupId = paymentIsRecurring ? createFinancialSeriesId() : null;
+    const paymentsToCreate = dueDates.map((dueDate, index) => {
+      const shouldApplyAdditional =
+        additionalAmount > 0 &&
+        (paymentAdditionalScope === "future" || index === 0);
+      return {
+        patient_id: selectedPaymentPatient.id,
+        patient_name: selectedPaymentPatient.name,
+        amount: normalizedAmount + (shouldApplyAdditional ? additionalAmount : 0),
+        base_amount: normalizedAmount,
+        additional_amount: shouldApplyAdditional ? additionalAmount : 0,
+        additional_scope: additionalAmount > 0 ? paymentAdditionalScope : null,
+        payment_date: index === 0 ? paymentDate : dueDate,
+        due_date: dueDate,
+        method: paymentMethod,
+        status: index === 0 && paymentReceipt ? "paid" : "pending",
+        receipt_url: index === 0 ? paymentReceipt : null,
+        receipt_file_name: index === 0 ? paymentReceiptName || null : null,
+        type: paymentType,
+        insurance_name: paymentType === "convênio" ? paymentInsurance : null,
+        specialty: paymentSpecialty || null,
+        is_recurring: paymentIsRecurring,
+        recurrence_group_id: recurrenceGroupId,
+        recurrence_index: index + 1,
+        recurrence_total: dueDates.length,
+        recurrence_frequency: paymentIsRecurring ? "monthly" : null,
+      };
+    });
+
+    const results = await Promise.all(paymentsToCreate.map((payment) => dataService.savePayment(payment)));
+    const failed = results.find((result) => !result?.success);
+    if (!failed) {
+      setPayments((prev) => [
+        ...results.map((result, index) => result.data || paymentsToCreate[index]),
+        ...prev,
+      ]);
+      setIsPaymentModalOpen(false);
+      setEditingPayment(null);
       setPaymentAmount("");
       setSelectedPaymentPatient(null);
       setPaymentReceipt(null);
       setPaymentReceiptName("");
       setPaymentSpecialty("");
+      setPaymentIsRecurring(false);
+      setPaymentRecurrenceDueDays("");
+      setPaymentAdditionalAmount("");
+      setPaymentAdditionalScope("next");
       alert(paymentReceipt ? "Pagamento registrado como pago." : "Cobrança registrada como pendente.");
       onAddActivityLog(
         paymentReceipt ? "Pagamento registrado" : "Cobrança registrada",
-        `${paymentReceipt ? "Pagamento" : "Cobrança"} de R$ ${paymentAmount} para ${selectedPaymentPatient?.name || "paciente"}.`,
+        `${paymentReceipt ? "Pagamento" : "Cobrança"} de R$ ${formatMoneyInput(paymentAmount)} para ${selectedPaymentPatient?.name || "paciente"}${paymentIsRecurring ? ` em ${dueDates.length} vencimentos recorrentes` : ""}.`,
         "management",
       );
     } else {
@@ -1117,32 +1277,149 @@ export function CoordinatorDashboard({
     reader.readAsDataURL(file);
   };
 
+  const getFutureSeriesItems = (items: any[], current: any) => {
+    const groupId = String(current?.recurrence_group_id || current?.recurrenceGroupId || "").trim();
+    if (!groupId) return [current];
+    const currentDate = String(current?.due_date || current?.dueDate || current?.payment_date || current?.paymentDate || "");
+    const currentIndex = Number(current?.recurrence_index ?? current?.recurrenceIndex ?? 0) || 0;
+    return items.filter((item: any) => {
+      const itemGroupId = String(item?.recurrence_group_id || item?.recurrenceGroupId || "").trim();
+      if (itemGroupId !== groupId) return false;
+      const itemIndex = Number(item?.recurrence_index ?? item?.recurrenceIndex ?? 0) || 0;
+      if (currentIndex > 0 && itemIndex > 0) return itemIndex >= currentIndex;
+      const itemDate = String(item?.due_date || item?.dueDate || item?.payment_date || item?.paymentDate || "");
+      return itemDate >= currentDate;
+    });
+  };
+
+  const openPaymentEditor = (payment: any) => {
+    const patient = allPatients.find((item: any) => String(item.id) === String(payment?.patient_id || payment?.patientId));
+    setEditingPayment(payment);
+    setEditingPaymentScope("single");
+    setSelectedPaymentPatient(patient || {
+      id: payment?.patient_id || payment?.patientId,
+      name: payment?.patient_name || payment?.patientName || "Paciente",
+    });
+    setPaymentAmount(formatMoneyInput(payment?.amount));
+    setPaymentDate(String(payment?.payment_date || payment?.paymentDate || new Date().toISOString().slice(0, 10)).slice(0, 10));
+    setPaymentDueDate(String(payment?.due_date || payment?.dueDate || new Date().toISOString().slice(0, 10)).slice(0, 10));
+    setPaymentMethod(payment?.method || "pix");
+    setPaymentType(payment?.type || "particular");
+    setPaymentInsurance(payment?.insurance_name || payment?.insuranceName || "");
+    setPaymentSpecialty(payment?.specialty || "");
+    setPaymentReceipt(payment?.receipt_url || null);
+    setPaymentReceiptName(payment?.receipt_file_name || "");
+    setPaymentIsRecurring(Boolean(payment?.is_recurring || payment?.isRecurring || payment?.recurrence_group_id || payment?.recurrenceGroupId));
+    setPaymentAdditionalAmount(formatMoneyInput(payment?.additional_amount || ""));
+    setPaymentAdditionalScope(payment?.additional_scope === "future" ? "future" : "next");
+    setIsPaymentModalOpen(true);
+  };
+
+  const openProfessionalPaymentEditor = (payment: any) => {
+    setEditingProfessionalPayment(payment);
+    setEditingProfessionalPaymentScope("single");
+    setSelectedProfessionalPaymentId(String(payment?.professional_id || payment?.professionalId || ""));
+    setProfessionalPaymentAmount(formatMoneyInput(payment?.amount));
+    setProfessionalPaymentDate(String(payment?.payment_date || payment?.paymentDate || new Date().toISOString().slice(0, 10)).slice(0, 10));
+    setProfessionalPaymentDueDate(String(payment?.due_date || payment?.dueDate || new Date().toISOString().slice(0, 10)).slice(0, 10));
+    setProfessionalPaymentMethod(payment?.method || "pix");
+    setProfessionalPaymentStatus(payment?.status || "pending");
+    setProfessionalPaymentIsRecurring(Boolean(payment?.is_recurring || payment?.isRecurring || payment?.recurrence_group_id || payment?.recurrenceGroupId));
+    setProfessionalPaymentAdditionalAmount(formatMoneyInput(payment?.additional_amount || ""));
+    setProfessionalPaymentAdditionalScope(payment?.additional_scope === "future" ? "future" : "next");
+    setIsProfessionalPaymentModalOpen(true);
+  };
+
   const handleAddProfessionalPayment = async () => {
     const member = therapistFilterOptions.find((item) => item.id === selectedProfessionalPaymentId);
-    const amount = parseFloat(String(professionalPaymentAmount).replace(",", "."));
+    const amount = parseMoneyInput(professionalPaymentAmount);
+    const additionalAmount = parseMoneyInput(professionalPaymentAdditionalAmount);
     if (!member || !Number.isFinite(amount) || amount <= 0) {
       alert("Selecione o profissional e informe um valor válido.");
       return;
     }
-    const payload = {
-      professional_id: member.id,
-      professional_name: member.label,
-      amount,
-      payment_date: professionalPaymentDate,
-      due_date: professionalPaymentDueDate || professionalPaymentDate,
-      method: professionalPaymentMethod,
-      status: professionalPaymentStatus,
-    };
-    const result = await dataService.saveProfessionalPayment(payload);
-    if (result?.success) {
-      setProfessionalPayments((prev) => [result.data || payload, ...prev]);
+    if (editingProfessionalPayment?.id) {
+      const targets = editingProfessionalPaymentScope === "future"
+        ? getFutureSeriesItems(professionalPayments, editingProfessionalPayment)
+        : [editingProfessionalPayment];
+      const patch = {
+        professional_id: member.id,
+        professional_name: member.label,
+        amount: amount + additionalAmount,
+        base_amount: amount,
+        additional_amount: additionalAmount,
+        additional_scope: additionalAmount > 0 ? professionalPaymentAdditionalScope : null,
+        payment_date: professionalPaymentDate,
+        due_date: professionalPaymentDueDate || professionalPaymentDate,
+        method: professionalPaymentMethod,
+        status: professionalPaymentStatus,
+      };
+      const results = await Promise.all(targets.map((payment: any) =>
+        dataService.updateProfessionalPayment(String(payment.id), patch),
+      ));
+      const failed = results.find((result) => !result?.success);
+      if (failed) {
+        showToast(failed?.error || "Não foi possível editar o pagamento profissional.", "error");
+        return;
+      }
+      setProfessionalPayments((prev) =>
+        prev.map((payment: any) =>
+          targets.some((target: any) => String(target.id) === String(payment.id))
+            ? { ...payment, ...patch }
+            : payment,
+        ),
+      );
+      setIsProfessionalPaymentModalOpen(false);
+      setEditingProfessionalPayment(null);
+      setProfessionalPaymentAdditionalAmount("");
+      showToast(editingProfessionalPaymentScope === "future" ? "Pagamentos profissionais futuros atualizados." : "Pagamento profissional atualizado.");
+      return;
+    }
+    const dueDays = parseDueDays(professionalPaymentRecurrenceDueDays, professionalPaymentDueDate || professionalPaymentDate);
+    const dueDates = professionalPaymentIsRecurring
+      ? buildMonthlyDueDates(professionalPaymentDueDate || professionalPaymentDate, dueDays, Number(professionalPaymentRecurrenceMonths) || 1)
+      : [professionalPaymentDueDate || professionalPaymentDate];
+    const recurrenceGroupId = professionalPaymentIsRecurring ? createFinancialSeriesId() : null;
+    const payloads = dueDates.map((dueDate, index) => {
+      const shouldApplyAdditional =
+        additionalAmount > 0 &&
+        (professionalPaymentAdditionalScope === "future" || index === 0);
+      return {
+        professional_id: member.id,
+        professional_name: member.label,
+        amount: amount + (shouldApplyAdditional ? additionalAmount : 0),
+        base_amount: amount,
+        additional_amount: shouldApplyAdditional ? additionalAmount : 0,
+        additional_scope: additionalAmount > 0 ? professionalPaymentAdditionalScope : null,
+        payment_date: index === 0 ? professionalPaymentDate : dueDate,
+        due_date: dueDate,
+        method: professionalPaymentMethod,
+        status: index === 0 ? professionalPaymentStatus : "pending",
+        is_recurring: professionalPaymentIsRecurring,
+        recurrence_group_id: recurrenceGroupId,
+        recurrence_index: index + 1,
+        recurrence_total: dueDates.length,
+        recurrence_frequency: professionalPaymentIsRecurring ? "monthly" : null,
+      };
+    });
+    const results = await Promise.all(payloads.map((payload) => dataService.saveProfessionalPayment(payload)));
+    const failed = results.find((result) => !result?.success);
+    if (!failed) {
+      setProfessionalPayments((prev) => [
+        ...results.map((result, index) => result.data || payloads[index]),
+        ...prev,
+      ]);
       setIsProfessionalPaymentModalOpen(false);
       setSelectedProfessionalPaymentId("");
       setProfessionalPaymentAmount("");
       setProfessionalPaymentStatus("pending");
-      showToast("Pagamento profissional registrado.");
+      setProfessionalPaymentIsRecurring(false);
+      setProfessionalPaymentRecurrenceDueDays("");
+      setProfessionalPaymentAdditionalAmount("");
+      setProfessionalPaymentAdditionalScope("next");
+      showToast(professionalPaymentIsRecurring ? "Pagamentos profissionais recorrentes registrados." : "Pagamento profissional registrado.");
     } else {
-      showToast(result?.error || "Não foi possível salvar o pagamento profissional.", "error");
+      showToast(failed?.error || "Não foi possível salvar o pagamento profissional.", "error");
     }
   };
 
@@ -2423,10 +2700,55 @@ export function CoordinatorDashboard({
     [normalizedAgenda, todayAgendaKey],
   );
 
+  const confirmedTodayCount = useMemo(
+    () =>
+      todayAgendaItems.filter((item: any) =>
+        ["confirmed", "confirmado"].includes(String(item?.status || "").toLowerCase()),
+      ).length,
+    [todayAgendaItems],
+  );
+
   const canceledTodayCount = useMemo(
     () => todayAgendaItems.filter(isCanceledAgendaItem).length,
     [todayAgendaItems],
   );
+
+  const pendingPatientPayments = useMemo(
+    () => (payments || []).filter((payment: any) => !isPaymentPaid(payment)),
+    [payments],
+  );
+
+  const dueSoonPatientPayments = useMemo(
+    () =>
+      pendingPatientPayments.filter((payment: any) => {
+        const days = daysUntilDate(payment?.due_date || payment?.dueDate);
+        return days === 2;
+      }),
+    [pendingPatientPayments],
+  );
+
+  const overduePatientPayments = useMemo(
+    () =>
+      pendingPatientPayments.filter((payment: any) => {
+        const days = daysUntilDate(payment?.due_date || payment?.dueDate);
+        return days !== null && days < 0;
+      }),
+    [pendingPatientPayments],
+  );
+
+  useEffect(() => {
+    if (!["coordinator", "receptionist", "admin", "owner"].includes(role)) return;
+    dueSoonPatientPayments.forEach((payment: any) => {
+      const paymentId = String(payment?.id || `${payment?.patient_id}-${payment?.due_date}`);
+      const noticeKey = `verto:payment-due-soon:${paymentId}:${payment?.due_date}`;
+      if (localStorage.getItem(noticeKey)) return;
+      localStorage.setItem(noticeKey, "1");
+      showToast(
+        `Faltam 2 dias para o vencimento do pagamento de ${payment?.patient_name || payment?.patientName || "paciente"}.`,
+        "info",
+      );
+    });
+  }, [dueSoonPatientPayments, role]);
 
   const birthdayTodayCount = useMemo(() => {
     const today = new Date();
@@ -2467,8 +2789,8 @@ export function CoordinatorDashboard({
       {
         id: "agenda",
         label: "Consultas hoje",
-        value: todayAgendaItems.length,
-        hint: "para hoje",
+        value: confirmedTodayCount,
+        hint: "confirmadas",
         icon: Calendar,
         accent: "bg-emerald-500",
         color: "text-emerald-600",
@@ -2494,8 +2816,18 @@ export function CoordinatorDashboard({
         color: "text-sky-600",
         iconBg: theme === "dark" ? "bg-sky-400/15" : "bg-sky-50",
       },
+      {
+        id: "financial",
+        label: "Inadimplentes",
+        value: overduePatientPayments.length,
+        hint: "pagamentos vencidos",
+        icon: AlertCircle,
+        accent: "bg-amber-500",
+        color: "text-amber-600",
+        iconBg: theme === "dark" ? "bg-amber-400/15" : "bg-amber-50",
+      },
     ],
-    [birthdayTodayCount, canceledTodayCount, theme, todayAgendaItems.length],
+    [birthdayTodayCount, canceledTodayCount, confirmedTodayCount, overduePatientPayments.length, theme],
   );
 
   useEffect(() => {
@@ -3228,6 +3560,11 @@ export function CoordinatorDashboard({
 
     const realized = paidPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
     const pendingAmount = pendingPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
+    const overduePayments = pendingPayments.filter((payment: any) => {
+      const days = daysUntilDate(payment?.due_date || payment?.dueDate);
+      return days !== null && days < 0;
+    });
+    const overdueAmount = overduePayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
     const professionalPaid = paidProfessionalPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
     const professionalPending = pendingProfessionalPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
     const averageTicket = activePatients.length ? projection / activePatients.length : 0;
@@ -3256,6 +3593,7 @@ export function CoordinatorDashboard({
       { label: "Faturamento projetado", value: projection, type: "income", info: "Soma das mensalidades cadastradas nos pacientes ativos." },
       { label: "Faturamento realizado", value: realized, type: "income", info: "Pagamentos com status pago no mês selecionado." },
       { label: "Cobranças pendentes registradas", value: pendingAmount, type: "total", info: "Cobranças já lançadas sem comprovante/pagamento." },
+      { label: "Inadimplência", value: -overdueAmount, type: "expense", info: `${overduePayments.length} pagamento(s) vencido(s) sem baixa.` },
       { label: "A receber projetado", value: outstanding, type: "total", info: "Diferença entre projeção mensal e pagamentos pagos." },
       { label: "Pagamentos a profissionais", value: -professionalPaid, type: "expense", info: "Repasses profissionais pagos no mês." },
       { label: "Despesas operacionais", value: -operationalExpenses, type: "expense", info: "Saídas registradas no fluxo de caixa da clínica." },
@@ -3294,6 +3632,8 @@ export function CoordinatorDashboard({
       projection,
       realized,
       pendingAmount,
+      overdueAmount,
+      overduePayments,
       outstanding,
       cashIn,
       cashOut,
@@ -3722,7 +4062,7 @@ export function CoordinatorDashboard({
           </div>
         </section>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 xl:grid-cols-1">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-4 xl:grid-cols-1">
           {dashboardDailyStats.map((stat) => (
             <button
               key={stat.label}
@@ -3756,6 +4096,34 @@ export function CoordinatorDashboard({
             </button>
           ))}
         </div>
+        {overduePatientPayments.length > 0 && (
+          <button
+            type="button"
+            onClick={() => navigateToTab("financial")}
+            className={`w-full rounded-[24px] border p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg ${
+              theme === "dark"
+                ? "border-amber-300/20 bg-amber-400/10 text-amber-100"
+                : "border-amber-200 bg-amber-50 text-amber-900"
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div className="rounded-2xl bg-white/80 p-3 text-amber-600">
+                <AlertCircle size={20} />
+              </div>
+              <div>
+                <p className="text-sm font-black">
+                  Pagamentos vencidos sem registro
+                </p>
+                <p className="mt-1 text-xs font-semibold opacity-80">
+                  {overduePatientPayments.slice(0, 2).map((payment: any) =>
+                    payment?.patient_name || payment?.patientName || "Paciente",
+                  ).join(", ")}
+                  {overduePatientPayments.length > 2 ? ` e mais ${overduePatientPayments.length - 2}` : ""}
+                </p>
+              </div>
+            </div>
+          </button>
+        )}
       </div>
 
       {!isTherapist && (
@@ -4471,6 +4839,7 @@ export function CoordinatorDashboard({
         { id: "patients", label: "Pacientes", icon: ClipboardList },
         { id: "agenda", label: "Agenda", icon: CalendarDays },
         { id: "rooms", label: "Salas", icon: DoorOpen },
+        { id: "financial", label: "Recebimentos", icon: DollarSign },
         { id: "logs", label: "Log de Atividades", icon: History },
         { id: "settings", label: "Configurações", icon: Settings },
       ]
@@ -4501,6 +4870,7 @@ export function CoordinatorDashboard({
         { id: "patients", label: "Pacientes", icon: ClipboardList },
         { id: "agenda", label: "Agenda", icon: CalendarDays },
         { id: "rooms", label: "Salas", icon: DoorOpen },
+        { id: "financial", label: "Recebimentos", icon: DollarSign },
         { id: "logs", label: "Registros", icon: History },
         { id: "settings", label: "Configurações", icon: Settings },
       ]
@@ -4793,21 +5163,27 @@ export function CoordinatorDashboard({
           {isPaymentModalOpen && (
             <div
               className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"
-              onClick={() => setIsPaymentModalOpen(false)}
+              onClick={() => {
+                setIsPaymentModalOpen(false);
+                setEditingPayment(null);
+              }}
             >
               <div
                 className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-pop relative"
                 onClick={(e) => e.stopPropagation()}
               >
                 <button
-                  onClick={() => setIsPaymentModalOpen(false)}
+                  onClick={() => {
+                    setIsPaymentModalOpen(false);
+                    setEditingPayment(null);
+                  }}
                   className="absolute top-6 right-6 text-gray-400 hover:text-gray-600"
                 >
                   <X size={24} />
                 </button>
                 <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-2">
                   <DollarSign size={24} className="text-[#7a32fc]" /> Registrar
-                  Pagamento
+                  {editingPayment ? " Pagamento" : " Pagamento"}
                 </h2>
                 <div className="space-y-4">
                   <div>
@@ -4827,7 +5203,7 @@ export function CoordinatorDashboard({
                           const plans = getPatientPlans(p);
                           const total = plans.reduce((sum: number, plan: any) => sum + plan.amount, 0);
                           const primaryPlan = plans[0];
-                          if (total > 0) setPaymentAmount(String(total.toFixed(2)));
+                          if (total > 0) setPaymentAmount(formatMoneyInput(total));
                           setPaymentType(primaryPlan?.payerType === "convenio" ? "convênio" : "particular");
                           setPaymentInsurance(primaryPlan?.insuranceName || p.insuranceName || "");
                           if (primaryPlan?.billingMethod) setPaymentMethod(primaryPlan.billingMethod);
@@ -4882,9 +5258,10 @@ export function CoordinatorDashboard({
                         Valor (R$)
                       </label>
                       <input
-                        type="number"
                         value={paymentAmount}
-                        onChange={(e) => setPaymentAmount(e.target.value)}
+                        onChange={(e) => setPaymentAmount(normalizeMoneyInputChange(e.target.value))}
+                        onBlur={() => setPaymentAmount(formatMoneyInput(paymentAmount))}
+                        inputMode="decimal"
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
                         placeholder="0,00"
                       />
@@ -4910,6 +5287,101 @@ export function CoordinatorDashboard({
                         onChange={(e) => setPaymentDueDate(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
                       />
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                    {editingPayment && paymentIsRecurring && (
+                      <div className="mb-4 rounded-2xl bg-white p-1">
+                        <div className="grid grid-cols-2 gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setEditingPaymentScope("single")}
+                            className={`rounded-xl px-3 py-2 text-xs font-black transition-all ${editingPaymentScope === "single" ? "bg-[#7a32fc] text-white" : "text-slate-500 hover:bg-slate-50"}`}
+                          >
+                            Só este
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingPaymentScope("future")}
+                            className={`rounded-xl px-3 py-2 text-xs font-black transition-all ${editingPaymentScope === "future" ? "bg-[#7a32fc] text-white" : "text-slate-500 hover:bg-slate-50"}`}
+                          >
+                            Este e próximos
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <label className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        disabled={Boolean(editingPayment)}
+                        checked={paymentIsRecurring}
+                        onChange={(e) => setPaymentIsRecurring(e.target.checked)}
+                        className="mt-1 h-4 w-4 rounded border-slate-300 text-[#7a32fc]"
+                      />
+                      <span>
+                        <span className="block text-sm font-black text-slate-800">
+                          Gerar cobranças recorrentes
+                        </span>
+                        <span className="mt-1 block text-xs font-medium text-slate-500">
+                          Use uma ou mais datas de vencimento por mês.
+                        </span>
+                      </span>
+                    </label>
+                    {paymentIsRecurring && (
+                      <div className="mt-4 grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                            Meses à frente
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={60}
+                            value={paymentRecurrenceMonths}
+                            onChange={(e) => setPaymentRecurrenceMonths(e.target.value)}
+                            className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                            Dias de vencimento
+                          </label>
+                          <input
+                            value={paymentRecurrenceDueDays}
+                            onChange={(e) => setPaymentRecurrenceDueDays(e.target.value.replace(/[^\d,;\s]/g, ""))}
+                            className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                            placeholder="10, 20"
+                          />
+                        </div>
+                      </div>
+                    )}
+                    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                          Adicional (R$)
+                        </label>
+                        <input
+                          value={paymentAdditionalAmount}
+                          onChange={(e) => setPaymentAdditionalAmount(normalizeMoneyInputChange(e.target.value))}
+                          onBlur={() => setPaymentAdditionalAmount(formatMoneyInput(paymentAdditionalAmount))}
+                          inputMode="decimal"
+                          className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                          placeholder="0,00"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                          Aplicar adicional
+                        </label>
+                        <select
+                          value={paymentAdditionalScope}
+                          onChange={(e) => setPaymentAdditionalScope(e.target.value as "next" | "future")}
+                          className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                        >
+                          <option value="next">Só no próximo pagamento</option>
+                          <option value="future">Em todos à frente</option>
+                        </select>
+                      </div>
                     </div>
                   </div>
                   <div>
@@ -5000,14 +5472,20 @@ export function CoordinatorDashboard({
           {isProfessionalPaymentModalOpen && (
             <div
               className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"
-              onClick={() => setIsProfessionalPaymentModalOpen(false)}
+              onClick={() => {
+                setIsProfessionalPaymentModalOpen(false);
+                setEditingProfessionalPayment(null);
+              }}
             >
               <div
                 className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-pop relative"
                 onClick={(e) => e.stopPropagation()}
               >
                 <button
-                  onClick={() => setIsProfessionalPaymentModalOpen(false)}
+                  onClick={() => {
+                    setIsProfessionalPaymentModalOpen(false);
+                    setEditingProfessionalPayment(null);
+                  }}
                   className="absolute top-6 right-6 text-gray-400 hover:text-gray-600"
                 >
                   <X size={24} />
@@ -5040,7 +5518,8 @@ export function CoordinatorDashboard({
                       </label>
                       <input
                         value={professionalPaymentAmount}
-                        onChange={(e) => setProfessionalPaymentAmount(e.target.value)}
+                        onChange={(e) => setProfessionalPaymentAmount(normalizeMoneyInputChange(e.target.value))}
+                        onBlur={() => setProfessionalPaymentAmount(formatMoneyInput(professionalPaymentAmount))}
                         inputMode="decimal"
                         className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-700 outline-none"
                         placeholder="0,00"
@@ -5100,6 +5579,101 @@ export function CoordinatorDashboard({
                       <option value="boleto">Boleto</option>
                     </select>
                   </div>
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                    {editingProfessionalPayment && professionalPaymentIsRecurring && (
+                      <div className="mb-4 rounded-2xl bg-white p-1">
+                        <div className="grid grid-cols-2 gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setEditingProfessionalPaymentScope("single")}
+                            className={`rounded-xl px-3 py-2 text-xs font-black transition-all ${editingProfessionalPaymentScope === "single" ? "bg-[#7a32fc] text-white" : "text-slate-500 hover:bg-slate-50"}`}
+                          >
+                            Só este
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingProfessionalPaymentScope("future")}
+                            className={`rounded-xl px-3 py-2 text-xs font-black transition-all ${editingProfessionalPaymentScope === "future" ? "bg-[#7a32fc] text-white" : "text-slate-500 hover:bg-slate-50"}`}
+                          >
+                            Este e próximos
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <label className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        disabled={Boolean(editingProfessionalPayment)}
+                        checked={professionalPaymentIsRecurring}
+                        onChange={(e) => setProfessionalPaymentIsRecurring(e.target.checked)}
+                        className="mt-1 h-4 w-4 rounded border-slate-300 text-[#7a32fc]"
+                      />
+                      <span>
+                        <span className="block text-sm font-black text-slate-800">
+                          Gerar pagamentos recorrentes
+                        </span>
+                        <span className="mt-1 block text-xs font-medium text-slate-500">
+                          Cria vencimentos futuros para o profissional.
+                        </span>
+                      </span>
+                    </label>
+                    {professionalPaymentIsRecurring && (
+                      <div className="mt-4 grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400">
+                            Meses à frente
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={60}
+                            value={professionalPaymentRecurrenceMonths}
+                            onChange={(e) => setProfessionalPaymentRecurrenceMonths(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm font-semibold text-slate-700 outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400">
+                            Dias de vencimento
+                          </label>
+                          <input
+                            value={professionalPaymentRecurrenceDueDays}
+                            onChange={(e) => setProfessionalPaymentRecurrenceDueDays(e.target.value.replace(/[^\d,;\s]/g, ""))}
+                            className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm font-semibold text-slate-700 outline-none"
+                            placeholder="5, 20"
+                          />
+                        </div>
+                      </div>
+                    )}
+                    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400">
+                          Adicional (R$)
+                        </label>
+                        <input
+                          value={professionalPaymentAdditionalAmount}
+                          onChange={(e) => setProfessionalPaymentAdditionalAmount(normalizeMoneyInputChange(e.target.value))}
+                          onBlur={() => setProfessionalPaymentAdditionalAmount(formatMoneyInput(professionalPaymentAdditionalAmount))}
+                          inputMode="decimal"
+                          className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm font-semibold text-slate-700 outline-none"
+                          placeholder="0,00"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400">
+                          Aplicar adicional
+                        </label>
+                        <select
+                          value={professionalPaymentAdditionalScope}
+                          onChange={(e) => setProfessionalPaymentAdditionalScope(e.target.value as "next" | "future")}
+                          className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm font-semibold text-slate-700 outline-none"
+                        >
+                          <option value="next">Só no próximo pagamento</option>
+                          <option value="future">Em todos à frente</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
                   <button
                     onClick={handleAddProfessionalPayment}
                     className="mt-4 w-full rounded-2xl bg-[#7a32fc] py-4 text-sm font-bold text-white shadow-lg shadow-purple-500/20"
@@ -5152,14 +5726,61 @@ export function CoordinatorDashboard({
                 exit={{ opacity: 0, y: -20 }}
                 className="space-y-8"
               >
-                <div className="rounded-[36px] border border-slate-100 bg-white p-6 shadow-sm">
+                {!isReceptionist && (
+                  <div className="rounded-[36px] border border-slate-100 bg-white p-6 shadow-sm">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                      <div>
+                        <h3 className="text-2xl font-black tracking-tight text-slate-900">
+                          DRE da Clínica
+                        </h3>
+                        <p className="text-sm font-medium text-slate-500">
+                          Projeção pelo cadastro dos pacientes e realizado pelos pagamentos confirmados.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                          Mês
+                        </label>
+                        <input
+                          type="month"
+                          value={financialMonth}
+                          onChange={(e) => setFinancialMonth(e.target.value)}
+                          className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:border-[#7a32fc]"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      {[
+                        ["Pacientes ativos", financialDashboard.patientCount, "Com plano financeiro ativo"],
+                        ["Projeção mensal", formatCurrency(financialDashboard.projection), "Mensalidades cadastradas"],
+                        ["Realizado", formatCurrency(financialDashboard.realized), "Pagamentos do mês"],
+                        ["Ticket médio", formatCurrency(financialDashboard.averageTicket), "Por paciente ativo"],
+                        ["Fluxo de caixa", formatCurrency(financialDashboard.cashFlow), "Entradas menos saídas pagas"],
+                        ["Lucro líquido", formatCurrency(financialDashboard.netProfit), `${financialDashboard.netMarginPct.toFixed(1)}% de margem líquida`],
+                        ["Margem contribuição", `${financialDashboard.contributionMarginPct.toFixed(1)}%`, formatCurrency(financialDashboard.contributionMarginValue)],
+                        ["Repasses profissionais", formatCurrency(financialDashboard.professionalPaid), `${formatCurrency(financialDashboard.professionalPending)} pendente`],
+                      ].map(([label, value, hint]) => (
+                        <div key={label} className="rounded-3xl bg-slate-50 p-5">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{label}</p>
+                          <p className="mt-2 text-2xl font-black text-slate-900">{value}</p>
+                          <p className="mt-1 text-[11px] font-semibold text-slate-400">{hint}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                     <div>
                       <h3 className="text-2xl font-black tracking-tight text-slate-900">
-                        DRE da Clínica
+                        {isReceptionist ? "Recebimentos e cobranças" : "Financeiro e DRE Operacional da Clínica"}
                       </h3>
                       <p className="text-sm font-medium text-slate-500">
-                        Projeção pelo cadastro dos pacientes e realizado pelos pagamentos confirmados.
+                        {isReceptionist
+                          ? "Acompanhe cobranças, vencimentos, recebimentos e comprovantes dos pacientes."
+                          : "Recebimentos, convênios, vencimentos, projeção e realizado em um só lugar."}
                       </p>
                     </div>
                     <div className="flex items-center gap-3">
@@ -5171,165 +5792,138 @@ export function CoordinatorDashboard({
                         value={financialMonth}
                         onChange={(e) => setFinancialMonth(e.target.value)}
                         className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:border-[#7a32fc]"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-                    {[
-                      ["Pacientes ativos", financialDashboard.patientCount, "Com plano financeiro ativo"],
-                      ["Projeção mensal", formatCurrency(financialDashboard.projection), "Mensalidades cadastradas"],
-                      ["Realizado", formatCurrency(financialDashboard.realized), "Pagamentos do mês"],
-                      ["Ticket médio", formatCurrency(financialDashboard.averageTicket), "Por paciente ativo"],
-                      ["Fluxo de caixa", formatCurrency(financialDashboard.cashFlow), "Entradas menos saídas pagas"],
-                      ["Lucro líquido", formatCurrency(financialDashboard.netProfit), `${financialDashboard.netMarginPct.toFixed(1)}% de margem líquida`],
-                      ["Margem contribuição", `${financialDashboard.contributionMarginPct.toFixed(1)}%`, formatCurrency(financialDashboard.contributionMarginValue)],
-                      ["Repasses profissionais", formatCurrency(financialDashboard.professionalPaid), `${formatCurrency(financialDashboard.professionalPending)} pendente`],
-                    ].map(([label, value, hint]) => (
-                      <div key={label} className="rounded-3xl bg-slate-50 p-5">
-                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{label}</p>
-                        <p className="mt-2 text-2xl font-black text-slate-900">{value}</p>
-                        <p className="mt-1 text-[11px] font-semibold text-slate-400">{hint}</p>
+                        />
                       </div>
-                    ))}
-                  </div>
+                    </div>
                 </div>
 
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-2xl font-bold text-slate-900 tracking-tight">
-                      Financeiro e DRE Operacional da Clínica
-                    </h3>
-                    <p className="text-slate-500 font-medium">
-                      Recebimentos, convênios, vencimentos, projeção e realizado em um só lugar.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      onClick={() => setIsPaymentModalOpen(true)}
-                      className="bg-[#7a32fc] text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-purple-500/20 flex items-center gap-2 hover:scale-105 transition-all"
-                    >
-                      <Plus size={18} /> Cobrança / Pagamento
-                    </button>
-                    <button
-                      onClick={() => setIsProfessionalPaymentModalOpen(true)}
-                      className="bg-slate-900 text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-slate-500/20 flex items-center gap-2 hover:scale-105 transition-all"
-                    >
-                      <CreditCard size={18} /> Pagamento Profissional
-                    </button>
-                  </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setIsPaymentModalOpen(true)}
+                    className="bg-[#7a32fc] text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-purple-500/20 flex items-center gap-2 hover:scale-105 transition-all"
+                  >
+                    <Plus size={18} /> Cobrança / Pagamento
+                  </button>
+                  <button
+                    onClick={() => setIsProfessionalPaymentModalOpen(true)}
+                    className="bg-slate-900 text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-slate-500/20 flex items-center gap-2 hover:scale-105 transition-all"
+                  >
+                    <CreditCard size={18} /> Pagamento Profissional
+                  </button>
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   <div className="lg:col-span-2 space-y-8">
-                    {/* DRE Table */}
-                    <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden">
-                      <div className="p-8 border-b border-slate-50">
-                        <h4 className="font-bold text-slate-900">
-                          Resumo Financeiro Operacional
-                        </h4>
-                      </div>
-                      <div className="p-8">
-                        <div className="space-y-4">
-                          {dreData.map((item, idx) => (
-                            <div
-                              key={idx}
-                              className={`flex items-center justify-between p-4 rounded-2xl ${
-                                item.type === "total"
-                                  ? "bg-slate-50 font-bold"
-                                  : item.type === "profit"
-                                    ? "bg-emerald-50 text-emerald-700 font-black"
-                                    : "bg-white"
-                              }`}
-                            >
-                              <div className="flex items-center gap-3">
-                                <div
-                                  className={`w-2 h-2 rounded-full ${
-                                    item.type === "income"
-                                      ? "bg-emerald-500"
-                                      : item.type === "expense"
-                                        ? "bg-red-500"
-                                        : "bg-blue-500"
-                                  }`}
-                                />
-                                <div>
-                                  <p className="text-sm">{item.label}</p>
-                                  <p className="text-[10px] text-slate-400 font-medium">
-                                    {item.info}
-                                  </p>
-                                </div>
-                              </div>
-                              <p className="text-lg">
-                                {item.value < 0
-                                  ? `- ${formatCurrency(Math.abs(item.value))}`
-                                  : formatCurrency(item.value)}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                      <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
-                        <h4 className="font-bold text-slate-900">
-                          Mensalidades por especialidade
-                        </h4>
-                        <div className="mt-5 space-y-3">
-                          {financialDashboard.specialtyRows.length ? (
-                            financialDashboard.specialtyRows.map((row: any) => (
-                              <div key={row.label} className="flex items-center justify-between gap-4 rounded-2xl bg-slate-50 p-4">
-                                <div>
-                                  <p className="text-sm font-black text-slate-800">{row.label}</p>
-                                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                                    {row.patients} paciente(s)
-                                  </p>
-                                </div>
-                                <p className="text-sm font-black text-[#7a32fc]">{formatCurrency(row.amount)}</p>
-                              </div>
-                            ))
-                          ) : (
-                            <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">
-                              Nenhuma mensalidade cadastrada nos pacientes ativos.
-                            </p>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
-                        <h4 className="font-bold text-slate-900">
-                          Particular, convênio e faturamento
-                        </h4>
-                        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                          {financialDashboard.payerRows.map((row: any) => (
-                            <div key={row.label} className="rounded-2xl bg-slate-50 p-4">
-                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{row.label}</p>
-                              <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(row.amount)}</p>
-                              <p className="text-[10px] font-semibold text-slate-400">{row.patients} paciente(s)</p>
-                            </div>
-                          ))}
-                          {financialDashboard.billingMethodRows.map((row: any) => (
-                            <div key={row.label} className="rounded-2xl bg-slate-50 p-4">
-                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{row.label}</p>
-                              <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(row.amount)}</p>
-                              <p className="text-[10px] font-semibold text-slate-400">Meio de faturamento</p>
-                            </div>
-                          ))}
-                        </div>
-                        {financialDashboard.insuranceRows.length > 0 && (
-                          <div className="mt-4 space-y-2 border-t border-slate-100 pt-4">
-                            {financialDashboard.insuranceRows.map((row: any) => (
-                              <div key={row.label} className="flex items-center justify-between text-xs font-bold text-slate-500">
-                                <span>{row.label}</span>
-                                <span>{formatCurrency(row.amount)}</span>
-                              </div>
-                            ))}
+                    {!isReceptionist && (
+                      <>
+                        <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden">
+                          <div className="p-8 border-b border-slate-50">
+                            <h4 className="font-bold text-slate-900">
+                              Resumo Financeiro Operacional
+                            </h4>
                           </div>
-                        )}
-                      </div>
-                    </div>
+                          <div className="p-8">
+                            <div className="space-y-4">
+                              {dreData.map((item, idx) => (
+                                <div
+                                  key={idx}
+                                  className={`flex items-center justify-between p-4 rounded-2xl ${
+                                    item.type === "total"
+                                      ? "bg-slate-50 font-bold"
+                                      : item.type === "profit"
+                                        ? "bg-emerald-50 text-emerald-700 font-black"
+                                        : "bg-white"
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <div
+                                      className={`w-2 h-2 rounded-full ${
+                                        item.type === "income"
+                                          ? "bg-emerald-500"
+                                          : item.type === "expense"
+                                            ? "bg-red-500"
+                                            : "bg-blue-500"
+                                      }`}
+                                    />
+                                    <div>
+                                      <p className="text-sm">{item.label}</p>
+                                      <p className="text-[10px] text-slate-400 font-medium">
+                                        {item.info}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <p className="text-lg">
+                                    {item.value < 0
+                                      ? `- ${formatCurrency(Math.abs(item.value))}`
+                                      : formatCurrency(item.value)}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
 
-                    {/* Recent Payments */}
+                        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                          <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                            <h4 className="font-bold text-slate-900">
+                              Mensalidades por especialidade
+                            </h4>
+                            <div className="mt-5 space-y-3">
+                              {financialDashboard.specialtyRows.length ? (
+                                financialDashboard.specialtyRows.map((row: any) => (
+                                  <div key={row.label} className="flex items-center justify-between gap-4 rounded-2xl bg-slate-50 p-4">
+                                    <div>
+                                      <p className="text-sm font-black text-slate-800">{row.label}</p>
+                                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                                        {row.patients} paciente(s)
+                                      </p>
+                                    </div>
+                                    <p className="text-sm font-black text-[#7a32fc]">{formatCurrency(row.amount)}</p>
+                                  </div>
+                                ))
+                              ) : (
+                                <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">
+                                  Nenhuma mensalidade cadastrada nos pacientes ativos.
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                            <h4 className="font-bold text-slate-900">
+                              Particular, convênio e faturamento
+                            </h4>
+                            <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                              {financialDashboard.payerRows.map((row: any) => (
+                                <div key={row.label} className="rounded-2xl bg-slate-50 p-4">
+                                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{row.label}</p>
+                                  <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(row.amount)}</p>
+                                  <p className="text-[10px] font-semibold text-slate-400">{row.patients} paciente(s)</p>
+                                </div>
+                              ))}
+                              {financialDashboard.billingMethodRows.map((row: any) => (
+                                <div key={row.label} className="rounded-2xl bg-slate-50 p-4">
+                                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{row.label}</p>
+                                  <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(row.amount)}</p>
+                                  <p className="text-[10px] font-semibold text-slate-400">Meio de faturamento</p>
+                                </div>
+                              ))}
+                            </div>
+                            {financialDashboard.insuranceRows.length > 0 && (
+                              <div className="mt-4 space-y-2 border-t border-slate-100 pt-4">
+                                {financialDashboard.insuranceRows.map((row: any) => (
+                                  <div key={row.label} className="flex items-center justify-between text-xs font-bold text-slate-500">
+                                    <span>{row.label}</span>
+                                    <span>{formatCurrency(row.amount)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    )}
+
                     <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden">
                       <div className="p-8 border-b border-slate-50">
                         <h4 className="font-bold text-slate-900">
@@ -5360,6 +5954,9 @@ export function CoordinatorDashboard({
                               </th>
                               <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                                 Status
+                              </th>
+                              <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                                Ações
                               </th>
                             </tr>
                           </thead>
@@ -5428,12 +6025,21 @@ export function CoordinatorDashboard({
                                       {String(p.status || "").toLowerCase() === "paid" ? "Pago" : "Pendente"}
                                     </span>
                                   </td>
+                                  <td className="py-4">
+                                    <button
+                                      type="button"
+                                      onClick={() => openPaymentEditor(p)}
+                                      className="rounded-xl border border-slate-200 px-3 py-1.5 text-[10px] font-black uppercase text-slate-600 hover:border-[#7a32fc] hover:text-[#7a32fc]"
+                                    >
+                                      Editar
+                                    </button>
+                                  </td>
                                 </tr>
                               ))
                             ) : (
                               <tr>
                                 <td
-                                  colSpan={7}
+                                  colSpan={8}
                                   className="py-8 text-center text-slate-400 text-sm font-medium"
                                 >
                                   Nenhum pagamento registrado.
@@ -5447,51 +6053,53 @@ export function CoordinatorDashboard({
                   </div>
 
                   <div className="space-y-8">
-                    <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 p-8">
-                      <h4 className="font-bold text-slate-900 mb-6">
-                        Realizado x projeção
-                      </h4>
-                      <div className="h-64 min-h-[300px]">
-              <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
-                          <BarChart data={revenueHistory}>
-                            <CartesianGrid
-                              strokeDasharray="3 3"
-                              vertical={false}
-                              stroke="#F1F5F9"
-                            />
-                            <XAxis
-                              dataKey="month"
-                              axisLine={false}
-                              tickLine={false}
-                              tick={{ fill: "#94A3B8", fontSize: 12 }}
-                            />
-                            <YAxis
-                              axisLine={false}
-                              tickLine={false}
-                              tick={{ fill: "#94A3B8", fontSize: 12 }}
-                            />
-                            <Tooltip
-                              contentStyle={{
-                                borderRadius: "16px",
-                                border: "none",
-                                boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1)",
-                              }}
-                              cursor={{ fill: "#F8FAFC" }}
-                            />
-                            <Bar
-                              dataKey="revenue"
-                              fill="#7a32fc"
-                              radius={[4, 4, 0, 0]}
-                            />
-                            <Bar
-                              dataKey="profit"
-                              fill="#6AD2FF"
-                              radius={[4, 4, 0, 0]}
-                            />
-                          </BarChart>
-                        </SafeResponsiveContainer>
+                    {!isReceptionist && (
+                      <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 p-8">
+                        <h4 className="font-bold text-slate-900 mb-6">
+                          Realizado x projeção
+                        </h4>
+                        <div className="h-64 min-h-[300px]">
+                <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
+                            <BarChart data={revenueHistory}>
+                              <CartesianGrid
+                                strokeDasharray="3 3"
+                                vertical={false}
+                                stroke="#F1F5F9"
+                              />
+                              <XAxis
+                                dataKey="month"
+                                axisLine={false}
+                                tickLine={false}
+                                tick={{ fill: "#94A3B8", fontSize: 12 }}
+                              />
+                              <YAxis
+                                axisLine={false}
+                                tickLine={false}
+                                tick={{ fill: "#94A3B8", fontSize: 12 }}
+                              />
+                              <Tooltip
+                                contentStyle={{
+                                  borderRadius: "16px",
+                                  border: "none",
+                                  boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1)",
+                                }}
+                                cursor={{ fill: "#F8FAFC" }}
+                              />
+                              <Bar
+                                dataKey="revenue"
+                                fill="#7a32fc"
+                                radius={[4, 4, 0, 0]}
+                              />
+                              <Bar
+                                dataKey="profit"
+                                fill="#6AD2FF"
+                                radius={[4, 4, 0, 0]}
+                              />
+                            </BarChart>
+                          </SafeResponsiveContainer>
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 p-8">
                       <h4 className="font-bold text-slate-900 mb-6">
@@ -5565,6 +6173,13 @@ export function CoordinatorDashboard({
                                 }`}>
                                   {String(payment.status || "").toLowerCase() === "paid" ? "Pago" : "Pendente"}
                                 </span>
+                                <button
+                                  type="button"
+                                  onClick={() => openProfessionalPaymentEditor(payment)}
+                                  className="mt-2 block rounded-xl border border-slate-200 px-3 py-1.5 text-[10px] font-black uppercase text-slate-600 hover:border-[#7a32fc] hover:text-[#7a32fc]"
+                                >
+                                  Editar
+                                </button>
                               </div>
                             </div>
                           ))
@@ -5677,12 +6292,22 @@ export function CoordinatorDashboard({
                   {visiblePatients.map((patient, i) => (
                     <div
                       key={i}
-                      onClick={() => onPatientClick(patient.id, { tab: "history" })}
+                      onClick={() => {
+                        if (isReceptionist) {
+                          openPatientProfileModal(patient);
+                          return;
+                        }
+                        onPatientClick(patient.id, { tab: "history" });
+                      }}
                       role="button"
                       tabIndex={0}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
+                          if (isReceptionist) {
+                            openPatientProfileModal(patient);
+                            return;
+                          }
                           onPatientClick(patient.id, { tab: "history" });
                         }
                       }}
