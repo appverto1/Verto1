@@ -2408,7 +2408,52 @@ export default function App() {
   const handleUpdateAgendaStatus = async (id: any, status: string, details: any = {}) => {
     const normalizedStatus = status === 'cancelled' ? 'canceled' : status;
     const note = String(details?.note ?? details?.notes ?? details?.observation ?? '').trim();
-    setTherapistAgenda(prev => prev.map(item => String(item.id) === String(id) ? { ...item, status: normalizedStatus, ...(note ? { notes: note, note, observation: note } : {}) } : item));
+    const recurrenceScope = String(details?.recurrenceScope || 'single').toLowerCase() === 'future' ? 'future' : 'single';
+    const currentAppointment = therapistAgenda.find(item => String(item.id) === String(id));
+    const recurrenceGroupId = String(
+      currentAppointment?.recurrenceGroupId || currentAppointment?.recurrence_group_id || '',
+    ).trim();
+    const getRecurrenceIndex = (appointment: any) =>
+      Number(appointment?.recurrenceIndex ?? appointment?.recurrence_index ?? 0) || 0;
+    const currentRecurrenceIndex = getRecurrenceIndex(currentAppointment);
+    const isFutureRecurringCancellation =
+      normalizedStatus === 'canceled' &&
+      recurrenceScope === 'future' &&
+      Boolean(recurrenceGroupId);
+    const getOccurrenceTimestamp = (appointment: any) => {
+      const scheduledAt = appointment?.scheduledAt || appointment?.scheduled_at;
+      const parsedScheduledAt = scheduledAt ? new Date(scheduledAt).getTime() : Number.NaN;
+      if (!Number.isNaN(parsedScheduledAt)) return parsedScheduledAt;
+      const date = String(appointment?.date || '').trim();
+      const time = String(appointment?.time || '').trim();
+      const parsedDateTime = date && time ? new Date(`${date}T${time}:00`).getTime() : Number.NaN;
+      return Number.isNaN(parsedDateTime) ? Number.POSITIVE_INFINITY : parsedDateTime;
+    };
+    const currentOccurrenceTimestamp = getOccurrenceTimestamp(currentAppointment);
+    const shouldUpdateItem = (appointment: any) => {
+      if (String(appointment?.id) === String(id)) return true;
+      if (!isFutureRecurringCancellation) return false;
+      const appointmentRecurrenceGroupId = String(
+        appointment?.recurrenceGroupId || appointment?.recurrence_group_id || '',
+      ).trim();
+      if (!appointmentRecurrenceGroupId || appointmentRecurrenceGroupId !== recurrenceGroupId) return false;
+      const appointmentRecurrenceIndex = getRecurrenceIndex(appointment);
+      if (currentRecurrenceIndex > 0 && appointmentRecurrenceIndex > 0) {
+        return appointmentRecurrenceIndex >= currentRecurrenceIndex;
+      }
+      return getOccurrenceTimestamp(appointment) >= currentOccurrenceTimestamp;
+    };
+    setTherapistAgenda(prev =>
+      prev.map(item =>
+        shouldUpdateItem(item)
+          ? {
+              ...item,
+              status: normalizedStatus,
+              ...(note ? { notes: note, note, observation: note } : {}),
+            }
+          : item,
+      ),
+    );
     try {
       const response = await fetch(`/api/appointments/${encodeURIComponent(String(id))}/status`, {
         method: 'PATCH',
@@ -2417,12 +2462,22 @@ export default function App() {
         body: JSON.stringify({
           status: normalizedStatus,
           note,
-          source: details?.source || 'agenda_management'
+          source: details?.source || 'agenda_management',
+          recurrenceScope,
         })
       });
       const result = await response.json().catch(() => ({}));
-      if (response.ok && result?.appointment) {
-        setTherapistAgenda(prev => prev.map(item => String(item.id) === String(id) ? { ...item, ...result.appointment } : item));
+      if (response.ok && Array.isArray(result?.appointments) && result.appointments.length > 0) {
+        setTherapistAgenda(
+          [...result.appointments].sort((a, b) => {
+            if (a.date !== b.date) return String(a.date || '').localeCompare(String(b.date || ''));
+            return String(a.time || '').localeCompare(String(b.time || ''));
+          }),
+        );
+      } else if (response.ok && result?.appointment) {
+        setTherapistAgenda(prev =>
+          prev.map(item => (String(item.id) === String(id) ? { ...item, ...result.appointment } : item)),
+        );
       }
     } catch (error) {
       console.warn('Falha ao persistir status da consulta imediatamente:', error);

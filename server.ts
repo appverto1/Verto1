@@ -2910,6 +2910,51 @@ function buildAppointmentScheduledAt(appointment: any): string | null {
   return parsed.toISOString();
 }
 
+function getAppointmentRecurrenceGroupId(appointment: any): string {
+  return sanitizeString(
+    appointment?.recurrenceGroupId || appointment?.recurrence_group_id,
+    120,
+  );
+}
+
+function getAppointmentRecurrenceIndex(appointment: any): number {
+  const rawValue = Number(
+    appointment?.recurrenceIndex ?? appointment?.recurrence_index ?? 0,
+  );
+  return Number.isFinite(rawValue) ? rawValue : 0;
+}
+
+function getAppointmentOccurrenceTime(appointment: any): number {
+  const scheduledAt = buildAppointmentScheduledAt(appointment);
+  if (scheduledAt) {
+    const parsed = new Date(scheduledAt).getTime();
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+
+  const fallbackDate = sanitizeDate(appointment?.date);
+  const fallbackTime = sanitizeString(appointment?.time, 10);
+  if (fallbackDate && /^\d{2}:\d{2}$/.test(fallbackTime)) {
+    const parsed = new Date(`${fallbackDate}T${fallbackTime}:00-03:00`).getTime();
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+
+  return Number.POSITIVE_INFINITY;
+}
+
+function isSameOrFutureRecurringAppointment(referenceAppointment: any, candidateAppointment: any): boolean {
+  const referenceGroupId = getAppointmentRecurrenceGroupId(referenceAppointment);
+  const candidateGroupId = getAppointmentRecurrenceGroupId(candidateAppointment);
+  if (!referenceGroupId || referenceGroupId !== candidateGroupId) return false;
+
+  const referenceIndex = getAppointmentRecurrenceIndex(referenceAppointment);
+  const candidateIndex = getAppointmentRecurrenceIndex(candidateAppointment);
+  if (referenceIndex > 0 && candidateIndex > 0) {
+    return candidateIndex >= referenceIndex;
+  }
+
+  return getAppointmentOccurrenceTime(candidateAppointment) >= getAppointmentOccurrenceTime(referenceAppointment);
+}
+
 function resetAppointmentReminderStateAfterScheduleChange(appointment: any) {
   return {
     ...appointment,
@@ -8369,12 +8414,25 @@ async function startServer() {
       const clinicId = currentClinicId(actor);
       const now = new Date().toISOString();
       const safeSource = sanitizeString(req.body?.source, 80) || 'appointment_confirmation_popup';
+      const recurrenceScope =
+        sanitizeString(req.body?.recurrenceScope, 20).toLowerCase() === 'future'
+          ? 'future'
+          : 'single';
       const appointmentNote = sanitizeString(
         req.body?.note || req.body?.notes || req.body?.observation || req.body?.appointmentObservation,
         1200
       );
       const notificationAction = sanitizeString(req.body?.notificationAction || req.body?.action, 80).toLowerCase();
       const isPushNotificationAction = safeSource === 'push_notification_action';
+      const isFutureRecurringCancellation =
+        normalizedStatus === 'canceled' && recurrenceScope === 'future';
+
+      if (isFutureRecurringCancellation && actorRole !== 'therapist') {
+        return res.status(403).json({
+          success: false,
+          error: 'Somente o profissional pode cancelar esta e as próximas consultas da recorrência.'
+        });
+      }
 
       if (
         isPatientActor &&
@@ -8394,8 +8452,9 @@ async function startServer() {
         });
       }
 
-      const updateAppointmentsTableStatus = async () => {
-        if (!isUuid(appointmentId)) return null;
+      const updateAppointmentsTableStatuses = async (appointmentIds: string[]) => {
+        const validAppointmentIds = appointmentIds.filter((value) => isUuid(value));
+        if (validAppointmentIds.length === 0) return new Map<string, any>();
         const patchWithConfirmation: any = {
           status: tableStatus,
           updated_at: now
@@ -8423,17 +8482,23 @@ async function startServer() {
           });
         }
 
+        const updatedAppointments = new Map<string, any>();
         let safePatch: Record<string, any> = cleanObject(patchWithConfirmation);
         let triedLegacyStatus = false;
         while (Object.keys(safePatch).length > 0) {
-          let { data: updatedTableAppointment, error: tableUpdateError } = await supabase
+          const { data: updatedRows, error: tableUpdateError } = await supabase
             .from('appointments')
             .update(safePatch)
-            .eq('id', appointmentId)
-            .select('*')
-            .maybeSingle();
+            .in('id', validAppointmentIds)
+            .select('*');
 
-          if (!tableUpdateError) return updatedTableAppointment || null;
+          if (!tableUpdateError) {
+            for (const row of Array.isArray(updatedRows) ? updatedRows : []) {
+              const rowId = sanitizeString(row?.id, 120);
+              if (rowId) updatedAppointments.set(rowId, row);
+            }
+            return updatedAppointments;
+          }
 
           const missingColumn = extractMissingColumnName(tableUpdateError);
           if (missingColumn && missingColumn in safePatch) {
@@ -8448,10 +8513,10 @@ async function startServer() {
           }
 
           console.warn('[Appointments] status table sync failed:', tableUpdateError.message);
-          return null;
+          return updatedAppointments;
         }
 
-        return null;
+        return updatedAppointments;
       };
 
       const clinicStateQuery = supabase
@@ -8493,6 +8558,37 @@ async function startServer() {
       }
 
       const appointments = Array.isArray(ownerState?.appointments) ? ownerState.appointments : [];
+      let affectedAppointments = [foundAppointment];
+      if (isFutureRecurringCancellation) {
+        const recurrenceGroupId = getAppointmentRecurrenceGroupId(foundAppointment);
+        if (!recurrenceGroupId) {
+          affectedAppointments = [foundAppointment];
+        } else if (appointments.length > 0) {
+          affectedAppointments = appointments.filter((appointment: any) =>
+            isSameOrFutureRecurringAppointment(foundAppointment, appointment),
+          );
+        } else {
+          const { data: recurringRows, error: recurringReadError } = await supabase
+            .from('appointments')
+            .select('*')
+            .eq('recurrence_group_id', recurrenceGroupId)
+            .order('scheduled_at', { ascending: true });
+          if (recurringReadError) {
+            console.warn('[Appointments] recurring fallback read failed:', recurringReadError.message);
+          }
+          const recurringAppointments = Array.isArray(recurringRows) ? recurringRows : [];
+          affectedAppointments = recurringAppointments.filter((appointment: any) =>
+            isSameOrFutureRecurringAppointment(foundAppointment, appointment),
+          );
+        }
+      }
+      if (affectedAppointments.length === 0) {
+        affectedAppointments = [foundAppointment];
+      }
+      const affectedAppointmentIds = affectedAppointments
+        .map((appointment: any) => sanitizeString(appointment?.id, 120))
+        .filter(Boolean);
+      const affectedAppointmentIdSet = new Set(affectedAppointmentIds);
 
       if (isPatientActor) {
         const actorEmail = sanitizeEmail(actor?.email);
@@ -8544,7 +8640,7 @@ async function startServer() {
 
       if (ownerState) {
         nextAppointments = appointments.map((appointment: any) => {
-          if (String(appointment?.id) !== appointmentId) return appointment;
+          if (!affectedAppointmentIdSet.has(String(appointment?.id))) return appointment;
           
           const updated = {
             ...appointment,
@@ -8610,10 +8706,10 @@ async function startServer() {
         updatedClinicAppointments = Array.isArray(updated?.appointments) ? updated.appointments : nextAppointments;
       }
 
-      const updatedTableAppointment = await updateAppointmentsTableStatus();
+      const updatedTableAppointments = await updateAppointmentsTableStatuses(affectedAppointmentIds);
       const rawUpdatedAppointment =
         nextAppointments.find((appointment: any) => String(appointment?.id) === appointmentId) ||
-        updatedTableAppointment ||
+        updatedTableAppointments.get(appointmentId) ||
         {
           ...foundAppointment,
           status: normalizedStatus,
@@ -8658,6 +8754,8 @@ async function startServer() {
         payloadDetails: JSON.stringify({
           appointmentId,
           status: normalizedStatus,
+          recurrenceScope,
+          affectedAppointmentIds,
           source: safeSource,
           actorRole,
           patientId: updatedAppointment?.patientId || updatedAppointment?.patient_id || null,

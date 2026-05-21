@@ -503,6 +503,12 @@ export function CoordinatorDashboard({
     useState<any>(null);
   const [agendaAppointmentObservation, setAgendaAppointmentObservation] =
     useState("");
+  const [pendingRecurringCancellation, setPendingRecurringCancellation] =
+    useState<{
+      appointment: any;
+      note: string;
+      source: string;
+    } | null>(null);
   const [filteredPatients, setFilteredPatients] = useState<any[]>([]);
   const dashboardHeadlineMessage = useMemo(() => {
     const todayKey = new Date().toISOString().slice(0, 10);
@@ -1393,10 +1399,61 @@ export function CoordinatorDashboard({
     onUpdateAgendaStatus(id, status, details);
     onAddActivityLog(
       "Status de agenda atualizado",
-      `Agendamento ${id} atualizado para ${status}.${details?.note ? ` Observação: ${details.note}` : ""}`,
+      `Agendamento ${id} atualizado para ${status}${details?.recurrenceScope === "future" ? " para esta e as próximas consultas da série" : ""}.${details?.note ? ` Observação: ${details.note}` : ""}`,
       "management",
     );
   };
+
+  const isRecurringAppointment = useCallback((appointment: any) => {
+    if (!appointment) return false;
+    return Boolean(
+      appointment?.isRecurring ||
+        appointment?.is_recurring ||
+        appointment?.recurrenceGroupId ||
+        appointment?.recurrence_group_id,
+    );
+  }, []);
+
+  const requestAppointmentCancellation = useCallback(
+    (appointment: any, details: any = {}) => {
+      if (!appointment?.id) return;
+      const payload = {
+        note: String(
+          details?.note ?? details?.notes ?? details?.observation ?? "",
+        ).trim(),
+        source: String(details?.source || "agenda_management"),
+      };
+      if (isTherapist && isRecurringAppointment(appointment)) {
+        setPendingRecurringCancellation({
+          appointment,
+          ...payload,
+        });
+        return;
+      }
+      handleStatusUpdate(appointment.id, "canceled", {
+        ...payload,
+        recurrenceScope: "single",
+      });
+    },
+    [handleStatusUpdate, isRecurringAppointment, isTherapist],
+  );
+
+  const submitRecurringCancellation = useCallback(
+    (scope: "single" | "future") => {
+      if (!pendingRecurringCancellation?.appointment?.id) return;
+      handleStatusUpdate(
+        pendingRecurringCancellation.appointment.id,
+        "canceled",
+        {
+          note: pendingRecurringCancellation.note,
+          source: pendingRecurringCancellation.source,
+          recurrenceScope: scope,
+        },
+      );
+      setPendingRecurringCancellation(null);
+    },
+    [handleStatusUpdate, pendingRecurringCancellation],
+  );
 
   const normalizeCpfInput = (value: string) =>
     String(value || "")
@@ -2178,12 +2235,12 @@ export function CoordinatorDashboard({
   const handleCancelAppointmentFromAgenda = useCallback(
     (appointment: any) => {
       closeAgendaActionModal();
-      handleStatusUpdate(appointment?.id, "canceled", {
+      requestAppointmentCancellation(appointment, {
         note: agendaAppointmentObservation,
         source: "agenda_modal",
       });
     },
-    [agendaAppointmentObservation, closeAgendaActionModal, handleStatusUpdate],
+    [agendaAppointmentObservation, closeAgendaActionModal, requestAppointmentCancellation],
   );
 
   const handleConfirmAppointmentFromAgenda = useCallback(
@@ -6761,6 +6818,65 @@ export function CoordinatorDashboard({
               <div><span className="text-slate-400">Renovação da anamnese:</span> <p className="font-semibold text-slate-800">{normalizeAnamnesisRenewalMonths(selectedPatientProfile.anamnesisRenewalMonths)} meses</p></div>
               <div className="md:col-span-2"><span className="text-slate-400">Endereço:</span> <p className="font-semibold text-slate-800">{[selectedPatientProfile.address?.logradouro, selectedPatientProfile.address?.numero, selectedPatientProfile.address?.complemento, selectedPatientProfile.address?.bairro, selectedPatientProfile.address?.cidade].filter(Boolean).join(" - ") || "-"}</p></div>
               <div className="md:col-span-2"><span className="text-slate-400">Observações:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.notes || "-"}</p></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingRecurringCancellation && (
+        <div className="fixed inset-0 z-[134] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-3xl border border-violet-100 bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-violet-500">
+                  Recorrência
+                </p>
+                <h3 className="text-lg font-bold text-slate-900">
+                  Como deseja cancelar?
+                </h3>
+                <p className="mt-2 text-sm text-slate-500">
+                  Esta consulta faz parte de uma série recorrente. O cancelamento pode valer só para esta data ou para esta e as próximas consultas.
+                </p>
+              </div>
+              <button
+                onClick={() => setPendingRecurringCancellation(null)}
+                className="text-slate-400 hover:text-slate-700"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-sm font-bold text-slate-800">
+                {pendingRecurringCancellation.appointment?.patientName ||
+                  pendingRecurringCancellation.appointment?.name ||
+                  "Paciente"}
+              </p>
+              <p className="mt-1 text-xs font-medium text-slate-500">
+                {pendingRecurringCancellation.appointment?.date} às{" "}
+                {pendingRecurringCancellation.appointment?.time}
+              </p>
+            </div>
+
+            <div className="mt-6 grid gap-2">
+              <button
+                onClick={() => submitRecurringCancellation("single")}
+                className="rounded-2xl border border-rose-200 px-4 py-3 text-left text-sm font-semibold text-rose-600 transition-all hover:bg-rose-50"
+              >
+                Cancelar só esta consulta
+              </button>
+              <button
+                onClick={() => submitRecurringCancellation("future")}
+                className="rounded-2xl bg-rose-600 px-4 py-3 text-left text-sm font-semibold text-white transition-all hover:bg-rose-700"
+              >
+                Cancelar esta e as próximas
+              </button>
+              <button
+                onClick={() => setPendingRecurringCancellation(null)}
+                className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-600 transition-all hover:bg-slate-50"
+              >
+                Voltar
+              </button>
             </div>
           </div>
         </div>
