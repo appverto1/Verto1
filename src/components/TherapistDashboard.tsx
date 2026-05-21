@@ -93,7 +93,7 @@ const ProfileView = ({
   };
 
   return (
-    <div className="p-8 bg-slate-50 min-h-screen">
+    <div className="professional-dark-shell p-8 bg-slate-50 min-h-screen">
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center gap-4 mb-8">
           <button
@@ -858,7 +858,7 @@ export const TherapistDashboard = ({
   ];
 
   return (
-    <div className="flex min-h-screen bg-[#F4F7FE] font-sans overflow-hidden">
+    <div className="professional-dark-shell flex min-h-screen bg-[#F4F7FE] font-sans overflow-hidden">
       {/* Desktop Sidebar */}
       <aside 
         onMouseEnter={() => setIsSidebarExpanded(true)}
