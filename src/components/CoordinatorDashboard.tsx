@@ -474,7 +474,7 @@ export function CoordinatorDashboard({
   );
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     const legacy = localStorage.getItem("verto_theme");
-    return legacy === "dark" || legacy === "light" ? legacy : "dark";
+    return legacy === "dark" || legacy === "light" ? legacy : "light";
   });
   const [sessionDate, setSessionDate] = useState(
     new Date().toISOString().split("T")[0],
@@ -4426,7 +4426,7 @@ export function CoordinatorDashboard({
     }
     const patientSidebarExpanded = isSidebarExpanded;
     return (
-      <div className="professional-dark-shell min-h-screen bg-[#F4F7FE] flex">
+      <div className="min-h-screen bg-[#F4F7FE] flex">
         {/* Sidebar */}
         <div
           onMouseEnter={() => setIsSidebarExpanded(true)}
@@ -4909,7 +4909,7 @@ export function CoordinatorDashboard({
       ];
 
   return (
-    <div className="professional-dark-shell min-h-screen bg-[#F4F7FE] flex">
+    <div className="min-h-screen bg-[#F4F7FE] flex">
       {/* Sidebar */}
       <aside 
         onMouseEnter={() => setIsSidebarExpanded(true)}
