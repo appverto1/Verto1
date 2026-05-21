@@ -13,6 +13,8 @@ import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 type CumulativeGrowthChartProps = {
   patientId: string | number;
   history?: any[];
+  protocols?: any[];
+  protocolId?: string | number | null;
 };
 
 type CumulativePoint = {
@@ -32,13 +34,55 @@ const normalizeSkill = (value: unknown) =>
     .trim();
 
 const resolveScore = (row: any) => {
-  const raw = row?.professionalScore ?? row?.pro_score ?? row?.score;
+  const taskData = row?.task_data && typeof row.task_data === 'object'
+    ? row.task_data
+    : row?.taskData && typeof row.taskData === 'object'
+      ? row.taskData
+      : {};
+  const raw = row?.professionalScore ?? row?.pro_score ?? row?.score ?? taskData?.proScore ?? taskData?.pro_score;
   const score = Number(raw);
   return Number.isFinite(score) ? score : null;
 };
 
+const resolveMaxScore = (row: any, protocolMaxScore?: number) => {
+  const taskData = row?.task_data && typeof row.task_data === 'object'
+    ? row.task_data
+    : row?.taskData && typeof row.taskData === 'object'
+      ? row.taskData
+      : {};
+  const raw = row?.maxScore ?? row?.max_score ?? taskData?.maxScore ?? taskData?.max_score ?? protocolMaxScore ?? 1;
+  const maxScore = Number(raw);
+  return Number.isFinite(maxScore) ? Math.max(1, maxScore) : 1;
+};
+
+const resolveTitle = (row: any) => {
+  const taskData = row?.task_data && typeof row.task_data === 'object'
+    ? row.task_data
+    : row?.taskData && typeof row.taskData === 'object'
+      ? row.taskData
+      : {};
+  return String(row?.title || row?.taskTitle || taskData?.title || taskData?.skillName || taskData?.skill_name || '').trim();
+};
+
+const resolveProtocolRef = (row: any) => {
+  const taskData = row?.task_data && typeof row.task_data === 'object'
+    ? row.task_data
+    : row?.taskData && typeof row.taskData === 'object'
+      ? row.taskData
+      : {};
+  return {
+    id: String(row?.protocol_id || row?.protocolId || taskData?.protocol_id || taskData?.protocolId || '').trim(),
+    title: normalizeSkill(row?.protocol_title || row?.protocolTitle || taskData?.protocolTitle || taskData?.protocol_name || '')
+  };
+};
+
 const resolveTimestamp = (row: any) => {
-  const direct = new Date(row?.created_at || row?.createdAt || row?.date || row?.sessionReferenceDate || 0).getTime();
+  const taskData = row?.task_data && typeof row.task_data === 'object'
+    ? row.task_data
+    : row?.taskData && typeof row.taskData === 'object'
+      ? row.taskData
+      : {};
+  const direct = new Date(row?.reviewed_at || taskData?.reviewed_at || taskData?.reviewedAt || row?.created_at || row?.createdAt || row?.date || row?.sessionReferenceDate || 0).getTime();
   if (Number.isFinite(direct) && direct > 0) return direct;
   const numericId = Number(row?.id);
   return Number.isFinite(numericId) ? numericId : 0;
@@ -69,9 +113,34 @@ const CustomTooltip = ({ active, payload }: any) => {
   );
 };
 
-export const CumulativeGrowthChart = ({ patientId, history = [] }: CumulativeGrowthChartProps) => {
+export const CumulativeGrowthChart = ({ patientId, history = [], protocols = [], protocolId = null }: CumulativeGrowthChartProps) => {
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => setIsMounted(true), []);
+
+  const protocolSkillMap = useMemo(() => {
+    const selectedId = String(protocolId || '').trim();
+    const selectedProtocols = (Array.isArray(protocols) ? protocols : []).filter((protocol) => {
+      if (!selectedId || selectedId === 'all') return true;
+      return String(protocol?.id || '').trim() === selectedId;
+    });
+    const map = new Map<string, { maxScore: number; protocolId: string; protocolTitle: string }>();
+    selectedProtocols.forEach((protocol) => {
+      const protocolTitle = String(protocol?.title || protocol?.name || '').trim();
+      const resolvedProtocolId = String(protocol?.id || protocolTitle || '').trim();
+      (Array.isArray(protocol?.data) ? protocol.data : []).forEach((domain: any) => {
+        (Array.isArray(domain?.skills) ? domain.skills : []).forEach((skill: any) => {
+          const key = normalizeSkill(skill?.name || skill?.title);
+          if (!key) return;
+          map.set(key, {
+            maxScore: Math.max(1, Number(skill?.maxScore ?? skill?.max_score ?? 1) || 1),
+            protocolId: resolvedProtocolId,
+            protocolTitle: normalizeSkill(protocolTitle)
+          });
+        });
+      });
+    });
+    return map;
+  }, [protocolId, protocols]);
 
   const chartData = useMemo<CumulativePoint[]>(() => {
     const targetPatientId = String(patientId || '').trim();
@@ -79,14 +148,30 @@ export const CumulativeGrowthChart = ({ patientId, history = [] }: CumulativeGro
 
     const rows = (Array.isArray(history) ? history : [])
       .filter((row) => String(row?.patientId || row?.patient_id || '').trim() === targetPatientId)
-      .filter((row) => normalizeSkill(row?.title || row?.taskTitle))
+      .filter((row) => normalizeSkill(resolveTitle(row)))
       .filter((row) => resolveScore(row) !== null)
-      .map((row) => ({
-        ...row,
-        _skillKey: normalizeSkill(row?.title || row?.taskTitle),
-        _score: resolveScore(row) || 0,
-        _ts: resolveTimestamp(row)
-      }))
+      .map((row) => {
+        const title = resolveTitle(row);
+        const skillKey = normalizeSkill(title);
+        const protocolSkill = protocolSkillMap.get(skillKey);
+        const protocolRef = resolveProtocolRef(row);
+        const selectedProtocolId = String(protocolId || '').trim();
+        const rowMatchesSelectedProtocol =
+          !selectedProtocolId ||
+          selectedProtocolId === 'all' ||
+          protocolSkill ||
+          protocolRef.id === selectedProtocolId ||
+          (protocolRef.title && Array.from(protocolSkillMap.values()).some((item: any) => item.protocolTitle === protocolRef.title));
+        if (!rowMatchesSelectedProtocol) return null;
+        return {
+          ...row,
+          _skillKey: skillKey,
+          _score: resolveScore(row) || 0,
+          _maxScore: resolveMaxScore(row, protocolSkill?.maxScore),
+          _ts: resolveTimestamp(row)
+        };
+      })
+      .filter(Boolean)
       .sort((a, b) => a._ts - b._ts);
 
     if (!rows.length) return [];
@@ -95,7 +180,7 @@ export const CumulativeGrowthChart = ({ patientId, history = [] }: CumulativeGro
     const pointsByDate = new Map<string, CumulativePoint>();
 
     rows.forEach((row, index) => {
-      if (row._score >= 1) masteredSkills.add(row._skillKey);
+      if (row._score >= row._maxScore) masteredSkills.add(row._skillKey);
 
       const date = formatFullDate(row._ts, index);
       const label = formatDateLabel(row._ts, index);
@@ -107,7 +192,7 @@ export const CumulativeGrowthChart = ({ patientId, history = [] }: CumulativeGro
     });
 
     return Array.from(pointsByDate.values());
-  }, [history, patientId]);
+  }, [history, patientId, protocolId, protocolSkillMap]);
 
   if (!chartData.length) {
     return (

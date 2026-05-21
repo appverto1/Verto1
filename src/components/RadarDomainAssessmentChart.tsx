@@ -15,6 +15,7 @@ type RadarDomainAssessmentChartProps = {
   protocols?: any[];
   history?: any[];
   initialProtocolId?: string | number | null;
+  storageKey?: string;
 };
 
 type RadarDomainRow = {
@@ -42,7 +43,12 @@ const resolveTimestamp = (row: any) => {
 };
 
 const resolveScore = (row: any) => {
-  const raw = row?.professionalScore ?? row?.pro_score ?? row?.score;
+  const taskData = row?.task_data && typeof row.task_data === 'object'
+    ? row.task_data
+    : row?.taskData && typeof row.taskData === 'object'
+      ? row.taskData
+      : {};
+  const raw = row?.professionalScore ?? row?.pro_score ?? row?.score ?? taskData?.proScore ?? taskData?.pro_score;
   const score = Number(raw);
   return Number.isFinite(score) ? score : null;
 };
@@ -67,11 +73,21 @@ export const RadarDomainAssessmentChart = ({
   patientId,
   protocols = [],
   history = [],
-  initialProtocolId = null
+  initialProtocolId = null,
+  storageKey
 }: RadarDomainAssessmentChartProps) => {
   const [isMounted, setIsMounted] = useState(false);
+  const persistedStorageKey = storageKey || `verto.radar-domain-filter:${String(patientId || 'unknown')}`;
+  const readPersistedProtocolId = () => {
+    if (typeof window === 'undefined') return '';
+    try {
+      return String(window.localStorage.getItem(persistedStorageKey) || '').trim();
+    } catch {
+      return '';
+    }
+  };
   const [selectedProtocolId, setSelectedProtocolId] = useState(() =>
-    String(initialProtocolId || '').trim() || 'all'
+    readPersistedProtocolId() || String(initialProtocolId || '').trim() || 'all'
   );
   useEffect(() => setIsMounted(true), []);
 
@@ -86,6 +102,12 @@ export const RadarDomainAssessmentChart = ({
   }, [protocols]);
 
   useEffect(() => {
+    const persistedProtocolId = readPersistedProtocolId();
+    if (persistedProtocolId && protocolOptions.some((option) => option.id === persistedProtocolId)) {
+      setSelectedProtocolId(persistedProtocolId);
+      return;
+    }
+
     const normalizedInitialProtocolId = String(initialProtocolId || '').trim();
     const initialIsValid = normalizedInitialProtocolId
       ? protocolOptions.some((option) => option.id === normalizedInitialProtocolId)
@@ -104,7 +126,16 @@ export const RadarDomainAssessmentChart = ({
     if (!protocolOptions.some((option) => option.id === selectedProtocolId)) {
       setSelectedProtocolId('all');
     }
-  }, [initialProtocolId, protocolOptions, selectedProtocolId]);
+  }, [initialProtocolId, persistedStorageKey, protocolOptions, selectedProtocolId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(persistedStorageKey, selectedProtocolId);
+    } catch {
+      // localStorage can be unavailable in restricted contexts.
+    }
+  }, [persistedStorageKey, selectedProtocolId]);
 
   const visibleProtocols = useMemo(() => {
     if (selectedProtocolId === 'all') return protocolOptions.map((option) => option.protocol);

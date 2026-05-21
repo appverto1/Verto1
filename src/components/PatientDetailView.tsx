@@ -159,6 +159,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       patient?.anamnesisData?.formType === 'child' ||
       (patient?.anamnesisData?.formType !== 'adult' && hasNumericAge && normalizedPatientAge <= 12)
     ));
+  const chartFiltersStorageKey = `verto.patient-chart-filters:${String(patient?.id || 'unknown')}:${isKidsProfile ? 'kids' : 'adult'}`;
+  const readPersistedChartFilters = () => {
+    if (typeof window === 'undefined') return {};
+    try {
+      return JSON.parse(window.localStorage.getItem(chartFiltersStorageKey) || '{}') || {};
+    } catch {
+      return {};
+    }
+  };
+  const initialChartFilters = readPersistedChartFilters();
   const [activeTab, setActiveTab] = useState(initialTab); 
   const [newNote, setNewNote] = useState(""); 
   const [noteMode, setNoteMode] = useState('private'); 
@@ -168,11 +178,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [newNoteSubject, setNewNoteSubject] = useState("");
   const [showNoteFilters, setShowNoteFilters] = useState(false);
   const [showAnamnesis, setShowAnamnesis] = useState(false); 
-  const [reportPeriod, setReportPeriod] = useState('monthly');
-  const [comparisonDate1, setComparisonDate1] = useState('');
-  const [comparisonDate2, setComparisonDate2] = useState('');
-  const [adultReportDate1, setAdultReportDate1] = useState('');
-  const [adultReportDate2, setAdultReportDate2] = useState('');
+  const [reportPeriod, setReportPeriod] = useState(() => String(initialChartFilters.reportPeriod || 'monthly'));
+  const [comparisonDate1, setComparisonDate1] = useState(() => String(initialChartFilters.comparisonDate1 || ''));
+  const [comparisonDate2, setComparisonDate2] = useState(() => String(initialChartFilters.comparisonDate2 || ''));
+  const [adultReportDate1, setAdultReportDate1] = useState(() => String(initialChartFilters.adultReportDate1 || ''));
+  const [adultReportDate2, setAdultReportDate2] = useState(() => String(initialChartFilters.adultReportDate2 || ''));
   const [selectedReportNotes, setSelectedReportNotes] = useState<number[]>([]);
   const [selectedAdultEvolutionIds, setSelectedAdultEvolutionIds] = useState<string[]>([]);
   const [reportAdditionalNote, setReportAdditionalNote] = useState('');
@@ -428,6 +438,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [isLoadingAssignedTasks, setIsLoadingAssignedTasks] = useState(false);
   const [assignedReviewDrafts, setAssignedReviewDrafts] = useState<Record<string, { score: string; note: string }>>({});
   const [generatedReviewNotes, setGeneratedReviewNotes] = useState<any[]>([]);
+  const [suggestedInterventionTasks, setSuggestedInterventionTasks] = useState<any[]>([]);
+  const [suggestionsHydratedKey, setSuggestionsHydratedKey] = useState('');
   const [lastRecordedTrialId, setLastRecordedTrialId] = useState<any>(null);
   const [lastRecordedGoalId, setLastRecordedGoalId] = useState<any>(null);
   const [pendingTrial, setPendingTrial] = useState<any>(null);
@@ -436,6 +448,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [isSavingObservation, setIsSavingObservation] = useState(false);
   const sessionStorageKey = useMemo(
     () => `verto.active_patient_session:${String(patient?.id || 'unknown')}`,
+    [patient?.id]
+  );
+  const interventionSuggestionsStorageKey = useMemo(
+    () => `verto.adult-intervention-suggestions:${String(patient?.id || 'unknown')}`,
     [patient?.id]
   );
   const configuredDefaultSessionMinutes = useMemo(() => {
@@ -480,6 +496,25 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   useEffect(() => {
     setGeneratedReviewNotes([]);
   }, [patient?.id]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      setSuggestedInterventionTasks([]);
+      return;
+    }
+    try {
+      const persisted = JSON.parse(window.localStorage.getItem(interventionSuggestionsStorageKey) || '[]');
+      setSuggestedInterventionTasks(Array.isArray(persisted) ? persisted : []);
+    } catch {
+      setSuggestedInterventionTasks([]);
+    }
+    setSuggestionsHydratedKey(interventionSuggestionsStorageKey);
+  }, [interventionSuggestionsStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || suggestionsHydratedKey !== interventionSuggestionsStorageKey) return;
+    window.localStorage.setItem(interventionSuggestionsStorageKey, JSON.stringify(suggestedInterventionTasks.slice(0, 12)));
+  }, [interventionSuggestionsStorageKey, suggestedInterventionTasks, suggestionsHydratedKey]);
 
   const formatSessionCountdown = (totalSeconds: number) => {
     const safeSeconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
@@ -604,10 +639,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [reportStartDate, setReportStartDate] = useState("");
   const [reportEndDate, setReportEndDate] = useState("");
 
-  const [selectedChartProtocolId, setSelectedChartProtocolId] = useState('');
+  const [selectedChartProtocolId, setSelectedChartProtocolId] = useState(() => String(initialChartFilters.selectedChartProtocolId || ''));
   const [latestProtocolReference, setLatestProtocolReference] = useState<any>(null);
-  const [hasUserChangedChartProtocol, setHasUserChangedChartProtocol] = useState(false);
-  const [selectedSnapshotDate, setSelectedSnapshotDate] = useState("all");
+  const [hasUserChangedChartProtocol, setHasUserChangedChartProtocol] = useState(() => Boolean(initialChartFilters.selectedChartProtocolId));
+  const [selectedSnapshotDate, setSelectedSnapshotDate] = useState(() => String(initialChartFilters.selectedSnapshotDate || "all"));
+  const [chartFiltersHydratedKey, setChartFiltersHydratedKey] = useState(chartFiltersStorageKey);
   const isUuidLike = (value: unknown) =>
     typeof value === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -638,8 +674,46 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [patient?.birth_date, patient?.dataNascimento, patient?.anamnesisData?.dataNascimento, patient?.age]);
 
   useEffect(() => {
-    setHasUserChangedChartProtocol(false);
-  }, [patient?.id]);
+    const persisted = readPersistedChartFilters();
+    const safeReportPeriod = ['monthly', 'bimonthly', 'quarterly', 'semiannual', 'annual'].includes(String(persisted.reportPeriod || ''))
+      ? String(persisted.reportPeriod)
+      : 'monthly';
+    setReportPeriod(safeReportPeriod);
+    setComparisonDate1(String(persisted.comparisonDate1 || ''));
+    setComparisonDate2(String(persisted.comparisonDate2 || ''));
+    setAdultReportDate1(String(persisted.adultReportDate1 || ''));
+    setAdultReportDate2(String(persisted.adultReportDate2 || ''));
+    setSelectedChartProtocolId(String(persisted.selectedChartProtocolId || ''));
+    setSelectedSnapshotDate(String(persisted.selectedSnapshotDate || 'all'));
+    setHasUserChangedChartProtocol(Boolean(persisted.selectedChartProtocolId));
+    setChartFiltersHydratedKey(chartFiltersStorageKey);
+  }, [chartFiltersStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || chartFiltersHydratedKey !== chartFiltersStorageKey) return;
+    window.localStorage.setItem(
+      chartFiltersStorageKey,
+      JSON.stringify({
+        selectedChartProtocolId,
+        selectedSnapshotDate,
+        comparisonDate1,
+        comparisonDate2,
+        adultReportDate1,
+        adultReportDate2,
+        reportPeriod
+      })
+    );
+  }, [
+    adultReportDate1,
+    adultReportDate2,
+    chartFiltersHydratedKey,
+    chartFiltersStorageKey,
+    comparisonDate1,
+    comparisonDate2,
+    reportPeriod,
+    selectedChartProtocolId,
+    selectedSnapshotDate
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1656,6 +1730,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .replace(/famÃ­lia/gi, 'família')
       .replace(/sessÃ£o/gi, 'sessão')
       .replace(/avaliaÃ§Ã£o/gi, 'avaliação')
+      .replace(/Energia restante após a tarefa/gi, 'Energia após a atividade')
+      .replace(/Esforço informado/gi, 'Energia após a atividade')
       .replace(/Ã¡/g, 'á')
       .replace(/Ã©/g, 'é')
       .replace(/Ã­/g, 'í')
@@ -2172,6 +2248,33 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return protocol && String(protocol.id) === String(selectedChartProtocol.id);
     });
   }, [adultCompletedTasks, selectedChartProtocol, isKidsProfile, protocols]);
+
+  const cumulativeGrowthHistory = useMemo(() => {
+    const baseHistory = Array.isArray(history) ? history : [];
+    if (isKidsProfile) return baseHistory;
+    const adultRows = adultCompletedTasks
+      .filter((task: any) => Number.isFinite(Number(task?.professionalScore)))
+      .map((task: any) => {
+        const taskData = getAssignedTaskData(task);
+        return {
+          id: `adult-cumulative-${task?.id}`,
+          patientId: task?.patientId || task?.patient_id || patient?.id,
+          patient_id: task?.patient_id || task?.patientId || patient?.id,
+          title: task?.taskTitle || taskData?.title || task?.title || 'Tarefa',
+          taskTitle: task?.taskTitle || taskData?.title || task?.title || 'Tarefa',
+          professionalScore: task?.professionalScore,
+          pro_score: task?.professionalScore,
+          maxScore: task?.maxScore,
+          max_score: task?.maxScore,
+          created_at: task?.reviewed_at || task?.reviewDateRaw || task?.eventDateRaw || task?.completed_at || task?.created_at,
+          reviewed_at: task?.reviewed_at || task?.reviewDateRaw || task?.eventDateRaw,
+          protocol_id: taskData?.protocolId || taskData?.protocol_id || task?.protocol_id,
+          protocol_title: taskData?.protocolTitle || taskData?.protocol_name || task?.protocol_title,
+          task_data: taskData
+        };
+      });
+    return [...baseHistory, ...adultRows];
+  }, [adultCompletedTasks, history, isKidsProfile, patient?.id]);
 
   const toDateKey = (value: any) => {
     const date = value instanceof Date ? value : new Date(value);
@@ -2870,7 +2973,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return next;
     });
 
-    const returnedNote = result?.privateNote;
+    const returnedNote = result?.privateNote || {
+      id: `assigned-review-note-${taskId}`,
+      patient_id: reviewedTask?.patient_id || patient?.id,
+      text: [
+        'REVISÃO PROFISSIONAL DE TAREFA ADULTA',
+        `Tarefa: ${String(reviewedTask?.task_data?.title || reviewedTask?.title || 'Tarefa adulta')}`,
+        `Pontuação profissional: ${numericScore} / ${dynamicMaxScore}`,
+        `Energia após a atividade: ${normalizeEffortPercent(reviewedTask?.patient_effort ?? reviewedTask?.task_data?.patientEffort ?? reviewedTask?.task_data?.patient_effort ?? 0)}%`,
+        draft.note ? `Anotação técnica: ${draft.note}` : 'Anotação técnica: Sem anotação técnica registrada.'
+      ].join('\n'),
+      content: '',
+      created_at: reviewedTask?.reviewed_at || new Date().toISOString(),
+      visibility: 'private',
+      type: 'private',
+      subject: 'Revisão profissional - tarefa adulta'
+    };
     if (returnedNote) {
       const noteCreatedAt = returnedNote?.created_at || reviewedTask?.reviewed_at || new Date().toISOString();
       setGeneratedReviewNotes((prev) => {
@@ -2892,15 +3010,25 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       });
     }
 
-    if (result?.mastery_feedback?.protocol === 'VB-MAPP') {
-      alert(result.mastery_feedback.progress_text || 'Sucesso consecutivo registrado no VB-MAPP.');
-    }
-
     const suggestedTask = result?.suggestedTask;
     if (suggestedTask) {
-      const suggestedTitle = String(suggestedTask?.task_data?.title || 'Intervenção sugerida');
-      alert(`Sugestão clínica gerada: "${suggestedTitle}". Use "Plano Adulto" para Atribuir/Agendar manualmente ao paciente.`);
+      const taskData = suggestedTask?.task_data && typeof suggestedTask.task_data === 'object' ? suggestedTask.task_data : {};
+      const suggestion = {
+        ...suggestedTask,
+        id: String(suggestedTask?.id || `suggestion-${taskId}`),
+        sourceAssignedTaskId: taskId,
+        createdAt: new Date().toISOString(),
+        title: String(taskData?.title || suggestedTask?.title || 'Intervenção sugerida'),
+        description: String(taskData?.description || suggestedTask?.description || ''),
+        task_data: taskData
+      };
+      setSuggestedInterventionTasks((prev) => [
+        suggestion,
+        ...prev.filter((item: any) => String(item?.sourceAssignedTaskId || item?.id) !== String(taskId))
+      ].slice(0, 12));
     }
+
+    alert('Nota profissional salva com sucesso.');
   };
 
   const isFormValid = () => { 
@@ -3339,7 +3467,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         'Anotações de evolução selecionadas:',
         ...(selectedNotes.length
           ? selectedNotes.map((task: any) =>
-              `- ${task.taskTitle} | ${task.eventDate.toLocaleDateString('pt-BR')} | esforço ${task.patientEffort}% | nota ${task.professionalScore ?? '-'} / ${task.maxScore} (${normalizeScoreToPercent(task.professionalScore ?? 0, task.maxScore).toFixed(1)}%) | ${task.evolutionNote || 'Sem anotação'}`
+              `- ${task.taskTitle} | ${task.eventDate.toLocaleDateString('pt-BR')} | energia ${task.patientEffort}% | nota ${task.professionalScore ?? '-'} / ${task.maxScore} (${normalizeScoreToPercent(task.professionalScore ?? 0, task.maxScore).toFixed(1)}%) | ${task.evolutionNote || 'Sem anotação'}`
             )
           : ['- Nenhuma anotação selecionada']),
         '',
@@ -3775,12 +3903,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <RadarDomainAssessmentChart
                   patientId={patient.id}
                   protocols={planProtocolCatalog}
-                  history={history}
+                  history={cumulativeGrowthHistory}
                   initialProtocolId={selectedChartProtocolId}
+                  storageKey={`verto.radar-domain-filter:${String(patient?.id || 'unknown')}`}
                 />
                 <CumulativeGrowthChart
                   patientId={patient.id}
-                  history={history}
+                  history={cumulativeGrowthHistory}
+                  protocols={planProtocolCatalog}
+                  protocolId={selectedChartProtocolId}
                 />
               </div>
             )}
@@ -3891,7 +4022,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                             <div className={`rounded-2xl border p-3 ${isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-white border-slate-200'}`}>
                               <div className="flex items-center justify-between gap-3 mb-2">
                                 <span className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                                  Energia restante após a tarefa
+                                  Energia após a atividade
                                 </span>
                                 <span className={`text-sm font-semibold flex items-center gap-2 ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>
                                   <span className="text-lg">{event.patientEffortEmoji || getEffortEmoji(event.patientEffort)}</span>
@@ -3900,9 +4031,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                               </div>
                               <div className={`h-2 rounded-full overflow-hidden ${isPanelDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
                                 <div
-                                  className="h-full rounded-full bg-gradient-to-r from-[#7a32fc] to-[#05CD99]"
+                                  className="h-full rounded-full bg-gradient-to-r from-[#fb5a4d] via-[#f6c04d] to-[#05CD99]"
                                   style={{ width: `${normalizeEffortPercent(event.patientEffort)}%` }}
                                 />
+                              </div>
+                              <div className={`mt-2 flex justify-between text-[10px] font-semibold ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                                <span>Baixa</span>
+                                <span>Média</span>
+                                <span>Alta</span>
                               </div>
                             </div>
                             <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
@@ -4369,7 +4505,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         </div>
                         <p className="text-sm font-semibold text-gray-800">{task.taskTitle}</p>
                         <p className="text-xs text-gray-600 mt-1">
-                          Esforço: <span className="font-semibold">{task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}%</span>
+                          Energia após a atividade: <span className="font-semibold">{task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}%</span>
                         </p>
                         <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap mt-2">
                           {normalizeNoteText(task.evolutionNote) || 'Sem anotação técnica registrada.'}
@@ -4420,7 +4556,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                             </div>
                             <p className={`text-xs font-semibold ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>{task.taskTitle}</p>
                             <p className={`text-[11px] mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>
-                              Esforço {task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}% • Nota {task.professionalScore ?? '-'} / {task.maxScore}
+                              Energia {task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}% • Nota {task.professionalScore ?? '-'} / {task.maxScore}
                             </p>
                             <p className={`text-xs line-clamp-2 mt-1 ${isPanelDark ? 'text-slate-200' : 'text-gray-600'}`}>{normalizeNoteText(task.evolutionNote) || 'Sem anotação técnica.'}</p>
                           </div>
@@ -5016,6 +5152,56 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     )} 
                   </div> 
                 </div> 
+                {!isKidsProfile && suggestedInterventionTasks.length > 0 && (
+                  <div className={`rounded-3xl border p-4 shadow-sm ${isPanelDark ? 'bg-emerald-500/5 border-emerald-400/15' : 'bg-emerald-50/60 border-emerald-100'}`}>
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div>
+                        <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-emerald-200' : 'text-emerald-700'}`}>Sugestões discretas de intervenção</p>
+                        <p className={`text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Geradas após pontuações baixas. Use apenas quando fizer sentido para o plano do paciente.</p>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      {suggestedInterventionTasks.map((suggestion: any) => {
+                        const title = String(suggestion?.title || suggestion?.task_data?.title || 'Intervenção sugerida');
+                        const description = normalizeNoteText(String(suggestion?.description || suggestion?.task_data?.description || ''));
+                        return (
+                          <div key={String(suggestion?.id || suggestion?.sourceAssignedTaskId || title)} className={`rounded-2xl border p-3 ${isPanelDark ? 'bg-slate-900/50 border-slate-700' : 'bg-white/80 border-emerald-100'}`}>
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div className="min-w-0">
+                                <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{title}</p>
+                                {description && <p className={`mt-1 text-xs leading-relaxed ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{description}</p>}
+                              </div>
+                              <div className="flex shrink-0 items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPlanType('intervention');
+                                    setIsCreatingNewTask(true);
+                                    setNewTaskName(title.replace(/^Intervenção sugerida:\s*/i, ''));
+                                    setNewTaskObjective(description);
+                                    setFinalTaskTitle(title.replace(/^Intervenção sugerida:\s*/i, ''));
+                                    setFinalTaskSubtitle(description);
+                                  }}
+                                  className={`rounded-xl px-3 py-2 text-[10px] font-semibold uppercase tracking-widest transition-colors ${isPanelDark ? 'bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/15' : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'}`}
+                                >
+                                  Usar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setSuggestedInterventionTasks((prev) => prev.filter((item: any) => String(item?.id || item?.sourceAssignedTaskId) !== String(suggestion?.id || suggestion?.sourceAssignedTaskId)))}
+                                  className={`rounded-xl p-2 transition-colors ${isPanelDark ? 'text-slate-500 hover:bg-slate-800 hover:text-slate-200' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'}`}
+                                  title="Ocultar sugestão"
+                                >
+                                  <X size={14} />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 <div className="space-y-3"> 
                   <h3 className={`text-sm font-semibold uppercase tracking-wider ml-2 tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Agendados</h3> 
                   {((isKidsProfile ? (patientTasks || []) : adultScheduledTasks).length || 0) > 0 ? ((isKidsProfile ? (patientTasks || []) : adultScheduledTasks).map((task: any) => ( 
@@ -5057,7 +5243,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                 <p className="font-semibold text-gray-800 text-sm tracking-tight">{displayedTitle}</p>
                                 <div className="mt-2 w-full max-w-xs rounded-xl border border-slate-100 bg-slate-50 p-2">
                                   <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
-                                    <span>Esforço informado</span>
+                                    <span>Energia após a atividade</span>
                                     <span className="font-semibold text-slate-800 flex items-center gap-1">
                                       <span>{String(task?.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || getEffortEmoji(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0))}</span>
                                       {normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0)}%
@@ -5065,9 +5251,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                   </div>
                                   <div className="h-1.5 bg-white rounded-full overflow-hidden">
                                     <div
-                                      className="h-full rounded-full bg-gradient-to-r from-[#7a32fc] to-[#05CD99]"
+                                      className="h-full rounded-full bg-gradient-to-r from-[#fb5a4d] via-[#f6c04d] to-[#05CD99]"
                                       style={{ width: `${normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0)}%` }}
                                     />
+                                  </div>
+                                  <div className="mt-1 flex justify-between text-[9px] font-semibold text-gray-400">
+                                    <span>Baixa</span>
+                                    <span>Média</span>
+                                    <span>Alta</span>
                                   </div>
                                 </div>
                                 {reviewContext?.protocol && (

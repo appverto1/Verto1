@@ -12,9 +12,20 @@ import { calculateDomainMastery } from '../utils/clinicalMath';
 import { ensureFreshSession } from '../lib/supabase';
 
 export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false, patientPortalId = '' }: any) => { 
-  const [selectedBaseDate, setSelectedBaseDate] = useState("");
-  const [selectedCompareDate, setSelectedCompareDate] = useState("");
-  const [selectedSnapshotDate, setSelectedSnapshotDate] = useState("all");
+  const chartFiltersStorageKey = `verto.patient-dashboard-chart-filters:${String(user?.id || patientPortalId || 'unknown')}`;
+  const readPersistedChartFilters = () => {
+    if (typeof window === 'undefined') return {};
+    try {
+      return JSON.parse(window.localStorage.getItem(chartFiltersStorageKey) || '{}') || {};
+    } catch {
+      return {};
+    }
+  };
+  const initialChartFilters = readPersistedChartFilters();
+  const [selectedBaseDate, setSelectedBaseDate] = useState(() => String(initialChartFilters.selectedBaseDate || ""));
+  const [selectedCompareDate, setSelectedCompareDate] = useState(() => String(initialChartFilters.selectedCompareDate || ""));
+  const [selectedSnapshotDate, setSelectedSnapshotDate] = useState(() => String(initialChartFilters.selectedSnapshotDate || "all"));
+  const [chartFiltersHydratedKey, setChartFiltersHydratedKey] = useState(chartFiltersStorageKey);
   const [selectedTask, setSelectedTask] = useState<any>(null); 
   const [taskEnergy, setTaskEnergy] = useState(50); 
   const [taskNote, setTaskNote] = useState(""); 
@@ -74,6 +85,26 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     (!hasExplicitPatientType && ((userAge !== null && userAge <= 12) || user.anamnesisData?.formType === 'child'));
   const isConventionalAdult = (userType === 'conventional' || userType === 'adult_conventional') && !isKidsProfile;
   const readOnlyNotice = "Você não possui um tratamento ativo no momento. Entre em contato com sua clínica para retomar o acompanhamento.";
+
+  useEffect(() => {
+    const persisted = readPersistedChartFilters();
+    setSelectedBaseDate(String(persisted.selectedBaseDate || ""));
+    setSelectedCompareDate(String(persisted.selectedCompareDate || ""));
+    setSelectedSnapshotDate(String(persisted.selectedSnapshotDate || "all"));
+    setChartFiltersHydratedKey(chartFiltersStorageKey);
+  }, [chartFiltersStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || chartFiltersHydratedKey !== chartFiltersStorageKey) return;
+    window.localStorage.setItem(
+      chartFiltersStorageKey,
+      JSON.stringify({
+        selectedBaseDate,
+        selectedCompareDate,
+        selectedSnapshotDate
+      })
+    );
+  }, [chartFiltersHydratedKey, chartFiltersStorageKey, selectedBaseDate, selectedCompareDate, selectedSnapshotDate]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setCurrentTime(new Date()), 5000);
@@ -1409,6 +1440,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 <div className="mb-6">
                   <CumulativeGrowthChart
                     patientId={user.id}
+                    protocols={protocols}
+                    protocolId={activeKidsProtocol?.id}
                     history={activeKidsProtocolEvents.map((event: any) => ({
                       ...event,
                       patientId: event?.patientId || event?.patient_id || user.id,
@@ -1985,7 +2018,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                         value={taskEnergy}
                         onChange={(e: any) => setTaskEnergy(Number(e.target.value) || 0)}
                         onCommit={handleEnergyCommit}
-                        label={isConventionalAdult ? 'Esforço' : 'Energia'}
+                        label="Energia"
                         scaleLabels={isConventionalAdult ? ['Difícil', 'Moderado', 'Leve'] : ['Baixa', 'Média', 'Alta']}
                       /> 
                       <p className="text-center text-[10px] text-[#7a32fc]/50 mt-4 font-medium animate-pulse italic uppercase tracking-widest">(Solte para continuar)</p>
@@ -1997,7 +2030,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <div className="animate-slide-up"> 
                 <div className="mb-4"> 
                   <div className="flex items-center justify-between mb-2"> 
-                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">{isKidsProfile ? 'Sua Pontuação' : isConventionalAdult ? 'Esforço' : 'Energia'}</span> 
+                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">{isKidsProfile ? 'Sua Pontuação' : 'Energia'}</span>
                     <span className="text-sm font-semibold text-[#7a32fc] flex items-center gap-2">{!isKidsProfile ? <span>{getTaskEnergyEmoji(Number(taskEnergy) || 0)}</span> : null}{isKidsProfile ? taskEnergy : `${taskEnergy}%`}</span> 
                   </div> 
                   <div className="w-full bg-gray-100 rounded-full h-2"> 

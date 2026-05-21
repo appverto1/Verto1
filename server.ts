@@ -13727,7 +13727,7 @@ async function startServer() {
         reviewMetadata.protocolTitle ? `Protocolo: ${reviewMetadata.protocolTitle}` : '',
         reviewMetadata.domainName ? `Domínio: ${reviewMetadata.domainName}` : '',
         `Pontuação profissional: ${proScore} / ${maxScoreFromTask}`,
-        patientEffort !== null ? `Energia restante após a tarefa: ${patientEffort}% ${patientEffortEmoji || ''}`.trim() : '',
+        patientEffort !== null ? `Energia após a atividade: ${patientEffort}% ${patientEffortEmoji || ''}`.trim() : '',
         sanitizeTextField(existing?.patient_comment, 4000) ? `Comentário do paciente: ${sanitizeTextField(existing?.patient_comment, 4000)}` : '',
         reviewNote ? `Anotação técnica: ${reviewNote}` : 'Anotação técnica: Sem anotação técnica registrada.'
       ].filter(Boolean);
