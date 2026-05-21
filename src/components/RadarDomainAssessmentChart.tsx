@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   PolarAngleAxis,
   PolarGrid,
@@ -89,6 +89,8 @@ export const RadarDomainAssessmentChart = ({
   const [selectedProtocolId, setSelectedProtocolId] = useState(() =>
     readPersistedProtocolId() || String(initialProtocolId || '').trim() || 'all'
   );
+  const lastHydratedStorageKeyRef = useRef(persistedStorageKey);
+  const hasUserSelectedProtocolRef = useRef(false);
   useEffect(() => setIsMounted(true), []);
 
   const protocolOptions = useMemo(() => {
@@ -102,31 +104,31 @@ export const RadarDomainAssessmentChart = ({
   }, [protocols]);
 
   useEffect(() => {
-    const persistedProtocolId = readPersistedProtocolId();
-    if (persistedProtocolId && protocolOptions.some((option) => option.id === persistedProtocolId)) {
-      setSelectedProtocolId(persistedProtocolId);
-      return;
-    }
+    if (lastHydratedStorageKeyRef.current === persistedStorageKey) return;
+    lastHydratedStorageKeyRef.current = persistedStorageKey;
+    hasUserSelectedProtocolRef.current = false;
 
+    const nextProtocolId = readPersistedProtocolId() || String(initialProtocolId || '').trim() || 'all';
+    setSelectedProtocolId((prev) => (prev === nextProtocolId ? prev : nextProtocolId));
+  }, [initialProtocolId, persistedStorageKey]);
+
+  useEffect(() => {
     const normalizedInitialProtocolId = String(initialProtocolId || '').trim();
     const initialIsValid = normalizedInitialProtocolId
       ? protocolOptions.some((option) => option.id === normalizedInitialProtocolId)
       : false;
 
-    if (initialIsValid) {
-      setSelectedProtocolId((prev) => {
-        const previousIsValid = protocolOptions.some((option) => option.id === prev);
-        if (prev === 'all' || !previousIsValid) return normalizedInitialProtocolId;
+    setSelectedProtocolId((prev) => {
+      const previousIsValid = prev === 'all' || protocolOptions.some((option) => option.id === prev);
+      if (previousIsValid) {
+        if (prev === 'all' && !hasUserSelectedProtocolRef.current && initialIsValid) {
+          return normalizedInitialProtocolId;
+        }
         return prev;
-      });
-      return;
-    }
-
-    if (selectedProtocolId === 'all') return;
-    if (!protocolOptions.some((option) => option.id === selectedProtocolId)) {
-      setSelectedProtocolId('all');
-    }
-  }, [initialProtocolId, persistedStorageKey, protocolOptions, selectedProtocolId]);
+      }
+      return initialIsValid ? normalizedInitialProtocolId : 'all';
+    });
+  }, [initialProtocolId, protocolOptions]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -235,7 +237,10 @@ export const RadarDomainAssessmentChart = ({
             <select
               className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-700 outline-none transition-all focus:border-[#8B5CF6] focus:ring-4 focus:ring-[#8B5CF6]/10"
               value={selectedProtocolId}
-              onChange={(event) => setSelectedProtocolId(event.target.value)}
+              onChange={(event) => {
+                hasUserSelectedProtocolRef.current = true;
+                setSelectedProtocolId(event.target.value);
+              }}
             >
               <option value="all">Todos os protocolos</option>
               {protocolOptions.map((option) => (
