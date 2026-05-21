@@ -162,7 +162,7 @@ export const SuccessOverlay = ({ title = "Fantástico!", message = "Você está 
   </div> 
 );
 
-export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true, label = 'Energia', scaleLabels }: any) => { 
+export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true, label = 'Energia', labelHelp, scaleLabels }: any) => { 
   const numericValue = Number(value) || 0;
   const resolvedScaleLabels = Array.isArray(scaleLabels) && scaleLabels.length === 3
     ? scaleLabels
@@ -178,7 +178,19 @@ export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true, l
     <div className="w-full"> 
       {showLabel && (
         <div className="flex justify-between items-center mb-4">
-          <span className="font-semibold text-gray-700 flex items-center gap-2"><BatteryCharging size={20} className="text-[#7a32fc]" /> {label}</span>
+          <span className="font-semibold text-gray-700 flex items-center gap-2">
+            <BatteryCharging size={20} className="text-[#7a32fc]" />
+            {labelHelp ? (
+              <span className="relative group cursor-help" tabIndex={0} title={labelHelp} aria-label={`${label}: ${labelHelp}`}>
+                {label}
+                <span className="pointer-events-none absolute left-0 top-full z-30 mt-2 hidden w-56 rounded-2xl bg-slate-900 px-3 py-2 text-xs font-semibold leading-relaxed text-white shadow-xl group-hover:block group-focus:block">
+                  {labelHelp}
+                </span>
+              </span>
+            ) : (
+              label
+            )}
+          </span>
           <div className="flex items-center gap-2 bg-white px-3 py-1 rounded-full shadow-sm">
             <span className="text-2xl">{getMoodEmoji(numericValue)}</span>
             <span className="text-xl font-semibold text-[#7a32fc]">{numericValue}%</span>

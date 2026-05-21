@@ -3689,7 +3689,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4 text-green-600"><Activity size={32} /></div> 
             <h3 className="text-xl font-semibold text-gray-800 mb-2">Agendamento Confirmado!</h3> 
             <p className="text-gray-500 text-sm mb-6">A tarefa foi enviada para a agenda do paciente e salva no protocolo.</p> 
-            <button onClick={() => setShowConfirmation(false)} className="w-full py-3 bg-gray-100 rounded-xl font-semibold text-gray-700 hover:bg-gray-200 transition-colors">Fechar</button> 
+            <button
+              onClick={() => setShowConfirmation(false)}
+              className="w-full py-3 bg-slate-900 rounded-xl font-semibold text-white hover:bg-slate-800 transition-colors shadow-sm"
+            >
+              Fechar
+            </button> 
           </div> 
         </div> 
       )} 

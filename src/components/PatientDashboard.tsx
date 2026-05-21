@@ -84,6 +84,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     userType === 'kids_tea' ||
     (!hasExplicitPatientType && ((userAge !== null && userAge <= 12) || user.anamnesisData?.formType === 'child'));
   const isConventionalAdult = (userType === 'conventional' || userType === 'adult_conventional') && !isKidsProfile;
+  const taskReflectionLabel = isConventionalAdult ? 'Humor' : 'Energia';
+  const taskReflectionPrompt = isConventionalAdult
+    ? 'Registre seu humor depois dessa tarefa'
+    : 'Registre sua energia depois dessa tarefa';
+  const taskReflectionHelp = isConventionalAdult
+    ? 'Quanto mais alto o humor, mais fácil foi fazer essa tarefa'
+    : 'Quanto mais energia, mais fácil foi fazer essa tarefa';
   const readOnlyNotice = "Você não possui um tratamento ativo no momento. Entre em contato com sua clínica para retomar o acompanhamento.";
 
   useEffect(() => {
@@ -1865,9 +1872,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <p className="text-gray-500 text-sm mt-1">
                 {selectedTask.type === 'intervention'
                   ? 'Instruções da tarefa de intervenção'
-                  : isConventionalAdult
-                    ? 'Como foi fazer essa tarefa?'
-                    : 'Como foi realizar esta atividade?'}
+                  : taskReflectionPrompt}
               </p> 
             </div> 
             {selectedTask.type === 'intervention' ? (
@@ -2018,7 +2023,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                         value={taskEnergy}
                         onChange={(e: any) => setTaskEnergy(Number(e.target.value) || 0)}
                         onCommit={handleEnergyCommit}
-                        label="Energia"
+                        label={taskReflectionLabel}
+                        labelHelp={taskReflectionHelp}
                         scaleLabels={isConventionalAdult ? ['Difícil', 'Moderado', 'Leve'] : ['Baixa', 'Média', 'Alta']}
                       /> 
                       <p className="text-center text-[10px] text-[#7a32fc]/50 mt-4 font-medium animate-pulse italic uppercase tracking-widest">(Solte para continuar)</p>
@@ -2030,7 +2036,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <div className="animate-slide-up"> 
                 <div className="mb-4"> 
                   <div className="flex items-center justify-between mb-2"> 
-                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">{isKidsProfile ? 'Sua Pontuação' : 'Energia'}</span>
+                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">{isKidsProfile ? 'Sua Pontuação' : taskReflectionLabel}</span>
                     <span className="text-sm font-semibold text-[#7a32fc] flex items-center gap-2">{!isKidsProfile ? <span>{getTaskEnergyEmoji(Number(taskEnergy) || 0)}</span> : null}{isKidsProfile ? taskEnergy : `${taskEnergy}%`}</span> 
                   </div> 
                   <div className="w-full bg-gray-100 rounded-full h-2"> 
