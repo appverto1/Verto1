@@ -714,7 +714,7 @@ export const SessionMode = ({
 
   const saveIntervalAggregate = (run: any, completedTotal: number, occurredTotal: number, endedAt: string, reason = 'completed') => {
     const safeCompletedTotal = Math.max(0, Number(completedTotal || 0));
-    const safeOccurredTotal = Math.max(0, Number(occurredTotal || 0));
+    const safeOccurredTotal = Math.min(safeCompletedTotal, Math.max(0, Number(occurredTotal || 0)));
     const notOccurredTotal = Math.max(0, safeCompletedTotal - safeOccurredTotal);
     const percent = safeCompletedTotal > 0 ? Math.round((safeOccurredTotal / safeCompletedTotal) * 100) : 0;
     const aggregateId = `${run.id}-summary`;
@@ -983,6 +983,14 @@ export const SessionMode = ({
     const localTotal = records.filter((record) => record.syncStatus === 'local' || record.syncStatus === 'syncing').length;
     return { trialTotal, behaviorTotal, errorTotal, localTotal };
   }, [records]);
+
+  const intervalSummaryTotals = useMemo(() => {
+    const total = Math.max(0, Number(intervalSummary?.totalIntervals || 0));
+    const occurred = Math.min(total, Math.max(0, Number(intervalSummary?.occurredCount || 0)));
+    const notOccurred = Math.max(0, total - occurred);
+    const percent = total > 0 ? Math.round((occurred / total) * 100) : 0;
+    return { total, occurred, notOccurred, percent };
+  }, [intervalSummary]);
 
   const renderSyncBadge = (status: SyncStatus) => (
     <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-widest ${syncClasses[status]}`}>
@@ -1334,19 +1342,19 @@ export const SessionMode = ({
                 </div>
                 <div className="rounded-2xl bg-white/70 border border-emerald-100 p-3">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Total</p>
-                  <p className="text-2xl font-bold text-emerald-950">{intervalSummary.totalIntervals}</p>
+                  <p className="text-2xl font-bold text-emerald-950">{intervalSummaryTotals.total}</p>
                 </div>
                 <div className="rounded-2xl bg-white/70 border border-emerald-100 p-3">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">SIM</p>
-                  <p className="text-2xl font-bold text-emerald-700">{intervalSummary.occurredCount}</p>
+                  <p className="text-2xl font-bold text-emerald-700">{intervalSummaryTotals.occurred}</p>
                 </div>
                 <div className="rounded-2xl bg-white/70 border border-emerald-100 p-3">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">NAO</p>
-                  <p className="text-2xl font-bold text-emerald-700">{intervalSummary.notOccurredCount}</p>
+                  <p className="text-2xl font-bold text-emerald-700">{intervalSummaryTotals.notOccurred}</p>
                 </div>
                 <div className="rounded-2xl bg-white/70 border border-emerald-100 p-3">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Ocorrencia</p>
-                  <p className="text-2xl font-bold text-emerald-700">{intervalSummary.percent}%</p>
+                  <p className="text-2xl font-bold text-emerald-700">{intervalSummaryTotals.percent}%</p>
                 </div>
               </div>
             </div>
