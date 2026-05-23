@@ -442,7 +442,7 @@ test('aba prompt integrity: dropdown selections are canonical and persistent', (
 test('aba session mode: trials and behavior events are one-touch and session-scoped', () => {
   assert.match(
     sessionModeCode,
-    /onClick=\{\(\) => handleTrialClick\(goal, 1, 'independent'\)\}[\s\S]*?Independente[\s\S]*?onClick=\{\(\) => handleTrialClick\(goal, 0\.5, 'prompted'\)\}[\s\S]*?Com ajuda[\s\S]*?onClick=\{\(\) => handleTrialClick\(goal, 0, 'error'\)\}[\s\S]*?Erro/m,
+    /onClick=\{\(\) => handleTrialClick\(goal, 1, 'independent'\)\}[\s\S]*?Independente[\s\S]*?onClick=\{\(\) => handleTrialClick\(goal, 0\.5, 'prompted'(?:, promptLevelKey)?\)\}[\s\S]*?Com ajuda[\s\S]*?onClick=\{\(\) => handleTrialClick\(goal, 0, 'error'\)\}[\s\S]*?Erro/m,
     'SessionMode deve salvar tentativa em um toque com botoes Independente, Com ajuda e Erro.'
   );
   assert.match(
@@ -457,7 +457,7 @@ test('aba session mode: trials and behavior events are one-touch and session-sco
   );
   assert.match(
     sessionModeCode,
-    /const registerFrequency[\s\S]*?const startDuration[\s\S]*?const endDuration[\s\S]*?const startRateWindow[\s\S]*?const registerInterval[\s\S]*?const startMomentary[\s\S]*?const saveAbcEvent/m,
+    /const registerFrequency[\s\S]*?const startDuration[\s\S]*?const endDuration[\s\S]*?const startRateWindow[\s\S]*?const startIntervalRun[\s\S]*?const registerInterval[\s\S]*?const saveAbcEvent/m,
     'SessionMode deve implementar frequencia, duracao, taxa, intervalo, amostragem momentanea e ABC.'
   );
   assert.match(
@@ -467,7 +467,7 @@ test('aba session mode: trials and behavior events are one-touch and session-sco
   );
   assert.match(
     sessionModeCode,
-    /if \(openDurations\.length > 0\)[\s\S]*?Finalize os eventos de duracao em aberto antes de encerrar a sessao/m,
+    /canCloseAbaSession\(\{ openDurations, intervalRun \}\)[\s\S]*?Ha eventos de duracao em aberto[\s\S]*?Encerrar agora[\s\S]*?Descartar evento[\s\S]*?Voltar para sessao/m,
     'SessionMode deve bloquear encerramento com duracao aberta.'
   );
 });
@@ -540,7 +540,7 @@ test('aba persistence: frontend records sessions and structured trials offline-f
   );
   assert.match(
     sessionModeCode,
-    /const \[promptLevelKey, setPromptLevelKey\] = useState\('independent'\)/m,
+    /const \[promptLevelKey, setPromptLevelKey\] = useState\('verbal'\)/m,
     'SessionMode deve coletar hierarquia de prompt.'
   );
   assert.match(

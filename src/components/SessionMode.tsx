@@ -20,6 +20,7 @@ import {
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { dataService } from '../services/dataService';
 import { ABA_PROMPT_LEVEL_OPTIONS, resolveAbaPromptLevel } from '../utils/abaPromptLevels';
+import { calculateSessionSummary, canCloseAbaSession, type SessionSummary, type SessionSummaryPendingItem } from '../utils/abaSessionSummary';
 
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
 
@@ -35,6 +36,12 @@ type SessionRecord = {
   endedAt?: string;
   durationSeconds?: number | null;
   countDelta?: number | null;
+  trialOutcome?: 'independent' | 'prompted' | 'error';
+  collectionType?: string;
+  promptLevelKey?: string;
+  score?: number | null;
+  correct?: boolean;
+  independent?: boolean;
   behaviorId?: string | null;
   intervalNumber?: number | null;
   intervalIndex?: number | null;
@@ -118,6 +125,15 @@ const formatRemainingUntil = (dueAt: string, nowMs = Date.now()) => {
   const remaining = Math.max(0, Math.ceil((new Date(dueAt).getTime() - nowMs) / 1000));
   const minutes = Math.floor(remaining / 60);
   const seconds = remaining % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+};
+
+const formatDurationSeconds = (durationSeconds: number) => {
+  const safeSeconds = Math.max(0, Math.round(Number(durationSeconds) || 0));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+  if (hours > 0) return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 };
 
@@ -207,6 +223,9 @@ export const SessionMode = ({
   const [abcNote, setAbcNote] = useState('');
   const [sessionWarning, setSessionWarning] = useState('');
   const [showSessionSummary, setShowSessionSummary] = useState(false);
+  const [sessionEndPreviewAt, setSessionEndPreviewAt] = useState('');
+  const [sessionNote, setSessionNote] = useState('');
+  const [sessionCompleted, setSessionCompleted] = useState(false);
   const [durationBlockModalOpen, setDurationBlockModalOpen] = useState(false);
   const [promptSelectionGoal, setPromptSelectionGoal] = useState<any>(null);
   const [promptWarning, setPromptWarning] = useState('');
@@ -244,6 +263,8 @@ export const SessionMode = ({
       setRateWindow(persisted.rateWindow || null);
       setIntervalRun(persisted.intervalRun || null);
       setIntervalSummary(persisted.intervalSummary || null);
+      setSessionNote(String(persisted.sessionNote || ''));
+      setSessionCompleted(Boolean(persisted.sessionCompleted || false));
       setTrialCount(Number(persisted.trialCount || 0));
     } catch {
       setRecords([]);
@@ -251,6 +272,8 @@ export const SessionMode = ({
       setRateWindow(null);
       setIntervalRun(null);
       setIntervalSummary(null);
+      setSessionNote('');
+      setSessionCompleted(false);
       setTrialCount(0);
     } finally {
       setHydratedSessionStateKey(sessionStateKey);
@@ -268,13 +291,15 @@ export const SessionMode = ({
           rateWindow,
           intervalRun,
           intervalSummary,
+          sessionNote,
+          sessionCompleted,
           trialCount
         })
       );
     } catch {
       // Local session history is a convenience layer; encrypted offline cache remains the source of truth.
     }
-  }, [hydratedSessionStateKey, intervalRun, intervalSummary, openDurations, rateWindow, records, sessionStateKey, trialCount]);
+  }, [hydratedSessionStateKey, intervalRun, intervalSummary, openDurations, rateWindow, records, sessionCompleted, sessionNote, sessionStateKey, trialCount]);
 
   useEffect(() => {
     const hasRunningTimer = openDurations.length > 0 || rateWindow || intervalRun;
@@ -337,6 +362,12 @@ export const SessionMode = ({
 
   const updateRecord = (id: string, updates: Partial<SessionRecord>) => {
     setRecords((prev) => prev.map((record) => (record.id === id ? { ...record, ...updates } : record)));
+  };
+
+  const ensureSessionCanRecord = () => {
+    if (!sessionCompleted) return true;
+    setSessionWarning('Sessao ja encerrada. O historico permanece editavel apenas para complementos permitidos.');
+    return false;
   };
 
   const addRecord = (record: Omit<SessionRecord, 'syncStatus'>, syncStatus: SyncStatus = 'local') => {
@@ -449,6 +480,7 @@ export const SessionMode = ({
   };
 
   const handleTrialClick = async (goal: any, score: number, outcome: 'independent' | 'prompted' | 'error', promptedPromptKey?: string) => {
+    if (!ensureSessionCanRecord()) return;
     const maxScore = Number(goal?.maxScore || 1);
     const timestamp = new Date().toISOString();
     const selectedPrompt = outcome === 'independent'
@@ -471,7 +503,13 @@ export const SessionMode = ({
       kind: 'trial',
       title: goal.name,
       detail: `${collectionOptions.find((option) => option.key === collectionType)?.label || collectionType} - ${selectedPrompt.label} - ${score}`,
-      timestamp
+      timestamp,
+      trialOutcome: outcome,
+      collectionType,
+      promptLevelKey: selectedPrompt.key,
+      score,
+      correct: isCorrect,
+      independent: isIndependent
     });
     setTimeout(() => updateRecordStatus(trialId, 'syncing'), 60);
 
@@ -509,6 +547,7 @@ export const SessionMode = ({
   };
 
   const registerFrequency = (behaviorName = selectedBehavior.name, countDelta = 1) => {
+    if (!ensureSessionCanRecord()) return;
     const payload = buildBehaviorPayload(behaviorName, 'frequency', { count_delta: countDelta, countDelta });
     void saveBehaviorEvent(payload, {
       id: String(payload.id),
@@ -532,6 +571,7 @@ export const SessionMode = ({
   };
 
   const startDuration = (behaviorName = selectedBehavior.name) => {
+    if (!ensureSessionCanRecord()) return;
     const startedAt = new Date().toISOString();
     const id = crypto.randomUUID();
     const openEvent: OpenDurationEvent = {
@@ -625,6 +665,7 @@ export const SessionMode = ({
   };
 
   const handleSelectedBehaviorAction = () => {
+    if (!ensureSessionCanRecord()) return;
     if (behaviorMeasurementType === 'frequency') {
       registerFrequency(selectedBehavior.name, 1);
       return;
@@ -649,6 +690,7 @@ export const SessionMode = ({
   };
 
   const startRateWindow = () => {
+    if (!ensureSessionCanRecord()) return;
     setRateWindow({
       id: crypto.randomUUID(),
       behaviorName: selectedBehavior.name,
@@ -658,6 +700,7 @@ export const SessionMode = ({
   };
 
   const registerRateOccurrence = () => {
+    if (!ensureSessionCanRecord()) return;
     if (!rateWindow) return;
     setRateWindow({ ...rateWindow, count: Number(rateWindow.count || 0) + 1 });
     const payload = buildBehaviorPayload(rateWindow.behaviorName, 'rate', {
@@ -679,6 +722,7 @@ export const SessionMode = ({
   };
 
   const startIntervalRun = () => {
+    if (!ensureSessionCanRecord()) return;
     if (intervalRun) {
       setSessionWarning(intervalRun.behaviorId === selectedBehavior.id
         ? 'Ja existe uma coleta por intervalo em andamento para este comportamento.'
@@ -823,6 +867,7 @@ export const SessionMode = ({
   };
 
   const registerInterval = (occurred: boolean) => {
+    if (!ensureSessionCanRecord()) return;
     if (!intervalRun) return;
     const intervalNumber = Number(intervalRun.intervalIndex || 1);
     const totalIntervals = Math.max(1, Number(intervalRun.totalIntervals || 1));
@@ -921,6 +966,7 @@ export const SessionMode = ({
   };
 
   const saveAbcEvent = () => {
+    if (!ensureSessionCanRecord()) return;
     const behavior = behaviorPresets.find((item) => item.id === abcBehaviorId) || selectedBehavior;
     const payload = buildBehaviorPayload(behavior.name, 'abc', {
       antecedent: abcAntecedent,
@@ -949,11 +995,8 @@ export const SessionMode = ({
   };
 
   const requestEndSession = () => {
-    if (openDurations.length > 0) {
-      setDurationBlockModalOpen(true);
-      return;
-    }
     setSessionWarning('');
+    setSessionEndPreviewAt(new Date().toISOString());
     setShowSessionSummary(true);
   };
 
@@ -967,7 +1010,90 @@ export const SessionMode = ({
     }
   };
 
-  const confirmEndSession = () => {
+  const buildSessionPendingItems = (): SessionSummaryPendingItem[] => {
+    const behaviorRecords = records.filter((record) => record.kind === 'behavior' && !record.intervalAggregate);
+    const unsynced = records.filter((record) => record.syncStatus !== 'synced');
+    const syncErrors = records.filter((record) => record.syncStatus === 'error');
+    const withoutLocation = behaviorRecords.filter((record) => !record.location);
+    const withoutSeverity = behaviorRecords.filter((record) => record.severity === undefined || record.severity === null);
+    const withoutAbc = behaviorRecords.filter((record) => (
+      inferRecordMeasurementType(record) !== 'abc' &&
+      !record.antecedent &&
+      !record.consequence
+    ));
+    const items: SessionSummaryPendingItem[] = [];
+    if (unsynced.length > 0) items.push({ key: 'unsynced_records', label: `${unsynced.length} dado(s) ainda nao sincronizado(s)`, count: unsynced.length });
+    if (syncErrors.length > 0) items.push({ key: 'sync_error', label: `${syncErrors.length} registro(s) com erro de sincronizacao`, count: syncErrors.length });
+    if (withoutLocation.length > 0) items.push({ key: 'missing_location', label: `${withoutLocation.length} registro(s) sem local`, count: withoutLocation.length });
+    if (withoutSeverity.length > 0) items.push({ key: 'missing_severity', label: `${withoutSeverity.length} registro(s) sem severidade`, count: withoutSeverity.length });
+    if (withoutAbc.length > 0) items.push({ key: 'missing_abc', label: `${withoutAbc.length} evento(s) sem ABC`, count: withoutAbc.length });
+    if (promptSelectionGoal) items.push({ key: 'incomplete_trial', label: 'Ha uma tentativa de ensino incompleta', count: 1 });
+    items.push({ key: 'guardian_signature_pending', label: 'Assinatura do responsavel pendente (pendencia futura)', count: 1 });
+    if (!sessionNote.trim()) items.push({ key: 'session_note_pending', label: 'Observacao da sessao pendente', count: 1 });
+    return items;
+  };
+
+  const confirmEndSession = async () => {
+    const closure = canCloseAbaSession({ openDurations, intervalRun });
+    if (!closure.canClose) {
+      setSessionWarning('Resolva as pendencias bloqueantes antes de encerrar a sessao.');
+      return;
+    }
+    const endedAt = new Date().toISOString();
+    const pendingItems = buildSessionPendingItems();
+    const finalSummary = calculateSessionSummary(sessionId, {
+      id: `summary-${sessionId}`,
+      sessionId,
+      patientId,
+      patientName: patient?.name || 'Paciente',
+      therapistId: resolvedTherapistId || null,
+      startedAt: activeSession?.startedAt || endedAt,
+      endedAt,
+      trials: records.filter((record) => record.kind === 'trial'),
+      behaviorEvents: records.filter((record) => record.kind === 'behavior'),
+      pendingItems,
+      syncStatus: pendingItems.some((item) => item.key === 'sync_error') ? 'error' : pendingItems.some((item) => item.key === 'unsynced_records') ? 'local' : 'synced'
+    });
+    setSessionEndPreviewAt(endedAt);
+    setSessionCompleted(true);
+    try {
+      await dataService.saveAbaSessionSummary({
+        ...finalSummary,
+        session_id: finalSummary.sessionId,
+        patient_id: finalSummary.patientId,
+        therapist_id: finalSummary.therapistId || undefined,
+        started_at: finalSummary.startedAt,
+        ended_at: finalSummary.endedAt,
+        duration_seconds: finalSummary.durationSeconds,
+        total_trials: finalSummary.totalTrials,
+        independent_trials: finalSummary.independentTrials,
+        prompted_trials: finalSummary.promptedTrials,
+        error_trials: finalSummary.errorTrials,
+        accuracy_percent: finalSummary.accuracyPercent,
+        independence_percent: finalSummary.independencePercent,
+        total_behavior_events: finalSummary.totalBehaviorEvents,
+        frequency_summary: finalSummary.frequencySummary,
+        duration_summary: finalSummary.durationSummary,
+        interval_summary: finalSummary.intervalSummary,
+        pending_items: finalSummary.pendingItems,
+        summary_payload: {
+          patientName: finalSummary.patientName,
+          teachingSummary: finalSummary.teachingSummary,
+          sessionNote
+        }
+      });
+      await dataService.updateAbaSession(sessionId, {
+        status: 'completed',
+        ended_at: endedAt,
+        duration_seconds: finalSummary.durationSeconds,
+        duration_minutes: Math.ceil(finalSummary.durationSeconds / 60),
+        record_count: finalSummary.totalTrials + finalSummary.totalBehaviorEvents,
+        notes: sessionNote
+      });
+    } catch (error) {
+      console.error('Falha ao persistir encerramento da sessao ABA:', error);
+      setSessionWarning('A sessao foi marcada como encerrada localmente, mas houve falha de sincronizacao.');
+    }
     setShowSessionSummary(false);
     if (typeof onConfirmEndSession === 'function') {
       onConfirmEndSession();
@@ -983,6 +1109,56 @@ export const SessionMode = ({
     const localTotal = records.filter((record) => record.syncStatus === 'local' || record.syncStatus === 'syncing').length;
     return { trialTotal, behaviorTotal, errorTotal, localTotal };
   }, [records]);
+
+  const sessionClosureState = useMemo(() => canCloseAbaSession({ openDurations, intervalRun }), [openDurations, intervalRun]);
+
+  const sessionClosurePendingItems = useMemo(() => buildSessionPendingItems(), [records, promptSelectionGoal, sessionNote]);
+
+  const sessionClosureSummary: SessionSummary = useMemo(() => {
+    const endedAt = sessionEndPreviewAt || new Date().toISOString();
+    const pendingItems = [...sessionClosureState.blockers, ...sessionClosurePendingItems];
+    const syncStatus = pendingItems.some((item) => item.key === 'sync_error')
+      ? 'error'
+      : pendingItems.some((item) => item.key === 'unsynced_records')
+        ? 'local'
+        : 'synced';
+    return calculateSessionSummary(sessionId, {
+      id: `summary-${sessionId}`,
+      sessionId,
+      patientId,
+      patientName: patient?.name || 'Paciente',
+      therapistId: resolvedTherapistId || null,
+      startedAt: activeSession?.startedAt || endedAt,
+      endedAt,
+      trials: records.filter((record) => record.kind === 'trial'),
+      behaviorEvents: records.filter((record) => record.kind === 'behavior'),
+      pendingItems,
+      syncStatus
+    });
+  }, [activeSession?.startedAt, patient?.name, patientId, records, resolvedTherapistId, sessionClosurePendingItems, sessionClosureState.blockers, sessionEndPreviewAt, sessionId]);
+
+  const teachingMasteryRows = useMemo(() => sessionGoals.map((goal: any) => {
+    const goalTrials = records.filter((record) => record.kind === 'trial' && record.title === goal.name);
+    const correctTrials = goalTrials.filter((record) => record.correct || Number(record.score || 0) > 0).length;
+    const independentTrials = goalTrials.filter((record) => record.independent || record.trialOutcome === 'independent').length;
+    const masteryTarget = Number(goal?.meta_sucessos ?? goal?.metaSucessos ?? goal?.masteryTarget ?? goal?.mastery_target) || 0;
+    const performanceText = `${correctTrials}/${goalTrials.length} acertos`;
+    const contributes = correctTrials > 0;
+    const status = goalTrials.length === 0
+      ? 'dados insuficientes'
+      : masteryTarget > 0 && correctTrials >= masteryTarget
+        ? 'criterio atingido hoje'
+        : 'criterio nao atingido';
+    return {
+      id: goal.id,
+      name: goal.name,
+      criterion: masteryTarget > 0 ? `${masteryTarget} acerto(s) configurado(s)` : 'criterio nao configurado',
+      performanceText,
+      contributes,
+      status,
+      independentTrials
+    };
+  }), [records, sessionGoals]);
 
   const intervalSummaryTotals = useMemo(() => {
     const total = Math.max(0, Number(intervalSummary?.totalIntervals || 0));
@@ -1027,7 +1203,7 @@ export const SessionMode = ({
     setEditingRecordNotes('');
   };
 
-  const inferRecordMeasurementType = (record: SessionRecord) => {
+  function inferRecordMeasurementType(record: SessionRecord) {
     if (record.measurementType) return record.measurementType;
     const detail = String(record.detail || '').toLowerCase();
     if (detail.includes('duracao')) return 'duration';
@@ -1036,7 +1212,7 @@ export const SessionMode = ({
     if (detail.includes('taxa')) return 'rate';
     if (detail.includes('amostragem')) return 'momentary_time_sampling';
     return 'frequency';
-  };
+  }
 
   const buildPayloadFromSessionRecord = (record: SessionRecord) => {
     const measurementType = inferRecordMeasurementType(record);
@@ -1924,33 +2100,174 @@ export const SessionMode = ({
 
       {showSessionSummary && (
         <div className="fixed inset-0 z-[145] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm">
-          <div className="bg-white rounded-[32px] p-7 shadow-2xl max-w-md w-full border border-red-100">
-            <div className="w-14 h-14 bg-red-50 rounded-2xl flex items-center justify-center mb-5 text-red-500">
-              <StopCircle size={28} />
+          <div className="bg-white rounded-[32px] p-7 shadow-2xl max-w-5xl w-full max-h-[88vh] overflow-y-auto border border-red-100">
+            <div className="flex items-start justify-between gap-4 mb-6">
+              <div>
+                <p className="text-[10px] font-bold text-red-500 uppercase tracking-widest">Encerramento da sessao ABA</p>
+                <h3 className="text-2xl font-semibold text-gray-900 mt-1">Resumo da sessao</h3>
+                <p className="text-sm text-gray-500 mt-1">Revise pendencias e dados clinicos antes de confirmar.</p>
+              </div>
+              <button onClick={() => setShowSessionSummary(false)} className="p-2 rounded-full hover:bg-gray-100">
+                <X size={20} />
+              </button>
             </div>
-            <h3 className="text-2xl font-semibold text-gray-900 mb-2">Resumo da sessao</h3>
-            <div className="grid grid-cols-2 gap-3 my-5">
-              <div className="rounded-2xl bg-[#F4F7FE] p-4">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tentativas hoje</p>
-                <p className="text-3xl font-bold text-gray-900">{sessionSummary.trialTotal}</p>
+
+            {openDurations.length > 0 && (
+              <div className="mb-5 rounded-[24px] border border-amber-100 bg-amber-50 p-5">
+                <h4 className="text-lg font-bold text-amber-800">Ha eventos de duracao em aberto</h4>
+                <div className="mt-3 space-y-3">
+                  {openDurations.map((event) => (
+                    <div key={event.id} className="rounded-2xl bg-white/80 border border-amber-100 p-4">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div>
+                          <p className="font-bold text-gray-900">{event.behaviorName}</p>
+                          <p className="text-xs text-gray-500 mt-1">{event.location || 'Sem local'} - severidade {event.severity || '-'}</p>
+                          <p className="text-xs text-gray-500 mt-1">Inicio {new Date(event.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - duracao atual {formatElapsed(event.startedAt, nowMs)}</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button onClick={() => resolveDurationBeforeEnd(event.id, 'end')} className="rounded-xl bg-[#1B254B] px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-white">Encerrar agora</button>
+                          <button onClick={() => resolveDurationBeforeEnd(event.id, 'discard')} className="rounded-xl bg-red-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500">Descartar evento</button>
+                          <button onClick={() => setShowSessionSummary(false)} className="rounded-xl bg-gray-100 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-600">Voltar para sessao</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="rounded-2xl bg-[#F4F7FE] p-4">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Comportamentos</p>
-                <p className="text-3xl font-bold text-gray-900">{sessionSummary.behaviorTotal}</p>
+            )}
+
+            {intervalRun && (
+              <div className="mb-5 rounded-[24px] border border-purple-100 bg-purple-50 p-5">
+                <h4 className="text-lg font-bold text-purple-800">Ha uma coleta por intervalo em andamento</h4>
+                <p className="mt-1 text-sm text-purple-700">{intervalRun.behaviorName} - {getMeasurementLabel(intervalRun.measurementType)} - intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals}</p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button onClick={finishIntervalRunNow} className="rounded-xl bg-emerald-500 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-white">Finalizar coleta agora</button>
+                  <button onClick={cancelIntervalRun} className="rounded-xl bg-red-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500">Cancelar coleta</button>
+                  <button onClick={() => setShowSessionSummary(false)} className="rounded-xl bg-white px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-600 border border-purple-100">Voltar para sessao</button>
+                </div>
               </div>
-              <div className="rounded-2xl bg-[#F4F7FE] p-4">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Pendentes</p>
-                <p className="text-3xl font-bold text-gray-900">{sessionSummary.localTotal}</p>
+            )}
+
+            {!sessionClosureState.canClose ? (
+              <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-5 text-sm font-semibold text-gray-600">
+                Resolva as pendencias bloqueantes acima para liberar o encerramento final.
               </div>
-              <div className="rounded-2xl bg-[#F4F7FE] p-4">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Erros</p>
-                <p className="text-3xl font-bold text-gray-900">{sessionSummary.errorTotal}</p>
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <button onClick={() => setShowSessionSummary(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-semibold">Continuar</button>
-              <button onClick={confirmEndSession} className="flex-1 py-3 rounded-2xl bg-red-500 text-white font-semibold shadow-lg shadow-red-500/20">Encerrar</button>
-            </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="rounded-2xl bg-[#F4F7FE] p-4">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Paciente</p>
+                    <p className="text-lg font-bold text-gray-900">{sessionClosureSummary.patientName || patient.name}</p>
+                  </div>
+                  <div className="rounded-2xl bg-[#F4F7FE] p-4">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Inicio</p>
+                    <p className="text-lg font-bold text-gray-900">{new Date(sessionClosureSummary.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                  </div>
+                  <div className="rounded-2xl bg-[#F4F7FE] p-4">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Fim</p>
+                    <p className="text-lg font-bold text-gray-900">{new Date(sessionClosureSummary.endedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                  </div>
+                  <div className="rounded-2xl bg-[#F4F7FE] p-4">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Duracao total</p>
+                    <p className="text-lg font-bold text-gray-900">{formatDurationSeconds(sessionClosureSummary.durationSeconds)}</p>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid grid-cols-2 lg:grid-cols-6 gap-3">
+                  <div className="rounded-2xl bg-[#F4F7FE] p-4"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tentativas</p><p className="text-3xl font-bold text-gray-900">{sessionClosureSummary.totalTrials}</p></div>
+                  <div className="rounded-2xl bg-[#F4F7FE] p-4"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Comport.</p><p className="text-3xl font-bold text-gray-900">{sessionClosureSummary.totalBehaviorEvents}</p></div>
+                  <div className="rounded-2xl bg-[#F4F7FE] p-4"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Frequencia</p><p className="text-3xl font-bold text-gray-900">{sessionClosureSummary.frequencySummary.reduce((sum, item) => sum + item.occurrences, 0)}</p></div>
+                  <div className="rounded-2xl bg-[#F4F7FE] p-4"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Duracao</p><p className="text-3xl font-bold text-gray-900">{sessionClosureSummary.durationSummary.reduce((sum, item) => sum + item.episodes, 0)}</p></div>
+                  <div className="rounded-2xl bg-[#F4F7FE] p-4"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Intervalo</p><p className="text-3xl font-bold text-gray-900">{sessionClosureSummary.intervalSummary.length}</p></div>
+                  <div className="rounded-2xl bg-[#F4F7FE] p-4"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Sync</p><p className="text-sm font-bold text-gray-900 uppercase">{sessionClosureSummary.syncStatus === 'synced' ? 'sincronizado' : sessionClosureSummary.syncStatus === 'error' ? 'erro' : 'pendente'}</p></div>
+                </div>
+
+                <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="rounded-[24px] border border-blue-100 bg-[#F8FAFF] p-5">
+                    <h4 className="text-lg font-bold text-gray-900">Resumo de comportamentos</h4>
+                    <div className="mt-3 space-y-3">
+                      {sessionClosureSummary.frequencySummary.map((item) => (
+                        <div key={`frequency-${item.behaviorName}`} className="rounded-2xl bg-white border border-gray-100 p-4">
+                          <p className="font-bold text-gray-900">{item.behaviorName}</p>
+                          <p className="text-sm text-gray-500">{item.occurrences} ocorrencia(s)</p>
+                        </div>
+                      ))}
+                      {sessionClosureSummary.durationSummary.map((item) => (
+                        <div key={`duration-${item.behaviorName}`} className="rounded-2xl bg-white border border-gray-100 p-4">
+                          <p className="font-bold text-gray-900">{item.behaviorName}</p>
+                          <p className="text-sm text-gray-500">{item.episodes} episodio(s)</p>
+                          <p className="text-sm text-gray-500">duracao total: {formatDurationSeconds(item.totalSeconds)}</p>
+                          <p className="text-sm text-gray-500">duracao media: {formatDurationSeconds(item.averageSeconds)}</p>
+                          <p className="text-sm text-gray-500">maior episodio: {formatDurationSeconds(item.maxSeconds)}</p>
+                        </div>
+                      ))}
+                      {sessionClosureSummary.intervalSummary.map((item) => (
+                        <div key={`interval-${item.behaviorName}-${item.method}`} className="rounded-2xl bg-white border border-gray-100 p-4">
+                          <p className="font-bold text-gray-900">{item.behaviorName}</p>
+                          <p className="text-sm text-gray-500">{getMeasurementLabel(item.method)}</p>
+                          <p className="text-sm text-gray-500">{item.totalIntervals} intervalo(s) - {item.occurredCount} SIM - {item.notOccurredCount} NAO</p>
+                          <p className="text-sm font-bold text-[#7a32fc]">ocorrencia: {item.occurrencePercent}%</p>
+                        </div>
+                      ))}
+                      {sessionClosureSummary.totalBehaviorEvents === 0 && <p className="text-sm text-gray-500">Nenhum comportamento registrado nesta sessao.</p>}
+                    </div>
+                  </div>
+
+                  <div className="rounded-[24px] border border-blue-100 bg-[#F8FAFF] p-5">
+                    <h4 className="text-lg font-bold text-gray-900">Tentativas de ensino</h4>
+                    <div className="mt-3 grid grid-cols-2 gap-3">
+                      <div className="rounded-2xl bg-white p-3 border border-gray-100"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total</p><p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.totalTrials}</p></div>
+                      <div className="rounded-2xl bg-white p-3 border border-gray-100"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Indep.</p><p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.independentTrials}</p></div>
+                      <div className="rounded-2xl bg-white p-3 border border-gray-100"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Ajuda</p><p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.promptedTrials}</p></div>
+                      <div className="rounded-2xl bg-white p-3 border border-gray-100"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Erros</p><p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.errorTrials}</p></div>
+                    </div>
+                    <p className="mt-3 text-sm text-gray-500">Independencia: <span className="font-bold text-gray-900">{sessionClosureSummary.independencePercent}%</span></p>
+                    <p className="text-sm text-gray-500">Acerto: <span className="font-bold text-gray-900">{sessionClosureSummary.accuracyPercent}%</span></p>
+                    <p className="text-sm text-gray-500">Tipos usados: {sessionClosureSummary.teachingSummary.typesUsed.join(', ') || 'nenhum'}</p>
+
+                    <h4 className="mt-5 text-lg font-bold text-gray-900">Maestria</h4>
+                    <div className="mt-3 space-y-2">
+                      {teachingMasteryRows.map((row) => (
+                        <div key={row.id} className="rounded-2xl bg-white border border-gray-100 p-3">
+                          <p className="font-bold text-gray-900">{row.name}</p>
+                          <p className="text-xs text-gray-500">criterio: {row.criterion}</p>
+                          <p className="text-xs text-gray-500">desempenho: {row.performanceText}</p>
+                          <p className="text-xs text-gray-500">contribuiu para o criterio: {row.contributes ? 'sim' : 'nao'}</p>
+                          <p className="text-xs font-bold text-[#7a32fc]">{row.status}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-5 rounded-[24px] border border-amber-100 bg-amber-50 p-5">
+                  <h4 className="text-lg font-bold text-amber-800">Pendencias</h4>
+                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {sessionClosureSummary.pendingItems.length === 0 ? (
+                      <p className="text-sm font-semibold text-amber-700">Sem pendencias.</p>
+                    ) : sessionClosureSummary.pendingItems.map((item) => (
+                      <div key={item.key} className="rounded-xl bg-white/80 border border-amber-100 px-3 py-2 text-sm font-semibold text-amber-800">
+                        {item.label}
+                      </div>
+                    ))}
+                  </div>
+                  <label className="mt-4 block text-[10px] font-bold text-amber-700 uppercase tracking-widest">
+                    Observacao da sessao
+                    <textarea
+                      value={sessionNote}
+                      onChange={(event) => setSessionNote(event.target.value)}
+                      placeholder="Observacoes clinicas do encerramento..."
+                      className="mt-2 w-full min-h-[84px] rounded-2xl border border-amber-100 bg-white px-4 py-3 text-sm text-gray-700 outline-none resize-none focus:border-[#7a32fc]"
+                    />
+                  </label>
+                </div>
+
+                <div className="mt-6 flex flex-col sm:flex-row gap-3">
+                  <button onClick={() => setShowSessionSummary(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-semibold">Voltar para sessao</button>
+                  <button onClick={confirmEndSession} className="flex-1 py-3 rounded-2xl bg-red-500 text-white font-semibold shadow-lg shadow-red-500/20">Confirmar encerramento da sessao</button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

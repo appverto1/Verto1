@@ -1029,6 +1029,30 @@ export const dataService = {
     );
   },
 
+  async saveAbaSessionSummary(summary: any) {
+    const id = String(summary?.id || summary?.summary_id || summary?.summaryId || generateId());
+    const data = {
+      ...(summary || {}),
+      id,
+      session_id: summary?.session_id || summary?.sessionId,
+      sessionId: summary?.session_id || summary?.sessionId,
+      patient_id: summary?.patient_id || summary?.patientId,
+      patientId: summary?.patient_id || summary?.patientId,
+      therapist_id: summary?.therapist_id || summary?.therapistId,
+      therapistId: summary?.therapist_id || summary?.therapistId,
+      started_at: summary?.started_at || summary?.startedAt,
+      startedAt: summary?.started_at || summary?.startedAt,
+      ended_at: summary?.ended_at || summary?.endedAt,
+      endedAt: summary?.ended_at || summary?.endedAt,
+      duration_seconds: summary?.duration_seconds ?? summary?.durationSeconds,
+      durationSeconds: summary?.duration_seconds ?? summary?.durationSeconds,
+      syncStatus: summary?.syncStatus || 'local',
+      created_at: summary?.created_at || summary?.createdAt || new Date().toISOString(),
+      createdAt: summary?.created_at || summary?.createdAt || new Date().toISOString()
+    };
+    return await saveOfflineFirst(id, data, 'aba', '/api/aba/session-summaries');
+  },
+
   async getAbaSessions(patientId: string) {
     const endpoint = `/api/aba/sessions/${encodeURIComponent(String(patientId))}`;
     try {

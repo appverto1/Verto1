@@ -14175,6 +14175,9 @@ async function startServer() {
         status: normalizeAbaSessionStatus(req.body?.status),
         started_at: startedAt,
         ended_at: req.body?.ended_at || req.body?.endedAt ? sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt, startedAt) : null,
+        duration_seconds: req.body?.duration_seconds !== undefined || req.body?.durationSeconds !== undefined
+          ? asSafeNumber(req.body?.duration_seconds ?? req.body?.durationSeconds, 0, 86400)
+          : null,
         duration_minutes: req.body?.duration_minutes !== undefined || req.body?.durationMinutes !== undefined
           ? asSafeNumber(req.body?.duration_minutes ?? req.body?.durationMinutes, 0, 1440)
           : null,
@@ -14210,6 +14213,9 @@ async function startServer() {
         status: req.body?.status !== undefined ? normalizeAbaSessionStatus(req.body?.status) : undefined,
         ended_at: req.body?.ended_at !== undefined || req.body?.endedAt !== undefined
           ? sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt)
+          : undefined,
+        duration_seconds: req.body?.duration_seconds !== undefined || req.body?.durationSeconds !== undefined
+          ? asSafeNumber(req.body?.duration_seconds ?? req.body?.durationSeconds, 0, 86400)
           : undefined,
         duration_minutes: req.body?.duration_minutes !== undefined || req.body?.durationMinutes !== undefined
           ? asSafeNumber(req.body?.duration_minutes ?? req.body?.durationMinutes, 0, 1440)
@@ -14267,6 +14273,65 @@ async function startServer() {
         throw error;
       }
       return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.post('/api/aba/session-summaries', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 192 * 1024, 'Payload do resumo da sessão ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+      if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+
+      const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180);
+      if (!sessionId) return res.status(400).json({ success: false, error: 'Sessão inválida.' });
+      const endedAt = sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt);
+      const startedAt = sanitizeIsoDateTime(req.body?.started_at || req.body?.startedAt, endedAt);
+      const durationSeconds = req.body?.duration_seconds !== undefined || req.body?.durationSeconds !== undefined
+        ? asSafeNumber(req.body?.duration_seconds ?? req.body?.durationSeconds, 0, 86400)
+        : Math.max(0, Math.round((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1000));
+
+      const payload = cleanObject({
+        id: sanitizeString(req.body?.id || req.body?.summary_id || req.body?.summaryId || `summary-${sessionId}`, 180),
+        clinic_id: clinicId,
+        session_id: sessionId,
+        patient_id: patientId,
+        therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
+        started_at: startedAt,
+        ended_at: endedAt,
+        duration_seconds: durationSeconds,
+        total_trials: asSafeNumber(req.body?.total_trials ?? req.body?.totalTrials, 0, 100000) || 0,
+        independent_trials: asSafeNumber(req.body?.independent_trials ?? req.body?.independentTrials, 0, 100000) || 0,
+        prompted_trials: asSafeNumber(req.body?.prompted_trials ?? req.body?.promptedTrials, 0, 100000) || 0,
+        error_trials: asSafeNumber(req.body?.error_trials ?? req.body?.errorTrials, 0, 100000) || 0,
+        accuracy_percent: asSafeNumber(req.body?.accuracy_percent ?? req.body?.accuracyPercent, 0, 100) || 0,
+        independence_percent: asSafeNumber(req.body?.independence_percent ?? req.body?.independencePercent, 0, 100) || 0,
+        total_behavior_events: asSafeNumber(req.body?.total_behavior_events ?? req.body?.totalBehaviorEvents, 0, 100000) || 0,
+        frequency_summary: sanitizeClinicalPayload(req.body?.frequency_summary || req.body?.frequencySummary || []),
+        duration_summary: sanitizeClinicalPayload(req.body?.duration_summary || req.body?.durationSummary || []),
+        interval_summary: sanitizeClinicalPayload(req.body?.interval_summary || req.body?.intervalSummary || []),
+        pending_items: sanitizeClinicalPayload(req.body?.pending_items || req.body?.pendingItems || []),
+        sync_status: 'synced',
+        summary_payload: sanitizeClinicalPayload({
+          ...(req.body?.summary_payload || req.body?.summaryPayload || {}),
+          patientName: sanitizeString(req.body?.patient_name || req.body?.patientName, 180),
+          teachingSummary: req.body?.teaching_summary || req.body?.teachingSummary || undefined,
+          syncStatus: 'synced'
+        }),
+        created_at: req.body?.created_at || req.body?.createdAt ? sanitizeIsoDateTime(req.body?.created_at || req.body?.createdAt) : new Date().toISOString()
+      });
+
+      const result = await writeAbaRowWithSchemaFallback('aba_session_summaries', payload, 'upsert');
+      if (result.error) {
+        if (hasMissingFinancialSchema(result.error)) {
+          return res.status(503).json({ success: false, error: 'Schema ABA ainda não aplicado.' });
+        }
+        throw result.error;
+      }
+      return res.json({ success: true, data: result.data || payload });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
     }
