@@ -7,8 +7,6 @@ import {
   ChevronLeft,
   Clock,
   FileText,
-  MapPin,
-  Minus,
   Pencil,
   Play,
   Plus,
@@ -32,6 +30,18 @@ type SessionRecord = {
   detail: string;
   timestamp: string;
   syncStatus: SyncStatus;
+  measurementType?: string;
+  startedAt?: string;
+  endedAt?: string;
+  durationSeconds?: number | null;
+  countDelta?: number | null;
+  intervalIndex?: number | null;
+  intervalOccurred?: boolean | null;
+  location?: string;
+  severity?: number | null;
+  antecedent?: string;
+  consequence?: string;
+  notes?: string;
   editedAt?: string;
 };
 
@@ -62,12 +72,12 @@ const behaviorMeasurementOptions = [
 ];
 
 const behaviorPresets = [
-  { id: 'crying', name: 'Choro', defaultMeasurement: 'duration', tone: 'bg-sky-50 text-sky-700 border-sky-100' },
-  { id: 'escape', name: 'Fuga da atividade', defaultMeasurement: 'duration', tone: 'bg-amber-50 text-amber-700 border-amber-100' },
-  { id: 'aggression', name: 'Agressao', defaultMeasurement: 'frequency', tone: 'bg-red-50 text-red-700 border-red-100' },
-  { id: 'self_injury', name: 'Autoagressao', defaultMeasurement: 'frequency', tone: 'bg-rose-50 text-rose-700 border-rose-100' },
-  { id: 'refusal', name: 'Recusa', defaultMeasurement: 'frequency', tone: 'bg-violet-50 text-violet-700 border-violet-100' },
-  { id: 'stereotypy', name: 'Estereotipia', defaultMeasurement: 'duration', tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' }
+  { id: 'crying', name: 'Choro', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], tone: 'bg-sky-50 text-sky-700 border-sky-100' },
+  { id: 'escape', name: 'Fuga da atividade', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], tone: 'bg-amber-50 text-amber-700 border-amber-100' },
+  { id: 'aggression', name: 'Agressao', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], tone: 'bg-red-50 text-red-700 border-red-100' },
+  { id: 'self_injury', name: 'Autoagressao', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], tone: 'bg-rose-50 text-rose-700 border-rose-100' },
+  { id: 'refusal', name: 'Recusa', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], tone: 'bg-violet-50 text-violet-700 border-violet-100' },
+  { id: 'stereotypy', name: 'Estereotipia', defaultMeasurement: 'partial_interval', allowedMeasurements: ['partial_interval', 'duration'], tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' }
 ];
 
 const antecedentOptions = ['Demanda apresentada', 'Transicao', 'Espera', 'Negacao de acesso', 'Barulho', 'Atencao dividida'];
@@ -112,6 +122,10 @@ const normalizeSyncStatus = (status: any): SyncStatus => {
   return status === 'syncing' || status === 'synced' || status === 'error' ? status : 'local';
 };
 
+const getMeasurementLabel = (measurementType: string) => {
+  return behaviorMeasurementOptions.find((option) => option.key === measurementType)?.label || measurementType;
+};
+
 export const SessionMode = ({
   patient,
   onClose,
@@ -139,7 +153,7 @@ export const SessionMode = ({
   const [records, setRecords] = useState<SessionRecord[]>([]);
   const [openDurations, setOpenDurations] = useState<OpenDurationEvent[]>([]);
   const [selectedBehaviorId, setSelectedBehaviorId] = useState('crying');
-  const [behaviorMeasurementType, setBehaviorMeasurementType] = useState('frequency');
+  const [behaviorMeasurementType, setBehaviorMeasurementType] = useState(behaviorPresets[0].defaultMeasurement);
   const [selectedLocation, setSelectedLocation] = useState(locationOptions[0]);
   const [selectedSeverity, setSelectedSeverity] = useState(2);
   const [rateWindow, setRateWindow] = useState<any>(null);
@@ -162,6 +176,11 @@ export const SessionMode = ({
   const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
   const [editingRecordTitle, setEditingRecordTitle] = useState('');
   const [editingRecordDetail, setEditingRecordDetail] = useState('');
+  const [editingRecordLocation, setEditingRecordLocation] = useState('');
+  const [editingRecordSeverity, setEditingRecordSeverity] = useState(2);
+  const [editingRecordAntecedent, setEditingRecordAntecedent] = useState('');
+  const [editingRecordConsequence, setEditingRecordConsequence] = useState('');
+  const [editingRecordNotes, setEditingRecordNotes] = useState('');
   const [hydratedSessionStateKey, setHydratedSessionStateKey] = useState('');
   const [nowMs, setNowMs] = useState(Date.now());
 
@@ -169,6 +188,13 @@ export const SessionMode = ({
     () => behaviorPresets.find((behavior) => behavior.id === selectedBehaviorId) || behaviorPresets[0],
     [selectedBehaviorId]
   );
+  const selectedBehaviorMeasurements = selectedBehavior.allowedMeasurements || [selectedBehavior.defaultMeasurement];
+  const selectedBehaviorAllowsMultipleMethods = selectedBehaviorMeasurements.length > 1;
+  const selectedBehaviorMethodOptions = behaviorMeasurementOptions.filter((option) => selectedBehaviorMeasurements.includes(option.key));
+
+  useEffect(() => {
+    setBehaviorMeasurementType(selectedBehavior.defaultMeasurement);
+  }, [selectedBehavior.id, selectedBehavior.defaultMeasurement]);
 
   useEffect(() => {
     setHydratedSessionStateKey('');
@@ -309,6 +335,29 @@ export const SessionMode = ({
     }
   };
 
+  const deleteBehaviorEvent = async (record: SessionRecord) => {
+    updateRecordStatus(record.id, 'syncing');
+    try {
+      const result = await dataService.deleteAbaBehaviorEvent(record.id, {
+        patient_id: patientId,
+        patientId,
+        session_id: sessionId,
+        sessionId
+      });
+      if (result?.success || result?.pending || result?.offline) {
+        setRecords((prev) => prev.filter((item) => item.id !== record.id));
+        onSessionRecordSaved?.();
+        return result;
+      }
+      updateRecordStatus(record.id, 'error');
+      return result;
+    } catch (error) {
+      updateRecordStatus(record.id, 'error');
+      console.error('Falha ao descartar evento ABA:', error);
+      return { success: false, error };
+    }
+  };
+
   const buildBehaviorPayload = (behaviorName: string, measurementType: string, overrides: any = {}) => {
     const timestamp = overrides.timestamp || new Date().toISOString();
     return {
@@ -400,13 +449,12 @@ export const SessionMode = ({
       kind: 'behavior',
       title: behaviorName,
       detail: `${countDelta > 0 ? '+' : ''}${countDelta} ocorrencia`,
-      timestamp: payload.timestamp
+      timestamp: payload.timestamp,
+      measurementType: 'frequency',
+      countDelta,
+      location: selectedLocation,
+      severity: selectedSeverity
     });
-  };
-
-  const openPromptSelection = (goal: any) => {
-    setPromptWarning('');
-    setPromptSelectionGoal(goal);
   };
 
   const savePromptedTrial = (promptKey: string) => {
@@ -428,12 +476,33 @@ export const SessionMode = ({
       severity: selectedSeverity
     };
     setOpenDurations((prev) => [openEvent, ...prev]);
-    addRecord({
+    const payload = buildBehaviorPayload(behaviorName, 'duration', {
+      id,
+      started_at: startedAt,
+      startedAt,
+      ended_at: null,
+      endedAt: null,
+      duration_seconds: null,
+      durationSeconds: null,
+      count_delta: 1,
+      countDelta: 1,
+      location: selectedLocation,
+      severity: selectedSeverity,
+      timestamp: startedAt,
+      raw_payload: { durationLifecycleStatus: 'open' }
+    });
+    void saveExistingBehaviorEvent(payload, {
       id,
       kind: 'behavior',
       title: behaviorName,
       detail: 'duracao em andamento',
-      timestamp: startedAt
+      timestamp: startedAt,
+      measurementType: 'duration',
+      startedAt,
+      durationSeconds: null,
+      countDelta: 1,
+      location: selectedLocation,
+      severity: selectedSeverity
     });
   };
 
@@ -455,32 +524,65 @@ export const SessionMode = ({
       countDelta: 1,
       location: event.location || selectedLocation,
       severity: event.severity ?? selectedSeverity,
-      timestamp: event.startedAt
+      timestamp: event.startedAt,
+      raw_payload: { durationLifecycleStatus: 'completed' }
     });
     void saveExistingBehaviorEvent(payload, {
       id: event.id,
       kind: 'behavior',
       title: event.behaviorName,
       detail: `duracao ${formatElapsed(event.startedAt, new Date(endedAt).getTime())}`,
-      timestamp: event.startedAt
+      timestamp: event.startedAt,
+      measurementType: 'duration',
+      startedAt: event.startedAt,
+      endedAt,
+      durationSeconds,
+      countDelta: 1,
+      location: event.location || selectedLocation,
+      severity: event.severity ?? selectedSeverity
     });
   };
 
   const discardDuration = (eventId: string) => {
+    const record = records.find((item) => item.id === eventId && item.kind === 'behavior');
     setOpenDurations((prev) => prev.filter((item) => item.id !== eventId));
+    if (record) {
+      void deleteBehaviorEvent(record);
+      return;
+    }
     setRecords((prev) => prev.filter((record) => record.id !== eventId));
   };
 
-  const handleQuickBehavior = (behavior: any) => {
+  const selectBehavior = (behavior: any) => {
     setSelectedBehaviorId(behavior.id);
     setBehaviorMeasurementType(behavior.defaultMeasurement);
-    if (behavior.defaultMeasurement === 'duration') {
-      const open = openDurations.find((event) => event.behaviorName === behavior.name);
-      if (open) endDuration(open.id);
-      else startDuration(behavior.name);
+  };
+
+  const handleSelectedBehaviorAction = () => {
+    if (behaviorMeasurementType === 'frequency') {
+      registerFrequency(selectedBehavior.name, 1);
       return;
     }
-    registerFrequency(behavior.name, 1);
+    if (behaviorMeasurementType === 'duration') {
+      startDuration(selectedBehavior.name);
+      return;
+    }
+    if (behaviorMeasurementType === 'abc') {
+      openAbcModal(selectedBehavior.id);
+      return;
+    }
+    if (behaviorMeasurementType === 'partial_interval' || behaviorMeasurementType === 'whole_interval') {
+      if (!intervalRun) startIntervalRun();
+      return;
+    }
+    if (behaviorMeasurementType === 'rate') {
+      if (!rateWindow) startRateWindow();
+      else registerRateOccurrence();
+      return;
+    }
+    if (behaviorMeasurementType === 'momentary_time_sampling') {
+      if (!momentaryRun) startMomentary();
+    }
   };
 
   const startRateWindow = () => {
@@ -505,7 +607,11 @@ export const SessionMode = ({
       kind: 'behavior',
       title: rateWindow.behaviorName,
       detail: `taxa +1 (${Number(rateWindow.count || 0) + 1})`,
-      timestamp: payload.timestamp
+      timestamp: payload.timestamp,
+      measurementType: 'rate',
+      countDelta: 1,
+      location: selectedLocation,
+      severity: selectedSeverity
     });
   };
 
@@ -538,7 +644,12 @@ export const SessionMode = ({
       kind: 'behavior',
       title: intervalRun.behaviorName,
       detail: `intervalo ${intervalRun.intervalIndex}: ${occurred ? 'SIM' : 'NAO'}`,
-      timestamp: payload.timestamp
+      timestamp: payload.timestamp,
+      measurementType: intervalRun.measurementType,
+      intervalIndex: intervalRun.intervalIndex,
+      intervalOccurred: occurred,
+      location: selectedLocation,
+      severity: selectedSeverity
     });
   };
 
@@ -569,7 +680,11 @@ export const SessionMode = ({
       kind: 'behavior',
       title: momentaryRun.behaviorName,
       detail: `amostragem momentanea: ${occurred ? 'SIM' : 'NAO'}`,
-      timestamp: payload.timestamp
+      timestamp: payload.timestamp,
+      measurementType: 'momentary_time_sampling',
+      intervalOccurred: occurred,
+      location: selectedLocation,
+      severity: selectedSeverity
     });
   };
 
@@ -577,6 +692,11 @@ export const SessionMode = ({
     const behavior = behaviorPresets.find((item) => item.id === behaviorId) || selectedBehavior;
     setAbcBehaviorId(behavior.id);
     setAbcModalOpen(true);
+  };
+
+  const openAbcModalForBehaviorName = (behaviorName: string) => {
+    const behavior = behaviorPresets.find((item) => item.name === behaviorName) || selectedBehavior;
+    openAbcModal(behavior.id);
   };
 
   const saveAbcEvent = () => {
@@ -595,7 +715,13 @@ export const SessionMode = ({
       kind: 'behavior',
       title: behavior.name,
       detail: `ABC - severidade ${abcSeverity}`,
-      timestamp: payload.timestamp
+      timestamp: payload.timestamp,
+      measurementType: 'abc',
+      location: abcLocation,
+      severity: abcSeverity,
+      antecedent: abcAntecedent,
+      consequence: abcConsequence,
+      notes: abcNote
     });
     setAbcModalOpen(false);
     setAbcNote('');
@@ -648,12 +774,71 @@ export const SessionMode = ({
     setEditingRecordId(record.id);
     setEditingRecordTitle(record.title);
     setEditingRecordDetail(record.detail);
+    setEditingRecordLocation(record.location || selectedLocation);
+    setEditingRecordSeverity(Number(record.severity || selectedSeverity || 1));
+    setEditingRecordAntecedent(record.antecedent || '');
+    setEditingRecordConsequence(record.consequence || '');
+    setEditingRecordNotes(record.notes || '');
   };
 
   const cancelEditingRecord = () => {
     setEditingRecordId(null);
     setEditingRecordTitle('');
     setEditingRecordDetail('');
+    setEditingRecordLocation('');
+    setEditingRecordSeverity(2);
+    setEditingRecordAntecedent('');
+    setEditingRecordConsequence('');
+    setEditingRecordNotes('');
+  };
+
+  const inferRecordMeasurementType = (record: SessionRecord) => {
+    if (record.measurementType) return record.measurementType;
+    const detail = String(record.detail || '').toLowerCase();
+    if (detail.includes('duracao')) return 'duration';
+    if (detail.includes('abc')) return 'abc';
+    if (detail.includes('intervalo')) return 'partial_interval';
+    if (detail.includes('taxa')) return 'rate';
+    if (detail.includes('amostragem')) return 'momentary_time_sampling';
+    return 'frequency';
+  };
+
+  const buildPayloadFromSessionRecord = (record: SessionRecord) => {
+    const measurementType = inferRecordMeasurementType(record);
+    return buildBehaviorPayload(record.title, measurementType, {
+      id: record.id,
+      behavior_name: record.title,
+      behaviorName: record.title,
+      measurement_type: measurementType,
+      measurementType,
+      count_delta: record.countDelta ?? undefined,
+      countDelta: record.countDelta ?? undefined,
+      started_at: measurementType === 'duration' ? (record.startedAt || record.timestamp) : undefined,
+      startedAt: measurementType === 'duration' ? (record.startedAt || record.timestamp) : undefined,
+      ended_at: measurementType === 'duration' ? (record.endedAt || null) : undefined,
+      endedAt: measurementType === 'duration' ? (record.endedAt || null) : undefined,
+      duration_seconds: measurementType === 'duration' ? (record.durationSeconds ?? null) : undefined,
+      durationSeconds: measurementType === 'duration' ? (record.durationSeconds ?? null) : undefined,
+      interval_index: record.intervalIndex ?? undefined,
+      intervalIndex: record.intervalIndex ?? undefined,
+      interval_occurred: record.intervalOccurred ?? undefined,
+      intervalOccurred: record.intervalOccurred ?? undefined,
+      location: record.location,
+      severity: record.severity,
+      antecedent: record.antecedent,
+      consequence: record.consequence,
+      notes: record.notes,
+      response_by_therapist: record.notes,
+      responseByTherapist: record.notes,
+      occurred_at: record.timestamp,
+      occurredAt: record.timestamp,
+      timestamp: record.timestamp,
+      raw_payload: {
+        editedAt: record.editedAt || null,
+        displayDetail: record.detail,
+        source: 'session_mode_history_edit'
+      }
+    });
   };
 
   const saveRecordEdit = () => {
@@ -663,12 +848,35 @@ export const SessionMode = ({
       cancelEditingRecord();
       return;
     }
-    updateRecord(editingRecordId, {
+    const editedRecord: SessionRecord = {
+      ...original,
       title: editingRecordTitle.trim() || original.title,
       detail: editingRecordDetail.trim() || original.detail,
+      location: editingRecordLocation || undefined,
+      severity: editingRecordSeverity,
+      antecedent: editingRecordAntecedent.trim() || undefined,
+      consequence: editingRecordConsequence.trim() || undefined,
+      notes: editingRecordNotes.trim() || undefined,
       syncStatus: 'local',
       editedAt: new Date().toISOString()
-    });
+    };
+    if (inferRecordMeasurementType(editedRecord) === 'duration') {
+      setOpenDurations((prev) => prev.map((event) => (
+        event.id === editedRecord.id
+          ? {
+              ...event,
+              behaviorName: editedRecord.title,
+              location: editedRecord.location,
+              severity: editedRecord.severity
+            }
+          : event
+      )));
+    }
+    if (editedRecord.kind === 'behavior') {
+      void saveExistingBehaviorEvent(buildPayloadFromSessionRecord(editedRecord), editedRecord);
+    } else {
+      updateRecord(editingRecordId, editedRecord);
+    }
     cancelEditingRecord();
   };
 
@@ -766,17 +974,32 @@ export const SessionMode = ({
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {openDurations.map((event) => (
-                  <div key={event.id} className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-4 flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-bold text-gray-800">{event.behaviorName} em andamento ha {formatElapsed(event.startedAt, nowMs)}</p>
-                      <p className="text-xs text-gray-500">{event.location || 'Sem local'} - severidade {event.severity || '-'}</p>
+                  <div key={event.id} className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-4 flex flex-col gap-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-gray-800">{event.behaviorName}</p>
+                        <p className="text-xs text-gray-500 mt-1">{event.location || 'Sem local'} - severidade {event.severity || '-'}</p>
+                        <p className="text-[11px] text-gray-400 mt-1">Inicio {new Date(event.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cronometro</p>
+                        <p className="text-2xl font-bold text-[#7a32fc] leading-none">{formatElapsed(event.startedAt, nowMs)}</p>
+                      </div>
                     </div>
-                    <button
-                      onClick={() => endDuration(event.id)}
-                      className="shrink-0 bg-[#1B254B] text-white rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest"
-                    >
-                      Encerrar
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => endDuration(event.id)}
+                        className="bg-[#1B254B] text-white rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest"
+                      >
+                        Encerrar
+                      </button>
+                      <button
+                        onClick={() => openAbcModalForBehaviorName(event.behaviorName)}
+                        className="bg-white text-[#7a32fc] border border-purple-100 rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest inline-flex items-center gap-2"
+                      >
+                        <FileText size={14} /> ABC rapido
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -789,15 +1012,25 @@ export const SessionMode = ({
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Evento comportamental inteligente</p>
                 <h2 className="text-xl font-bold text-gray-800">Registro rapido</h2>
               </div>
-              <select
-                value={behaviorMeasurementType}
-                onChange={(event) => setBehaviorMeasurementType(event.target.value)}
-                className="bg-[#F4F7FE] border border-blue-100 rounded-2xl px-4 py-3 text-xs font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
-              >
-                {behaviorMeasurementOptions.map((option) => (
-                  <option key={option.key} value={option.key}>{option.label}</option>
-                ))}
-              </select>
+              {selectedBehaviorAllowsMultipleMethods ? (
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                  Metodo
+                  <select
+                    value={behaviorMeasurementType}
+                    onChange={(event) => setBehaviorMeasurementType(event.target.value)}
+                    className="block mt-1 bg-[#F4F7FE] border border-blue-100 rounded-2xl px-4 py-3 text-xs font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
+                  >
+                    {selectedBehaviorMethodOptions.map((option) => (
+                      <option key={option.key} value={option.key}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 px-4 py-3 text-right">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Metodo</p>
+                  <p className="text-sm font-bold text-gray-800">{getMeasurementLabel(behaviorMeasurementType)}</p>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-5">
@@ -808,11 +1041,11 @@ export const SessionMode = ({
                     key={behavior.id}
                     className={`border rounded-2xl px-4 py-4 text-left font-bold text-sm transition-all hover:scale-[1.02] ${behavior.tone} ${selectedBehaviorId === behavior.id ? 'ring-2 ring-[#7a32fc]/40' : ''}`}
                   >
-                    <button onClick={() => handleQuickBehavior(behavior)} className="w-full text-left">
+                    <button onClick={() => selectBehavior(behavior)} className="w-full text-left">
                       <span className="block">{behavior.name}</span>
                       <span className="mt-2 inline-flex items-center gap-1 text-[10px] uppercase tracking-widest opacity-70">
-                        {behavior.defaultMeasurement === 'duration' ? (isOpen ? <Square size={12} /> : <Play size={12} />) : <Plus size={12} />}
-                        {behavior.defaultMeasurement === 'duration' ? (isOpen ? 'encerrar' : 'iniciar') : '+ ocorrencia'}
+                        {behavior.defaultMeasurement === 'duration' ? (isOpen ? <Square size={12} /> : <Play size={12} />) : behavior.defaultMeasurement === 'frequency' ? <Plus size={12} /> : <Timer size={12} />}
+                        {getMeasurementLabel(behavior.defaultMeasurement)}
                       </span>
                     </button>
                     <button
@@ -832,7 +1065,10 @@ export const SessionMode = ({
                   Comportamento
                   <select
                     value={selectedBehaviorId}
-                    onChange={(event) => setSelectedBehaviorId(event.target.value)}
+                    onChange={(event) => {
+                      const behavior = behaviorPresets.find((item) => item.id === event.target.value);
+                      if (behavior) selectBehavior(behavior);
+                    }}
                     className="mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none"
                   >
                     {behaviorPresets.map((behavior) => (
@@ -868,11 +1104,8 @@ export const SessionMode = ({
 
               {behaviorMeasurementType === 'frequency' && (
                 <div className="flex gap-3 flex-wrap">
-                  <button onClick={() => registerFrequency(selectedBehavior.name, 1)} className="px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
-                    <Plus size={16} /> +1
-                  </button>
-                  <button onClick={() => registerFrequency(selectedBehavior.name, -1)} className="px-5 py-3 rounded-2xl bg-slate-700 text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
-                    <Minus size={16} /> -1
+                  <button onClick={handleSelectedBehaviorAction} className="px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                    <Plus size={16} /> + ocorrencia
                   </button>
                   <button onClick={() => openAbcModal()} className="px-5 py-3 rounded-2xl bg-white text-[#7a32fc] border border-purple-100 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
                     <FileText size={16} /> ABC rapido
@@ -882,7 +1115,7 @@ export const SessionMode = ({
 
               {behaviorMeasurementType === 'duration' && (
                 <div className="flex gap-3 flex-wrap">
-                  <button onClick={() => startDuration(selectedBehavior.name)} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                  <button onClick={handleSelectedBehaviorAction} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
                     <Play size={16} /> Iniciar duracao
                   </button>
                   {openDurations.filter((event) => event.behaviorName === selectedBehavior.name).map((event) => (
@@ -919,8 +1152,8 @@ export const SessionMode = ({
                     {intervalSecondOptions.map((seconds) => <option key={seconds} value={seconds}>{seconds}s</option>)}
                   </select>
                   {!intervalRun ? (
-                    <button onClick={startIntervalRun} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
-                      <Play size={16} /> Iniciar timer
+                    <button onClick={handleSelectedBehaviorAction} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                      <Play size={16} /> Iniciar coleta por intervalo
                     </button>
                   ) : (
                     <>
@@ -959,7 +1192,7 @@ export const SessionMode = ({
 
               {behaviorMeasurementType === 'abc' && (
                 <div className="flex gap-3 flex-wrap">
-                  <button onClick={() => openAbcModal()} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                  <button onClick={handleSelectedBehaviorAction} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
                     <FileText size={16} /> Abrir ABC rapido
                   </button>
                 </div>
@@ -1001,7 +1234,7 @@ export const SessionMode = ({
                       <span className="text-2xl font-bold mt-2">Independente</span>
                       <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">1 = correto independente</span>
                     </button>
-                    <button onClick={() => openPromptSelection(goal)} className="bg-[#FFB547] text-white min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-orange-500/20 hover:scale-[1.01] active:scale-95 transition-all">
+                    <button onClick={() => handleTrialClick(goal, 0.5, 'prompted', promptLevelKey)} className="bg-[#FFB547] text-white min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-orange-500/20 hover:scale-[1.01] active:scale-95 transition-all">
                       <Activity size={26} />
                       <span className="text-2xl font-bold mt-2">Com ajuda</span>
                       <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">0.5 = correto com ajuda</span>
@@ -1070,6 +1303,56 @@ export const SessionMode = ({
                       onChange={(event) => setEditingRecordDetail(event.target.value)}
                       className="w-full min-h-[74px] rounded-xl border border-blue-100 bg-white px-3 py-2 text-xs text-gray-600 outline-none resize-none focus:border-[#7a32fc]"
                     />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                        Local
+                        <select
+                          value={editingRecordLocation}
+                          onChange={(event) => setEditingRecordLocation(event.target.value)}
+                          className="mt-1 w-full rounded-xl border border-blue-100 bg-white px-3 py-2 text-xs font-bold text-gray-700 outline-none"
+                        >
+                          {locationOptions.map((location) => <option key={location} value={location}>{location}</option>)}
+                        </select>
+                      </label>
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                        Severidade
+                        <select
+                          value={editingRecordSeverity}
+                          onChange={(event) => setEditingRecordSeverity(Number(event.target.value))}
+                          className="mt-1 w-full rounded-xl border border-blue-100 bg-white px-3 py-2 text-xs font-bold text-gray-700 outline-none"
+                        >
+                          {severityOptions.map((severity) => <option key={severity} value={severity}>{severity}</option>)}
+                        </select>
+                      </label>
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                        Antecedente
+                        <select
+                          value={editingRecordAntecedent}
+                          onChange={(event) => setEditingRecordAntecedent(event.target.value)}
+                          className="mt-1 w-full rounded-xl border border-blue-100 bg-white px-3 py-2 text-xs font-bold text-gray-700 outline-none"
+                        >
+                          <option value="">Nao informado</option>
+                          {antecedentOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                        </select>
+                      </label>
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                        Consequencia
+                        <select
+                          value={editingRecordConsequence}
+                          onChange={(event) => setEditingRecordConsequence(event.target.value)}
+                          className="mt-1 w-full rounded-xl border border-blue-100 bg-white px-3 py-2 text-xs font-bold text-gray-700 outline-none"
+                        >
+                          <option value="">Nao informada</option>
+                          {consequenceOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                    <textarea
+                      value={editingRecordNotes}
+                      onChange={(event) => setEditingRecordNotes(event.target.value)}
+                      placeholder="Observacao opcional"
+                      className="w-full min-h-[64px] rounded-xl border border-blue-100 bg-white px-3 py-2 text-xs text-gray-600 outline-none resize-none focus:border-[#7a32fc]"
+                    />
                     <p className="text-[11px] text-gray-400">Horario original: {new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                     <div className="flex gap-2">
                       <button onClick={cancelEditingRecord} className="flex-1 rounded-xl bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-500 border border-gray-100">
@@ -1086,6 +1369,16 @@ export const SessionMode = ({
                       <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{record.kind === 'trial' ? 'Tentativa' : 'Comportamento'}</p>
                       <h3 className="text-sm font-bold text-gray-800 mt-1 truncate">{record.title}</h3>
                       <p className="text-xs text-gray-500 mt-1">{record.detail}</p>
+                      {(record.location || record.severity || record.antecedent || record.consequence || record.notes) && (
+                        <div className="mt-2 space-y-1 text-[11px] text-gray-500">
+                          {(record.location || record.severity) && (
+                            <p>{record.location || 'Local nao informado'} - severidade {record.severity || '-'}</p>
+                          )}
+                          {record.antecedent && <p>Antecedente: {record.antecedent}</p>}
+                          {record.consequence && <p>Consequencia: {record.consequence}</p>}
+                          {record.notes && <p>Obs: {record.notes}</p>}
+                        </div>
+                      )}
                       <p className="text-[11px] text-gray-400 mt-2">
                         {new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         {record.editedAt ? ' - editado' : ''}

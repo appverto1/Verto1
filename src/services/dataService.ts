@@ -1139,6 +1139,22 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'aba', '/api/aba/behavior-events');
   },
 
+  async deleteAbaBehaviorEvent(eventId: string, context: any = {}) {
+    const id = String(eventId || context?.id || context?.event_id || context?.eventId || generateId());
+    const data = {
+      ...(context || {}),
+      id,
+      event_id: id,
+      eventId: id,
+      patient_id: context?.patient_id || context?.patientId,
+      patientId: context?.patient_id || context?.patientId,
+      session_id: context?.session_id || context?.sessionId,
+      sessionId: context?.session_id || context?.sessionId,
+      deleted_at: context?.deleted_at || context?.deletedAt || new Date().toISOString()
+    };
+    return await saveOfflineFirst(id, data, 'aba', `/api/aba/behavior-events/${encodeURIComponent(id)}`, 'DELETE');
+  },
+
   async getAbaBehaviorEvents(patientId: string) {
     const endpoint = `/api/aba/behavior-events/${encodeURIComponent(String(patientId))}`;
     try {

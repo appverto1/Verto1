@@ -14385,7 +14385,7 @@ async function startServer() {
         ? sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt, occurredAt)
         : null;
 
-      const payload = cleanObject({
+      let payload: Record<string, any> = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.event_id || req.body?.eventId || crypto.randomUUID(), 180),
         clinic_id: clinicId,
         patient_id: patientId,
@@ -14426,6 +14426,26 @@ async function startServer() {
         created_at: new Date().toISOString()
       });
 
+      if (payload.measurement_type === 'duration' && !endedAt && payload.id) {
+        const { data: existingDuration } = await supabase
+          .from('aba_behavior_events')
+          .select('ended_at,duration_seconds,raw_payload')
+          .eq('id', payload.id)
+          .maybeSingle();
+        if (existingDuration?.ended_at) {
+          payload = cleanObject({
+            ...payload,
+            ended_at: existingDuration.ended_at,
+            duration_seconds: existingDuration.duration_seconds ?? payload.duration_seconds,
+            raw_payload: sanitizeClinicalPayload({
+              ...(payload.raw_payload || {}),
+              staleOpenWriteIgnored: true,
+              preservedCompletedAt: existingDuration.ended_at
+            })
+          });
+        }
+      }
+
       const result = await writeAbaRowWithSchemaFallback('aba_behavior_events', payload, 'upsert');
       if (result.error) {
         if (hasMissingFinancialSchema(result.error)) {
@@ -14434,6 +14454,36 @@ async function startServer() {
         throw result.error;
       }
       return res.json({ success: true, data: result.data || payload });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.delete('/api/aba/behavior-events/:eventId', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const eventId = sanitizeString(req.params?.eventId || req.body?.event_id || req.body?.eventId || req.body?.id, 180);
+      const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!eventId) return res.status(400).json({ success: false, error: 'Evento inválido.' });
+      if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+
+      let query = supabase
+        .from('aba_behavior_events')
+        .delete()
+        .eq('id', eventId)
+        .eq('patient_id', patientId);
+      if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
+      if (sanitizeString(req.session.user?.role, 40).toLowerCase() === 'therapist') {
+        query = query.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
+      }
+      const { error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) {
+          return res.status(503).json({ success: false, error: 'Schema ABA ainda não aplicado.' });
+        }
+        throw error;
+      }
+      return res.json({ success: true, data: { id: eventId, deleted: true } });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
     }
