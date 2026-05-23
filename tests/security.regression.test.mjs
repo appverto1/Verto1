@@ -358,8 +358,23 @@ test('aba persistence: frontend records sessions and structured trials offline-f
   );
   assert.match(
     dataServiceCode,
+    /async getAbaSessions\(patientId: string\)[\s\S]*?\/api\/aba\/sessions\/\$\{encodeURIComponent\(String\(patientId\)\)\}/m,
+    'dataService deve buscar sessoes ABA para exibir no prontuario.'
+  );
+  assert.match(
+    dataServiceCode,
+    /async getAbaTrials\(patientId: string\)[\s\S]*?\/api\/aba\/trials\/\$\{encodeURIComponent\(String\(patientId\)\)\}/m,
+    'dataService deve buscar tentativas ABA para exibir no prontuario.'
+  );
+  assert.match(
+    dataServiceCode,
     /async saveAbaBehaviorEvent\(event: any\)[\s\S]*?saveOfflineFirst\(id, data, 'aba', '\/api\/aba\/behavior-events'\)/m,
     'dataService deve salvar eventos de comportamento ABA na fila offline-first.'
+  );
+  assert.match(
+    dataServiceCode,
+    /async getAbaBehaviorEvents\(patientId: string\)[\s\S]*?\/api\/aba\/behavior-events\/\$\{encodeURIComponent\(String\(patientId\)\)\}/m,
+    'dataService deve buscar eventos de comportamento ABA para exibir no prontuario.'
   );
   assert.match(
     patientDetailCode,
@@ -370,6 +385,16 @@ test('aba persistence: frontend records sessions and structured trials offline-f
     patientDetailCode,
     /dataService\.updateAbaSession\(String\(endedSession\.id\)/m,
     'PatientDetailView deve persistir encerramento de sessao ABA.'
+  );
+  assert.match(
+    patientDetailCode,
+    /dataService\.getAbaSessions\(String\(patient\.id\)\)[\s\S]*?dataService\.getAbaTrials\(String\(patient\.id\)\)[\s\S]*?dataService\.getAbaBehaviorEvents\(String\(patient\.id\)\)/m,
+    'PatientDetailView deve carregar sessoes, tentativas e comportamentos ABA.'
+  );
+  assert.match(
+    patientDetailCode,
+    /ABA estruturado[\s\S]*?aba_trials[\s\S]*?aba_behavior_events/m,
+    'PatientDetailView deve explicar e renderizar onde os dados ABA ficam registrados.'
   );
   assert.match(
     sessionModeCode,

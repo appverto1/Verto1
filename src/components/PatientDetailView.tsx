@@ -478,6 +478,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [showSessionEndConfirm, setShowSessionEndConfirm] = useState(false);
   const [pendingSessionAction, setPendingSessionAction] = useState<'tab' | 'fullscreen'>('tab');
   const [restoreSessionData, setRestoreSessionData] = useState(false);
+  const [abaSessions, setAbaSessions] = useState<any[]>([]);
+  const [abaTrials, setAbaTrials] = useState<any[]>([]);
+  const [abaBehaviorEvents, setAbaBehaviorEvents] = useState<any[]>([]);
+  const [isLoadingAbaRecords, setIsLoadingAbaRecords] = useState(false);
+  const [abaRecordsError, setAbaRecordsError] = useState("");
+  const [abaRecordTypeFilter, setAbaRecordTypeFilter] = useState("all");
+  const [abaSessionFilter, setAbaSessionFilter] = useState("all");
+  const [abaRecordSearch, setAbaRecordSearch] = useState("");
+  const [abaRecordsRefreshKey, setAbaRecordsRefreshKey] = useState(0);
   const notes = useMemo(() => {
     const baseNotes = Array.isArray(externalNotes) ? externalNotes : [];
     if (!generatedReviewNotes.length) return baseNotes;
@@ -497,6 +506,48 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   useEffect(() => {
     setGeneratedReviewNotes([]);
   }, [patient?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadAbaRecords = async () => {
+      if (!patient?.id || !isKidsProfile) {
+        setAbaSessions([]);
+        setAbaTrials([]);
+        setAbaBehaviorEvents([]);
+        return;
+      }
+      setIsLoadingAbaRecords(true);
+      setAbaRecordsError("");
+      try {
+        const [sessionsResult, trialsResult, behaviorResult] = await Promise.allSettled([
+          dataService.getAbaSessions(String(patient.id)),
+          dataService.getAbaTrials(String(patient.id)),
+          dataService.getAbaBehaviorEvents(String(patient.id))
+        ]);
+        if (cancelled) return;
+        const readData = (result: PromiseSettledResult<any>) =>
+          result.status === 'fulfilled' && Array.isArray(result.value?.data) ? result.value.data : [];
+        setAbaSessions(readData(sessionsResult));
+        setAbaTrials(readData(trialsResult));
+        setAbaBehaviorEvents(readData(behaviorResult));
+        if ([sessionsResult, trialsResult, behaviorResult].some((result) => result.status === 'rejected')) {
+          setAbaRecordsError("Alguns registros ABA nao puderam ser carregados agora.");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Falha ao carregar registros ABA:', error);
+          setAbaRecordsError("Nao foi possivel carregar os registros ABA.");
+        }
+      } finally {
+        if (!cancelled) setIsLoadingAbaRecords(false);
+      }
+    };
+
+    void loadAbaRecords();
+    return () => {
+      cancelled = true;
+    };
+  }, [patient?.id, isKidsProfile, activeSession?.recordCount, abaRecordsRefreshKey]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1799,6 +1850,119 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .replace(/&gt;/g, '>')
       .replace(/Â/g, '')
       .trim();
+
+  const formatAbaDateTime = (value: any) => {
+    const date = new Date(value || 0);
+    if (Number.isNaN(date.getTime())) return 'Sem data';
+    return date.toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const abaCollectionTypeLabels: Record<string, string> = {
+    dtt: 'DTT',
+    net: 'NET',
+    cold_probe: 'Cold Probe',
+    baseline_probe: 'Baseline Probe',
+    maintenance_probe: 'Maintenance Probe'
+  };
+
+  const abaMeasurementTypeLabels: Record<string, string> = {
+    frequency: 'Frequencia',
+    duration: 'Duracao',
+    rate: 'Taxa',
+    partial_interval: 'Intervalo parcial',
+    whole_interval: 'Intervalo total',
+    momentary_time_sampling: 'Amostragem momentanea',
+    abc: 'ABC'
+  };
+
+  const abaSessionOptions = useMemo(() => {
+    const byId = new Map<string, any>();
+    const includeSession = (session: any) => {
+      const id = String(session?.id || session?.session_id || session?.sessionId || '').trim();
+      if (!id || byId.has(id)) return;
+      byId.set(id, session);
+    };
+    (Array.isArray(abaSessions) ? abaSessions : []).forEach(includeSession);
+    [...(Array.isArray(abaTrials) ? abaTrials : []), ...(Array.isArray(abaBehaviorEvents) ? abaBehaviorEvents : [])]
+      .forEach((record: any) => {
+        const sessionId = String(record?.session_id || record?.sessionId || '').trim();
+        if (sessionId && !byId.has(sessionId)) {
+          byId.set(sessionId, { id: sessionId, started_at: record?.occurred_at || record?.created_at });
+        }
+      });
+    return Array.from(byId.values())
+      .map((session: any) => ({
+        id: String(session?.id || session?.session_id || session?.sessionId || ''),
+        label: `${formatAbaDateTime(session?.started_at || session?.startedAt || session?.created_at)}${Number(session?.record_count ?? session?.recordCount ?? 0) ? ` - ${Number(session?.record_count ?? session?.recordCount)} registro(s)` : ''}`
+      }))
+      .sort((a, b) => b.label.localeCompare(a.label));
+  }, [abaSessions, abaTrials, abaBehaviorEvents]);
+
+  const abaStructuredRecords = useMemo(() => {
+    const search = abaRecordSearch.trim().toLowerCase();
+    const trials = (Array.isArray(abaTrials) ? abaTrials : []).map((trial: any) => {
+      const collectionType = String(trial?.collection_type || trial?.collectionType || 'dtt').toLowerCase();
+      const score = trial?.response_score ?? trial?.responseScore ?? trial?.score;
+      const maxScore = trial?.max_score ?? trial?.maxScore;
+      const prompt = trial?.prompt_level_name || trial?.promptLevelName || trial?.prompt_level_key || trial?.promptLevelKey || 'Sem prompt';
+      const title = normalizeNoteText(trial?.target_name || trial?.targetName || trial?.title || 'Meta sem nome');
+      const sessionId = String(trial?.session_id || trial?.sessionId || '').trim();
+      const occurredAt = trial?.occurred_at || trial?.occurredAt || trial?.created_at || trial?.createdAt;
+      return {
+        id: `trial-${String(trial?.id || `${title}-${occurredAt}`)}`,
+        kind: 'trial',
+        tableName: 'aba_trials',
+        sessionId,
+        occurredAt,
+        title,
+        label: abaCollectionTypeLabels[collectionType] || collectionType.toUpperCase(),
+        detail: `Pontuacao ${score ?? '-'}${maxScore !== null && maxScore !== undefined ? `/${maxScore}` : ''} - ${prompt}`,
+        note: normalizeNoteText(trial?.notes || trial?.note || ''),
+        meta: trial,
+        searchText: `${title} ${collectionType} ${prompt} ${trial?.domain_name || trial?.domainName || ''} ${trial?.protocol_title || trial?.protocolTitle || ''}`.toLowerCase()
+      };
+    });
+
+    const behaviorEvents = (Array.isArray(abaBehaviorEvents) ? abaBehaviorEvents : []).map((event: any) => {
+      const measurementType = String(event?.measurement_type || event?.measurementType || 'frequency').toLowerCase();
+      const title = normalizeNoteText(event?.behavior_name || event?.behaviorName || event?.name || 'Comportamento sem nome');
+      const sessionId = String(event?.session_id || event?.sessionId || '').trim();
+      const occurredAt = event?.occurred_at || event?.occurredAt || event?.created_at || event?.createdAt;
+      const countDelta = event?.count_delta ?? event?.countDelta;
+      const location = normalizeNoteText(event?.location || '');
+      const antecedent = normalizeNoteText(event?.antecedent || '');
+      const consequence = normalizeNoteText(event?.consequence || '');
+      const note = normalizeNoteText(event?.notes || event?.note || '');
+      return {
+        id: `behavior-${String(event?.id || `${title}-${occurredAt}`)}`,
+        kind: 'behavior',
+        tableName: 'aba_behavior_events',
+        sessionId,
+        occurredAt,
+        title,
+        label: abaMeasurementTypeLabels[measurementType] || measurementType,
+        detail:
+          measurementType === 'abc'
+            ? `A: ${antecedent || '-'} | C: ${consequence || '-'}`
+            : `${countDelta !== null && countDelta !== undefined ? `Contagem ${countDelta}` : 'Evento registrado'}${location ? ` - ${location}` : ''}`,
+        note,
+        meta: event,
+        searchText: `${title} ${measurementType} ${location} ${antecedent} ${consequence} ${note}`.toLowerCase()
+      };
+    });
+
+    return [...trials, ...behaviorEvents]
+      .filter((record) => abaRecordTypeFilter === 'all' || record.kind === abaRecordTypeFilter)
+      .filter((record) => abaSessionFilter === 'all' || record.sessionId === abaSessionFilter)
+      .filter((record) => !search || record.searchText.includes(search))
+      .sort((a, b) => new Date(b.occurredAt || 0).getTime() - new Date(a.occurredAt || 0).getTime());
+  }, [abaTrials, abaBehaviorEvents, abaRecordTypeFilter, abaSessionFilter, abaRecordSearch]);
 
   const isSystemMilestoneEvent = (note: any) => {
     const subject = String(note?.subject || '').trim().toLowerCase();
@@ -5573,6 +5737,127 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   </div>
                 )}
               </div>
+            </div>
+            <div className={`p-6 rounded-[32px] shadow-sm border transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between mb-5">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#7a32fc]">ABA estruturado</p>
+                  <h3 className={`text-xl font-semibold tracking-tight mt-1 ${isPanelDark ? 'text-slate-50' : 'text-gray-800'}`}>
+                    Registros salvos da sessao
+                  </h3>
+                  <p className={`text-xs mt-1 max-w-2xl ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>
+                    Tentativas ficam em <span className="font-semibold">aba_trials</span>; comportamentos ficam em <span className="font-semibold">aba_behavior_events</span>. Se o aparelho estiver offline, entram primeiro na fila local <span className="font-semibold">OfflineVertoDB.records</span>.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAbaRecordsRefreshKey((value) => value + 1)}
+                  className={`rounded-2xl px-4 py-3 text-[10px] font-semibold uppercase tracking-widest transition-colors ${isPanelDark ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+                >
+                  Atualizar
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-[160px_1fr_1fr] mb-5">
+                <select
+                  value={abaRecordTypeFilter}
+                  onChange={(e) => setAbaRecordTypeFilter(e.target.value)}
+                  className={`rounded-2xl border px-4 py-3 text-xs font-semibold outline-none focus:border-[#7a32fc] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-gray-50 border-gray-200 text-slate-800'}`}
+                >
+                  <option value="all">Tudo</option>
+                  <option value="trial">Tentativas</option>
+                  <option value="behavior">Comportamentos</option>
+                </select>
+                <select
+                  value={abaSessionFilter}
+                  onChange={(e) => setAbaSessionFilter(e.target.value)}
+                  className={`rounded-2xl border px-4 py-3 text-xs font-semibold outline-none focus:border-[#7a32fc] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-gray-50 border-gray-200 text-slate-800'}`}
+                >
+                  <option value="all">Todas as sessoes</option>
+                  {abaSessionOptions.map((session) => (
+                    <option key={session.id} value={session.id}>{session.label}</option>
+                  ))}
+                </select>
+                <div className="relative">
+                  <Search size={14} className={`absolute left-4 top-1/2 -translate-y-1/2 ${isPanelDark ? 'text-slate-400' : 'text-slate-400'}`} />
+                  <input
+                    type="text"
+                    value={abaRecordSearch}
+                    onChange={(e) => setAbaRecordSearch(e.target.value)}
+                    placeholder="Buscar por meta, comportamento, local, prompt..."
+                    className={`w-full rounded-2xl border px-4 py-3 pl-10 text-xs font-semibold outline-none focus:border-[#7a32fc] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-gray-50 border-gray-200 text-slate-800 placeholder:text-slate-400'}`}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 mb-5">
+                <div className={`rounded-2xl border p-4 ${isPanelDark ? 'bg-slate-900/50 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
+                  <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Tentativas</p>
+                  <p className={`text-2xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{abaTrials.length}</p>
+                </div>
+                <div className={`rounded-2xl border p-4 ${isPanelDark ? 'bg-slate-900/50 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
+                  <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Comportamentos</p>
+                  <p className={`text-2xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{abaBehaviorEvents.length}</p>
+                </div>
+                <div className={`rounded-2xl border p-4 ${isPanelDark ? 'bg-slate-900/50 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
+                  <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Sessoes</p>
+                  <p className={`text-2xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{abaSessionOptions.length}</p>
+                </div>
+              </div>
+
+              {abaRecordsError && (
+                <div className={`mb-4 rounded-2xl border p-3 text-xs font-semibold ${isPanelDark ? 'bg-amber-500/10 border-amber-400/20 text-amber-100' : 'bg-amber-50 border-amber-100 text-amber-700'}`}>
+                  {abaRecordsError}
+                </div>
+              )}
+
+              {isLoadingAbaRecords ? (
+                <div className={`rounded-3xl border border-dashed py-10 text-center ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                  <p className="text-sm font-semibold">Carregando registros ABA...</p>
+                </div>
+              ) : abaStructuredRecords.length > 0 ? (
+                <div className="space-y-3">
+                  {abaStructuredRecords.map((record) => (
+                    <div key={record.id} className={`rounded-2xl border p-4 transition-colors ${isPanelDark ? 'bg-slate-900/50 border-slate-700' : 'bg-white border-slate-100'}`}>
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2 mb-2">
+                            <span className={`rounded-full px-3 py-1 text-[9px] font-semibold uppercase tracking-widest ${record.kind === 'trial' ? 'bg-[#7a32fc]/10 text-[#7a32fc]' : 'bg-emerald-500/10 text-emerald-600'}`}>
+                              {record.kind === 'trial' ? 'Tentativa' : 'Comportamento'}
+                            </span>
+                            <span className={`rounded-full px-3 py-1 text-[9px] font-semibold uppercase tracking-widest ${isPanelDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-500'}`}>
+                              {record.label}
+                            </span>
+                            <span className={`text-[10px] font-semibold ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                              {formatAbaDateTime(record.occurredAt)}
+                            </span>
+                          </div>
+                          <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-800'}`}>{record.title}</p>
+                          <p className={`text-xs mt-1 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{record.detail}</p>
+                          {record.note && (
+                            <p className={`text-xs mt-2 whitespace-pre-wrap ${isPanelDark ? 'text-slate-400' : 'text-slate-600'}`}>{record.note}</p>
+                          )}
+                        </div>
+                        <div className="shrink-0 text-left sm:text-right">
+                          <p className={`text-[9px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>Tabela</p>
+                          <p className={`text-[11px] font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>{record.tableName}</p>
+                          {record.sessionId && (
+                            <p className={`mt-2 max-w-[180px] truncate text-[10px] ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`} title={record.sessionId}>
+                              {record.sessionId}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className={`rounded-3xl border border-dashed py-10 text-center ${isPanelDark ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-slate-50'}`}>
+                  <Target size={34} className={`mx-auto mb-3 ${isPanelDark ? 'text-slate-600' : 'text-slate-300'}`} />
+                  <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Nenhum registro ABA encontrado com estes filtros.</p>
+                  <p className={`text-xs mt-1 ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>Registre uma tentativa ou comportamento no modo tela cheia e atualize esta lista.</p>
+                </div>
+              )}
             </div>
           </div>
         ) : (
