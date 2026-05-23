@@ -9,8 +9,10 @@ import {
   FileText,
   MapPin,
   Minus,
+  Pencil,
   Play,
   Plus,
+  Save,
   Square,
   StopCircle,
   Timer,
@@ -30,6 +32,7 @@ type SessionRecord = {
   detail: string;
   timestamp: string;
   syncStatus: SyncStatus;
+  editedAt?: string;
 };
 
 type OpenDurationEvent = {
@@ -102,6 +105,13 @@ const syncClasses: Record<SyncStatus, string> = {
   error: 'bg-red-50 text-red-600 border-red-100'
 };
 
+const promptedPromptKeys = ['visual', 'gestural', 'verbal', 'model', 'partial_physical', 'full_physical'];
+const promptedPromptOptions = ABA_PROMPT_LEVEL_OPTIONS.filter((prompt) => promptedPromptKeys.includes(prompt.key));
+
+const normalizeSyncStatus = (status: any): SyncStatus => {
+  return status === 'syncing' || status === 'synced' || status === 'error' ? status : 'local';
+};
+
 export const SessionMode = ({
   patient,
   onClose,
@@ -125,7 +135,7 @@ export const SessionMode = ({
   const [trialCount, setTrialCount] = useState(0);
   const [activeCriteria, setActiveCriteria] = useState<string | null>(null);
   const [collectionType, setCollectionType] = useState('dtt');
-  const [promptLevelKey, setPromptLevelKey] = useState('independent');
+  const [promptLevelKey, setPromptLevelKey] = useState('verbal');
   const [records, setRecords] = useState<SessionRecord[]>([]);
   const [openDurations, setOpenDurations] = useState<OpenDurationEvent[]>([]);
   const [selectedBehaviorId, setSelectedBehaviorId] = useState('crying');
@@ -146,6 +156,12 @@ export const SessionMode = ({
   const [abcNote, setAbcNote] = useState('');
   const [sessionWarning, setSessionWarning] = useState('');
   const [showSessionSummary, setShowSessionSummary] = useState(false);
+  const [durationBlockModalOpen, setDurationBlockModalOpen] = useState(false);
+  const [promptSelectionGoal, setPromptSelectionGoal] = useState<any>(null);
+  const [promptWarning, setPromptWarning] = useState('');
+  const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
+  const [editingRecordTitle, setEditingRecordTitle] = useState('');
+  const [editingRecordDetail, setEditingRecordDetail] = useState('');
   const [hydratedSessionStateKey, setHydratedSessionStateKey] = useState('');
   const [nowMs, setNowMs] = useState(Date.now());
 
@@ -158,7 +174,9 @@ export const SessionMode = ({
     setHydratedSessionStateKey('');
     try {
       const persisted = JSON.parse(localStorage.getItem(sessionStateKey) || '{}');
-      setRecords(Array.isArray(persisted.records) ? persisted.records : []);
+      setRecords(Array.isArray(persisted.records)
+        ? persisted.records.map((record: any) => ({ ...record, syncStatus: normalizeSyncStatus(record?.syncStatus) }))
+        : []);
       setOpenDurations(Array.isArray(persisted.openDurations) ? persisted.openDurations : []);
       setRateWindow(persisted.rateWindow || null);
       setIntervalRun(persisted.intervalRun || null);
@@ -215,12 +233,57 @@ export const SessionMode = ({
     }
   }, [momentaryRun, nowMs]);
 
+  useEffect(() => {
+    if (!durationBlockModalOpen || openDurations.length > 0) return;
+    setDurationBlockModalOpen(false);
+    setShowSessionSummary(true);
+  }, [durationBlockModalOpen, openDurations.length]);
+
   const updateRecordStatus = (id: string, syncStatus: SyncStatus) => {
     setRecords((prev) => prev.map((record) => (record.id === id ? { ...record, syncStatus } : record)));
   };
 
+  const updateRecord = (id: string, updates: Partial<SessionRecord>) => {
+    setRecords((prev) => prev.map((record) => (record.id === id ? { ...record, ...updates } : record)));
+  };
+
   const addRecord = (record: Omit<SessionRecord, 'syncStatus'>, syncStatus: SyncStatus = 'local') => {
     setRecords((prev) => [{ ...record, syncStatus }, ...prev].slice(0, 40));
+  };
+
+  const upsertRecord = (record: Omit<SessionRecord, 'syncStatus'>, syncStatus: SyncStatus = 'local') => {
+    setRecords((prev) => {
+      let found = false;
+      const next = prev.map((item) => {
+        if (item.id !== record.id) return item;
+        found = true;
+        return { ...item, ...record, syncStatus };
+      });
+      return found ? next : [{ ...record, syncStatus }, ...next].slice(0, 40);
+    });
+  };
+
+  const saveExistingBehaviorEvent = async (payload: any, record: Omit<SessionRecord, 'syncStatus'>) => {
+    upsertRecord(record, 'local');
+    setTimeout(() => updateRecordStatus(record.id, 'syncing'), 60);
+    try {
+      const result = await dataService.saveAbaBehaviorEvent({
+        ...payload,
+        patient_id: patientId,
+        patientId,
+        session_id: sessionId,
+        sessionId,
+        therapist_id: resolvedTherapistId || undefined,
+        therapistId: resolvedTherapistId || undefined
+      });
+      updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
+      onSessionRecordSaved?.();
+      return result;
+    } catch (error) {
+      updateRecordStatus(record.id, 'error');
+      console.error('Falha ao persistir evento ABA:', error);
+      return { success: false, error };
+    }
   };
 
   const saveBehaviorEvent = async (payload: any, record: Omit<SessionRecord, 'syncStatus'>) => {
@@ -270,12 +333,20 @@ export const SessionMode = ({
     };
   };
 
-  const handleTrialClick = async (goal: any, score: number, outcome: 'independent' | 'prompted' | 'error') => {
+  const handleTrialClick = async (goal: any, score: number, outcome: 'independent' | 'prompted' | 'error', promptedPromptKey?: string) => {
     const maxScore = Number(goal?.maxScore || 1);
     const timestamp = new Date().toISOString();
     const selectedPrompt = outcome === 'independent'
       ? resolveAbaPromptLevel({ promptLevelKey: 'independent' })
-      : resolveAbaPromptLevel({ promptLevelKey });
+      : outcome === 'error'
+        ? resolveAbaPromptLevel({ promptLevelKey: 'error' })
+        : resolveAbaPromptLevel({ promptLevelKey: promptedPromptKey || promptLevelKey });
+    if (outcome === 'prompted' && !promptedPromptKeys.includes(selectedPrompt.key)) {
+      setPromptWarning('Selecione visual, gestual, verbal, modelo, fisica parcial ou fisica total antes de salvar.');
+      setPromptSelectionGoal(goal);
+      return;
+    }
+    setPromptWarning('');
     const isCorrect = outcome !== 'error' && score > 0;
     const isIndependent = outcome === 'independent';
     const trialId = `trial-ui-${crypto.randomUUID()}`;
@@ -305,7 +376,7 @@ export const SessionMode = ({
         promptLevelKey: selectedPrompt.key,
         promptLevelName: selectedPrompt.label,
         promptLevel: selectedPrompt.key,
-        promptLevelSource: outcome === 'independent' ? 'independent_button' : 'prompt_dropdown',
+        promptLevelSource: outcome === 'independent' ? 'independent_button' : outcome === 'error' ? 'error_button' : 'prompt_modal',
         correct: isCorrect,
         isCorrect,
         independent: isIndependent,
@@ -333,6 +404,19 @@ export const SessionMode = ({
     });
   };
 
+  const openPromptSelection = (goal: any) => {
+    setPromptWarning('');
+    setPromptSelectionGoal(goal);
+  };
+
+  const savePromptedTrial = (promptKey: string) => {
+    if (!promptSelectionGoal) return;
+    setPromptLevelKey(promptKey);
+    const goal = promptSelectionGoal;
+    setPromptSelectionGoal(null);
+    void handleTrialClick(goal, 0.5, 'prompted', promptKey);
+  };
+
   const startDuration = (behaviorName = selectedBehavior.name) => {
     const startedAt = new Date().toISOString();
     const id = crypto.randomUUID();
@@ -344,21 +428,11 @@ export const SessionMode = ({
       severity: selectedSeverity
     };
     setOpenDurations((prev) => [openEvent, ...prev]);
-    const payload = buildBehaviorPayload(behaviorName, 'duration', {
-      id,
-      started_at: startedAt,
-      startedAt,
-      count_delta: 1,
-      countDelta: 1,
-      duration_seconds: null,
-      durationSeconds: null,
-      timestamp: startedAt
-    });
-    void saveBehaviorEvent(payload, {
+    addRecord({
       id,
       kind: 'behavior',
       title: behaviorName,
-      detail: 'duracao iniciada',
+      detail: 'duracao em andamento',
       timestamp: startedAt
     });
   };
@@ -383,13 +457,18 @@ export const SessionMode = ({
       severity: event.severity ?? selectedSeverity,
       timestamp: event.startedAt
     });
-    void saveBehaviorEvent(payload, {
-      id: `${event.id}-ended-${Date.now()}`,
+    void saveExistingBehaviorEvent(payload, {
+      id: event.id,
       kind: 'behavior',
       title: event.behaviorName,
       detail: `duracao ${formatElapsed(event.startedAt, new Date(endedAt).getTime())}`,
-      timestamp: endedAt
+      timestamp: event.startedAt
     });
+  };
+
+  const discardDuration = (eventId: string) => {
+    setOpenDurations((prev) => prev.filter((item) => item.id !== eventId));
+    setRecords((prev) => prev.filter((record) => record.id !== eventId));
   };
 
   const handleQuickBehavior = (behavior: any) => {
@@ -524,11 +603,21 @@ export const SessionMode = ({
 
   const requestEndSession = () => {
     if (openDurations.length > 0) {
-      setSessionWarning('Finalize os eventos de duracao em aberto antes de encerrar a sessao.');
+      setDurationBlockModalOpen(true);
       return;
     }
     setSessionWarning('');
     setShowSessionSummary(true);
+  };
+
+  const resolveDurationBeforeEnd = (eventId: string, action: 'end' | 'discard') => {
+    const isLastOpenDuration = openDurations.length <= 1;
+    if (action === 'end') endDuration(eventId);
+    else discardDuration(eventId);
+    if (isLastOpenDuration) {
+      setDurationBlockModalOpen(false);
+      setShowSessionSummary(true);
+    }
   };
 
   const confirmEndSession = () => {
@@ -554,6 +643,34 @@ export const SessionMode = ({
       {syncLabels[status]}
     </span>
   );
+
+  const startEditingRecord = (record: SessionRecord) => {
+    setEditingRecordId(record.id);
+    setEditingRecordTitle(record.title);
+    setEditingRecordDetail(record.detail);
+  };
+
+  const cancelEditingRecord = () => {
+    setEditingRecordId(null);
+    setEditingRecordTitle('');
+    setEditingRecordDetail('');
+  };
+
+  const saveRecordEdit = () => {
+    if (!editingRecordId) return;
+    const original = records.find((record) => record.id === editingRecordId);
+    if (!original) {
+      cancelEditingRecord();
+      return;
+    }
+    updateRecord(editingRecordId, {
+      title: editingRecordTitle.trim() || original.title,
+      detail: editingRecordDetail.trim() || original.detail,
+      syncStatus: 'local',
+      editedAt: new Date().toISOString()
+    });
+    cancelEditingRecord();
+  };
 
   if (sessionGoals.length === 0) {
     const emptyStateContent = (
@@ -602,13 +719,13 @@ export const SessionMode = ({
               </select>
             </label>
             <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-              Prompt da proxima tentativa
+              Prompt se houver ajuda
               <select
                 value={promptLevelKey}
                 onChange={(event) => setPromptLevelKey(event.target.value)}
                 className="block mt-1 bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
               >
-                {ABA_PROMPT_LEVEL_OPTIONS.map((prompt) => (
+                {promptedPromptOptions.map((prompt) => (
                   <option key={prompt.key} value={prompt.key}>{prompt.label}</option>
                 ))}
               </select>
@@ -642,7 +759,7 @@ export const SessionMode = ({
           )}
 
           {openDurations.length > 0 && (
-            <div className="bg-white rounded-[28px] p-5 shadow-xl shadow-blue-900/5 border border-white">
+            <div className="sticky top-0 z-30 bg-white rounded-[28px] p-5 shadow-2xl shadow-blue-900/10 border border-blue-100">
               <div className="flex items-center gap-2 mb-4">
                 <Timer size={18} className="text-[#7a32fc]" />
                 <h2 className="text-sm font-bold text-gray-800">Eventos em andamento</h2>
@@ -652,7 +769,7 @@ export const SessionMode = ({
                   <div key={event.id} className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-4 flex items-center justify-between gap-3">
                     <div>
                       <p className="text-sm font-bold text-gray-800">{event.behaviorName} em andamento ha {formatElapsed(event.startedAt, nowMs)}</p>
-                      <p className="text-xs text-gray-500">{event.location || 'Sem local'} · severidade {event.severity || '-'}</p>
+                      <p className="text-xs text-gray-500">{event.location || 'Sem local'} - severidade {event.severity || '-'}</p>
                     </div>
                     <button
                       onClick={() => endDuration(event.id)}
@@ -687,17 +804,24 @@ export const SessionMode = ({
               {behaviorPresets.map((behavior) => {
                 const isOpen = openDurations.some((event) => event.behaviorName === behavior.name);
                 return (
-                  <button
+                  <div
                     key={behavior.id}
-                    onClick={() => handleQuickBehavior(behavior)}
                     className={`border rounded-2xl px-4 py-4 text-left font-bold text-sm transition-all hover:scale-[1.02] ${behavior.tone} ${selectedBehaviorId === behavior.id ? 'ring-2 ring-[#7a32fc]/40' : ''}`}
                   >
-                    <span className="block">{behavior.name}</span>
-                    <span className="mt-2 inline-flex items-center gap-1 text-[10px] uppercase tracking-widest opacity-70">
-                      {behavior.defaultMeasurement === 'duration' ? (isOpen ? <Square size={12} /> : <Play size={12} />) : <Plus size={12} />}
-                      {behavior.defaultMeasurement === 'duration' ? (isOpen ? 'encerrar' : 'iniciar') : '+ ocorrencia'}
-                    </span>
-                  </button>
+                    <button onClick={() => handleQuickBehavior(behavior)} className="w-full text-left">
+                      <span className="block">{behavior.name}</span>
+                      <span className="mt-2 inline-flex items-center gap-1 text-[10px] uppercase tracking-widest opacity-70">
+                        {behavior.defaultMeasurement === 'duration' ? (isOpen ? <Square size={12} /> : <Play size={12} />) : <Plus size={12} />}
+                        {behavior.defaultMeasurement === 'duration' ? (isOpen ? 'encerrar' : 'iniciar') : '+ ocorrencia'}
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => openAbcModal(behavior.id)}
+                      className="mt-3 inline-flex items-center gap-1 rounded-xl bg-white/70 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-[#7a32fc] border border-white/80"
+                    >
+                      <FileText size={13} /> ABC rapido
+                    </button>
+                  </div>
                 );
               })}
             </div>
@@ -777,7 +901,7 @@ export const SessionMode = ({
                     </button>
                   ) : (
                     <>
-                      <span className="text-sm font-bold text-gray-700">Janela {formatElapsed(rateWindow.startedAt, nowMs)} · {rateWindow.count} ocorrencia(s)</span>
+                      <span className="text-sm font-bold text-gray-700">Janela {formatElapsed(rateWindow.startedAt, nowMs)} - {rateWindow.count} ocorrencia(s)</span>
                       <button onClick={registerRateOccurrence} className="px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
                         <Plus size={16} /> Ocorrencia
                       </button>
@@ -800,7 +924,7 @@ export const SessionMode = ({
                     </button>
                   ) : (
                     <>
-                      <span className="text-sm font-bold text-gray-700">Intervalo {intervalRun.intervalIndex} · {formatElapsed(intervalRun.startedAt, nowMs)}</span>
+                      <span className="text-sm font-bold text-gray-700">Intervalo {intervalRun.intervalIndex} - {formatElapsed(intervalRun.startedAt, nowMs)}</span>
                       <button onClick={() => registerInterval(true)} className="px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest">SIM</button>
                       <button onClick={() => registerInterval(false)} className="px-5 py-3 rounded-2xl bg-red-500 text-white text-xs font-bold uppercase tracking-widest">NAO</button>
                       <button onClick={() => setIntervalRun(null)} className="px-5 py-3 rounded-2xl bg-slate-700 text-white text-xs font-bold uppercase tracking-widest">Parar</button>
@@ -865,8 +989,8 @@ export const SessionMode = ({
                     </div>
                     {patient.age <= 12 && (
                       <div className="text-right">
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Maestria</p>
-                        <p className="text-lg font-bold text-[#7a32fc]">{Math.min(masteryCount, masteryTarget)}/{masteryTarget}</p>
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Criterio de maestria</p>
+                        <p className="text-lg font-bold text-[#7a32fc]">{Math.min(masteryCount, masteryTarget)}/{masteryTarget} dias</p>
                       </div>
                     )}
                   </div>
@@ -877,7 +1001,7 @@ export const SessionMode = ({
                       <span className="text-2xl font-bold mt-2">Independente</span>
                       <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">1 = correto independente</span>
                     </button>
-                    <button onClick={() => handleTrialClick(goal, 0.5, 'prompted')} className="bg-[#FFB547] text-white min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-orange-500/20 hover:scale-[1.01] active:scale-95 transition-all">
+                    <button onClick={() => openPromptSelection(goal)} className="bg-[#FFB547] text-white min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-orange-500/20 hover:scale-[1.01] active:scale-95 transition-all">
                       <Activity size={26} />
                       <span className="text-2xl font-bold mt-2">Com ajuda</span>
                       <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">0.5 = correto com ajuda</span>
@@ -921,7 +1045,7 @@ export const SessionMode = ({
               <h2 className="text-lg font-bold text-gray-800">{records.length} registro(s)</h2>
             </div>
             <div className="text-right">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tentativas</p>
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tentativas hoje</p>
               <p className="text-3xl font-bold text-[#7a32fc] leading-none">{trialCount}</p>
             </div>
           </div>
@@ -933,15 +1057,48 @@ export const SessionMode = ({
               </div>
             ) : records.slice(0, 18).map((record) => (
               <div key={record.id} className="rounded-2xl border border-gray-100 bg-[#F8FAFF] p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
+                {editingRecordId === record.id ? (
+                  <div className="space-y-3">
                     <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{record.kind === 'trial' ? 'Tentativa' : 'Comportamento'}</p>
-                    <h3 className="text-sm font-bold text-gray-800 mt-1 truncate">{record.title}</h3>
-                    <p className="text-xs text-gray-500 mt-1">{record.detail}</p>
-                    <p className="text-[11px] text-gray-400 mt-2">{new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                    <input
+                      value={editingRecordTitle}
+                      onChange={(event) => setEditingRecordTitle(event.target.value)}
+                      className="w-full rounded-xl border border-blue-100 bg-white px-3 py-2 text-sm font-bold text-gray-800 outline-none focus:border-[#7a32fc]"
+                    />
+                    <textarea
+                      value={editingRecordDetail}
+                      onChange={(event) => setEditingRecordDetail(event.target.value)}
+                      className="w-full min-h-[74px] rounded-xl border border-blue-100 bg-white px-3 py-2 text-xs text-gray-600 outline-none resize-none focus:border-[#7a32fc]"
+                    />
+                    <p className="text-[11px] text-gray-400">Horario original: {new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                    <div className="flex gap-2">
+                      <button onClick={cancelEditingRecord} className="flex-1 rounded-xl bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-500 border border-gray-100">
+                        Voltar
+                      </button>
+                      <button onClick={saveRecordEdit} className="flex-1 rounded-xl bg-[#7a32fc] px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white inline-flex items-center justify-center gap-1">
+                        <Save size={12} /> Salvar
+                      </button>
+                    </div>
                   </div>
-                  {renderSyncBadge(record.syncStatus)}
-                </div>
+                ) : (
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{record.kind === 'trial' ? 'Tentativa' : 'Comportamento'}</p>
+                      <h3 className="text-sm font-bold text-gray-800 mt-1 truncate">{record.title}</h3>
+                      <p className="text-xs text-gray-500 mt-1">{record.detail}</p>
+                      <p className="text-[11px] text-gray-400 mt-2">
+                        {new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {record.editedAt ? ' - editado' : ''}
+                      </p>
+                    </div>
+                    <div className="shrink-0 flex flex-col items-end gap-2">
+                      {renderSyncBadge(normalizeSyncStatus(record.syncStatus))}
+                      <button onClick={() => startEditingRecord(record)} className="inline-flex items-center gap-1 rounded-full bg-white border border-gray-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 hover:text-[#7a32fc]">
+                        <Pencil size={11} /> Editar
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -1004,6 +1161,80 @@ export const SessionMode = ({
         </div>
       )}
 
+      {promptSelectionGoal && (
+        <div className="fixed inset-0 z-[142] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm">
+          <div className="bg-white rounded-[32px] p-6 shadow-2xl max-w-lg w-full border border-orange-100">
+            <div className="flex items-center justify-between gap-3 mb-5">
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Prompt obrigatorio</p>
+                <h2 className="text-xl font-bold text-gray-800">{promptSelectionGoal.name}</h2>
+              </div>
+              <button onClick={() => setPromptSelectionGoal(null)} className="p-2 rounded-full hover:bg-gray-100">
+                <X size={20} />
+              </button>
+            </div>
+            {promptWarning && (
+              <div className="mb-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
+                {promptWarning}
+              </div>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {promptedPromptOptions.map((prompt) => (
+                <button
+                  key={prompt.key}
+                  onClick={() => savePromptedTrial(prompt.key)}
+                  className="rounded-2xl border border-orange-100 bg-orange-50 px-4 py-4 text-left text-sm font-bold text-orange-700 hover:border-orange-300 hover:bg-orange-100 transition-all"
+                >
+                  {prompt.label}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setPromptSelectionGoal(null)} className="mt-5 w-full py-3 rounded-2xl bg-gray-100 text-gray-600 font-bold">
+              Voltar para sessao
+            </button>
+          </div>
+        </div>
+      )}
+
+      {durationBlockModalOpen && (
+        <div className="fixed inset-0 z-[143] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm">
+          <div className="bg-white rounded-[32px] p-6 shadow-2xl max-w-2xl w-full border border-amber-100">
+            <div className="flex items-center justify-between gap-3 mb-5">
+              <div>
+                <p className="text-[10px] font-bold text-amber-600 uppercase tracking-widest">Eventos em andamento</p>
+                <h2 className="text-xl font-bold text-gray-800">Finalize as duracoes antes de encerrar</h2>
+              </div>
+              <button onClick={() => setDurationBlockModalOpen(false)} className="p-2 rounded-full hover:bg-gray-100">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="space-y-3 max-h-[55vh] overflow-y-auto pr-1">
+              {openDurations.map((event) => (
+                <div key={event.id} className="rounded-2xl border border-blue-100 bg-[#F4F7FE] p-4">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <h3 className="text-sm font-bold text-gray-800">{event.behaviorName}</h3>
+                      <p className="text-xs text-gray-500 mt-1">{formatElapsed(event.startedAt, nowMs)} em andamento - {event.location || 'sem local'} - severidade {event.severity || '-'}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={() => resolveDurationBeforeEnd(event.id, 'end')} className="rounded-xl bg-[#1B254B] px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-white">
+                        Encerrar evento agora
+                      </button>
+                      <button onClick={() => resolveDurationBeforeEnd(event.id, 'discard')} className="rounded-xl bg-red-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500">
+                        Descartar evento
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => setDurationBlockModalOpen(false)} className="mt-5 w-full py-3 rounded-2xl bg-gray-100 text-gray-600 font-bold">
+              Voltar para sessao
+            </button>
+          </div>
+        </div>
+      )}
+
       {showSessionSummary && (
         <div className="fixed inset-0 z-[145] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm">
           <div className="bg-white rounded-[32px] p-7 shadow-2xl max-w-md w-full border border-red-100">
@@ -1013,7 +1244,7 @@ export const SessionMode = ({
             <h3 className="text-2xl font-semibold text-gray-900 mb-2">Resumo da sessao</h3>
             <div className="grid grid-cols-2 gap-3 my-5">
               <div className="rounded-2xl bg-[#F4F7FE] p-4">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tentativas</p>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tentativas hoje</p>
                 <p className="text-3xl font-bold text-gray-900">{sessionSummary.trialTotal}</p>
               </div>
               <div className="rounded-2xl bg-[#F4F7FE] p-4">
