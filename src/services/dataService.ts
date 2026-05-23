@@ -1083,6 +1083,7 @@ export const dataService = {
         .map(r => r.data)
         .filter((row: any) =>
           String(row?.patient_id || row?.patientId || '') === String(patientId) &&
+          !(row?.evaluation_status || row?.evaluationStatus) &&
           (row?.target_name || row?.targetName || row?.collection_type || row?.collectionType)
         )
     };
@@ -1121,6 +1122,43 @@ export const dataService = {
         .filter((row: any) =>
           String(row?.patient_id || row?.patientId || '') === String(patientId) &&
           (row?.behavior_name || row?.behaviorName || row?.measurement_type || row?.measurementType)
+        )
+    };
+  },
+
+  async saveAbaMasteryEvaluation(evaluation: any) {
+    const id = String(evaluation?.id || evaluation?.evaluation_id || evaluation?.evaluationId || generateId());
+    const data = {
+      ...(evaluation || {}),
+      id,
+      patient_id: evaluation?.patient_id || evaluation?.patientId,
+      evaluated_at: evaluation?.evaluated_at || evaluation?.evaluatedAt || new Date().toISOString()
+    };
+    return await saveOfflineFirst(id, data, 'aba', '/api/aba/mastery-evaluations');
+  },
+
+  async getAbaMasteryEvaluations(patientId: string) {
+    const endpoint = `/api/aba/mastery-evaluations/${encodeURIComponent(String(patientId))}`;
+    try {
+      const response = await fetch(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      });
+      if (response.ok) {
+        const result = await response.json();
+        return result;
+      }
+    } catch (error) {
+      console.log('Fetching ABA mastery evaluations from local storage...');
+    }
+    const local = await getRecordsByType('aba');
+    return {
+      success: true,
+      data: local
+        .map(r => r.data)
+        .filter((row: any) =>
+          String(row?.patient_id || row?.patientId || '') === String(patientId) &&
+          (row?.evaluation_status || row?.evaluationStatus || row?.suggested_phase || row?.suggestedPhase)
         )
     };
   },

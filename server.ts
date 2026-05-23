@@ -5382,13 +5382,27 @@ async function startServer() {
   // Ownership Middleware (IDOR Protection)
   const checkPatientAccess = async (req: any, res: any, next: any) => {
     const user = req.session.user;
-    const rawPatientId = sanitizeString(req.params.patientId || req.body.patient_id, 120);
+    const requestPatientIdAliases = [
+      sanitizeString(req.params?.patientId, 120),
+      sanitizeString(req.body?.patient_id, 120),
+      sanitizeString(req.body?.patientId, 120)
+    ].filter(Boolean);
+    const uniquePatientIdAliases = Array.from(new Set(requestPatientIdAliases));
+    if (uniquePatientIdAliases.length > 1) {
+      return res.status(400).json({ success: false, error: 'Identificadores de paciente divergentes.' });
+    }
+    const rawPatientId = uniquePatientIdAliases[0] || '';
 
     if (!rawPatientId) return next();
 
     try {
       const resolvedPatientId = await resolvePatientIdForRequest(rawPatientId, user, { createIfMissing: false });
-      req.resolvedPatientId = resolvedPatientId || rawPatientId;
+      const canonicalPatientId = resolvedPatientId || rawPatientId;
+      req.resolvedPatientId = canonicalPatientId;
+      if (req.body && typeof req.body === 'object') {
+        req.body.patient_id = canonicalPatientId;
+        req.body.patientId = canonicalPatientId;
+      }
 
       // Global backoffice bypass only
       if (hasGlobalClinicAccess(user)) return next();
@@ -14063,6 +14077,8 @@ async function startServer() {
     'momentary_time_sampling',
     'abc'
   ]);
+  const ABA_MASTERY_STATUSES = new Set(['not_met', 'met', 'mastered', 'regressed', 'maintenance_due', 'insufficient_data']);
+  const ABA_TARGET_PHASES = new Set(['draft', 'baseline', 'teaching', 'mastered', 'maintenance', 'generalization', 'regressed', 'discontinued']);
 
   const sanitizeIsoDateTime = (value: unknown, fallback = new Date().toISOString()) => {
     const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
@@ -14089,6 +14105,18 @@ async function startServer() {
     if (safe === 'whole') return 'whole_interval';
     if (safe === 'momentary' || safe === 'mts') return 'momentary_time_sampling';
     return ABA_BEHAVIOR_MEASUREMENT_TYPES.has(safe) ? safe : 'frequency';
+  };
+
+  const normalizeAbaMasteryStatus = (value: unknown) => {
+    const safe = sanitizeString(value, 80).toLowerCase();
+    if (safe === 'notmet' || safe === 'not-met') return 'not_met';
+    if (safe === 'maintenance') return 'maintenance_due';
+    return ABA_MASTERY_STATUSES.has(safe) ? safe : 'not_met';
+  };
+
+  const normalizeAbaTargetPhase = (value: unknown) => {
+    const safe = sanitizeString(value, 80).toLowerCase();
+    return ABA_TARGET_PHASES.has(safe) ? safe : null;
   };
 
   const inferAbaCorrect = (score: number | null, maxScore: number | null, explicit: unknown) => {
@@ -14409,6 +14437,85 @@ async function startServer() {
       if (sanitizeString(req.session.user?.role, 40).toLowerCase() === 'therapist') {
         query = query.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
       }
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.post('/api/aba/mastery-evaluations', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 128 * 1024, 'Payload da avaliação de maestria ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+      if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+
+      const targetName = sanitizeTextField(req.body?.target_name || req.body?.targetName || req.body?.title, 240);
+      if (!targetName) return res.status(400).json({ success: false, error: 'Target é obrigatório.' });
+
+      const payload = cleanObject({
+        id: sanitizeString(req.body?.id || req.body?.evaluation_id || req.body?.evaluationId || crypto.randomUUID(), 180),
+        clinic_id: clinicId,
+        patient_id: patientId,
+        session_id: sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null,
+        target_id: sanitizeString(req.body?.target_id || req.body?.targetId, 180) || null,
+        target_name: targetName,
+        evaluation_status: normalizeAbaMasteryStatus(req.body?.evaluation_status || req.body?.evaluationStatus || req.body?.status),
+        suggested_phase: normalizeAbaTargetPhase(req.body?.suggested_phase || req.body?.suggestedPhase),
+        accuracy_percent: req.body?.accuracy_percent !== undefined || req.body?.accuracyPercent !== undefined
+          ? asSafeNumber(req.body?.accuracy_percent ?? req.body?.accuracyPercent, 0, 100)
+          : null,
+        consecutive_successes: asSafeNumber(req.body?.consecutive_successes ?? req.body?.consecutiveSuccesses, 0, 100000) || 0,
+        min_consecutive_successes: asSafeNumber(req.body?.min_consecutive_successes ?? req.body?.minConsecutiveSuccesses, 1, 100000) || 1,
+        trials_considered: asSafeNumber(req.body?.trials_considered ?? req.body?.trialsConsidered, 0, 100000) || 0,
+        distinct_therapists_count: req.body?.distinct_therapists_count !== undefined || req.body?.distinctTherapistsCount !== undefined
+          ? asSafeNumber(req.body?.distinct_therapists_count ?? req.body?.distinctTherapistsCount, 0, 100000)
+          : null,
+        first_trial_independent: typeof req.body?.first_trial_independent === 'boolean'
+          ? req.body.first_trial_independent
+          : typeof req.body?.firstTrialIndependent === 'boolean'
+            ? req.body.firstTrialIndependent
+            : null,
+        criteria: sanitizeClinicalPayload(req.body?.criteria || {}),
+        reasons: sanitizeClinicalPayload(Array.isArray(req.body?.reasons) ? req.body.reasons : []),
+        evaluated_at: sanitizeIsoDateTime(req.body?.evaluated_at || req.body?.evaluatedAt),
+        therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
+        source_trial_id: sanitizeString(req.body?.source_trial_id || req.body?.sourceTrialId, 180) || null,
+        raw_payload: sanitizeClinicalPayload(req.body?.raw_payload || req.body?.rawPayload || {}),
+        created_at: new Date().toISOString()
+      });
+
+      const result = await writeAbaRowWithSchemaFallback('aba_mastery_evaluations', payload, 'upsert');
+      if (result.error) {
+        if (hasMissingFinancialSchema(result.error)) {
+          return res.status(503).json({ success: false, error: 'Schema ABA de maestria ainda não aplicado.' });
+        }
+        throw result.error;
+      }
+      return res.json({ success: true, data: result.data || payload });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/aba/mastery-evaluations/:patientId', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(patientId)) return res.json({ success: true, data: [] });
+      let query = supabase
+        .from('aba_mastery_evaluations')
+        .select('*')
+        .eq('patient_id', patientId)
+        .order('evaluated_at', { ascending: false })
+        .limit(500);
+      if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
       const { data, error } = await query;
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });

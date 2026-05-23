@@ -3528,36 +3528,40 @@ export default function App() {
       console.error('Falha ao persistir registro de sessão:', error);
     }
 
+    const maxScoreForAba = Number(sessionMeta?.targetMaxScore || peiGoal?.maxScore || matchedSkill?.maxScore || skillMaxScore || 1);
+    const promptLevelKey = String(
+      sessionMeta?.promptLevelKey ||
+      (finalScore >= maxScoreForAba ? 'independent' : finalScore > 0 ? 'prompted' : 'error')
+    ).toLowerCase();
+    const abaCorrect = typeof sessionMeta?.correct === 'boolean'
+      ? sessionMeta.correct
+      : finalScore >= maxScoreForAba;
+    const abaIndependent = typeof sessionMeta?.independent === 'boolean'
+      ? sessionMeta.independent
+      : abaCorrect && promptLevelKey === 'independent';
+    const abaCollectionType = String(sessionMeta?.collectionType || 'dtt').toLowerCase();
+    const abaTargetId = String(sessionMeta?.targetId || peiGoal?.id || matchedSkill?.id || title);
+    const abaTrialId = `trial-${newId}`;
+
     try {
-      const maxScoreForAba = Number(sessionMeta?.targetMaxScore || peiGoal?.maxScore || matchedSkill?.maxScore || skillMaxScore || 1);
-      const promptLevelKey = String(
-        sessionMeta?.promptLevelKey ||
-        (finalScore >= maxScoreForAba ? 'independent' : finalScore > 0 ? 'prompted' : 'error')
-      ).toLowerCase();
-      const correct = typeof sessionMeta?.correct === 'boolean'
-        ? sessionMeta.correct
-        : finalScore >= maxScoreForAba;
-      const independent = typeof sessionMeta?.independent === 'boolean'
-        ? sessionMeta.independent
-        : correct && promptLevelKey === 'independent';
       await dataService.saveAbaTrial({
-        id: `trial-${newId}`,
+        id: abaTrialId,
         patient_id: String(pid),
         session_id: sessionMeta?.sessionId || null,
-        target_id: String(sessionMeta?.targetId || peiGoal?.id || matchedSkill?.id || title),
+        target_id: abaTargetId,
         target_name: title,
         program_id: sessionMeta?.programId || peiGoal?.programId || null,
         protocol_id: sessionMeta?.protocolId || peiGoal?.protocolId || matchedProtocol?.id || null,
         protocol_title: sessionMeta?.protocolTitle || peiGoal?.protocolTitle || matchedProtocol?.title || matchedProtocol?.name || null,
         domain_id: sessionMeta?.domainId || peiGoal?.domainId || matchedDomain?.id || null,
         domain_name: sessionMeta?.domainName || peiGoal?.domainName || matchedDomain?.name || matchedDomain?.title || null,
-        collection_type: String(sessionMeta?.collectionType || 'dtt').toLowerCase(),
+        collection_type: abaCollectionType,
         response_score: finalScore,
         max_score: maxScoreForAba,
-        correct,
-        independent,
+        correct: abaCorrect,
+        independent: abaIndependent,
         prompt_level_key: promptLevelKey,
-        prompt_level_name: sessionMeta?.promptLevelName || (independent ? 'Independente' : correct ? 'Com ajuda' : 'Erro / sem resposta'),
+        prompt_level_name: sessionMeta?.promptLevelName || (abaIndependent ? 'Independente' : abaCorrect ? 'Com ajuda' : 'Erro / sem resposta'),
         notes: evalComment || '',
         occurred_at: recordedAt,
         source_history_id: String(sourceHistoryId || newId),
@@ -3610,6 +3614,7 @@ export default function App() {
         else break;
       }
 
+      let appliedMasteryTarget = 5;
       updatedPei = sourcePei.map((goal: any) => {
         if (goal.name !== title) return goal;
 
@@ -3617,6 +3622,7 @@ export default function App() {
           1,
           Math.floor(Number(goal?.meta_sucessos ?? goal?.metaSucessos ?? goal?.masteryTarget ?? goal?.mastery_target) || 5)
         );
+        appliedMasteryTarget = masteryTarget;
         const progress = Math.min(Math.round((consecutiveCount / masteryTarget) * 100), 100);
         const isMastered = progress >= 100;
 
@@ -3624,6 +3630,42 @@ export default function App() {
       });
       const updatedGoal = updatedPei.find((goal: any) => goal.name === title);
       const isMastered = updatedGoal?.status === 'completed';
+
+      try {
+        await dataService.saveAbaMasteryEvaluation({
+          id: `mastery-${newId}`,
+          patient_id: String(pid),
+          session_id: sessionMeta?.sessionId || null,
+          target_id: abaTargetId,
+          target_name: title,
+          evaluation_status: isMastered ? 'mastered' : 'not_met',
+          suggested_phase: isMastered ? 'mastered' : 'teaching',
+          accuracy_percent: abaCorrect ? 100 : 0,
+          consecutive_successes: consecutiveCount,
+          min_consecutive_successes: appliedMasteryTarget,
+          trials_considered: skillHistory.length,
+          distinct_therapists_count: 1,
+          first_trial_independent: abaIndependent,
+          criteria: {
+            source: 'pei_consecutive_successes',
+            minConsecutiveSuccesses: appliedMasteryTarget,
+            minAccuracyPercent: 100,
+            collectionType: abaCollectionType
+          },
+          reasons: isMastered
+            ? ['Criterio de sucessos independentes consecutivos atingido.']
+            : [`${consecutiveCount}/${appliedMasteryTarget} sucessos independentes consecutivos.`],
+          evaluated_at: recordedAt,
+          source_trial_id: abaTrialId,
+          raw_payload: {
+            legacyHistoryId: String(sourceHistoryId || newId),
+            previousStatus: peiGoal?.status || null,
+            progress: updatedGoal?.progress ?? null
+          }
+        });
+      } catch (error) {
+        console.error('Falha ao persistir avaliação de maestria ABA:', error);
+      }
 
       if (isMastered && peiGoal?.status !== 'completed') {
         handleAddNote(

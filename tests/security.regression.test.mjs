@@ -18,6 +18,8 @@ const financialRlsPath = path.resolve(process.cwd(), 'supabase/migrations/202605
 const financialRlsCode = fs.readFileSync(financialRlsPath, 'utf8');
 const abaRlsPath = path.resolve(process.cwd(), 'supabase/migrations/20260523120000_aba_clinical_core.sql');
 const abaRlsCode = fs.readFileSync(abaRlsPath, 'utf8');
+const abaMasteryRlsPath = path.resolve(process.cwd(), 'supabase/migrations/20260523123000_aba_mastery_engine.sql');
+const abaMasteryRlsCode = fs.readFileSync(abaMasteryRlsPath, 'utf8');
 
 function expectPattern(pattern, message) {
   assert.match(serverCode, pattern, message);
@@ -36,6 +38,21 @@ test('multi-tenant: checkPatientAccess allows global bypass only for admin/owner
   expectPattern(
     /const checkPatientAccess = async[\s\S]*?if \(hasGlobalClinicAccess\(user\)\) return next\(\);/m,
     'checkPatientAccess deve usar bypass global restrito.'
+  );
+});
+
+test('multi-tenant: checkPatientAccess canonicalizes snake/camel patient ids', () => {
+  expectPattern(
+    /const requestPatientIdAliases = \[[\s\S]*?req\.params\?\.patientId[\s\S]*?req\.body\?\.patient_id[\s\S]*?req\.body\?\.patientId[\s\S]*?\]\.filter\(Boolean\);/m,
+    'checkPatientAccess deve validar patient_id e patientId como aliases do mesmo paciente.'
+  );
+  expectPattern(
+    /const uniquePatientIdAliases = Array\.from\(new Set\(requestPatientIdAliases\)\);[\s\S]*?if \(uniquePatientIdAliases\.length > 1\)[\s\S]*?return res\.status\(400\)\.json\(\{ success: false, error: 'Identificadores de paciente divergentes\.' \}\);/m,
+    'checkPatientAccess deve rejeitar payloads com patient_id e patientId divergentes.'
+  );
+  expectPattern(
+    /const canonicalPatientId = resolvedPatientId \|\| rawPatientId;[\s\S]*?req\.resolvedPatientId = canonicalPatientId;[\s\S]*?req\.body\.patient_id = canonicalPatientId;[\s\S]*?req\.body\.patientId = canonicalPatientId;/m,
+    'checkPatientAccess deve canonicalizar ambos os aliases antes de seguir para a rota.'
   );
 });
 
@@ -269,7 +286,9 @@ test('aba privacy: API endpoints are clinic-scoped and exclude patient/reception
     "app.post('/api/aba/trials'",
     "app.get('/api/aba/trials/:patientId'",
     "app.post('/api/aba/behavior-events'",
-    "app.get('/api/aba/behavior-events/:patientId'"
+    "app.get('/api/aba/behavior-events/:patientId'",
+    "app.post('/api/aba/mastery-evaluations'",
+    "app.get('/api/aba/mastery-evaluations/:patientId'"
   ];
 
   for (const marker of abaMarkers) {
@@ -313,6 +332,16 @@ test('aba privacy: API endpoints are clinic-scoped and exclude patient/reception
     /app\.get\('\/api\/aba\/behavior-events\/:patientId'[\s\S]*?checkPatientAccess/m,
     'GET /api/aba/behavior-events/:patientId deve validar acesso ao paciente.'
   );
+  assert.match(
+    serverCode,
+    /app\.post\('\/api\/aba\/mastery-evaluations'[\s\S]*?checkPatientAccess/m,
+    'POST /api/aba/mastery-evaluations deve validar acesso ao paciente.'
+  );
+  assert.match(
+    serverCode,
+    /app\.get\('\/api\/aba\/mastery-evaluations\/:patientId'[\s\S]*?checkPatientAccess/m,
+    'GET /api/aba/mastery-evaluations/:patientId deve validar acesso ao paciente.'
+  );
 });
 
 test('aba privacy: RLS is enabled and patient-scoped for clinical ABA tables', () => {
@@ -342,6 +371,26 @@ test('aba privacy: RLS is enabled and patient-scoped for clinical ABA tables', (
     abaRlsCode,
     /u\.role = 'patient'|u\.role = 'receptionist'/,
     'RLS ABA nao deve conceder acesso direto a paciente ou recepcao.'
+  );
+  assert.match(
+    abaMasteryRlsCode,
+    /alter table public\.aba_mastery_evaluations enable row level security;/,
+    'aba_mastery_evaluations deve ter RLS habilitado.'
+  );
+  assert.match(
+    abaMasteryRlsCode,
+    /u\.role = 'coordinator'[\s\S]*?u\.clinic_id::text = aba_mastery_evaluations\.clinic_id/m,
+    'aba_mastery_evaluations deve permitir coordenador somente dentro da clinica.'
+  );
+  assert.match(
+    abaMasteryRlsCode,
+    /u\.role = 'therapist'[\s\S]*?p\.therapist_id = auth\.uid\(\)[\s\S]*?u\.clinic_id::text = aba_mastery_evaluations\.clinic_id/m,
+    'aba_mastery_evaluations deve permitir terapeuta somente quando vinculado ao paciente.'
+  );
+  assert.doesNotMatch(
+    abaMasteryRlsCode,
+    /u\.role = 'patient'|u\.role = 'receptionist'/,
+    'RLS ABA de maestria nao deve conceder acesso direto a paciente ou recepcao.'
   );
 });
 
@@ -377,6 +426,16 @@ test('aba persistence: frontend records sessions and structured trials offline-f
     'dataService deve buscar eventos de comportamento ABA para exibir no prontuario.'
   );
   assert.match(
+    dataServiceCode,
+    /async saveAbaMasteryEvaluation\(evaluation: any\)[\s\S]*?saveOfflineFirst\(id, data, 'aba', '\/api\/aba\/mastery-evaluations'\)/m,
+    'dataService deve salvar avaliacoes de maestria ABA na fila offline-first.'
+  );
+  assert.match(
+    dataServiceCode,
+    /async getAbaMasteryEvaluations\(patientId: string\)[\s\S]*?\/api\/aba\/mastery-evaluations\/\$\{encodeURIComponent\(String\(patientId\)\)\}/m,
+    'dataService deve buscar avaliacoes de maestria ABA para exibir no prontuario.'
+  );
+  assert.match(
     patientDetailCode,
     /dataService\.saveAbaSession\(/m,
     'PatientDetailView deve persistir inicio de sessao ABA.'
@@ -388,12 +447,12 @@ test('aba persistence: frontend records sessions and structured trials offline-f
   );
   assert.match(
     patientDetailCode,
-    /dataService\.getAbaSessions\(String\(patient\.id\)\)[\s\S]*?dataService\.getAbaTrials\(String\(patient\.id\)\)[\s\S]*?dataService\.getAbaBehaviorEvents\(String\(patient\.id\)\)/m,
-    'PatientDetailView deve carregar sessoes, tentativas e comportamentos ABA.'
+    /dataService\.getAbaSessions\(String\(patient\.id\)\)[\s\S]*?dataService\.getAbaTrials\(String\(patient\.id\)\)[\s\S]*?dataService\.getAbaBehaviorEvents\(String\(patient\.id\)\)[\s\S]*?dataService\.getAbaMasteryEvaluations\(String\(patient\.id\)\)/m,
+    'PatientDetailView deve carregar sessoes, tentativas, comportamentos e maestria ABA.'
   );
   assert.match(
     patientDetailCode,
-    /ABA estruturado[\s\S]*?aba_trials[\s\S]*?aba_behavior_events/m,
+    /Central ABA[\s\S]*?aba_trials[\s\S]*?aba_behavior_events[\s\S]*?aba_mastery_evaluations/m,
     'PatientDetailView deve explicar e renderizar onde os dados ABA ficam registrados.'
   );
   assert.match(
@@ -413,8 +472,13 @@ test('aba persistence: frontend records sessions and structured trials offline-f
   );
   assert.match(
     appCode,
-    /dataService\.saveAbaTrial\(\{[\s\S]*?collection_type: String\(sessionMeta\?\.collectionType \|\| 'dtt'\)\.toLowerCase\(\)/m,
+    /const abaCollectionType = String\(sessionMeta\?\.collectionType \|\| 'dtt'\)\.toLowerCase\(\);[\s\S]*?dataService\.saveAbaTrial\(\{[\s\S]*?collection_type: abaCollectionType/m,
     'App deve persistir cada registro como aba_trial estruturado.'
+  );
+  assert.match(
+    appCode,
+    /dataService\.saveAbaMasteryEvaluation\(\{[\s\S]*?evaluation_status: isMastered \? 'mastered' : 'not_met'/m,
+    'App deve persistir a avaliacao de maestria a cada tentativa ABA.'
   );
 });
 
