@@ -14080,6 +14080,7 @@ async function startServer() {
   ]);
   const ABA_MASTERY_STATUSES = new Set(['not_met', 'met', 'mastered', 'regressed', 'maintenance_due', 'insufficient_data']);
   const ABA_TARGET_PHASES = new Set(['draft', 'baseline', 'teaching', 'mastered', 'maintenance', 'generalization', 'regressed', 'discontinued']);
+  const ABA_SYNC_STATUSES = new Set(['local', 'local_only', 'queued', 'syncing', 'synced', 'error', 'failed', 'conflict']);
 
   const sanitizeIsoDateTime = (value: unknown, fallback = new Date().toISOString()) => {
     const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
@@ -14106,6 +14107,13 @@ async function startServer() {
     if (safe === 'whole') return 'whole_interval';
     if (safe === 'momentary' || safe === 'mts') return 'momentary_time_sampling';
     return ABA_BEHAVIOR_MEASUREMENT_TYPES.has(safe) ? safe : 'frequency';
+  };
+
+  const normalizeAbaSyncStatus = (value: unknown, fallback = 'synced') => {
+    const safe = sanitizeString(value, 40).toLowerCase();
+    if (safe === 'offline') return 'local';
+    if (safe === 'pending') return 'queued';
+    return ABA_SYNC_STATUSES.has(safe) ? safe : fallback;
   };
 
   const normalizeAbaMasteryStatus = (value: unknown) => {
@@ -14384,15 +14392,36 @@ async function startServer() {
       const endedAt = req.body?.ended_at || req.body?.endedAt
         ? sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt, occurredAt)
         : null;
+      const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null;
+      const behaviorId = sanitizeString(req.body?.behavior_id || req.body?.behaviorId, 180) || null;
+      const measurementType = normalizeAbaBehaviorMeasurementType(req.body?.measurement_type || req.body?.measurementType || req.body?.method);
+      const intervalNumber = req.body?.interval_number !== undefined || req.body?.intervalNumber !== undefined
+        ? asSafeNumber(req.body?.interval_number ?? req.body?.intervalNumber, 0, 100000)
+        : req.body?.interval_index !== undefined || req.body?.intervalIndex !== undefined
+          ? asSafeNumber(req.body?.interval_index ?? req.body?.intervalIndex, 0, 100000)
+          : null;
+      const intervalStartedAt = req.body?.interval_started_at || req.body?.intervalStartedAt
+        ? sanitizeIsoDateTime(req.body?.interval_started_at || req.body?.intervalStartedAt, startedAt || occurredAt)
+        : null;
+      const intervalEndedAt = req.body?.interval_ended_at || req.body?.intervalEndedAt
+        ? sanitizeIsoDateTime(req.body?.interval_ended_at || req.body?.intervalEndedAt, occurredAt)
+        : null;
+      const intervalOccurred = typeof req.body?.interval_occurred === 'boolean'
+        ? req.body.interval_occurred
+        : typeof req.body?.intervalOccurred === 'boolean'
+          ? req.body.intervalOccurred
+          : null;
+      const occurred = typeof req.body?.occurred === 'boolean' ? req.body.occurred : intervalOccurred;
+      const clientSyncStatus = normalizeAbaSyncStatus(req.body?.sync_status || req.body?.syncStatus, 'local');
 
       let payload: Record<string, any> = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.event_id || req.body?.eventId || crypto.randomUUID(), 180),
         clinic_id: clinicId,
         patient_id: patientId,
-        session_id: sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null,
-        behavior_id: sanitizeString(req.body?.behavior_id || req.body?.behaviorId, 180) || null,
+        session_id: sessionId,
+        behavior_id: behaviorId,
         behavior_name: behaviorName,
-        measurement_type: normalizeAbaBehaviorMeasurementType(req.body?.measurement_type || req.body?.measurementType),
+        measurement_type: measurementType,
         count_delta: req.body?.count_delta !== undefined || req.body?.countDelta !== undefined
           ? asSafeNumber(req.body?.count_delta ?? req.body?.countDelta, -10000, 10000)
           : null,
@@ -14401,14 +14430,12 @@ async function startServer() {
         duration_seconds: req.body?.duration_seconds !== undefined || req.body?.durationSeconds !== undefined
           ? asSafeNumber(req.body?.duration_seconds ?? req.body?.durationSeconds, 0, 86400)
           : null,
-        interval_index: req.body?.interval_index !== undefined || req.body?.intervalIndex !== undefined
-          ? asSafeNumber(req.body?.interval_index ?? req.body?.intervalIndex, 0, 100000)
-          : null,
-        interval_occurred: typeof req.body?.interval_occurred === 'boolean'
-          ? req.body.interval_occurred
-          : typeof req.body?.intervalOccurred === 'boolean'
-            ? req.body.intervalOccurred
-            : null,
+        interval_number: intervalNumber,
+        interval_index: intervalNumber,
+        interval_started_at: intervalStartedAt,
+        interval_ended_at: intervalEndedAt,
+        interval_occurred: intervalOccurred,
+        occurred,
         severity: req.body?.severity !== undefined ? asSafeNumber(req.body?.severity, 0, 5) : null,
         antecedent: sanitizeTextField(req.body?.antecedent, 500),
         consequence: sanitizeTextField(req.body?.consequence, 500),
@@ -14417,11 +14444,21 @@ async function startServer() {
         notes: sanitizeTextField(req.body?.notes, 4000),
         occurred_at: occurredAt,
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
+        sync_status: 'synced',
         raw_payload: sanitizeClinicalPayload({
           ...(req.body?.raw_payload || req.body?.rawPayload || {}),
+          patientId,
+          sessionId: sessionId || undefined,
+          behaviorId: behaviorId || undefined,
+          method: measurementType,
+          intervalNumber: intervalNumber ?? undefined,
+          intervalStartedAt: intervalStartedAt || undefined,
+          intervalEndedAt: intervalEndedAt || undefined,
+          occurred: occurred ?? undefined,
           therapistId: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
           timestamp: occurredAt,
-          syncStatus: sanitizeString(req.body?.syncStatus || req.body?.sync_status, 40) || undefined
+          clientSyncStatus,
+          syncStatus: 'synced'
         }),
         created_at: new Date().toISOString()
       });

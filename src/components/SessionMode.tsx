@@ -77,15 +77,26 @@ const behaviorPresets = [
   { id: 'aggression', name: 'Agressao', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], tone: 'bg-red-50 text-red-700 border-red-100' },
   { id: 'self_injury', name: 'Autoagressao', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], tone: 'bg-rose-50 text-rose-700 border-rose-100' },
   { id: 'refusal', name: 'Recusa', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], tone: 'bg-violet-50 text-violet-700 border-violet-100' },
-  { id: 'stereotypy', name: 'Estereotipia', defaultMeasurement: 'partial_interval', allowedMeasurements: ['partial_interval', 'duration'], tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' }
+  { id: 'stereotypy', name: 'Estereotipia', defaultMeasurement: 'partial_interval', allowedMeasurements: ['partial_interval', 'whole_interval', 'momentary_time_sampling', 'duration'], tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' }
 ];
 
 const antecedentOptions = ['Demanda apresentada', 'Transicao', 'Espera', 'Negacao de acesso', 'Barulho', 'Atencao dividida'];
 const consequenceOptions = ['Redirecionamento', 'Pausa breve', 'Reforco diferencial', 'Ajuda fisica', 'Bloqueio seguro', 'Acesso removido'];
 const locationOptions = ['Mesa', 'Sala de terapia', 'Brinquedoteca', 'Corredor', 'Banheiro', 'Recepcao'];
 const severityOptions = [1, 2, 3, 4, 5];
-const intervalSecondOptions = [10, 15, 30, 60, 120];
-const momentarySecondOptions = [30, 60, 120, 300];
+const intervalDurationOptions = [
+  { key: '10', label: '10s', seconds: 10 },
+  { key: '30', label: '30s', seconds: 30 },
+  { key: '60', label: '1min', seconds: 60 },
+  { key: '120', label: '2min', seconds: 120 },
+  { key: 'custom', label: 'Customizado', seconds: null }
+];
+const intervalAlertOptions = [
+  { key: 'vibration', label: 'Vibracao' },
+  { key: 'sound', label: 'Som' },
+  { key: 'both', label: 'Ambos' },
+  { key: 'silent', label: 'Silencioso' }
+];
 
 const formatElapsed = (start: string, nowMs = Date.now()) => {
   const elapsed = Math.max(0, Math.floor((nowMs - new Date(start).getTime()) / 1000));
@@ -126,6 +137,12 @@ const getMeasurementLabel = (measurementType: string) => {
   return behaviorMeasurementOptions.find((option) => option.key === measurementType)?.label || measurementType;
 };
 
+const isIntervalMeasurement = (measurementType: string) => (
+  measurementType === 'partial_interval' ||
+  measurementType === 'whole_interval' ||
+  measurementType === 'momentary_time_sampling'
+);
+
 export const SessionMode = ({
   patient,
   onClose,
@@ -158,9 +175,14 @@ export const SessionMode = ({
   const [selectedSeverity, setSelectedSeverity] = useState(2);
   const [rateWindow, setRateWindow] = useState<any>(null);
   const [intervalRun, setIntervalRun] = useState<any>(null);
-  const [momentaryRun, setMomentaryRun] = useState<any>(null);
-  const [intervalSeconds, setIntervalSeconds] = useState(30);
-  const [momentarySeconds, setMomentarySeconds] = useState(60);
+  const [intervalSummary, setIntervalSummary] = useState<any>(null);
+  const [intervalDurationMode, setIntervalDurationMode] = useState('30');
+  const [intervalCustomSeconds, setIntervalCustomSeconds] = useState(45);
+  const [intervalTotalIntervals, setIntervalTotalIntervals] = useState(10);
+  const [intervalAlertType, setIntervalAlertType] = useState('both');
+  const intervalSeconds = intervalDurationMode === 'custom'
+    ? Math.max(1, Math.floor(Number(intervalCustomSeconds) || 1))
+    : Number(intervalDurationOptions.find((option) => option.key === intervalDurationMode)?.seconds || 30);
   const [abcModalOpen, setAbcModalOpen] = useState(false);
   const [abcBehaviorId, setAbcBehaviorId] = useState('crying');
   const [abcAntecedent, setAbcAntecedent] = useState(antecedentOptions[0]);
@@ -206,14 +228,14 @@ export const SessionMode = ({
       setOpenDurations(Array.isArray(persisted.openDurations) ? persisted.openDurations : []);
       setRateWindow(persisted.rateWindow || null);
       setIntervalRun(persisted.intervalRun || null);
-      setMomentaryRun(persisted.momentaryRun || null);
+      setIntervalSummary(persisted.intervalSummary || null);
       setTrialCount(Number(persisted.trialCount || 0));
     } catch {
       setRecords([]);
       setOpenDurations([]);
       setRateWindow(null);
       setIntervalRun(null);
-      setMomentaryRun(null);
+      setIntervalSummary(null);
       setTrialCount(0);
     } finally {
       setHydratedSessionStateKey(sessionStateKey);
@@ -230,34 +252,63 @@ export const SessionMode = ({
           openDurations,
           rateWindow,
           intervalRun,
-          momentaryRun,
+          intervalSummary,
           trialCount
         })
       );
     } catch {
       // Local session history is a convenience layer; encrypted offline cache remains the source of truth.
     }
-  }, [hydratedSessionStateKey, intervalRun, momentaryRun, openDurations, rateWindow, records, sessionStateKey, trialCount]);
+  }, [hydratedSessionStateKey, intervalRun, intervalSummary, openDurations, rateWindow, records, sessionStateKey, trialCount]);
 
   useEffect(() => {
-    const hasRunningTimer = openDurations.length > 0 || rateWindow || intervalRun || momentaryRun;
+    const hasRunningTimer = openDurations.length > 0 || rateWindow || intervalRun;
     if (!hasRunningTimer) return;
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [intervalRun, momentaryRun, openDurations.length, rateWindow]);
+  }, [intervalRun, openDurations.length, rateWindow]);
 
-  useEffect(() => {
-    if (!momentaryRun || momentaryRun.dueAt || !momentaryRun.startedAt) return;
-    const dueAt = new Date(momentaryRun.startedAt).getTime() + Number(momentaryRun.seconds || 60) * 1000;
-    setMomentaryRun({ ...momentaryRun, dueAt: new Date(dueAt).toISOString() });
-  }, [momentaryRun]);
-
-  useEffect(() => {
-    if (!momentaryRun?.dueAt || momentaryRun?.due) return;
-    if (nowMs >= new Date(momentaryRun.dueAt).getTime()) {
-      setMomentaryRun({ ...momentaryRun, due: true });
+  const triggerIntervalAlert = (alertType: string) => {
+    if ((alertType === 'vibration' || alertType === 'both') && typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      try {
+        navigator.vibrate([180, 80, 180]);
+      } catch {
+        // Alert feedback is best-effort only.
+      }
     }
-  }, [momentaryRun, nowMs]);
+    if (alertType === 'sound' || alertType === 'both') {
+      try {
+        const AudioContextCtor = (window as any).AudioContext || (window as any).webkitAudioContext;
+        if (!AudioContextCtor) return;
+        const context = new AudioContextCtor();
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = 'sine';
+        oscillator.frequency.value = 880;
+        gain.gain.value = 0.08;
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start();
+        window.setTimeout(() => {
+          oscillator.stop();
+          context.close?.();
+        }, 180);
+      } catch {
+        // Some browsers block audio; visual highlighting still indicates the interval ended.
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!intervalRun || intervalRun.awaitingResponse || intervalRun.completed) return;
+    if (!intervalRun.intervalEndsAt) return;
+    if (nowMs < new Date(intervalRun.intervalEndsAt).getTime()) return;
+    triggerIntervalAlert(intervalRun.alertType || 'both');
+    setIntervalRun((prev: any) => {
+      if (!prev || prev.id !== intervalRun.id || prev.awaitingResponse) return prev;
+      return { ...prev, awaitingResponse: true, alertFiredAt: new Date().toISOString() };
+    });
+  }, [intervalRun, nowMs]);
 
   useEffect(() => {
     if (!durationBlockModalOpen || openDurations.length > 0) return;
@@ -571,7 +622,7 @@ export const SessionMode = ({
       openAbcModal(selectedBehavior.id);
       return;
     }
-    if (behaviorMeasurementType === 'partial_interval' || behaviorMeasurementType === 'whole_interval') {
+    if (isIntervalMeasurement(behaviorMeasurementType)) {
       if (!intervalRun) startIntervalRun();
       return;
     }
@@ -579,9 +630,6 @@ export const SessionMode = ({
       if (!rateWindow) startRateWindow();
       else registerRateOccurrence();
       return;
-    }
-    if (behaviorMeasurementType === 'momentary_time_sampling') {
-      if (!momentaryRun) startMomentary();
     }
   };
 
@@ -616,75 +664,112 @@ export const SessionMode = ({
   };
 
   const startIntervalRun = () => {
+    const startedAt = new Date().toISOString();
+    const intervalEndsAt = new Date(new Date(startedAt).getTime() + intervalSeconds * 1000).toISOString();
     setIntervalRun({
       id: crypto.randomUUID(),
+      behaviorId: selectedBehavior.id,
       behaviorName: selectedBehavior.name,
       measurementType: behaviorMeasurementType,
-      startedAt: new Date().toISOString(),
+      method: behaviorMeasurementType,
+      location: selectedLocation,
+      severity: selectedSeverity,
+      startedAt,
+      intervalStartedAt: startedAt,
+      intervalEndsAt,
       intervalSeconds,
-      intervalIndex: 1
+      intervalIndex: 1,
+      totalIntervals: Math.max(1, Math.floor(Number(intervalTotalIntervals) || 1)),
+      alertType: intervalAlertType,
+      awaitingResponse: false,
+      completedCount: 0,
+      occurredCount: 0
     });
+    setIntervalSummary(null);
   };
 
   const registerInterval = (occurred: boolean) => {
     if (!intervalRun) return;
+    const intervalNumber = Number(intervalRun.intervalIndex || 1);
+    const totalIntervals = Math.max(1, Number(intervalRun.totalIntervals || 1));
+    const intervalStartedAt = intervalRun.intervalStartedAt || intervalRun.startedAt || new Date().toISOString();
+    const intervalEndedAt = intervalRun.intervalEndsAt || new Date().toISOString();
+    const recordId = `${intervalRun.id}-interval-${intervalNumber}`;
     const payload = buildBehaviorPayload(intervalRun.behaviorName, intervalRun.measurementType, {
-      interval_index: intervalRun.intervalIndex,
-      intervalIndex: intervalRun.intervalIndex,
+      id: recordId,
+      behavior_id: intervalRun.behaviorId || selectedBehavior.id,
+      behaviorId: intervalRun.behaviorId || selectedBehavior.id,
+      method: intervalRun.measurementType,
+      interval_number: intervalNumber,
+      intervalNumber,
+      interval_index: intervalNumber,
+      intervalIndex: intervalNumber,
+      interval_started_at: intervalStartedAt,
+      intervalStartedAt,
+      interval_ended_at: intervalEndedAt,
+      intervalEndedAt,
       interval_occurred: occurred,
       intervalOccurred: occurred,
+      occurred,
+      location: intervalRun.location || selectedLocation,
+      severity: intervalRun.severity ?? selectedSeverity,
+      timestamp: intervalEndedAt,
       raw_payload: {
         intervalRunId: intervalRun.id,
-        intervalSeconds: intervalRun.intervalSeconds
+        patientId,
+        sessionId,
+        therapistId: resolvedTherapistId || null,
+        behaviorId: intervalRun.behaviorId || selectedBehavior.id,
+        method: intervalRun.measurementType,
+        intervalNumber,
+        intervalStartedAt,
+        intervalEndedAt,
+        occurred,
+        intervalSeconds: intervalRun.intervalSeconds,
+        totalIntervals,
+        alertType: intervalRun.alertType || 'both',
+        location: intervalRun.location || selectedLocation,
+        severity: intervalRun.severity ?? selectedSeverity,
+        syncStatus: 'local'
       }
     });
-    setIntervalRun({ ...intervalRun, intervalIndex: Number(intervalRun.intervalIndex || 1) + 1 });
+    const nextCompletedCount = Number(intervalRun.completedCount || 0) + 1;
+    const nextOccurredCount = Number(intervalRun.occurredCount || 0) + (occurred ? 1 : 0);
     void saveBehaviorEvent(payload, {
-      id: String(payload.id),
+      id: recordId,
       kind: 'behavior',
       title: intervalRun.behaviorName,
-      detail: `intervalo ${intervalRun.intervalIndex}: ${occurred ? 'SIM' : 'NAO'}`,
-      timestamp: payload.timestamp,
+      detail: `intervalo ${intervalNumber}: ${occurred ? 'SIM' : 'NAO'}`,
+      timestamp: intervalEndedAt,
       measurementType: intervalRun.measurementType,
-      intervalIndex: intervalRun.intervalIndex,
+      intervalIndex: intervalNumber,
       intervalOccurred: occurred,
-      location: selectedLocation,
-      severity: selectedSeverity
+      location: intervalRun.location || selectedLocation,
+      severity: intervalRun.severity ?? selectedSeverity
     });
-  };
-
-  const startMomentary = () => {
-    setMomentaryRun({
-      id: crypto.randomUUID(),
-      behaviorName: selectedBehavior.name,
-      seconds: momentarySeconds,
-      startedAt: new Date().toISOString(),
-      due: false
-    });
-  };
-
-  const registerMomentary = (occurred: boolean) => {
-    if (!momentaryRun) return;
-    const payload = buildBehaviorPayload(momentaryRun.behaviorName, 'momentary_time_sampling', {
-      interval_occurred: occurred,
-      intervalOccurred: occurred,
-      raw_payload: {
-        momentaryRunId: momentaryRun.id,
-        configuredSeconds: momentaryRun.seconds,
-        dueAt: momentaryRun.dueAt || null
-      }
-    });
-    setMomentaryRun(null);
-    void saveBehaviorEvent(payload, {
-      id: String(payload.id),
-      kind: 'behavior',
-      title: momentaryRun.behaviorName,
-      detail: `amostragem momentanea: ${occurred ? 'SIM' : 'NAO'}`,
-      timestamp: payload.timestamp,
-      measurementType: 'momentary_time_sampling',
-      intervalOccurred: occurred,
-      location: selectedLocation,
-      severity: selectedSeverity
+    if (intervalNumber >= totalIntervals) {
+      const percent = Math.round((nextOccurredCount / totalIntervals) * 100);
+      setIntervalSummary({
+        behaviorName: intervalRun.behaviorName,
+        measurementType: intervalRun.measurementType,
+        occurredCount: nextOccurredCount,
+        totalIntervals,
+        percent
+      });
+      setIntervalRun(null);
+      return;
+    }
+    const nextStartedAt = new Date().toISOString();
+    const nextEndsAt = new Date(new Date(nextStartedAt).getTime() + Number(intervalRun.intervalSeconds || intervalSeconds) * 1000).toISOString();
+    setIntervalRun({
+      ...intervalRun,
+      intervalIndex: intervalNumber + 1,
+      intervalStartedAt: nextStartedAt,
+      intervalEndsAt: nextEndsAt,
+      awaitingResponse: false,
+      alertFiredAt: null,
+      completedCount: nextCompletedCount,
+      occurredCount: nextOccurredCount
     });
   };
 
@@ -1006,6 +1091,75 @@ export const SessionMode = ({
             </div>
           )}
 
+          {intervalRun && (
+            <div className={`sticky top-0 z-30 rounded-[28px] p-5 shadow-2xl border transition-all ${intervalRun.awaitingResponse ? 'bg-amber-50 border-amber-300 ring-4 ring-amber-200/70' : 'bg-white border-blue-100 shadow-blue-900/10'}`}>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Timer size={18} className={intervalRun.awaitingResponse ? 'text-amber-600' : 'text-[#7a32fc]'} />
+                    <h2 className="text-sm font-bold text-gray-800">Coleta por intervalo em andamento</h2>
+                  </div>
+                  <h3 className="text-xl font-bold text-gray-900">{intervalRun.behaviorName}</h3>
+                  <p className="text-xs font-semibold text-gray-500 mt-1">
+                    {getMeasurementLabel(intervalRun.measurementType)} - {intervalRun.location || 'Sem local'} - severidade {intervalRun.severity || '-'}
+                  </p>
+                </div>
+                <div className="grid grid-cols-3 gap-3 min-w-[320px]">
+                  <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-3 text-center">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Intervalo</p>
+                    <p className="text-2xl font-bold text-gray-900">{intervalRun.intervalIndex}</p>
+                  </div>
+                  <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-3 text-center">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total</p>
+                    <p className="text-2xl font-bold text-gray-900">{intervalRun.totalIntervals}</p>
+                  </div>
+                  <div className={`rounded-2xl border p-3 text-center ${intervalRun.awaitingResponse ? 'bg-amber-100 border-amber-200' : 'bg-[#F4F7FE] border-blue-100'}`}>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Restante</p>
+                    <p className={`text-2xl font-bold ${intervalRun.awaitingResponse ? 'text-amber-700' : 'text-[#7a32fc]'}`}>
+                      {intervalRun.awaitingResponse ? 'Agora' : formatRemainingUntil(intervalRun.intervalEndsAt, nowMs)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-xs font-semibold text-gray-500">
+                  {intervalRun.measurementType === 'partial_interval'
+                    ? 'SIM = ocorreu em qualquer momento do intervalo.'
+                    : intervalRun.measurementType === 'whole_interval'
+                      ? 'SIM = ocorreu durante o intervalo inteiro.'
+                      : 'SIM = estava ocorrendo exatamente no alerta.'}
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => registerInterval(true)}
+                    disabled={!intervalRun.awaitingResponse}
+                    className={`px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all ${intervalRun.awaitingResponse ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                  >
+                    SIM
+                  </button>
+                  <button
+                    onClick={() => registerInterval(false)}
+                    disabled={!intervalRun.awaitingResponse}
+                    className={`px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all ${intervalRun.awaitingResponse ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                  >
+                    NAO
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {intervalSummary && (
+            <div className="rounded-[28px] border border-emerald-100 bg-emerald-50 p-5 shadow-xl shadow-emerald-900/5">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Resumo da coleta por intervalo</p>
+              <h2 className="mt-1 text-xl font-bold text-emerald-900">{intervalSummary.behaviorName}</h2>
+              <p className="mt-2 text-lg font-bold text-emerald-800">
+                {intervalSummary.occurredCount}/{intervalSummary.totalIntervals} intervalos com ocorrencia
+              </p>
+              <p className="text-3xl font-bold text-emerald-700">{intervalSummary.percent}%</p>
+            </div>
+          )}
+
           <div className="bg-white rounded-[28px] p-5 shadow-xl shadow-blue-900/5 border border-white">
             <div className="flex items-center justify-between gap-3 mb-5">
               <div>
@@ -1146,47 +1300,65 @@ export const SessionMode = ({
                 </div>
               )}
 
-              {(behaviorMeasurementType === 'partial_interval' || behaviorMeasurementType === 'whole_interval') && (
-                <div className="flex gap-3 flex-wrap items-center">
-                  <select value={intervalSeconds} onChange={(event) => setIntervalSeconds(Number(event.target.value))} className="bg-white border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
-                    {intervalSecondOptions.map((seconds) => <option key={seconds} value={seconds}>{seconds}s</option>)}
-                  </select>
-                  {!intervalRun ? (
-                    <button onClick={handleSelectedBehaviorAction} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
-                      <Play size={16} /> Iniciar coleta por intervalo
-                    </button>
-                  ) : (
-                    <>
-                      <span className="text-sm font-bold text-gray-700">Intervalo {intervalRun.intervalIndex} - {formatElapsed(intervalRun.startedAt, nowMs)}</span>
-                      <button onClick={() => registerInterval(true)} className="px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest">SIM</button>
-                      <button onClick={() => registerInterval(false)} className="px-5 py-3 rounded-2xl bg-red-500 text-white text-xs font-bold uppercase tracking-widest">NAO</button>
-                      <button onClick={() => setIntervalRun(null)} className="px-5 py-3 rounded-2xl bg-slate-700 text-white text-xs font-bold uppercase tracking-widest">Parar</button>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {behaviorMeasurementType === 'momentary_time_sampling' && (
-                <div className="flex gap-3 flex-wrap items-center">
-                  <select value={momentarySeconds} onChange={(event) => setMomentarySeconds(Number(event.target.value))} className="bg-white border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
-                    {momentarySecondOptions.map((seconds) => <option key={seconds} value={seconds}>{seconds}s</option>)}
-                  </select>
-                  {!momentaryRun ? (
-                    <button onClick={startMomentary} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
-                      <Timer size={16} /> Iniciar alerta
-                    </button>
-                  ) : momentaryRun.due ? (
-                    <>
-                      <span className="text-sm font-bold text-[#7a32fc]">Momento de observar</span>
-                      <button onClick={() => registerMomentary(true)} className="px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest">SIM</button>
-                      <button onClick={() => registerMomentary(false)} className="px-5 py-3 rounded-2xl bg-red-500 text-white text-xs font-bold uppercase tracking-widest">NAO</button>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-sm font-bold text-gray-700">Alerta em {formatRemainingUntil(momentaryRun.dueAt || momentaryRun.startedAt, nowMs)}</span>
-                      <button onClick={() => setMomentaryRun(null)} className="px-5 py-3 rounded-2xl bg-slate-700 text-white text-xs font-bold uppercase tracking-widest">Cancelar</button>
-                    </>
-                  )}
+              {isIntervalMeasurement(behaviorMeasurementType) && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                      Duracao do intervalo
+                      <select
+                        value={intervalDurationMode}
+                        onChange={(event) => setIntervalDurationMode(event.target.value)}
+                        disabled={Boolean(intervalRun)}
+                        className="mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none disabled:opacity-60"
+                      >
+                        {intervalDurationOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+                      </select>
+                    </label>
+                    {intervalDurationMode === 'custom' && (
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                        Segundos
+                        <input
+                          type="number"
+                          min={1}
+                          max={3600}
+                          value={intervalCustomSeconds}
+                          onChange={(event) => setIntervalCustomSeconds(Number(event.target.value))}
+                          disabled={Boolean(intervalRun)}
+                          className="mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none disabled:opacity-60"
+                        />
+                      </label>
+                    )}
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                      Quantidade
+                      <input
+                        type="number"
+                        min={1}
+                        max={200}
+                        value={intervalTotalIntervals}
+                        onChange={(event) => setIntervalTotalIntervals(Math.max(1, Number(event.target.value) || 1))}
+                        disabled={Boolean(intervalRun)}
+                        className="mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none disabled:opacity-60"
+                      />
+                    </label>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                      Alerta
+                      <select
+                        value={intervalAlertType}
+                        onChange={(event) => setIntervalAlertType(event.target.value)}
+                        disabled={Boolean(intervalRun)}
+                        className="mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none disabled:opacity-60"
+                      >
+                        {intervalAlertOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <button
+                    onClick={handleSelectedBehaviorAction}
+                    disabled={Boolean(intervalRun)}
+                    className={`px-5 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest flex items-center gap-2 ${intervalRun ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-[#7a32fc] text-white'}`}
+                  >
+                    <Play size={16} /> Iniciar coleta por intervalo
+                  </button>
                 </div>
               )}
 
