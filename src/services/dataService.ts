@@ -9,6 +9,7 @@ import {
   saveEncryptedRecord,
   setEndpointCacheMeta
 } from './localDb';
+import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 
 enum OperationType {
   CREATE = 'create',
@@ -1010,6 +1011,9 @@ export const dataService = {
       ...(session || {}),
       id,
       patient_id: session?.patient_id || session?.patientId,
+      patientId: session?.patient_id || session?.patientId,
+      therapist_id: session?.therapist_id || session?.therapistId,
+      therapistId: session?.therapist_id || session?.therapistId,
       started_at: session?.started_at || session?.startedAt || new Date().toISOString()
     };
     return await saveOfflineFirst(id, data, 'aba', '/api/aba/sessions');
@@ -1053,11 +1057,36 @@ export const dataService = {
 
   async saveAbaTrial(trial: any) {
     const id = String(trial?.id || trial?.trial_id || trial?.trialId || generateId());
+    const abaPromptLevel = resolveAbaPromptLevel({
+      promptLevelKey: trial?.prompt_level_key || trial?.promptLevelKey,
+      promptLevelName: trial?.prompt_level_name || trial?.promptLevelName,
+      score: trial?.response_score ?? trial?.responseScore ?? trial?.score,
+      maxScore: trial?.max_score ?? trial?.maxScore,
+      correct: trial?.correct,
+      independent: trial?.independent
+    });
     const data = {
       ...(trial || {}),
       id,
       patient_id: trial?.patient_id || trial?.patientId,
-      occurred_at: trial?.occurred_at || trial?.occurredAt || new Date().toISOString()
+      patientId: trial?.patient_id || trial?.patientId,
+      session_id: trial?.session_id || trial?.sessionId,
+      sessionId: trial?.session_id || trial?.sessionId,
+      target_id: trial?.target_id || trial?.targetId,
+      targetId: trial?.target_id || trial?.targetId,
+      trialType: trial?.trialType || trial?.trial_type || trial?.collection_type || trial?.collectionType,
+      promptLevel: abaPromptLevel.key,
+      prompt_level_key: abaPromptLevel.key,
+      promptLevelKey: abaPromptLevel.key,
+      prompt_level_name: abaPromptLevel.label,
+      promptLevelName: abaPromptLevel.label,
+      isIndependent: Boolean(trial?.isIndependent ?? trial?.independent),
+      isCorrect: Boolean(trial?.isCorrect ?? trial?.correct),
+      therapist_id: trial?.therapist_id || trial?.therapistId,
+      therapistId: trial?.therapist_id || trial?.therapistId,
+      occurred_at: trial?.occurred_at || trial?.occurredAt || trial?.timestamp || new Date().toISOString(),
+      timestamp: trial?.timestamp || trial?.occurred_at || trial?.occurredAt || new Date().toISOString(),
+      syncStatus: trial?.syncStatus || 'local'
     };
     return await saveOfflineFirst(id, data, 'aba', '/api/aba/trials');
   },
@@ -1091,11 +1120,21 @@ export const dataService = {
 
   async saveAbaBehaviorEvent(event: any) {
     const id = String(event?.id || event?.event_id || event?.eventId || generateId());
+    const timestamp = event?.timestamp || event?.occurred_at || event?.occurredAt || new Date().toISOString();
     const data = {
       ...(event || {}),
       id,
       patient_id: event?.patient_id || event?.patientId,
-      occurred_at: event?.occurred_at || event?.occurredAt || new Date().toISOString()
+      patientId: event?.patient_id || event?.patientId,
+      session_id: event?.session_id || event?.sessionId,
+      sessionId: event?.session_id || event?.sessionId,
+      therapist_id: event?.therapist_id || event?.therapistId,
+      therapistId: event?.therapist_id || event?.therapistId,
+      measurement_type: event?.measurement_type || event?.measurementType,
+      measurementType: event?.measurement_type || event?.measurementType,
+      occurred_at: timestamp,
+      timestamp,
+      syncStatus: event?.syncStatus || 'local'
     };
     return await saveOfflineFirst(id, data, 'aba', '/api/aba/behavior-events');
   },

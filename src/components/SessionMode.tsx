@@ -1,202 +1,567 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, Zap, Camera, Clock, StopCircle } from 'lucide-react';
+import {
+  AlertCircle,
+  Activity,
+  Camera,
+  CheckCircle2,
+  ChevronLeft,
+  Clock,
+  FileText,
+  MapPin,
+  Minus,
+  Play,
+  Plus,
+  Square,
+  StopCircle,
+  Timer,
+  X,
+  Zap
+} from 'lucide-react';
 import { SecureImage } from './SecureMedia';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { dataService } from '../services/dataService';
+import { ABA_PROMPT_LEVEL_OPTIONS, resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 
-export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, remainingSeconds = 0, formatCountdown, onRequestEndSession, onSessionRecordSaved }: any) => {
+type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
+
+type SessionRecord = {
+  id: string;
+  kind: 'trial' | 'behavior';
+  title: string;
+  detail: string;
+  timestamp: string;
+  syncStatus: SyncStatus;
+};
+
+type OpenDurationEvent = {
+  id: string;
+  behaviorName: string;
+  startedAt: string;
+  location?: string;
+  severity?: number | null;
+};
+
+const collectionOptions = [
+  { key: 'dtt', label: 'DTT' },
+  { key: 'net', label: 'NET' },
+  { key: 'cold_probe', label: 'Cold Probe' },
+  { key: 'baseline_probe', label: 'Baseline Probe' },
+  { key: 'maintenance_probe', label: 'Maintenance Probe' }
+];
+
+const behaviorMeasurementOptions = [
+  { key: 'frequency', label: 'Frequencia' },
+  { key: 'duration', label: 'Duracao' },
+  { key: 'rate', label: 'Taxa' },
+  { key: 'partial_interval', label: 'Intervalo parcial' },
+  { key: 'whole_interval', label: 'Intervalo total' },
+  { key: 'momentary_time_sampling', label: 'Amostragem momentanea' },
+  { key: 'abc', label: 'ABC' }
+];
+
+const behaviorPresets = [
+  { id: 'crying', name: 'Choro', defaultMeasurement: 'duration', tone: 'bg-sky-50 text-sky-700 border-sky-100' },
+  { id: 'escape', name: 'Fuga da atividade', defaultMeasurement: 'duration', tone: 'bg-amber-50 text-amber-700 border-amber-100' },
+  { id: 'aggression', name: 'Agressao', defaultMeasurement: 'frequency', tone: 'bg-red-50 text-red-700 border-red-100' },
+  { id: 'self_injury', name: 'Autoagressao', defaultMeasurement: 'frequency', tone: 'bg-rose-50 text-rose-700 border-rose-100' },
+  { id: 'refusal', name: 'Recusa', defaultMeasurement: 'frequency', tone: 'bg-violet-50 text-violet-700 border-violet-100' },
+  { id: 'stereotypy', name: 'Estereotipia', defaultMeasurement: 'duration', tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' }
+];
+
+const antecedentOptions = ['Demanda apresentada', 'Transicao', 'Espera', 'Negacao de acesso', 'Barulho', 'Atencao dividida'];
+const consequenceOptions = ['Redirecionamento', 'Pausa breve', 'Reforco diferencial', 'Ajuda fisica', 'Bloqueio seguro', 'Acesso removido'];
+const locationOptions = ['Mesa', 'Sala de terapia', 'Brinquedoteca', 'Corredor', 'Banheiro', 'Recepcao'];
+const severityOptions = [1, 2, 3, 4, 5];
+const intervalSecondOptions = [10, 15, 30, 60, 120];
+const momentarySecondOptions = [30, 60, 120, 300];
+
+const formatElapsed = (start: string, nowMs = Date.now()) => {
+  const elapsed = Math.max(0, Math.floor((nowMs - new Date(start).getTime()) / 1000));
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = elapsed % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+};
+
+const formatRemainingUntil = (dueAt: string, nowMs = Date.now()) => {
+  const remaining = Math.max(0, Math.ceil((new Date(dueAt).getTime() - nowMs) / 1000));
+  const minutes = Math.floor(remaining / 60);
+  const seconds = remaining % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+};
+
+const syncLabels: Record<SyncStatus, string> = {
+  local: 'salvo localmente',
+  syncing: 'sincronizando',
+  synced: 'sincronizado',
+  error: 'erro'
+};
+
+const syncClasses: Record<SyncStatus, string> = {
+  local: 'bg-blue-50 text-blue-600 border-blue-100',
+  syncing: 'bg-amber-50 text-amber-600 border-amber-100',
+  synced: 'bg-emerald-50 text-emerald-600 border-emerald-100',
+  error: 'bg-red-50 text-red-600 border-red-100'
+};
+
+export const SessionMode = ({
+  patient,
+  onClose,
+  onRecordTrial,
+  activeSession,
+  remainingSeconds = 0,
+  formatCountdown,
+  onRequestEndSession,
+  onConfirmEndSession,
+  onSessionRecordSaved,
+  therapistId
+}: any) => {
   const sessionGoals = (patient.pei?.filter((g: any) => g.isPriority || g.status === 'in_progress') || [])
     .sort((a: any, b: any) => (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0));
+
+  const sessionId = String(activeSession?.id || `draft-${patient?.id || 'patient'}`);
+  const patientId = String(patient?.id || '');
+  const resolvedTherapistId = String(therapistId || activeSession?.therapistId || activeSession?.therapist_id || '').trim();
+  const sessionStateKey = `verto.aba_session_state:${patientId}:${sessionId}`;
+
   const [trialCount, setTrialCount] = useState(0);
   const [activeCriteria, setActiveCriteria] = useState<string | null>(null);
-  
-  const [lastRecordedTrialId, setLastRecordedTrialId] = useState<any>(null);
-  const [lastRecordedGoalId, setLastRecordedGoalId] = useState<any>(null);
-  const [pendingTrial, setPendingTrial] = useState<any>(null);
-  const [showTrialConfirmation, setShowTrialConfirmation] = useState(false);
-  const [trialObservation, setTrialObservation] = useState("");
-  const [isSavingObservation, setIsSavingObservation] = useState(false);
   const [collectionType, setCollectionType] = useState('dtt');
   const [promptLevelKey, setPromptLevelKey] = useState('independent');
-  const [behaviorName, setBehaviorName] = useState('');
+  const [records, setRecords] = useState<SessionRecord[]>([]);
+  const [openDurations, setOpenDurations] = useState<OpenDurationEvent[]>([]);
+  const [selectedBehaviorId, setSelectedBehaviorId] = useState('crying');
   const [behaviorMeasurementType, setBehaviorMeasurementType] = useState('frequency');
-  const [behaviorAntecedent, setBehaviorAntecedent] = useState('');
-  const [behaviorConsequence, setBehaviorConsequence] = useState('');
-  const [behaviorLocation, setBehaviorLocation] = useState('');
-  const [behaviorNote, setBehaviorNote] = useState('');
-  const [behaviorEventCount, setBehaviorEventCount] = useState(0);
-  const [isSavingBehaviorEvent, setIsSavingBehaviorEvent] = useState(false);
+  const [selectedLocation, setSelectedLocation] = useState(locationOptions[0]);
+  const [selectedSeverity, setSelectedSeverity] = useState(2);
+  const [rateWindow, setRateWindow] = useState<any>(null);
+  const [intervalRun, setIntervalRun] = useState<any>(null);
+  const [momentaryRun, setMomentaryRun] = useState<any>(null);
+  const [intervalSeconds, setIntervalSeconds] = useState(30);
+  const [momentarySeconds, setMomentarySeconds] = useState(60);
+  const [abcModalOpen, setAbcModalOpen] = useState(false);
+  const [abcBehaviorId, setAbcBehaviorId] = useState('crying');
+  const [abcAntecedent, setAbcAntecedent] = useState(antecedentOptions[0]);
+  const [abcConsequence, setAbcConsequence] = useState(consequenceOptions[0]);
+  const [abcLocation, setAbcLocation] = useState(locationOptions[0]);
+  const [abcSeverity, setAbcSeverity] = useState(2);
+  const [abcNote, setAbcNote] = useState('');
+  const [sessionWarning, setSessionWarning] = useState('');
+  const [showSessionSummary, setShowSessionSummary] = useState(false);
+  const [hydratedSessionStateKey, setHydratedSessionStateKey] = useState('');
+  const [nowMs, setNowMs] = useState(Date.now());
 
-  const collectionOptions = [
-    { key: 'dtt', label: 'DTT' },
-    { key: 'net', label: 'NET' },
-    { key: 'cold_probe', label: 'Cold Probe' },
-    { key: 'baseline_probe', label: 'Baseline Probe' },
-    { key: 'maintenance_probe', label: 'Maintenance Probe' }
-  ];
+  const selectedBehavior = useMemo(
+    () => behaviorPresets.find((behavior) => behavior.id === selectedBehaviorId) || behaviorPresets[0],
+    [selectedBehaviorId]
+  );
 
-  const promptLevels = [
-    { key: 'independent', label: 'Independente', isIndependent: true, isError: false },
-    { key: 'visual', label: 'Visual', isIndependent: false, isError: false },
-    { key: 'gestural', label: 'Gestual', isIndependent: false, isError: false },
-    { key: 'verbal', label: 'Verbal', isIndependent: false, isError: false },
-    { key: 'model', label: 'Modelo', isIndependent: false, isError: false },
-    { key: 'partial_physical', label: 'Fisica parcial', isIndependent: false, isError: false },
-    { key: 'full_physical', label: 'Fisica total', isIndependent: false, isError: false },
-    { key: 'error', label: 'Erro / sem resposta', isIndependent: false, isError: true }
-  ];
-
-  const behaviorMeasurementOptions = [
-    { key: 'frequency', label: 'Frequencia' },
-    { key: 'duration', label: 'Duracao' },
-    { key: 'rate', label: 'Taxa' },
-    { key: 'partial_interval', label: 'Intervalo parcial' },
-    { key: 'whole_interval', label: 'Intervalo total' },
-    { key: 'momentary_time_sampling', label: 'Amostragem momentanea' },
-    { key: 'abc', label: 'ABC' }
-  ];
-  
   const patientPhotos = useMemo(() => {
     return (patient.history || [])
       .filter((h: any) => h.type === 'photo' && h.image)
       .sort((a: any, b: any) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
   }, [patient.history]);
 
-  const handleScore = (goal: any, score: number) => {
-    setPendingTrial({ goal, score });
-    setLastRecordedGoalId(goal.id);
-    setTrialObservation("");
-    setShowTrialConfirmation(true);
-  };
-
-  const getMasteryTarget = (goal: any) => {
-    const target = Number(goal?.meta_sucessos ?? goal?.metaSucessos ?? goal?.masteryTarget ?? goal?.mastery_target);
-    return Number.isFinite(target) && target > 0 ? Math.floor(target) : 5;
-  };
-
-  const getGoalProgressResetMarker = (goal: any) => {
-    const explicitReset = Number(
-      goal?.sessionProgressResetAt ??
-      goal?.progressResetAt ??
-      goal?.masteryResetAt ??
-      goal?.progress_reset_at
-    );
-    if (Number.isFinite(explicitReset) && explicitReset > 0) return explicitReset;
-    const legacyGoalId = Number(goal?.id);
-    return Number.isFinite(legacyGoalId) ? legacyGoalId : 0;
-  };
-
-  const getHistoryProgressMarker = (entry: any) => {
-    const numericId = Number(entry?.id);
-    if (Number.isFinite(numericId) && numericId > 0) return numericId;
-    const createdAt = new Date(entry?.created_at || entry?.date || entry?.time || 0).getTime();
-    return Number.isFinite(createdAt) ? createdAt : 0;
-  };
-
-  const getConsecutiveMasteryCount = (goal: any) => {
-    const resetMarker = getGoalProgressResetMarker(goal);
-    const skillHistory = (patient.history || [])
-      .filter((h: any) =>
-        h.title === goal.name &&
-        h.type === 'task' &&
-        getHistoryProgressMarker(h) > resetMarker
-      )
-      .sort((a: any, b: any) => getHistoryProgressMarker(b) - getHistoryProgressMarker(a));
-
-    let count = 0;
-    for (const h of skillHistory) {
-      if (h.score === 1) count++;
-      else break;
-    }
-
-    return Math.min(count, getMasteryTarget(goal));
-  };
-
-  const handleUndoTrial = () => {
-    setShowTrialConfirmation(false);
-    setLastRecordedGoalId(null);
-    setPendingTrial(null);
-  };
-
-  const handleSaveTrialObservation = () => {
-    if (pendingTrial) {
-      setIsSavingObservation(true);
-      const selectedPrompt = promptLevels.find((prompt) => prompt.key === promptLevelKey) || promptLevels[0];
-      const maxScore = Number(pendingTrial.goal?.maxScore || 1);
-      const correct = pendingTrial.score >= maxScore;
-      const sessionMeta = activeSession
-        ? {
-            sessionId: activeSession.id,
-            sessionStartedAt: activeSession.startedAt,
-            sessionReferenceDate: activeSession.referenceDate,
-            targetId: pendingTrial.goal?.id,
-            targetMaxScore: maxScore,
-            protocolId: pendingTrial.goal?.protocolId || null,
-            protocolTitle: pendingTrial.goal?.protocolTitle || null,
-            domainId: pendingTrial.goal?.domainId || null,
-            domainName: pendingTrial.goal?.domainName || null,
-            collectionType,
-            promptLevelKey: selectedPrompt.key,
-            promptLevelName: selectedPrompt.label,
-            correct,
-            independent: correct && selectedPrompt.isIndependent
-          }
-        : null;
-      const newId = onRecordTrial(patient.id, pendingTrial.goal.name, pendingTrial.score, trialObservation, sessionMeta);
-      setTrialCount(prev => prev + 1);
-      setLastRecordedTrialId(newId);
-      onSessionRecordSaved?.();
-      
-      setTimeout(() => {
-        setIsSavingObservation(false);
-        setShowTrialConfirmation(false);
-        setLastRecordedGoalId(null);
-        setPendingTrial(null);
-      }, 500);
-    } else {
-      setShowTrialConfirmation(false);
-      setLastRecordedGoalId(null);
-    }
-  };
-
-  const handleSaveBehaviorEvent = async () => {
-    const name = behaviorName.trim();
-    if (!name || isSavingBehaviorEvent) return;
-    setIsSavingBehaviorEvent(true);
-    const occurredAt = new Date().toISOString();
-    const intervalType = ['partial_interval', 'whole_interval', 'momentary_time_sampling'].includes(behaviorMeasurementType);
+  useEffect(() => {
+    setHydratedSessionStateKey('');
     try {
-      await dataService.saveAbaBehaviorEvent({
-        patient_id: patient.id,
-        session_id: activeSession?.id || null,
-        behavior_name: name,
-        measurement_type: behaviorMeasurementType,
-        count_delta: behaviorMeasurementType === 'frequency' || behaviorMeasurementType === 'rate' ? 1 : null,
-        interval_occurred: intervalType ? true : null,
-        antecedent: behaviorMeasurementType === 'abc' ? behaviorAntecedent : '',
-        consequence: behaviorMeasurementType === 'abc' ? behaviorConsequence : '',
-        location: behaviorLocation,
-        notes: behaviorNote,
-        occurred_at: occurredAt,
-        raw_payload: {
-          source: 'session_mode_quick_behavior',
-          sessionReferenceDate: activeSession?.referenceDate || null
-        }
-      });
-      setBehaviorEventCount(prev => prev + 1);
-      onSessionRecordSaved?.();
-      setBehaviorNote('');
-      if (behaviorMeasurementType === 'abc') {
-        setBehaviorAntecedent('');
-        setBehaviorConsequence('');
-      }
-    } catch (error) {
-      console.error('Falha ao persistir comportamento ABA:', error);
+      const persisted = JSON.parse(localStorage.getItem(sessionStateKey) || '{}');
+      setRecords(Array.isArray(persisted.records) ? persisted.records : []);
+      setOpenDurations(Array.isArray(persisted.openDurations) ? persisted.openDurations : []);
+      setRateWindow(persisted.rateWindow || null);
+      setIntervalRun(persisted.intervalRun || null);
+      setMomentaryRun(persisted.momentaryRun || null);
+      setTrialCount(Number(persisted.trialCount || 0));
+    } catch {
+      setRecords([]);
+      setOpenDurations([]);
+      setRateWindow(null);
+      setIntervalRun(null);
+      setMomentaryRun(null);
+      setTrialCount(0);
     } finally {
-      setIsSavingBehaviorEvent(false);
+      setHydratedSessionStateKey(sessionStateKey);
+    }
+  }, [sessionStateKey]);
+
+  useEffect(() => {
+    if (hydratedSessionStateKey !== sessionStateKey) return;
+    try {
+      localStorage.setItem(
+        sessionStateKey,
+        JSON.stringify({
+          records: records.slice(0, 40),
+          openDurations,
+          rateWindow,
+          intervalRun,
+          momentaryRun,
+          trialCount
+        })
+      );
+    } catch {
+      // Local session history is a convenience layer; encrypted offline cache remains the source of truth.
+    }
+  }, [hydratedSessionStateKey, intervalRun, momentaryRun, openDurations, rateWindow, records, sessionStateKey, trialCount]);
+
+  useEffect(() => {
+    const hasRunningTimer = openDurations.length > 0 || rateWindow || intervalRun || momentaryRun;
+    if (!hasRunningTimer) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [intervalRun, momentaryRun, openDurations.length, rateWindow]);
+
+  useEffect(() => {
+    if (!momentaryRun || momentaryRun.dueAt || !momentaryRun.startedAt) return;
+    const dueAt = new Date(momentaryRun.startedAt).getTime() + Number(momentaryRun.seconds || 60) * 1000;
+    setMomentaryRun({ ...momentaryRun, dueAt: new Date(dueAt).toISOString() });
+  }, [momentaryRun]);
+
+  useEffect(() => {
+    if (!momentaryRun?.dueAt || momentaryRun?.due) return;
+    if (nowMs >= new Date(momentaryRun.dueAt).getTime()) {
+      setMomentaryRun({ ...momentaryRun, due: true });
+    }
+  }, [momentaryRun, nowMs]);
+
+  const updateRecordStatus = (id: string, syncStatus: SyncStatus) => {
+    setRecords((prev) => prev.map((record) => (record.id === id ? { ...record, syncStatus } : record)));
+  };
+
+  const addRecord = (record: Omit<SessionRecord, 'syncStatus'>, syncStatus: SyncStatus = 'local') => {
+    setRecords((prev) => [{ ...record, syncStatus }, ...prev].slice(0, 40));
+  };
+
+  const saveBehaviorEvent = async (payload: any, record: Omit<SessionRecord, 'syncStatus'>) => {
+    addRecord(record, 'local');
+    setTimeout(() => updateRecordStatus(record.id, 'syncing'), 60);
+    try {
+      const result = await dataService.saveAbaBehaviorEvent({
+        ...payload,
+        patient_id: patientId,
+        patientId,
+        session_id: sessionId,
+        sessionId,
+        therapist_id: resolvedTherapistId || undefined,
+        therapistId: resolvedTherapistId || undefined
+      });
+      updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
+      onSessionRecordSaved?.();
+      return result;
+    } catch (error) {
+      updateRecordStatus(record.id, 'error');
+      console.error('Falha ao persistir evento ABA:', error);
+      return { success: false, error };
     }
   };
+
+  const buildBehaviorPayload = (behaviorName: string, measurementType: string, overrides: any = {}) => {
+    const timestamp = overrides.timestamp || new Date().toISOString();
+    return {
+      id: overrides.id || crypto.randomUUID(),
+      behavior_name: behaviorName,
+      behaviorName,
+      measurement_type: measurementType,
+      measurementType,
+      occurred_at: timestamp,
+      occurredAt: timestamp,
+      timestamp,
+      location: overrides.location ?? selectedLocation,
+      severity: overrides.severity ?? selectedSeverity,
+      notes: overrides.notes || '',
+      raw_payload: {
+        ...(overrides.raw_payload || {}),
+        source: 'session_mode_intelligent_behavior',
+        sessionReferenceDate: activeSession?.referenceDate || null,
+        syncStatus: 'local'
+      },
+      ...overrides
+    };
+  };
+
+  const handleTrialClick = async (goal: any, score: number, outcome: 'independent' | 'prompted' | 'error') => {
+    const maxScore = Number(goal?.maxScore || 1);
+    const timestamp = new Date().toISOString();
+    const selectedPrompt = outcome === 'independent'
+      ? resolveAbaPromptLevel({ promptLevelKey: 'independent' })
+      : resolveAbaPromptLevel({ promptLevelKey });
+    const isCorrect = outcome !== 'error' && score > 0;
+    const isIndependent = outcome === 'independent';
+    const trialId = `trial-ui-${crypto.randomUUID()}`;
+
+    addRecord({
+      id: trialId,
+      kind: 'trial',
+      title: goal.name,
+      detail: `${collectionOptions.find((option) => option.key === collectionType)?.label || collectionType} - ${selectedPrompt.label} - ${score}`,
+      timestamp
+    });
+    setTimeout(() => updateRecordStatus(trialId, 'syncing'), 60);
+
+    try {
+      await Promise.resolve(onRecordTrial(patient.id, goal.name, score, '', {
+        sessionId,
+        sessionStartedAt: activeSession?.startedAt || timestamp,
+        sessionReferenceDate: activeSession?.referenceDate || timestamp.slice(0, 10),
+        targetId: goal?.id,
+        targetMaxScore: maxScore,
+        protocolId: goal?.protocolId || null,
+        protocolTitle: goal?.protocolTitle || null,
+        domainId: goal?.domainId || null,
+        domainName: goal?.domainName || null,
+        collectionType,
+        trialType: collectionType,
+        promptLevelKey: selectedPrompt.key,
+        promptLevelName: selectedPrompt.label,
+        promptLevel: selectedPrompt.key,
+        promptLevelSource: outcome === 'independent' ? 'independent_button' : 'prompt_dropdown',
+        correct: isCorrect,
+        isCorrect,
+        independent: isIndependent,
+        isIndependent,
+        timestamp,
+        therapistId: resolvedTherapistId || null
+      }));
+      setTrialCount((prev) => prev + 1);
+      updateRecordStatus(trialId, 'synced');
+      onSessionRecordSaved?.();
+    } catch (error) {
+      updateRecordStatus(trialId, 'error');
+      console.error('Falha ao persistir tentativa ABA:', error);
+    }
+  };
+
+  const registerFrequency = (behaviorName = selectedBehavior.name, countDelta = 1) => {
+    const payload = buildBehaviorPayload(behaviorName, 'frequency', { count_delta: countDelta, countDelta });
+    void saveBehaviorEvent(payload, {
+      id: String(payload.id),
+      kind: 'behavior',
+      title: behaviorName,
+      detail: `${countDelta > 0 ? '+' : ''}${countDelta} ocorrencia`,
+      timestamp: payload.timestamp
+    });
+  };
+
+  const startDuration = (behaviorName = selectedBehavior.name) => {
+    const startedAt = new Date().toISOString();
+    const id = crypto.randomUUID();
+    const openEvent: OpenDurationEvent = {
+      id,
+      behaviorName,
+      startedAt,
+      location: selectedLocation,
+      severity: selectedSeverity
+    };
+    setOpenDurations((prev) => [openEvent, ...prev]);
+    const payload = buildBehaviorPayload(behaviorName, 'duration', {
+      id,
+      started_at: startedAt,
+      startedAt,
+      count_delta: 1,
+      countDelta: 1,
+      duration_seconds: null,
+      durationSeconds: null,
+      timestamp: startedAt
+    });
+    void saveBehaviorEvent(payload, {
+      id,
+      kind: 'behavior',
+      title: behaviorName,
+      detail: 'duracao iniciada',
+      timestamp: startedAt
+    });
+  };
+
+  const endDuration = (eventId: string) => {
+    const event = openDurations.find((item) => item.id === eventId);
+    if (!event) return;
+    const endedAt = new Date().toISOString();
+    const durationSeconds = Math.max(0, Math.round((new Date(endedAt).getTime() - new Date(event.startedAt).getTime()) / 1000));
+    setOpenDurations((prev) => prev.filter((item) => item.id !== eventId));
+    const payload = buildBehaviorPayload(event.behaviorName, 'duration', {
+      id: event.id,
+      started_at: event.startedAt,
+      startedAt: event.startedAt,
+      ended_at: endedAt,
+      endedAt,
+      duration_seconds: durationSeconds,
+      durationSeconds,
+      count_delta: 1,
+      countDelta: 1,
+      location: event.location || selectedLocation,
+      severity: event.severity ?? selectedSeverity,
+      timestamp: event.startedAt
+    });
+    void saveBehaviorEvent(payload, {
+      id: `${event.id}-ended-${Date.now()}`,
+      kind: 'behavior',
+      title: event.behaviorName,
+      detail: `duracao ${formatElapsed(event.startedAt, new Date(endedAt).getTime())}`,
+      timestamp: endedAt
+    });
+  };
+
+  const handleQuickBehavior = (behavior: any) => {
+    setSelectedBehaviorId(behavior.id);
+    setBehaviorMeasurementType(behavior.defaultMeasurement);
+    if (behavior.defaultMeasurement === 'duration') {
+      const open = openDurations.find((event) => event.behaviorName === behavior.name);
+      if (open) endDuration(open.id);
+      else startDuration(behavior.name);
+      return;
+    }
+    registerFrequency(behavior.name, 1);
+  };
+
+  const startRateWindow = () => {
+    setRateWindow({
+      id: crypto.randomUUID(),
+      behaviorName: selectedBehavior.name,
+      startedAt: new Date().toISOString(),
+      count: 0
+    });
+  };
+
+  const registerRateOccurrence = () => {
+    if (!rateWindow) return;
+    setRateWindow({ ...rateWindow, count: Number(rateWindow.count || 0) + 1 });
+    const payload = buildBehaviorPayload(rateWindow.behaviorName, 'rate', {
+      count_delta: 1,
+      countDelta: 1,
+      raw_payload: { rateWindowId: rateWindow.id, rateWindowStartedAt: rateWindow.startedAt }
+    });
+    void saveBehaviorEvent(payload, {
+      id: String(payload.id),
+      kind: 'behavior',
+      title: rateWindow.behaviorName,
+      detail: `taxa +1 (${Number(rateWindow.count || 0) + 1})`,
+      timestamp: payload.timestamp
+    });
+  };
+
+  const startIntervalRun = () => {
+    setIntervalRun({
+      id: crypto.randomUUID(),
+      behaviorName: selectedBehavior.name,
+      measurementType: behaviorMeasurementType,
+      startedAt: new Date().toISOString(),
+      intervalSeconds,
+      intervalIndex: 1
+    });
+  };
+
+  const registerInterval = (occurred: boolean) => {
+    if (!intervalRun) return;
+    const payload = buildBehaviorPayload(intervalRun.behaviorName, intervalRun.measurementType, {
+      interval_index: intervalRun.intervalIndex,
+      intervalIndex: intervalRun.intervalIndex,
+      interval_occurred: occurred,
+      intervalOccurred: occurred,
+      raw_payload: {
+        intervalRunId: intervalRun.id,
+        intervalSeconds: intervalRun.intervalSeconds
+      }
+    });
+    setIntervalRun({ ...intervalRun, intervalIndex: Number(intervalRun.intervalIndex || 1) + 1 });
+    void saveBehaviorEvent(payload, {
+      id: String(payload.id),
+      kind: 'behavior',
+      title: intervalRun.behaviorName,
+      detail: `intervalo ${intervalRun.intervalIndex}: ${occurred ? 'SIM' : 'NAO'}`,
+      timestamp: payload.timestamp
+    });
+  };
+
+  const startMomentary = () => {
+    setMomentaryRun({
+      id: crypto.randomUUID(),
+      behaviorName: selectedBehavior.name,
+      seconds: momentarySeconds,
+      startedAt: new Date().toISOString(),
+      due: false
+    });
+  };
+
+  const registerMomentary = (occurred: boolean) => {
+    if (!momentaryRun) return;
+    const payload = buildBehaviorPayload(momentaryRun.behaviorName, 'momentary_time_sampling', {
+      interval_occurred: occurred,
+      intervalOccurred: occurred,
+      raw_payload: {
+        momentaryRunId: momentaryRun.id,
+        configuredSeconds: momentaryRun.seconds,
+        dueAt: momentaryRun.dueAt || null
+      }
+    });
+    setMomentaryRun(null);
+    void saveBehaviorEvent(payload, {
+      id: String(payload.id),
+      kind: 'behavior',
+      title: momentaryRun.behaviorName,
+      detail: `amostragem momentanea: ${occurred ? 'SIM' : 'NAO'}`,
+      timestamp: payload.timestamp
+    });
+  };
+
+  const openAbcModal = (behaviorId = selectedBehaviorId) => {
+    const behavior = behaviorPresets.find((item) => item.id === behaviorId) || selectedBehavior;
+    setAbcBehaviorId(behavior.id);
+    setAbcModalOpen(true);
+  };
+
+  const saveAbcEvent = () => {
+    const behavior = behaviorPresets.find((item) => item.id === abcBehaviorId) || selectedBehavior;
+    const payload = buildBehaviorPayload(behavior.name, 'abc', {
+      antecedent: abcAntecedent,
+      consequence: abcConsequence,
+      location: abcLocation,
+      severity: abcSeverity,
+      notes: abcNote,
+      response_by_therapist: abcNote,
+      responseByTherapist: abcNote
+    });
+    void saveBehaviorEvent(payload, {
+      id: String(payload.id),
+      kind: 'behavior',
+      title: behavior.name,
+      detail: `ABC - severidade ${abcSeverity}`,
+      timestamp: payload.timestamp
+    });
+    setAbcModalOpen(false);
+    setAbcNote('');
+  };
+
+  const requestEndSession = () => {
+    if (openDurations.length > 0) {
+      setSessionWarning('Finalize os eventos de duracao em aberto antes de encerrar a sessao.');
+      return;
+    }
+    setSessionWarning('');
+    setShowSessionSummary(true);
+  };
+
+  const confirmEndSession = () => {
+    setShowSessionSummary(false);
+    if (typeof onConfirmEndSession === 'function') {
+      onConfirmEndSession();
+      return;
+    }
+    onRequestEndSession?.();
+  };
+
+  const sessionSummary = useMemo(() => {
+    const trialTotal = records.filter((record) => record.kind === 'trial').length;
+    const behaviorTotal = records.filter((record) => record.kind === 'behavior').length;
+    const errorTotal = records.filter((record) => record.syncStatus === 'error').length;
+    const localTotal = records.filter((record) => record.syncStatus === 'local' || record.syncStatus === 'syncing').length;
+    return { trialTotal, behaviorTotal, errorTotal, localTotal };
+  }, [records]);
+
+  const renderSyncBadge = (status: SyncStatus) => (
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-widest ${syncClasses[status]}`}>
+      {status === 'synced' ? <CheckCircle2 size={12} /> : status === 'error' ? <AlertCircle size={12} /> : <Clock size={12} />}
+      {syncLabels[status]}
+    </span>
+  );
 
   if (sessionGoals.length === 0) {
     const emptyStateContent = (
@@ -205,13 +570,12 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
           <ChevronLeft size={32} className="text-gray-400" />
         </button>
         {activeSession && (
-          <button onClick={onRequestEndSession} className="absolute top-6 right-6 px-4 py-2 bg-red-50 text-red-500 rounded-2xl text-xs font-bold uppercase tracking-widest hover:bg-red-100 transition-all flex items-center gap-2">
-            <StopCircle size={16} /> Encerrar sessão
+          <button onClick={requestEndSession} className="absolute top-6 right-6 px-4 py-2 bg-red-50 text-red-500 rounded-2xl text-xs font-bold uppercase tracking-widest hover:bg-red-100 transition-all flex items-center gap-2">
+            <StopCircle size={16} /> Encerrar sessao
           </button>
         )}
         <Zap size={64} className="text-gray-200 mb-4" />
-        <h2 className="text-xl font-bold text-gray-800 text-center">Nenhuma meta em treino ou prioritária.</h2>
-        <p className="text-gray-500 text-center mt-2">Altere o status de uma meta para "Em Treino" ou marque como prioridade para iniciar a sessão.</p>
+        <h2 className="text-xl font-bold text-gray-800 text-center">Nenhuma meta em treino ou prioritaria.</h2>
       </div>
     );
     if (typeof document === 'undefined') return emptyStateContent;
@@ -220,21 +584,21 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
 
   const sessionModeContent = (
     <div className="fixed inset-0 z-[100] bg-[#F4F7FE] flex flex-col overflow-hidden animate-fade-in">
-      {/* Header */}
-      <div className="bg-white px-8 py-6 shadow-sm flex items-center justify-between gap-4 shrink-0">
-        <div className="flex items-center gap-6">
+      <div className="bg-white px-6 py-5 shadow-sm flex items-center justify-between gap-4 shrink-0">
+        <div className="flex items-center gap-5 min-w-0">
           <button onClick={onClose} className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-all">
-            <ChevronLeft size={32} className="text-gray-400" />
+            <ChevronLeft size={30} className="text-gray-400" />
           </button>
-          <div>
-            <h1 className="text-3xl font-bold text-gray-800 tracking-tight">Sessão: <span className="text-[#7a32fc]">{patient.name}</span></h1>
-            <p className="text-xs font-bold text-gray-400 uppercase tracking-[0.2em] mt-1">Dashboard de Ensino Dinâmico</p>
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold text-gray-800 tracking-tight truncate">Sessao: <span className="text-[#7a32fc]">{patient.name}</span></h1>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.18em] mt-1">Registro ABA em tempo real</p>
           </div>
         </div>
-        <div className="flex items-center gap-4 flex-wrap justify-end">
+
+        <div className="flex items-center gap-3 flex-wrap justify-end">
           <div className="flex items-center gap-3 rounded-2xl bg-[#F4F7FE] border border-blue-100 px-4 py-3">
             <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-              Tipo
+              Tipo da proxima tentativa
               <select
                 value={collectionType}
                 onChange={(event) => setCollectionType(event.target.value)}
@@ -246,319 +610,459 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
               </select>
             </label>
             <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-              Prompt
+              Prompt da proxima tentativa
               <select
                 value={promptLevelKey}
                 onChange={(event) => setPromptLevelKey(event.target.value)}
                 className="block mt-1 bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
               >
-                {promptLevels.map((prompt) => (
+                {ABA_PROMPT_LEVEL_OPTIONS.map((prompt) => (
                   <option key={prompt.key} value={prompt.key}>{prompt.label}</option>
                 ))}
               </select>
             </label>
           </div>
           {activeSession && (
-            <div className="bg-[#7a32fc]/10 text-[#7a32fc] rounded-2xl px-5 py-3 min-w-[150px] text-right">
+            <div className="bg-[#7a32fc]/10 text-[#7a32fc] rounded-2xl px-5 py-3 min-w-[140px] text-right">
               <p className="text-[10px] font-bold uppercase tracking-widest flex items-center justify-end gap-2">
-                <Clock size={14} /> Tempo restante
+                <Clock size={14} /> Restante
               </p>
               <p className="text-3xl font-bold leading-none">{formatCountdown ? formatCountdown(remainingSeconds) : '00:00'}</p>
             </div>
           )}
           {activeSession && (
             <button
-              onClick={onRequestEndSession}
+              onClick={requestEndSession}
               className="bg-red-50 text-red-500 font-bold px-5 py-4 rounded-2xl text-xs uppercase tracking-widest hover:bg-red-100 transition-all flex items-center gap-2"
             >
               <StopCircle size={18} /> Encerrar
             </button>
           )}
-          <div className="text-right">
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Registros</p>
-            <p className="text-4xl font-bold text-[#7a32fc] leading-none">{trialCount}</p>
-          </div>
         </div>
       </div>
 
-      {/* Goals List */}
-      <div className="flex-1 overflow-y-auto p-8 space-y-8 no-scrollbar">
-        <div className="max-w-4xl mx-auto space-y-8">
-          <div className="bg-white rounded-[32px] p-6 shadow-xl shadow-blue-900/5 border border-white animate-slide-up">
-            <div className="flex flex-col lg:flex-row lg:items-end gap-4">
-              <div className="flex-1">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] mb-2">
-                  Registro rapido de comportamento
-                </p>
-                <input
-                  type="text"
-                  value={behaviorName}
-                  onChange={(event) => setBehaviorName(event.target.value)}
-                  placeholder="Ex: fuga da atividade, agressao, choro..."
-                  className="w-full bg-[#F4F7FE] border border-blue-100 rounded-2xl px-5 py-4 text-sm font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
-                />
+      <div className="flex-1 overflow-hidden grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_390px]">
+        <div className="overflow-y-auto p-6 space-y-6 no-scrollbar">
+          {sessionWarning && (
+            <div className="rounded-2xl border border-amber-100 bg-amber-50 px-5 py-4 text-sm font-semibold text-amber-700 flex items-center gap-3">
+              <AlertCircle size={18} /> {sessionWarning}
+            </div>
+          )}
+
+          {openDurations.length > 0 && (
+            <div className="bg-white rounded-[28px] p-5 shadow-xl shadow-blue-900/5 border border-white">
+              <div className="flex items-center gap-2 mb-4">
+                <Timer size={18} className="text-[#7a32fc]" />
+                <h2 className="text-sm font-bold text-gray-800">Eventos em andamento</h2>
               </div>
-              <div className="w-full lg:w-56">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] mb-2">
-                  Metodo
-                </p>
-                <select
-                  value={behaviorMeasurementType}
-                  onChange={(event) => setBehaviorMeasurementType(event.target.value)}
-                  className="w-full bg-[#F4F7FE] border border-blue-100 rounded-2xl px-5 py-4 text-sm font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
-                >
-                  {behaviorMeasurementOptions.map((option) => (
-                    <option key={option.key} value={option.key}>{option.label}</option>
-                  ))}
-                </select>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {openDurations.map((event) => (
+                  <div key={event.id} className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-4 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-bold text-gray-800">{event.behaviorName} em andamento ha {formatElapsed(event.startedAt, nowMs)}</p>
+                      <p className="text-xs text-gray-500">{event.location || 'Sem local'} · severidade {event.severity || '-'}</p>
+                    </div>
+                    <button
+                      onClick={() => endDuration(event.id)}
+                      className="shrink-0 bg-[#1B254B] text-white rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest"
+                    >
+                      Encerrar
+                    </button>
+                  </div>
+                ))}
               </div>
-              <button
-                onClick={handleSaveBehaviorEvent}
-                disabled={!behaviorName.trim() || isSavingBehaviorEvent}
-                className="px-6 py-4 bg-[#1B254B] text-white rounded-2xl text-xs font-bold uppercase tracking-widest hover:opacity-90 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            </div>
+          )}
+
+          <div className="bg-white rounded-[28px] p-5 shadow-xl shadow-blue-900/5 border border-white">
+            <div className="flex items-center justify-between gap-3 mb-5">
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Evento comportamental inteligente</p>
+                <h2 className="text-xl font-bold text-gray-800">Registro rapido</h2>
+              </div>
+              <select
+                value={behaviorMeasurementType}
+                onChange={(event) => setBehaviorMeasurementType(event.target.value)}
+                className="bg-[#F4F7FE] border border-blue-100 rounded-2xl px-4 py-3 text-xs font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
               >
-                {isSavingBehaviorEvent ? 'Salvando...' : 'Registrar'}
+                {behaviorMeasurementOptions.map((option) => (
+                  <option key={option.key} value={option.key}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-5">
+              {behaviorPresets.map((behavior) => {
+                const isOpen = openDurations.some((event) => event.behaviorName === behavior.name);
+                return (
+                  <button
+                    key={behavior.id}
+                    onClick={() => handleQuickBehavior(behavior)}
+                    className={`border rounded-2xl px-4 py-4 text-left font-bold text-sm transition-all hover:scale-[1.02] ${behavior.tone} ${selectedBehaviorId === behavior.id ? 'ring-2 ring-[#7a32fc]/40' : ''}`}
+                  >
+                    <span className="block">{behavior.name}</span>
+                    <span className="mt-2 inline-flex items-center gap-1 text-[10px] uppercase tracking-widest opacity-70">
+                      {behavior.defaultMeasurement === 'duration' ? (isOpen ? <Square size={12} /> : <Play size={12} />) : <Plus size={12} />}
+                      {behavior.defaultMeasurement === 'duration' ? (isOpen ? 'encerrar' : 'iniciar') : '+ ocorrencia'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-4">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-4">
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                  Comportamento
+                  <select
+                    value={selectedBehaviorId}
+                    onChange={(event) => setSelectedBehaviorId(event.target.value)}
+                    className="mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none"
+                  >
+                    {behaviorPresets.map((behavior) => (
+                      <option key={behavior.id} value={behavior.id}>{behavior.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                  Local
+                  <select
+                    value={selectedLocation}
+                    onChange={(event) => setSelectedLocation(event.target.value)}
+                    className="mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none"
+                  >
+                    {locationOptions.map((location) => (
+                      <option key={location} value={location}>{location}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                  Severidade
+                  <select
+                    value={selectedSeverity}
+                    onChange={(event) => setSelectedSeverity(Number(event.target.value))}
+                    className="mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none"
+                  >
+                    {severityOptions.map((severity) => (
+                      <option key={severity} value={severity}>{severity}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              {behaviorMeasurementType === 'frequency' && (
+                <div className="flex gap-3 flex-wrap">
+                  <button onClick={() => registerFrequency(selectedBehavior.name, 1)} className="px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                    <Plus size={16} /> +1
+                  </button>
+                  <button onClick={() => registerFrequency(selectedBehavior.name, -1)} className="px-5 py-3 rounded-2xl bg-slate-700 text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                    <Minus size={16} /> -1
+                  </button>
+                  <button onClick={() => openAbcModal()} className="px-5 py-3 rounded-2xl bg-white text-[#7a32fc] border border-purple-100 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                    <FileText size={16} /> ABC rapido
+                  </button>
+                </div>
+              )}
+
+              {behaviorMeasurementType === 'duration' && (
+                <div className="flex gap-3 flex-wrap">
+                  <button onClick={() => startDuration(selectedBehavior.name)} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                    <Play size={16} /> Iniciar duracao
+                  </button>
+                  {openDurations.filter((event) => event.behaviorName === selectedBehavior.name).map((event) => (
+                    <button key={event.id} onClick={() => endDuration(event.id)} className="px-5 py-3 rounded-2xl bg-[#1B254B] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                      <Square size={16} /> Encerrar {formatElapsed(event.startedAt, nowMs)}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {behaviorMeasurementType === 'rate' && (
+                <div className="flex gap-3 flex-wrap items-center">
+                  {!rateWindow ? (
+                    <button onClick={startRateWindow} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                      <Play size={16} /> Iniciar janela
+                    </button>
+                  ) : (
+                    <>
+                      <span className="text-sm font-bold text-gray-700">Janela {formatElapsed(rateWindow.startedAt, nowMs)} · {rateWindow.count} ocorrencia(s)</span>
+                      <button onClick={registerRateOccurrence} className="px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                        <Plus size={16} /> Ocorrencia
+                      </button>
+                      <button onClick={() => setRateWindow(null)} className="px-5 py-3 rounded-2xl bg-slate-700 text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                        <Square size={16} /> Finalizar janela
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {(behaviorMeasurementType === 'partial_interval' || behaviorMeasurementType === 'whole_interval') && (
+                <div className="flex gap-3 flex-wrap items-center">
+                  <select value={intervalSeconds} onChange={(event) => setIntervalSeconds(Number(event.target.value))} className="bg-white border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                    {intervalSecondOptions.map((seconds) => <option key={seconds} value={seconds}>{seconds}s</option>)}
+                  </select>
+                  {!intervalRun ? (
+                    <button onClick={startIntervalRun} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                      <Play size={16} /> Iniciar timer
+                    </button>
+                  ) : (
+                    <>
+                      <span className="text-sm font-bold text-gray-700">Intervalo {intervalRun.intervalIndex} · {formatElapsed(intervalRun.startedAt, nowMs)}</span>
+                      <button onClick={() => registerInterval(true)} className="px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest">SIM</button>
+                      <button onClick={() => registerInterval(false)} className="px-5 py-3 rounded-2xl bg-red-500 text-white text-xs font-bold uppercase tracking-widest">NAO</button>
+                      <button onClick={() => setIntervalRun(null)} className="px-5 py-3 rounded-2xl bg-slate-700 text-white text-xs font-bold uppercase tracking-widest">Parar</button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {behaviorMeasurementType === 'momentary_time_sampling' && (
+                <div className="flex gap-3 flex-wrap items-center">
+                  <select value={momentarySeconds} onChange={(event) => setMomentarySeconds(Number(event.target.value))} className="bg-white border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                    {momentarySecondOptions.map((seconds) => <option key={seconds} value={seconds}>{seconds}s</option>)}
+                  </select>
+                  {!momentaryRun ? (
+                    <button onClick={startMomentary} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                      <Timer size={16} /> Iniciar alerta
+                    </button>
+                  ) : momentaryRun.due ? (
+                    <>
+                      <span className="text-sm font-bold text-[#7a32fc]">Momento de observar</span>
+                      <button onClick={() => registerMomentary(true)} className="px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest">SIM</button>
+                      <button onClick={() => registerMomentary(false)} className="px-5 py-3 rounded-2xl bg-red-500 text-white text-xs font-bold uppercase tracking-widest">NAO</button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-sm font-bold text-gray-700">Alerta em {formatRemainingUntil(momentaryRun.dueAt || momentaryRun.startedAt, nowMs)}</span>
+                      <button onClick={() => setMomentaryRun(null)} className="px-5 py-3 rounded-2xl bg-slate-700 text-white text-xs font-bold uppercase tracking-widest">Cancelar</button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {behaviorMeasurementType === 'abc' && (
+                <div className="flex gap-3 flex-wrap">
+                  <button onClick={() => openAbcModal()} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                    <FileText size={16} /> Abrir ABC rapido
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-5">
+            {sessionGoals.map((goal: any) => {
+              const masteryTarget = Number(goal?.meta_sucessos ?? goal?.metaSucessos ?? goal?.masteryTarget ?? goal?.mastery_target) || 5;
+              const skillHistory = (patient.history || [])
+                .filter((h: any) => h.title === goal.name && h.type === 'task')
+                .sort((a: any, b: any) => new Date(b.created_at || b.date || 0).getTime() - new Date(a.created_at || a.date || 0).getTime());
+              let masteryCount = 0;
+              for (const h of skillHistory) {
+                if (h.score === 1) masteryCount += 1;
+                else break;
+              }
+              return (
+                <div key={goal.id} className="bg-white rounded-[32px] p-6 shadow-xl shadow-blue-900/5 border border-white relative overflow-hidden">
+                  <div className="flex items-start justify-between gap-4 mb-5">
+                    <div>
+                      <span className="inline-flex bg-[#7a32fc]/10 text-[#7a32fc] text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest mb-3">
+                        {goal.domainName || 'Meta'}
+                      </span>
+                      <h2 className="text-2xl font-bold text-gray-800 tracking-tight">{goal.name}</h2>
+                    </div>
+                    {patient.age <= 12 && (
+                      <div className="text-right">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Maestria</p>
+                        <p className="text-lg font-bold text-[#7a32fc]">{Math.min(masteryCount, masteryTarget)}/{masteryTarget}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <button onClick={() => handleTrialClick(goal, 1, 'independent')} className="bg-[#05CD99] text-white min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-green-500/20 hover:scale-[1.01] active:scale-95 transition-all">
+                      <CheckCircle2 size={26} />
+                      <span className="text-2xl font-bold mt-2">Independente</span>
+                      <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">1 = correto independente</span>
+                    </button>
+                    <button onClick={() => handleTrialClick(goal, 0.5, 'prompted')} className="bg-[#FFB547] text-white min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-orange-500/20 hover:scale-[1.01] active:scale-95 transition-all">
+                      <Activity size={26} />
+                      <span className="text-2xl font-bold mt-2">Com ajuda</span>
+                      <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">0.5 = correto com ajuda</span>
+                    </button>
+                    <button onClick={() => handleTrialClick(goal, 0, 'error')} className="bg-[#EE5D50] text-white min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-red-500/20 hover:scale-[1.01] active:scale-95 transition-all">
+                      <X size={26} />
+                      <span className="text-2xl font-bold mt-2">Erro</span>
+                      <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">0 = erro ou sem resposta</span>
+                    </button>
+                  </div>
+
+                  <div className="mt-5 text-center">
+                    <button
+                      onMouseDown={() => setActiveCriteria(goal.id)}
+                      onMouseUp={() => setActiveCriteria(null)}
+                      onMouseLeave={() => setActiveCriteria(null)}
+                      onTouchStart={() => setActiveCriteria(goal.id)}
+                      onTouchEnd={() => setActiveCriteria(null)}
+                      className="text-[10px] font-bold text-gray-300 uppercase tracking-[0.3em] hover:text-gray-400 transition-colors"
+                    >
+                      Segure para ver criterios
+                    </button>
+                    {activeCriteria === goal.id && (
+                      <div className="mt-3 mx-auto max-w-xl bg-[#1B254B] text-white p-5 rounded-3xl shadow-2xl animate-pop">
+                        <p className="text-sm font-medium leading-relaxed">
+                          {sanitizeDescriptionForDisplay(goal.criteria) || 'Criterios nao cadastrados para esta meta.'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <aside className="bg-white border-l border-gray-100 p-5 overflow-y-auto">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <div>
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Historico da sessao</p>
+              <h2 className="text-lg font-bold text-gray-800">{records.length} registro(s)</h2>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tentativas</p>
+              <p className="text-3xl font-bold text-[#7a32fc] leading-none">{trialCount}</p>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {records.length === 0 ? (
+              <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-5 text-sm text-gray-500">
+                Nenhum registro nesta sessao.
+              </div>
+            ) : records.slice(0, 18).map((record) => (
+              <div key={record.id} className="rounded-2xl border border-gray-100 bg-[#F8FAFF] p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{record.kind === 'trial' ? 'Tentativa' : 'Comportamento'}</p>
+                    <h3 className="text-sm font-bold text-gray-800 mt-1 truncate">{record.title}</h3>
+                    <p className="text-xs text-gray-500 mt-1">{record.detail}</p>
+                    <p className="text-[11px] text-gray-400 mt-2">{new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                  </div>
+                  {renderSyncBadge(record.syncStatus)}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {patientPhotos.length > 0 && (
+            <div className="mt-6">
+              <div className="flex items-center gap-2 mb-3">
+                <Camera size={16} className="text-[#7a32fc]" />
+                <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Fotos do paciente</h3>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {patientPhotos.slice(0, 6).map((photo: any) => (
+                  <div key={photo.id} className="aspect-square rounded-2xl overflow-hidden border border-gray-100">
+                    <SecureImage src={photo.image} alt="Foto do paciente" className="w-full h-full object-cover" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </aside>
+      </div>
+
+      {abcModalOpen && (
+        <div className="fixed inset-0 z-[140] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm">
+          <div className="bg-white rounded-[32px] p-6 shadow-2xl max-w-lg w-full border border-purple-100">
+            <div className="flex items-center justify-between gap-3 mb-5">
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">ABC rapido</p>
+                <h2 className="text-xl font-bold text-gray-800">Evento comportamental</h2>
+              </div>
+              <button onClick={() => setAbcModalOpen(false)} className="p-2 rounded-full hover:bg-gray-100">
+                <X size={20} />
               </button>
             </div>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mt-4">
-              {behaviorMeasurementType === 'abc' && (
-                <>
-                  <input
-                    type="text"
-                    value={behaviorAntecedent}
-                    onChange={(event) => setBehaviorAntecedent(event.target.value)}
-                    placeholder="Antecedente"
-                    className="bg-[#F4F7FE] border border-blue-100 rounded-2xl px-4 py-3 text-sm text-gray-700 outline-none focus:border-[#7a32fc]"
-                  />
-                  <input
-                    type="text"
-                    value={behaviorConsequence}
-                    onChange={(event) => setBehaviorConsequence(event.target.value)}
-                    placeholder="Consequencia"
-                    className="bg-[#F4F7FE] border border-blue-100 rounded-2xl px-4 py-3 text-sm text-gray-700 outline-none focus:border-[#7a32fc]"
-                  />
-                </>
-              )}
-              <input
-                type="text"
-                value={behaviorLocation}
-                onChange={(event) => setBehaviorLocation(event.target.value)}
-                placeholder="Local"
-                className="bg-[#F4F7FE] border border-blue-100 rounded-2xl px-4 py-3 text-sm text-gray-700 outline-none focus:border-[#7a32fc]"
-              />
-              <input
-                type="text"
-                value={behaviorNote}
-                onChange={(event) => setBehaviorNote(event.target.value)}
-                placeholder="Observacao opcional"
-                className="bg-[#F4F7FE] border border-blue-100 rounded-2xl px-4 py-3 text-sm text-gray-700 outline-none focus:border-[#7a32fc]"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                Comportamento
+                <select value={abcBehaviorId} onChange={(event) => setAbcBehaviorId(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                  {behaviorPresets.map((behavior) => <option key={behavior.id} value={behavior.id}>{behavior.name}</option>)}
+                </select>
+              </label>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                Antecedente
+                <select value={abcAntecedent} onChange={(event) => setAbcAntecedent(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                  {antecedentOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </label>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                Consequencia
+                <select value={abcConsequence} onChange={(event) => setAbcConsequence(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                  {consequenceOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </label>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                Local
+                <select value={abcLocation} onChange={(event) => setAbcLocation(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                  {locationOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </label>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                Severidade
+                <select value={abcSeverity} onChange={(event) => setAbcSeverity(Number(event.target.value))} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                  {severityOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </label>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest sm:col-span-2">
+                Observacao opcional
+                <textarea value={abcNote} onChange={(event) => setAbcNote(event.target.value)} maxLength={600} className="mt-1 w-full min-h-[84px] bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-sm text-gray-700 outline-none resize-none" />
+              </label>
             </div>
-            {behaviorEventCount > 0 && (
-              <p className="text-[10px] font-bold text-[#7a32fc] uppercase tracking-[0.2em] mt-4">
-                {behaviorEventCount} comportamento(s) registrado(s) nesta tela
-              </p>
-            )}
-          </div>
-          {sessionGoals.map((goal: any) => (
-            <div key={goal.id} className="bg-white rounded-[40px] p-10 shadow-xl shadow-blue-900/5 border border-white relative group animate-slide-up overflow-hidden">
-              {showTrialConfirmation && lastRecordedGoalId === goal.id && (
-                <div className="absolute inset-x-0 bottom-0 z-30 bg-white/95 backdrop-blur-sm border-t border-gray-100 p-8 animate-slide-up rounded-b-[40px]">
-                  <div className="flex items-center gap-6">
-                    <div className="flex-1">
-                      <input 
-                        type="text"
-                        className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-6 py-4 text-lg outline-none focus:border-green-500 transition-all"
-                        placeholder="Observação rápida (opcional)..."
-                        value={trialObservation}
-                        onChange={(e) => setTrialObservation(e.target.value)}
-                        autoFocus
-                      />
-                    </div>
-                    <div className="flex gap-4 shrink-0">
-                      <button 
-                        onClick={handleUndoTrial}
-                        className="px-8 py-4 bg-red-50 text-red-500 rounded-2xl text-xs font-bold uppercase tracking-widest hover:bg-red-100 transition-all active:scale-95"
-                      >
-                        Desfazer
-                      </button>
-                      <button 
-                        onClick={handleSaveTrialObservation}
-                        disabled={isSavingObservation}
-                        className="px-10 py-4 bg-green-500 text-white rounded-2xl text-xs font-bold uppercase tracking-widest hover:opacity-90 transition-all active:scale-95 shadow-xl shadow-green-500/20 disabled:opacity-60"
-                      >
-                        {isSavingObservation ? 'Salvando...' : 'Confirmar'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-              {/* Domain Tag */}
-              <div className="mb-4">
-                <span className="bg-[#7a32fc]/10 text-[#7a32fc] text-[10px] font-bold px-4 py-1.5 rounded-full uppercase tracking-widest">
-                  {goal.domainName}
-                </span>
-              </div>
-
-              {/* Goal Name */}
-              <h2 className="text-3xl font-bold text-gray-800 mb-2 tracking-tight group-hover:text-[#7a32fc] transition-colors">
-                {goal.name}
-              </h2>
-
-              {/* Mastery Progress for Criança */}
-              {patient.age <= 12 && (() => {
-                const masteryTarget = getMasteryTarget(goal);
-                const masteryCount = getConsecutiveMasteryCount(goal);
-                const dotSize = masteryTarget > 30 ? 'w-2.5 h-2.5' : masteryTarget > 12 ? 'w-3.5 h-3.5' : 'w-5 h-5';
-
-                return (
-                  <div className="mb-8">
-                    {/* Progress Bar with visual feedback */}
-                    <div className="flex gap-1.5 mb-3 items-center flex-wrap">
-                      {Array.from({ length: masteryTarget }, (_, index) => index + 1).map((i) => {
-                      const isMastered = goal.status === 'completed';
-                      const isActive = i <= masteryCount || isMastered;
-
-                      return (
-                        <div 
-                          key={i} 
-                          className={`${dotSize} rounded-full transition-all duration-300 ${
-                            isMastered ? 'bg-green-500 shadow-lg shadow-green-400/60 ring-2 ring-green-200' : 
-                            isActive ? 'bg-[#7a32fc] scale-110 shadow-lg shadow-purple-400/60 ring-2 ring-purple-200' : 
-                            'bg-gray-300 shadow-sm'
-                          }`}
-                        ></div>
-                      );
-                    })}
-                    </div>
-                    
-                    {/* Progress text and counter */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-gray-600 uppercase tracking-widest">
-                        {goal.status === 'completed' ? '✓ Adquirida' : 'Progresso de Maestria'}
-                      </span>
-                      <span className="text-sm font-bold text-[#7a32fc] bg-[#7a32fc]/10 px-3 py-1 rounded-full">
-                        {masteryCount}/{masteryTarget}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })()}
-
-
-              {/* Scoring Buttons */}
-              <div className={`grid gap-6 relative ${(goal.maxScore || 1) > 1 || ((goal.maxScore || 1) === 1 && patient.age > 12) ? 'grid-cols-5' : 'grid-cols-3'}`}>
-                {(goal.maxScore || 1) === 1 && patient.age <= 12 ? (
-                  <>
-                    {/* Score 1 */}
-                    <button 
-                      onClick={() => handleScore(goal, 1)}
-                      className="bg-[#05CD99] text-white h-24 rounded-3xl flex items-center justify-center text-4xl font-bold shadow-lg shadow-green-500/20 hover:scale-[1.02] active:scale-95 transition-all"
-                    >
-                      1
-                    </button>
-
-                    {/* Score 0.5 */}
-                    <div className="relative">
-                      <button 
-                        onClick={() => handleScore(goal, 0.5)}
-                        className="w-full bg-[#FFB547] text-white h-24 rounded-3xl flex items-center justify-center text-4xl font-bold shadow-lg shadow-orange-500/20 hover:scale-[1.02] active:scale-95 transition-all"
-                      >
-                        0.5
-                      </button>
-                      
-                      {/* Criteria Tooltip */}
-                      {activeCriteria === goal.id && (
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 w-64 bg-[#1B254B] text-white p-6 rounded-3xl shadow-2xl animate-pop z-20">
-                          <p className="text-[10px] font-bold text-blue-300 uppercase tracking-widest mb-2">Critério Pontuação 0.5</p>
-                          <p className="text-sm font-medium leading-relaxed">
-                            {sanitizeDescriptionForDisplay(goal.criteria) || "Faz com ajuda física ou verbal parcial."}
-                          </p>
-                          <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-[#1B254B]"></div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Score 0 */}
-                    <button 
-                      onClick={() => handleScore(goal, 0)}
-                      className="bg-[#EE5D50] text-white h-24 rounded-3xl flex items-center justify-center text-4xl font-bold shadow-lg shadow-red-500/20 hover:scale-[1.02] active:scale-95 transition-all"
-                    >
-                      0
-                    </button>
-                  </>
-                ) : (
-                  // Dynamic buttons for AFLS or other protocols with maxScore > 1
-                  Array.from({ length: (goal.maxScore || 1) + 1 }, (_, i) => (goal.maxScore || 1) - i).map((score) => {
-                    const colors = [
-                      'bg-[#EE5D50] shadow-red-500/20',     // 0
-                      'bg-[#FFB547] shadow-orange-500/20',  // 1
-                      'bg-[#7a32fc] shadow-blue-500/20',    // 2
-                      'bg-[#7551FF] shadow-indigo-500/20',  // 3
-                      'bg-[#05CD99] shadow-green-500/20'    // 4
-                    ];
-                    const colorClass = colors[score] || 'bg-gray-500';
-                    
-                    return (
-                      <button 
-                        key={score}
-                        onClick={() => handleScore(goal, score)}
-                        className={`${colorClass} text-white h-24 rounded-3xl flex items-center justify-center text-4xl font-bold shadow-lg hover:scale-[1.02] active:scale-95 transition-all`}
-                      >
-                        {score}
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-
-              {/* Criteria Hint */}
-              <div className="mt-6 text-center">
-                <button 
-                  onMouseDown={() => setActiveCriteria(goal.id)}
-                  onMouseUp={() => setActiveCriteria(null)}
-                  onMouseLeave={() => setActiveCriteria(null)}
-                  onTouchStart={() => setActiveCriteria(goal.id)}
-                  onTouchEnd={() => setActiveCriteria(null)}
-                  className="text-[10px] font-bold text-gray-300 uppercase tracking-[0.3em] hover:text-gray-400 transition-colors"
-                >
-                  Segure para ver critérios
-                </button>
-              </div>
-
-              {/* Decorative Icon */}
-              <div className="absolute top-10 right-10 opacity-10 group-hover:opacity-30 transition-opacity">
-                <Zap size={32} className="text-orange-500" />
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Patient Photos (Interação durante a sessão) */}
-      {patientPhotos.length > 0 && (
-        <div className="shrink-0 bg-white border-t border-gray-100 p-6">
-          <div className="max-w-4xl mx-auto">
-            <div className="flex items-center gap-2 mb-4">
-              <Camera size={16} className="text-[#7a32fc]" />
-              <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Mural de Fotos do Paciente</h3>
-            </div>
-            <div className="flex gap-4 overflow-x-auto pb-2 no-scrollbar">
-              {patientPhotos.map((photo: any) => (
-                <div key={photo.id} className="shrink-0 w-32 h-32 rounded-2xl overflow-hidden border border-gray-100 shadow-sm hover:scale-105 transition-all cursor-pointer relative group">
-                  <SecureImage src={photo.image} alt="Foto do paciente" className="w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center p-2">
-                    <p className="text-[8px] font-bold text-white text-center uppercase leading-tight">{photo.title}</p>
-                  </div>
-                </div>
-              ))}
+            <div className="flex gap-3 mt-5">
+              <button onClick={() => setAbcModalOpen(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-bold">Cancelar</button>
+              <button onClick={saveAbcEvent} className="flex-1 py-3 rounded-2xl bg-[#7a32fc] text-white font-bold shadow-lg shadow-purple-500/20">Salvar ABC</button>
             </div>
           </div>
         </div>
       )}
 
+      {showSessionSummary && (
+        <div className="fixed inset-0 z-[145] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm">
+          <div className="bg-white rounded-[32px] p-7 shadow-2xl max-w-md w-full border border-red-100">
+            <div className="w-14 h-14 bg-red-50 rounded-2xl flex items-center justify-center mb-5 text-red-500">
+              <StopCircle size={28} />
+            </div>
+            <h3 className="text-2xl font-semibold text-gray-900 mb-2">Resumo da sessao</h3>
+            <div className="grid grid-cols-2 gap-3 my-5">
+              <div className="rounded-2xl bg-[#F4F7FE] p-4">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tentativas</p>
+                <p className="text-3xl font-bold text-gray-900">{sessionSummary.trialTotal}</p>
+              </div>
+              <div className="rounded-2xl bg-[#F4F7FE] p-4">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Comportamentos</p>
+                <p className="text-3xl font-bold text-gray-900">{sessionSummary.behaviorTotal}</p>
+              </div>
+              <div className="rounded-2xl bg-[#F4F7FE] p-4">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Pendentes</p>
+                <p className="text-3xl font-bold text-gray-900">{sessionSummary.localTotal}</p>
+              </div>
+              <div className="rounded-2xl bg-[#F4F7FE] p-4">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Erros</p>
+                <p className="text-3xl font-bold text-gray-900">{sessionSummary.errorTotal}</p>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setShowSessionSummary(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-semibold">Continuar</button>
+              <button onClick={confirmEndSession} className="flex-1 py-3 rounded-2xl bg-red-500 text-white font-semibold shadow-lg shadow-red-500/20">Encerrar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+
   if (typeof document === 'undefined') return sessionModeContent;
   return createPortal(sessionModeContent, document.body);
 };

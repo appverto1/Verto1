@@ -12,6 +12,8 @@ const dataServicePath = path.resolve(process.cwd(), 'src/services/dataService.ts
 const dataServiceCode = fs.readFileSync(dataServicePath, 'utf8');
 const patientDetailPath = path.resolve(process.cwd(), 'src/components/PatientDetailView.tsx');
 const patientDetailCode = fs.readFileSync(patientDetailPath, 'utf8');
+const abaPromptPath = path.resolve(process.cwd(), 'src/utils/abaPromptLevels.ts');
+const abaPromptCode = fs.readFileSync(abaPromptPath, 'utf8');
 const sessionModePath = path.resolve(process.cwd(), 'src/components/SessionMode.tsx');
 const sessionModeCode = fs.readFileSync(sessionModePath, 'utf8');
 const financialRlsPath = path.resolve(process.cwd(), 'supabase/migrations/20260521143000_financial_rls_coordinator_only.sql');
@@ -391,6 +393,82 @@ test('aba privacy: RLS is enabled and patient-scoped for clinical ABA tables', (
     abaMasteryRlsCode,
     /u\.role = 'patient'|u\.role = 'receptionist'/,
     'RLS ABA de maestria nao deve conceder acesso direto a paciente ou recepcao.'
+  );
+});
+
+test('aba prompt integrity: dropdown selections are canonical and persistent', () => {
+  assert.match(
+    abaPromptCode,
+    /ABA_PROMPT_LEVEL_OPTIONS[\s\S]*?key: 'gestural', label: 'Gestual'[\s\S]*?key: 'verbal', label: 'Verbal'[\s\S]*?key: 'other', label: 'Outro'/m,
+    'A hierarquia de prompt deve incluir Gestual, Verbal e Outro canônicos.'
+  );
+  assert.match(
+    abaPromptCode,
+    /export function resolveAbaPromptLevel[\s\S]*?getAbaPromptLevel\(input\.promptLevelKey\)[\s\S]*?getAbaPromptLevel\(input\.promptLevelName\)/m,
+    'resolveAbaPromptLevel deve priorizar chave/nome explícitos antes de inferir por pontuação.'
+  );
+  assert.match(
+    sessionModeCode,
+    /promptLevelKey: selectedPrompt\.key[\s\S]*?promptLevelName: selectedPrompt\.label[\s\S]*?promptLevel: selectedPrompt\.key/m,
+    'SessionMode deve enviar o prompt selecionado no dropdown mesmo sem depender de fallback por score.'
+  );
+  assert.doesNotMatch(
+    sessionModeCode,
+    /const sessionMeta = activeSession\s*\?/m,
+    'SessionMode nao deve descartar promptLevelKey/promptLevelName quando nao houver sessao ativa.'
+  );
+  assert.match(
+    appCode,
+    /const abaPromptLevel = resolveAbaPromptLevel\(\{[\s\S]*?promptLevelKey: sessionMeta\?\.promptLevelKey[\s\S]*?prompt_level_name: abaPromptLevel\.label/m,
+    'App deve persistir o rótulo canônico do prompt escolhido.'
+  );
+  assert.match(
+    dataServiceCode,
+    /const abaPromptLevel = resolveAbaPromptLevel\(\{[\s\S]*?prompt_level_key: abaPromptLevel\.key[\s\S]*?prompt_level_name: abaPromptLevel\.label/m,
+    'dataService deve salvar key/name canônicos no cache offline e no payload.'
+  );
+  assert.match(
+    serverCode,
+    /const promptLevel = resolveAbaPromptLevel\(\{[\s\S]*?promptLevelKey: req\.body\?\.prompt_level_key[\s\S]*?prompt_level_name: promptLevel\.label/m,
+    'Backend deve normalizar prompt_level_key/prompt_level_name antes do upsert.'
+  );
+  assert.match(
+    patientDetailCode,
+    /const prompt = resolveAbaPromptLevel\(\{[\s\S]*?promptLevelKey: trial\?\.prompt_level_key[\s\S]*?\}\)\.label/m,
+    'PatientDetailView deve renderizar tentativas pelo prompt canônico persistido.'
+  );
+});
+
+test('aba session mode: trials and behavior events are one-touch and session-scoped', () => {
+  assert.match(
+    sessionModeCode,
+    /onClick=\{\(\) => handleTrialClick\(goal, 1, 'independent'\)\}[\s\S]*?Independente[\s\S]*?onClick=\{\(\) => handleTrialClick\(goal, 0\.5, 'prompted'\)\}[\s\S]*?Com ajuda[\s\S]*?onClick=\{\(\) => handleTrialClick\(goal, 0, 'error'\)\}[\s\S]*?Erro/m,
+    'SessionMode deve salvar tentativa em um toque com botoes Independente, Com ajuda e Erro.'
+  );
+  assert.match(
+    appCode,
+    /dataService\.saveAbaTrial\(\{[\s\S]*?patientId: String\(pid\)[\s\S]*?sessionId: sessionMeta\?\.sessionId[\s\S]*?targetId: abaTargetId[\s\S]*?trialType: abaCollectionType[\s\S]*?score: finalScore[\s\S]*?isCorrect: abaCorrect[\s\S]*?isIndependent: abaIndependent[\s\S]*?promptLevel: promptLevelKey[\s\S]*?timestamp: recordedAt[\s\S]*?therapistId: user\?\.id/m,
+    'App deve persistir os campos essenciais do Trial ABA.'
+  );
+  assert.match(
+    sessionModeCode,
+    /const behaviorMeasurementOptions = \[[\s\S]*?'frequency'[\s\S]*?'duration'[\s\S]*?'rate'[\s\S]*?'partial_interval'[\s\S]*?'whole_interval'[\s\S]*?'momentary_time_sampling'[\s\S]*?'abc'/m,
+    'SessionMode deve oferecer todos os metodos de evento comportamental.'
+  );
+  assert.match(
+    sessionModeCode,
+    /const registerFrequency[\s\S]*?const startDuration[\s\S]*?const endDuration[\s\S]*?const startRateWindow[\s\S]*?const registerInterval[\s\S]*?const startMomentary[\s\S]*?const saveAbcEvent/m,
+    'SessionMode deve implementar frequencia, duracao, taxa, intervalo, amostragem momentanea e ABC.'
+  );
+  assert.match(
+    sessionModeCode,
+    /syncLabels[\s\S]*?salvo localmente[\s\S]*?sincronizando[\s\S]*?sincronizado[\s\S]*?erro[\s\S]*?Evento comportamental inteligente[\s\S]*?Historico da sessao/m,
+    'SessionMode deve mostrar historico da sessao e indicadores de sincronizacao.'
+  );
+  assert.match(
+    sessionModeCode,
+    /if \(openDurations\.length > 0\)[\s\S]*?Finalize os eventos de duracao em aberto antes de encerrar a sessao/m,
+    'SessionMode deve bloquear encerramento com duracao aberta.'
   );
 });
 

@@ -5,6 +5,7 @@ import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard } f
 import { syncOfflineData } from './services/localDb';
 import { dataService } from './services/dataService';
 import { formatProfessionalRegistry } from './utils/professionalRegistry';
+import { resolveAbaPromptLevel } from './utils/abaPromptLevels';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -3529,16 +3530,21 @@ export default function App() {
     }
 
     const maxScoreForAba = Number(sessionMeta?.targetMaxScore || peiGoal?.maxScore || matchedSkill?.maxScore || skillMaxScore || 1);
-    const promptLevelKey = String(
-      sessionMeta?.promptLevelKey ||
-      (finalScore >= maxScoreForAba ? 'independent' : finalScore > 0 ? 'prompted' : 'error')
-    ).toLowerCase();
     const abaCorrect = typeof sessionMeta?.correct === 'boolean'
       ? sessionMeta.correct
       : finalScore >= maxScoreForAba;
+    const abaPromptLevel = resolveAbaPromptLevel({
+      promptLevelKey: sessionMeta?.promptLevelKey,
+      promptLevelName: sessionMeta?.promptLevelName,
+      score: finalScore,
+      maxScore: maxScoreForAba,
+      correct: abaCorrect,
+      independent: sessionMeta?.independent
+    });
+    const promptLevelKey = abaPromptLevel.key;
     const abaIndependent = typeof sessionMeta?.independent === 'boolean'
-      ? sessionMeta.independent
-      : abaCorrect && promptLevelKey === 'independent';
+      ? abaCorrect && sessionMeta.independent && abaPromptLevel.isIndependent
+      : abaCorrect && abaPromptLevel.isIndependent;
     const abaCollectionType = String(sessionMeta?.collectionType || 'dtt').toLowerCase();
     const abaTargetId = String(sessionMeta?.targetId || peiGoal?.id || matchedSkill?.id || title);
     const abaTrialId = `trial-${newId}`;
@@ -3547,8 +3553,11 @@ export default function App() {
       await dataService.saveAbaTrial({
         id: abaTrialId,
         patient_id: String(pid),
+        patientId: String(pid),
         session_id: sessionMeta?.sessionId || null,
+        sessionId: sessionMeta?.sessionId || null,
         target_id: abaTargetId,
+        targetId: abaTargetId,
         target_name: title,
         program_id: sessionMeta?.programId || peiGoal?.programId || null,
         protocol_id: sessionMeta?.protocolId || peiGoal?.protocolId || matchedProtocol?.id || null,
@@ -3556,20 +3565,35 @@ export default function App() {
         domain_id: sessionMeta?.domainId || peiGoal?.domainId || matchedDomain?.id || null,
         domain_name: sessionMeta?.domainName || peiGoal?.domainName || matchedDomain?.name || matchedDomain?.title || null,
         collection_type: abaCollectionType,
+        trialType: abaCollectionType,
         response_score: finalScore,
+        score: finalScore,
         max_score: maxScoreForAba,
         correct: abaCorrect,
+        isCorrect: abaCorrect,
         independent: abaIndependent,
+        isIndependent: abaIndependent,
         prompt_level_key: promptLevelKey,
-        prompt_level_name: sessionMeta?.promptLevelName || (abaIndependent ? 'Independente' : abaCorrect ? 'Com ajuda' : 'Erro / sem resposta'),
+        promptLevel: promptLevelKey,
+        promptLevelKey,
+        prompt_level_name: abaPromptLevel.label,
+        promptLevelName: abaPromptLevel.label,
         notes: evalComment || '',
         occurred_at: recordedAt,
+        timestamp: recordedAt,
+        therapist_id: user?.id || undefined,
+        therapistId: user?.id || undefined,
         source_history_id: String(sourceHistoryId || newId),
         raw_payload: {
           legacyScore: score,
           normalizedScore: finalScore,
           isKid,
-          sessionReferenceDate: sessionMeta?.sessionReferenceDate || null
+          sessionReferenceDate: sessionMeta?.sessionReferenceDate || null,
+          promptLevelKey: abaPromptLevel.key,
+          promptLevelName: abaPromptLevel.label,
+          promptLevelSource: sessionMeta?.promptLevelSource || null,
+          trialType: abaCollectionType,
+          therapistId: user?.id || null
         }
       });
     } catch (error) {

@@ -16,6 +16,7 @@ import { calculateDomainMastery, normalizeScoreToPercent } from '../utils/clinic
 import { prepareElementForPdfCapture } from '../utils/pdfCapture';
 import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
+import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
 import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
 import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
@@ -681,6 +682,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       id: `session-${String(patient?.id || 'patient')}-${startedAt.getTime()}`,
       patientId: patient?.id,
       patientName: patient?.name || 'Paciente',
+      therapistId: resolvedClinicContext?.userId || clinicContext?.userId || null,
       status: 'active',
       durationMinutes,
       startedAt: startedAt.toISOString(),
@@ -693,6 +695,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       id: nextSession.id,
       patient_id: patient?.id,
       patient_name: patient?.name || 'Paciente',
+      therapist_id: resolvedClinicContext?.userId || clinicContext?.userId || undefined,
       status: 'active',
       started_at: nextSession.startedAt,
       duration_minutes: durationMinutes,
@@ -712,6 +715,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const handleConfirmSessionEnd = () => {
     const endedSession = activeSession;
+    if (endedSession && typeof window !== 'undefined') {
+      try {
+        const sessionState = JSON.parse(
+          window.localStorage.getItem(`verto.aba_session_state:${String(patient?.id || '')}:${String(endedSession.id || '')}`) || '{}'
+        );
+        if (Array.isArray(sessionState?.openDurations) && sessionState.openDurations.length > 0) {
+          alert('Finalize os eventos de duração em aberto antes de encerrar a sessão.');
+          return;
+        }
+      } catch {
+        // Se o estado auxiliar falhar, seguimos com a confirmação padrão.
+      }
+    }
     clearActiveSession();
     setShowSessionEndConfirm(false);
     setIsSessionModeOpen(false);
@@ -1928,7 +1944,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const collectionType = String(trial?.collection_type || trial?.collectionType || 'dtt').toLowerCase();
       const score = trial?.response_score ?? trial?.responseScore ?? trial?.score;
       const maxScore = trial?.max_score ?? trial?.maxScore;
-      const prompt = trial?.prompt_level_name || trial?.promptLevelName || trial?.prompt_level_key || trial?.promptLevelKey || 'Sem prompt';
+      const prompt = resolveAbaPromptLevel({
+        promptLevelKey: trial?.prompt_level_key || trial?.promptLevelKey,
+        promptLevelName: trial?.prompt_level_name || trial?.promptLevelName,
+        score,
+        maxScore,
+        correct: trial?.correct,
+        independent: trial?.independent
+      }).label;
       const title = normalizeNoteText(trial?.target_name || trial?.targetName || trial?.title || 'Meta sem nome');
       const sessionId = String(trial?.session_id || trial?.sessionId || '').trim();
       const occurredAt = trial?.occurred_at || trial?.occurredAt || trial?.created_at || trial?.createdAt;
@@ -4153,7 +4176,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           remainingSeconds={remainingSessionSeconds}
           formatCountdown={formatSessionCountdown}
           onRequestEndSession={() => setShowSessionEndConfirm(true)}
+          onConfirmEndSession={handleConfirmSessionEnd}
           onSessionRecordSaved={incrementActiveSessionRecordCount}
+          therapistId={resolvedClinicContext?.userId || clinicContext?.userId || null}
         />
       )}
       {isTutorialActive && ( 

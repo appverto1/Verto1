@@ -36,6 +36,7 @@ import {
   buildActivationEmailTemplate,
   buildPasswordRecoveryEmailTemplate
 } from './src/services/emailTemplates';
+import { resolveAbaPromptLevel } from './src/utils/abaPromptLevels';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
@@ -14127,11 +14128,6 @@ async function startServer() {
     return safeScore > 0;
   };
 
-  const inferAbaIndependent = (correct: boolean, promptKey: string, explicit: unknown) => {
-    if (typeof explicit === 'boolean') return explicit;
-    return correct && (!promptKey || promptKey === 'independent');
-  };
-
   const writeAbaRowWithSchemaFallback = async (tableName: string, payloadBase: Record<string, any>, mode: 'insert' | 'upsert' = 'insert') => {
     let payload: Record<string, any> = { ...payloadBase };
     while (Object.keys(payload).length > 0) {
@@ -14282,9 +14278,17 @@ async function startServer() {
       const maxScore = req.body?.max_score !== undefined || req.body?.maxScore !== undefined
         ? asSafeNumber(req.body?.max_score ?? req.body?.maxScore, 0, 100000)
         : null;
-      const promptKey = sanitizeString(req.body?.prompt_level_key || req.body?.promptLevelKey, 80).toLowerCase();
-      const correct = inferAbaCorrect(score, maxScore, req.body?.correct);
-      const independent = inferAbaIndependent(correct, promptKey, req.body?.independent);
+      const correct = inferAbaCorrect(score, maxScore, req.body?.is_correct ?? req.body?.isCorrect ?? req.body?.correct);
+      const promptLevel = resolveAbaPromptLevel({
+        promptLevelKey: req.body?.prompt_level_key || req.body?.promptLevelKey || req.body?.promptLevel,
+        promptLevelName: req.body?.prompt_level_name || req.body?.promptLevelName,
+        score,
+        maxScore,
+        correct: req.body?.is_correct ?? req.body?.isCorrect ?? correct,
+        independent: req.body?.is_independent ?? req.body?.isIndependent ?? req.body?.independent
+      });
+      const promptKey = promptLevel.key;
+      const independent = correct && promptLevel.isIndependent;
       const targetName = sanitizeTextField(req.body?.target_name || req.body?.targetName || req.body?.title, 240);
       if (!targetName) return res.status(400).json({ success: false, error: 'Target é obrigatório.' });
 
@@ -14301,21 +14305,29 @@ async function startServer() {
         protocol_title: sanitizeString(req.body?.protocol_title || req.body?.protocolTitle, 240) || null,
         domain_id: sanitizeString(req.body?.domain_id || req.body?.domainId, 180) || null,
         domain_name: sanitizeString(req.body?.domain_name || req.body?.domainName, 240) || null,
-        collection_type: normalizeAbaCollectionType(req.body?.collection_type || req.body?.collectionType),
+        collection_type: normalizeAbaCollectionType(req.body?.collection_type || req.body?.collectionType || req.body?.trial_type || req.body?.trialType),
         response_score: score,
         max_score: maxScore,
         correct,
         independent,
         prompt_level_key: promptKey || null,
-        prompt_level_name: sanitizeString(req.body?.prompt_level_name || req.body?.promptLevelName, 120) || null,
+        prompt_level_name: promptLevel.label,
         latency_ms: req.body?.latency_ms !== undefined || req.body?.latencyMs !== undefined
           ? asSafeNumber(req.body?.latency_ms ?? req.body?.latencyMs, 0, 3_600_000)
           : null,
         notes: sanitizeTextField(req.body?.notes, 4000),
-        occurred_at: occurredAt,
+        occurred_at: sanitizeIsoDateTime(req.body?.occurred_at || req.body?.occurredAt || req.body?.timestamp, occurredAt),
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
         source_history_id: sanitizeString(req.body?.source_history_id || req.body?.sourceHistoryId, 180) || null,
-        raw_payload: sanitizeClinicalPayload(req.body?.raw_payload || req.body?.rawPayload || {}),
+        raw_payload: sanitizeClinicalPayload({
+          ...(req.body?.raw_payload || req.body?.rawPayload || {}),
+          trialType: sanitizeString(req.body?.trialType || req.body?.trial_type || req.body?.collection_type || req.body?.collectionType, 80),
+          promptLevel: promptLevel.key,
+          isIndependent: independent,
+          isCorrect: correct,
+          therapistId: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
+          timestamp: sanitizeIsoDateTime(req.body?.timestamp || req.body?.occurred_at || req.body?.occurredAt, occurredAt)
+        }),
         created_at: new Date().toISOString()
       });
 
@@ -14365,7 +14377,7 @@ async function startServer() {
 
       const behaviorName = sanitizeTextField(req.body?.behavior_name || req.body?.behaviorName || req.body?.name, 240);
       if (!behaviorName) return res.status(400).json({ success: false, error: 'Comportamento é obrigatório.' });
-      const occurredAt = sanitizeIsoDateTime(req.body?.occurred_at || req.body?.occurredAt);
+      const occurredAt = sanitizeIsoDateTime(req.body?.occurred_at || req.body?.occurredAt || req.body?.timestamp);
       const startedAt = req.body?.started_at || req.body?.startedAt
         ? sanitizeIsoDateTime(req.body?.started_at || req.body?.startedAt, occurredAt)
         : null;
@@ -14405,7 +14417,12 @@ async function startServer() {
         notes: sanitizeTextField(req.body?.notes, 4000),
         occurred_at: occurredAt,
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
-        raw_payload: sanitizeClinicalPayload(req.body?.raw_payload || req.body?.rawPayload || {}),
+        raw_payload: sanitizeClinicalPayload({
+          ...(req.body?.raw_payload || req.body?.rawPayload || {}),
+          therapistId: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
+          timestamp: occurredAt,
+          syncStatus: sanitizeString(req.body?.syncStatus || req.body?.sync_status, 40) || undefined
+        }),
         created_at: new Date().toISOString()
       });
 
