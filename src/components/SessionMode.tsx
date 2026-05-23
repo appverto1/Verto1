@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import {
   AlertCircle,
   Activity,
-  Camera,
   CheckCircle2,
   ChevronLeft,
   Clock,
@@ -18,7 +17,6 @@ import {
   X,
   Zap
 } from 'lucide-react';
-import { SecureImage } from './SecureMedia';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { dataService } from '../services/dataService';
 import { ABA_PROMPT_LEVEL_OPTIONS, resolveAbaPromptLevel } from '../utils/abaPromptLevels';
@@ -155,12 +153,6 @@ export const SessionMode = ({
     () => behaviorPresets.find((behavior) => behavior.id === selectedBehaviorId) || behaviorPresets[0],
     [selectedBehaviorId]
   );
-
-  const patientPhotos = useMemo(() => {
-    return (patient.history || [])
-      .filter((h: any) => h.type === 'photo' && h.image)
-      .sort((a: any, b: any) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
-  }, [patient.history]);
 
   useEffect(() => {
     setHydratedSessionStateKey('');
@@ -953,22 +945,6 @@ export const SessionMode = ({
               </div>
             ))}
           </div>
-
-          {patientPhotos.length > 0 && (
-            <div className="mt-6">
-              <div className="flex items-center gap-2 mb-3">
-                <Camera size={16} className="text-[#7a32fc]" />
-                <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Fotos do paciente</h3>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {patientPhotos.slice(0, 6).map((photo: any) => (
-                  <div key={photo.id} className="aspect-square rounded-2xl overflow-hidden border border-gray-100">
-                    <SecureImage src={photo.image} alt="Foto do paciente" className="w-full h-full object-cover" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </aside>
       </div>
 
