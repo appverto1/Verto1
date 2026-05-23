@@ -416,7 +416,7 @@ function normalizeNoteVisibility(value: any): 'private' | 'shared_patient' | 'sh
   return 'private';
 }
 
-type OfflineType = 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment';
+type OfflineType = 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba';
 
 async function buildConditionalHeaders(endpoint: string, type: OfflineType, includeBearer = false) {
   const headers = await getAuthHeaders(includeBearer);
@@ -1002,6 +1002,127 @@ export const dataService = {
     const id = item.id || generateId();
     const data = { ...item, id, created_at: item.created_at || new Date().toISOString() };
     return await saveOfflineFirst(id, data, 'history', '/api/history');
+  },
+
+  async saveAbaSession(session: any) {
+    const id = String(session?.id || session?.session_id || session?.sessionId || generateId());
+    const data = {
+      ...(session || {}),
+      id,
+      patient_id: session?.patient_id || session?.patientId,
+      started_at: session?.started_at || session?.startedAt || new Date().toISOString()
+    };
+    return await saveOfflineFirst(id, data, 'aba', '/api/aba/sessions');
+  },
+
+  async updateAbaSession(sessionId: string, updates: any) {
+    return await saveOfflineFirst(
+      String(sessionId),
+      updates || {},
+      'aba',
+      `/api/aba/sessions/${encodeURIComponent(String(sessionId))}`,
+      'PATCH'
+    );
+  },
+
+  async getAbaSessions(patientId: string) {
+    const endpoint = `/api/aba/sessions/${encodeURIComponent(String(patientId))}`;
+    try {
+      const response = await fetch(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      });
+      if (response.ok) {
+        const result = await response.json();
+        return result;
+      }
+    } catch (error) {
+      console.log('Fetching ABA sessions from local storage...');
+    }
+    const local = await getRecordsByType('aba');
+    return {
+      success: true,
+      data: local
+        .map(r => r.data)
+        .filter((row: any) =>
+          String(row?.patient_id || row?.patientId || '') === String(patientId) &&
+          (row?.started_at || row?.startedAt)
+        )
+    };
+  },
+
+  async saveAbaTrial(trial: any) {
+    const id = String(trial?.id || trial?.trial_id || trial?.trialId || generateId());
+    const data = {
+      ...(trial || {}),
+      id,
+      patient_id: trial?.patient_id || trial?.patientId,
+      occurred_at: trial?.occurred_at || trial?.occurredAt || new Date().toISOString()
+    };
+    return await saveOfflineFirst(id, data, 'aba', '/api/aba/trials');
+  },
+
+  async getAbaTrials(patientId: string) {
+    const endpoint = `/api/aba/trials/${encodeURIComponent(String(patientId))}`;
+    try {
+      const response = await fetch(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      });
+      if (response.ok) {
+        const result = await response.json();
+        return result;
+      }
+    } catch (error) {
+      console.log('Fetching ABA trials from local storage...');
+    }
+    const local = await getRecordsByType('aba');
+    return {
+      success: true,
+      data: local
+        .map(r => r.data)
+        .filter((row: any) =>
+          String(row?.patient_id || row?.patientId || '') === String(patientId) &&
+          (row?.target_name || row?.targetName || row?.collection_type || row?.collectionType)
+        )
+    };
+  },
+
+  async saveAbaBehaviorEvent(event: any) {
+    const id = String(event?.id || event?.event_id || event?.eventId || generateId());
+    const data = {
+      ...(event || {}),
+      id,
+      patient_id: event?.patient_id || event?.patientId,
+      occurred_at: event?.occurred_at || event?.occurredAt || new Date().toISOString()
+    };
+    return await saveOfflineFirst(id, data, 'aba', '/api/aba/behavior-events');
+  },
+
+  async getAbaBehaviorEvents(patientId: string) {
+    const endpoint = `/api/aba/behavior-events/${encodeURIComponent(String(patientId))}`;
+    try {
+      const response = await fetch(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      });
+      if (response.ok) {
+        const result = await response.json();
+        return result;
+      }
+    } catch (error) {
+      console.log('Fetching ABA behavior events from local storage...');
+    }
+    const local = await getRecordsByType('aba');
+    return {
+      success: true,
+      data: local
+        .map(r => r.data)
+        .filter((row: any) =>
+          String(row?.patient_id || row?.patientId || '') === String(patientId) &&
+          (row?.behavior_name || row?.behaviorName || row?.measurement_type || row?.measurementType)
+        )
+    };
   },
 
   async addPatientLog(log: {

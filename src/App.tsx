@@ -3447,13 +3447,33 @@ export default function App() {
     const targetPatient = allPatients.find(p => p.id === pid);
     const clinicalRecord = clinicalRecords.find(r => r.patientId === pid);
     const isKid = (targetPatient?.age !== undefined && targetPatient.age <= 12) || clinicalRecord?.anamnesisData?.formType === 'child';
+    const sourcePei = Array.isArray(clinicalRecord?.pei)
+      ? clinicalRecord.pei
+      : Array.isArray(targetPatient?.pei)
+        ? targetPatient.pei
+        : [];
+    const peiGoal = sourcePei.find((goal: any) =>
+      goal.name === title || String(goal?.id || '') === String(sessionMeta?.targetId || '')
+    );
     
     // Find the skill to get its maxScore
-    let skillMaxScore = 1;
-    protocols.forEach(p => {
-      p.data.forEach((domain: any) => {
-        const skill = domain.skills.find((s: any) => s.name === title);
-        if (skill) skillMaxScore = skill.maxScore || 1;
+    let skillMaxScore = Number(sessionMeta?.targetMaxScore || peiGoal?.maxScore || 1);
+    let matchedProtocol: any = null;
+    let matchedDomain: any = null;
+    let matchedSkill: any = null;
+    protocols.forEach((p: any) => {
+      const domains = Array.isArray(p?.data) ? p.data : [];
+      domains.forEach((domain: any) => {
+        const skills = Array.isArray(domain?.skills) ? domain.skills : [];
+        const skill = skills.find((s: any) =>
+          s.name === title || String(s?.id || '') === String(sessionMeta?.targetId || '')
+        );
+        if (skill) {
+          matchedProtocol = p;
+          matchedDomain = domain;
+          matchedSkill = skill;
+          skillMaxScore = skill.maxScore || skillMaxScore || 1;
+        }
       });
     });
 
@@ -3491,8 +3511,9 @@ export default function App() {
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
+    let sourceHistoryId: any = newId;
     try {
-      await dataService.addHistoryItem({
+      const historyResult = await dataService.addHistoryItem({
         patient_id: String(pid),
         patient_email: targetPatient?.email || null,
         type: 'task',
@@ -3502,22 +3523,61 @@ export default function App() {
         icon: "🎯",
         created_at: recordedAt
       });
+      sourceHistoryId = historyResult?.data?.id || newId;
     } catch (error) {
       console.error('Falha ao persistir registro de sessão:', error);
+    }
+
+    try {
+      const maxScoreForAba = Number(sessionMeta?.targetMaxScore || peiGoal?.maxScore || matchedSkill?.maxScore || skillMaxScore || 1);
+      const promptLevelKey = String(
+        sessionMeta?.promptLevelKey ||
+        (finalScore >= maxScoreForAba ? 'independent' : finalScore > 0 ? 'prompted' : 'error')
+      ).toLowerCase();
+      const correct = typeof sessionMeta?.correct === 'boolean'
+        ? sessionMeta.correct
+        : finalScore >= maxScoreForAba;
+      const independent = typeof sessionMeta?.independent === 'boolean'
+        ? sessionMeta.independent
+        : correct && promptLevelKey === 'independent';
+      await dataService.saveAbaTrial({
+        id: `trial-${newId}`,
+        patient_id: String(pid),
+        session_id: sessionMeta?.sessionId || null,
+        target_id: String(sessionMeta?.targetId || peiGoal?.id || matchedSkill?.id || title),
+        target_name: title,
+        program_id: sessionMeta?.programId || peiGoal?.programId || null,
+        protocol_id: sessionMeta?.protocolId || peiGoal?.protocolId || matchedProtocol?.id || null,
+        protocol_title: sessionMeta?.protocolTitle || peiGoal?.protocolTitle || matchedProtocol?.title || matchedProtocol?.name || null,
+        domain_id: sessionMeta?.domainId || peiGoal?.domainId || matchedDomain?.id || null,
+        domain_name: sessionMeta?.domainName || peiGoal?.domainName || matchedDomain?.name || matchedDomain?.title || null,
+        collection_type: String(sessionMeta?.collectionType || 'dtt').toLowerCase(),
+        response_score: finalScore,
+        max_score: maxScoreForAba,
+        correct,
+        independent,
+        prompt_level_key: promptLevelKey,
+        prompt_level_name: sessionMeta?.promptLevelName || (independent ? 'Independente' : correct ? 'Com ajuda' : 'Erro / sem resposta'),
+        notes: evalComment || '',
+        occurred_at: recordedAt,
+        source_history_id: String(sourceHistoryId || newId),
+        raw_payload: {
+          legacyScore: score,
+          normalizedScore: finalScore,
+          isKid,
+          sessionReferenceDate: sessionMeta?.sessionReferenceDate || null
+        }
+      });
+    } catch (error) {
+      console.error('Falha ao persistir tentativa ABA estruturada:', error);
     }
 
     const updatedHistory = [newHistoryItem, ...history];
     setHistory(updatedHistory);
 
-    const sourcePei = Array.isArray(clinicalRecord?.pei)
-      ? clinicalRecord.pei
-      : Array.isArray(targetPatient?.pei)
-        ? targetPatient.pei
-        : [];
     let updatedPei = sourcePei;
 
     if (isKid && sourcePei.length > 0) {
-      const peiGoal = sourcePei.find((g: any) => g.name === title);
       const progressResetMarker = (() => {
         const explicitReset = Number(
           peiGoal?.sessionProgressResetAt ??

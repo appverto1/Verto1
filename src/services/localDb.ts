@@ -4,7 +4,7 @@ import { ensureFreshSession, getSupabase } from '../lib/supabase';
 export interface OfflineRecord {
   id: string;
   data: any;
-  type: 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment';
+  type: 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba';
   sync_status: 'synced' | 'pending';
   last_updated: number;
   method: 'POST' | 'PATCH' | 'DELETE';

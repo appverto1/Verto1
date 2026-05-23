@@ -8,8 +8,16 @@ const coordinatorPath = path.resolve(process.cwd(), 'src/components/CoordinatorD
 const coordinatorCode = fs.readFileSync(coordinatorPath, 'utf8');
 const appPath = path.resolve(process.cwd(), 'src/App.tsx');
 const appCode = fs.readFileSync(appPath, 'utf8');
+const dataServicePath = path.resolve(process.cwd(), 'src/services/dataService.ts');
+const dataServiceCode = fs.readFileSync(dataServicePath, 'utf8');
+const patientDetailPath = path.resolve(process.cwd(), 'src/components/PatientDetailView.tsx');
+const patientDetailCode = fs.readFileSync(patientDetailPath, 'utf8');
+const sessionModePath = path.resolve(process.cwd(), 'src/components/SessionMode.tsx');
+const sessionModeCode = fs.readFileSync(sessionModePath, 'utf8');
 const financialRlsPath = path.resolve(process.cwd(), 'supabase/migrations/20260521143000_financial_rls_coordinator_only.sql');
 const financialRlsCode = fs.readFileSync(financialRlsPath, 'utf8');
+const abaRlsPath = path.resolve(process.cwd(), 'supabase/migrations/20260523120000_aba_clinical_core.sql');
+const abaRlsCode = fs.readFileSync(abaRlsPath, 'utf8');
 
 function expectPattern(pattern, message) {
   assert.match(serverCode, pattern, message);
@@ -250,6 +258,138 @@ test('finance privacy: RLS is enabled and coordinator-scoped for DRE tables', ()
     financialRlsCode,
     /receptionist|therapist|patient/,
     'RLS financeiro nÃ£o deve conceder acesso a recepcionista, terapeuta ou paciente.'
+  );
+});
+
+test('aba privacy: API endpoints are clinic-scoped and exclude patient/receptionist roles', () => {
+  const abaMarkers = [
+    "app.post('/api/aba/sessions'",
+    "app.patch('/api/aba/sessions/:sessionId'",
+    "app.get('/api/aba/sessions/:patientId'",
+    "app.post('/api/aba/trials'",
+    "app.get('/api/aba/trials/:patientId'",
+    "app.post('/api/aba/behavior-events'",
+    "app.get('/api/aba/behavior-events/:patientId'"
+  ];
+
+  for (const marker of abaMarkers) {
+    const start = serverCode.indexOf(marker);
+    assert.ok(start >= 0, `endpoint ${marker} nao encontrado.`);
+    const slice = serverCode.slice(start, start + 900);
+    assert.match(
+      slice,
+      /requireRoles\('coordinator', 'therapist', 'admin', 'owner'\)/,
+      `${marker} deve aceitar somente coordenador, terapeuta vinculado, admin ou owner.`
+    );
+    assert.doesNotMatch(
+      slice,
+      /requireRoles\([^)]*'patient'|requireRoles\([^)]*'receptionist'/,
+      `${marker} nao deve expor ABA para paciente ou recepcao.`
+    );
+  }
+
+  assert.match(
+    serverCode,
+    /app\.post\('\/api\/aba\/sessions'[\s\S]*?checkPatientAccess/m,
+    'POST /api/aba/sessions deve validar acesso ao paciente.'
+  );
+  assert.match(
+    serverCode,
+    /app\.post\('\/api\/aba\/trials'[\s\S]*?checkPatientAccess/m,
+    'POST /api/aba/trials deve validar acesso ao paciente.'
+  );
+  assert.match(
+    serverCode,
+    /app\.get\('\/api\/aba\/trials\/:patientId'[\s\S]*?checkPatientAccess/m,
+    'GET /api/aba/trials/:patientId deve validar acesso ao paciente.'
+  );
+  assert.match(
+    serverCode,
+    /app\.post\('\/api\/aba\/behavior-events'[\s\S]*?checkPatientAccess/m,
+    'POST /api/aba/behavior-events deve validar acesso ao paciente.'
+  );
+  assert.match(
+    serverCode,
+    /app\.get\('\/api\/aba\/behavior-events\/:patientId'[\s\S]*?checkPatientAccess/m,
+    'GET /api/aba/behavior-events/:patientId deve validar acesso ao paciente.'
+  );
+});
+
+test('aba privacy: RLS is enabled and patient-scoped for clinical ABA tables', () => {
+  for (const tableName of ['aba_programs', 'aba_targets', 'aba_behavior_definitions', 'aba_behavior_events', 'aba_sessions', 'aba_trials']) {
+    assert.match(
+      abaRlsCode,
+      new RegExp(`alter table public\\.${tableName} enable row level security;`),
+      `${tableName} deve ter RLS habilitado.`
+    );
+  }
+  assert.match(
+    abaRlsCode,
+    /u\.role = 'coordinator'[\s\S]*?u\.clinic_id::text = aba_trials\.clinic_id/m,
+    'aba_trials deve permitir coordenador somente dentro da clinica.'
+  );
+  assert.match(
+    abaRlsCode,
+    /u\.role = 'coordinator'[\s\S]*?u\.clinic_id::text = aba_behavior_events\.clinic_id/m,
+    'aba_behavior_events deve permitir coordenador somente dentro da clinica.'
+  );
+  assert.match(
+    abaRlsCode,
+    /u\.role = 'therapist'[\s\S]*?p\.therapist_id = auth\.uid\(\)[\s\S]*?u\.clinic_id::text = aba_sessions\.clinic_id/m,
+    'aba_sessions deve permitir terapeuta somente quando vinculado ao paciente.'
+  );
+  assert.doesNotMatch(
+    abaRlsCode,
+    /u\.role = 'patient'|u\.role = 'receptionist'/,
+    'RLS ABA nao deve conceder acesso direto a paciente ou recepcao.'
+  );
+});
+
+test('aba persistence: frontend records sessions and structured trials offline-first', () => {
+  assert.match(
+    dataServiceCode,
+    /async saveAbaSession\(session: any\)[\s\S]*?saveOfflineFirst\(id, data, 'aba', '\/api\/aba\/sessions'\)/m,
+    'dataService deve salvar sessoes ABA na fila offline-first.'
+  );
+  assert.match(
+    dataServiceCode,
+    /async saveAbaTrial\(trial: any\)[\s\S]*?saveOfflineFirst\(id, data, 'aba', '\/api\/aba\/trials'\)/m,
+    'dataService deve salvar tentativas ABA na fila offline-first.'
+  );
+  assert.match(
+    dataServiceCode,
+    /async saveAbaBehaviorEvent\(event: any\)[\s\S]*?saveOfflineFirst\(id, data, 'aba', '\/api\/aba\/behavior-events'\)/m,
+    'dataService deve salvar eventos de comportamento ABA na fila offline-first.'
+  );
+  assert.match(
+    patientDetailCode,
+    /dataService\.saveAbaSession\(/m,
+    'PatientDetailView deve persistir inicio de sessao ABA.'
+  );
+  assert.match(
+    patientDetailCode,
+    /dataService\.updateAbaSession\(String\(endedSession\.id\)/m,
+    'PatientDetailView deve persistir encerramento de sessao ABA.'
+  );
+  assert.match(
+    sessionModeCode,
+    /const \[collectionType, setCollectionType\] = useState\('dtt'\)/m,
+    'SessionMode deve coletar o tipo DTT/NET/probe.'
+  );
+  assert.match(
+    sessionModeCode,
+    /const \[promptLevelKey, setPromptLevelKey\] = useState\('independent'\)/m,
+    'SessionMode deve coletar hierarquia de prompt.'
+  );
+  assert.match(
+    sessionModeCode,
+    /dataService\.saveAbaBehaviorEvent\(/m,
+    'SessionMode deve registrar comportamento ABA rapido.'
+  );
+  assert.match(
+    appCode,
+    /dataService\.saveAbaTrial\(\{[\s\S]*?collection_type: String\(sessionMeta\?\.collectionType \|\| 'dtt'\)\.toLowerCase\(\)/m,
+    'App deve persistir cada registro como aba_trial estruturado.'
   );
 });
 

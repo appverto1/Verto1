@@ -1,8 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, Info, Zap, Camera, Clock, StopCircle } from 'lucide-react';
+import { ChevronLeft, Zap, Camera, Clock, StopCircle } from 'lucide-react';
 import { SecureImage } from './SecureMedia';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
+import { dataService } from '../services/dataService';
 
 export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, remainingSeconds = 0, formatCountdown, onRequestEndSession, onSessionRecordSaved }: any) => {
   const sessionGoals = (patient.pei?.filter((g: any) => g.isPriority || g.status === 'in_progress') || [])
@@ -16,6 +17,45 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
   const [showTrialConfirmation, setShowTrialConfirmation] = useState(false);
   const [trialObservation, setTrialObservation] = useState("");
   const [isSavingObservation, setIsSavingObservation] = useState(false);
+  const [collectionType, setCollectionType] = useState('dtt');
+  const [promptLevelKey, setPromptLevelKey] = useState('independent');
+  const [behaviorName, setBehaviorName] = useState('');
+  const [behaviorMeasurementType, setBehaviorMeasurementType] = useState('frequency');
+  const [behaviorAntecedent, setBehaviorAntecedent] = useState('');
+  const [behaviorConsequence, setBehaviorConsequence] = useState('');
+  const [behaviorLocation, setBehaviorLocation] = useState('');
+  const [behaviorNote, setBehaviorNote] = useState('');
+  const [behaviorEventCount, setBehaviorEventCount] = useState(0);
+  const [isSavingBehaviorEvent, setIsSavingBehaviorEvent] = useState(false);
+
+  const collectionOptions = [
+    { key: 'dtt', label: 'DTT' },
+    { key: 'net', label: 'NET' },
+    { key: 'cold_probe', label: 'Cold Probe' },
+    { key: 'baseline_probe', label: 'Baseline Probe' },
+    { key: 'maintenance_probe', label: 'Maintenance Probe' }
+  ];
+
+  const promptLevels = [
+    { key: 'independent', label: 'Independente', isIndependent: true, isError: false },
+    { key: 'visual', label: 'Visual', isIndependent: false, isError: false },
+    { key: 'gestural', label: 'Gestual', isIndependent: false, isError: false },
+    { key: 'verbal', label: 'Verbal', isIndependent: false, isError: false },
+    { key: 'model', label: 'Modelo', isIndependent: false, isError: false },
+    { key: 'partial_physical', label: 'Fisica parcial', isIndependent: false, isError: false },
+    { key: 'full_physical', label: 'Fisica total', isIndependent: false, isError: false },
+    { key: 'error', label: 'Erro / sem resposta', isIndependent: false, isError: true }
+  ];
+
+  const behaviorMeasurementOptions = [
+    { key: 'frequency', label: 'Frequencia' },
+    { key: 'duration', label: 'Duracao' },
+    { key: 'rate', label: 'Taxa' },
+    { key: 'partial_interval', label: 'Intervalo parcial' },
+    { key: 'whole_interval', label: 'Intervalo total' },
+    { key: 'momentary_time_sampling', label: 'Amostragem momentanea' },
+    { key: 'abc', label: 'ABC' }
+  ];
   
   const patientPhotos = useMemo(() => {
     return (patient.history || [])
@@ -82,11 +122,25 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
   const handleSaveTrialObservation = () => {
     if (pendingTrial) {
       setIsSavingObservation(true);
+      const selectedPrompt = promptLevels.find((prompt) => prompt.key === promptLevelKey) || promptLevels[0];
+      const maxScore = Number(pendingTrial.goal?.maxScore || 1);
+      const correct = pendingTrial.score >= maxScore;
       const sessionMeta = activeSession
         ? {
             sessionId: activeSession.id,
             sessionStartedAt: activeSession.startedAt,
-            sessionReferenceDate: activeSession.referenceDate
+            sessionReferenceDate: activeSession.referenceDate,
+            targetId: pendingTrial.goal?.id,
+            targetMaxScore: maxScore,
+            protocolId: pendingTrial.goal?.protocolId || null,
+            protocolTitle: pendingTrial.goal?.protocolTitle || null,
+            domainId: pendingTrial.goal?.domainId || null,
+            domainName: pendingTrial.goal?.domainName || null,
+            collectionType,
+            promptLevelKey: selectedPrompt.key,
+            promptLevelName: selectedPrompt.label,
+            correct,
+            independent: correct && selectedPrompt.isIndependent
           }
         : null;
       const newId = onRecordTrial(patient.id, pendingTrial.goal.name, pendingTrial.score, trialObservation, sessionMeta);
@@ -103,6 +157,44 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
     } else {
       setShowTrialConfirmation(false);
       setLastRecordedGoalId(null);
+    }
+  };
+
+  const handleSaveBehaviorEvent = async () => {
+    const name = behaviorName.trim();
+    if (!name || isSavingBehaviorEvent) return;
+    setIsSavingBehaviorEvent(true);
+    const occurredAt = new Date().toISOString();
+    const intervalType = ['partial_interval', 'whole_interval', 'momentary_time_sampling'].includes(behaviorMeasurementType);
+    try {
+      await dataService.saveAbaBehaviorEvent({
+        patient_id: patient.id,
+        session_id: activeSession?.id || null,
+        behavior_name: name,
+        measurement_type: behaviorMeasurementType,
+        count_delta: behaviorMeasurementType === 'frequency' || behaviorMeasurementType === 'rate' ? 1 : null,
+        interval_occurred: intervalType ? true : null,
+        antecedent: behaviorMeasurementType === 'abc' ? behaviorAntecedent : '',
+        consequence: behaviorMeasurementType === 'abc' ? behaviorConsequence : '',
+        location: behaviorLocation,
+        notes: behaviorNote,
+        occurred_at: occurredAt,
+        raw_payload: {
+          source: 'session_mode_quick_behavior',
+          sessionReferenceDate: activeSession?.referenceDate || null
+        }
+      });
+      setBehaviorEventCount(prev => prev + 1);
+      onSessionRecordSaved?.();
+      setBehaviorNote('');
+      if (behaviorMeasurementType === 'abc') {
+        setBehaviorAntecedent('');
+        setBehaviorConsequence('');
+      }
+    } catch (error) {
+      console.error('Falha ao persistir comportamento ABA:', error);
+    } finally {
+      setIsSavingBehaviorEvent(false);
     }
   };
 
@@ -129,7 +221,7 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
   const sessionModeContent = (
     <div className="fixed inset-0 z-[100] bg-[#F4F7FE] flex flex-col overflow-hidden animate-fade-in">
       {/* Header */}
-      <div className="bg-white px-8 py-6 shadow-sm flex items-center justify-between shrink-0">
+      <div className="bg-white px-8 py-6 shadow-sm flex items-center justify-between gap-4 shrink-0">
         <div className="flex items-center gap-6">
           <button onClick={onClose} className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-all">
             <ChevronLeft size={32} className="text-gray-400" />
@@ -139,7 +231,33 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
             <p className="text-xs font-bold text-gray-400 uppercase tracking-[0.2em] mt-1">Dashboard de Ensino Dinâmico</p>
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 flex-wrap justify-end">
+          <div className="flex items-center gap-3 rounded-2xl bg-[#F4F7FE] border border-blue-100 px-4 py-3">
+            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+              Tipo
+              <select
+                value={collectionType}
+                onChange={(event) => setCollectionType(event.target.value)}
+                className="block mt-1 bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
+              >
+                {collectionOptions.map((option) => (
+                  <option key={option.key} value={option.key}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+              Prompt
+              <select
+                value={promptLevelKey}
+                onChange={(event) => setPromptLevelKey(event.target.value)}
+                className="block mt-1 bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
+              >
+                {promptLevels.map((prompt) => (
+                  <option key={prompt.key} value={prompt.key}>{prompt.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
           {activeSession && (
             <div className="bg-[#7a32fc]/10 text-[#7a32fc] rounded-2xl px-5 py-3 min-w-[150px] text-right">
               <p className="text-[10px] font-bold uppercase tracking-widest flex items-center justify-end gap-2">
@@ -166,6 +284,82 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
       {/* Goals List */}
       <div className="flex-1 overflow-y-auto p-8 space-y-8 no-scrollbar">
         <div className="max-w-4xl mx-auto space-y-8">
+          <div className="bg-white rounded-[32px] p-6 shadow-xl shadow-blue-900/5 border border-white animate-slide-up">
+            <div className="flex flex-col lg:flex-row lg:items-end gap-4">
+              <div className="flex-1">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] mb-2">
+                  Registro rapido de comportamento
+                </p>
+                <input
+                  type="text"
+                  value={behaviorName}
+                  onChange={(event) => setBehaviorName(event.target.value)}
+                  placeholder="Ex: fuga da atividade, agressao, choro..."
+                  className="w-full bg-[#F4F7FE] border border-blue-100 rounded-2xl px-5 py-4 text-sm font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
+                />
+              </div>
+              <div className="w-full lg:w-56">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] mb-2">
+                  Metodo
+                </p>
+                <select
+                  value={behaviorMeasurementType}
+                  onChange={(event) => setBehaviorMeasurementType(event.target.value)}
+                  className="w-full bg-[#F4F7FE] border border-blue-100 rounded-2xl px-5 py-4 text-sm font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
+                >
+                  {behaviorMeasurementOptions.map((option) => (
+                    <option key={option.key} value={option.key}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                onClick={handleSaveBehaviorEvent}
+                disabled={!behaviorName.trim() || isSavingBehaviorEvent}
+                className="px-6 py-4 bg-[#1B254B] text-white rounded-2xl text-xs font-bold uppercase tracking-widest hover:opacity-90 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {isSavingBehaviorEvent ? 'Salvando...' : 'Registrar'}
+              </button>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mt-4">
+              {behaviorMeasurementType === 'abc' && (
+                <>
+                  <input
+                    type="text"
+                    value={behaviorAntecedent}
+                    onChange={(event) => setBehaviorAntecedent(event.target.value)}
+                    placeholder="Antecedente"
+                    className="bg-[#F4F7FE] border border-blue-100 rounded-2xl px-4 py-3 text-sm text-gray-700 outline-none focus:border-[#7a32fc]"
+                  />
+                  <input
+                    type="text"
+                    value={behaviorConsequence}
+                    onChange={(event) => setBehaviorConsequence(event.target.value)}
+                    placeholder="Consequencia"
+                    className="bg-[#F4F7FE] border border-blue-100 rounded-2xl px-4 py-3 text-sm text-gray-700 outline-none focus:border-[#7a32fc]"
+                  />
+                </>
+              )}
+              <input
+                type="text"
+                value={behaviorLocation}
+                onChange={(event) => setBehaviorLocation(event.target.value)}
+                placeholder="Local"
+                className="bg-[#F4F7FE] border border-blue-100 rounded-2xl px-4 py-3 text-sm text-gray-700 outline-none focus:border-[#7a32fc]"
+              />
+              <input
+                type="text"
+                value={behaviorNote}
+                onChange={(event) => setBehaviorNote(event.target.value)}
+                placeholder="Observacao opcional"
+                className="bg-[#F4F7FE] border border-blue-100 rounded-2xl px-4 py-3 text-sm text-gray-700 outline-none focus:border-[#7a32fc]"
+              />
+            </div>
+            {behaviorEventCount > 0 && (
+              <p className="text-[10px] font-bold text-[#7a32fc] uppercase tracking-[0.2em] mt-4">
+                {behaviorEventCount} comportamento(s) registrado(s) nesta tela
+              </p>
+            )}
+          </div>
           {sessionGoals.map((goal: any) => (
             <div key={goal.id} className="bg-white rounded-[40px] p-10 shadow-xl shadow-blue-900/5 border border-white relative group animate-slide-up overflow-hidden">
               {showTrialConfirmation && lastRecordedGoalId === goal.id && (
@@ -190,9 +384,10 @@ export const SessionMode = ({ patient, onClose, onRecordTrial, activeSession, re
                       </button>
                       <button 
                         onClick={handleSaveTrialObservation}
-                        className="px-10 py-4 bg-green-500 text-white rounded-2xl text-xs font-bold uppercase tracking-widest hover:opacity-90 transition-all active:scale-95 shadow-xl shadow-green-500/20"
+                        disabled={isSavingObservation}
+                        className="px-10 py-4 bg-green-500 text-white rounded-2xl text-xs font-bold uppercase tracking-widest hover:opacity-90 transition-all active:scale-95 shadow-xl shadow-green-500/20 disabled:opacity-60"
                       >
-                        Confirmar
+                        {isSavingObservation ? 'Salvando...' : 'Confirmar'}
                       </button>
                     </div>
                   </div>

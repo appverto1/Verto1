@@ -633,6 +633,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       recordCount: 0
     };
     persistActiveSession(nextSession);
+    void dataService.saveAbaSession({
+      id: nextSession.id,
+      patient_id: patient?.id,
+      patient_name: patient?.name || 'Paciente',
+      status: 'active',
+      started_at: nextSession.startedAt,
+      duration_minutes: durationMinutes,
+      reference_date: nextSession.referenceDate,
+      record_count: 0,
+      source: 'verto_web'
+    });
     setShowSessionStartConfirm(false);
     setRestoreSessionData(false);
     onAddActivityLog?.(
@@ -649,6 +660,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setShowSessionEndConfirm(false);
     setIsSessionModeOpen(false);
     if (endedSession) {
+      void dataService.updateAbaSession(String(endedSession.id), {
+        status: 'completed',
+        ended_at: new Date().toISOString(),
+        record_count: Number(endedSession.recordCount || 0)
+      });
       onAddNote?.(
         patient.id,
         `Sessão encerrada.\nInício: ${new Date(endedSession.startedAt).toLocaleString('pt-BR')}\nTérmino: ${new Date().toLocaleString('pt-BR')}\nRegistros nesta sessão: ${Number(endedSession.recordCount || 0)}`,
@@ -3221,11 +3237,24 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const handleSaveTrialObservation = () => {
     if (pendingTrial) {
       setIsSavingObservation(true);
+      const pendingGoal = Array.isArray(patient?.pei)
+        ? patient.pei.find((goal: any) => String(goal?.id) === String(pendingTrial.goalId) || goal?.name === pendingTrial.title)
+        : null;
       const sessionMeta = activeSession
         ? {
             sessionId: activeSession.id,
             sessionStartedAt: activeSession.startedAt,
-            sessionReferenceDate: activeSession.referenceDate
+            sessionReferenceDate: activeSession.referenceDate,
+            targetId: pendingTrial.goalId,
+            targetMaxScore: pendingGoal?.maxScore || 1,
+            protocolId: pendingGoal?.protocolId || null,
+            protocolTitle: pendingGoal?.protocolTitle || null,
+            domainId: pendingGoal?.domainId || null,
+            domainName: pendingGoal?.domainName || null,
+            collectionType: 'dtt',
+            promptLevelKey: pendingTrial.score === 1 ? 'independent' : 'prompted',
+            promptLevelName: pendingTrial.score === 1 ? 'Independente' : 'Com ajuda',
+            independent: pendingTrial.score === 1
           }
         : null;
       const newId = onRecordTrial(pendingTrial.pid, pendingTrial.title, pendingTrial.score, trialObservation, sessionMeta);
