@@ -16,12 +16,16 @@ const abaPromptPath = path.resolve(process.cwd(), 'src/utils/abaPromptLevels.ts'
 const abaPromptCode = fs.readFileSync(abaPromptPath, 'utf8');
 const sessionModePath = path.resolve(process.cwd(), 'src/components/SessionMode.tsx');
 const sessionModeCode = fs.readFileSync(sessionModePath, 'utf8');
+const featureFlagsPath = path.resolve(process.cwd(), 'src/utils/featureFlags.ts');
+const featureFlagsCode = fs.readFileSync(featureFlagsPath, 'utf8');
 const financialRlsPath = path.resolve(process.cwd(), 'supabase/migrations/20260521143000_financial_rls_coordinator_only.sql');
 const financialRlsCode = fs.readFileSync(financialRlsPath, 'utf8');
 const abaRlsPath = path.resolve(process.cwd(), 'supabase/migrations/20260523120000_aba_clinical_core.sql');
 const abaRlsCode = fs.readFileSync(abaRlsPath, 'utf8');
 const abaMasteryRlsPath = path.resolve(process.cwd(), 'supabase/migrations/20260523123000_aba_mastery_engine.sql');
 const abaMasteryRlsCode = fs.readFileSync(abaMasteryRlsPath, 'utf8');
+const abaV2RlsPath = path.resolve(process.cwd(), 'supabase/migrations/20260524103000_aba_v2_interval_abc_audit.sql');
+const abaV2RlsCode = fs.readFileSync(abaV2RlsPath, 'utf8');
 
 function expectPattern(pattern, message) {
   assert.match(serverCode, pattern, message);
@@ -285,10 +289,14 @@ test('aba privacy: API endpoints are clinic-scoped and exclude patient/reception
     "app.post('/api/aba/sessions'",
     "app.patch('/api/aba/sessions/:sessionId'",
     "app.get('/api/aba/sessions/:patientId'",
+    "app.post('/api/aba/session-summaries'",
     "app.post('/api/aba/trials'",
     "app.get('/api/aba/trials/:patientId'",
     "app.post('/api/aba/behavior-events'",
     "app.get('/api/aba/behavior-events/:patientId'",
+    "app.post('/api/aba/interval-records'",
+    "app.post('/api/aba/interval-summaries'",
+    "app.post('/api/aba/abc-events'",
     "app.post('/api/aba/mastery-evaluations'",
     "app.get('/api/aba/mastery-evaluations/:patientId'"
   ];
@@ -301,6 +309,11 @@ test('aba privacy: API endpoints are clinic-scoped and exclude patient/reception
       slice,
       /requireRoles\('coordinator', 'therapist', 'admin', 'owner'\)/,
       `${marker} deve aceitar somente coordenador, terapeuta vinculado, admin ou owner.`
+    );
+    assert.match(
+      slice,
+      /requireAbaV2Feature/,
+      `${marker} deve ficar isolado pela feature flag aba_v2.`
     );
     assert.doesNotMatch(
       slice,
@@ -389,10 +402,60 @@ test('aba privacy: RLS is enabled and patient-scoped for clinical ABA tables', (
     /u\.role = 'therapist'[\s\S]*?p\.therapist_id = auth\.uid\(\)[\s\S]*?u\.clinic_id::text = aba_mastery_evaluations\.clinic_id/m,
     'aba_mastery_evaluations deve permitir terapeuta somente quando vinculado ao paciente.'
   );
+  for (const tableName of ['aba_interval_records', 'aba_interval_summaries', 'aba_abc_events', 'aba_audit_events']) {
+    assert.match(
+      abaV2RlsCode,
+      new RegExp(`alter table public\\.${tableName} enable row level security;`),
+      `${tableName} deve ter RLS habilitado.`
+    );
+  }
+  assert.match(
+    abaV2RlsCode,
+    /u\.role = 'coordinator'[\s\S]*?u\.clinic_id::text = aba_interval_records\.clinic_id/m,
+    'aba_interval_records deve permitir coordenador somente dentro da clinica.'
+  );
+  assert.match(
+    abaV2RlsCode,
+    /u\.role = 'therapist'[\s\S]*?p\.therapist_id = auth\.uid\(\)[\s\S]*?u\.clinic_id::text = aba_abc_events\.clinic_id/m,
+    'aba_abc_events deve permitir terapeuta somente quando vinculado ao paciente.'
+  );
+  assert.doesNotMatch(
+    abaV2RlsCode,
+    /u\.role = 'patient'|u\.role = 'receptionist'/,
+    'RLS ABA V2 nao deve conceder acesso direto a paciente ou recepcao.'
+  );
   assert.doesNotMatch(
     abaMasteryRlsCode,
     /u\.role = 'patient'|u\.role = 'receptionist'/,
     'RLS ABA de maestria nao deve conceder acesso direto a paciente ou recepcao.'
+  );
+});
+
+test('aba v2 feature flag: frontend and backend can disable isolated ABA V2 flows', () => {
+  assert.match(
+    featureFlagsCode,
+    /export const isAbaV2Enabled[\s\S]*?resolveFeatureFlag\('aba_v2'/m,
+    'frontend deve expor feature flag aba_v2.'
+  );
+  assert.match(
+    serverCode,
+    /const requireAbaV2Feature[\s\S]*?feature_disabled[\s\S]*?aba_v2/m,
+    'backend deve bloquear rotas ABA V2 quando a feature flag estiver desligada.'
+  );
+  assert.match(
+    dataServiceCode,
+    /if \(!isAbaV2Enabled\(\)\) return abaV2DisabledResponse/m,
+    'dataService deve evitar writes ABA V2 quando aba_v2=false.'
+  );
+  assert.match(
+    patientDetailCode,
+    /abaV2Enabled && isSessionModeOpen[\s\S]*?<SessionMode/m,
+    'PatientDetailView deve isolar o componente SessionMode por aba_v2.'
+  );
+  assert.match(
+    appCode,
+    /if \(isAbaV2Enabled\(\)\) \{[\s\S]*?dataService\.saveAbaTrial/m,
+    'App nao deve gravar tentativas estruturadas quando aba_v2=false.'
   );
 });
 
@@ -505,6 +568,21 @@ test('aba persistence: frontend records sessions and structured trials offline-f
   );
   assert.match(
     dataServiceCode,
+    /async saveAbaIntervalRecord\(record: any\)[\s\S]*?saveOfflineFirst\(id, data, 'aba', '\/api\/aba\/interval-records'\)/m,
+    'dataService deve salvar respostas de intervalo ABA em tabela propria.'
+  );
+  assert.match(
+    dataServiceCode,
+    /async saveAbaIntervalSummary\(summary: any\)[\s\S]*?saveOfflineFirst\(id, data, 'aba', '\/api\/aba\/interval-summaries'\)/m,
+    'dataService deve salvar resumo de intervalo ABA em tabela propria.'
+  );
+  assert.match(
+    dataServiceCode,
+    /async saveAbaAbcEvent\(event: any\)[\s\S]*?saveOfflineFirst\(id, data, 'aba', '\/api\/aba\/abc-events'\)/m,
+    'dataService deve salvar ABC ABA em tabela propria.'
+  );
+  assert.match(
+    dataServiceCode,
     /async getAbaBehaviorEvents\(patientId: string\)[\s\S]*?\/api\/aba\/behavior-events\/\$\{encodeURIComponent\(String\(patientId\)\)\}/m,
     'dataService deve buscar eventos de comportamento ABA para exibir no prontuario.'
   );
@@ -552,6 +630,11 @@ test('aba persistence: frontend records sessions and structured trials offline-f
     sessionModeCode,
     /dataService\.saveAbaBehaviorEvent\(/m,
     'SessionMode deve registrar comportamento ABA rapido.'
+  );
+  assert.match(
+    sessionModeCode,
+    /dataService\.saveAbaIntervalRecord\([\s\S]*?dataService\.saveAbaIntervalSummary\([\s\S]*?dataService\.saveAbaAbcEvent\(/m,
+    'SessionMode deve persistir intervalo e ABC nas tabelas dedicadas, sem duplicar tudo em behavior_events.'
   );
   assert.match(
     appCode,

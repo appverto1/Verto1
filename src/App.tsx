@@ -6,6 +6,7 @@ import { syncOfflineData } from './services/localDb';
 import { dataService } from './services/dataService';
 import { formatProfessionalRegistry } from './utils/professionalRegistry';
 import { resolveAbaPromptLevel } from './utils/abaPromptLevels';
+import { isAbaV2Enabled } from './utils/featureFlags';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -3549,55 +3550,57 @@ export default function App() {
     const abaTargetId = String(sessionMeta?.targetId || peiGoal?.id || matchedSkill?.id || title);
     const abaTrialId = `trial-${newId}`;
 
-    try {
-      await dataService.saveAbaTrial({
-        id: abaTrialId,
-        patient_id: String(pid),
-        patientId: String(pid),
-        session_id: sessionMeta?.sessionId || null,
-        sessionId: sessionMeta?.sessionId || null,
-        target_id: abaTargetId,
-        targetId: abaTargetId,
-        target_name: title,
-        program_id: sessionMeta?.programId || peiGoal?.programId || null,
-        protocol_id: sessionMeta?.protocolId || peiGoal?.protocolId || matchedProtocol?.id || null,
-        protocol_title: sessionMeta?.protocolTitle || peiGoal?.protocolTitle || matchedProtocol?.title || matchedProtocol?.name || null,
-        domain_id: sessionMeta?.domainId || peiGoal?.domainId || matchedDomain?.id || null,
-        domain_name: sessionMeta?.domainName || peiGoal?.domainName || matchedDomain?.name || matchedDomain?.title || null,
-        collection_type: abaCollectionType,
-        trialType: abaCollectionType,
-        response_score: finalScore,
-        score: finalScore,
-        max_score: maxScoreForAba,
-        correct: abaCorrect,
-        isCorrect: abaCorrect,
-        independent: abaIndependent,
-        isIndependent: abaIndependent,
-        prompt_level_key: promptLevelKey,
-        promptLevel: promptLevelKey,
-        promptLevelKey,
-        prompt_level_name: abaPromptLevel.label,
-        promptLevelName: abaPromptLevel.label,
-        notes: evalComment || '',
-        occurred_at: recordedAt,
-        timestamp: recordedAt,
-        therapist_id: user?.id || undefined,
-        therapistId: user?.id || undefined,
-        source_history_id: String(sourceHistoryId || newId),
-        raw_payload: {
-          legacyScore: score,
-          normalizedScore: finalScore,
-          isKid,
-          sessionReferenceDate: sessionMeta?.sessionReferenceDate || null,
-          promptLevelKey: abaPromptLevel.key,
-          promptLevelName: abaPromptLevel.label,
-          promptLevelSource: sessionMeta?.promptLevelSource || null,
+    if (isAbaV2Enabled()) {
+      try {
+        await dataService.saveAbaTrial({
+          id: abaTrialId,
+          patient_id: String(pid),
+          patientId: String(pid),
+          session_id: sessionMeta?.sessionId || null,
+          sessionId: sessionMeta?.sessionId || null,
+          target_id: abaTargetId,
+          targetId: abaTargetId,
+          target_name: title,
+          program_id: sessionMeta?.programId || peiGoal?.programId || null,
+          protocol_id: sessionMeta?.protocolId || peiGoal?.protocolId || matchedProtocol?.id || null,
+          protocol_title: sessionMeta?.protocolTitle || peiGoal?.protocolTitle || matchedProtocol?.title || matchedProtocol?.name || null,
+          domain_id: sessionMeta?.domainId || peiGoal?.domainId || matchedDomain?.id || null,
+          domain_name: sessionMeta?.domainName || peiGoal?.domainName || matchedDomain?.name || matchedDomain?.title || null,
+          collection_type: abaCollectionType,
           trialType: abaCollectionType,
-          therapistId: user?.id || null
-        }
-      });
-    } catch (error) {
-      console.error('Falha ao persistir tentativa ABA estruturada:', error);
+          response_score: finalScore,
+          score: finalScore,
+          max_score: maxScoreForAba,
+          correct: abaCorrect,
+          isCorrect: abaCorrect,
+          independent: abaIndependent,
+          isIndependent: abaIndependent,
+          prompt_level_key: promptLevelKey,
+          promptLevel: promptLevelKey,
+          promptLevelKey,
+          prompt_level_name: abaPromptLevel.label,
+          promptLevelName: abaPromptLevel.label,
+          notes: evalComment || '',
+          occurred_at: recordedAt,
+          timestamp: recordedAt,
+          therapist_id: user?.id || undefined,
+          therapistId: user?.id || undefined,
+          source_history_id: String(sourceHistoryId || newId),
+          raw_payload: {
+            legacyScore: score,
+            normalizedScore: finalScore,
+            isKid,
+            sessionReferenceDate: sessionMeta?.sessionReferenceDate || null,
+            promptLevelKey: abaPromptLevel.key,
+            promptLevelName: abaPromptLevel.label,
+            promptLevelSource: sessionMeta?.promptLevelSource || null,
+            trialType: abaCollectionType,
+            therapistId: user?.id || null
+          }
+        });
+      } catch (error) {
+        console.error('Falha ao persistir tentativa ABA estruturada:', error);
+      }
     }
 
     const updatedHistory = [newHistoryItem, ...history];
@@ -3655,40 +3658,42 @@ export default function App() {
       const updatedGoal = updatedPei.find((goal: any) => goal.name === title);
       const isMastered = updatedGoal?.status === 'completed';
 
-      try {
-        await dataService.saveAbaMasteryEvaluation({
-          id: `mastery-${newId}`,
-          patient_id: String(pid),
-          session_id: sessionMeta?.sessionId || null,
-          target_id: abaTargetId,
-          target_name: title,
-          evaluation_status: isMastered ? 'mastered' : 'not_met',
-          suggested_phase: isMastered ? 'mastered' : 'teaching',
-          accuracy_percent: abaCorrect ? 100 : 0,
-          consecutive_successes: consecutiveCount,
-          min_consecutive_successes: appliedMasteryTarget,
-          trials_considered: skillHistory.length,
-          distinct_therapists_count: 1,
-          first_trial_independent: abaIndependent,
-          criteria: {
-            source: 'pei_consecutive_successes',
-            minConsecutiveSuccesses: appliedMasteryTarget,
-            minAccuracyPercent: 100,
-            collectionType: abaCollectionType
-          },
-          reasons: isMastered
-            ? ['Criterio de sucessos independentes consecutivos atingido.']
-            : [`${consecutiveCount}/${appliedMasteryTarget} sucessos independentes consecutivos.`],
-          evaluated_at: recordedAt,
-          source_trial_id: abaTrialId,
-          raw_payload: {
-            legacyHistoryId: String(sourceHistoryId || newId),
-            previousStatus: peiGoal?.status || null,
-            progress: updatedGoal?.progress ?? null
-          }
-        });
-      } catch (error) {
-        console.error('Falha ao persistir avaliação de maestria ABA:', error);
+      if (isAbaV2Enabled()) {
+        try {
+          await dataService.saveAbaMasteryEvaluation({
+            id: `mastery-${newId}`,
+            patient_id: String(pid),
+            session_id: sessionMeta?.sessionId || null,
+            target_id: abaTargetId,
+            target_name: title,
+            evaluation_status: isMastered ? 'mastered' : 'not_met',
+            suggested_phase: isMastered ? 'mastered' : 'teaching',
+            accuracy_percent: abaCorrect ? 100 : 0,
+            consecutive_successes: consecutiveCount,
+            min_consecutive_successes: appliedMasteryTarget,
+            trials_considered: skillHistory.length,
+            distinct_therapists_count: 1,
+            first_trial_independent: abaIndependent,
+            criteria: {
+              source: 'pei_consecutive_successes',
+              minConsecutiveSuccesses: appliedMasteryTarget,
+              minAccuracyPercent: 100,
+              collectionType: abaCollectionType
+            },
+            reasons: isMastered
+              ? ['Criterio de sucessos independentes consecutivos atingido.']
+              : [`${consecutiveCount}/${appliedMasteryTarget} sucessos independentes consecutivos.`],
+            evaluated_at: recordedAt,
+            source_trial_id: abaTrialId,
+            raw_payload: {
+              legacyHistoryId: String(sourceHistoryId || newId),
+              previousStatus: peiGoal?.status || null,
+              progress: updatedGoal?.progress ?? null
+            }
+          });
+        } catch (error) {
+          console.error('Falha ao persistir avaliação de maestria ABA:', error);
+        }
       }
 
       if (isMastered && peiGoal?.status !== 'completed') {

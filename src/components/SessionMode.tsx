@@ -21,6 +21,7 @@ import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { dataService } from '../services/dataService';
 import { ABA_PROMPT_LEVEL_OPTIONS, resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 import { buildSessionReport, calculateSessionSummary, canCloseAbaSession, canRecordInAbaSession, type SessionSummary, type SessionSummaryPendingItem } from '../utils/abaSessionSummary';
+import { isAbaV2Enabled } from '../utils/featureFlags';
 
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
 type AbcRequirement = 'REQUIRED' | 'RECOMMENDED' | 'OPTIONAL' | 'DISABLED';
@@ -207,6 +208,8 @@ export const SessionMode = ({
   onSessionRecordSaved,
   therapistId
 }: any) => {
+  if (!isAbaV2Enabled()) return null;
+
   const sessionGoals = (patient.pei?.filter((g: any) => g.isPriority || g.status === 'in_progress') || [])
     .sort((a: any, b: any) => (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0));
 
@@ -459,6 +462,76 @@ export const SessionMode = ({
     }
   };
 
+  const saveIntervalRecord = async (payload: any, record: Omit<SessionRecord, 'syncStatus'>) => {
+    addRecord(record, 'local');
+    setTimeout(() => updateRecordStatus(record.id, 'syncing'), 60);
+    try {
+      const result = await dataService.saveAbaIntervalRecord({
+        ...payload,
+        patient_id: patientId,
+        patientId,
+        session_id: sessionId,
+        sessionId,
+        therapist_id: resolvedTherapistId || undefined,
+        therapistId: resolvedTherapistId || undefined
+      });
+      updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
+      onSessionRecordSaved?.();
+      return result;
+    } catch (error) {
+      updateRecordStatus(record.id, 'error');
+      console.error('Falha ao persistir intervalo ABA:', error);
+      return { success: false, error };
+    }
+  };
+
+  const saveIntervalSummaryRecord = async (payload: any, record: Omit<SessionRecord, 'syncStatus'>) => {
+    addRecord(record, 'local');
+    setTimeout(() => updateRecordStatus(record.id, 'syncing'), 60);
+    try {
+      const result = await dataService.saveAbaIntervalSummary({
+        ...payload,
+        patient_id: patientId,
+        patientId,
+        session_id: sessionId,
+        sessionId,
+        therapist_id: resolvedTherapistId || undefined,
+        therapistId: resolvedTherapistId || undefined
+      });
+      updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
+      onSessionRecordSaved?.();
+      return result;
+    } catch (error) {
+      updateRecordStatus(record.id, 'error');
+      console.error('Falha ao persistir resumo de intervalo ABA:', error);
+      return { success: false, error };
+    }
+  };
+
+  const saveAbcClinicalEvent = async (payload: any, record: Omit<SessionRecord, 'syncStatus'>, mode: 'add' | 'upsert' = 'add') => {
+    if (mode === 'upsert') upsertRecord(record, 'local');
+    else addRecord(record, 'local');
+    setTimeout(() => updateRecordStatus(record.id, 'syncing'), 60);
+    try {
+      const result = await dataService.saveAbaAbcEvent({
+        ...payload,
+        patient_id: patientId,
+        patientId,
+        session_id: sessionId,
+        sessionId,
+        therapist_id: resolvedTherapistId || undefined,
+        therapistId: resolvedTherapistId || undefined
+      });
+      updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
+      onSessionRecordSaved?.();
+      return result;
+    } catch (error) {
+      updateRecordStatus(record.id, 'error');
+      console.error('Falha ao persistir ABC ABA:', error);
+      return { success: false, error };
+    }
+  };
+
   const deleteBehaviorEvent = async (record: SessionRecord) => {
     updateRecordStatus(record.id, 'syncing');
     try {
@@ -617,6 +690,7 @@ export const SessionMode = ({
       endedAt: null,
       duration_seconds: null,
       durationSeconds: null,
+      status: 'IN_PROGRESS',
       count_delta: 1,
       countDelta: 1,
       location: selectedLocation,
@@ -653,6 +727,7 @@ export const SessionMode = ({
       endedAt,
       duration_seconds: durationSeconds,
       durationSeconds,
+      status: 'COMPLETED',
       count_delta: 1,
       countDelta: 1,
       location: event.location || selectedLocation,
@@ -795,6 +870,18 @@ export const SessionMode = ({
       behavior_id: behaviorId,
       behaviorId,
       method: run.measurementType,
+      total_intervals: safeCompletedTotal,
+      totalIntervals: safeCompletedTotal,
+      yes_count: safeOccurredTotal,
+      yesCount: safeOccurredTotal,
+      no_count: notOccurredTotal,
+      noCount: notOccurredTotal,
+      occurrence_percent: percent,
+      occurrencePercent: percent,
+      started_at: run.startedAt,
+      startedAt: run.startedAt,
+      ended_at: endedAt,
+      endedAt,
       count_delta: safeOccurredTotal,
       countDelta: safeOccurredTotal,
       location: run.location || selectedLocation,
@@ -824,7 +911,7 @@ export const SessionMode = ({
         syncStatus: 'local'
       }
     });
-    void saveBehaviorEvent(payload, {
+    void saveIntervalSummaryRecord(payload, {
       id: aggregateId,
       kind: 'behavior',
       title: run.behaviorName,
@@ -914,6 +1001,8 @@ export const SessionMode = ({
       intervalStartedAt,
       interval_ended_at: intervalEndedAt,
       intervalEndedAt,
+      interval_duration_seconds: Number(intervalRun.intervalSeconds || intervalSeconds),
+      intervalDurationSeconds: Number(intervalRun.intervalSeconds || intervalSeconds),
       interval_occurred: occurred,
       intervalOccurred: occurred,
       occurred,
@@ -942,7 +1031,7 @@ export const SessionMode = ({
     });
     const nextCompletedCount = Number(intervalRun.completedCount || 0) + 1;
     const nextOccurredCount = Number(intervalRun.occurredCount || 0) + (occurred ? 1 : 0);
-    void saveBehaviorEvent(payload, {
+    void saveIntervalRecord(payload, {
       id: recordId,
       kind: 'behavior',
       title: intervalRun.behaviorName,
@@ -996,21 +1085,25 @@ export const SessionMode = ({
     if (!ensureSessionCanRecord()) return;
     const behavior = behaviorPresets.find((item) => item.id === abcBehaviorId) || selectedBehavior;
     const payload = buildBehaviorPayload(behavior.name, 'abc', {
+      behavior_id: behavior.id,
+      behaviorId: behavior.id,
       antecedent: abcAntecedent,
       consequence: abcConsequence,
       location: abcLocation,
       severity: abcSeverity,
       notes: abcNote,
+      response: abcNote,
       response_by_therapist: abcNote,
       responseByTherapist: abcNote
     });
-    void saveBehaviorEvent(payload, {
+    void saveAbcClinicalEvent(payload, {
       id: String(payload.id),
       kind: 'behavior',
       title: behavior.name,
       detail: `ABC - severidade ${abcSeverity}`,
       timestamp: payload.timestamp,
       measurementType: 'abc',
+      behaviorId: behavior.id,
       location: abcLocation,
       severity: abcSeverity,
       antecedent: abcAntecedent,
@@ -1134,6 +1227,7 @@ export const SessionMode = ({
         frequency_summary: finalSummary.frequencySummary,
         duration_summary: finalSummary.durationSummary,
         interval_summary: finalSummary.intervalSummary,
+        abc_summary: finalSummary.abcSummary,
         mastery_summary: finalSummary.masterySummary,
         blocking_items: finalSummary.blockingItems,
         warning_items: finalSummary.warningItems,
@@ -1144,6 +1238,7 @@ export const SessionMode = ({
           patientName: finalSummary.patientName,
           teachingSummary: finalSummary.teachingSummary,
           trialTypesUsed: finalSummary.trialTypesUsed,
+          abcSummary: finalSummary.abcSummary,
           masterySummary: finalSummary.masterySummary,
           blockingItems: finalSummary.blockingItems,
           warningItems: finalSummary.warningItems,
@@ -1359,7 +1454,23 @@ export const SessionMode = ({
       )));
     }
     if (editedRecord.kind === 'behavior') {
-      void saveExistingBehaviorEvent(buildPayloadFromSessionRecord(editedRecord), editedRecord);
+      const editedPayload = buildPayloadFromSessionRecord(editedRecord);
+      if (sessionCompleted && (editedRecord.antecedent || editedRecord.consequence)) {
+        void saveAbcClinicalEvent({
+          ...editedPayload,
+          behavior_event_id: editedRecord.id,
+          behaviorEventId: editedRecord.id,
+          behavior_id: editedRecord.behaviorId || editedRecord.id,
+          behaviorId: editedRecord.behaviorId || editedRecord.id,
+          response: editedRecord.notes,
+          clinical_complement: true,
+          clinicalComplement: true,
+          complement_type: 'abc',
+          complementType: 'abc'
+        }, editedRecord, 'upsert');
+      } else {
+        void saveExistingBehaviorEvent(editedPayload, editedRecord);
+      }
     } else {
       updateRecord(editingRecordId, editedRecord);
     }
@@ -1390,6 +1501,7 @@ export const SessionMode = ({
         frequency_summary: updatedSummary.frequencySummary,
         duration_summary: updatedSummary.durationSummary,
         interval_summary: updatedSummary.intervalSummary,
+        abc_summary: updatedSummary.abcSummary,
         mastery_summary: updatedSummary.masterySummary,
         blocking_items: updatedSummary.blockingItems,
         warning_items: updatedSummary.warningItems,
@@ -1400,6 +1512,7 @@ export const SessionMode = ({
           patientName: updatedSummary.patientName,
           teachingSummary: updatedSummary.teachingSummary,
           trialTypesUsed: updatedSummary.trialTypesUsed,
+          abcSummary: updatedSummary.abcSummary,
           masterySummary: updatedSummary.masterySummary,
           blockingItems: updatedSummary.blockingItems,
           warningItems: updatedSummary.warningItems,

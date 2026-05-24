@@ -17,6 +17,7 @@ import { prepareElementForPdfCapture } from '../utils/pdfCapture';
 import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
+import { isAbaV2Enabled } from '../utils/featureFlags';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
 import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
 import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
@@ -160,6 +161,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       patient?.anamnesisData?.formType === 'child' ||
       (patient?.anamnesisData?.formType !== 'adult' && hasNumericAge && normalizedPatientAge <= 12)
     ));
+  const abaV2Enabled = isAbaV2Enabled();
   const chartFiltersStorageKey = `verto.patient-chart-filters:${String(patient?.id || 'unknown')}:${isKidsProfile ? 'kids' : 'adult'}`;
   const readPersistedChartFilters = () => {
     if (typeof window === 'undefined') return {};
@@ -513,7 +515,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   useEffect(() => {
     let cancelled = false;
     const loadAbaRecords = async () => {
-      if (!patient?.id || !isKidsProfile) {
+      if (!patient?.id || !isKidsProfile || !abaV2Enabled) {
         setAbaSessions([]);
         setAbaTrials([]);
         setAbaBehaviorEvents([]);
@@ -553,7 +555,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return () => {
       cancelled = true;
     };
-  }, [patient?.id, isKidsProfile, activeSession?.recordCount, abaRecordsRefreshKey]);
+  }, [patient?.id, isKidsProfile, abaV2Enabled, activeSession?.recordCount, abaRecordsRefreshKey]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -630,6 +632,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [sessionStorageKey, patient?.id]);
 
   const requestSessionStart = (nextAction: 'tab' | 'fullscreen' = 'tab') => {
+    if (!abaV2Enabled) {
+      setActiveTab('session');
+      return;
+    }
     if (activeSession) {
       if (nextAction === 'fullscreen') setIsSessionModeOpen(true);
       else setActiveTab('session');
@@ -691,18 +697,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       recordCount: 0
     };
     persistActiveSession(nextSession);
-    void dataService.saveAbaSession({
-      id: nextSession.id,
-      patient_id: patient?.id,
-      patient_name: patient?.name || 'Paciente',
-      therapist_id: resolvedClinicContext?.userId || clinicContext?.userId || undefined,
-      status: 'active',
-      started_at: nextSession.startedAt,
-      duration_minutes: durationMinutes,
-      reference_date: nextSession.referenceDate,
-      record_count: 0,
-      source: 'verto_web'
-    });
+    if (abaV2Enabled) {
+      void dataService.saveAbaSession({
+        id: nextSession.id,
+        patient_id: patient?.id,
+        patient_name: patient?.name || 'Paciente',
+        therapist_id: resolvedClinicContext?.userId || clinicContext?.userId || undefined,
+        status: 'active',
+        started_at: nextSession.startedAt,
+        duration_minutes: durationMinutes,
+        reference_date: nextSession.referenceDate,
+        record_count: 0,
+        source: 'verto_web'
+      });
+    }
     setShowSessionStartConfirm(false);
     setRestoreSessionData(false);
     onAddActivityLog?.(
@@ -733,11 +741,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setIsSessionModeOpen(false);
     if (endedSession) {
       if (!options?.alreadyPersisted) {
-        void dataService.updateAbaSession(String(endedSession.id), {
-          status: 'completed',
-          ended_at: new Date().toISOString(),
-          record_count: Number(endedSession.recordCount || 0)
-        });
+        if (abaV2Enabled) {
+          void dataService.updateAbaSession(String(endedSession.id), {
+            status: 'completed',
+            ended_at: new Date().toISOString(),
+            record_count: Number(endedSession.recordCount || 0)
+          });
+        }
         onAddNote?.(
           patient.id,
           `Sessão encerrada.\nInício: ${new Date(endedSession.startedAt).toLocaleString('pt-BR')}\nTérmino: ${new Date().toLocaleString('pt-BR')}\nRegistros nesta sessão: ${Number(endedSession.recordCount || 0)}`,
@@ -4167,7 +4177,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           />
         </div>
       </div>
-      {isSessionModeOpen && (
+      {abaV2Enabled && isSessionModeOpen && (
         <SessionMode 
           patient={{ ...patient, history: history.filter((h: any) => h.patientId === patient.id) }} 
           onClose={() => setIsSessionModeOpen(false)} 
@@ -5877,7 +5887,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           </div> 
         ) : activeTab === 'session' && isKidsProfile ? (
           <div className="space-y-6 animate-fade-in">
-            {renderAbaRecordsPanel()}
+            {abaV2Enabled && renderAbaRecordsPanel()}
             <div className={`p-8 rounded-[40px] shadow-sm border relative overflow-hidden transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>
               <div className="absolute top-0 right-0 w-32 h-32 bg-[#7a32fc]/5 rounded-bl-full -z-0"></div>
               <div className="flex items-center justify-between mb-8 relative z-10">

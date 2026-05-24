@@ -37,6 +37,7 @@ export type SessionSummary = {
   frequencySummary: BehaviorFrequencySummary[];
   durationSummary: BehaviorDurationSummary[];
   intervalSummary: BehaviorIntervalSummary[];
+  abcSummary: BehaviorAbcSummary[];
   masterySummary: SessionMasterySummaryItem[];
   teachingSummary: TeachingSummary;
   syncStatus: 'local' | 'syncing' | 'synced' | 'error';
@@ -69,6 +70,15 @@ export type BehaviorIntervalSummary = {
   occurredCount: number;
   notOccurredCount: number;
   occurrencePercent: number;
+};
+
+export type BehaviorAbcSummary = {
+  behaviorName: string;
+  totalEvents: number;
+  completedEvents: number;
+  missingEvents: number;
+  locations: string[];
+  averageSeverity: number | null;
 };
 
 export type TeachingSummary = {
@@ -175,6 +185,7 @@ type CalculateSessionSummaryInput = {
   endedAt?: string;
   trials?: any[];
   behaviorEvents?: any[];
+  abcSummary?: BehaviorAbcSummary[];
   masterySummary?: SessionMasterySummaryItem[];
   blockingItems?: SessionSummaryPendingItem[];
   warningItems?: SessionSummaryPendingItem[];
@@ -410,6 +421,47 @@ const calculateIntervalSummary = (events: any[]): BehaviorIntervalSummary[] => {
   return Array.from(grouped.values()).map(({ hasAggregate, ...summary }) => summary);
 };
 
+const hasAbcFields = (record: any) => Boolean(valueOf(record, 'antecedent') || valueOf(record, 'consequence'));
+
+const calculateAbcSummary = (events: any[]): BehaviorAbcSummary[] => {
+  const grouped = new Map<string, {
+    behaviorName: string;
+    totalEvents: number;
+    completedEvents: number;
+    missingEvents: number;
+    locations: any[];
+    severities: any[];
+  }>();
+
+  for (const event of events) {
+    if (isIntervalAggregate(event)) continue;
+    const behaviorName = behaviorNameOf(event);
+    const current = grouped.get(behaviorName) || {
+      behaviorName,
+      totalEvents: 0,
+      completedEvents: 0,
+      missingEvents: 0,
+      locations: [],
+      severities: []
+    };
+    current.totalEvents += 1;
+    current.locations.push(valueOf(event, 'location'));
+    current.severities.push(valueOf(event, 'severity'));
+    if (measurementTypeOf(event) === 'abc' || hasAbcFields(event)) current.completedEvents += 1;
+    else current.missingEvents += 1;
+    grouped.set(behaviorName, current);
+  }
+
+  return Array.from(grouped.values()).map((group) => ({
+    behaviorName: group.behaviorName,
+    totalEvents: group.totalEvents,
+    completedEvents: group.completedEvents,
+    missingEvents: group.missingEvents,
+    locations: uniqueStrings(group.locations),
+    averageSeverity: averageOrNull(group.severities)
+  }));
+};
+
 export const calculateSessionSummary = (sessionId: string, input: CalculateSessionSummaryInput = {}): SessionSummary => {
   const endedAt = safeIso(input.endedAt);
   const startedAt = safeIso(input.startedAt, endedAt);
@@ -420,6 +472,7 @@ export const calculateSessionSummary = (sessionId: string, input: CalculateSessi
   const frequencySummary = calculateFrequencySummary(behaviorEvents);
   const durationSummary = calculateDurationSummary(behaviorEvents);
   const intervalSummary = calculateIntervalSummary(behaviorEvents);
+  const abcSummary = input.abcSummary || calculateAbcSummary(behaviorEvents);
   const totalBehaviorEvents = behaviorEvents.filter((event) => !isIntervalAggregate(event)).length;
   const blockingItems = input.blockingItems || input.pendingItems || [];
   const warningItems = input.warningItems || input.pendingWarnings || [];
@@ -444,6 +497,7 @@ export const calculateSessionSummary = (sessionId: string, input: CalculateSessi
     frequencySummary,
     durationSummary,
     intervalSummary,
+    abcSummary,
     masterySummary: input.masterySummary || [],
     teachingSummary,
     syncStatus: input.syncStatus || 'local',
@@ -636,7 +690,7 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
         averageSeverity: null
       }));
 
-  const hasAbc = (record: any) => Boolean(valueOf(record, 'antecedent') || valueOf(record, 'consequence'));
+  const hasAbc = hasAbcFields;
   const abcEvents = effectiveBehaviorRecords
     .filter((record) => measurementTypeOf(record) === 'abc' || hasAbc(record))
     .map((record) => ({
@@ -647,14 +701,28 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
       severity: valueOf(record, 'severity') !== undefined ? safeNumber(valueOf(record, 'severity'), 0) : null,
       note: String(valueOf(record, 'notes', 'note') || '')
     }));
+  const abcEventsWithFallback = abcEvents.length > 0
+    ? abcEvents
+    : (sessionSummary.abcSummary || [])
+        .filter((item) => Number(item.completedEvents || 0) > 0)
+        .map((item) => ({
+          antecedent: '',
+          behavior: item.behaviorName,
+          consequence: '',
+          location: item.locations.join(', '),
+          severity: item.averageSeverity,
+          note: `${item.completedEvents} ABC(s) preenchido(s)`
+        }));
   const abcMissingFromRecords = effectiveBehaviorRecords.filter((record) => (
     measurementTypeOf(record) !== 'abc' &&
     !hasAbc(record)
   )).length;
+  const abcMissingFromSummary = (sessionSummary.abcSummary || [])
+    .reduce((sum, item) => sum + Math.max(0, Number(item.missingEvents || 0)), 0);
   const abcMissingFromWarnings = (sessionSummary.warningItems || [])
     .filter((item) => String(item.key || '').includes('abc_missing'))
     .reduce((sum, item) => sum + Math.max(1, Number(item.count || 1)), 0);
-  const abcPendingCount = abcMissingFromRecords || abcMissingFromWarnings;
+  const abcPendingCount = abcMissingFromRecords || abcMissingFromSummary || abcMissingFromWarnings;
   const unsyncedCount = sourceRecords.filter((record) => {
     const status = String(valueOf(record, 'syncStatus', 'sync_status') || '').toLowerCase();
     return status === 'local' || status === 'syncing' || status === 'error';
@@ -718,7 +786,7 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
       duration,
       interval
     },
-    abcEvents,
+    abcEvents: abcEventsWithFallback,
     pendingComplements: {
       guardianSignature,
       sessionNote: sessionSummary.sessionNote?.trim() ? 'completed' : 'pending',

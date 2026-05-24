@@ -14067,6 +14067,26 @@ async function startServer() {
     }
   });
 
+  const normalizeServerFeatureFlag = (value: unknown, fallback = true) => {
+    const safe = sanitizeString(value, 40).toLowerCase();
+    if (!safe) return fallback;
+    if (['1', 'true', 'yes', 'on', 'enabled'].includes(safe)) return true;
+    if (['0', 'false', 'no', 'off', 'disabled'].includes(safe)) return false;
+    return fallback;
+  };
+
+  const isAbaV2ApiEnabled = () => normalizeServerFeatureFlag(
+    process.env.FEATURE_ABA_V2 ?? process.env.ABA_V2 ?? process.env.VITE_FEATURE_ABA_V2,
+    true
+  );
+
+  const requireAbaV2Feature = (_req: any, res: any, next: any) => {
+    if (!isAbaV2ApiEnabled()) {
+      return res.status(404).json({ success: false, code: 'feature_disabled', feature: 'aba_v2', error: 'ABA V2 desabilitada.' });
+    }
+    return next();
+  };
+
   const ABA_SESSION_STATUSES = new Set(['active', 'completed', 'canceled']);
   const ABA_COLLECTION_TYPES = new Set(['dtt', 'net', 'cold_probe', 'baseline_probe', 'maintenance_probe']);
   const ABA_BEHAVIOR_MEASUREMENT_TYPES = new Set([
@@ -14081,6 +14101,7 @@ async function startServer() {
   const ABA_MASTERY_STATUSES = new Set(['not_met', 'met', 'mastered', 'regressed', 'maintenance_due', 'insufficient_data']);
   const ABA_TARGET_PHASES = new Set(['draft', 'baseline', 'teaching', 'mastered', 'maintenance', 'generalization', 'regressed', 'discontinued']);
   const ABA_SYNC_STATUSES = new Set(['local', 'local_only', 'queued', 'syncing', 'synced', 'error', 'failed', 'conflict']);
+  const ABA_EVENT_STATUSES = new Set(['IN_PROGRESS', 'COMPLETED', 'CANCELED']);
 
   const sanitizeIsoDateTime = (value: unknown, fallback = new Date().toISOString()) => {
     const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
@@ -14114,6 +14135,11 @@ async function startServer() {
     if (safe === 'offline') return 'local';
     if (safe === 'pending') return 'queued';
     return ABA_SYNC_STATUSES.has(safe) ? safe : fallback;
+  };
+
+  const normalizeAbaEventStatus = (value: unknown, fallback = 'COMPLETED') => {
+    const safe = sanitizeString(value, 40).toUpperCase();
+    return ABA_EVENT_STATUSES.has(safe) ? safe : fallback;
   };
 
   const normalizeAbaMasteryStatus = (value: unknown) => {
@@ -14154,7 +14180,35 @@ async function startServer() {
     return { data: null, error: { message: 'Payload ABA vazio após fallback de schema.' } };
   };
 
-  app.post('/api/aba/sessions', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  const assertAbaSessionCanAcceptClinicalWrite = async (
+    sessionId: string | null,
+    clinicId: string,
+    user: any,
+    options: { allowCompletedComplement?: boolean } = {}
+  ) => {
+    if (!sessionId) return { ok: true };
+    let query = supabase
+      .from('aba_sessions')
+      .select('id,status,clinic_id,therapist_id')
+      .eq('id', sessionId);
+    if (!hasGlobalClinicAccess(user) && clinicId) query = query.eq('clinic_id', clinicId);
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return { ok: true };
+      throw error;
+    }
+    if (!data) return { ok: true };
+    const role = sanitizeString(user?.role, 40).toLowerCase();
+    if (role === 'therapist' && data.therapist_id && data.therapist_id !== sanitizeString(user?.id, 120)) {
+      return { ok: false, status: 403, error: 'Terapeuta nao autorizado para esta sessao ABA.' };
+    }
+    if (String(data.status || '').toLowerCase() === 'completed' && !options.allowCompletedComplement) {
+      return { ok: false, status: 409, error: 'Sessao ABA concluida nao aceita novos registros clinicos.' };
+    }
+    return { ok: true };
+  };
+
+  app.post('/api/aba/sessions', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload da sessão ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -14202,7 +14256,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/sessions/:sessionId', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/aba/sessions/:sessionId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload da sessão ABA')) return;
       const sessionId = sanitizeString(req.params.sessionId, 180);
@@ -14252,7 +14306,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/sessions/:patientId', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/sessions/:patientId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -14278,7 +14332,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/session-summaries', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/session-summaries', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 192 * 1024, 'Payload do resumo da sessão ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -14314,6 +14368,7 @@ async function startServer() {
         frequency_summary: sanitizeClinicalPayload(req.body?.frequency_summary || req.body?.frequencySummary || []),
         duration_summary: sanitizeClinicalPayload(req.body?.duration_summary || req.body?.durationSummary || []),
         interval_summary: sanitizeClinicalPayload(req.body?.interval_summary || req.body?.intervalSummary || []),
+        abc_summary: sanitizeClinicalPayload(req.body?.abc_summary || req.body?.abcSummary || []),
         mastery_summary: sanitizeClinicalPayload(req.body?.mastery_summary || req.body?.masterySummary || []),
         blocking_items: sanitizeClinicalPayload(req.body?.blocking_items || req.body?.blockingItems || req.body?.pending_items || req.body?.pendingItems || []),
         warning_items: sanitizeClinicalPayload(req.body?.warning_items || req.body?.warningItems || req.body?.pending_warnings || req.body?.pendingWarnings || []),
@@ -14326,6 +14381,7 @@ async function startServer() {
           patientName: sanitizeString(req.body?.patient_name || req.body?.patientName, 180),
           teachingSummary: req.body?.teaching_summary || req.body?.teachingSummary || undefined,
           trialTypesUsed: req.body?.trial_types_used || req.body?.trialTypesUsed || undefined,
+          abcSummary: req.body?.abc_summary || req.body?.abcSummary || undefined,
           masterySummary: req.body?.mastery_summary || req.body?.masterySummary || undefined,
           blockingItems: req.body?.blocking_items || req.body?.blockingItems || undefined,
           warningItems: req.body?.warning_items || req.body?.warningItems || undefined,
@@ -14349,7 +14405,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/trials', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/trials', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 128 * 1024, 'Payload da tentativa ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -14378,11 +14434,14 @@ async function startServer() {
       if (!targetName) return res.status(400).json({ success: false, error: 'Target é obrigatório.' });
 
       const occurredAt = sanitizeIsoDateTime(req.body?.occurred_at || req.body?.occurredAt);
+      const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null;
+      const sessionWrite = await assertAbaSessionCanAcceptClinicalWrite(sessionId, clinicId, req.session.user);
+      if (!sessionWrite.ok) return res.status((sessionWrite as any).status || 409).json({ success: false, error: (sessionWrite as any).error });
       const payload = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.trial_id || req.body?.trialId || crypto.randomUUID(), 180),
         clinic_id: clinicId,
         patient_id: patientId,
-        session_id: sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null,
+        session_id: sessionId,
         target_id: sanitizeString(req.body?.target_id || req.body?.targetId, 180) || null,
         target_name: targetName,
         program_id: sanitizeString(req.body?.program_id || req.body?.programId, 180) || null,
@@ -14396,6 +14455,7 @@ async function startServer() {
         correct,
         independent,
         prompt_level_key: promptKey || null,
+        prompt_level_id: sanitizeString(req.body?.prompt_level_id || req.body?.promptLevelId || promptKey, 180) || null,
         prompt_level_name: promptLevel.label,
         latency_ms: req.body?.latency_ms !== undefined || req.body?.latencyMs !== undefined
           ? asSafeNumber(req.body?.latency_ms ?? req.body?.latencyMs, 0, 3_600_000)
@@ -14403,6 +14463,7 @@ async function startServer() {
         notes: sanitizeTextField(req.body?.notes, 4000),
         occurred_at: sanitizeIsoDateTime(req.body?.occurred_at || req.body?.occurredAt || req.body?.timestamp, occurredAt),
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
+        sync_status: 'synced',
         source_history_id: sanitizeString(req.body?.source_history_id || req.body?.sourceHistoryId, 180) || null,
         raw_payload: sanitizeClinicalPayload({
           ...(req.body?.raw_payload || req.body?.rawPayload || {}),
@@ -14429,7 +14490,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/trials/:patientId', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/trials/:patientId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -14452,7 +14513,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/behavior-events', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/behavior-events', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 128 * 1024, 'Payload do comportamento ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -14490,6 +14551,11 @@ async function startServer() {
           : null;
       const occurred = typeof req.body?.occurred === 'boolean' ? req.body.occurred : intervalOccurred;
       const clientSyncStatus = normalizeAbaSyncStatus(req.body?.sync_status || req.body?.syncStatus, 'local');
+      const isAuthorizedComplement = Boolean(req.body?.clinical_complement || req.body?.clinicalComplement || req.body?.authorizedComplement);
+      const sessionWrite = await assertAbaSessionCanAcceptClinicalWrite(sessionId, clinicId, req.session.user, {
+        allowCompletedComplement: isAuthorizedComplement
+      });
+      if (!sessionWrite.ok) return res.status((sessionWrite as any).status || 409).json({ success: false, error: (sessionWrite as any).error });
 
       let payload: Record<string, any> = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.event_id || req.body?.eventId || crypto.randomUUID(), 180),
@@ -14507,6 +14573,7 @@ async function startServer() {
         duration_seconds: req.body?.duration_seconds !== undefined || req.body?.durationSeconds !== undefined
           ? asSafeNumber(req.body?.duration_seconds ?? req.body?.durationSeconds, 0, 86400)
           : null,
+        status: normalizeAbaEventStatus(req.body?.status, measurementType === 'duration' && !endedAt ? 'IN_PROGRESS' : 'COMPLETED'),
         interval_number: intervalNumber,
         interval_index: intervalNumber,
         interval_started_at: intervalStartedAt,
@@ -14573,7 +14640,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/aba/behavior-events/:eventId', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.delete('/api/aba/behavior-events/:eventId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       const eventId = sanitizeString(req.params?.eventId || req.body?.event_id || req.body?.eventId || req.body?.id, 180);
       const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
@@ -14603,7 +14670,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/behavior-events/:patientId', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/behavior-events/:patientId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -14629,7 +14696,173 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/mastery-evaluations', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/interval-records', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload do intervalo ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+      if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+
+      const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null;
+      const sessionWrite = await assertAbaSessionCanAcceptClinicalWrite(sessionId, clinicId, req.session.user);
+      if (!sessionWrite.ok) return res.status((sessionWrite as any).status || 409).json({ success: false, error: (sessionWrite as any).error });
+
+      const behaviorName = sanitizeTextField(req.body?.behavior_name || req.body?.behaviorName || req.body?.name, 240);
+      if (!behaviorName) return res.status(400).json({ success: false, error: 'Comportamento é obrigatório.' });
+      const rawMethod = normalizeAbaBehaviorMeasurementType(req.body?.method || req.body?.measurement_type || req.body?.measurementType);
+      const method = rawMethod === 'whole_interval' || rawMethod === 'momentary_time_sampling' ? rawMethod : 'partial_interval';
+      const intervalStartedAt = sanitizeIsoDateTime(req.body?.interval_started_at || req.body?.intervalStartedAt);
+      const intervalEndedAt = sanitizeIsoDateTime(req.body?.interval_ended_at || req.body?.intervalEndedAt, intervalStartedAt);
+      const payload = cleanObject({
+        id: sanitizeString(req.body?.id || req.body?.record_id || req.body?.recordId || crypto.randomUUID(), 180),
+        clinic_id: clinicId,
+        patient_id: patientId,
+        session_id: sessionId,
+        behavior_id: sanitizeString(req.body?.behavior_id || req.body?.behaviorId, 180) || null,
+        behavior_name: behaviorName,
+        method,
+        interval_number: asSafeNumber(req.body?.interval_number ?? req.body?.intervalNumber, 1, 100000) || 1,
+        interval_duration_seconds: asSafeNumber(req.body?.interval_duration_seconds ?? req.body?.intervalDurationSeconds, 1, 86400) || 1,
+        interval_started_at: intervalStartedAt,
+        interval_ended_at: intervalEndedAt,
+        occurred: typeof req.body?.occurred === 'boolean' ? req.body.occurred : Boolean(req.body?.interval_occurred ?? req.body?.intervalOccurred),
+        location: sanitizeTextField(req.body?.location, 240),
+        severity: req.body?.severity !== undefined ? asSafeNumber(req.body?.severity, 0, 5) : null,
+        therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
+        sync_status: 'synced',
+        raw_payload: sanitizeClinicalPayload({
+          ...(req.body?.raw_payload || req.body?.rawPayload || {}),
+          method,
+          patientId,
+          sessionId: sessionId || undefined,
+          syncStatus: 'synced'
+        }),
+        created_at: new Date().toISOString()
+      });
+
+      const result = await writeAbaRowWithSchemaFallback('aba_interval_records', payload, 'upsert');
+      if (result.error) {
+        if (hasMissingFinancialSchema(result.error)) return res.status(503).json({ success: false, error: 'Schema ABA de intervalo ainda não aplicado.' });
+        throw result.error;
+      }
+      return res.json({ success: true, data: result.data || payload });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.post('/api/aba/interval-summaries', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload do resumo de intervalo ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+      if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+
+      const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null;
+      const sessionWrite = await assertAbaSessionCanAcceptClinicalWrite(sessionId, clinicId, req.session.user);
+      if (!sessionWrite.ok) return res.status((sessionWrite as any).status || 409).json({ success: false, error: (sessionWrite as any).error });
+
+      const behaviorName = sanitizeTextField(req.body?.behavior_name || req.body?.behaviorName || req.body?.name, 240);
+      if (!behaviorName) return res.status(400).json({ success: false, error: 'Comportamento é obrigatório.' });
+      const totalIntervals = asSafeNumber(req.body?.total_intervals ?? req.body?.totalIntervals, 0, 100000) || 0;
+      const yesCount = Math.min(totalIntervals, asSafeNumber(req.body?.yes_count ?? req.body?.yesCount ?? req.body?.occurredCount, 0, 100000) || 0);
+      const noCount = Math.max(0, asSafeNumber(req.body?.no_count ?? req.body?.noCount ?? req.body?.notOccurredCount, 0, 100000) ?? (totalIntervals - yesCount));
+      const occurrencePercent = totalIntervals > 0 ? Math.round((yesCount / totalIntervals) * 10000) / 100 : 0;
+      const rawMethod = normalizeAbaBehaviorMeasurementType(req.body?.method || req.body?.measurement_type || req.body?.measurementType);
+      const method = rawMethod === 'whole_interval' || rawMethod === 'momentary_time_sampling' ? rawMethod : 'partial_interval';
+      const endedAt = sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt);
+      const payload = cleanObject({
+        id: sanitizeString(req.body?.id || req.body?.summary_id || req.body?.summaryId || crypto.randomUUID(), 180),
+        clinic_id: clinicId,
+        patient_id: patientId,
+        session_id: sessionId,
+        behavior_id: sanitizeString(req.body?.behavior_id || req.body?.behaviorId, 180) || null,
+        behavior_name: behaviorName,
+        method,
+        total_intervals: totalIntervals,
+        yes_count: yesCount,
+        no_count: noCount,
+        occurrence_percent: occurrencePercent,
+        started_at: req.body?.started_at || req.body?.startedAt ? sanitizeIsoDateTime(req.body?.started_at || req.body?.startedAt, endedAt) : null,
+        ended_at: endedAt,
+        location: sanitizeTextField(req.body?.location, 240),
+        severity: req.body?.severity !== undefined ? asSafeNumber(req.body?.severity, 0, 5) : null,
+        therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
+        sync_status: 'synced',
+        raw_payload: sanitizeClinicalPayload({
+          ...(req.body?.raw_payload || req.body?.rawPayload || {}),
+          method,
+          totalIntervals,
+          yesCount,
+          noCount,
+          occurrencePercent,
+          patientId,
+          sessionId: sessionId || undefined,
+          syncStatus: 'synced'
+        }),
+        created_at: new Date().toISOString()
+      });
+
+      const result = await writeAbaRowWithSchemaFallback('aba_interval_summaries', payload, 'upsert');
+      if (result.error) {
+        if (hasMissingFinancialSchema(result.error)) return res.status(503).json({ success: false, error: 'Schema ABA de resumo de intervalo ainda não aplicado.' });
+        throw result.error;
+      }
+      return res.json({ success: true, data: result.data || payload });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.post('/api/aba/abc-events', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload ABC ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+      if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+
+      const behaviorName = sanitizeTextField(req.body?.behavior_name || req.body?.behaviorName || req.body?.name, 240);
+      if (!behaviorName) return res.status(400).json({ success: false, error: 'Comportamento é obrigatório.' });
+      const payload = cleanObject({
+        id: sanitizeString(req.body?.id || req.body?.abc_id || req.body?.abcId || crypto.randomUUID(), 180),
+        clinic_id: clinicId,
+        patient_id: patientId,
+        session_id: sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null,
+        behavior_id: sanitizeString(req.body?.behavior_id || req.body?.behaviorId, 180) || null,
+        behavior_event_id: sanitizeString(req.body?.behavior_event_id || req.body?.behaviorEventId, 180) || null,
+        behavior_name: behaviorName,
+        antecedent: sanitizeTextField(req.body?.antecedent, 500),
+        consequence: sanitizeTextField(req.body?.consequence, 500),
+        location: sanitizeTextField(req.body?.location, 240),
+        severity: req.body?.severity !== undefined ? asSafeNumber(req.body?.severity, 0, 5) : null,
+        response: sanitizeTextField(req.body?.response || req.body?.response_by_therapist || req.body?.responseByTherapist, 1000),
+        notes: sanitizeTextField(req.body?.notes, 4000),
+        therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
+        sync_status: 'synced',
+        raw_payload: sanitizeClinicalPayload({
+          ...(req.body?.raw_payload || req.body?.rawPayload || {}),
+          patientId,
+          syncStatus: 'synced',
+          clinicalComplement: Boolean(req.body?.clinical_complement || req.body?.clinicalComplement)
+        }),
+        created_at: req.body?.created_at || req.body?.createdAt ? sanitizeIsoDateTime(req.body?.created_at || req.body?.createdAt) : new Date().toISOString()
+      });
+
+      const result = await writeAbaRowWithSchemaFallback('aba_abc_events', payload, 'upsert');
+      if (result.error) {
+        if (hasMissingFinancialSchema(result.error)) return res.status(503).json({ success: false, error: 'Schema ABA de ABC ainda não aplicado.' });
+        throw result.error;
+      }
+      return res.json({ success: true, data: result.data || payload });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.post('/api/aba/mastery-evaluations', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 128 * 1024, 'Payload da avaliação de maestria ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -14685,7 +14918,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/mastery-evaluations/:patientId', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/mastery-evaluations/:patientId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);

@@ -10,6 +10,7 @@ import {
   setEndpointCacheMeta
 } from './localDb';
 import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
+import { isAbaV2Enabled } from '../utils/featureFlags';
 
 enum OperationType {
   CREATE = 'create',
@@ -443,6 +444,15 @@ async function cacheResponseMetadata(endpoint: string, response: Response, lastU
 function createIdempotencyKey(scope: string, entityId?: string) {
   const baseId = entityId || generateId();
   return `${scope}:${baseId}:${Date.now()}:${crypto.randomUUID()}`;
+}
+
+function abaV2DisabledResponse(data: any = null) {
+  return {
+    success: true,
+    disabled: true,
+    feature: 'aba_v2',
+    data
+  };
 }
 
 // Helper to handle offline-first saving
@@ -1006,6 +1016,7 @@ export const dataService = {
   },
 
   async saveAbaSession(session: any) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(session || {});
     const id = String(session?.id || session?.session_id || session?.sessionId || generateId());
     const data = {
       ...(session || {}),
@@ -1020,6 +1031,7 @@ export const dataService = {
   },
 
   async updateAbaSession(sessionId: string, updates: any) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse({ id: String(sessionId), ...(updates || {}) });
     return await saveOfflineFirst(
       String(sessionId),
       updates || {},
@@ -1030,6 +1042,7 @@ export const dataService = {
   },
 
   async saveAbaSessionSummary(summary: any) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(summary || {});
     const id = String(summary?.id || summary?.summary_id || summary?.summaryId || generateId());
     const data = {
       ...(summary || {}),
@@ -1056,6 +1069,8 @@ export const dataService = {
       warningItems: summary?.warning_items || summary?.warningItems || summary?.pending_warnings || summary?.pendingWarnings || [],
       pending_warnings: summary?.pending_warnings || summary?.pendingWarnings || [],
       pendingWarnings: summary?.pending_warnings || summary?.pendingWarnings || [],
+      abc_summary: summary?.abc_summary || summary?.abcSummary || [],
+      abcSummary: summary?.abc_summary || summary?.abcSummary || [],
       session_note: summary?.session_note ?? summary?.sessionNote ?? '',
       sessionNote: summary?.session_note ?? summary?.sessionNote ?? '',
       syncStatus: summary?.syncStatus || 'local',
@@ -1066,6 +1081,7 @@ export const dataService = {
   },
 
   async getAbaSessions(patientId: string) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
     const endpoint = `/api/aba/sessions/${encodeURIComponent(String(patientId))}`;
     try {
       const response = await fetch(endpoint, {
@@ -1092,6 +1108,7 @@ export const dataService = {
   },
 
   async saveAbaTrial(trial: any) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(trial || {});
     const id = String(trial?.id || trial?.trial_id || trial?.trialId || generateId());
     const abaPromptLevel = resolveAbaPromptLevel({
       promptLevelKey: trial?.prompt_level_key || trial?.promptLevelKey,
@@ -1122,12 +1139,14 @@ export const dataService = {
       therapistId: trial?.therapist_id || trial?.therapistId,
       occurred_at: trial?.occurred_at || trial?.occurredAt || trial?.timestamp || new Date().toISOString(),
       timestamp: trial?.timestamp || trial?.occurred_at || trial?.occurredAt || new Date().toISOString(),
+      sync_status: trial?.sync_status || trial?.syncStatus || 'local',
       syncStatus: trial?.syncStatus || 'local'
     };
     return await saveOfflineFirst(id, data, 'aba', '/api/aba/trials');
   },
 
   async getAbaTrials(patientId: string) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
     const endpoint = `/api/aba/trials/${encodeURIComponent(String(patientId))}`;
     try {
       const response = await fetch(endpoint, {
@@ -1155,6 +1174,7 @@ export const dataService = {
   },
 
   async saveAbaBehaviorEvent(event: any) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(event || {});
     const id = String(event?.id || event?.event_id || event?.eventId || generateId());
     const timestamp = event?.timestamp || event?.occurred_at || event?.occurredAt || new Date().toISOString();
     const data = {
@@ -1170,12 +1190,14 @@ export const dataService = {
       measurementType: event?.measurement_type || event?.measurementType,
       occurred_at: timestamp,
       timestamp,
+      sync_status: event?.sync_status || event?.syncStatus || 'local',
       syncStatus: event?.syncStatus || 'local'
     };
     return await saveOfflineFirst(id, data, 'aba', '/api/aba/behavior-events');
   },
 
   async deleteAbaBehaviorEvent(eventId: string, context: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse({ id: String(eventId || context?.id || ''), deleted: false });
     const id = String(eventId || context?.id || context?.event_id || context?.eventId || generateId());
     const data = {
       ...(context || {}),
@@ -1192,6 +1214,7 @@ export const dataService = {
   },
 
   async getAbaBehaviorEvents(patientId: string) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
     const endpoint = `/api/aba/behavior-events/${encodeURIComponent(String(patientId))}`;
     try {
       const response = await fetch(endpoint, {
@@ -1217,7 +1240,102 @@ export const dataService = {
     };
   },
 
+  async saveAbaIntervalRecord(record: any) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(record || {});
+    const id = String(record?.id || record?.record_id || record?.recordId || generateId());
+    const timestamp = record?.interval_ended_at || record?.intervalEndedAt || record?.occurred_at || record?.occurredAt || new Date().toISOString();
+    const data = {
+      ...(record || {}),
+      id,
+      patient_id: record?.patient_id || record?.patientId,
+      patientId: record?.patient_id || record?.patientId,
+      session_id: record?.session_id || record?.sessionId,
+      sessionId: record?.session_id || record?.sessionId,
+      behavior_id: record?.behavior_id || record?.behaviorId,
+      behaviorId: record?.behavior_id || record?.behaviorId,
+      behavior_name: record?.behavior_name || record?.behaviorName,
+      behaviorName: record?.behavior_name || record?.behaviorName,
+      method: record?.method || record?.measurement_type || record?.measurementType || 'partial_interval',
+      interval_number: record?.interval_number ?? record?.intervalNumber,
+      intervalNumber: record?.interval_number ?? record?.intervalNumber,
+      interval_duration_seconds: record?.interval_duration_seconds ?? record?.intervalDurationSeconds,
+      intervalDurationSeconds: record?.interval_duration_seconds ?? record?.intervalDurationSeconds,
+      interval_started_at: record?.interval_started_at || record?.intervalStartedAt,
+      intervalStartedAt: record?.interval_started_at || record?.intervalStartedAt,
+      interval_ended_at: timestamp,
+      intervalEndedAt: timestamp,
+      occurred: Boolean(record?.occurred),
+      therapist_id: record?.therapist_id || record?.therapistId,
+      therapistId: record?.therapist_id || record?.therapistId,
+      sync_status: record?.sync_status || record?.syncStatus || 'local',
+      syncStatus: record?.syncStatus || 'local'
+    };
+    return await saveOfflineFirst(id, data, 'aba', '/api/aba/interval-records');
+  },
+
+  async saveAbaIntervalSummary(summary: any) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(summary || {});
+    const id = String(summary?.id || summary?.summary_id || summary?.summaryId || generateId());
+    const data = {
+      ...(summary || {}),
+      id,
+      patient_id: summary?.patient_id || summary?.patientId,
+      patientId: summary?.patient_id || summary?.patientId,
+      session_id: summary?.session_id || summary?.sessionId,
+      sessionId: summary?.session_id || summary?.sessionId,
+      behavior_id: summary?.behavior_id || summary?.behaviorId,
+      behaviorId: summary?.behavior_id || summary?.behaviorId,
+      behavior_name: summary?.behavior_name || summary?.behaviorName,
+      behaviorName: summary?.behavior_name || summary?.behaviorName,
+      method: summary?.method || summary?.measurement_type || summary?.measurementType || 'partial_interval',
+      total_intervals: summary?.total_intervals ?? summary?.totalIntervals,
+      totalIntervals: summary?.total_intervals ?? summary?.totalIntervals,
+      yes_count: summary?.yes_count ?? summary?.yesCount ?? summary?.occurredCount,
+      yesCount: summary?.yes_count ?? summary?.yesCount ?? summary?.occurredCount,
+      no_count: summary?.no_count ?? summary?.noCount ?? summary?.notOccurredCount,
+      noCount: summary?.no_count ?? summary?.noCount ?? summary?.notOccurredCount,
+      occurrence_percent: summary?.occurrence_percent ?? summary?.occurrencePercent,
+      occurrencePercent: summary?.occurrence_percent ?? summary?.occurrencePercent,
+      started_at: summary?.started_at || summary?.startedAt,
+      startedAt: summary?.started_at || summary?.startedAt,
+      ended_at: summary?.ended_at || summary?.endedAt || new Date().toISOString(),
+      endedAt: summary?.ended_at || summary?.endedAt || new Date().toISOString(),
+      therapist_id: summary?.therapist_id || summary?.therapistId,
+      therapistId: summary?.therapist_id || summary?.therapistId,
+      sync_status: summary?.sync_status || summary?.syncStatus || 'local',
+      syncStatus: summary?.syncStatus || 'local'
+    };
+    return await saveOfflineFirst(id, data, 'aba', '/api/aba/interval-summaries');
+  },
+
+  async saveAbaAbcEvent(event: any) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(event || {});
+    const id = String(event?.id || event?.abc_id || event?.abcId || generateId());
+    const data = {
+      ...(event || {}),
+      id,
+      patient_id: event?.patient_id || event?.patientId,
+      patientId: event?.patient_id || event?.patientId,
+      session_id: event?.session_id || event?.sessionId,
+      sessionId: event?.session_id || event?.sessionId,
+      behavior_id: event?.behavior_id || event?.behaviorId,
+      behaviorId: event?.behavior_id || event?.behaviorId,
+      behavior_event_id: event?.behavior_event_id || event?.behaviorEventId,
+      behaviorEventId: event?.behavior_event_id || event?.behaviorEventId,
+      behavior_name: event?.behavior_name || event?.behaviorName,
+      behaviorName: event?.behavior_name || event?.behaviorName,
+      response: event?.response || event?.response_by_therapist || event?.responseByTherapist,
+      therapist_id: event?.therapist_id || event?.therapistId,
+      therapistId: event?.therapist_id || event?.therapistId,
+      sync_status: event?.sync_status || event?.syncStatus || 'local',
+      syncStatus: event?.syncStatus || 'local',
+      created_at: event?.created_at || event?.createdAt || new Date().toISOString()
+    };
+    return await saveOfflineFirst(id, data, 'aba', '/api/aba/abc-events');
+  },
+
   async saveAbaMasteryEvaluation(evaluation: any) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(evaluation || {});
     const id = String(evaluation?.id || evaluation?.evaluation_id || evaluation?.evaluationId || generateId());
     const data = {
       ...(evaluation || {}),
@@ -1229,6 +1347,7 @@ export const dataService = {
   },
 
   async getAbaMasteryEvaluations(patientId: string) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
     const endpoint = `/api/aba/mastery-evaluations/${encodeURIComponent(String(patientId))}`;
     try {
       const response = await fetch(endpoint, {

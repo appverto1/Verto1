@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { buildSessionReport, calculateSessionSummary, canCloseAbaSession, canRecordInAbaSession } from '../src/utils/abaSessionSummary.ts';
+import { isAbaV2Enabled, resolveFeatureFlag } from '../src/utils/featureFlags.ts';
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -174,8 +175,15 @@ test('relatório da sessão deriva dados sem nova tabela ou duplicação clínic
   assert.equal(report.behaviorSummaries.frequency[0].totalOccurrences, 2);
   assert.equal(report.behaviorSummaries.duration[0].totalSeconds, 120);
   assert.equal(report.behaviorSummaries.interval[0].intervalSeconds, 30);
+  assert.equal(summary.abcSummary.find((item) => item.behaviorName === 'Recusa')?.completedEvents, 1);
   assert.equal(report.abcEvents.length, 1);
   assert.equal(report.pendingComplements.guardianSignature, 'pending');
+});
+
+test('aba_v2=false preserva o fluxo antigo fora da ABA V2', () => {
+  assert.equal(isAbaV2Enabled({ overrides: { aba_v2: false } }), false);
+  assert.equal(resolveFeatureFlag('aba_v2', { defaultValue: true, overrides: { VITE_FEATURE_ABA_V2: 'false' } }), false);
+  assert.equal(isAbaV2Enabled({ overrides: { FEATURE_ABA_V2: 'true' } }), true);
 });
 
 for (const item of tests) {
