@@ -467,7 +467,7 @@ test('aba session mode: trials and behavior events are one-touch and session-sco
   );
   assert.match(
     sessionModeCode,
-    /canCloseAbaSession\(\{ openDurations, intervalRun \}\)[\s\S]*?Ha eventos de duracao em aberto[\s\S]*?Encerrar agora[\s\S]*?Descartar evento[\s\S]*?Voltar para sessao/m,
+    /canCloseAbaSession\(\{[\s\S]*?openDurations[\s\S]*?intervalRun[\s\S]*?unsavedLocalCount[\s\S]*?Ha eventos de duracao em aberto[\s\S]*?Encerrar agora[\s\S]*?Descartar evento[\s\S]*?Voltar para sessao[\s\S]*?Bloqueios de encerramento/m,
     'SessionMode deve bloquear encerramento com duracao aberta.'
   );
 });

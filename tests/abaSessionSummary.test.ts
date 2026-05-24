@@ -22,6 +22,18 @@ test('sessao com coleta por intervalo aberta nao pode ser encerrada', () => {
   assert.equal(result.blockers[0].key, 'open_interval_collection');
 });
 
+test('sessao com dado ainda nao salvo localmente nao pode ser encerrada', () => {
+  const result = canCloseAbaSession({ openDurations: [], intervalRun: null, unsavedLocalCount: 1 });
+  assert.equal(result.canClose, false);
+  assert.equal(result.blockers[0].key, 'unsaved_local_records');
+});
+
+test('sessao com ABC obrigatorio pendente pode bloquear encerramento', () => {
+  const result = canCloseAbaSession({ openDurations: [], intervalRun: null, requiredAbcMissingCount: 2 });
+  assert.equal(result.canClose, false);
+  assert.equal(result.blockers[0].key, 'required_abc_missing');
+});
+
 test('resumo de frequencia calcula corretamente', () => {
   const summary = calculateSessionSummary('session-1', {
     startedAt: '2026-05-23T10:00:00.000Z',
@@ -90,6 +102,16 @@ test('tentativas calculam acuracia e independencia corretamente', () => {
   assert.equal(summary.accuracyPercent, 67);
   assert.equal(summary.independencePercent, 33);
   assert.deepEqual(summary.teachingSummary.typesUsed, ['DTT', 'NET', 'Cold Probe']);
+});
+
+test('resumo preserva avisos de encerramento separados dos bloqueios', () => {
+  const summary = calculateSessionSummary('session-1', {
+    pendingItems: [{ key: 'required_abc_missing', label: 'ABC obrigatorio pendente', blocking: true }],
+    pendingWarnings: [{ key: 'session_note_pending', label: 'Observacao da sessao pendente' }]
+  });
+  assert.equal(summary.pendingItems.length, 1);
+  assert.equal(summary.pendingWarnings.length, 1);
+  assert.equal(summary.pendingWarnings[0].key, 'session_note_pending');
 });
 
 for (const item of tests) {

@@ -23,6 +23,7 @@ import { ABA_PROMPT_LEVEL_OPTIONS, resolveAbaPromptLevel } from '../utils/abaPro
 import { calculateSessionSummary, canCloseAbaSession, type SessionSummary, type SessionSummaryPendingItem } from '../utils/abaSessionSummary';
 
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
+type AbcRequirement = 'REQUIRED' | 'RECOMMENDED' | 'OPTIONAL' | 'DISABLED';
 
 type SessionRecord = {
   id: string;
@@ -88,12 +89,12 @@ const behaviorMeasurementOptions = [
 ];
 
 const behaviorPresets = [
-  { id: 'crying', name: 'Choro', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], tone: 'bg-sky-50 text-sky-700 border-sky-100' },
-  { id: 'escape', name: 'Fuga da atividade', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], tone: 'bg-amber-50 text-amber-700 border-amber-100' },
-  { id: 'aggression', name: 'Agressao', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], tone: 'bg-red-50 text-red-700 border-red-100' },
-  { id: 'self_injury', name: 'Autoagressao', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], tone: 'bg-rose-50 text-rose-700 border-rose-100' },
-  { id: 'refusal', name: 'Recusa', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], tone: 'bg-violet-50 text-violet-700 border-violet-100' },
-  { id: 'stereotypy', name: 'Estereotipia', defaultMeasurement: 'partial_interval', allowedMeasurements: ['partial_interval', 'whole_interval', 'momentary_time_sampling', 'duration'], tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' }
+  { id: 'crying', name: 'Choro', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], abcRequirement: 'RECOMMENDED' as AbcRequirement, tone: 'bg-sky-50 text-sky-700 border-sky-100' },
+  { id: 'escape', name: 'Fuga da atividade', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], abcRequirement: 'RECOMMENDED' as AbcRequirement, tone: 'bg-amber-50 text-amber-700 border-amber-100' },
+  { id: 'aggression', name: 'Agressao', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'REQUIRED' as AbcRequirement, tone: 'bg-red-50 text-red-700 border-red-100' },
+  { id: 'self_injury', name: 'Autoagressao', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'REQUIRED' as AbcRequirement, tone: 'bg-rose-50 text-rose-700 border-rose-100' },
+  { id: 'refusal', name: 'Recusa', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'RECOMMENDED' as AbcRequirement, tone: 'bg-violet-50 text-violet-700 border-violet-100' },
+  { id: 'stereotypy', name: 'Estereotipia', defaultMeasurement: 'partial_interval', allowedMeasurements: ['partial_interval', 'whole_interval', 'momentary_time_sampling', 'duration'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' }
 ];
 
 const antecedentOptions = ['Demanda apresentada', 'Transicao', 'Espera', 'Negacao de acesso', 'Barulho', 'Atencao dividida'];
@@ -160,6 +161,14 @@ const normalizeSyncStatus = (status: any): SyncStatus => {
 
 const getMeasurementLabel = (measurementType: string) => {
   return behaviorMeasurementOptions.find((option) => option.key === measurementType)?.label || measurementType;
+};
+
+const normalizeAbcRequirement = (value: any): AbcRequirement => {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (normalized === 'REQUIRED' || normalized === 'RECOMMENDED' || normalized === 'OPTIONAL' || normalized === 'DISABLED') {
+    return normalized;
+  }
+  return 'OPTIONAL';
 };
 
 const isIntervalMeasurement = (measurementType: string) => (
@@ -1010,37 +1019,68 @@ export const SessionMode = ({
     }
   };
 
-  const buildSessionPendingItems = (): SessionSummaryPendingItem[] => {
+  const getRecordAbcRequirement = (record: SessionRecord): AbcRequirement => {
+    const behavior = behaviorPresets.find((item) => item.id === record.behaviorId || item.name === record.title);
+    const configuredRequirements =
+      patient?.abaBehaviorSettings ||
+      patient?.clinicSettings?.abaBehaviorSettings ||
+      patient?.clinicSettings?.behaviorAbcRequirements ||
+      patient?.clinicSettings?.behaviorSettings ||
+      {};
+    const configured =
+      configuredRequirements?.[String(record.behaviorId || '')]?.abcRequirement ||
+      configuredRequirements?.[String(behavior?.id || '')]?.abcRequirement ||
+      configuredRequirements?.[String(record.title || '')]?.abcRequirement ||
+      configuredRequirements?.[String(behavior?.name || '')]?.abcRequirement;
+    return normalizeAbcRequirement(configured || behavior?.abcRequirement || 'OPTIONAL');
+  };
+
+  const clinicBlocksRequiredAbc = patient?.clinicSettings?.blockRequiredAbcOnSessionClose !== false && patient?.abaSettings?.blockRequiredAbcOnClose !== false;
+  const clinicAllowsEmptySessionNote = patient?.clinicSettings?.allowSessionCloseWithoutNote !== false && patient?.abaSettings?.allowSessionCloseWithoutNote !== false;
+
+  const buildSessionClosureIssues = (): { blockers: SessionSummaryPendingItem[]; warnings: SessionSummaryPendingItem[] } => {
     const behaviorRecords = records.filter((record) => record.kind === 'behavior' && !record.intervalAggregate);
-    const unsynced = records.filter((record) => record.syncStatus !== 'synced');
-    const syncErrors = records.filter((record) => record.syncStatus === 'error');
-    const withoutLocation = behaviorRecords.filter((record) => !record.location);
-    const withoutSeverity = behaviorRecords.filter((record) => record.severity === undefined || record.severity === null);
-    const withoutAbc = behaviorRecords.filter((record) => (
+    const savingLocally = records.filter((record) => record.syncStatus === 'syncing');
+    const notSyncedWithServer = records.filter((record) => record.syncStatus === 'local' || record.syncStatus === 'error');
+    const abcMissingCounts: Record<AbcRequirement, number> = {
+      REQUIRED: 0,
+      RECOMMENDED: 0,
+      OPTIONAL: 0,
+      DISABLED: 0
+    };
+    behaviorRecords.filter((record) => (
       inferRecordMeasurementType(record) !== 'abc' &&
       !record.antecedent &&
       !record.consequence
-    ));
-    const items: SessionSummaryPendingItem[] = [];
-    if (unsynced.length > 0) items.push({ key: 'unsynced_records', label: `${unsynced.length} dado(s) ainda nao sincronizado(s)`, count: unsynced.length });
-    if (syncErrors.length > 0) items.push({ key: 'sync_error', label: `${syncErrors.length} registro(s) com erro de sincronizacao`, count: syncErrors.length });
-    if (withoutLocation.length > 0) items.push({ key: 'missing_location', label: `${withoutLocation.length} registro(s) sem local`, count: withoutLocation.length });
-    if (withoutSeverity.length > 0) items.push({ key: 'missing_severity', label: `${withoutSeverity.length} registro(s) sem severidade`, count: withoutSeverity.length });
-    if (withoutAbc.length > 0) items.push({ key: 'missing_abc', label: `${withoutAbc.length} evento(s) sem ABC`, count: withoutAbc.length });
-    if (promptSelectionGoal) items.push({ key: 'incomplete_trial', label: 'Ha uma tentativa de ensino incompleta', count: 1 });
-    items.push({ key: 'guardian_signature_pending', label: 'Assinatura do responsavel pendente (pendencia futura)', count: 1 });
-    if (!sessionNote.trim()) items.push({ key: 'session_note_pending', label: 'Observacao da sessao pendente', count: 1 });
-    return items;
+    )).forEach((record) => {
+      abcMissingCounts[getRecordAbcRequirement(record)] += 1;
+    });
+
+    const closure = canCloseAbaSession({
+      openDurations,
+      intervalRun,
+      unsavedLocalCount: savingLocally.length,
+      incompleteTrial: Boolean(promptSelectionGoal),
+      requiredAbcMissingCount: clinicBlocksRequiredAbc ? abcMissingCounts.REQUIRED : 0,
+      sessionNoteRequired: !clinicAllowsEmptySessionNote && !sessionNote.trim()
+    });
+    const warnings: SessionSummaryPendingItem[] = [];
+    if (abcMissingCounts.REQUIRED > 0 && !clinicBlocksRequiredAbc) warnings.push({ key: 'required_abc_missing_warning', label: `ABC obrigatorio pendente em ${abcMissingCounts.REQUIRED} evento(s)`, category: 'warning', count: abcMissingCounts.REQUIRED });
+    if (abcMissingCounts.RECOMMENDED > 0) warnings.push({ key: 'recommended_abc_missing', label: `ABC recomendado pendente em ${abcMissingCounts.RECOMMENDED} evento(s)`, category: 'warning', count: abcMissingCounts.RECOMMENDED });
+    if (abcMissingCounts.OPTIONAL > 0) warnings.push({ key: 'optional_abc_missing', label: `ABC opcional ausente em ${abcMissingCounts.OPTIONAL} evento(s)`, category: 'warning', count: abcMissingCounts.OPTIONAL });
+    warnings.push({ key: 'guardian_signature_pending', label: 'Assinatura do responsavel pendente', category: 'warning', count: 1 });
+    if (!sessionNote.trim() && clinicAllowsEmptySessionNote) warnings.push({ key: 'session_note_pending', label: 'Observacao da sessao pendente', category: 'warning', count: 1 });
+    if (notSyncedWithServer.length > 0) warnings.push({ key: 'server_sync_pending', label: `${notSyncedWithServer.length} dado(s) ainda nao sincronizado(s) com servidor`, category: 'warning', count: notSyncedWithServer.length });
+    return { blockers: closure.blockers, warnings };
   };
 
   const confirmEndSession = async () => {
-    const closure = canCloseAbaSession({ openDurations, intervalRun });
-    if (!closure.canClose) {
+    const closureIssues = buildSessionClosureIssues();
+    if (closureIssues.blockers.length > 0) {
       setSessionWarning('Resolva as pendencias bloqueantes antes de encerrar a sessao.');
       return;
     }
     const endedAt = new Date().toISOString();
-    const pendingItems = buildSessionPendingItems();
     const finalSummary = calculateSessionSummary(sessionId, {
       id: `summary-${sessionId}`,
       sessionId,
@@ -1051,8 +1091,9 @@ export const SessionMode = ({
       endedAt,
       trials: records.filter((record) => record.kind === 'trial'),
       behaviorEvents: records.filter((record) => record.kind === 'behavior'),
-      pendingItems,
-      syncStatus: pendingItems.some((item) => item.key === 'sync_error') ? 'error' : pendingItems.some((item) => item.key === 'unsynced_records') ? 'local' : 'synced'
+      pendingItems: closureIssues.blockers,
+      pendingWarnings: closureIssues.warnings,
+      syncStatus: records.some((record) => record.syncStatus === 'error') ? 'error' : records.some((record) => record.syncStatus !== 'synced') ? 'local' : 'synced'
     });
     setSessionEndPreviewAt(endedAt);
     setSessionCompleted(true);
@@ -1076,9 +1117,11 @@ export const SessionMode = ({
         duration_summary: finalSummary.durationSummary,
         interval_summary: finalSummary.intervalSummary,
         pending_items: finalSummary.pendingItems,
+        pending_warnings: finalSummary.pendingWarnings,
         summary_payload: {
           patientName: finalSummary.patientName,
           teachingSummary: finalSummary.teachingSummary,
+          pendingWarnings: finalSummary.pendingWarnings,
           sessionNote
         }
       });
@@ -1110,16 +1153,13 @@ export const SessionMode = ({
     return { trialTotal, behaviorTotal, errorTotal, localTotal };
   }, [records]);
 
-  const sessionClosureState = useMemo(() => canCloseAbaSession({ openDurations, intervalRun }), [openDurations, intervalRun]);
-
-  const sessionClosurePendingItems = useMemo(() => buildSessionPendingItems(), [records, promptSelectionGoal, sessionNote]);
+  const sessionClosureIssues = useMemo(() => buildSessionClosureIssues(), [records, openDurations, intervalRun, promptSelectionGoal, sessionNote, patient?.abaBehaviorSettings, patient?.abaSettings, patient?.clinicSettings]);
 
   const sessionClosureSummary: SessionSummary = useMemo(() => {
     const endedAt = sessionEndPreviewAt || new Date().toISOString();
-    const pendingItems = [...sessionClosureState.blockers, ...sessionClosurePendingItems];
-    const syncStatus = pendingItems.some((item) => item.key === 'sync_error')
+    const syncStatus = records.some((record) => record.syncStatus === 'error')
       ? 'error'
-      : pendingItems.some((item) => item.key === 'unsynced_records')
+      : records.some((record) => record.syncStatus !== 'synced')
         ? 'local'
         : 'synced';
     return calculateSessionSummary(sessionId, {
@@ -1132,10 +1172,11 @@ export const SessionMode = ({
       endedAt,
       trials: records.filter((record) => record.kind === 'trial'),
       behaviorEvents: records.filter((record) => record.kind === 'behavior'),
-      pendingItems,
+      pendingItems: sessionClosureIssues.blockers,
+      pendingWarnings: sessionClosureIssues.warnings,
       syncStatus
     });
-  }, [activeSession?.startedAt, patient?.name, patientId, records, resolvedTherapistId, sessionClosurePendingItems, sessionClosureState.blockers, sessionEndPreviewAt, sessionId]);
+  }, [activeSession?.startedAt, patient?.name, patientId, records, resolvedTherapistId, sessionClosureIssues, sessionEndPreviewAt, sessionId]);
 
   const teachingMasteryRows = useMemo(() => sessionGoals.map((goal: any) => {
     const goalTrials = records.filter((record) => record.kind === 'trial' && record.title === goal.name);
@@ -1302,6 +1343,11 @@ export const SessionMode = ({
     }
     cancelEditingRecord();
   };
+
+  const closureBlockers = sessionClosureSummary.pendingItems;
+  const closureWarnings = sessionClosureSummary.pendingWarnings;
+  const hasClosureBlockers = closureBlockers.length > 0;
+  const hasClosureWarnings = closureWarnings.length > 0;
 
   if (sessionGoals.length === 0) {
     const emptyStateContent = (
@@ -2099,25 +2145,60 @@ export const SessionMode = ({
       )}
 
       {showSessionSummary && (
-        <div className="fixed inset-0 z-[145] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm">
-          <div className="bg-white rounded-[32px] p-7 shadow-2xl max-w-5xl w-full max-h-[88vh] overflow-y-auto border border-red-100">
-            <div className="flex items-start justify-between gap-4 mb-6">
+        <div className="fixed inset-0 z-[145] flex items-center justify-center p-4 bg-slate-900/30 backdrop-blur-sm">
+          <div className="bg-[#F4F7FE] rounded-[32px] p-6 shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-y-auto border border-blue-100">
+            <div className="flex items-start justify-between gap-4 mb-5">
               <div>
-                <p className="text-[10px] font-bold text-red-500 uppercase tracking-widest">Encerramento da sessao ABA</p>
+                <p className="text-[10px] font-bold text-[#7a32fc] uppercase tracking-widest">Encerramento da sessao ABA</p>
                 <h3 className="text-2xl font-semibold text-gray-900 mt-1">Resumo da sessao</h3>
-                <p className="text-sm text-gray-500 mt-1">Revise pendencias e dados clinicos antes de confirmar.</p>
+                <p className="text-sm text-gray-500 mt-1">Revise bloqueios, avisos e dados clinicos antes de confirmar.</p>
               </div>
-              <button onClick={() => setShowSessionSummary(false)} className="p-2 rounded-full hover:bg-gray-100">
+              <button onClick={() => setShowSessionSummary(false)} className="p-2 rounded-full hover:bg-white text-gray-500">
                 <X size={20} />
               </button>
             </div>
 
+            <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <h4 className="text-lg font-bold text-gray-900">Resumo geral</h4>
+                <span className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${sessionClosureSummary.syncStatus === 'synced' ? 'bg-emerald-50 text-emerald-600' : sessionClosureSummary.syncStatus === 'error' ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-600'}`}>
+                  {sessionClosureSummary.syncStatus === 'synced' ? 'sincronizado' : sessionClosureSummary.syncStatus === 'error' ? 'nao sincronizado' : 'pendente de sync'}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 lg:grid-cols-7 gap-3">
+                <div className="rounded-2xl bg-[#F8FAFF] p-4 lg:col-span-2">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Paciente</p>
+                  <p className="text-lg font-bold text-gray-900">{sessionClosureSummary.patientName || patient.name}</p>
+                </div>
+                <div className="rounded-2xl bg-[#F8FAFF] p-4">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Inicio</p>
+                  <p className="text-lg font-bold text-gray-900">{new Date(sessionClosureSummary.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                </div>
+                <div className="rounded-2xl bg-[#F8FAFF] p-4">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Fim previsto</p>
+                  <p className="text-lg font-bold text-gray-900">{new Date(sessionClosureSummary.endedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                </div>
+                <div className="rounded-2xl bg-[#F8FAFF] p-4">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Duracao</p>
+                  <p className="text-lg font-bold text-gray-900">{formatDurationSeconds(sessionClosureSummary.durationSeconds)}</p>
+                </div>
+                <div className="rounded-2xl bg-[#F8FAFF] p-4">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tentativas</p>
+                  <p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.totalTrials}</p>
+                </div>
+                <div className="rounded-2xl bg-[#F8FAFF] p-4">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Comport.</p>
+                  <p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.totalBehaviorEvents}</p>
+                </div>
+              </div>
+            </section>
+
             {openDurations.length > 0 && (
-              <div className="mb-5 rounded-[24px] border border-amber-100 bg-amber-50 p-5">
-                <h4 className="text-lg font-bold text-amber-800">Ha eventos de duracao em aberto</h4>
+              <section className="mt-4 rounded-[24px] border border-red-100 bg-red-50 p-5">
+                <h4 className="text-lg font-bold text-red-700">Ha eventos de duracao em aberto</h4>
                 <div className="mt-3 space-y-3">
                   {openDurations.map((event) => (
-                    <div key={event.id} className="rounded-2xl bg-white/80 border border-amber-100 p-4">
+                    <div key={event.id} className="rounded-2xl bg-white border border-red-100 p-4">
                       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                         <div>
                           <p className="font-bold text-gray-900">{event.behaviorName}</p>
@@ -2126,148 +2207,144 @@ export const SessionMode = ({
                         </div>
                         <div className="flex flex-wrap gap-2">
                           <button onClick={() => resolveDurationBeforeEnd(event.id, 'end')} className="rounded-xl bg-[#1B254B] px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-white">Encerrar agora</button>
-                          <button onClick={() => resolveDurationBeforeEnd(event.id, 'discard')} className="rounded-xl bg-red-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500">Descartar evento</button>
+                          <button onClick={() => resolveDurationBeforeEnd(event.id, 'discard')} className="rounded-xl bg-white px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-600 border border-red-100">Descartar evento</button>
                           <button onClick={() => setShowSessionSummary(false)} className="rounded-xl bg-gray-100 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-600">Voltar para sessao</button>
                         </div>
                       </div>
                     </div>
                   ))}
                 </div>
-              </div>
+              </section>
             )}
 
             {intervalRun && (
-              <div className="mb-5 rounded-[24px] border border-purple-100 bg-purple-50 p-5">
-                <h4 className="text-lg font-bold text-purple-800">Ha uma coleta por intervalo em andamento</h4>
-                <p className="mt-1 text-sm text-purple-700">{intervalRun.behaviorName} - {getMeasurementLabel(intervalRun.measurementType)} - intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals}</p>
+              <section className="mt-4 rounded-[24px] border border-red-100 bg-red-50 p-5">
+                <h4 className="text-lg font-bold text-red-700">Ha uma coleta por intervalo em andamento</h4>
+                <p className="mt-1 text-sm text-red-700">{intervalRun.behaviorName} - {getMeasurementLabel(intervalRun.measurementType)} - intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals}</p>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <button onClick={finishIntervalRunNow} className="rounded-xl bg-emerald-500 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-white">Finalizar coleta agora</button>
-                  <button onClick={cancelIntervalRun} className="rounded-xl bg-red-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500">Cancelar coleta</button>
-                  <button onClick={() => setShowSessionSummary(false)} className="rounded-xl bg-white px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-600 border border-purple-100">Voltar para sessao</button>
+                  <button onClick={cancelIntervalRun} className="rounded-xl bg-white px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-600 border border-red-100">Cancelar coleta</button>
+                  <button onClick={() => setShowSessionSummary(false)} className="rounded-xl bg-gray-100 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-600">Voltar para sessao</button>
                 </div>
-              </div>
+              </section>
             )}
 
-            {!sessionClosureState.canClose ? (
-              <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-5 text-sm font-semibold text-gray-600">
-                Resolva as pendencias bloqueantes acima para liberar o encerramento final.
+            <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <section className="rounded-[24px] bg-white border border-red-100 p-5">
+                <h4 className="text-lg font-bold text-red-700">Bloqueios de encerramento</h4>
+                <div className="mt-3 space-y-2">
+                  {closureBlockers.length === 0 ? (
+                    <p className="rounded-2xl bg-emerald-50 border border-emerald-100 px-4 py-3 text-sm font-semibold text-emerald-700">Nenhum bloqueio. O encerramento esta liberado.</p>
+                  ) : closureBlockers.map((item) => (
+                    <div key={item.key} className="rounded-2xl bg-red-50 border border-red-100 px-4 py-3 text-sm font-semibold text-red-700">
+                      {item.label}
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="rounded-[24px] bg-white border border-amber-100 p-5">
+                <h4 className="text-lg font-bold text-amber-700">Avisos de encerramento</h4>
+                {hasClosureWarnings && !hasClosureBlockers && (
+                  <p className="mt-2 rounded-2xl bg-amber-50 border border-amber-100 px-4 py-3 text-sm font-semibold text-amber-800">
+                    {'Esta sess\u00e3o possui avisos. Eles ficar\u00e3o registrados no resumo da sess\u00e3o.'}
+                  </p>
+                )}
+                <div className="mt-3 space-y-2">
+                  {closureWarnings.length === 0 ? (
+                    <p className="rounded-2xl bg-[#F8FAFF] border border-blue-100 px-4 py-3 text-sm font-semibold text-gray-600">Sem avisos adicionais.</p>
+                  ) : closureWarnings.map((item) => (
+                    <div key={item.key} className="rounded-2xl bg-amber-50 border border-amber-100 px-4 py-3 text-sm font-semibold text-amber-800">
+                      {item.label}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+
+            <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
+              <h4 className="text-lg font-bold text-gray-900">Resumo de comportamentos</h4>
+              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                {sessionClosureSummary.frequencySummary.map((item) => (
+                  <div key={`frequency-${item.behaviorName}`} className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
+                    <p className="font-bold text-gray-900">{item.behaviorName}</p>
+                    <p className="text-sm text-gray-500">frequencia: {item.occurrences} ocorrencia(s)</p>
+                  </div>
+                ))}
+                {sessionClosureSummary.durationSummary.map((item) => (
+                  <div key={`duration-${item.behaviorName}`} className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
+                    <p className="font-bold text-gray-900">{item.behaviorName}</p>
+                    <p className="text-sm text-gray-500">{item.episodes} episodio(s)</p>
+                    <p className="text-sm text-gray-500">duracao total: {formatDurationSeconds(item.totalSeconds)}</p>
+                    <p className="text-sm text-gray-500">duracao media: {formatDurationSeconds(item.averageSeconds)}</p>
+                    <p className="text-sm text-gray-500">maior episodio: {formatDurationSeconds(item.maxSeconds)}</p>
+                  </div>
+                ))}
+                {sessionClosureSummary.intervalSummary.map((item) => (
+                  <div key={`interval-${item.behaviorName}-${item.method}`} className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
+                    <p className="font-bold text-gray-900">{item.behaviorName}</p>
+                    <p className="text-sm text-gray-500">{getMeasurementLabel(item.method)}</p>
+                    <p className="text-sm text-gray-500">{item.totalIntervals} intervalo(s)</p>
+                    <p className="text-sm text-gray-500">{item.occurredCount} SIM - {item.notOccurredCount} NAO</p>
+                    <p className="text-sm font-bold text-[#7a32fc]">ocorrencia: {item.occurrencePercent}%</p>
+                  </div>
+                ))}
+                {sessionClosureSummary.totalBehaviorEvents === 0 && <p className="text-sm text-gray-500">Nenhum comportamento registrado nesta sessao.</p>}
               </div>
-            ) : (
-              <>
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                  <div className="rounded-2xl bg-[#F4F7FE] p-4">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Paciente</p>
-                    <p className="text-lg font-bold text-gray-900">{sessionClosureSummary.patientName || patient.name}</p>
-                  </div>
-                  <div className="rounded-2xl bg-[#F4F7FE] p-4">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Inicio</p>
-                    <p className="text-lg font-bold text-gray-900">{new Date(sessionClosureSummary.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
-                  </div>
-                  <div className="rounded-2xl bg-[#F4F7FE] p-4">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Fim</p>
-                    <p className="text-lg font-bold text-gray-900">{new Date(sessionClosureSummary.endedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
-                  </div>
-                  <div className="rounded-2xl bg-[#F4F7FE] p-4">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Duracao total</p>
-                    <p className="text-lg font-bold text-gray-900">{formatDurationSeconds(sessionClosureSummary.durationSeconds)}</p>
-                  </div>
-                </div>
+            </section>
 
-                <div className="mt-4 grid grid-cols-2 lg:grid-cols-6 gap-3">
-                  <div className="rounded-2xl bg-[#F4F7FE] p-4"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tentativas</p><p className="text-3xl font-bold text-gray-900">{sessionClosureSummary.totalTrials}</p></div>
-                  <div className="rounded-2xl bg-[#F4F7FE] p-4"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Comport.</p><p className="text-3xl font-bold text-gray-900">{sessionClosureSummary.totalBehaviorEvents}</p></div>
-                  <div className="rounded-2xl bg-[#F4F7FE] p-4"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Frequencia</p><p className="text-3xl font-bold text-gray-900">{sessionClosureSummary.frequencySummary.reduce((sum, item) => sum + item.occurrences, 0)}</p></div>
-                  <div className="rounded-2xl bg-[#F4F7FE] p-4"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Duracao</p><p className="text-3xl font-bold text-gray-900">{sessionClosureSummary.durationSummary.reduce((sum, item) => sum + item.episodes, 0)}</p></div>
-                  <div className="rounded-2xl bg-[#F4F7FE] p-4"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Intervalo</p><p className="text-3xl font-bold text-gray-900">{sessionClosureSummary.intervalSummary.length}</p></div>
-                  <div className="rounded-2xl bg-[#F4F7FE] p-4"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Sync</p><p className="text-sm font-bold text-gray-900 uppercase">{sessionClosureSummary.syncStatus === 'synced' ? 'sincronizado' : sessionClosureSummary.syncStatus === 'error' ? 'erro' : 'pendente'}</p></div>
+            <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <h4 className="text-lg font-bold text-gray-900">Resumo de ensino</h4>
+                <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="rounded-2xl bg-[#F8FAFF] p-3 border border-gray-100"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total</p><p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.totalTrials}</p></div>
+                  <div className="rounded-2xl bg-[#F8FAFF] p-3 border border-gray-100"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Indep.</p><p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.independentTrials}</p></div>
+                  <div className="rounded-2xl bg-[#F8FAFF] p-3 border border-gray-100"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Ajuda</p><p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.promptedTrials}</p></div>
+                  <div className="rounded-2xl bg-[#F8FAFF] p-3 border border-gray-100"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Erros</p><p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.errorTrials}</p></div>
                 </div>
+                <p className="mt-3 text-sm text-gray-500">Acerto: <span className="font-bold text-gray-900">{sessionClosureSummary.accuracyPercent}%</span></p>
+                <p className="text-sm text-gray-500">Independencia: <span className="font-bold text-gray-900">{sessionClosureSummary.independencePercent}%</span></p>
+                <p className="text-sm text-gray-500">Tipos usados: {sessionClosureSummary.teachingSummary.typesUsed.join(', ') || 'nenhum'}</p>
+              </section>
 
-                <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <div className="rounded-[24px] border border-blue-100 bg-[#F8FAFF] p-5">
-                    <h4 className="text-lg font-bold text-gray-900">Resumo de comportamentos</h4>
-                    <div className="mt-3 space-y-3">
-                      {sessionClosureSummary.frequencySummary.map((item) => (
-                        <div key={`frequency-${item.behaviorName}`} className="rounded-2xl bg-white border border-gray-100 p-4">
-                          <p className="font-bold text-gray-900">{item.behaviorName}</p>
-                          <p className="text-sm text-gray-500">{item.occurrences} ocorrencia(s)</p>
-                        </div>
-                      ))}
-                      {sessionClosureSummary.durationSummary.map((item) => (
-                        <div key={`duration-${item.behaviorName}`} className="rounded-2xl bg-white border border-gray-100 p-4">
-                          <p className="font-bold text-gray-900">{item.behaviorName}</p>
-                          <p className="text-sm text-gray-500">{item.episodes} episodio(s)</p>
-                          <p className="text-sm text-gray-500">duracao total: {formatDurationSeconds(item.totalSeconds)}</p>
-                          <p className="text-sm text-gray-500">duracao media: {formatDurationSeconds(item.averageSeconds)}</p>
-                          <p className="text-sm text-gray-500">maior episodio: {formatDurationSeconds(item.maxSeconds)}</p>
-                        </div>
-                      ))}
-                      {sessionClosureSummary.intervalSummary.map((item) => (
-                        <div key={`interval-${item.behaviorName}-${item.method}`} className="rounded-2xl bg-white border border-gray-100 p-4">
-                          <p className="font-bold text-gray-900">{item.behaviorName}</p>
-                          <p className="text-sm text-gray-500">{getMeasurementLabel(item.method)}</p>
-                          <p className="text-sm text-gray-500">{item.totalIntervals} intervalo(s) - {item.occurredCount} SIM - {item.notOccurredCount} NAO</p>
-                          <p className="text-sm font-bold text-[#7a32fc]">ocorrencia: {item.occurrencePercent}%</p>
-                        </div>
-                      ))}
-                      {sessionClosureSummary.totalBehaviorEvents === 0 && <p className="text-sm text-gray-500">Nenhum comportamento registrado nesta sessao.</p>}
+              <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <h4 className="text-lg font-bold text-gray-900">Maestria</h4>
+                <div className="mt-3 space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                  {teachingMasteryRows.map((row) => (
+                    <div key={row.id} className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-3">
+                      <p className="font-bold text-gray-900">{row.name}</p>
+                      <p className="text-xs text-gray-500">criterio: {row.criterion}</p>
+                      <p className="text-xs text-gray-500">desempenho: {row.performanceText}</p>
+                      <p className="text-xs text-gray-500">contribuiu para o criterio: {row.contributes ? 'sim' : 'nao'}</p>
+                      <p className="text-xs font-bold text-[#7a32fc]">{row.status}</p>
                     </div>
-                  </div>
-
-                  <div className="rounded-[24px] border border-blue-100 bg-[#F8FAFF] p-5">
-                    <h4 className="text-lg font-bold text-gray-900">Tentativas de ensino</h4>
-                    <div className="mt-3 grid grid-cols-2 gap-3">
-                      <div className="rounded-2xl bg-white p-3 border border-gray-100"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total</p><p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.totalTrials}</p></div>
-                      <div className="rounded-2xl bg-white p-3 border border-gray-100"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Indep.</p><p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.independentTrials}</p></div>
-                      <div className="rounded-2xl bg-white p-3 border border-gray-100"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Ajuda</p><p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.promptedTrials}</p></div>
-                      <div className="rounded-2xl bg-white p-3 border border-gray-100"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Erros</p><p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.errorTrials}</p></div>
-                    </div>
-                    <p className="mt-3 text-sm text-gray-500">Independencia: <span className="font-bold text-gray-900">{sessionClosureSummary.independencePercent}%</span></p>
-                    <p className="text-sm text-gray-500">Acerto: <span className="font-bold text-gray-900">{sessionClosureSummary.accuracyPercent}%</span></p>
-                    <p className="text-sm text-gray-500">Tipos usados: {sessionClosureSummary.teachingSummary.typesUsed.join(', ') || 'nenhum'}</p>
-
-                    <h4 className="mt-5 text-lg font-bold text-gray-900">Maestria</h4>
-                    <div className="mt-3 space-y-2">
-                      {teachingMasteryRows.map((row) => (
-                        <div key={row.id} className="rounded-2xl bg-white border border-gray-100 p-3">
-                          <p className="font-bold text-gray-900">{row.name}</p>
-                          <p className="text-xs text-gray-500">criterio: {row.criterion}</p>
-                          <p className="text-xs text-gray-500">desempenho: {row.performanceText}</p>
-                          <p className="text-xs text-gray-500">contribuiu para o criterio: {row.contributes ? 'sim' : 'nao'}</p>
-                          <p className="text-xs font-bold text-[#7a32fc]">{row.status}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                  ))}
                 </div>
+              </section>
+            </div>
 
-                <div className="mt-5 rounded-[24px] border border-amber-100 bg-amber-50 p-5">
-                  <h4 className="text-lg font-bold text-amber-800">Pendencias</h4>
-                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {sessionClosureSummary.pendingItems.length === 0 ? (
-                      <p className="text-sm font-semibold text-amber-700">Sem pendencias.</p>
-                    ) : sessionClosureSummary.pendingItems.map((item) => (
-                      <div key={item.key} className="rounded-xl bg-white/80 border border-amber-100 px-3 py-2 text-sm font-semibold text-amber-800">
-                        {item.label}
-                      </div>
-                    ))}
-                  </div>
-                  <label className="mt-4 block text-[10px] font-bold text-amber-700 uppercase tracking-widest">
-                    Observacao da sessao
-                    <textarea
-                      value={sessionNote}
-                      onChange={(event) => setSessionNote(event.target.value)}
-                      placeholder="Observacoes clinicas do encerramento..."
-                      className="mt-2 w-full min-h-[84px] rounded-2xl border border-amber-100 bg-white px-4 py-3 text-sm text-gray-700 outline-none resize-none focus:border-[#7a32fc]"
-                    />
-                  </label>
-                </div>
+            <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
+              <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                Observacao da sessao
+                <textarea
+                  value={sessionNote}
+                  onChange={(event) => setSessionNote(event.target.value)}
+                  placeholder={'Resumo cl\u00ednico da sess\u00e3o, intercorr\u00eancias, resposta do paciente e orienta\u00e7\u00f5es relevantes...'}
+                  className="mt-2 w-full min-h-[104px] rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-sm text-gray-700 outline-none resize-none focus:border-[#7a32fc]"
+                />
+              </label>
+            </section>
 
-                <div className="mt-6 flex flex-col sm:flex-row gap-3">
-                  <button onClick={() => setShowSessionSummary(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-semibold">Voltar para sessao</button>
-                  <button onClick={confirmEndSession} className="flex-1 py-3 rounded-2xl bg-red-500 text-white font-semibold shadow-lg shadow-red-500/20">Confirmar encerramento da sessao</button>
-                </div>
-              </>
-            )}
+            <div className="mt-6 flex flex-col sm:flex-row gap-3">
+              <button onClick={() => setShowSessionSummary(false)} className="flex-1 py-3 rounded-2xl bg-white border border-blue-100 text-gray-600 font-semibold">Voltar para sessao</button>
+              <button
+                onClick={confirmEndSession}
+                disabled={hasClosureBlockers}
+                className={`flex-1 py-3 rounded-2xl font-semibold shadow-lg transition-all ${hasClosureBlockers ? 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none' : 'bg-[#7a32fc] text-white shadow-purple-500/20 hover:bg-[#6425df]'}`}
+              >
+                Confirmar encerramento da sessao
+              </button>
+            </div>
           </div>
         </div>
       )}

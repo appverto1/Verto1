@@ -14314,11 +14314,13 @@ async function startServer() {
         duration_summary: sanitizeClinicalPayload(req.body?.duration_summary || req.body?.durationSummary || []),
         interval_summary: sanitizeClinicalPayload(req.body?.interval_summary || req.body?.intervalSummary || []),
         pending_items: sanitizeClinicalPayload(req.body?.pending_items || req.body?.pendingItems || []),
+        pending_warnings: sanitizeClinicalPayload(req.body?.pending_warnings || req.body?.pendingWarnings || []),
         sync_status: 'synced',
         summary_payload: sanitizeClinicalPayload({
           ...(req.body?.summary_payload || req.body?.summaryPayload || {}),
           patientName: sanitizeString(req.body?.patient_name || req.body?.patientName, 180),
           teachingSummary: req.body?.teaching_summary || req.body?.teachingSummary || undefined,
+          pendingWarnings: req.body?.pending_warnings || req.body?.pendingWarnings || undefined,
           syncStatus: 'synced'
         }),
         created_at: req.body?.created_at || req.body?.createdAt ? sanitizeIsoDateTime(req.body?.created_at || req.body?.createdAt) : new Date().toISOString()

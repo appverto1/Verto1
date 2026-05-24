@@ -1046,6 +1046,8 @@ export const dataService = {
       endedAt: summary?.ended_at || summary?.endedAt,
       duration_seconds: summary?.duration_seconds ?? summary?.durationSeconds,
       durationSeconds: summary?.duration_seconds ?? summary?.durationSeconds,
+      pending_warnings: summary?.pending_warnings || summary?.pendingWarnings || [],
+      pendingWarnings: summary?.pending_warnings || summary?.pendingWarnings || [],
       syncStatus: summary?.syncStatus || 'local',
       created_at: summary?.created_at || summary?.createdAt || new Date().toISOString(),
       createdAt: summary?.created_at || summary?.createdAt || new Date().toISOString()

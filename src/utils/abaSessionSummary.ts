@@ -3,6 +3,7 @@ export type SessionSummaryPendingItem = {
   label: string;
   blocking?: boolean;
   count?: number;
+  category?: 'blocker' | 'warning';
 };
 
 export type SessionSummary = {
@@ -27,6 +28,7 @@ export type SessionSummary = {
   teachingSummary: TeachingSummary;
   syncStatus: 'local' | 'syncing' | 'synced' | 'error';
   pendingItems: SessionSummaryPendingItem[];
+  pendingWarnings: SessionSummaryPendingItem[];
   createdAt: string;
 };
 
@@ -73,6 +75,7 @@ type CalculateSessionSummaryInput = {
   trials?: any[];
   behaviorEvents?: any[];
   pendingItems?: SessionSummaryPendingItem[];
+  pendingWarnings?: SessionSummaryPendingItem[];
   syncStatus?: 'local' | 'syncing' | 'synced' | 'error';
   createdAt?: string;
 };
@@ -269,6 +272,7 @@ export const calculateSessionSummary = (sessionId: string, input: CalculateSessi
     teachingSummary,
     syncStatus: input.syncStatus || 'local',
     pendingItems: input.pendingItems || [],
+    pendingWarnings: input.pendingWarnings || [],
     createdAt: input.createdAt || new Date().toISOString()
   };
 };
@@ -276,10 +280,25 @@ export const calculateSessionSummary = (sessionId: string, input: CalculateSessi
 export const canCloseAbaSession = (input: {
   openDurations?: any[];
   intervalRun?: any;
+  unsavedLocalCount?: number;
+  incompleteTrial?: boolean;
+  requiredAbcMissingCount?: number;
+  sessionNoteRequired?: boolean;
 }) => ({
-  canClose: !(input.openDurations?.length || input.intervalRun),
+  canClose: !(
+    input.openDurations?.length ||
+    input.intervalRun ||
+    input.unsavedLocalCount ||
+    input.incompleteTrial ||
+    input.requiredAbcMissingCount ||
+    input.sessionNoteRequired
+  ),
   blockers: [
-    ...(input.openDurations?.length ? [{ key: 'open_duration', label: 'Ha eventos de duracao em aberto', blocking: true, count: input.openDurations.length }] : []),
-    ...(input.intervalRun ? [{ key: 'open_interval_collection', label: 'Ha uma coleta por intervalo em andamento', blocking: true, count: 1 }] : [])
+    ...(input.openDurations?.length ? [{ key: 'open_duration', label: 'Ha eventos de duracao em aberto', blocking: true, category: 'blocker' as const, count: input.openDurations.length }] : []),
+    ...(input.intervalRun ? [{ key: 'open_interval_collection', label: 'Ha uma coleta por intervalo em andamento', blocking: true, category: 'blocker' as const, count: 1 }] : []),
+    ...(input.unsavedLocalCount ? [{ key: 'unsaved_local_records', label: `${input.unsavedLocalCount} dado(s) ainda nao salvos localmente`, blocking: true, category: 'blocker' as const, count: input.unsavedLocalCount }] : []),
+    ...(input.incompleteTrial ? [{ key: 'incomplete_trial', label: 'Ha uma tentativa de ensino incompleta', blocking: true, category: 'blocker' as const, count: 1 }] : []),
+    ...(input.requiredAbcMissingCount ? [{ key: 'required_abc_missing', label: `ABC obrigatorio pendente em ${input.requiredAbcMissingCount} evento(s)`, blocking: true, category: 'blocker' as const, count: input.requiredAbcMissingCount }] : []),
+    ...(input.sessionNoteRequired ? [{ key: 'session_note_required', label: 'Observacao da sessao obrigatoria antes do encerramento', blocking: true, category: 'blocker' as const, count: 1 }] : [])
   ] as SessionSummaryPendingItem[]
 });
