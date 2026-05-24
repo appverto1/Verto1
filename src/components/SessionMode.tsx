@@ -120,7 +120,7 @@ const intervalAlertOptions = [
   { key: 'silent', label: 'Silencioso' }
 ];
 
-const AbaSessionToast = ({ toast }: { toast: ClinicalActionToast }) => {
+const AbaSessionToast = ({ toast, compact = false }: { toast: ClinicalActionToast; compact?: boolean }) => {
   const variantClass = {
     success: 'border-emerald-100 bg-white text-emerald-700 shadow-emerald-900/10',
     warning: 'border-amber-100 bg-white text-amber-700 shadow-amber-900/10',
@@ -134,20 +134,23 @@ const AbaSessionToast = ({ toast }: { toast: ClinicalActionToast }) => {
     info: 'bg-blue-50 text-blue-600'
   }[toast.variant];
   const Icon = toast.variant === 'success' ? CheckCircle2 : toast.variant === 'error' ? AlertCircle : toast.variant === 'warning' ? Clock : Zap;
+  const title = compact ? (toast.compactTitle || toast.title) : toast.title;
+  const subtitle = compact ? (toast.compactSubtitle || toast.subtitle) : toast.subtitle;
 
   return (
     <div
       role="status"
       aria-live="polite"
-      className={`pointer-events-auto flex w-[calc(100vw-1.5rem)] max-w-sm items-start gap-3 rounded-[22px] border px-4 py-3 shadow-2xl animate-pop sm:w-[360px] ${variantClass}`}
+      data-aba-toast-compact={compact ? 'true' : 'false'}
+      className={`pointer-events-none flex border shadow-2xl animate-pop ${compact ? 'w-auto max-w-[calc(100vw-2rem)] items-center gap-2 rounded-2xl px-3 py-2' : 'w-[calc(100vw-1.5rem)] max-w-sm items-start gap-3 rounded-[22px] px-4 py-3 sm:w-[360px]'} ${variantClass}`}
     >
-      <span className={`mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl ${iconClass}`}>
+      <span className={`inline-flex shrink-0 items-center justify-center rounded-2xl ${compact ? 'hidden' : 'mt-0.5 h-9 w-9'} ${iconClass}`}>
         <Icon size={18} />
       </span>
       <span className="min-w-0">
-        <span className="block text-sm font-extrabold leading-tight text-slate-900">{toast.title}</span>
-        {toast.subtitle ? (
-          <span className="mt-1 block text-xs font-semibold leading-snug text-slate-500">{toast.subtitle}</span>
+        <span className={`block font-extrabold leading-tight text-slate-900 ${compact ? 'truncate text-xs' : 'text-sm'}`}>{title}</span>
+        {subtitle ? (
+          <span className={`block font-semibold leading-snug text-slate-500 ${compact ? 'mt-0.5 truncate text-[11px]' : 'mt-1 text-xs'}`}>{subtitle}</span>
         ) : null}
       </span>
     </div>
@@ -334,6 +337,7 @@ export const SessionMode = ({
   const dockShortcuts = useMemo(() => getDockVisibleShortcuts(quickBehaviorShortcuts, { crisisMode, limit: 3 }), [crisisMode, quickBehaviorShortcuts]);
   const crisisShortcutIdSet = useMemo(() => new Set(getCrisisShortcutIds()), []);
   const recentBehaviorRecords = useMemo(() => records.filter((record) => record.kind === 'behavior').slice(0, 5), [records]);
+  const intervalToastCompact = Boolean(intervalRun && !intervalRun.paused && !intervalRun.completed);
   const vibrateClinicalAction = (pattern: number | number[]) => {
     if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
     try {
@@ -351,7 +355,7 @@ export const SessionMode = ({
     actionToastTimerRef.current = window.setTimeout(() => {
       setActionToast(null);
       actionToastTimerRef.current = null;
-    }, 2000);
+    }, intervalToastCompact ? 1500 : 2000);
   };
 
   const showPersistResultToast = (result: any) => {
@@ -1805,6 +1809,8 @@ export const SessionMode = ({
     : 'pb-[calc(12rem+env(safe-area-inset-bottom))] scroll-pb-[calc(12rem+env(safe-area-inset-bottom))]';
   const actionToastPositionClass = intervalResponseActive
     ? 'top-[calc(5rem+env(safe-area-inset-top))] bottom-auto'
+    : intervalToastCompact
+      ? 'top-[calc(4.75rem+env(safe-area-inset-top))] bottom-auto'
     : 'bottom-[calc(6.75rem+env(safe-area-inset-bottom))]';
   const closeCompletedSession = () => {
     if (typeof onConfirmEndSession === 'function') {
@@ -1816,7 +1822,7 @@ export const SessionMode = ({
   const actionToastPortal = actionToast && typeof document !== 'undefined'
     ? createPortal(
         <div className={`pointer-events-none fixed inset-x-0 z-[220] flex justify-center px-3 xl:inset-x-auto xl:right-4 xl:bottom-4 xl:top-auto xl:justify-end ${actionToastPositionClass}`}>
-          <AbaSessionToast toast={actionToast} />
+          <AbaSessionToast toast={actionToast} compact={intervalToastCompact} />
         </div>,
         document.body
       )

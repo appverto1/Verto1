@@ -5,6 +5,8 @@ export type ClinicalActionToast = {
   variant: ClinicalToastVariant;
   title: string;
   subtitle?: string;
+  compactTitle?: string;
+  compactSubtitle?: string;
 };
 
 type TrialToastInput = {
@@ -65,12 +67,19 @@ export const formatClinicalScore = (score: number) => {
 const joinPresent = (items: Array<string | number | null | undefined>) =>
   items.filter((item) => item !== undefined && item !== null && String(item).trim() !== '').join(' • ');
 
+const compactContext = (location?: string, severity?: number | null) => joinPresent([
+  location,
+  severity ? `sev. ${severity}` : null
+]);
+
 export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): ClinicalActionToast => {
   if (input.action === 'frequency') {
     const count = Number(input.countDelta || 1);
     return {
       variant: 'success',
       title: `${input.behaviorName} registrada`,
+      compactTitle: `✓ ${input.behaviorName} ${count > 0 ? '+' : ''}${count}`,
+      compactSubtitle: compactContext(input.location, input.severity),
       subtitle: joinPresent([
         `${count > 0 ? '+' : ''}${count} ocorrência`,
         input.location,
@@ -83,6 +92,8 @@ export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): 
     return {
       variant: 'success',
       title: `${input.behaviorName} iniciado`,
+      compactTitle: `⏱ ${input.behaviorName} iniciado`,
+      compactSubtitle: compactContext(input.location, input.severity),
       subtitle: joinPresent([
         input.location,
         input.severity ? `severidade ${input.severity}` : null
@@ -94,6 +105,8 @@ export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): 
     return {
       variant: 'success',
       title: `${input.behaviorName} encerrado`,
+      compactTitle: `✓ ${input.behaviorName} ${formatClinicalDuration(input.durationSeconds)}`,
+      compactSubtitle: 'Duração encerrada',
       subtitle: `Duração: ${formatClinicalDuration(input.durationSeconds)}`
     };
   }
@@ -104,6 +117,8 @@ export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): 
       return {
         variant: 'success',
         title: 'Tentativa registrada',
+        compactTitle: '✓ Tentativa salva',
+        compactSubtitle: joinPresent([input.collectionLabel, 'independente', scoreText]),
         subtitle: `Independente • ${input.collectionLabel} • ${scoreText}`
       };
     }
@@ -111,12 +126,16 @@ export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): 
       return {
         variant: 'success',
         title: 'Tentativa registrada',
+        compactTitle: '✓ Tentativa salva',
+        compactSubtitle: joinPresent([input.collectionLabel, String(input.promptLabel || '').toLowerCase(), scoreText]),
         subtitle: `Com ajuda ${String(input.promptLabel || '').toLowerCase()} • ${input.collectionLabel} • ${scoreText}`
       };
     }
     return {
       variant: 'success',
       title: 'Tentativa registrada',
+      compactTitle: '✓ Tentativa salva',
+      compactSubtitle: joinPresent([input.collectionLabel, 'erro', scoreText]),
       subtitle: `Erro / sem resposta • ${input.collectionLabel} • ${scoreText}`
     };
   }
@@ -125,6 +144,8 @@ export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): 
     return {
       variant: 'success',
       title: 'Intervalo registrado',
+      compactTitle: `✓ Intervalo ${input.intervalNumber}: ${input.occurred ? 'SIM' : 'NÃO'}`,
+      compactSubtitle: input.behaviorName,
       subtitle: `${input.behaviorName} • intervalo ${input.intervalNumber}: ${input.occurred ? 'SIM' : 'NÃO'}`
     };
   }
@@ -133,6 +154,8 @@ export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): 
     return {
       variant: 'success',
       title: 'ABC salvo',
+      compactTitle: '✓ ABC salvo',
+      compactSubtitle: 'Complemento registrado',
       subtitle: 'Complemento registrado'
     };
   }
@@ -141,6 +164,8 @@ export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): 
     return {
       variant: 'success',
       title: 'Sessão encerrada',
+      compactTitle: '✓ Sessão encerrada',
+      compactSubtitle: 'Resumo salvo',
       subtitle: 'Resumo clínico salvo para revisão'
     };
   }
@@ -148,6 +173,8 @@ export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): 
   return {
     variant: 'success',
     title: 'Registro atualizado',
+    compactTitle: '✓ Registro atualizado',
+    compactSubtitle: 'Complemento salvo',
     subtitle: 'Complemento salvo sem alterar o horário original'
   };
 };
@@ -155,13 +182,17 @@ export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): 
 export const buildClinicalSaveErrorToast = (): ClinicalActionToast => ({
   variant: 'error',
   title: 'Não foi possível salvar',
-  subtitle: 'Tente novamente. Nenhum dado foi perdido.'
+  compactTitle: 'Não salvou',
+  subtitle: 'Tente novamente. Nenhum dado foi perdido.',
+  compactSubtitle: 'Tente novamente'
 });
 
 export const buildClinicalOfflineToast = (): ClinicalActionToast => ({
   variant: 'warning',
   title: 'Salvo no dispositivo',
-  subtitle: 'Será sincronizado quando houver conexão.'
+  compactTitle: 'Salvo localmente',
+  subtitle: 'Será sincronizado quando houver conexão.',
+  compactSubtitle: 'Sincroniza depois'
 });
 
 export class ClinicalActionDebounceGate {

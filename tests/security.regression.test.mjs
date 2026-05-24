@@ -545,6 +545,11 @@ test('aba session mode: trials and behavior events are one-touch and session-sco
   );
   assert.match(
     sessionModeCode,
+    /const AbaSessionToast = \(\{ toast, compact = false \}[\s\S]*?compactTitle[\s\S]*?compactSubtitle[\s\S]*?data-aba-toast-compact[\s\S]*?intervalToastCompact[\s\S]*?1500[\s\S]*?top-\[calc\(4\.75rem\+env\(safe-area-inset-top\)\)\][\s\S]*?<AbaSessionToast toast=\{actionToast\} compact=\{intervalToastCompact\}/m,
+    'Toast clínico deve usar modo compacto durante coleta por intervalo ativa no mobile.'
+  );
+  assert.match(
+    sessionModeCode,
     /buildSessionReport\(\{[\s\S]*?sourceRecords: records[\s\S]*?Relatório da sessão[\s\S]*?Exportação em PDF será implementada em breve[\s\S]*?Gerar PDF/m,
     'SessionMode deve renderizar relatório pós-encerramento baseado no SessionSummary e manter PDF desabilitado.'
   );

@@ -20,6 +20,8 @@ test('toast aparece após registrar frequência', () => {
   assert.equal(toast.variant, 'success');
   assert.equal(toast.title, 'Agressão registrada');
   assert.equal(toast.subtitle, '+1 ocorrência • Mesa • severidade 2');
+  assert.equal(toast.compactTitle, '✓ Agressão +1');
+  assert.equal(toast.compactSubtitle, 'Mesa • sev. 2');
 });
 
 test('toast aparece após tentativa independente e com ajuda', () => {
@@ -38,7 +40,9 @@ test('toast aparece após tentativa independente e com ajuda', () => {
   });
   assert.equal(independent.title, 'Tentativa registrada');
   assert.equal(independent.subtitle, 'Independente • DTT • 1.0');
+  assert.equal(independent.compactTitle, '✓ Tentativa salva');
   assert.equal(prompted.subtitle, 'Com ajuda verbal • DTT • 0.5');
+  assert.equal(prompted.compactSubtitle, 'DTT • verbal • 0.5');
 });
 
 test('toast aparece após encerrar duração', () => {
@@ -49,6 +53,19 @@ test('toast aparece após encerrar duração', () => {
   });
   assert.equal(toast.title, 'Choro encerrado');
   assert.equal(toast.subtitle, 'Duração: 00:42');
+  assert.equal(toast.compactTitle, '✓ Choro 00:42');
+  assert.equal(toast.compactSubtitle, 'Duração encerrada');
+});
+
+test('toast compacto de intervalo usa SIM/NÃO curto', () => {
+  const toast = buildClinicalActionToast({
+    action: 'interval',
+    behaviorName: 'Estereotipia',
+    intervalNumber: 2,
+    occurred: true
+  });
+  assert.equal(toast.compactTitle, '✓ Intervalo 2: SIM');
+  assert.equal(toast.compactSubtitle, 'Estereotipia');
 });
 
 test('toast de erro aparece se salvar falhar', () => {
