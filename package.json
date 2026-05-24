@@ -15,6 +15,7 @@
     "start": "tsx server.ts",
     "test:security": "node tests/security.regression.test.mjs",
     "test:aba-session-summary": "tsx tests/abaSessionSummary.test.ts",
+    "test:aba-session-feedback": "tsx tests/abaSessionFeedback.test.ts",
     "stripe:create-active-patient-price": "node scripts/create-stripe-active-patient-price.mjs",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"

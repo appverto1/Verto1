@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   AlertCircle,
@@ -22,6 +22,7 @@ import { dataService } from '../services/dataService';
 import { ABA_PROMPT_LEVEL_OPTIONS, resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 import { buildSessionReport, calculateSessionSummary, canCloseAbaSession, canRecordInAbaSession, type SessionSummary, type SessionSummaryPendingItem } from '../utils/abaSessionSummary';
 import { isAbaV2Enabled } from '../utils/featureFlags';
+import { buildClinicalActionToast, buildClinicalOfflineToast, buildClinicalSaveErrorToast, type ClinicalActionToast } from '../utils/abaSessionFeedback';
 
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
 type AbcRequirement = 'REQUIRED' | 'RECOMMENDED' | 'OPTIONAL' | 'DISABLED';
@@ -115,6 +116,40 @@ const intervalAlertOptions = [
   { key: 'both', label: 'Ambos' },
   { key: 'silent', label: 'Silencioso' }
 ];
+
+const AbaSessionToast = ({ toast }: { toast: ClinicalActionToast }) => {
+  const variantClass = {
+    success: 'border-emerald-100 bg-white text-emerald-700 shadow-emerald-900/10',
+    warning: 'border-amber-100 bg-white text-amber-700 shadow-amber-900/10',
+    error: 'border-red-100 bg-white text-red-600 shadow-red-900/10',
+    info: 'border-blue-100 bg-white text-blue-700 shadow-blue-900/10'
+  }[toast.variant];
+  const iconClass = {
+    success: 'bg-emerald-50 text-emerald-600',
+    warning: 'bg-amber-50 text-amber-600',
+    error: 'bg-red-50 text-red-600',
+    info: 'bg-blue-50 text-blue-600'
+  }[toast.variant];
+  const Icon = toast.variant === 'success' ? CheckCircle2 : toast.variant === 'error' ? AlertCircle : toast.variant === 'warning' ? Clock : Zap;
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={`pointer-events-auto flex w-[calc(100vw-1.5rem)] max-w-sm items-start gap-3 rounded-[22px] border px-4 py-3 shadow-2xl animate-pop sm:w-[360px] ${variantClass}`}
+    >
+      <span className={`mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl ${iconClass}`}>
+        <Icon size={18} />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-extrabold leading-tight text-slate-900">{toast.title}</span>
+        {toast.subtitle ? (
+          <span className="mt-1 block text-xs font-semibold leading-snug text-slate-500">{toast.subtitle}</span>
+        ) : null}
+      </span>
+    </div>
+  );
+};
 
 const formatElapsed = (start: string, nowMs = Date.now()) => {
   const elapsed = Math.max(0, Math.floor((nowMs - new Date(start).getTime()) / 1000));
@@ -258,6 +293,9 @@ export const SessionMode = ({
   const [promptWarning, setPromptWarning] = useState('');
   const [mobileFocusMode, setMobileFocusMode] = useState(true);
   const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [actionToast, setActionToast] = useState<ClinicalActionToast | null>(null);
+  const [actionLocks, setActionLocks] = useState<Record<string, boolean>>({});
+  const [microFeedback, setMicroFeedback] = useState<Record<string, 'pulse' | 'check' | 'plus'>>({});
   const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
   const [editingRecordTitle, setEditingRecordTitle] = useState('');
   const [editingRecordDetail, setEditingRecordDetail] = useState('');
@@ -268,6 +306,10 @@ export const SessionMode = ({
   const [editingRecordNotes, setEditingRecordNotes] = useState('');
   const [hydratedSessionStateKey, setHydratedSessionStateKey] = useState('');
   const [nowMs, setNowMs] = useState(Date.now());
+  const actionToastTimerRef = useRef<number | null>(null);
+  const actionLocksRef = useRef<Record<string, boolean>>({});
+  const actionLockTimersRef = useRef<Record<string, number>>({});
+  const microFeedbackTimersRef = useRef<Record<string, number>>({});
 
   const selectedBehavior = useMemo(
     () => behaviorPresets.find((behavior) => behavior.id === selectedBehaviorId) || behaviorPresets[0],
@@ -276,6 +318,80 @@ export const SessionMode = ({
   const selectedBehaviorMeasurements = selectedBehavior.allowedMeasurements || [selectedBehavior.defaultMeasurement];
   const selectedBehaviorAllowsMultipleMethods = selectedBehaviorMeasurements.length > 1;
   const selectedBehaviorMethodOptions = behaviorMeasurementOptions.filter((option) => selectedBehaviorMeasurements.includes(option.key));
+  const vibrateClinicalAction = (pattern: number | number[]) => {
+    if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
+    try {
+      navigator.vibrate(pattern);
+    } catch {
+      // Vibration is best-effort and should never block clinical recording.
+    }
+  };
+
+  const showClinicalToast = (toast: ClinicalActionToast, vibration: 'success' | 'error' | 'none' = 'success') => {
+    if (actionToastTimerRef.current) window.clearTimeout(actionToastTimerRef.current);
+    setActionToast({ ...toast, id: toast.id || crypto.randomUUID() });
+    if (vibration === 'success') vibrateClinicalAction(30);
+    if (vibration === 'error') vibrateClinicalAction([30, 60, 30]);
+    actionToastTimerRef.current = window.setTimeout(() => {
+      setActionToast(null);
+      actionToastTimerRef.current = null;
+    }, 2000);
+  };
+
+  const showPersistResultToast = (result: any) => {
+    if (!result) return;
+    if (result?.success === false && !result?.pending && !result?.offline) {
+      showClinicalToast(buildClinicalSaveErrorToast(), 'error');
+      return;
+    }
+    if (result?.pending || result?.offline) {
+      showClinicalToast(buildClinicalOfflineToast(), 'none');
+    }
+  };
+
+  const releaseActionLock = (key: string) => {
+    const nextLocks = { ...actionLocksRef.current };
+    delete nextLocks[key];
+    actionLocksRef.current = nextLocks;
+    if (actionLockTimersRef.current[key]) {
+      window.clearTimeout(actionLockTimersRef.current[key]);
+      delete actionLockTimersRef.current[key];
+    }
+    setActionLocks((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const lockAction = (key: string, debounceMs: number) => {
+    if (actionLocksRef.current[key]) return false;
+    actionLocksRef.current = { ...actionLocksRef.current, [key]: true };
+    setActionLocks((prev) => ({ ...prev, [key]: true }));
+    if (debounceMs > 0) {
+      actionLockTimersRef.current[key] = window.setTimeout(() => releaseActionLock(key), debounceMs);
+    }
+    return true;
+  };
+
+  const triggerMicroFeedback = (key: string, kind: 'pulse' | 'check' | 'plus') => {
+    if (microFeedbackTimersRef.current[key]) window.clearTimeout(microFeedbackTimersRef.current[key]);
+    setMicroFeedback((prev) => ({ ...prev, [key]: kind }));
+    microFeedbackTimersRef.current[key] = window.setTimeout(() => {
+      setMicroFeedback((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      delete microFeedbackTimersRef.current[key];
+    }, 650);
+  };
+
+  useEffect(() => () => {
+    if (actionToastTimerRef.current) window.clearTimeout(actionToastTimerRef.current);
+    Object.values(actionLockTimersRef.current).forEach((timer) => window.clearTimeout(Number(timer)));
+    Object.values(microFeedbackTimersRef.current).forEach((timer) => window.clearTimeout(Number(timer)));
+  }, []);
 
   useEffect(() => {
     setBehaviorMeasurementType(selectedBehavior.defaultMeasurement);
@@ -432,10 +548,12 @@ export const SessionMode = ({
         therapistId: resolvedTherapistId || undefined
       });
       updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
+      showPersistResultToast(result);
       onSessionRecordSaved?.();
       return result;
     } catch (error) {
       updateRecordStatus(record.id, 'error');
+      showClinicalToast(buildClinicalSaveErrorToast(), 'error');
       console.error('Falha ao persistir evento ABA:', error);
       return { success: false, error };
     }
@@ -455,10 +573,12 @@ export const SessionMode = ({
         therapistId: resolvedTherapistId || undefined
       });
       updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
+      showPersistResultToast(result);
       onSessionRecordSaved?.();
       return result;
     } catch (error) {
       updateRecordStatus(record.id, 'error');
+      showClinicalToast(buildClinicalSaveErrorToast(), 'error');
       console.error('Falha ao persistir evento ABA:', error);
       return { success: false, error };
     }
@@ -478,10 +598,12 @@ export const SessionMode = ({
         therapistId: resolvedTherapistId || undefined
       });
       updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
+      showPersistResultToast(result);
       onSessionRecordSaved?.();
       return result;
     } catch (error) {
       updateRecordStatus(record.id, 'error');
+      showClinicalToast(buildClinicalSaveErrorToast(), 'error');
       console.error('Falha ao persistir intervalo ABA:', error);
       return { success: false, error };
     }
@@ -501,10 +623,12 @@ export const SessionMode = ({
         therapistId: resolvedTherapistId || undefined
       });
       updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
+      showPersistResultToast(result);
       onSessionRecordSaved?.();
       return result;
     } catch (error) {
       updateRecordStatus(record.id, 'error');
+      showClinicalToast(buildClinicalSaveErrorToast(), 'error');
       console.error('Falha ao persistir resumo de intervalo ABA:', error);
       return { success: false, error };
     }
@@ -525,10 +649,12 @@ export const SessionMode = ({
         therapistId: resolvedTherapistId || undefined
       });
       updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
+      showPersistResultToast(result);
       onSessionRecordSaved?.();
       return result;
     } catch (error) {
       updateRecordStatus(record.id, 'error');
+      showClinicalToast(buildClinicalSaveErrorToast(), 'error');
       console.error('Falha ao persistir ABC ABA:', error);
       return { success: false, error };
     }
@@ -595,16 +721,19 @@ export const SessionMode = ({
       setPromptSelectionGoal(goal);
       return;
     }
+    const trialLockKey = `trial:${String(goal?.id || goal?.name || 'goal')}:${outcome}:${selectedPrompt.key}`;
+    if (!lockAction(trialLockKey, 600)) return;
     setPromptWarning('');
     const isCorrect = outcome !== 'error' && score > 0;
     const isIndependent = outcome === 'independent';
     const trialId = `trial-ui-${crypto.randomUUID()}`;
+    const collectionLabel = collectionOptions.find((option) => option.key === collectionType)?.label || collectionType;
 
     addRecord({
       id: trialId,
       kind: 'trial',
       title: goal.name,
-      detail: `${collectionOptions.find((option) => option.key === collectionType)?.label || collectionType} - ${selectedPrompt.label} - ${score}`,
+      detail: `${collectionLabel} - ${selectedPrompt.label} - ${score}`,
       timestamp,
       trialOutcome: outcome,
       collectionType,
@@ -613,6 +742,14 @@ export const SessionMode = ({
       correct: isCorrect,
       independent: isIndependent
     });
+    triggerMicroFeedback(trialLockKey, 'check');
+    showClinicalToast(buildClinicalActionToast({
+      action: 'trial',
+      outcome,
+      collectionLabel,
+      promptLabel: selectedPrompt.label,
+      score
+    }));
     setTimeout(() => updateRecordStatus(trialId, 'syncing'), 60);
 
     try {
@@ -644,13 +781,24 @@ export const SessionMode = ({
       onSessionRecordSaved?.();
     } catch (error) {
       updateRecordStatus(trialId, 'error');
+      showClinicalToast(buildClinicalSaveErrorToast(), 'error');
       console.error('Falha ao persistir tentativa ABA:', error);
     }
   };
 
   const registerFrequency = (behaviorName = selectedBehavior.name, countDelta = 1) => {
     if (!ensureSessionCanRecord()) return;
+    const frequencyLockKey = `frequency:${selectedBehavior.id}:${behaviorName}`;
+    if (!lockAction(frequencyLockKey, 300)) return;
     const payload = buildBehaviorPayload(behaviorName, 'frequency', { count_delta: countDelta, countDelta });
+    triggerMicroFeedback(`behavior:${selectedBehavior.id}`, 'plus');
+    showClinicalToast(buildClinicalActionToast({
+      action: 'frequency',
+      behaviorName,
+      countDelta,
+      location: selectedLocation,
+      severity: selectedSeverity
+    }));
     void saveBehaviorEvent(payload, {
       id: String(payload.id),
       kind: 'behavior',
@@ -674,6 +822,16 @@ export const SessionMode = ({
 
   const startDuration = (behaviorName = selectedBehavior.name) => {
     if (!ensureSessionCanRecord()) return;
+    if (openDurations.some((event) => event.behaviorName === behaviorName)) {
+      showClinicalToast({
+        variant: 'info',
+        title: 'Duração já em andamento',
+        subtitle: `${behaviorName} está sendo cronometrado.`
+      }, 'none');
+      return;
+    }
+    const behavior = behaviorPresets.find((item) => item.name === behaviorName) || selectedBehavior;
+    if (!lockAction(`duration:start:${behavior.id}`, 300)) return;
     const startedAt = new Date().toISOString();
     const id = crypto.randomUUID();
     const openEvent: OpenDurationEvent = {
@@ -684,6 +842,13 @@ export const SessionMode = ({
       severity: selectedSeverity
     };
     setOpenDurations((prev) => [openEvent, ...prev]);
+    triggerMicroFeedback(`behavior:${behavior.id}`, 'pulse');
+    showClinicalToast(buildClinicalActionToast({
+      action: 'duration_start',
+      behaviorName,
+      location: selectedLocation,
+      severity: selectedSeverity
+    }));
     const payload = buildBehaviorPayload(behaviorName, 'duration', {
       id,
       started_at: startedAt,
@@ -718,9 +883,16 @@ export const SessionMode = ({
   const endDuration = (eventId: string) => {
     const event = openDurations.find((item) => item.id === eventId);
     if (!event) return;
+    const durationEndLockKey = `duration:end:${eventId}`;
+    if (!lockAction(durationEndLockKey, 0)) return;
     const endedAt = new Date().toISOString();
     const durationSeconds = Math.max(0, Math.round((new Date(endedAt).getTime() - new Date(event.startedAt).getTime()) / 1000));
     setOpenDurations((prev) => prev.filter((item) => item.id !== eventId));
+    showClinicalToast(buildClinicalActionToast({
+      action: 'duration_end',
+      behaviorName: event.behaviorName,
+      durationSeconds
+    }));
     const payload = buildBehaviorPayload(event.behaviorName, 'duration', {
       id: event.id,
       started_at: event.startedAt,
@@ -750,7 +922,7 @@ export const SessionMode = ({
       countDelta: 1,
       location: event.location || selectedLocation,
       severity: event.severity ?? selectedSeverity
-    });
+    }).finally(() => releaseActionLock(durationEndLockKey));
   };
 
   const discardDuration = (eventId: string) => {
@@ -806,12 +978,20 @@ export const SessionMode = ({
   const registerRateOccurrence = () => {
     if (!ensureSessionCanRecord()) return;
     if (!rateWindow) return;
+    if (!lockAction(`rate:${rateWindow.id}`, 300)) return;
     setRateWindow({ ...rateWindow, count: Number(rateWindow.count || 0) + 1 });
     const payload = buildBehaviorPayload(rateWindow.behaviorName, 'rate', {
       count_delta: 1,
       countDelta: 1,
       raw_payload: { rateWindowId: rateWindow.id, rateWindowStartedAt: rateWindow.startedAt }
     });
+    showClinicalToast(buildClinicalActionToast({
+      action: 'frequency',
+      behaviorName: rateWindow.behaviorName,
+      countDelta: 1,
+      location: selectedLocation,
+      severity: selectedSeverity
+    }));
     void saveBehaviorEvent(payload, {
       id: String(payload.id),
       kind: 'behavior',
@@ -985,7 +1165,10 @@ export const SessionMode = ({
   const registerInterval = (occurred: boolean) => {
     if (!ensureSessionCanRecord()) return;
     if (!intervalRun) return;
+    if (!intervalRun.awaitingResponse) return;
     const intervalNumber = Number(intervalRun.intervalIndex || 1);
+    const intervalLockKey = `interval:${intervalRun.id}:${intervalNumber}`;
+    if (!lockAction(intervalLockKey, 0)) return;
     const totalIntervals = Math.max(1, Number(intervalRun.totalIntervals || 1));
     const intervalStartedAt = intervalRun.intervalStartedAt || intervalRun.startedAt || new Date().toISOString();
     const intervalEndedAt = intervalRun.intervalEndsAt || new Date().toISOString();
@@ -1033,6 +1216,12 @@ export const SessionMode = ({
     });
     const nextCompletedCount = Number(intervalRun.completedCount || 0) + 1;
     const nextOccurredCount = Number(intervalRun.occurredCount || 0) + (occurred ? 1 : 0);
+    showClinicalToast(buildClinicalActionToast({
+      action: 'interval',
+      behaviorName: intervalRun.behaviorName,
+      intervalNumber,
+      occurred
+    }));
     void saveIntervalRecord(payload, {
       id: recordId,
       kind: 'behavior',
@@ -1085,6 +1274,7 @@ export const SessionMode = ({
 
   const saveAbcEvent = () => {
     if (!ensureSessionCanRecord()) return;
+    if (!lockAction('abc:save', 600)) return;
     const behavior = behaviorPresets.find((item) => item.id === abcBehaviorId) || selectedBehavior;
     const payload = buildBehaviorPayload(behavior.name, 'abc', {
       behavior_id: behavior.id,
@@ -1112,6 +1302,7 @@ export const SessionMode = ({
       consequence: abcConsequence,
       notes: abcNote
     });
+    showClinicalToast(buildClinicalActionToast({ action: 'abc' }));
     setAbcModalOpen(false);
     setAbcNote('');
   };
@@ -1256,9 +1447,11 @@ export const SessionMode = ({
         record_count: finalSummary.totalTrials + finalSummary.totalBehaviorEvents,
         notes: sessionNote
       });
+      showClinicalToast(buildClinicalActionToast({ action: 'session_end' }));
     } catch (error) {
       console.error('Falha ao persistir encerramento da sessão ABA:', error);
       setSessionWarning('A sessão foi marcada como encerrada localmente, mas houve falha de sincronização.');
+      showClinicalToast(buildClinicalSaveErrorToast(), 'error');
     }
     setShowSessionSummary(false);
   };
@@ -1477,6 +1670,7 @@ export const SessionMode = ({
     } else {
       updateRecord(editingRecordId, editedRecord);
     }
+    showClinicalToast(buildClinicalActionToast({ action: 'edit' }));
     cancelEditingRecord();
   };
 
@@ -1524,9 +1718,11 @@ export const SessionMode = ({
         }
       });
       await dataService.updateAbaSession(sessionId, { notes: sessionNote });
+      showClinicalToast(buildClinicalActionToast({ action: 'edit' }));
     } catch (error) {
       console.error('Falha ao persistir complemento da sessão:', error);
       setSessionWarning('Complemento salvo na tela, mas ainda não sincronizado com o servidor.');
+      showClinicalToast(buildClinicalOfflineToast(), 'none');
     }
   };
 
@@ -1559,6 +1755,14 @@ export const SessionMode = ({
     }
     onClose?.();
   };
+  const actionToastPortal = actionToast && typeof document !== 'undefined'
+    ? createPortal(
+        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-[220] flex justify-center px-3 sm:inset-x-auto sm:right-4 sm:bottom-4 sm:justify-end">
+          <AbaSessionToast toast={actionToast} />
+        </div>,
+        document.body
+      )
+    : null;
 
   if (sessionGoals.length === 0 && !(sessionCompleted && postClosureSummary && !showSessionSummary)) {
     const emptyStateContent = (
@@ -1573,6 +1777,7 @@ export const SessionMode = ({
         )}
         <Zap size={64} className="text-gray-200 mb-4" />
         <h2 className="text-xl font-bold text-gray-800 text-center">Nenhuma meta em treino ou prioritaria.</h2>
+        {actionToastPortal}
       </div>
     );
     if (typeof document === 'undefined') return emptyStateContent;
@@ -1939,6 +2144,7 @@ export const SessionMode = ({
             </div>
           </div>
         </div>
+        {actionToastPortal}
       </div>
     );
     if (typeof document === 'undefined') return postClosureContent;
@@ -1968,7 +2174,8 @@ export const SessionMode = ({
             <div className="grid grid-cols-2 gap-3">
               <button
                 onClick={() => endDuration(event.id)}
-                className="min-h-[48px] bg-[#1B254B] text-white rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest"
+                disabled={Boolean(actionLocks[`duration:end:${event.id}`])}
+                className="min-h-[48px] bg-[#1B254B] text-white rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest transition-all active:scale-95 disabled:opacity-60"
               >
                 Encerrar
               </button>
@@ -2081,7 +2288,8 @@ export const SessionMode = ({
                     <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
                       <button
                         onClick={() => endDuration(event.id)}
-                        className="min-h-[48px] bg-[#1B254B] text-white rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest"
+                        disabled={Boolean(actionLocks[`duration:end:${event.id}`])}
+                        className="min-h-[48px] bg-[#1B254B] text-white rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest transition-all active:scale-95 disabled:opacity-60"
                       >
                         Encerrar
                       </button>
@@ -2141,15 +2349,15 @@ export const SessionMode = ({
                 <div className="grid w-full grid-cols-2 gap-3 sm:w-auto">
                   <button
                     onClick={() => registerInterval(true)}
-                    disabled={!intervalRun.awaitingResponse}
-                    className={`min-h-[52px] px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all ${intervalRun.awaitingResponse ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                    disabled={!intervalRun.awaitingResponse || Boolean(actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`])}
+                    className={`min-h-[52px] px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRun.awaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                   >
                     SIM
                   </button>
                   <button
                     onClick={() => registerInterval(false)}
-                    disabled={!intervalRun.awaitingResponse}
-                    className={`min-h-[52px] px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all ${intervalRun.awaitingResponse ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                    disabled={!intervalRun.awaitingResponse || Boolean(actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`])}
+                    className={`min-h-[52px] px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRun.awaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                   >
                     NÃO
                   </button>
@@ -2243,8 +2451,14 @@ export const SessionMode = ({
                 return (
                   <div
                     key={behavior.id}
-                    className={`min-h-[136px] border rounded-2xl px-3 py-3 sm:px-4 sm:py-4 text-left font-bold text-sm transition-all hover:scale-[1.02] flex flex-col justify-between overflow-hidden ${behavior.tone} ${selectedBehaviorId === behavior.id ? 'ring-2 ring-[#7a32fc]/40' : ''}`}
+                    className={`relative min-h-[136px] border rounded-2xl px-3 py-3 sm:px-4 sm:py-4 text-left font-bold text-sm transition-all hover:scale-[1.02] flex flex-col justify-between overflow-hidden ${behavior.tone} ${selectedBehaviorId === behavior.id ? 'ring-2 ring-[#7a32fc]/40' : ''} ${microFeedback[`behavior:${behavior.id}`] ? 'scale-[0.98] ring-4 ring-white/80' : ''}`}
                   >
+                    {microFeedback[`behavior:${behavior.id}`] === 'plus' && (
+                      <span className="pointer-events-none absolute right-3 top-3 animate-pop rounded-full bg-emerald-500 px-2 py-1 text-[11px] font-black text-white shadow-lg shadow-emerald-500/20">+1</span>
+                    )}
+                    {microFeedback[`behavior:${behavior.id}`] === 'pulse' && (
+                      <span className="pointer-events-none absolute right-3 top-3 animate-pop rounded-full bg-[#7a32fc] px-2 py-1 text-[10px] font-black text-white shadow-lg shadow-purple-500/20">ON</span>
+                    )}
                     <button onClick={() => selectBehavior(behavior)} className="w-full min-h-[58px] text-left">
                       <span className="block">{behavior.name}</span>
                       <span className="mt-2 inline-flex items-center gap-1 text-[10px] uppercase tracking-widest opacity-70">
@@ -2308,7 +2522,11 @@ export const SessionMode = ({
 
               {behaviorMeasurementType === 'frequency' && (
                 <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap">
-                  <button onClick={handleSelectedBehaviorAction} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
+                  <button
+                    onClick={handleSelectedBehaviorAction}
+                    disabled={Boolean(actionLocks[`frequency:${selectedBehavior.id}:${selectedBehavior.name}`])}
+                    className={`min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all disabled:opacity-80 ${microFeedback[`behavior:${selectedBehavior.id}`] === 'plus' ? 'scale-[0.98]' : ''}`}
+                  >
                     <Plus size={16} /> + ocorrência
                   </button>
                   <button onClick={() => openAbcModal()} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-white text-[#7a32fc] border border-purple-100 text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
@@ -2319,11 +2537,15 @@ export const SessionMode = ({
 
               {behaviorMeasurementType === 'duration' && (
                 <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap">
-                  <button onClick={handleSelectedBehaviorAction} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
+                  <button
+                    onClick={handleSelectedBehaviorAction}
+                    disabled={Boolean(actionLocks[`duration:start:${selectedBehavior.id}`]) || openDurations.some((event) => event.behaviorName === selectedBehavior.name)}
+                    className={`min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all disabled:opacity-60 ${microFeedback[`behavior:${selectedBehavior.id}`] === 'pulse' ? 'scale-[0.98]' : ''}`}
+                  >
                     <Play size={16} /> Iniciar duração
                   </button>
                   {openDurations.filter((event) => event.behaviorName === selectedBehavior.name).map((event) => (
-                    <button key={event.id} onClick={() => endDuration(event.id)} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-[#1B254B] text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
+                    <button key={event.id} onClick={() => endDuration(event.id)} disabled={Boolean(actionLocks[`duration:end:${event.id}`])} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-[#1B254B] text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-60">
                       <Square size={16} /> Encerrar {formatElapsed(event.startedAt, nowMs)}
                     </button>
                   ))}
@@ -2438,6 +2660,11 @@ export const SessionMode = ({
                 if (h.score === 1) masteryCount += 1;
                 else break;
               }
+              const goalKey = String(goal?.id || goal?.name || 'goal');
+              const promptedRenderPrompt = resolveAbaPromptLevel({ promptLevelKey });
+              const independentTrialLockKey = `trial:${goalKey}:independent:independent`;
+              const promptedTrialLockKey = `trial:${goalKey}:prompted:${promptedRenderPrompt.key}`;
+              const errorTrialLockKey = `trial:${goalKey}:error:error`;
               return (
                 <div key={goal.id} className="bg-white rounded-[24px] sm:rounded-[32px] p-4 sm:p-6 shadow-xl shadow-blue-900/5 border border-white relative overflow-hidden">
                   <div className="flex flex-col gap-4 mb-5 sm:flex-row sm:items-start sm:justify-between">
@@ -2456,17 +2683,32 @@ export const SessionMode = ({
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <button onClick={() => handleTrialClick(goal, 1, 'independent')} className="bg-[#05CD99] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-green-500/20 hover:scale-[1.01] active:scale-95 transition-all">
+                    <button
+                      onClick={() => handleTrialClick(goal, 1, 'independent')}
+                      disabled={Boolean(actionLocks[independentTrialLockKey])}
+                      className={`relative bg-[#05CD99] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-green-500/20 hover:scale-[1.01] active:scale-95 transition-all disabled:opacity-90 ${microFeedback[independentTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-emerald-200/70' : ''}`}
+                    >
+                      {microFeedback[independentTrialLockKey] === 'check' && <span className="absolute right-4 top-4 rounded-full bg-white/25 p-1"><CheckCircle2 size={16} /></span>}
                       <CheckCircle2 size={26} />
                       <span className="text-xl sm:text-2xl font-bold mt-2">Independente</span>
                       <span className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] font-bold uppercase tracking-widest opacity-80`}>1 = correto independente</span>
                     </button>
-                    <button onClick={() => handleTrialClick(goal, 0.5, 'prompted', promptLevelKey)} className="bg-[#FFB547] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-orange-500/20 hover:scale-[1.01] active:scale-95 transition-all">
+                    <button
+                      onClick={() => handleTrialClick(goal, 0.5, 'prompted', promptLevelKey)}
+                      disabled={Boolean(actionLocks[promptedTrialLockKey])}
+                      className={`relative bg-[#FFB547] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-orange-500/20 hover:scale-[1.01] active:scale-95 transition-all disabled:opacity-90 ${microFeedback[promptedTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-orange-200/70' : ''}`}
+                    >
+                      {microFeedback[promptedTrialLockKey] === 'check' && <span className="absolute right-4 top-4 rounded-full bg-white/25 p-1"><CheckCircle2 size={16} /></span>}
                       <Activity size={26} />
                       <span className="text-xl sm:text-2xl font-bold mt-2">Com ajuda</span>
                       <span className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] font-bold uppercase tracking-widest opacity-80`}>0.5 = correto com ajuda</span>
                     </button>
-                    <button onClick={() => handleTrialClick(goal, 0, 'error')} className="bg-[#EE5D50] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-red-500/20 hover:scale-[1.01] active:scale-95 transition-all">
+                    <button
+                      onClick={() => handleTrialClick(goal, 0, 'error')}
+                      disabled={Boolean(actionLocks[errorTrialLockKey])}
+                      className={`relative bg-[#EE5D50] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-red-500/20 hover:scale-[1.01] active:scale-95 transition-all disabled:opacity-90 ${microFeedback[errorTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-red-200/70' : ''}`}
+                    >
+                      {microFeedback[errorTrialLockKey] === 'check' && <span className="absolute right-4 top-4 rounded-full bg-white/25 p-1"><CheckCircle2 size={16} /></span>}
                       <X size={26} />
                       <span className="text-xl sm:text-2xl font-bold mt-2">Erro</span>
                       <span className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] font-bold uppercase tracking-widest opacity-80`}>0 = erro ou sem resposta</span>
@@ -2708,7 +2950,7 @@ export const SessionMode = ({
             </div>
             <div className="flex gap-3 mt-5">
               <button onClick={() => setAbcModalOpen(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-bold">Cancelar</button>
-              <button onClick={saveAbcEvent} className="flex-1 py-3 rounded-2xl bg-[#7a32fc] text-white font-bold shadow-lg shadow-purple-500/20">Salvar ABC</button>
+              <button onClick={saveAbcEvent} disabled={Boolean(actionLocks['abc:save'])} className="flex-1 py-3 rounded-2xl bg-[#7a32fc] text-white font-bold shadow-lg shadow-purple-500/20 transition-all active:scale-95 disabled:opacity-60">Salvar ABC</button>
             </div>
           </div>
         </div>
@@ -2990,6 +3232,7 @@ export const SessionMode = ({
           </div>
         </div>
       )}
+      {actionToastPortal}
     </div>
   );
 
