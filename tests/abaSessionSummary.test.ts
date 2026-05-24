@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { calculateSessionSummary, canCloseAbaSession, canRecordInAbaSession } from '../src/utils/abaSessionSummary.ts';
+import { buildSessionReport, calculateSessionSummary, canCloseAbaSession, canRecordInAbaSession } from '../src/utils/abaSessionSummary.ts';
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -129,6 +129,53 @@ test('sessão COMPLETED não aceita novos registros', () => {
   assert.equal(canRecordInAbaSession({ status: 'completed' }), false);
   assert.equal(canRecordInAbaSession({ sessionCompleted: true, status: 'active' }), false);
   assert.equal(canRecordInAbaSession({ sessionCompleted: false, status: 'active' }), true);
+});
+
+test('relatório da sessão deriva dados sem nova tabela ou duplicação clínica', () => {
+  const summary = calculateSessionSummary('session-1', {
+    patientId: 'patient-1',
+    patientName: 'Paciente Teste',
+    therapistId: 'therapist-1',
+    startedAt: '2026-05-24T10:00:00.000Z',
+    endedAt: '2026-05-24T11:00:00.000Z',
+    sessionNote: 'Sessão produtiva.',
+    warningItems: [{ key: 'guardian_signature_pending', label: 'Assinatura pendente', count: 1 }],
+    trials: [
+      { id: 't1', kind: 'trial', sessionId: 'session-1', title: 'Nomear cores', collectionType: 'dtt', promptLevelKey: 'independent', trialOutcome: 'independent', score: 1, correct: true, independent: true, programName: 'Comunicação' },
+      { id: 't2', kind: 'trial', sessionId: 'session-1', title: 'Nomear cores', collectionType: 'dtt', promptLevelKey: 'visual', trialOutcome: 'prompted', score: 0.5, correct: true, independent: false, programName: 'Comunicação' },
+      { id: 't3', kind: 'trial', sessionId: 'session-1', title: 'Imitação motora', collectionType: 'net', promptLevelKey: 'error', trialOutcome: 'error', score: 0, correct: false, independent: false, programName: 'Imitação' }
+    ],
+    behaviorEvents: [
+      { id: 'b1', kind: 'behavior', sessionId: 'session-1', behaviorName: 'Agressao', measurementType: 'frequency', countDelta: 2, location: 'Sala', severity: 3, timestamp: '2026-05-24T10:10:00.000Z' },
+      { id: 'b2', kind: 'behavior', sessionId: 'session-1', behaviorName: 'Choro', measurementType: 'duration', durationSeconds: 120, location: 'Mesa', severity: 2, timestamp: '2026-05-24T10:20:00.000Z' },
+      { id: 'b3', kind: 'behavior', sessionId: 'session-1', behaviorName: 'Estereotipia', measurementType: 'partial_interval', intervalOccurred: true, intervalSeconds: 30, location: 'Sala', severity: 1, timestamp: '2026-05-24T10:30:00.000Z' },
+      { id: 'b4', kind: 'behavior', sessionId: 'session-1', behaviorName: 'Recusa', measurementType: 'abc', antecedent: 'Demanda apresentada', consequence: 'Pausa breve', location: 'Mesa', severity: 2, notes: 'Redirecionado.' }
+    ],
+    masterySummary: [{ id: 'goal-1', name: 'Nomear cores', criterion: '2 acertos', performanceText: '2/2 acertos', contributes: true, status: 'critério atingido hoje' }]
+  });
+  const report = buildSessionReport({
+    ...summary,
+    therapistName: 'Terapeuta Teste',
+    sourceRecords: [
+      { id: 't1', kind: 'trial', title: 'Nomear cores', collectionType: 'dtt', promptLevelKey: 'independent', trialOutcome: 'independent', score: 1, correct: true, independent: true, programName: 'Comunicação' },
+      { id: 't2', kind: 'trial', title: 'Nomear cores', collectionType: 'dtt', promptLevelKey: 'visual', trialOutcome: 'prompted', score: 0.5, correct: true, independent: false, programName: 'Comunicação' },
+      { id: 't3', kind: 'trial', title: 'Imitação motora', collectionType: 'net', promptLevelKey: 'error', trialOutcome: 'error', score: 0, correct: false, independent: false, programName: 'Imitação' },
+      { id: 'b1', kind: 'behavior', title: 'Agressao', measurementType: 'frequency', countDelta: 2, location: 'Sala', severity: 3, timestamp: '2026-05-24T10:10:00.000Z' },
+      { id: 'b2', kind: 'behavior', title: 'Choro', measurementType: 'duration', durationSeconds: 120, location: 'Mesa', severity: 2, timestamp: '2026-05-24T10:20:00.000Z' },
+      { id: 'b3', kind: 'behavior', title: 'Estereotipia', measurementType: 'partial_interval', intervalOccurred: true, intervalSeconds: 30, location: 'Sala', severity: 1, timestamp: '2026-05-24T10:30:00.000Z' },
+      { id: 'b4', kind: 'behavior', title: 'Recusa', measurementType: 'abc', antecedent: 'Demanda apresentada', consequence: 'Pausa breve', location: 'Mesa', severity: 2, notes: 'Redirecionado.' }
+    ]
+  });
+  assert.equal(report.header.patient, 'Paciente Teste');
+  assert.equal(report.header.therapist, 'Terapeuta Teste');
+  assert.equal(report.generalSummary.totalTeachingTrials, 3);
+  assert.equal(report.teachingSummary.promptsUsed.some((prompt) => prompt.key === 'visual'), true);
+  assert.equal(report.targetSummaries.find((target) => target.targetName === 'Nomear cores')?.masteryStatus, 'critério atingido hoje');
+  assert.equal(report.behaviorSummaries.frequency[0].totalOccurrences, 2);
+  assert.equal(report.behaviorSummaries.duration[0].totalSeconds, 120);
+  assert.equal(report.behaviorSummaries.interval[0].intervalSeconds, 30);
+  assert.equal(report.abcEvents.length, 1);
+  assert.equal(report.pendingComplements.guardianSignature, 'pending');
 });
 
 for (const item of tests) {

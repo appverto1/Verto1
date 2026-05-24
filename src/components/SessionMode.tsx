@@ -20,7 +20,7 @@ import {
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { dataService } from '../services/dataService';
 import { ABA_PROMPT_LEVEL_OPTIONS, resolveAbaPromptLevel } from '../utils/abaPromptLevels';
-import { calculateSessionSummary, canCloseAbaSession, canRecordInAbaSession, type SessionSummary, type SessionSummaryPendingItem } from '../utils/abaSessionSummary';
+import { buildSessionReport, calculateSessionSummary, canCloseAbaSession, canRecordInAbaSession, type SessionSummary, type SessionSummaryPendingItem } from '../utils/abaSessionSummary';
 
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
 type AbcRequirement = 'REQUIRED' | 'RECOMMENDED' | 'OPTIONAL' | 'DISABLED';
@@ -249,6 +249,7 @@ export const SessionMode = ({
   const [sessionCompleted, setSessionCompleted] = useState(false);
   const [postClosureSummary, setPostClosureSummary] = useState<SessionSummary | null>(null);
   const [showPostClosureReport, setShowPostClosureReport] = useState(false);
+  const [showComplementEditor, setShowComplementEditor] = useState(false);
   const [durationBlockModalOpen, setDurationBlockModalOpen] = useState(false);
   const [promptSelectionGoal, setPromptSelectionGoal] = useState<any>(null);
   const [promptWarning, setPromptWarning] = useState('');
@@ -1112,6 +1113,7 @@ export const SessionMode = ({
     setSessionCompleted(true);
     setPostClosureSummary(finalSummary);
     setShowPostClosureReport(false);
+    setShowComplementEditor(false);
     try {
       await dataService.saveAbaSessionSummary({
         ...finalSummary,
@@ -1364,6 +1366,72 @@ export const SessionMode = ({
     cancelEditingRecord();
   };
 
+  const saveSessionNoteComplement = async () => {
+    if (!postClosureSummary) return;
+    const updatedSummary = { ...postClosureSummary, sessionNote };
+    setPostClosureSummary(updatedSummary);
+    try {
+      await dataService.saveAbaSessionSummary({
+        ...updatedSummary,
+        session_id: updatedSummary.sessionId,
+        patient_id: updatedSummary.patientId,
+        therapist_id: updatedSummary.therapistId || undefined,
+        started_at: updatedSummary.startedAt,
+        ended_at: updatedSummary.endedAt,
+        duration_seconds: updatedSummary.durationSeconds,
+        total_trials: updatedSummary.totalTrials,
+        independent_trials: updatedSummary.independentTrials,
+        prompted_trials: updatedSummary.promptedTrials,
+        error_trials: updatedSummary.errorTrials,
+        accuracy_percent: updatedSummary.accuracyPercent,
+        independence_percent: updatedSummary.independencePercent,
+        trial_types_used: updatedSummary.trialTypesUsed,
+        total_behavior_events: updatedSummary.totalBehaviorEvents,
+        frequency_summary: updatedSummary.frequencySummary,
+        duration_summary: updatedSummary.durationSummary,
+        interval_summary: updatedSummary.intervalSummary,
+        mastery_summary: updatedSummary.masterySummary,
+        blocking_items: updatedSummary.blockingItems,
+        warning_items: updatedSummary.warningItems,
+        pending_items: updatedSummary.pendingItems,
+        pending_warnings: updatedSummary.pendingWarnings,
+        session_note: sessionNote,
+        summary_payload: {
+          patientName: updatedSummary.patientName,
+          teachingSummary: updatedSummary.teachingSummary,
+          trialTypesUsed: updatedSummary.trialTypesUsed,
+          masterySummary: updatedSummary.masterySummary,
+          blockingItems: updatedSummary.blockingItems,
+          warningItems: updatedSummary.warningItems,
+          pendingWarnings: updatedSummary.pendingWarnings,
+          sessionNote
+        }
+      });
+      await dataService.updateAbaSession(sessionId, { notes: sessionNote });
+    } catch (error) {
+      console.error('Falha ao persistir complemento da sessão:', error);
+      setSessionWarning('Complemento salvo na tela, mas ainda não sincronizado com o servidor.');
+    }
+  };
+
+  const pendingAbcRecords = useMemo(() => records.filter((record) => (
+    record.kind === 'behavior' &&
+    !record.intervalAggregate &&
+    inferRecordMeasurementType(record) !== 'abc' &&
+    !record.antecedent &&
+    !record.consequence
+  )), [records]);
+
+  const postClosureReport = useMemo(() => {
+    if (!postClosureSummary) return null;
+    return buildSessionReport({
+      ...postClosureSummary,
+      therapistName: resolvedTherapistId || null,
+      sessionNote: sessionNote || postClosureSummary.sessionNote || '',
+      sourceRecords: records
+    });
+  }, [postClosureSummary, records, resolvedTherapistId, sessionNote]);
+
   const closureBlockers = sessionClosureSummary.blockingItems;
   const closureWarnings = sessionClosureSummary.warningItems;
   const hasClosureBlockers = closureBlockers.length > 0;
@@ -1398,13 +1466,17 @@ export const SessionMode = ({
   if (sessionCompleted && postClosureSummary && !showSessionSummary) {
     const postClosureContent = (
       <div className="fixed inset-0 z-[100] bg-[#F4F7FE] flex flex-col overflow-y-auto animate-fade-in">
-        <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col justify-center p-6">
+        <div className="mx-auto flex min-h-full w-full max-w-7xl flex-col justify-center p-6">
           <div className="rounded-[32px] bg-white border border-blue-100 p-8 shadow-2xl">
             <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
               <div>
                 <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Sessão concluída</p>
-                <h2 className="mt-2 text-3xl font-bold text-gray-900">Sessão encerrada com sucesso</h2>
-                <p className="mt-2 text-sm text-gray-500">Os registros clínicos foram bloqueados para novas coletas. Apenas complementos autorizados permanecem disponíveis.</p>
+                <h2 className="mt-2 text-3xl font-bold text-gray-900">{showPostClosureReport ? 'Relatório da sessão' : 'Sessão encerrada com sucesso'}</h2>
+                <p className="mt-2 text-sm text-gray-500">
+                  {showPostClosureReport
+                    ? 'Relatório clínico estruturado, somente leitura para os dados principais da sessão.'
+                    : 'Os registros clínicos foram bloqueados para novas coletas. Apenas complementos autorizados permanecem disponíveis.'}
+                </p>
               </div>
               <CheckCircle2 size={44} className="text-emerald-500" />
             </div>
@@ -1443,29 +1515,308 @@ export const SessionMode = ({
               </div>
             </section>
 
-            {showPostClosureReport && (
-              <section className="mt-5 rounded-[24px] bg-white border border-blue-100 p-5">
-                <h3 className="text-lg font-bold text-gray-900">Relatório da sessão</h3>
-                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-600">
-                  <div className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
-                    <p className="font-bold text-gray-900">Ensino</p>
-                    <p>Acerto: {postClosureSummary.accuracyPercent}%</p>
-                    <p>Independência: {postClosureSummary.independencePercent}%</p>
-                    <p>Tipos usados: {postClosureSummary.trialTypesUsed.join(', ') || 'nenhum'}</p>
+            {showPostClosureReport && postClosureReport && (
+              <div className="mt-5 space-y-5">
+                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <h3 className="text-lg font-bold text-gray-900">Dados da sessão</h3>
+                    <span className={`inline-flex w-fit items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${syncClasses[postClosureReport.header.syncStatus]}`}>
+                      {postClosureReport.header.syncStatus === 'synced' ? 'sincronizado' : postClosureReport.header.syncStatus === 'error' ? 'erro de sincronização' : 'pendente de sincronização'}
+                    </span>
                   </div>
-                  <div className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
-                    <p className="font-bold text-gray-900">Pendências registradas</p>
-                    <p>{postClosureSummary.blockingItems.length} bloqueio(s)</p>
-                    <p>{postClosureSummary.warningItems.length} aviso(s)</p>
+                  <div className="mt-4 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
+                    {[
+                      ['Paciente', postClosureReport.header.patient],
+                      ['Terapeuta', postClosureReport.header.therapist],
+                      ['Data', postClosureReport.header.date],
+                      ['Início', postClosureReport.header.startedAt],
+                      ['Fim', postClosureReport.header.endedAt],
+                      ['Duração total', postClosureReport.header.duration],
+                      ['Status', 'concluída']
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{label}</p>
+                        <p className="mt-1 text-base font-bold text-gray-900">{value}</p>
+                      </div>
+                    ))}
                   </div>
-                </div>
-              </section>
+                </section>
+
+                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                  <h3 className="text-lg font-bold text-gray-900">Resumo geral</h3>
+                  <div className="mt-4 grid grid-cols-2 md:grid-cols-5 gap-3">
+                    {[
+                      ['Tentativas de ensino', postClosureReport.generalSummary.totalTeachingTrials],
+                      ['Registros comportamentais', postClosureReport.generalSummary.totalBehaviorRecords],
+                      ['Eventos de frequência', postClosureReport.generalSummary.totalFrequencyEvents],
+                      ['Eventos de duração', postClosureReport.generalSummary.totalDurationEvents],
+                      ['Coletas por intervalo', postClosureReport.generalSummary.totalIntervalCollections]
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{label}</p>
+                        <p className="mt-1 text-2xl font-bold text-gray-900">{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                  {postClosureReport.generalSummary.sessionNote ? (
+                    <div className="mt-4 rounded-2xl bg-emerald-50 border border-emerald-100 p-4">
+                      <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Observação da sessão</p>
+                      <p className="mt-1 text-sm text-emerald-900 whitespace-pre-wrap">{postClosureReport.generalSummary.sessionNote}</p>
+                    </div>
+                  ) : (
+                    <p className="mt-4 rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm font-semibold text-amber-700">Observação da sessão pendente.</p>
+                  )}
+                </section>
+
+                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                  <h3 className="text-lg font-bold text-gray-900">Tentativas de ensino</h3>
+                  <div className="mt-4 grid grid-cols-2 md:grid-cols-6 gap-3">
+                    {[
+                      ['Total', postClosureReport.teachingSummary.totalTrials],
+                      ['Independentes', postClosureReport.teachingSummary.independentTrials],
+                      ['Com ajuda', postClosureReport.teachingSummary.promptedTrials],
+                      ['Erros', postClosureReport.teachingSummary.errorTrials],
+                      ['% acerto', `${postClosureReport.teachingSummary.accuracyPercent}%`],
+                      ['% independência', `${postClosureReport.teachingSummary.independencePercent}%`]
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{label}</p>
+                        <p className="mt-1 text-2xl font-bold text-gray-900">{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tipos usados</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {postClosureReport.teachingSummary.typesUsed.length > 0 ? postClosureReport.teachingSummary.typesUsed.map((item) => (
+                          <span key={item.key} className="rounded-full bg-white border border-blue-100 px-3 py-1 text-xs font-bold text-gray-700">{item.label} ({item.count})</span>
+                        )) : <span className="text-sm text-gray-400">Nenhum tipo registrado.</span>}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Prompts usados</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {postClosureReport.teachingSummary.promptsUsed.length > 0 ? postClosureReport.teachingSummary.promptsUsed.map((item) => (
+                          <span key={item.key} className="rounded-full bg-white border border-blue-100 px-3 py-1 text-xs font-bold text-gray-700">{item.label} ({item.count})</span>
+                        )) : <span className="text-sm text-gray-400">Nenhum prompt de ajuda registrado.</span>}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                  <h3 className="text-lg font-bold text-gray-900">Metas trabalhadas</h3>
+                  <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    {postClosureReport.targetSummaries.length > 0 ? postClosureReport.targetSummaries.map((target) => (
+                      <div key={`${target.targetId || target.targetName}`} className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-bold text-gray-900">{target.targetName}</p>
+                            <p className="text-xs text-gray-500 mt-1">{target.program}</p>
+                          </div>
+                          <span className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${target.masteryStatus === 'critério atingido hoje' ? 'bg-emerald-50 text-emerald-600' : target.masteryStatus === 'dados insuficientes' ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-500'}`}>
+                            {target.masteryStatus}
+                          </span>
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-gray-600">
+                          <p><b>{target.totalTrials}</b> tentativas</p>
+                          <p><b>{target.independentCorrect}</b> independentes</p>
+                          <p><b>{target.promptedCorrect}</b> com ajuda</p>
+                          <p><b>{target.errors}</b> erros</p>
+                          <p><b>{target.accuracyPercent}%</b> acurácia</p>
+                          <p><b>{target.independencePercent}%</b> independência</p>
+                          <p className="md:col-span-2">Tipo mais usado: <b>{target.mostUsedTrialType}</b></p>
+                        </div>
+                      </div>
+                    )) : <p className="text-sm text-gray-500">Nenhuma meta trabalhada nesta sessão.</p>}
+                  </div>
+                </section>
+
+                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                  <h3 className="text-lg font-bold text-gray-900">Comportamentos registrados</h3>
+                  <div className="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-3">
+                    <div className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
+                      <p className="text-sm font-bold text-gray-900">Frequência</p>
+                      <div className="mt-3 space-y-3">
+                        {postClosureReport.behaviorSummaries.frequency.length > 0 ? postClosureReport.behaviorSummaries.frequency.map((item) => (
+                          <div key={item.behavior} className="rounded-xl bg-white border border-gray-100 p-3 text-xs text-gray-600">
+                            <p className="font-bold text-gray-900">{item.behavior}</p>
+                            <p>Total: {item.totalOccurrences}</p>
+                            <p>Locais: {item.locations.join(', ') || 'Não informado'}</p>
+                            <p>Severidade média: {item.averageSeverity ?? '-'}</p>
+                            <p>Horários: {item.occurrenceTimes.join(', ') || '-'}</p>
+                          </div>
+                        )) : <p className="text-sm text-gray-400">Sem frequência registrada.</p>}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
+                      <p className="text-sm font-bold text-gray-900">Duração</p>
+                      <div className="mt-3 space-y-3">
+                        {postClosureReport.behaviorSummaries.duration.length > 0 ? postClosureReport.behaviorSummaries.duration.map((item) => (
+                          <div key={item.behavior} className="rounded-xl bg-white border border-gray-100 p-3 text-xs text-gray-600">
+                            <p className="font-bold text-gray-900">{item.behavior}</p>
+                            <p>Episódios: {item.episodes}</p>
+                            <p>Duração total: {formatDurationSeconds(item.totalSeconds)}</p>
+                            <p>Duração média: {formatDurationSeconds(item.averageSeconds)}</p>
+                            <p>Maior episódio: {formatDurationSeconds(item.maxSeconds)}</p>
+                            <p>Locais: {item.locations.join(', ') || 'Não informado'}</p>
+                            <p>Severidade média: {item.averageSeverity ?? '-'}</p>
+                          </div>
+                        )) : <p className="text-sm text-gray-400">Sem duração registrada.</p>}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
+                      <p className="text-sm font-bold text-gray-900">Intervalo</p>
+                      <div className="mt-3 space-y-3">
+                        {postClosureReport.behaviorSummaries.interval.length > 0 ? postClosureReport.behaviorSummaries.interval.map((item) => (
+                          <div key={`${item.behavior}-${item.method}`} className="rounded-xl bg-white border border-gray-100 p-3 text-xs text-gray-600">
+                            <p className="font-bold text-gray-900">{item.behavior}</p>
+                            <p>Método: {getMeasurementLabel(item.method)}</p>
+                            <p>Total: {item.totalIntervals} | SIM: {item.yes} | NÃO: {item.no}</p>
+                            <p>Ocorrência: {item.occurrencePercent}%</p>
+                            <p>Duração do intervalo: {item.intervalSeconds ? `${item.intervalSeconds}s` : '-'}</p>
+                            <p>Local: {item.location}</p>
+                            <p>Severidade média: {item.averageSeverity ?? '-'}</p>
+                          </div>
+                        )) : <p className="text-sm text-gray-400">Sem intervalo registrado.</p>}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <h3 className="text-lg font-bold text-gray-900">ABC</h3>
+                    {postClosureReport.pendingComplements.abcPendingCount > 0 && (
+                      <button
+                        onClick={() => {
+                          setShowComplementEditor(true);
+                          if (pendingAbcRecords[0]) startEditingRecord(pendingAbcRecords[0]);
+                        }}
+                        className="rounded-2xl bg-amber-50 px-4 py-2 text-xs font-bold uppercase tracking-widest text-amber-700 border border-amber-100"
+                      >
+                        Completar ABC
+                      </button>
+                    )}
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {postClosureReport.abcEvents.length > 0 ? postClosureReport.abcEvents.map((event, index) => (
+                      <div key={`${event.behavior}-${index}`} className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4 text-sm text-gray-600">
+                        <p className="font-bold text-gray-900">{event.behavior}</p>
+                        <p>Antecedente: {event.antecedent || '-'}</p>
+                        <p>Consequência: {event.consequence || '-'}</p>
+                        <p>Local: {event.location || '-'} | Severidade: {event.severity ?? '-'}</p>
+                        {event.note && <p>Observação: {event.note}</p>}
+                      </div>
+                    )) : <p className="text-sm text-gray-500">Nenhum ABC preenchido nesta sessão.</p>}
+                    {postClosureReport.pendingComplements.abcPendingCount > 0 && (
+                      <div className="rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm font-semibold text-amber-700">
+                        Existem eventos sem ABC preenchido.
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                  <h3 className="text-lg font-bold text-gray-900">Pendências e complementos</h3>
+                  <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
+                    {[
+                      ['Assinatura do responsável', postClosureReport.pendingComplements.guardianSignature === 'completed' ? 'concluída' : 'pendente'],
+                      ['Observação da sessão', postClosureReport.pendingComplements.sessionNote === 'completed' ? 'concluída' : 'pendente'],
+                      ['ABCs pendentes', postClosureReport.pendingComplements.abcPendingCount],
+                      ['Dados não sincronizados', postClosureReport.pendingComplements.unsyncedCount]
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{label}</p>
+                        <p className="mt-1 text-xl font-bold text-gray-900">{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                {showComplementEditor && (
+                  <section className="rounded-[24px] bg-slate-900 text-white p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] font-bold text-violet-200 uppercase tracking-widest">Complementos autorizados</p>
+                        <h3 className="text-xl font-bold">Editar observação e ABC pendente</h3>
+                      </div>
+                      <button onClick={() => { setShowComplementEditor(false); cancelEditingRecord(); }} className="rounded-full bg-white/10 p-2 hover:bg-white/20">
+                        <X size={18} />
+                      </button>
+                    </div>
+                    <label className="mt-4 block text-[10px] font-bold uppercase tracking-widest text-slate-300">
+                      Observação da sessão
+                      <textarea
+                        value={sessionNote}
+                        onChange={(event) => setSessionNote(event.target.value)}
+                        className="mt-2 w-full min-h-[96px] rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-400"
+                        placeholder="Registre complementos administrativos da sessão."
+                      />
+                    </label>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button onClick={saveSessionNoteComplement} className="rounded-2xl bg-white px-4 py-2 text-xs font-bold uppercase tracking-widest text-slate-900">
+                        Salvar observação
+                      </button>
+                      {pendingAbcRecords.length > 0 && (
+                        <button onClick={() => startEditingRecord(pendingAbcRecords[0])} className="rounded-2xl bg-amber-400 px-4 py-2 text-xs font-bold uppercase tracking-widest text-slate-900">
+                          Completar próximo ABC
+                        </button>
+                      )}
+                    </div>
+                    {editingRecordId && (
+                      <div className="mt-4 rounded-2xl border border-white/10 bg-white/10 p-4">
+                        <p className="text-sm font-bold">ABC de {editingRecordTitle}</p>
+                        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <select value={editingRecordAntecedent} onChange={(event) => setEditingRecordAntecedent(event.target.value)} className="rounded-xl bg-white px-3 py-2 text-xs font-bold text-slate-700 outline-none">
+                            <option value="">Antecedente</option>
+                            {antecedentOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                          </select>
+                          <select value={editingRecordConsequence} onChange={(event) => setEditingRecordConsequence(event.target.value)} className="rounded-xl bg-white px-3 py-2 text-xs font-bold text-slate-700 outline-none">
+                            <option value="">Consequência</option>
+                            {consequenceOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                          </select>
+                          <select value={editingRecordLocation} onChange={(event) => setEditingRecordLocation(event.target.value)} className="rounded-xl bg-white px-3 py-2 text-xs font-bold text-slate-700 outline-none">
+                            {locationOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                          </select>
+                          <select value={editingRecordSeverity} onChange={(event) => setEditingRecordSeverity(Number(event.target.value))} className="rounded-xl bg-white px-3 py-2 text-xs font-bold text-slate-700 outline-none">
+                            {severityOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                          </select>
+                        </div>
+                        <textarea value={editingRecordNotes} onChange={(event) => setEditingRecordNotes(event.target.value)} className="mt-3 w-full min-h-[72px] rounded-xl bg-white px-3 py-2 text-sm text-slate-700 outline-none" placeholder="Observação do ABC" />
+                        <div className="mt-3 flex gap-2">
+                          <button onClick={cancelEditingRecord} className="flex-1 rounded-xl bg-white/10 px-3 py-2 text-xs font-bold uppercase tracking-widest text-white">Cancelar</button>
+                          <button onClick={saveRecordEdit} className="flex-1 rounded-xl bg-emerald-400 px-3 py-2 text-xs font-bold uppercase tracking-widest text-slate-900">Salvar ABC</button>
+                        </div>
+                      </div>
+                    )}
+                  </section>
+                )}
+              </div>
             )}
 
             <div className="mt-7 flex flex-col sm:flex-row gap-3">
-              <button onClick={() => setShowPostClosureReport((value) => !value)} className="flex-1 inline-flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-5 py-3 font-semibold text-white shadow-lg shadow-purple-500/20">
-                <FileText size={18} /> Ver relatório
-              </button>
+              {!showPostClosureReport && (
+                <button onClick={() => setShowPostClosureReport(true)} className="flex-1 inline-flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-5 py-3 font-semibold text-white shadow-lg shadow-purple-500/20">
+                  <FileText size={18} /> Ver relatório
+                </button>
+              )}
+              {showPostClosureReport && (
+                <button onClick={() => setShowComplementEditor((value) => !value)} className="flex-1 inline-flex items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-5 py-3 font-semibold text-white">
+                  <Pencil size={18} /> Editar complementos autorizados
+                </button>
+              )}
+              {showPostClosureReport && (
+                <button disabled title="Exportação em PDF será implementada em breve." className="flex-1 inline-flex cursor-not-allowed items-center justify-center gap-2 rounded-2xl bg-gray-100 px-5 py-3 font-semibold text-gray-400">
+                  <FileText size={18} /> Gerar PDF
+                </button>
+              )}
+              {showPostClosureReport && (
+                <button onClick={() => { setShowPostClosureReport(false); setShowComplementEditor(false); cancelEditingRecord(); }} className="flex-1 rounded-2xl bg-white border border-blue-100 px-5 py-3 font-semibold text-gray-700">
+                  Voltar ao resumo
+                </button>
+              )}
               <button onClick={closeCompletedSession} className="flex-1 rounded-2xl bg-white border border-blue-100 px-5 py-3 font-semibold text-gray-700">
                 Voltar ao paciente
               </button>

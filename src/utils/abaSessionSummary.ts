@@ -21,6 +21,7 @@ export type SessionSummary = {
   sessionId: string;
   patientId: string;
   therapistId: string | null;
+  therapistName?: string | null;
   patientName?: string;
   startedAt: string;
   endedAt: string;
@@ -45,6 +46,7 @@ export type SessionSummary = {
   pendingWarnings: SessionSummaryPendingItem[];
   sessionNote: string;
   createdAt: string;
+  sourceRecords?: any[];
 };
 
 export type BehaviorFrequencySummary = {
@@ -79,6 +81,90 @@ export type TeachingSummary = {
   typesUsed: string[];
 };
 
+export type SessionReport = {
+  header: {
+    patient: string;
+    therapist: string;
+    date: string;
+    startedAt: string;
+    endedAt: string;
+    duration: string;
+    durationSeconds: number;
+    status: 'concluida';
+    syncStatus: SessionSummary['syncStatus'];
+  };
+  generalSummary: {
+    totalTeachingTrials: number;
+    totalBehaviorRecords: number;
+    totalFrequencyEvents: number;
+    totalDurationEvents: number;
+    totalIntervalCollections: number;
+    sessionNote: string;
+  };
+  teachingSummary: Omit<TeachingSummary, 'typesUsed'> & {
+    correctTrials: number;
+    typesUsed: Array<{ key: string; label: string; count: number }>;
+    promptsUsed: Array<{ key: string; label: string; count: number }>;
+  };
+  targetSummaries: Array<{
+    targetId?: string;
+    targetName: string;
+    program: string;
+    totalTrials: number;
+    independentCorrect: number;
+    promptedCorrect: number;
+    errors: number;
+    accuracyPercent: number;
+    independencePercent: number;
+    mostUsedTrialType: string;
+    masteryStatus: 'critério atingido hoje' | 'critério não atingido' | 'dados insuficientes';
+  }>;
+  behaviorSummaries: {
+    frequency: Array<{
+      behavior: string;
+      totalOccurrences: number;
+      locations: string[];
+      averageSeverity: number | null;
+      occurrenceTimes: string[];
+    }>;
+    duration: Array<{
+      behavior: string;
+      episodes: number;
+      totalSeconds: number;
+      averageSeconds: number;
+      maxSeconds: number;
+      locations: string[];
+      averageSeverity: number | null;
+    }>;
+    interval: Array<{
+      behavior: string;
+      method: string;
+      totalIntervals: number;
+      yes: number;
+      no: number;
+      occurrencePercent: number;
+      intervalSeconds: number | null;
+      location: string;
+      averageSeverity: number | null;
+    }>;
+  };
+  abcEvents: Array<{
+    antecedent: string;
+    behavior: string;
+    consequence: string;
+    location: string;
+    severity: number | null;
+    note: string;
+  }>;
+  pendingComplements: {
+    guardianSignature: 'pending' | 'completed';
+    sessionNote: 'pending' | 'completed';
+    abcPendingCount: number;
+    unsyncedCount: number;
+    items: SessionSummaryPendingItem[];
+  };
+};
+
 type CalculateSessionSummaryInput = {
   id?: string;
   sessionId?: string;
@@ -107,6 +193,18 @@ const collectionTypeLabels: Record<string, string> = {
   maintenance_probe: 'Maintenance Probe'
 };
 
+const promptTypeLabels: Record<string, string> = {
+  independent: 'Independente',
+  visual: 'Visual',
+  gestural: 'Gestual',
+  verbal: 'Verbal',
+  model: 'Modelo',
+  partial_physical: 'Física parcial',
+  full_physical: 'Física total',
+  prompted: 'Com ajuda',
+  error: 'Erro / sem resposta'
+};
+
 const intervalMethods = new Set(['partial_interval', 'whole_interval', 'momentary_time_sampling']);
 
 const valueOf = (row: any, ...keys: string[]) => {
@@ -127,6 +225,61 @@ const safeIso = (value: any, fallback = new Date().toISOString()) => {
 };
 
 const percent = (part: number, total: number) => (total > 0 ? Math.round((part / total) * 100) : 0);
+
+const uniqueStrings = (values: any[]) => Array.from(new Set(
+  values.map((value) => String(value || '').trim()).filter(Boolean)
+));
+
+const averageOrNull = (values: any[]) => {
+  const numbers = values.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  if (numbers.length === 0) return null;
+  return Math.round((numbers.reduce((sum, value) => sum + value, 0) / numbers.length) * 10) / 10;
+};
+
+const formatReportDate = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString('pt-BR');
+};
+
+const formatReportTime = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+};
+
+const formatReportDuration = (durationSeconds: number) => {
+  const safeSeconds = Math.max(0, Math.round(Number(durationSeconds) || 0));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}min`;
+  if (minutes > 0) return `${minutes}min ${seconds}s`;
+  return `${seconds}s`;
+};
+
+const countBy = (values: string[]) => {
+  const grouped = new Map<string, number>();
+  for (const value of values) {
+    const key = String(value || '').trim();
+    if (!key) continue;
+    grouped.set(key, (grouped.get(key) || 0) + 1);
+  }
+  return grouped;
+};
+
+const mostUsed = (values: string[], fallback = 'Não informado') => {
+  const grouped = countBy(values);
+  let best = fallback;
+  let bestCount = 0;
+  for (const [value, count] of grouped.entries()) {
+    if (count > bestCount) {
+      best = value;
+      bestCount = count;
+    }
+  }
+  return best;
+};
 
 const belongsToSession = (row: any, sessionId: string) => {
   const rowSessionId = valueOf(row, 'sessionId', 'session_id');
@@ -300,6 +453,279 @@ export const calculateSessionSummary = (sessionId: string, input: CalculateSessi
     pendingWarnings: warningItems,
     sessionNote: input.sessionNote || '',
     createdAt: input.createdAt || new Date().toISOString()
+  };
+};
+
+export const buildSessionReport = (sessionSummary: SessionSummary): SessionReport => {
+  const sourceRecords = Array.isArray(sessionSummary.sourceRecords)
+    ? sessionSummary.sourceRecords
+    : Array.isArray((sessionSummary as any).records)
+      ? (sessionSummary as any).records
+      : [];
+  const sourceTrials = sourceRecords.filter((record) => String(valueOf(record, 'kind') || '').toLowerCase() === 'trial');
+  const sourceBehaviorRecords = sourceRecords.filter((record) => (
+    String(valueOf(record, 'kind') || '').toLowerCase() === 'behavior' &&
+    !isIntervalAggregate(record)
+  ));
+
+  const effectiveTrials = sourceTrials.length > 0 ? sourceTrials : [];
+  const effectiveBehaviorRecords = sourceBehaviorRecords.length > 0 ? sourceBehaviorRecords : [];
+  const teachingSummaryBase = effectiveTrials.length > 0
+    ? calculateTeachingSummary(effectiveTrials)
+    : sessionSummary.teachingSummary;
+  const trialOutcomes = effectiveTrials.map(trialOutcome);
+  const correctTrials = effectiveTrials.length > 0
+    ? trialOutcomes.filter((outcome) => outcome.correct).length
+    : Math.max(0, sessionSummary.independentTrials + sessionSummary.promptedTrials);
+  const promptCounts = countBy(effectiveTrials.map((trial) => {
+    const promptKey = String(valueOf(trial, 'promptLevelKey', 'prompt_level_key', 'promptLevel', 'prompt_level') || '').toLowerCase();
+    if (promptKey) return promptKey;
+    const outcome = trialOutcome(trial);
+    if (outcome.independent) return 'independent';
+    if (outcome.error) return 'error';
+    return 'prompted';
+  }));
+  const typeCounts = countBy(effectiveTrials.map((trial) => {
+    const raw = String(valueOf(trial, 'collectionType', 'collection_type', 'trialType', 'trial_type') || '').toLowerCase();
+    return raw || trialTypeOf(trial);
+  }));
+
+  const targetGroups = new Map<string, any[]>();
+  for (const trial of effectiveTrials) {
+    const targetName = String(valueOf(trial, 'targetName', 'target_name', 'title') || 'Meta sem nome');
+    const key = String(valueOf(trial, 'targetId', 'target_id') || targetName);
+    targetGroups.set(key, [...(targetGroups.get(key) || []), trial]);
+  }
+  const masteryByName = new Map(
+    (sessionSummary.masterySummary || []).map((item) => [String(item.name || '').toLowerCase(), item])
+  );
+  const targetSummaries: SessionReport['targetSummaries'] = targetGroups.size > 0
+    ? Array.from(targetGroups.entries()).map(([targetId, trials]) => {
+        const targetName = String(valueOf(trials[0], 'targetName', 'target_name', 'title') || 'Meta sem nome');
+        const outcomes = trials.map(trialOutcome);
+        const independentCorrect = outcomes.filter((outcome) => outcome.independent && outcome.correct).length;
+        const promptedCorrect = outcomes.filter((outcome) => outcome.prompted && outcome.correct).length;
+        const errors = outcomes.filter((outcome) => outcome.error).length;
+        const correct = outcomes.filter((outcome) => outcome.correct).length;
+        const mastery = masteryByName.get(targetName.toLowerCase());
+        const masteryStatus = trials.length === 0
+          ? 'dados insuficientes'
+          : String(mastery?.status || '').toLowerCase().includes('atingido')
+            ? 'critério atingido hoje'
+            : 'critério não atingido';
+        return {
+          targetId,
+          targetName,
+          program: String(valueOf(trials[0], 'programName', 'program_name', 'programTitle', 'program_title', 'domainName', 'domain_name') || 'Não informado'),
+          totalTrials: trials.length,
+          independentCorrect,
+          promptedCorrect,
+          errors,
+          accuracyPercent: percent(correct, trials.length),
+          independencePercent: percent(independentCorrect, trials.length),
+          mostUsedTrialType: mostUsed(trials.map(trialTypeOf)),
+          masteryStatus: masteryStatus as SessionReport['targetSummaries'][number]['masteryStatus']
+        };
+      })
+    : (sessionSummary.masterySummary || []).map((item) => ({
+        targetId: item.id,
+        targetName: item.name,
+        program: 'Não informado',
+        totalTrials: 0,
+        independentCorrect: Number(item.independentTrials || 0),
+        promptedCorrect: 0,
+        errors: 0,
+        accuracyPercent: 0,
+        independencePercent: 0,
+        mostUsedTrialType: 'Não informado',
+        masteryStatus: (String(item.status || '').toLowerCase().includes('atingido')
+          ? 'critério atingido hoje'
+          : 'dados insuficientes') as SessionReport['targetSummaries'][number]['masteryStatus']
+      }));
+
+  const frequencyGroups = new Map<string, any[]>();
+  const durationGroups = new Map<string, any[]>();
+  const intervalGroups = new Map<string, any[]>();
+  for (const record of effectiveBehaviorRecords) {
+    const measurementType = measurementTypeOf(record);
+    const behaviorName = behaviorNameOf(record);
+    if (measurementType === 'frequency' || measurementType === 'rate') {
+      frequencyGroups.set(behaviorName, [...(frequencyGroups.get(behaviorName) || []), record]);
+    } else if (measurementType === 'duration') {
+      durationGroups.set(behaviorName, [...(durationGroups.get(behaviorName) || []), record]);
+    } else if (intervalMethods.has(measurementType)) {
+      const key = `${behaviorName}:${measurementType}`;
+      intervalGroups.set(key, [...(intervalGroups.get(key) || []), record]);
+    }
+  }
+
+  const frequency = frequencyGroups.size > 0
+    ? Array.from(frequencyGroups.entries()).map(([behavior, events]) => ({
+        behavior,
+        totalOccurrences: events.reduce((sum, event) => sum + Math.max(1, safeNumber(valueOf(event, 'countDelta', 'count_delta'), 1)), 0),
+        locations: uniqueStrings(events.map((event) => valueOf(event, 'location'))),
+        averageSeverity: averageOrNull(events.map((event) => valueOf(event, 'severity'))),
+        occurrenceTimes: uniqueStrings(events.map((event) => formatReportTime(valueOf(event, 'timestamp', 'occurredAt', 'occurred_at'))))
+      }))
+    : sessionSummary.frequencySummary.map((item) => ({
+        behavior: item.behaviorName,
+        totalOccurrences: item.occurrences,
+        locations: [],
+        averageSeverity: null,
+        occurrenceTimes: []
+      }));
+
+  const duration = durationGroups.size > 0
+    ? Array.from(durationGroups.entries()).map(([behavior, events]) => {
+        const durations = events.map((event) => Math.max(0, safeNumber(valueOf(event, 'durationSeconds', 'duration_seconds'), 0)));
+        const totalSeconds = durations.reduce((sum, value) => sum + value, 0);
+        return {
+          behavior,
+          episodes: events.length,
+          totalSeconds,
+          averageSeconds: events.length > 0 ? Math.round(totalSeconds / events.length) : 0,
+          maxSeconds: durations.length > 0 ? Math.max(...durations) : 0,
+          locations: uniqueStrings(events.map((event) => valueOf(event, 'location'))),
+          averageSeverity: averageOrNull(events.map((event) => valueOf(event, 'severity')))
+        };
+      })
+    : sessionSummary.durationSummary.map((item) => ({
+        behavior: item.behaviorName,
+        episodes: item.episodes,
+        totalSeconds: item.totalSeconds,
+        averageSeconds: item.averageSeconds,
+        maxSeconds: item.maxSeconds,
+        locations: [],
+        averageSeverity: null
+      }));
+
+  const interval = intervalGroups.size > 0
+    ? Array.from(intervalGroups.entries()).map(([, events]) => {
+        const first = events[0] || {};
+        const method = measurementTypeOf(first);
+        const aggregate = events.find((event) => isIntervalAggregate(event));
+        const rawPayload = valueOf(aggregate || first, 'raw_payload', 'rawPayload') || {};
+        const totalIntervals = aggregate
+          ? Math.max(0, safeNumber(valueOf(aggregate, 'totalIntervals') ?? rawPayload.totalIntervals, 0))
+          : events.length;
+        const yes = aggregate
+          ? Math.max(0, safeNumber(valueOf(aggregate, 'occurredCount') ?? rawPayload.occurredCount, 0))
+          : events.filter((event) => Boolean(valueOf(event, 'intervalOccurred', 'interval_occurred', 'occurred'))).length;
+        const no = Math.max(0, totalIntervals - yes);
+        return {
+          behavior: behaviorNameOf(first),
+          method,
+          totalIntervals,
+          yes,
+          no,
+          occurrencePercent: percent(yes, totalIntervals),
+          intervalSeconds: safeNumber(valueOf(first, 'intervalSeconds') ?? rawPayload.intervalSeconds, NaN) || null,
+          location: String(valueOf(first, 'location') || rawPayload.location || 'Não informado'),
+          averageSeverity: averageOrNull(events.map((event) => valueOf(event, 'severity')))
+        };
+      })
+    : sessionSummary.intervalSummary.map((item) => ({
+        behavior: item.behaviorName,
+        method: item.method,
+        totalIntervals: item.totalIntervals,
+        yes: item.occurredCount,
+        no: item.notOccurredCount,
+        occurrencePercent: item.occurrencePercent,
+        intervalSeconds: null,
+        location: 'Não informado',
+        averageSeverity: null
+      }));
+
+  const hasAbc = (record: any) => Boolean(valueOf(record, 'antecedent') || valueOf(record, 'consequence'));
+  const abcEvents = effectiveBehaviorRecords
+    .filter((record) => measurementTypeOf(record) === 'abc' || hasAbc(record))
+    .map((record) => ({
+      antecedent: String(valueOf(record, 'antecedent') || ''),
+      behavior: behaviorNameOf(record),
+      consequence: String(valueOf(record, 'consequence') || ''),
+      location: String(valueOf(record, 'location') || ''),
+      severity: valueOf(record, 'severity') !== undefined ? safeNumber(valueOf(record, 'severity'), 0) : null,
+      note: String(valueOf(record, 'notes', 'note') || '')
+    }));
+  const abcMissingFromRecords = effectiveBehaviorRecords.filter((record) => (
+    measurementTypeOf(record) !== 'abc' &&
+    !hasAbc(record)
+  )).length;
+  const abcMissingFromWarnings = (sessionSummary.warningItems || [])
+    .filter((item) => String(item.key || '').includes('abc_missing'))
+    .reduce((sum, item) => sum + Math.max(1, Number(item.count || 1)), 0);
+  const abcPendingCount = abcMissingFromRecords || abcMissingFromWarnings;
+  const unsyncedCount = sourceRecords.filter((record) => {
+    const status = String(valueOf(record, 'syncStatus', 'sync_status') || '').toLowerCase();
+    return status === 'local' || status === 'syncing' || status === 'error';
+  }).length || (sessionSummary.warningItems || [])
+    .filter((item) => String(item.key || '').includes('sync'))
+    .reduce((sum, item) => sum + Math.max(1, Number(item.count || 1)), 0);
+  const guardianSignature = (sessionSummary.warningItems || []).some((item) => item.key === 'guardian_signature_pending')
+    ? 'pending'
+    : 'completed';
+  const pendingItems = [
+    ...(sessionSummary.blockingItems || []),
+    ...(sessionSummary.warningItems || [])
+  ];
+  if (abcPendingCount > 0 && !pendingItems.some((item) => String(item.key || '').includes('abc_missing'))) {
+    pendingItems.push({ key: 'abc_missing', label: `${abcPendingCount} ABC(s) pendente(s)`, category: 'warning', count: abcPendingCount });
+  }
+
+  return {
+    header: {
+      patient: sessionSummary.patientName || sessionSummary.patientId || 'Paciente',
+      therapist: sessionSummary.therapistName || sessionSummary.therapistId || 'Não informado',
+      date: formatReportDate(sessionSummary.startedAt),
+      startedAt: formatReportTime(sessionSummary.startedAt),
+      endedAt: formatReportTime(sessionSummary.endedAt),
+      duration: formatReportDuration(sessionSummary.durationSeconds),
+      durationSeconds: sessionSummary.durationSeconds,
+      status: 'concluida',
+      syncStatus: sessionSummary.syncStatus
+    },
+    generalSummary: {
+      totalTeachingTrials: sessionSummary.totalTrials,
+      totalBehaviorRecords: sessionSummary.totalBehaviorEvents,
+      totalFrequencyEvents: effectiveBehaviorRecords.length > 0
+        ? effectiveBehaviorRecords.filter((record) => measurementTypeOf(record) === 'frequency' || measurementTypeOf(record) === 'rate').length
+        : sessionSummary.frequencySummary.reduce((sum, item) => sum + item.occurrences, 0),
+      totalDurationEvents: effectiveBehaviorRecords.length > 0
+        ? effectiveBehaviorRecords.filter((record) => measurementTypeOf(record) === 'duration').length
+        : sessionSummary.durationSummary.reduce((sum, item) => sum + item.episodes, 0),
+      totalIntervalCollections: interval.reduce((sum, item) => sum + item.totalIntervals, 0),
+      sessionNote: sessionSummary.sessionNote || ''
+    },
+    teachingSummary: {
+      ...teachingSummaryBase,
+      correctTrials,
+      typesUsed: Array.from(typeCounts.entries()).map(([key, count]) => ({
+        key,
+        label: collectionTypeLabels[key] || key,
+        count
+      })),
+      promptsUsed: Array.from(promptCounts.entries())
+        .filter(([key]) => key !== 'independent' && key !== 'error')
+        .map(([key, count]) => ({
+          key,
+          label: promptTypeLabels[key] || key,
+          count
+        }))
+    },
+    targetSummaries,
+    behaviorSummaries: {
+      frequency,
+      duration,
+      interval
+    },
+    abcEvents,
+    pendingComplements: {
+      guardianSignature,
+      sessionNote: sessionSummary.sessionNote?.trim() ? 'completed' : 'pending',
+      abcPendingCount,
+      unsyncedCount,
+      items: pendingItems
+    }
   };
 };
 

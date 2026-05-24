@@ -470,6 +470,11 @@ test('aba session mode: trials and behavior events are one-touch and session-sco
     /canCloseAbaSession\(\{[\s\S]*?openDurations[\s\S]*?intervalRun[\s\S]*?unsavedLocalCount[\s\S]*?Bloqueios de encerramento[\s\S]*?Encerrar agora[\s\S]*?Descartar evento[\s\S]*?Voltar para sessão/m,
     'SessionMode deve bloquear encerramento com duração aberta.'
   );
+  assert.match(
+    sessionModeCode,
+    /buildSessionReport\(\{[\s\S]*?sourceRecords: records[\s\S]*?Relatório da sessão[\s\S]*?Exportação em PDF será implementada em breve[\s\S]*?Gerar PDF/m,
+    'SessionMode deve renderizar relatório pós-encerramento baseado no SessionSummary e manter PDF desabilitado.'
+  );
 });
 
 test('aba persistence: frontend records sessions and structured trials offline-first', () => {
