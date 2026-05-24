@@ -1,40 +1,44 @@
 import assert from 'node:assert/strict';
-import { calculateSessionSummary, canCloseAbaSession } from '../src/utils/abaSessionSummary.ts';
+import { calculateSessionSummary, canCloseAbaSession, canRecordInAbaSession } from '../src/utils/abaSessionSummary.ts';
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
 
-test('sessao sem pendencias pode ser encerrada', () => {
+test('sessão sem pendências pode ser encerrada', () => {
   const result = canCloseAbaSession({ openDurations: [], intervalRun: null });
   assert.equal(result.canClose, true);
   assert.deepEqual(result.blockers, []);
 });
 
-test('sessao com duracao aberta nao pode ser encerrada', () => {
+test('bloqueio por duração aberta', () => {
   const result = canCloseAbaSession({ openDurations: [{ id: 'duration-1' }], intervalRun: null });
   assert.equal(result.canClose, false);
   assert.equal(result.blockers[0].key, 'open_duration');
 });
 
-test('sessao com coleta por intervalo aberta nao pode ser encerrada', () => {
+test('bloqueio por intervalo aberto', () => {
   const result = canCloseAbaSession({ openDurations: [], intervalRun: { id: 'interval-1' } });
   assert.equal(result.canClose, false);
   assert.equal(result.blockers[0].key, 'open_interval_collection');
 });
 
-test('sessao com dado ainda nao salvo localmente nao pode ser encerrada', () => {
+test('sessão com dado ainda não salvo localmente não pode ser encerrada', () => {
   const result = canCloseAbaSession({ openDurations: [], intervalRun: null, unsavedLocalCount: 1 });
   assert.equal(result.canClose, false);
   assert.equal(result.blockers[0].key, 'unsaved_local_records');
 });
 
-test('sessao com ABC obrigatorio pendente pode bloquear encerramento', () => {
-  const result = canCloseAbaSession({ openDurations: [], intervalRun: null, requiredAbcMissingCount: 2 });
-  assert.equal(result.canClose, false);
-  assert.equal(result.blockers[0].key, 'required_abc_missing');
+test('encerramento permitido com avisos', () => {
+  const summary = calculateSessionSummary('session-1', {
+    warningItems: [{ key: 'recommended_abc_missing', label: 'ABC recomendado pendente' }]
+  });
+  const result = canCloseAbaSession({ openDurations: [], intervalRun: null });
+  assert.equal(result.canClose, true);
+  assert.equal(summary.warningItems.length, 1);
+  assert.equal(summary.blockingItems.length, 0);
 });
 
-test('resumo de frequencia calcula corretamente', () => {
+test('resumo de frequência calcula corretamente', () => {
   const summary = calculateSessionSummary('session-1', {
     startedAt: '2026-05-23T10:00:00.000Z',
     endedAt: '2026-05-23T11:00:00.000Z',
@@ -47,7 +51,7 @@ test('resumo de frequencia calcula corretamente', () => {
   assert.equal(summary.frequencySummary[0].occurrences, 3);
 });
 
-test('resumo de duracao calcula total, media e maximo', () => {
+test('resumo de duração calcula total, média e máximo', () => {
   const summary = calculateSessionSummary('session-1', {
     behaviorEvents: [
       { sessionId: 'session-1', behaviorName: 'Choro', measurementType: 'duration', durationSeconds: 80 },
@@ -60,7 +64,7 @@ test('resumo de duracao calcula total, media e maximo', () => {
   assert.equal(summary.durationSummary[0].maxSeconds, 120);
 });
 
-test('resumo de intervalo calcula SIM, NAO e percentual', () => {
+test('resumo de intervalo calcula SIM, NÃO e percentual', () => {
   const summary = calculateSessionSummary('session-1', {
     behaviorEvents: [
       { sessionId: 'session-1', behaviorName: 'Estereotipia', measurementType: 'partial_interval', intervalOccurred: true },
@@ -87,7 +91,7 @@ test('resumo de intervalo usa agregado sem duplicar intervalos individuais', () 
   assert.equal(summary.intervalSummary[0].occurrencePercent, 50);
 });
 
-test('tentativas calculam acuracia e independencia corretamente', () => {
+test('tentativas calculam acerto e independência corretamente', () => {
   const summary = calculateSessionSummary('session-1', {
     trials: [
       { sessionId: 'session-1', targetName: 'Nomeia item', collectionType: 'dtt', trialOutcome: 'independent', score: 1 },
@@ -102,16 +106,29 @@ test('tentativas calculam acuracia e independencia corretamente', () => {
   assert.equal(summary.accuracyPercent, 67);
   assert.equal(summary.independencePercent, 33);
   assert.deepEqual(summary.teachingSummary.typesUsed, ['DTT', 'NET', 'Cold Probe']);
+  assert.deepEqual(summary.trialTypesUsed, ['DTT', 'NET', 'Cold Probe']);
 });
 
-test('resumo preserva avisos de encerramento separados dos bloqueios', () => {
+test('resumo persistente preserva bloqueios e avisos de encerramento separados', () => {
   const summary = calculateSessionSummary('session-1', {
-    pendingItems: [{ key: 'required_abc_missing', label: 'ABC obrigatorio pendente', blocking: true }],
-    pendingWarnings: [{ key: 'session_note_pending', label: 'Observacao da sessao pendente' }]
+    blockingItems: [{ key: 'open_duration', label: 'Duração aberta', blocking: true }],
+    warningItems: [{ key: 'session_note_pending', label: 'Observação da sessão pendente' }],
+    masterySummary: [{ name: 'Nomeia itens', criterion: '2/3 dias', performanceText: '2/2 acertos', contributes: true, status: 'critério atingido hoje' }],
+    sessionNote: 'Sessão produtiva.'
   });
+  assert.equal(summary.blockingItems.length, 1);
+  assert.equal(summary.warningItems.length, 1);
   assert.equal(summary.pendingItems.length, 1);
   assert.equal(summary.pendingWarnings.length, 1);
-  assert.equal(summary.pendingWarnings[0].key, 'session_note_pending');
+  assert.equal(summary.masterySummary[0].status, 'critério atingido hoje');
+  assert.equal(summary.sessionNote, 'Sessão produtiva.');
+});
+
+test('sessão COMPLETED não aceita novos registros', () => {
+  assert.equal(canRecordInAbaSession({ status: 'COMPLETED' }), false);
+  assert.equal(canRecordInAbaSession({ status: 'completed' }), false);
+  assert.equal(canRecordInAbaSession({ sessionCompleted: true, status: 'active' }), false);
+  assert.equal(canRecordInAbaSession({ sessionCompleted: false, status: 'active' }), true);
 });
 
 for (const item of tests) {

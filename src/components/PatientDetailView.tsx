@@ -713,9 +713,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     if (pendingSessionAction === 'fullscreen') setIsSessionModeOpen(true);
   };
 
-  const handleConfirmSessionEnd = () => {
+  const handleConfirmSessionEnd = (options?: { alreadyPersisted?: boolean; summary?: any }) => {
     const endedSession = activeSession;
-    if (endedSession && typeof window !== 'undefined') {
+    if (!options?.alreadyPersisted && endedSession && typeof window !== 'undefined') {
       try {
         const sessionState = JSON.parse(
           window.localStorage.getItem(`verto.aba_session_state:${String(patient?.id || '')}:${String(endedSession.id || '')}`) || '{}'
@@ -732,22 +732,24 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setShowSessionEndConfirm(false);
     setIsSessionModeOpen(false);
     if (endedSession) {
-      void dataService.updateAbaSession(String(endedSession.id), {
-        status: 'completed',
-        ended_at: new Date().toISOString(),
-        record_count: Number(endedSession.recordCount || 0)
-      });
-      onAddNote?.(
-        patient.id,
-        `Sessão encerrada.\nInício: ${new Date(endedSession.startedAt).toLocaleString('pt-BR')}\nTérmino: ${new Date().toLocaleString('pt-BR')}\nRegistros nesta sessão: ${Number(endedSession.recordCount || 0)}`,
-        'private',
-        'Sessão'
-      );
-      onAddActivityLog?.(
-        'Sessão encerrada',
-        `Sessão de ${patient?.name || 'paciente'} encerrada com ${Number(endedSession.recordCount || 0)} registro(s).`,
-        'clinical'
-      );
+      if (!options?.alreadyPersisted) {
+        void dataService.updateAbaSession(String(endedSession.id), {
+          status: 'completed',
+          ended_at: new Date().toISOString(),
+          record_count: Number(endedSession.recordCount || 0)
+        });
+        onAddNote?.(
+          patient.id,
+          `Sessão encerrada.\nInício: ${new Date(endedSession.startedAt).toLocaleString('pt-BR')}\nTérmino: ${new Date().toLocaleString('pt-BR')}\nRegistros nesta sessão: ${Number(endedSession.recordCount || 0)}`,
+          'private',
+          'Sessão'
+        );
+        onAddActivityLog?.(
+          'Sessão encerrada',
+          `Sessão de ${patient?.name || 'paciente'} encerrada com ${Number(endedSession.recordCount || 0)} registro(s).`,
+          'clinical'
+        );
+      }
     }
   };
 

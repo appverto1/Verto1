@@ -6,6 +6,16 @@ export type SessionSummaryPendingItem = {
   category?: 'blocker' | 'warning';
 };
 
+export type SessionMasterySummaryItem = {
+  id?: string;
+  name: string;
+  criterion: string;
+  performanceText: string;
+  contributes: boolean;
+  status: string;
+  independentTrials?: number;
+};
+
 export type SessionSummary = {
   id: string;
   sessionId: string;
@@ -21,14 +31,19 @@ export type SessionSummary = {
   errorTrials: number;
   accuracyPercent: number;
   independencePercent: number;
+  trialTypesUsed: string[];
   totalBehaviorEvents: number;
   frequencySummary: BehaviorFrequencySummary[];
   durationSummary: BehaviorDurationSummary[];
   intervalSummary: BehaviorIntervalSummary[];
+  masterySummary: SessionMasterySummaryItem[];
   teachingSummary: TeachingSummary;
   syncStatus: 'local' | 'syncing' | 'synced' | 'error';
+  blockingItems: SessionSummaryPendingItem[];
+  warningItems: SessionSummaryPendingItem[];
   pendingItems: SessionSummaryPendingItem[];
   pendingWarnings: SessionSummaryPendingItem[];
+  sessionNote: string;
   createdAt: string;
 };
 
@@ -74,8 +89,12 @@ type CalculateSessionSummaryInput = {
   endedAt?: string;
   trials?: any[];
   behaviorEvents?: any[];
+  masterySummary?: SessionMasterySummaryItem[];
+  blockingItems?: SessionSummaryPendingItem[];
+  warningItems?: SessionSummaryPendingItem[];
   pendingItems?: SessionSummaryPendingItem[];
   pendingWarnings?: SessionSummaryPendingItem[];
+  sessionNote?: string;
   syncStatus?: 'local' | 'syncing' | 'synced' | 'error';
   createdAt?: string;
 };
@@ -128,7 +147,7 @@ const trialTypeOf = (trial: any) => {
   if (explicit) return collectionTypeLabels[explicit] || explicit;
   const detail = String(valueOf(trial, 'detail') || '');
   const firstPart = detail.split('-')[0]?.trim();
-  return firstPart || 'Nao informado';
+  return firstPart || 'Não informado';
 };
 
 const trialOutcome = (trial: any) => {
@@ -249,6 +268,8 @@ export const calculateSessionSummary = (sessionId: string, input: CalculateSessi
   const durationSummary = calculateDurationSummary(behaviorEvents);
   const intervalSummary = calculateIntervalSummary(behaviorEvents);
   const totalBehaviorEvents = behaviorEvents.filter((event) => !isIntervalAggregate(event)).length;
+  const blockingItems = input.blockingItems || input.pendingItems || [];
+  const warningItems = input.warningItems || input.pendingWarnings || [];
 
   return {
     id: input.id || `summary-${sessionId}`,
@@ -265,14 +286,19 @@ export const calculateSessionSummary = (sessionId: string, input: CalculateSessi
     errorTrials: teachingSummary.errorTrials,
     accuracyPercent: teachingSummary.accuracyPercent,
     independencePercent: teachingSummary.independencePercent,
+    trialTypesUsed: teachingSummary.typesUsed,
     totalBehaviorEvents,
     frequencySummary,
     durationSummary,
     intervalSummary,
+    masterySummary: input.masterySummary || [],
     teachingSummary,
     syncStatus: input.syncStatus || 'local',
-    pendingItems: input.pendingItems || [],
-    pendingWarnings: input.pendingWarnings || [],
+    blockingItems,
+    warningItems,
+    pendingItems: blockingItems,
+    pendingWarnings: warningItems,
+    sessionNote: input.sessionNote || '',
     createdAt: input.createdAt || new Date().toISOString()
   };
 };
@@ -282,23 +308,22 @@ export const canCloseAbaSession = (input: {
   intervalRun?: any;
   unsavedLocalCount?: number;
   incompleteTrial?: boolean;
-  requiredAbcMissingCount?: number;
-  sessionNoteRequired?: boolean;
 }) => ({
   canClose: !(
     input.openDurations?.length ||
     input.intervalRun ||
     input.unsavedLocalCount ||
-    input.incompleteTrial ||
-    input.requiredAbcMissingCount ||
-    input.sessionNoteRequired
+    input.incompleteTrial
   ),
   blockers: [
-    ...(input.openDurations?.length ? [{ key: 'open_duration', label: 'Ha eventos de duracao em aberto', blocking: true, category: 'blocker' as const, count: input.openDurations.length }] : []),
-    ...(input.intervalRun ? [{ key: 'open_interval_collection', label: 'Ha uma coleta por intervalo em andamento', blocking: true, category: 'blocker' as const, count: 1 }] : []),
-    ...(input.unsavedLocalCount ? [{ key: 'unsaved_local_records', label: `${input.unsavedLocalCount} dado(s) ainda nao salvos localmente`, blocking: true, category: 'blocker' as const, count: input.unsavedLocalCount }] : []),
-    ...(input.incompleteTrial ? [{ key: 'incomplete_trial', label: 'Ha uma tentativa de ensino incompleta', blocking: true, category: 'blocker' as const, count: 1 }] : []),
-    ...(input.requiredAbcMissingCount ? [{ key: 'required_abc_missing', label: `ABC obrigatorio pendente em ${input.requiredAbcMissingCount} evento(s)`, blocking: true, category: 'blocker' as const, count: input.requiredAbcMissingCount }] : []),
-    ...(input.sessionNoteRequired ? [{ key: 'session_note_required', label: 'Observacao da sessao obrigatoria antes do encerramento', blocking: true, category: 'blocker' as const, count: 1 }] : [])
+    ...(input.openDurations?.length ? [{ key: 'open_duration', label: 'Há eventos de duração em andamento', blocking: true, category: 'blocker' as const, count: input.openDurations.length }] : []),
+    ...(input.intervalRun ? [{ key: 'open_interval_collection', label: 'Há uma coleta por intervalo em andamento', blocking: true, category: 'blocker' as const, count: 1 }] : []),
+    ...(input.unsavedLocalCount ? [{ key: 'unsaved_local_records', label: `${input.unsavedLocalCount} dado(s) não salvo(s) localmente`, blocking: true, category: 'blocker' as const, count: input.unsavedLocalCount }] : []),
+    ...(input.incompleteTrial ? [{ key: 'incomplete_trial', label: 'Há uma tentativa de ensino incompleta', blocking: true, category: 'blocker' as const, count: 1 }] : [])
   ] as SessionSummaryPendingItem[]
 });
+
+export const canRecordInAbaSession = (input: {
+  sessionCompleted?: boolean;
+  status?: string | null;
+}) => !input.sessionCompleted && String(input.status || '').toLowerCase() !== 'completed';
