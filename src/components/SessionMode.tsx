@@ -472,6 +472,10 @@ export const SessionMode = ({
     return () => window.clearInterval(timer);
   }, [intervalRun, openDurations.length, rateWindow]);
 
+  useEffect(() => {
+    if (intervalRun?.awaitingResponse) setClinicalDockSheetOpen(false);
+  }, [intervalRun?.awaitingResponse]);
+
   const triggerIntervalAlert = (alertType: string) => {
     if ((alertType === 'vibration' || alertType === 'both') && typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
       try {
@@ -1795,6 +1799,13 @@ export const SessionMode = ({
   const closureWarnings = sessionClosureSummary.warningItems;
   const hasClosureBlockers = closureBlockers.length > 0;
   const hasClosureWarnings = closureWarnings.length > 0;
+  const intervalResponseActive = Boolean(intervalRun?.awaitingResponse && !intervalRun?.paused && !intervalRun?.completed);
+  const scrollBottomPaddingClass = intervalResponseActive
+    ? 'pb-[calc(10rem+env(safe-area-inset-bottom))] scroll-pb-[calc(10rem+env(safe-area-inset-bottom))]'
+    : 'pb-[calc(12rem+env(safe-area-inset-bottom))] scroll-pb-[calc(12rem+env(safe-area-inset-bottom))]';
+  const actionToastPositionClass = intervalResponseActive
+    ? 'top-[calc(5rem+env(safe-area-inset-top))] bottom-auto'
+    : 'bottom-[calc(6.75rem+env(safe-area-inset-bottom))]';
   const closeCompletedSession = () => {
     if (typeof onConfirmEndSession === 'function') {
       onConfirmEndSession({ alreadyPersisted: true, summary: postClosureSummary });
@@ -1804,7 +1815,7 @@ export const SessionMode = ({
   };
   const actionToastPortal = actionToast && typeof document !== 'undefined'
     ? createPortal(
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(6.75rem+env(safe-area-inset-bottom))] z-[220] flex justify-center px-3 xl:inset-x-auto xl:right-4 xl:bottom-4 xl:justify-end">
+        <div className={`pointer-events-none fixed inset-x-0 z-[220] flex justify-center px-3 xl:inset-x-auto xl:right-4 xl:bottom-4 xl:top-auto xl:justify-end ${actionToastPositionClass}`}>
           <AbaSessionToast toast={actionToast} />
         </div>,
         document.body
@@ -2252,11 +2263,12 @@ export const SessionMode = ({
     return palette[color] || palette.slate;
   };
 
-  const renderDockShortcutButton = (shortcut: any, compact = false) => {
+  const renderDockShortcutButton = (shortcut: any, compact = false, closeAfterAction = false) => {
     const behavior = resolveShortcutBehavior(shortcut);
     const method = String(shortcut?.method || behavior.defaultMeasurement || 'frequency');
     const openDuration = method === 'duration' ? findOpenDurationForBehavior(behavior.name) : null;
     const isActive = Boolean(openDuration);
+    const elapsed = openDuration ? formatElapsed(openDuration.startedAt, nowMs) : '';
     const lockKey = method === 'duration' && openDuration
       ? `duration:end:${openDuration.id}`
       : method === 'duration'
@@ -2264,37 +2276,45 @@ export const SessionMode = ({
         : `frequency:${behavior.id}:${behavior.name}`;
     const disabled = Boolean(actionLocks[lockKey]);
     const feedbackKey = `behavior:${behavior.id}`;
-    const label = openDuration
-      ? `${behavior.name} ${formatElapsed(openDuration.startedAt, nowMs)}`
+    const label = method === 'duration'
+      ? (openDuration ? behavior.name : String(shortcut?.label || `${behavior.name} iniciar`))
       : String(shortcut?.label || behavior.name);
+    const isFrequencyLike = method === 'frequency' || method === 'rate';
 
     return (
       <button
         key={shortcut.behaviorId}
         type="button"
-        onClick={() => executeBehaviorShortcut(shortcut)}
+        onClick={() => {
+          executeBehaviorShortcut(shortcut);
+          if (closeAfterAction) setClinicalDockSheetOpen(false);
+        }}
         disabled={disabled}
         data-aba-dock-shortcut={shortcut.behaviorId}
-        className={`relative min-h-[48px] overflow-hidden rounded-[18px] border px-3 py-2 text-left shadow-lg transition-all active:scale-[0.98] disabled:opacity-60 ${getDockButtonClass(shortcut.color, isActive || crisisMode)} ${microFeedback[feedbackKey] ? 'scale-[0.98] ring-4 ring-white/70' : ''} ${compact ? 'min-h-[56px]' : ''}`}
+        data-aba-dock-duration-active={isActive ? 'true' : 'false'}
+        className={`relative min-h-[48px] overflow-visible rounded-[18px] border px-3 py-2 text-left shadow-lg transition-all active:scale-[0.98] disabled:opacity-60 ${getDockButtonClass(shortcut.color, isActive || crisisMode)} ${isActive ? 'ring-2 ring-amber-300 ring-offset-2 ring-offset-white animate-pulse' : ''} ${microFeedback[feedbackKey] ? 'scale-[0.98] ring-4 ring-white/70' : ''} ${compact ? 'min-h-[56px]' : ''}`}
       >
-        {microFeedback[feedbackKey] === 'plus' && (
-          <span className="pointer-events-none absolute right-2 top-2 animate-pop rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-black text-white">+1</span>
+        {isFrequencyLike && microFeedback[feedbackKey] === 'plus' && (
+          <span className="pointer-events-none absolute -top-3 right-2 z-20 animate-pop rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-black text-white shadow-lg shadow-emerald-900/20">+1</span>
         )}
         {microFeedback[feedbackKey] === 'pulse' && (
-          <span className="pointer-events-none absolute right-2 top-2 animate-pop rounded-full bg-white/25 px-2 py-0.5 text-[10px] font-black">ON</span>
+          <span className="pointer-events-none absolute -top-3 right-2 z-20 animate-pop rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-[#1B254B] shadow-lg">ON</span>
         )}
-        <span className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-widest">
-          {method === 'duration' ? (openDuration ? <Square size={13} /> : <Play size={13} />) : <Plus size={13} />}
-          {label}
+        <span className="flex items-center justify-between gap-1.5 text-[11px] font-black uppercase tracking-widest">
+          <span className="inline-flex min-w-0 items-center gap-1.5">
+            {method === 'duration' ? (openDuration ? <Square size={13} /> : <Play size={13} />) : <Plus size={13} />}
+            <span className="truncate">{label}</span>
+          </span>
+          {openDuration && <span className="ml-1 shrink-0 rounded-full bg-white/25 px-1.5 py-0.5 text-[10px]">{elapsed}</span>}
         </span>
-        <span className={`${mobileFocusMode || compact ? 'hidden' : 'block'} mt-1 text-[10px] font-semibold opacity-75`}>
-          {openDuration ? 'toque para encerrar' : method === 'duration' ? 'iniciar duração' : '+1 ocorrência'}
+        <span className={`${(mobileFocusMode || compact) && !openDuration ? 'hidden' : 'block'} mt-1 text-[10px] font-semibold opacity-75`}>
+          {openDuration ? 'encerrar agora' : method === 'duration' ? 'iniciar duração' : '+1 ocorrência'}
         </span>
       </button>
     );
   };
 
-  const clinicalDock = !sessionCompleted ? (
+  const clinicalDock = !sessionCompleted && !intervalResponseActive ? (
     <div
       data-aba-clinical-dock
       className={`xl:hidden fixed inset-x-0 bottom-0 z-[130] px-2 pb-[calc(0.55rem+env(safe-area-inset-bottom))] pt-2 ${clinicalDockSheetOpen ? 'pointer-events-none' : 'pointer-events-auto'}`}
@@ -2304,6 +2324,12 @@ export const SessionMode = ({
           <div className={`mb-2 flex items-center justify-between rounded-2xl px-3 py-2 text-xs font-black ${intervalRun.awaitingResponse ? 'bg-amber-100 text-amber-800' : crisisMode ? 'bg-white/10 text-white' : 'bg-[#F4F7FE] text-[#7a32fc]'}`}>
             <span>Intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals}</span>
             <span>{intervalRun.awaitingResponse ? 'Responda no painel' : formatRemainingUntil(intervalRun.intervalEndsAt, nowMs)}</span>
+          </div>
+        )}
+        {openDurations.length > 0 && (
+          <div className={`mb-2 flex items-center justify-between rounded-2xl px-3 py-2 text-xs font-black ${crisisMode ? 'bg-white/10 text-white' : 'bg-amber-50 text-amber-800'}`} data-aba-dock-open-duration-badge>
+            <span>{openDurations.length} duração em andamento</span>
+            <span>{openDurations[0].behaviorName} {formatElapsed(openDurations[0].startedAt, nowMs)} ■</span>
           </div>
         )}
         <div className="grid grid-cols-[repeat(3,minmax(0,1fr))_64px] gap-2">
@@ -2323,7 +2349,7 @@ export const SessionMode = ({
     </div>
   ) : null;
 
-  const clinicalDockSheet = clinicalDockSheetOpen ? (
+  const clinicalDockSheet = clinicalDockSheetOpen && !intervalResponseActive ? (
     <div className="fixed inset-0 z-[210] xl:hidden" data-aba-clinical-dock-sheet>
       <button
         type="button"
@@ -2351,8 +2377,8 @@ export const SessionMode = ({
           <section className="mt-4 rounded-[24px] border border-red-100 bg-red-50 p-3">
             <p className="text-[10px] font-black uppercase tracking-widest text-red-600">Crise / alta prioridade</p>
             <div className="mt-3 grid grid-cols-2 gap-2">
-              {quickBehaviorShortcuts.filter((shortcut) => crisisShortcutIdSet.has(shortcut.behaviorId)).map((shortcut) => renderDockShortcutButton(shortcut, true))}
-              <button onClick={() => openAbcModal()} className="min-h-[56px] rounded-[18px] border border-slate-900 bg-slate-950 px-3 text-left text-[11px] font-black uppercase tracking-widest text-white">
+              {quickBehaviorShortcuts.filter((shortcut) => crisisShortcutIdSet.has(shortcut.behaviorId)).map((shortcut) => renderDockShortcutButton(shortcut, true, true))}
+              <button onClick={() => { setClinicalDockSheetOpen(false); openAbcModal(); }} className="min-h-[56px] rounded-[18px] border border-slate-900 bg-slate-950 px-3 text-left text-[11px] font-black uppercase tracking-widest text-white">
                 <FileText size={14} className="mb-1" /> ABC rápido
               </button>
             </div>
@@ -2362,7 +2388,7 @@ export const SessionMode = ({
             <section className="mt-4">
               <p className="text-[10px] font-black uppercase tracking-widest text-red-600">Crise / alta prioridade</p>
               <div className="mt-2 grid grid-cols-2 gap-2">
-                {quickBehaviorShortcuts.filter((shortcut) => ['aggression', 'self_injury', 'escape', 'refusal'].includes(shortcut.behaviorId)).map((shortcut) => renderDockShortcutButton(shortcut))}
+                {quickBehaviorShortcuts.filter((shortcut) => ['aggression', 'self_injury', 'escape', 'refusal'].includes(shortcut.behaviorId)).map((shortcut) => renderDockShortcutButton(shortcut, false, true))}
               </div>
             </section>
 
@@ -2371,10 +2397,10 @@ export const SessionMode = ({
               <div className="mt-2 grid grid-cols-2 gap-2">
                 {behaviorPresets.filter((behavior) => behavior.defaultMeasurement === 'duration' || behavior.allowedMeasurements?.includes('duration')).slice(0, 4).map((behavior) => renderDockShortcutButton({
                   behaviorId: behavior.id,
-                  label: behavior.name,
+                  label: `${behavior.name} iniciar`,
                   method: 'duration',
                   color: behavior.id === 'crying' ? 'sky' : behavior.id === 'escape' ? 'amber' : 'emerald'
-                }))}
+                }, false, true))}
               </div>
             </section>
 
@@ -2386,6 +2412,7 @@ export const SessionMode = ({
                   onClick={() => {
                     const stereotypy = behaviorPresets.find((behavior) => behavior.id === 'stereotypy') || selectedBehavior;
                     startIntervalRun(stereotypy, 'partial_interval');
+                    setClinicalDockSheetOpen(false);
                   }}
                   disabled={Boolean(intervalRun)}
                   className="min-h-[52px] rounded-2xl border border-emerald-100 bg-emerald-50 px-4 text-left text-xs font-black uppercase tracking-widest text-emerald-700 disabled:opacity-50"
@@ -2399,7 +2426,7 @@ export const SessionMode = ({
 
         <section className="mt-4 rounded-[24px] border border-blue-100 bg-[#F4F7FE] p-3">
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">ABC rápido</p>
-          <button onClick={() => openAbcModal()} className="mt-2 inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-4 text-xs font-black uppercase tracking-widest text-white">
+          <button onClick={() => { setClinicalDockSheetOpen(false); openAbcModal(); }} className="mt-2 inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-4 text-xs font-black uppercase tracking-widest text-white">
             <FileText size={16} /> Abrir ABC rápido
           </button>
         </section>
@@ -2408,13 +2435,13 @@ export const SessionMode = ({
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Contexto atual</p>
           <div className="mt-2 grid grid-cols-2 gap-2">
             <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-              Local
+              Local atual
               <select value={selectedLocation} onChange={(event) => setSelectedLocation(event.target.value)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none">
                 {locationOptions.map((location) => <option key={location} value={location}>{location}</option>)}
               </select>
             </label>
             <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-              Severidade
+              Severidade atual
               <select value={selectedSeverity} onChange={(event) => setSelectedSeverity(Number(event.target.value))} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none">
                 {severityOptions.map((severity) => <option key={severity} value={severity}>{severity}</option>)}
               </select>
@@ -2427,7 +2454,7 @@ export const SessionMode = ({
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Eventos em andamento</p>
             <div className="mt-2 space-y-2">
               {openDurations.map((event) => (
-                <button key={event.id} onClick={() => endDuration(event.id)} disabled={Boolean(actionLocks[`duration:end:${event.id}`])} className="flex min-h-[52px] w-full items-center justify-between rounded-2xl border border-blue-100 bg-[#F4F7FE] px-4 text-left text-xs font-black text-slate-800 disabled:opacity-60">
+                <button key={event.id} onClick={() => { endDuration(event.id); setClinicalDockSheetOpen(false); }} disabled={Boolean(actionLocks[`duration:end:${event.id}`])} className="flex min-h-[52px] w-full items-center justify-between rounded-2xl border border-blue-100 bg-[#F4F7FE] px-4 text-left text-xs font-black text-slate-800 disabled:opacity-60">
                   <span>{event.behaviorName}</span>
                   <span>{formatElapsed(event.startedAt, nowMs)} ■</span>
                 </button>
@@ -2519,7 +2546,7 @@ export const SessionMode = ({
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden lg:overflow-hidden grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_390px]">
-        <div className="p-3 sm:p-4 lg:p-6 space-y-4 sm:space-y-6 lg:overflow-y-auto no-scrollbar pb-[calc(7.75rem+env(safe-area-inset-bottom))] xl:pb-[calc(1rem+env(safe-area-inset-bottom))]">
+        <div className={`p-3 sm:p-4 lg:p-6 space-y-4 sm:space-y-6 lg:overflow-y-auto no-scrollbar ${scrollBottomPaddingClass} xl:pb-[calc(1rem+env(safe-area-inset-bottom))]`}>
           {sessionWarning && (
             <div className="rounded-2xl border border-amber-100 bg-amber-50 px-5 py-4 text-sm font-semibold text-amber-700 flex items-center gap-3">
               <AlertCircle size={18} /> {sessionWarning}
@@ -2568,7 +2595,10 @@ export const SessionMode = ({
           )}
 
           {intervalRun && (
-            <div className={`sticky top-0 z-40 rounded-[24px] sm:rounded-[28px] p-3 sm:p-5 shadow-2xl border transition-all ${intervalRun.awaitingResponse ? 'bg-amber-50 border-amber-300 ring-4 ring-amber-200/70' : intervalRun.paused ? 'bg-slate-50 border-slate-200 ring-2 ring-slate-200/70' : 'bg-white border-blue-100 shadow-blue-900/10'}`}>
+            <div
+              data-aba-interval-response-active={intervalResponseActive ? 'true' : 'false'}
+              className={`sticky top-0 ${intervalResponseActive ? 'z-[160]' : 'z-40'} rounded-[24px] sm:rounded-[28px] p-3 sm:p-5 shadow-2xl border transition-all ${intervalRun.awaitingResponse ? 'bg-amber-50 border-amber-300 ring-4 ring-amber-200/70' : intervalRun.paused ? 'bg-slate-50 border-slate-200 ring-2 ring-slate-200/70' : 'bg-white border-blue-100 shadow-blue-900/10'}`}
+            >
               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <div className="flex items-center gap-2 mb-2">
@@ -2607,44 +2637,46 @@ export const SessionMode = ({
                 <p className={`rounded-2xl px-4 py-3 text-center text-sm font-bold ${intervalRun.awaitingResponse ? 'bg-amber-100 text-amber-800' : 'bg-[#F4F7FE] text-gray-500'}`}>
                   {intervalRun.awaitingResponse ? 'Responda agora' : 'Aguardando fim do intervalo...'}
                 </p>
-                <div className="grid w-full grid-cols-2 gap-3 sm:w-auto">
+                <div className={`grid w-full grid-cols-2 gap-3 sm:w-auto ${intervalResponseActive ? 'pb-4' : ''}`}>
                   <button
                     onClick={() => registerInterval(true)}
                     disabled={!intervalRun.awaitingResponse || Boolean(actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`])}
-                    className={`min-h-[52px] px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRun.awaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                    className={`min-h-[56px] px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRun.awaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                   >
                     SIM
                   </button>
                   <button
                     onClick={() => registerInterval(false)}
                     disabled={!intervalRun.awaitingResponse || Boolean(actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`])}
-                    className={`min-h-[52px] px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRun.awaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                    className={`min-h-[56px] px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRun.awaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                   >
                     NÃO
                   </button>
                 </div>
               </div>
-              <div className="mt-4 grid grid-cols-1 gap-2 border-t border-blue-100 pt-4 sm:flex sm:flex-wrap">
-                <button
-                  onClick={intervalRun.paused ? resumeIntervalRun : pauseIntervalRun}
-                  disabled={Boolean(intervalRun.awaitingResponse)}
-                  className={`min-h-[44px] rounded-xl px-4 py-2 text-[10px] font-bold uppercase tracking-widest ${intervalRun.awaitingResponse ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-[#1B254B] text-white'}`}
-                >
-                  {intervalRun.paused ? 'Retomar coleta' : 'Pausar coleta'}
-                </button>
-                <button
-                  onClick={cancelIntervalRun}
-                  className="min-h-[44px] rounded-xl bg-red-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500"
-                >
-                  Cancelar coleta
-                </button>
-                <button
-                  onClick={finishIntervalRunNow}
-                  className="min-h-[44px] rounded-xl bg-emerald-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700"
-                >
-                  Finalizar agora
-                </button>
-              </div>
+              {!intervalResponseActive && (
+                <div className="mt-4 grid grid-cols-1 gap-2 border-t border-blue-100 pt-4 sm:flex sm:flex-wrap">
+                  <button
+                    onClick={intervalRun.paused ? resumeIntervalRun : pauseIntervalRun}
+                    disabled={Boolean(intervalRun.awaitingResponse)}
+                    className={`min-h-[44px] rounded-xl px-4 py-2 text-[10px] font-bold uppercase tracking-widest ${intervalRun.awaitingResponse ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-[#1B254B] text-white'}`}
+                  >
+                    {intervalRun.paused ? 'Retomar coleta' : 'Pausar coleta'}
+                  </button>
+                  <button
+                    onClick={cancelIntervalRun}
+                    className="min-h-[44px] rounded-xl bg-red-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500"
+                  >
+                    Cancelar coleta
+                  </button>
+                  <button
+                    onClick={finishIntervalRunNow}
+                    className="min-h-[44px] rounded-xl bg-emerald-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700"
+                  >
+                    Finalizar agora
+                  </button>
+                </div>
+              )}
             </div>
           )}
 

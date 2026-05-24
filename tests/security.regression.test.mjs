@@ -535,6 +535,16 @@ test('aba session mode: trials and behavior events are one-touch and session-sco
   );
   assert.match(
     sessionModeCode,
+    /intervalResponseActive[\s\S]*?intervalRun\?\.awaitingResponse[\s\S]*?scrollBottomPaddingClass[\s\S]*?clinicalDock = !sessionCompleted && !intervalResponseActive[\s\S]*?clinicalDockSheetOpen && !intervalResponseActive[\s\S]*?data-aba-interval-response-active[\s\S]*?min-h-\[56px\]/m,
+    'SessionMode deve ocultar o dock e priorizar SIM/NÃO durante a resposta de intervalo no mobile.'
+  );
+  assert.match(
+    sessionModeCode,
+    /scroll-pb-\[calc\(12rem\+env\(safe-area-inset-bottom\)\)\][\s\S]*?closeAfterAction[\s\S]*?data-aba-dock-duration-active[\s\S]*?animate-pulse[\s\S]*?-top-3 right-2[\s\S]*?data-aba-dock-open-duration-badge[\s\S]*?Local atual[\s\S]*?Severidade atual[\s\S]*?Últimos registros/m,
+    'Dock clínico mobile deve reservar espaço, indicar duração ativa, mostrar +1 flutuante e fechar ações rápidas da sheet.'
+  );
+  assert.match(
+    sessionModeCode,
     /buildSessionReport\(\{[\s\S]*?sourceRecords: records[\s\S]*?Relatório da sessão[\s\S]*?Exportação em PDF será implementada em breve[\s\S]*?Gerar PDF/m,
     'SessionMode deve renderizar relatório pós-encerramento baseado no SessionSummary e manter PDF desabilitado.'
   );
