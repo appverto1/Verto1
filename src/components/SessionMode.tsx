@@ -256,6 +256,8 @@ export const SessionMode = ({
   const [durationBlockModalOpen, setDurationBlockModalOpen] = useState(false);
   const [promptSelectionGoal, setPromptSelectionGoal] = useState<any>(null);
   const [promptWarning, setPromptWarning] = useState('');
+  const [mobileFocusMode, setMobileFocusMode] = useState(true);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
   const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
   const [editingRecordTitle, setEditingRecordTitle] = useState('');
   const [editingRecordDetail, setEditingRecordDetail] = useState('');
@@ -1325,6 +1327,7 @@ export const SessionMode = ({
     const percent = total > 0 ? Math.round((occurred / total) * 100) : 0;
     return { total, occurred, notOccurred, percent };
   }, [intervalSummary]);
+  const visibleHistoryRecords = historyExpanded ? records : records.slice(0, 8);
 
   const renderSyncBadge = (status: SyncStatus) => (
     <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-widest ${syncClasses[status]}`}>
@@ -1942,39 +1945,85 @@ export const SessionMode = ({
     return createPortal(postClosureContent, document.body);
   }
 
+  const openDurationsPanel = openDurations.length > 0 ? (
+    <div className="bg-white rounded-[24px] sm:rounded-[28px] p-3 sm:p-5 shadow-2xl shadow-blue-900/10 border border-blue-100">
+      <div className="flex items-center gap-2 mb-3 sm:mb-4">
+        <Timer size={18} className="text-[#7a32fc]" />
+        <h2 className="text-sm font-bold text-gray-800">Eventos em andamento</h2>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {openDurations.map((event) => (
+          <div key={event.id} className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-3 sm:p-4 flex flex-col gap-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-gray-800 truncate">{event.behaviorName}</p>
+                <p className="text-xs text-gray-500 mt-1">{event.location || 'Sem local'} - severidade {event.severity || '-'}</p>
+                <p className="text-[11px] text-gray-400 mt-1">Inicio {new Date(event.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+              </div>
+              <div className="text-right shrink-0">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cronometro</p>
+                <p className="text-3xl sm:text-2xl font-bold text-[#7a32fc] leading-none">{formatElapsed(event.startedAt, nowMs)}</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => endDuration(event.id)}
+                className="min-h-[48px] bg-[#1B254B] text-white rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest"
+              >
+                Encerrar
+              </button>
+              <button
+                onClick={() => openAbcModalForBehaviorName(event.behaviorName)}
+                className="min-h-[48px] bg-white text-[#7a32fc] border border-purple-100 rounded-xl px-3 py-2 text-[11px] sm:text-xs font-bold uppercase tracking-widest inline-flex items-center justify-center gap-2"
+              >
+                <FileText size={14} /> ABC rapido
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  ) : null;
+
   const sessionModeContent = (
-    <div className="fixed inset-0 z-[100] bg-[#F4F7FE] flex flex-col overflow-hidden animate-fade-in">
-      <div className="bg-white px-6 py-5 shadow-sm flex items-center justify-between gap-4 shrink-0">
-        <div className="flex items-center gap-5 min-w-0">
-          <button onClick={onClose} className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-all">
-            <ChevronLeft size={30} className="text-gray-400" />
+    <div className="fixed inset-0 z-[100] bg-[#F4F7FE] flex flex-col overflow-hidden overflow-x-hidden animate-fade-in pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+      <div className="sticky top-0 z-50 bg-white/95 backdrop-blur px-3 py-2 sm:px-4 sm:py-3 lg:px-6 lg:py-5 shadow-sm shrink-0 lg:flex lg:items-center lg:justify-between lg:gap-4">
+        <div className="flex items-center gap-2 sm:gap-5 min-w-0">
+          <button onClick={onClose} className="p-2 -ml-1 sm:-ml-2 hover:bg-gray-100 rounded-full transition-all shrink-0">
+            <ChevronLeft size={24} className="text-gray-400" />
           </button>
           <div className="min-w-0">
-            <h1 className="text-2xl font-bold text-gray-800 tracking-tight truncate">Sessão: <span className="text-[#7a32fc]">{patient.name}</span></h1>
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.18em] mt-1">Registro ABA em tempo real</p>
+            <h1 className="text-base sm:text-2xl font-bold text-gray-800 tracking-tight truncate">Sessão: <span className="text-[#7a32fc]">{patient.name}</span></h1>
+            <p className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] font-bold text-gray-400 uppercase tracking-[0.18em] mt-0.5 sm:mt-1`}>Registro ABA em tempo real</p>
           </div>
+          <button
+            onClick={() => setMobileFocusMode((value) => !value)}
+            className="md:hidden ml-auto shrink-0 rounded-full bg-[#1B254B] px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white"
+          >
+            {mobileFocusMode ? 'Foco' : 'Completo'}
+          </button>
         </div>
 
-        <div className="flex items-center gap-3 flex-wrap justify-end">
-          <div className="flex items-center gap-3 rounded-2xl bg-[#F4F7FE] border border-blue-100 px-4 py-3">
-            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:mt-0 lg:flex lg:items-center lg:justify-end lg:gap-3">
+          <div className="contents lg:flex lg:items-center lg:gap-3 lg:rounded-2xl lg:bg-[#F4F7FE] lg:border lg:border-blue-100 lg:px-4 lg:py-3">
+            <label className="min-h-[52px] rounded-2xl bg-[#F4F7FE] border border-blue-100 px-3 py-2 text-[9px] sm:text-[10px] font-bold text-gray-400 uppercase tracking-widest lg:min-h-0 lg:border-0 lg:bg-transparent lg:p-0">
               Tipo da próxima tentativa
               <select
                 value={collectionType}
                 onChange={(event) => setCollectionType(event.target.value)}
-                className="block mt-1 bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
+                className="block mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
               >
                 {collectionOptions.map((option) => (
                   <option key={option.key} value={option.key}>{option.label}</option>
                 ))}
               </select>
             </label>
-            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+            <label className="min-h-[52px] rounded-2xl bg-[#F4F7FE] border border-blue-100 px-3 py-2 text-[9px] sm:text-[10px] font-bold text-gray-400 uppercase tracking-widest lg:min-h-0 lg:border-0 lg:bg-transparent lg:p-0">
               Prompt se houver ajuda
               <select
                 value={promptLevelKey}
                 onChange={(event) => setPromptLevelKey(event.target.value)}
-                className="block mt-1 bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
+                className="block mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
               >
                 {promptedPromptOptions.map((prompt) => (
                   <option key={prompt.key} value={prompt.key}>{prompt.label}</option>
@@ -1983,17 +2032,17 @@ export const SessionMode = ({
             </label>
           </div>
           {activeSession && (
-            <div className="bg-[#7a32fc]/10 text-[#7a32fc] rounded-2xl px-5 py-3 min-w-[140px] text-right">
-              <p className="text-[10px] font-bold uppercase tracking-widest flex items-center justify-end gap-2">
+            <div className="min-h-[52px] bg-[#7a32fc]/10 text-[#7a32fc] rounded-2xl px-3 py-2 sm:px-5 sm:py-3 text-right">
+              <p className="text-[9px] sm:text-[10px] font-bold uppercase tracking-widest flex items-center justify-end gap-2">
                 <Clock size={14} /> Restante
               </p>
-              <p className="text-3xl font-bold leading-none">{formatCountdown ? formatCountdown(remainingSeconds) : '00:00'}</p>
+              <p className="text-2xl sm:text-3xl font-bold leading-none">{formatCountdown ? formatCountdown(remainingSeconds) : '00:00'}</p>
             </div>
           )}
           {activeSession && (
             <button
               onClick={requestEndSession}
-              className="bg-red-50 text-red-500 font-bold px-5 py-4 rounded-2xl text-xs uppercase tracking-widest hover:bg-red-100 transition-all flex items-center gap-2"
+              className="min-h-[52px] bg-red-50 text-red-500 font-bold px-3 sm:px-5 py-3 sm:py-4 rounded-2xl text-xs uppercase tracking-widest hover:bg-red-100 transition-all flex items-center justify-center gap-2"
             >
               <StopCircle size={18} /> Encerrar
             </button>
@@ -2001,23 +2050,23 @@ export const SessionMode = ({
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_390px]">
-        <div className="overflow-y-auto p-6 space-y-6 no-scrollbar">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden lg:overflow-hidden grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_390px]">
+        <div className="p-3 sm:p-4 lg:p-6 space-y-4 sm:space-y-6 lg:overflow-y-auto no-scrollbar pb-[calc(1rem+env(safe-area-inset-bottom))]">
           {sessionWarning && (
             <div className="rounded-2xl border border-amber-100 bg-amber-50 px-5 py-4 text-sm font-semibold text-amber-700 flex items-center gap-3">
               <AlertCircle size={18} /> {sessionWarning}
             </div>
           )}
 
-          {openDurations.length > 0 && (
-            <div className="sticky top-0 z-30 bg-white rounded-[28px] p-5 shadow-2xl shadow-blue-900/10 border border-blue-100">
+          {!intervalRun && openDurations.length > 0 && (
+            <div className="sticky top-0 z-30 bg-white rounded-[24px] sm:rounded-[28px] p-3 sm:p-5 shadow-2xl shadow-blue-900/10 border border-blue-100">
               <div className="flex items-center gap-2 mb-4">
                 <Timer size={18} className="text-[#7a32fc]" />
                 <h2 className="text-sm font-bold text-gray-800">Eventos em andamento</h2>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {openDurations.map((event) => (
-                  <div key={event.id} className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-4 flex flex-col gap-3">
+                  <div key={event.id} className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-3 sm:p-4 flex flex-col gap-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-sm font-bold text-gray-800">{event.behaviorName}</p>
@@ -2026,19 +2075,19 @@ export const SessionMode = ({
                       </div>
                       <div className="text-right">
                         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cronometro</p>
-                        <p className="text-2xl font-bold text-[#7a32fc] leading-none">{formatElapsed(event.startedAt, nowMs)}</p>
+                        <p className="text-3xl font-bold text-[#7a32fc] leading-none">{formatElapsed(event.startedAt, nowMs)}</p>
                       </div>
                     </div>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
                       <button
                         onClick={() => endDuration(event.id)}
-                        className="bg-[#1B254B] text-white rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest"
+                        className="min-h-[48px] bg-[#1B254B] text-white rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest"
                       >
                         Encerrar
                       </button>
                       <button
                         onClick={() => openAbcModalForBehaviorName(event.behaviorName)}
-                        className="bg-white text-[#7a32fc] border border-purple-100 rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest inline-flex items-center gap-2"
+                        className="min-h-[48px] bg-white text-[#7a32fc] border border-purple-100 rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest inline-flex items-center justify-center gap-2"
                       >
                         <FileText size={14} /> ABC rapido
                       </button>
@@ -2050,7 +2099,7 @@ export const SessionMode = ({
           )}
 
           {intervalRun && (
-            <div className={`sticky top-0 z-30 rounded-[28px] p-5 shadow-2xl border transition-all ${intervalRun.awaitingResponse ? 'bg-amber-50 border-amber-300 ring-4 ring-amber-200/70' : intervalRun.paused ? 'bg-slate-50 border-slate-200 ring-2 ring-slate-200/70' : 'bg-white border-blue-100 shadow-blue-900/10'}`}>
+            <div className={`sticky top-0 z-40 rounded-[24px] sm:rounded-[28px] p-3 sm:p-5 shadow-2xl border transition-all ${intervalRun.awaitingResponse ? 'bg-amber-50 border-amber-300 ring-4 ring-amber-200/70' : intervalRun.paused ? 'bg-slate-50 border-slate-200 ring-2 ring-slate-200/70' : 'bg-white border-blue-100 shadow-blue-900/10'}`}>
               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <div className="flex items-center gap-2 mb-2">
@@ -2065,7 +2114,7 @@ export const SessionMode = ({
                     {Number(intervalRun.completedCount || 0)} respondido(s) - {Number(intervalRun.occurredCount || 0)} SIM
                   </p>
                 </div>
-                <div className="grid grid-cols-3 gap-3 min-w-[320px]">
+                <div className="grid w-full grid-cols-3 gap-2 sm:gap-3 lg:w-auto lg:min-w-[320px]">
                   <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-3 text-center">
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Intervalo</p>
                     <p className="text-2xl font-bold text-gray-900">{intervalRun.intervalIndex}</p>
@@ -2082,50 +2131,55 @@ export const SessionMode = ({
                   </div>
                 </div>
               </div>
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="mt-4 flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center">
                 <p className="text-xs font-semibold text-gray-500">
                   {getIntervalInstruction(intervalRun.measurementType)}
                 </p>
-                <div className="flex gap-3">
+                <p className={`rounded-2xl px-4 py-3 text-center text-sm font-bold ${intervalRun.awaitingResponse ? 'bg-amber-100 text-amber-800' : 'bg-[#F4F7FE] text-gray-500'}`}>
+                  {intervalRun.awaitingResponse ? 'Responda agora' : 'Aguardando fim do intervalo...'}
+                </p>
+                <div className="grid w-full grid-cols-2 gap-3 sm:w-auto">
                   <button
                     onClick={() => registerInterval(true)}
                     disabled={!intervalRun.awaitingResponse}
-                    className={`px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all ${intervalRun.awaitingResponse ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                    className={`min-h-[52px] px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all ${intervalRun.awaitingResponse ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                   >
                     SIM
                   </button>
                   <button
                     onClick={() => registerInterval(false)}
                     disabled={!intervalRun.awaitingResponse}
-                    className={`px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all ${intervalRun.awaitingResponse ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                    className={`min-h-[52px] px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all ${intervalRun.awaitingResponse ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                   >
                     NÃO
                   </button>
                 </div>
               </div>
-              <div className="mt-4 flex flex-wrap gap-2 border-t border-blue-100 pt-4">
+              <div className="mt-4 grid grid-cols-1 gap-2 border-t border-blue-100 pt-4 sm:flex sm:flex-wrap">
                 <button
                   onClick={intervalRun.paused ? resumeIntervalRun : pauseIntervalRun}
                   disabled={Boolean(intervalRun.awaitingResponse)}
-                  className={`rounded-xl px-4 py-2 text-[10px] font-bold uppercase tracking-widest ${intervalRun.awaitingResponse ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-[#1B254B] text-white'}`}
+                  className={`min-h-[44px] rounded-xl px-4 py-2 text-[10px] font-bold uppercase tracking-widest ${intervalRun.awaitingResponse ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-[#1B254B] text-white'}`}
                 >
                   {intervalRun.paused ? 'Retomar coleta' : 'Pausar coleta'}
                 </button>
                 <button
                   onClick={cancelIntervalRun}
-                  className="rounded-xl bg-red-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500"
+                  className="min-h-[44px] rounded-xl bg-red-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500"
                 >
                   Cancelar coleta
                 </button>
                 <button
                   onClick={finishIntervalRunNow}
-                  className="rounded-xl bg-emerald-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700"
+                  className="min-h-[44px] rounded-xl bg-emerald-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700"
                 >
                   Finalizar agora
                 </button>
               </div>
             </div>
           )}
+
+          {intervalRun && openDurationsPanel}
 
           {intervalSummary && (
             <div className="rounded-[28px] border border-emerald-100 bg-emerald-50 p-5 shadow-xl shadow-emerald-900/5">
@@ -2156,8 +2210,8 @@ export const SessionMode = ({
             </div>
           )}
 
-          <div className="bg-white rounded-[28px] p-5 shadow-xl shadow-blue-900/5 border border-white">
-            <div className="flex items-center justify-between gap-3 mb-5">
+          <div className="bg-white rounded-[24px] sm:rounded-[28px] p-4 sm:p-5 shadow-xl shadow-blue-900/5 border border-white">
+            <div className="flex flex-col gap-3 mb-5 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Evento comportamental inteligente</p>
                 <h2 className="text-xl font-bold text-gray-800">Registro rapido</h2>
@@ -2168,7 +2222,7 @@ export const SessionMode = ({
                   <select
                     value={behaviorMeasurementType}
                     onChange={(event) => setBehaviorMeasurementType(event.target.value)}
-                    className="block mt-1 bg-[#F4F7FE] border border-blue-100 rounded-2xl px-4 py-3 text-xs font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
+                  className="block mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-2xl px-4 py-3 text-xs font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
                   >
                     {selectedBehaviorMethodOptions.map((option) => (
                       <option key={option.key} value={option.key}>{option.label}</option>
@@ -2189,9 +2243,9 @@ export const SessionMode = ({
                 return (
                   <div
                     key={behavior.id}
-                    className={`border rounded-2xl px-4 py-4 text-left font-bold text-sm transition-all hover:scale-[1.02] ${behavior.tone} ${selectedBehaviorId === behavior.id ? 'ring-2 ring-[#7a32fc]/40' : ''}`}
+                    className={`min-h-[136px] border rounded-2xl px-3 py-3 sm:px-4 sm:py-4 text-left font-bold text-sm transition-all hover:scale-[1.02] flex flex-col justify-between overflow-hidden ${behavior.tone} ${selectedBehaviorId === behavior.id ? 'ring-2 ring-[#7a32fc]/40' : ''}`}
                   >
-                    <button onClick={() => selectBehavior(behavior)} className="w-full text-left">
+                    <button onClick={() => selectBehavior(behavior)} className="w-full min-h-[58px] text-left">
                       <span className="block">{behavior.name}</span>
                       <span className="mt-2 inline-flex items-center gap-1 text-[10px] uppercase tracking-widest opacity-70">
                         {behavior.defaultMeasurement === 'duration' ? (isOpen ? <Square size={12} /> : <Play size={12} />) : behavior.defaultMeasurement === 'frequency' ? <Plus size={12} /> : <Timer size={12} />}
@@ -2200,7 +2254,7 @@ export const SessionMode = ({
                     </button>
                     <button
                       onClick={() => openAbcModal(behavior.id)}
-                      className="mt-3 inline-flex items-center gap-1 rounded-xl bg-white/70 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-[#7a32fc] border border-white/80"
+                      className="mt-3 inline-flex min-h-[48px] w-full items-center justify-center gap-1 rounded-xl bg-white/70 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-[#7a32fc] border border-white/80"
                     >
                       <FileText size={13} /> ABC rapido
                     </button>
@@ -2253,23 +2307,23 @@ export const SessionMode = ({
               </div>
 
               {behaviorMeasurementType === 'frequency' && (
-                <div className="flex gap-3 flex-wrap">
-                  <button onClick={handleSelectedBehaviorAction} className="px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap">
+                  <button onClick={handleSelectedBehaviorAction} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
                     <Plus size={16} /> + ocorrência
                   </button>
-                  <button onClick={() => openAbcModal()} className="px-5 py-3 rounded-2xl bg-white text-[#7a32fc] border border-purple-100 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                  <button onClick={() => openAbcModal()} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-white text-[#7a32fc] border border-purple-100 text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
                     <FileText size={16} /> ABC rapido
                   </button>
                 </div>
               )}
 
               {behaviorMeasurementType === 'duration' && (
-                <div className="flex gap-3 flex-wrap">
-                  <button onClick={handleSelectedBehaviorAction} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap">
+                  <button onClick={handleSelectedBehaviorAction} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
                     <Play size={16} /> Iniciar duração
                   </button>
                   {openDurations.filter((event) => event.behaviorName === selectedBehavior.name).map((event) => (
-                    <button key={event.id} onClick={() => endDuration(event.id)} className="px-5 py-3 rounded-2xl bg-[#1B254B] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                    <button key={event.id} onClick={() => endDuration(event.id)} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-[#1B254B] text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
                       <Square size={16} /> Encerrar {formatElapsed(event.startedAt, nowMs)}
                     </button>
                   ))}
@@ -2277,18 +2331,18 @@ export const SessionMode = ({
               )}
 
               {behaviorMeasurementType === 'rate' && (
-                <div className="flex gap-3 flex-wrap items-center">
+                <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap sm:items-center">
                   {!rateWindow ? (
-                    <button onClick={startRateWindow} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                    <button onClick={startRateWindow} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
                       <Play size={16} /> Iniciar janela
                     </button>
                   ) : (
                     <>
                       <span className="text-sm font-bold text-gray-700">Janela {formatElapsed(rateWindow.startedAt, nowMs)} - {rateWindow.count} ocorrência(s)</span>
-                      <button onClick={registerRateOccurrence} className="px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                      <button onClick={registerRateOccurrence} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
                         <Plus size={16} /> Ocorrencia
                       </button>
-                      <button onClick={() => setRateWindow(null)} className="px-5 py-3 rounded-2xl bg-slate-700 text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                      <button onClick={() => setRateWindow(null)} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-slate-700 text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
                         <Square size={16} /> Finalizar janela
                       </button>
                     </>
@@ -2351,7 +2405,7 @@ export const SessionMode = ({
                   <button
                     onClick={handleSelectedBehaviorAction}
                     disabled={Boolean(intervalRun)}
-                    className={`px-5 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest flex items-center gap-2 ${intervalRun ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-[#7a32fc] text-white'}`}
+                    className={`min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2 ${intervalRun ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-[#7a32fc] text-white'}`}
                   >
                     <Play size={16} /> Iniciar coleta por intervalo
                   </button>
@@ -2364,8 +2418,8 @@ export const SessionMode = ({
               )}
 
               {behaviorMeasurementType === 'abc' && (
-                <div className="flex gap-3 flex-wrap">
-                  <button onClick={handleSelectedBehaviorAction} className="px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap">
+                  <button onClick={handleSelectedBehaviorAction} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
                     <FileText size={16} /> Abrir ABC rapido
                   </button>
                 </div>
@@ -2385,16 +2439,16 @@ export const SessionMode = ({
                 else break;
               }
               return (
-                <div key={goal.id} className="bg-white rounded-[32px] p-6 shadow-xl shadow-blue-900/5 border border-white relative overflow-hidden">
-                  <div className="flex items-start justify-between gap-4 mb-5">
+                <div key={goal.id} className="bg-white rounded-[24px] sm:rounded-[32px] p-4 sm:p-6 shadow-xl shadow-blue-900/5 border border-white relative overflow-hidden">
+                  <div className="flex flex-col gap-4 mb-5 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <span className="inline-flex bg-[#7a32fc]/10 text-[#7a32fc] text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest mb-3">
                         {goal.domainName || 'Meta'}
                       </span>
-                      <h2 className="text-2xl font-bold text-gray-800 tracking-tight">{goal.name}</h2>
+                      <h2 className="text-xl sm:text-2xl font-bold text-gray-800 tracking-tight">{goal.name}</h2>
                     </div>
                     {patient.age <= 12 && (
-                      <div className="text-right">
+                      <div className="text-left sm:text-right">
                         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Criterio de maestria</p>
                         <p className="text-lg font-bold text-[#7a32fc]">{Math.min(masteryCount, masteryTarget)}/{masteryTarget} dias</p>
                       </div>
@@ -2402,20 +2456,20 @@ export const SessionMode = ({
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <button onClick={() => handleTrialClick(goal, 1, 'independent')} className="bg-[#05CD99] text-white min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-green-500/20 hover:scale-[1.01] active:scale-95 transition-all">
+                    <button onClick={() => handleTrialClick(goal, 1, 'independent')} className="bg-[#05CD99] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-green-500/20 hover:scale-[1.01] active:scale-95 transition-all">
                       <CheckCircle2 size={26} />
-                      <span className="text-2xl font-bold mt-2">Independente</span>
-                      <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">1 = correto independente</span>
+                      <span className="text-xl sm:text-2xl font-bold mt-2">Independente</span>
+                      <span className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] font-bold uppercase tracking-widest opacity-80`}>1 = correto independente</span>
                     </button>
-                    <button onClick={() => handleTrialClick(goal, 0.5, 'prompted', promptLevelKey)} className="bg-[#FFB547] text-white min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-orange-500/20 hover:scale-[1.01] active:scale-95 transition-all">
+                    <button onClick={() => handleTrialClick(goal, 0.5, 'prompted', promptLevelKey)} className="bg-[#FFB547] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-orange-500/20 hover:scale-[1.01] active:scale-95 transition-all">
                       <Activity size={26} />
-                      <span className="text-2xl font-bold mt-2">Com ajuda</span>
-                      <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">0.5 = correto com ajuda</span>
+                      <span className="text-xl sm:text-2xl font-bold mt-2">Com ajuda</span>
+                      <span className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] font-bold uppercase tracking-widest opacity-80`}>0.5 = correto com ajuda</span>
                     </button>
-                    <button onClick={() => handleTrialClick(goal, 0, 'error')} className="bg-[#EE5D50] text-white min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-red-500/20 hover:scale-[1.01] active:scale-95 transition-all">
+                    <button onClick={() => handleTrialClick(goal, 0, 'error')} className="bg-[#EE5D50] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-red-500/20 hover:scale-[1.01] active:scale-95 transition-all">
                       <X size={26} />
-                      <span className="text-2xl font-bold mt-2">Erro</span>
-                      <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">0 = erro ou sem resposta</span>
+                      <span className="text-xl sm:text-2xl font-bold mt-2">Erro</span>
+                      <span className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] font-bold uppercase tracking-widest opacity-80`}>0 = erro ou sem resposta</span>
                     </button>
                   </div>
 
@@ -2444,7 +2498,7 @@ export const SessionMode = ({
           </div>
         </div>
 
-        <aside className="bg-white border-l border-gray-100 p-5 overflow-y-auto">
+        <aside className="bg-white border-t xl:border-t-0 xl:border-l border-gray-100 p-3 sm:p-5 xl:overflow-y-auto pb-[calc(1rem+env(safe-area-inset-bottom))]">
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Histórico da sessão</p>
@@ -2461,10 +2515,10 @@ export const SessionMode = ({
               <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-5 text-sm text-gray-500">
                 Nenhum registro nesta sessão.
               </div>
-            ) : records.slice(0, 18).map((record) => {
+            ) : visibleHistoryRecords.map((record) => {
               const lockedIntervalRecord = isIntervalHistoryRecord(record);
               return (
-              <div key={record.id} className="rounded-2xl border border-gray-100 bg-[#F8FAFF] p-4">
+              <div key={record.id} className="rounded-2xl border border-gray-100 bg-[#F8FAFF] p-3 sm:p-4">
                 {editingRecordId === record.id ? (
                   <div className="space-y-3">
                     <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{record.kind === 'trial' ? 'Tentativa' : 'Comportamento'}</p>
@@ -2543,7 +2597,7 @@ export const SessionMode = ({
                       className="w-full min-h-[64px] rounded-xl border border-blue-100 bg-white px-3 py-2 text-xs text-gray-600 outline-none resize-none focus:border-[#7a32fc]"
                     />
                     <p className="text-[11px] text-gray-400">Horario original: {new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
-                    <div className="flex gap-2">
+                    <div className="grid grid-cols-2 gap-2">
                       <button onClick={cancelEditingRecord} className="flex-1 rounded-xl bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-500 border border-gray-100">
                         Voltar
                       </button>
@@ -2557,7 +2611,7 @@ export const SessionMode = ({
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{record.kind === 'trial' ? 'Tentativa' : 'Comportamento'}</p>
                       <h3 className="text-sm font-bold text-gray-800 mt-1 truncate">{record.title}</h3>
-                      <p className="text-xs text-gray-500 mt-1">{record.detail}</p>
+                      <p className={`${mobileFocusMode ? 'line-clamp-2' : ''} text-xs text-gray-500 mt-1`}>{record.detail}</p>
                       {(record.location || record.severity || record.antecedent || record.consequence || record.notes) && (
                         <div className="mt-2 space-y-1 text-[11px] text-gray-500">
                           {(record.location || record.severity) && (
@@ -2575,7 +2629,7 @@ export const SessionMode = ({
                     </div>
                     <div className="shrink-0 flex flex-col items-end gap-2">
                       {renderSyncBadge(normalizeSyncStatus(record.syncStatus))}
-                      <button onClick={() => startEditingRecord(record)} className="inline-flex items-center gap-1 rounded-full bg-white border border-gray-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 hover:text-[#7a32fc]">
+                      <button onClick={() => startEditingRecord(record)} className="inline-flex min-h-[36px] items-center gap-1 rounded-full bg-white border border-gray-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 hover:text-[#7a32fc]">
                         <Pencil size={11} /> Editar
                       </button>
                     </div>
@@ -2584,13 +2638,29 @@ export const SessionMode = ({
               </div>
               );
             })}
+            {records.length > visibleHistoryRecords.length && (
+              <button
+                onClick={() => setHistoryExpanded(true)}
+                className="w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-4 py-3 text-xs font-bold uppercase tracking-widest text-[#7a32fc]"
+              >
+                Ver mais {records.length - visibleHistoryRecords.length} registro(s)
+              </button>
+            )}
+            {historyExpanded && records.length > 8 && (
+              <button
+                onClick={() => setHistoryExpanded(false)}
+                className="w-full rounded-2xl border border-gray-100 bg-white px-4 py-3 text-xs font-bold uppercase tracking-widest text-gray-500"
+              >
+                Recolher histórico
+              </button>
+            )}
           </div>
         </aside>
       </div>
 
       {abcModalOpen && (
-        <div className="fixed inset-0 z-[140] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm">
-          <div className="bg-white rounded-[32px] p-6 shadow-2xl max-w-lg w-full border border-purple-100">
+        <div className="fixed inset-0 z-[140] flex items-end sm:items-center justify-center p-3 sm:p-4 bg-black/30 backdrop-blur-sm">
+          <div className="bg-white rounded-[28px] sm:rounded-[32px] p-4 sm:p-6 shadow-2xl max-w-lg w-full max-h-[calc(100vh-2rem)] overflow-y-auto border border-purple-100">
             <div className="flex items-center justify-between gap-3 mb-5">
               <div>
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">ABC rapido</p>
@@ -2645,8 +2715,8 @@ export const SessionMode = ({
       )}
 
       {promptSelectionGoal && (
-        <div className="fixed inset-0 z-[142] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm">
-          <div className="bg-white rounded-[32px] p-6 shadow-2xl max-w-lg w-full border border-orange-100">
+        <div className="fixed inset-0 z-[142] flex items-end sm:items-center justify-center p-3 sm:p-4 bg-black/30 backdrop-blur-sm">
+          <div className="bg-white rounded-[28px] sm:rounded-[32px] p-4 sm:p-6 shadow-2xl max-w-lg w-full max-h-[calc(100vh-2rem)] overflow-y-auto border border-orange-100">
             <div className="flex items-center justify-between gap-3 mb-5">
               <div>
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Prompt obrigatorio</p>
@@ -2680,8 +2750,8 @@ export const SessionMode = ({
       )}
 
       {durationBlockModalOpen && (
-        <div className="fixed inset-0 z-[143] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm">
-          <div className="bg-white rounded-[32px] p-6 shadow-2xl max-w-2xl w-full border border-amber-100">
+        <div className="fixed inset-0 z-[143] flex items-end sm:items-center justify-center p-3 sm:p-4 bg-black/30 backdrop-blur-sm">
+          <div className="bg-white rounded-[28px] sm:rounded-[32px] p-4 sm:p-6 shadow-2xl max-w-2xl w-full max-h-[calc(100vh-2rem)] overflow-y-auto border border-amber-100">
             <div className="flex items-center justify-between gap-3 mb-5">
               <div>
                 <p className="text-[10px] font-bold text-amber-600 uppercase tracking-widest">Eventos em andamento</p>
@@ -2719,8 +2789,8 @@ export const SessionMode = ({
       )}
 
       {showSessionSummary && (
-        <div className="fixed inset-0 z-[145] flex items-center justify-center p-4 bg-slate-900/30 backdrop-blur-sm">
-          <div className="bg-[#F4F7FE] rounded-[32px] p-6 shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-y-auto border border-blue-100">
+        <div className="fixed inset-0 z-[145] flex items-end sm:items-center justify-center p-3 sm:p-4 bg-slate-900/30 backdrop-blur-sm">
+          <div className="bg-[#F4F7FE] rounded-[28px] sm:rounded-[32px] p-4 sm:p-6 shadow-2xl max-w-6xl w-full max-h-[calc(100vh-2rem)] overflow-y-auto border border-blue-100">
             <div className="flex items-start justify-between gap-4 mb-5">
               <div>
                 <p className="text-[10px] font-bold text-[#7a32fc] uppercase tracking-widest">Encerramento da sessão ABA</p>
