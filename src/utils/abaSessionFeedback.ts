@@ -133,7 +133,7 @@ export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): 
     return {
       variant: 'success',
       title: 'ABC salvo',
-      subtitle: 'Antecedente, comportamento e consequência registrados'
+      subtitle: 'Complemento registrado'
     };
   }
 

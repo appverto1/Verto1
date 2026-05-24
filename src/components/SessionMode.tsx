@@ -7,10 +7,12 @@ import {
   ChevronLeft,
   Clock,
   FileText,
+  Flame,
   Pencil,
   Play,
   Plus,
   Save,
+  ShieldAlert,
   Square,
   StopCircle,
   Timer,
@@ -23,6 +25,7 @@ import { ABA_PROMPT_LEVEL_OPTIONS, resolveAbaPromptLevel } from '../utils/abaPro
 import { buildSessionReport, calculateSessionSummary, canCloseAbaSession, canRecordInAbaSession, type SessionSummary, type SessionSummaryPendingItem } from '../utils/abaSessionSummary';
 import { isAbaV2Enabled } from '../utils/featureFlags';
 import { buildClinicalActionToast, buildClinicalOfflineToast, buildClinicalSaveErrorToast, type ClinicalActionToast } from '../utils/abaSessionFeedback';
+import { getCrisisShortcutIds, getDockVisibleShortcuts, normalizeQuickBehaviorShortcuts } from '../utils/abaClinicalDock';
 
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
 type AbcRequirement = 'REQUIRED' | 'RECOMMENDED' | 'OPTIONAL' | 'DISABLED';
@@ -293,6 +296,8 @@ export const SessionMode = ({
   const [promptWarning, setPromptWarning] = useState('');
   const [mobileFocusMode, setMobileFocusMode] = useState(true);
   const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [clinicalDockSheetOpen, setClinicalDockSheetOpen] = useState(false);
+  const [crisisMode, setCrisisMode] = useState(false);
   const [actionToast, setActionToast] = useState<ClinicalActionToast | null>(null);
   const [actionLocks, setActionLocks] = useState<Record<string, boolean>>({});
   const [microFeedback, setMicroFeedback] = useState<Record<string, 'pulse' | 'check' | 'plus'>>({});
@@ -318,6 +323,17 @@ export const SessionMode = ({
   const selectedBehaviorMeasurements = selectedBehavior.allowedMeasurements || [selectedBehavior.defaultMeasurement];
   const selectedBehaviorAllowsMultipleMethods = selectedBehaviorMeasurements.length > 1;
   const selectedBehaviorMethodOptions = behaviorMeasurementOptions.filter((option) => selectedBehaviorMeasurements.includes(option.key));
+  const quickBehaviorShortcuts = useMemo(() => normalizeQuickBehaviorShortcuts(
+    patient?.quickBehaviorShortcuts ||
+    patient?.quick_behavior_shortcuts ||
+    patient?.abaSettings?.quickBehaviorShortcuts ||
+    patient?.clinicSettings?.quickBehaviorShortcuts ||
+    patient?.clinicSettings?.abaQuickBehaviorShortcuts,
+    behaviorPresets
+  ), [patient?.abaSettings?.quickBehaviorShortcuts, patient?.clinicSettings?.abaQuickBehaviorShortcuts, patient?.clinicSettings?.quickBehaviorShortcuts, patient?.quickBehaviorShortcuts, patient?.quick_behavior_shortcuts]);
+  const dockShortcuts = useMemo(() => getDockVisibleShortcuts(quickBehaviorShortcuts, { crisisMode, limit: 3 }), [crisisMode, quickBehaviorShortcuts]);
+  const crisisShortcutIdSet = useMemo(() => new Set(getCrisisShortcutIds()), []);
+  const recentBehaviorRecords = useMemo(() => records.filter((record) => record.kind === 'behavior').slice(0, 5), [records]);
   const vibrateClinicalAction = (pattern: number | number[]) => {
     if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
     try {
@@ -788,10 +804,11 @@ export const SessionMode = ({
 
   const registerFrequency = (behaviorName = selectedBehavior.name, countDelta = 1) => {
     if (!ensureSessionCanRecord()) return;
-    const frequencyLockKey = `frequency:${selectedBehavior.id}:${behaviorName}`;
+    const behavior = behaviorPresets.find((item) => item.name === behaviorName) || selectedBehavior;
+    const frequencyLockKey = `frequency:${behavior.id}:${behaviorName}`;
     if (!lockAction(frequencyLockKey, 300)) return;
     const payload = buildBehaviorPayload(behaviorName, 'frequency', { count_delta: countDelta, countDelta });
-    triggerMicroFeedback(`behavior:${selectedBehavior.id}`, 'plus');
+    triggerMicroFeedback(`behavior:${behavior.id}`, 'plus');
     showClinicalToast(buildClinicalActionToast({
       action: 'frequency',
       behaviorName,
@@ -1005,10 +1022,10 @@ export const SessionMode = ({
     });
   };
 
-  const startIntervalRun = () => {
+  const startIntervalRun = (behaviorOverride = selectedBehavior, measurementOverride = behaviorMeasurementType) => {
     if (!ensureSessionCanRecord()) return;
     if (intervalRun) {
-      setSessionWarning(intervalRun.behaviorId === selectedBehavior.id
+      setSessionWarning(intervalRun.behaviorId === behaviorOverride.id
         ? 'Já existe uma coleta por intervalo em andamento para este comportamento.'
         : 'Finalize, pause/cancele ou conclua a coleta por intervalo em andamento antes de iniciar outra.');
       return;
@@ -1017,10 +1034,10 @@ export const SessionMode = ({
     const intervalEndsAt = new Date(new Date(startedAt).getTime() + intervalSeconds * 1000).toISOString();
     setIntervalRun({
       id: crypto.randomUUID(),
-      behaviorId: selectedBehavior.id,
-      behaviorName: selectedBehavior.name,
-      measurementType: behaviorMeasurementType,
-      method: behaviorMeasurementType,
+      behaviorId: behaviorOverride.id,
+      behaviorName: behaviorOverride.name,
+      measurementType: measurementOverride,
+      method: measurementOverride,
       location: selectedLocation,
       severity: selectedSeverity,
       startedAt,
@@ -1270,6 +1287,36 @@ export const SessionMode = ({
   const openAbcModalForBehaviorName = (behaviorName: string) => {
     const behavior = behaviorPresets.find((item) => item.name === behaviorName) || selectedBehavior;
     openAbcModal(behavior.id);
+  };
+
+  const resolveShortcutBehavior = (shortcut: any) => (
+    behaviorPresets.find((behavior) => behavior.id === shortcut?.behaviorId) || selectedBehavior
+  );
+
+  const findOpenDurationForBehavior = (behaviorName: string) => (
+    openDurations.find((event) => event.behaviorName === behaviorName)
+  );
+
+  const executeBehaviorShortcut = (shortcut: any) => {
+    const behavior = resolveShortcutBehavior(shortcut);
+    const method = String(shortcut?.method || behavior.defaultMeasurement || 'frequency');
+    if (shortcut?.behaviorId === 'abc' || method === 'abc') {
+      openAbcModal(behavior.id);
+      return;
+    }
+    if (method === 'frequency' || method === 'rate') {
+      registerFrequency(behavior.name, 1);
+      return;
+    }
+    if (method === 'duration') {
+      const openEvent = findOpenDurationForBehavior(behavior.name);
+      if (openEvent) endDuration(openEvent.id);
+      else startDuration(behavior.name);
+      return;
+    }
+    if (isIntervalMeasurement(method)) {
+      startIntervalRun(behavior, method);
+    }
   };
 
   const saveAbcEvent = () => {
@@ -1757,7 +1804,7 @@ export const SessionMode = ({
   };
   const actionToastPortal = actionToast && typeof document !== 'undefined'
     ? createPortal(
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-[220] flex justify-center px-3 sm:inset-x-auto sm:right-4 sm:bottom-4 sm:justify-end">
+        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(6.75rem+env(safe-area-inset-bottom))] z-[220] flex justify-center px-3 xl:inset-x-auto xl:right-4 xl:bottom-4 xl:justify-end">
           <AbaSessionToast toast={actionToast} />
         </div>,
         document.body
@@ -2192,6 +2239,220 @@ export const SessionMode = ({
     </div>
   ) : null;
 
+  const getDockButtonClass = (color: string, active = false) => {
+    const palette: Record<string, string> = {
+      red: active ? 'bg-red-600 text-white border-red-500 shadow-red-900/25' : 'bg-red-50 text-red-700 border-red-100',
+      rose: active ? 'bg-rose-600 text-white border-rose-500 shadow-rose-900/25' : 'bg-rose-50 text-rose-700 border-rose-100',
+      amber: active ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-amber-900/25' : 'bg-amber-50 text-amber-700 border-amber-100',
+      violet: active ? 'bg-violet-600 text-white border-violet-500 shadow-violet-900/25' : 'bg-violet-50 text-violet-700 border-violet-100',
+      sky: active ? 'bg-sky-600 text-white border-sky-500 shadow-sky-900/25' : 'bg-sky-50 text-sky-700 border-sky-100',
+      emerald: active ? 'bg-emerald-600 text-white border-emerald-500 shadow-emerald-900/25' : 'bg-emerald-50 text-emerald-700 border-emerald-100',
+      slate: active ? 'bg-[#1B254B] text-white border-[#1B254B] shadow-slate-900/25' : 'bg-slate-50 text-slate-700 border-slate-100'
+    };
+    return palette[color] || palette.slate;
+  };
+
+  const renderDockShortcutButton = (shortcut: any, compact = false) => {
+    const behavior = resolveShortcutBehavior(shortcut);
+    const method = String(shortcut?.method || behavior.defaultMeasurement || 'frequency');
+    const openDuration = method === 'duration' ? findOpenDurationForBehavior(behavior.name) : null;
+    const isActive = Boolean(openDuration);
+    const lockKey = method === 'duration' && openDuration
+      ? `duration:end:${openDuration.id}`
+      : method === 'duration'
+        ? `duration:start:${behavior.id}`
+        : `frequency:${behavior.id}:${behavior.name}`;
+    const disabled = Boolean(actionLocks[lockKey]);
+    const feedbackKey = `behavior:${behavior.id}`;
+    const label = openDuration
+      ? `${behavior.name} ${formatElapsed(openDuration.startedAt, nowMs)}`
+      : String(shortcut?.label || behavior.name);
+
+    return (
+      <button
+        key={shortcut.behaviorId}
+        type="button"
+        onClick={() => executeBehaviorShortcut(shortcut)}
+        disabled={disabled}
+        data-aba-dock-shortcut={shortcut.behaviorId}
+        className={`relative min-h-[48px] overflow-hidden rounded-[18px] border px-3 py-2 text-left shadow-lg transition-all active:scale-[0.98] disabled:opacity-60 ${getDockButtonClass(shortcut.color, isActive || crisisMode)} ${microFeedback[feedbackKey] ? 'scale-[0.98] ring-4 ring-white/70' : ''} ${compact ? 'min-h-[56px]' : ''}`}
+      >
+        {microFeedback[feedbackKey] === 'plus' && (
+          <span className="pointer-events-none absolute right-2 top-2 animate-pop rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-black text-white">+1</span>
+        )}
+        {microFeedback[feedbackKey] === 'pulse' && (
+          <span className="pointer-events-none absolute right-2 top-2 animate-pop rounded-full bg-white/25 px-2 py-0.5 text-[10px] font-black">ON</span>
+        )}
+        <span className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-widest">
+          {method === 'duration' ? (openDuration ? <Square size={13} /> : <Play size={13} />) : <Plus size={13} />}
+          {label}
+        </span>
+        <span className={`${mobileFocusMode || compact ? 'hidden' : 'block'} mt-1 text-[10px] font-semibold opacity-75`}>
+          {openDuration ? 'toque para encerrar' : method === 'duration' ? 'iniciar duração' : '+1 ocorrência'}
+        </span>
+      </button>
+    );
+  };
+
+  const clinicalDock = !sessionCompleted ? (
+    <div
+      data-aba-clinical-dock
+      className={`xl:hidden fixed inset-x-0 bottom-0 z-[130] px-2 pb-[calc(0.55rem+env(safe-area-inset-bottom))] pt-2 ${clinicalDockSheetOpen ? 'pointer-events-none' : 'pointer-events-auto'}`}
+    >
+      <div className={`mx-auto max-w-3xl rounded-[26px] border p-2 shadow-2xl backdrop-blur-xl ${crisisMode ? 'border-red-300 bg-slate-950/95 shadow-red-950/30' : 'border-blue-100 bg-white/95 shadow-blue-950/15'}`}>
+        {intervalRun && (
+          <div className={`mb-2 flex items-center justify-between rounded-2xl px-3 py-2 text-xs font-black ${intervalRun.awaitingResponse ? 'bg-amber-100 text-amber-800' : crisisMode ? 'bg-white/10 text-white' : 'bg-[#F4F7FE] text-[#7a32fc]'}`}>
+            <span>Intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals}</span>
+            <span>{intervalRun.awaitingResponse ? 'Responda no painel' : formatRemainingUntil(intervalRun.intervalEndsAt, nowMs)}</span>
+          </div>
+        )}
+        <div className="grid grid-cols-[repeat(3,minmax(0,1fr))_64px] gap-2">
+          {dockShortcuts.map((shortcut) => renderDockShortcutButton(shortcut, crisisMode))}
+          <button
+            type="button"
+            onClick={() => {
+              if (crisisMode) openAbcModal();
+              else setClinicalDockSheetOpen(true);
+            }}
+            className={`min-h-[48px] rounded-[18px] border px-2 text-[11px] font-black uppercase tracking-widest shadow-lg transition-all active:scale-[0.98] ${crisisMode ? 'border-white/15 bg-white text-slate-950' : 'border-slate-100 bg-[#1B254B] text-white'}`}
+          >
+            {crisisMode ? 'ABC' : 'Mais'}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  const clinicalDockSheet = clinicalDockSheetOpen ? (
+    <div className="fixed inset-0 z-[210] xl:hidden" data-aba-clinical-dock-sheet>
+      <button
+        type="button"
+        aria-label="Fechar dock clínico"
+        onClick={() => setClinicalDockSheetOpen(false)}
+        className="absolute inset-0 h-full w-full bg-slate-950/35 backdrop-blur-[2px]"
+      />
+      <div className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-[32px] border border-blue-100 bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl">
+        <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-slate-200" />
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.24em] text-[#7a32fc]">Dock clínico</p>
+            <h2 className="text-xl font-black text-slate-900">Registro sem sair da meta</h2>
+          </div>
+          <button
+            type="button"
+            onClick={() => setCrisisMode((value) => !value)}
+            className={`inline-flex min-h-[44px] items-center gap-2 rounded-2xl px-3 text-[10px] font-black uppercase tracking-widest ${crisisMode ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600'}`}
+          >
+            <ShieldAlert size={15} /> Modo crise
+          </button>
+        </div>
+
+        {crisisMode ? (
+          <section className="mt-4 rounded-[24px] border border-red-100 bg-red-50 p-3">
+            <p className="text-[10px] font-black uppercase tracking-widest text-red-600">Crise / alta prioridade</p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {quickBehaviorShortcuts.filter((shortcut) => crisisShortcutIdSet.has(shortcut.behaviorId)).map((shortcut) => renderDockShortcutButton(shortcut, true))}
+              <button onClick={() => openAbcModal()} className="min-h-[56px] rounded-[18px] border border-slate-900 bg-slate-950 px-3 text-left text-[11px] font-black uppercase tracking-widest text-white">
+                <FileText size={14} className="mb-1" /> ABC rápido
+              </button>
+            </div>
+          </section>
+        ) : (
+          <>
+            <section className="mt-4">
+              <p className="text-[10px] font-black uppercase tracking-widest text-red-600">Crise / alta prioridade</p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {quickBehaviorShortcuts.filter((shortcut) => ['aggression', 'self_injury', 'escape', 'refusal'].includes(shortcut.behaviorId)).map((shortcut) => renderDockShortcutButton(shortcut))}
+              </div>
+            </section>
+
+            <section className="mt-4">
+              <p className="text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">Duração</p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {behaviorPresets.filter((behavior) => behavior.defaultMeasurement === 'duration' || behavior.allowedMeasurements?.includes('duration')).slice(0, 4).map((behavior) => renderDockShortcutButton({
+                  behaviorId: behavior.id,
+                  label: behavior.name,
+                  method: 'duration',
+                  color: behavior.id === 'crying' ? 'sky' : behavior.id === 'escape' ? 'amber' : 'emerald'
+                }))}
+              </div>
+            </section>
+
+            <section className="mt-4">
+              <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Intervalo</p>
+              <div className="mt-2 grid grid-cols-1 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const stereotypy = behaviorPresets.find((behavior) => behavior.id === 'stereotypy') || selectedBehavior;
+                    startIntervalRun(stereotypy, 'partial_interval');
+                  }}
+                  disabled={Boolean(intervalRun)}
+                  className="min-h-[52px] rounded-2xl border border-emerald-100 bg-emerald-50 px-4 text-left text-xs font-black uppercase tracking-widest text-emerald-700 disabled:opacity-50"
+                >
+                  {intervalRun ? `Coleta ativa: ${intervalRun.behaviorName} ${intervalRun.intervalIndex}/${intervalRun.totalIntervals}` : 'Estereotipia iniciar intervalo'}
+                </button>
+              </div>
+            </section>
+          </>
+        )}
+
+        <section className="mt-4 rounded-[24px] border border-blue-100 bg-[#F4F7FE] p-3">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">ABC rápido</p>
+          <button onClick={() => openAbcModal()} className="mt-2 inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-4 text-xs font-black uppercase tracking-widest text-white">
+            <FileText size={16} /> Abrir ABC rápido
+          </button>
+        </section>
+
+        <section className="mt-4 rounded-[24px] border border-blue-100 bg-white p-3">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Contexto atual</p>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+              Local
+              <select value={selectedLocation} onChange={(event) => setSelectedLocation(event.target.value)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none">
+                {locationOptions.map((location) => <option key={location} value={location}>{location}</option>)}
+              </select>
+            </label>
+            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+              Severidade
+              <select value={selectedSeverity} onChange={(event) => setSelectedSeverity(Number(event.target.value))} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none">
+                {severityOptions.map((severity) => <option key={severity} value={severity}>{severity}</option>)}
+              </select>
+            </label>
+          </div>
+        </section>
+
+        {openDurations.length > 0 && (
+          <section className="mt-4">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Eventos em andamento</p>
+            <div className="mt-2 space-y-2">
+              {openDurations.map((event) => (
+                <button key={event.id} onClick={() => endDuration(event.id)} disabled={Boolean(actionLocks[`duration:end:${event.id}`])} className="flex min-h-[52px] w-full items-center justify-between rounded-2xl border border-blue-100 bg-[#F4F7FE] px-4 text-left text-xs font-black text-slate-800 disabled:opacity-60">
+                  <span>{event.behaviorName}</span>
+                  <span>{formatElapsed(event.startedAt, nowMs)} ■</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <section className="mt-4">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Últimos registros</p>
+          <div className="mt-2 space-y-2">
+            {recentBehaviorRecords.length === 0 ? (
+              <p className="rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-xs font-semibold text-slate-500">Nenhum comportamento registrado nesta sessão.</p>
+            ) : recentBehaviorRecords.map((record) => (
+              <div key={record.id} className="rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3">
+                <p className="text-xs font-black text-slate-800">{record.title}</p>
+                <p className="mt-1 text-[11px] font-semibold text-slate-500">{record.detail} • {new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  ) : null;
+
   const sessionModeContent = (
     <div className="fixed inset-0 z-[100] bg-[#F4F7FE] flex flex-col overflow-hidden overflow-x-hidden animate-fade-in pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
       <div className="sticky top-0 z-50 bg-white/95 backdrop-blur px-3 py-2 sm:px-4 sm:py-3 lg:px-6 lg:py-5 shadow-sm shrink-0 lg:flex lg:items-center lg:justify-between lg:gap-4">
@@ -2258,7 +2519,7 @@ export const SessionMode = ({
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden lg:overflow-hidden grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_390px]">
-        <div className="p-3 sm:p-4 lg:p-6 space-y-4 sm:space-y-6 lg:overflow-y-auto no-scrollbar pb-[calc(1rem+env(safe-area-inset-bottom))]">
+        <div className="p-3 sm:p-4 lg:p-6 space-y-4 sm:space-y-6 lg:overflow-y-auto no-scrollbar pb-[calc(7.75rem+env(safe-area-inset-bottom))] xl:pb-[calc(1rem+env(safe-area-inset-bottom))]">
           {sessionWarning && (
             <div className="rounded-2xl border border-amber-100 bg-amber-50 px-5 py-4 text-sm font-semibold text-amber-700 flex items-center gap-3">
               <AlertCircle size={18} /> {sessionWarning}
@@ -3232,6 +3493,8 @@ export const SessionMode = ({
           </div>
         </div>
       )}
+      {clinicalDock}
+      {clinicalDockSheet}
       {actionToastPortal}
     </div>
   );
