@@ -14714,6 +14714,13 @@ async function startServer() {
       const method = rawMethod === 'whole_interval' || rawMethod === 'momentary_time_sampling' ? rawMethod : 'partial_interval';
       const intervalStartedAt = sanitizeIsoDateTime(req.body?.interval_started_at || req.body?.intervalStartedAt);
       const intervalEndedAt = sanitizeIsoDateTime(req.body?.interval_ended_at || req.body?.intervalEndedAt, intervalStartedAt);
+      const rawCollectionStatus = sanitizeString(req.body?.collection_status || req.body?.collectionStatus || req.body?.status, 60).toUpperCase();
+      const collectionStatus = ['RUNNING', 'AWAITING_RESPONSE', 'PAUSED', 'COMPLETED', 'PARTIALLY_COMPLETED', 'CANCELLED'].includes(rawCollectionStatus)
+        ? rawCollectionStatus
+        : null;
+      const cancelledAt = req.body?.cancelled_at || req.body?.cancelledAt
+        ? sanitizeIsoDateTime(req.body?.cancelled_at || req.body?.cancelledAt, intervalEndedAt)
+        : null;
       const payload = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.record_id || req.body?.recordId || crypto.randomUUID(), 180),
         clinic_id: clinicId,
@@ -14727,6 +14734,10 @@ async function startServer() {
         interval_started_at: intervalStartedAt,
         interval_ended_at: intervalEndedAt,
         occurred: typeof req.body?.occurred === 'boolean' ? req.body.occurred : Boolean(req.body?.interval_occurred ?? req.body?.intervalOccurred),
+        collection_status: collectionStatus,
+        cancelled_at: cancelledAt,
+        cancelled_by: sanitizeString(req.body?.cancelled_by || req.body?.cancelledBy, 120) || null,
+        cancel_reason: sanitizeTextField(req.body?.cancel_reason || req.body?.cancelReason, 240),
         location: sanitizeTextField(req.body?.location, 240),
         severity: req.body?.severity !== undefined ? asSafeNumber(req.body?.severity, 0, 5) : null,
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
@@ -14734,6 +14745,8 @@ async function startServer() {
         raw_payload: sanitizeClinicalPayload({
           ...(req.body?.raw_payload || req.body?.rawPayload || {}),
           method,
+          collectionStatus,
+          cancelledAt: cancelledAt || undefined,
           patientId,
           sessionId: sessionId || undefined,
           syncStatus: 'synced'
@@ -14766,13 +14779,23 @@ async function startServer() {
 
       const behaviorName = sanitizeTextField(req.body?.behavior_name || req.body?.behaviorName || req.body?.name, 240);
       if (!behaviorName) return res.status(400).json({ success: false, error: 'Comportamento é obrigatório.' });
-      const totalIntervals = asSafeNumber(req.body?.total_intervals ?? req.body?.totalIntervals, 0, 100000) || 0;
-      const yesCount = Math.min(totalIntervals, asSafeNumber(req.body?.yes_count ?? req.body?.yesCount ?? req.body?.occurredCount, 0, 100000) || 0);
-      const noCount = Math.max(0, asSafeNumber(req.body?.no_count ?? req.body?.noCount ?? req.body?.notOccurredCount, 0, 100000) ?? (totalIntervals - yesCount));
-      const occurrencePercent = totalIntervals > 0 ? Math.round((yesCount / totalIntervals) * 10000) / 100 : 0;
+      const answeredIntervals = asSafeNumber(req.body?.answered_intervals ?? req.body?.answeredIntervals ?? req.body?.total_intervals ?? req.body?.totalIntervals, 0, 100000) || 0;
+      const plannedIntervals = Math.max(answeredIntervals, asSafeNumber(req.body?.planned_intervals ?? req.body?.plannedIntervals ?? req.body?.plannedTotalIntervals ?? req.body?.total_intervals ?? req.body?.totalIntervals, 0, 100000) || answeredIntervals);
+      const totalIntervals = answeredIntervals;
+      const yesCount = Math.min(answeredIntervals, asSafeNumber(req.body?.yes_count ?? req.body?.yesCount ?? req.body?.occurredCount, 0, 100000) || 0);
+      const noCount = Math.max(0, asSafeNumber(req.body?.no_count ?? req.body?.noCount ?? req.body?.notOccurredCount, 0, 100000) ?? (answeredIntervals - yesCount));
+      const occurrencePercent = answeredIntervals > 0 ? Math.round((yesCount / answeredIntervals) * 10000) / 100 : 0;
       const rawMethod = normalizeAbaBehaviorMeasurementType(req.body?.method || req.body?.measurement_type || req.body?.measurementType);
       const method = rawMethod === 'whole_interval' || rawMethod === 'momentary_time_sampling' ? rawMethod : 'partial_interval';
       const endedAt = sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt);
+      const rawCollectionStatus = sanitizeString(req.body?.collection_status || req.body?.collectionStatus || req.body?.status, 60).toUpperCase();
+      const collectionStatus = ['COMPLETED', 'PARTIALLY_COMPLETED', 'CANCELLED'].includes(rawCollectionStatus)
+        ? rawCollectionStatus
+        : (answeredIntervals < plannedIntervals ? 'PARTIALLY_COMPLETED' : 'COMPLETED');
+      const pausedAt = req.body?.paused_at || req.body?.pausedAt ? sanitizeIsoDateTime(req.body?.paused_at || req.body?.pausedAt, endedAt) : null;
+      const resumedAt = req.body?.resumed_at || req.body?.resumedAt ? sanitizeIsoDateTime(req.body?.resumed_at || req.body?.resumedAt, endedAt) : null;
+      const endedEarlyAt = req.body?.ended_early_at || req.body?.endedEarlyAt ? sanitizeIsoDateTime(req.body?.ended_early_at || req.body?.endedEarlyAt, endedAt) : null;
+      const cancelledAt = req.body?.cancelled_at || req.body?.cancelledAt ? sanitizeIsoDateTime(req.body?.cancelled_at || req.body?.cancelledAt, endedAt) : null;
       const payload = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.summary_id || req.body?.summaryId || crypto.randomUUID(), 180),
         clinic_id: clinicId,
@@ -14782,11 +14805,21 @@ async function startServer() {
         behavior_name: behaviorName,
         method,
         total_intervals: totalIntervals,
+        planned_intervals: plannedIntervals,
+        answered_intervals: answeredIntervals,
         yes_count: yesCount,
         no_count: noCount,
         occurrence_percent: occurrencePercent,
+        collection_status: collectionStatus,
         started_at: req.body?.started_at || req.body?.startedAt ? sanitizeIsoDateTime(req.body?.started_at || req.body?.startedAt, endedAt) : null,
         ended_at: endedAt,
+        paused_at: pausedAt,
+        resumed_at: resumedAt,
+        ended_early_at: endedEarlyAt,
+        cancelled_at: cancelledAt,
+        cancelled_by: sanitizeString(req.body?.cancelled_by || req.body?.cancelledBy, 120) || null,
+        cancel_reason: sanitizeTextField(req.body?.cancel_reason || req.body?.cancelReason, 240),
+        end_reason: sanitizeTextField(req.body?.end_reason || req.body?.endReason, 240),
         location: sanitizeTextField(req.body?.location, 240),
         severity: req.body?.severity !== undefined ? asSafeNumber(req.body?.severity, 0, 5) : null,
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
@@ -14794,10 +14827,17 @@ async function startServer() {
         raw_payload: sanitizeClinicalPayload({
           ...(req.body?.raw_payload || req.body?.rawPayload || {}),
           method,
+          plannedIntervals,
+          answeredIntervals,
           totalIntervals,
           yesCount,
           noCount,
           occurrencePercent,
+          collectionStatus,
+          pausedAt: pausedAt || undefined,
+          resumedAt: resumedAt || undefined,
+          endedEarlyAt: endedEarlyAt || undefined,
+          cancelledAt: cancelledAt || undefined,
           patientId,
           sessionId: sessionId || undefined,
           syncStatus: 'synced'

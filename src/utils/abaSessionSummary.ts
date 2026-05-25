@@ -1,3 +1,5 @@
+import { getIntervalRunStatus, isActiveIntervalCollection, type AbaIntervalCollectionStatus } from './abaIntervalLifecycle';
+
 export type SessionSummaryPendingItem = {
   key: string;
   label: string;
@@ -67,9 +69,12 @@ export type BehaviorIntervalSummary = {
   behaviorName: string;
   method: string;
   totalIntervals: number;
+  plannedIntervals?: number;
+  answeredIntervals?: number;
   occurredCount: number;
   notOccurredCount: number;
   occurrencePercent: number;
+  status?: AbaIntervalCollectionStatus;
 };
 
 export type BehaviorAbcSummary = {
@@ -150,12 +155,15 @@ export type SessionReport = {
       behavior: string;
       method: string;
       totalIntervals: number;
+      plannedIntervals?: number;
+      answeredIntervals?: number;
       yes: number;
       no: number;
       occurrencePercent: number;
       intervalSeconds: number | null;
       location: string;
       averageSeverity: number | null;
+      status?: AbaIntervalCollectionStatus;
     }>;
   };
   abcEvents: Array<{
@@ -306,6 +314,42 @@ const isIntervalAggregate = (event: any) => Boolean(
   valueOf(event, 'raw_payload', 'rawPayload')?.intervalAggregate
 );
 
+const intervalCollectionStatusOf = (event: any): AbaIntervalCollectionStatus | null => {
+  const rawPayload = valueOf(event, 'raw_payload', 'rawPayload') || {};
+  const explicitStatus = valueOf(event, 'status') ?? rawPayload.status;
+  const explicitCollectionStatus = valueOf(event, 'collectionStatus', 'collection_status') ?? rawPayload.collectionStatus;
+  const lifecycleKnown = Boolean(
+    explicitStatus ||
+    explicitCollectionStatus ||
+    valueOf(event, 'cancelledAt', 'cancelled_at') ||
+    rawPayload.cancelledAt ||
+    valueOf(event, 'paused') !== undefined ||
+    rawPayload.paused !== undefined ||
+    valueOf(event, 'awaitingResponse') !== undefined ||
+    rawPayload.awaitingResponse !== undefined ||
+    valueOf(event, 'completed') !== undefined ||
+    rawPayload.completed !== undefined
+  );
+  if (!lifecycleKnown) return null;
+  return getIntervalRunStatus({
+    status: explicitStatus,
+    collectionStatus: explicitCollectionStatus,
+    paused: Boolean(valueOf(event, 'paused') ?? rawPayload.paused),
+    awaitingResponse: Boolean(valueOf(event, 'awaitingResponse') ?? rawPayload.awaitingResponse),
+    completed: Boolean(valueOf(event, 'completed') ?? rawPayload.completed),
+    cancelledAt: valueOf(event, 'cancelledAt', 'cancelled_at') ?? rawPayload.cancelledAt
+  });
+};
+
+const isCancelledIntervalEvent = (event: any) => {
+  const rawPayload = valueOf(event, 'raw_payload', 'rawPayload') || {};
+  const status = intervalCollectionStatusOf(event);
+  return status === 'CANCELLED' ||
+    Boolean(valueOf(event, 'intervalCancelled', 'interval_cancelled')) ||
+    Boolean(valueOf(event, 'cancelledAt', 'cancelled_at') || rawPayload.cancelledAt) ||
+    String(rawPayload.collectionStatus || rawPayload.status || '').toUpperCase() === 'CANCELLED';
+};
+
 const trialTypeOf = (trial: any) => {
   const explicit = String(valueOf(trial, 'collectionType', 'collection_type', 'trialType', 'trial_type') || '').trim();
   if (explicit) return collectionTypeLabels[explicit] || explicit;
@@ -385,40 +429,73 @@ const calculateIntervalSummary = (events: any[]): BehaviorIntervalSummary[] => {
   for (const event of events) {
     const method = measurementTypeOf(event);
     if (!intervalMethods.has(method)) continue;
+    if (isCancelledIntervalEvent(event)) continue;
     const behaviorName = behaviorNameOf(event);
     const key = `${behaviorName}:${method}`;
     const current = grouped.get(key) || {
       behaviorName,
       method,
       totalIntervals: 0,
+      plannedIntervals: 0,
+      answeredIntervals: 0,
       occurredCount: 0,
       notOccurredCount: 0,
-      occurrencePercent: 0
+      occurrencePercent: 0,
+      status: undefined
     };
     const rawPayload = valueOf(event, 'raw_payload', 'rawPayload') || {};
     if (isIntervalAggregate(event)) {
       if (!current.hasAggregate) {
         current.totalIntervals = 0;
+        current.plannedIntervals = 0;
+        current.answeredIntervals = 0;
         current.occurredCount = 0;
         current.notOccurredCount = 0;
       }
-      const aggregateTotal = Math.max(0, safeNumber(valueOf(event, 'totalIntervals') ?? rawPayload.totalIntervals, 0));
-      const aggregateOccurred = Math.min(aggregateTotal, Math.max(0, safeNumber(valueOf(event, 'occurredCount') ?? rawPayload.occurredCount, 0)));
-      current.totalIntervals += aggregateTotal;
+      const aggregateAnswered = Math.max(0, safeNumber(
+        valueOf(event, 'answeredIntervals', 'answered_intervals') ??
+        valueOf(event, 'totalIntervals', 'total_intervals') ??
+        rawPayload.answeredIntervals ??
+        rawPayload.totalIntervals,
+        0
+      ));
+      const aggregatePlanned = Math.max(aggregateAnswered, safeNumber(
+        valueOf(event, 'plannedIntervals', 'planned_intervals') ??
+        rawPayload.plannedIntervals ??
+        rawPayload.plannedTotalIntervals ??
+        aggregateAnswered,
+        aggregateAnswered
+      ));
+      const aggregateOccurred = Math.min(aggregateAnswered, Math.max(0, safeNumber(
+        valueOf(event, 'yesCount', 'yes_count', 'occurredCount') ??
+        rawPayload.yesCount ??
+        rawPayload.occurredCount,
+        0
+      )));
+      current.totalIntervals += aggregateAnswered;
+      current.answeredIntervals = (current.answeredIntervals || 0) + aggregateAnswered;
+      current.plannedIntervals = (current.plannedIntervals || 0) + aggregatePlanned;
       current.occurredCount += aggregateOccurred;
-      current.notOccurredCount += Math.max(0, aggregateTotal - aggregateOccurred);
+      current.notOccurredCount += Math.max(0, aggregateAnswered - aggregateOccurred);
+      current.status = intervalCollectionStatusOf(event) || current.status || (aggregateAnswered < aggregatePlanned ? 'PARTIALLY_COMPLETED' : 'COMPLETED');
       current.hasAggregate = true;
     } else {
       if (current.hasAggregate) continue;
       const occurred = Boolean(valueOf(event, 'intervalOccurred', 'interval_occurred', 'occurred'));
       current.totalIntervals += 1;
+      current.answeredIntervals = (current.answeredIntervals || 0) + 1;
+      current.plannedIntervals = Math.max(current.plannedIntervals || 0, current.totalIntervals);
       if (occurred) current.occurredCount += 1;
       else current.notOccurredCount += 1;
     }
     current.occurrencePercent = percent(current.occurredCount, current.totalIntervals);
     grouped.set(key, current);
   }
-  return Array.from(grouped.values()).map(({ hasAggregate, ...summary }) => summary);
+  return Array.from(grouped.values()).map(({ hasAggregate, ...summary }) => ({
+    ...summary,
+    plannedIntervals: summary.plannedIntervals || summary.totalIntervals,
+    answeredIntervals: summary.answeredIntervals || summary.totalIntervals
+  }));
 };
 
 const hasAbcFields = (record: any) => Boolean(valueOf(record, 'antecedent') || valueOf(record, 'consequence'));
@@ -519,7 +596,7 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
   const sourceTrials = sourceRecords.filter((record) => String(valueOf(record, 'kind') || '').toLowerCase() === 'trial');
   const sourceBehaviorRecords = sourceRecords.filter((record) => (
     String(valueOf(record, 'kind') || '').toLowerCase() === 'behavior' &&
-    !isIntervalAggregate(record)
+    !isCancelledIntervalEvent(record)
   ));
 
   const effectiveTrials = sourceTrials.length > 0 ? sourceTrials : [];
@@ -660,34 +737,60 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
         const aggregate = events.find((event) => isIntervalAggregate(event));
         const rawPayload = valueOf(aggregate || first, 'raw_payload', 'rawPayload') || {};
         const totalIntervals = aggregate
-          ? Math.max(0, safeNumber(valueOf(aggregate, 'totalIntervals') ?? rawPayload.totalIntervals, 0))
+          ? Math.max(0, safeNumber(
+              valueOf(aggregate, 'answeredIntervals', 'answered_intervals') ??
+              valueOf(aggregate, 'totalIntervals', 'total_intervals') ??
+              rawPayload.answeredIntervals ??
+              rawPayload.totalIntervals,
+              0
+            ))
           : events.length;
+        const plannedIntervals = aggregate
+          ? Math.max(totalIntervals, safeNumber(
+              valueOf(aggregate, 'plannedIntervals', 'planned_intervals') ??
+              rawPayload.plannedIntervals ??
+              rawPayload.plannedTotalIntervals ??
+              totalIntervals,
+              totalIntervals
+            ))
+          : totalIntervals;
         const yes = aggregate
-          ? Math.max(0, safeNumber(valueOf(aggregate, 'occurredCount') ?? rawPayload.occurredCount, 0))
+          ? Math.max(0, safeNumber(
+              valueOf(aggregate, 'yesCount', 'yes_count', 'occurredCount') ??
+              rawPayload.yesCount ??
+              rawPayload.occurredCount,
+              0
+            ))
           : events.filter((event) => Boolean(valueOf(event, 'intervalOccurred', 'interval_occurred', 'occurred'))).length;
         const no = Math.max(0, totalIntervals - yes);
         return {
           behavior: behaviorNameOf(first),
           method,
           totalIntervals,
+          plannedIntervals,
+          answeredIntervals: totalIntervals,
           yes,
           no,
           occurrencePercent: percent(yes, totalIntervals),
           intervalSeconds: safeNumber(valueOf(first, 'intervalSeconds') ?? rawPayload.intervalSeconds, NaN) || null,
           location: String(valueOf(first, 'location') || rawPayload.location || 'Não informado'),
-          averageSeverity: averageOrNull(events.map((event) => valueOf(event, 'severity')))
+          averageSeverity: averageOrNull(events.map((event) => valueOf(event, 'severity'))),
+          status: aggregate ? intervalCollectionStatusOf(aggregate) || (totalIntervals < plannedIntervals ? 'PARTIALLY_COMPLETED' : 'COMPLETED') : undefined
         };
       })
     : sessionSummary.intervalSummary.map((item) => ({
         behavior: item.behaviorName,
         method: item.method,
         totalIntervals: item.totalIntervals,
+        plannedIntervals: item.plannedIntervals,
+        answeredIntervals: item.answeredIntervals,
         yes: item.occurredCount,
         no: item.notOccurredCount,
         occurrencePercent: item.occurrencePercent,
         intervalSeconds: null,
         location: 'Não informado',
-        averageSeverity: null
+        averageSeverity: null,
+        status: item.status
       }));
 
   const hasAbc = hasAbcFields;
@@ -715,6 +818,7 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
         }));
   const abcMissingFromRecords = effectiveBehaviorRecords.filter((record) => (
     measurementTypeOf(record) !== 'abc' &&
+    !isIntervalAggregate(record) &&
     !hasAbc(record)
   )).length;
   const abcMissingFromSummary = (sessionSummary.abcSummary || [])
@@ -761,7 +865,7 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
       totalDurationEvents: effectiveBehaviorRecords.length > 0
         ? effectiveBehaviorRecords.filter((record) => measurementTypeOf(record) === 'duration').length
         : sessionSummary.durationSummary.reduce((sum, item) => sum + item.episodes, 0),
-      totalIntervalCollections: interval.reduce((sum, item) => sum + item.totalIntervals, 0),
+      totalIntervalCollections: interval.length,
       sessionNote: sessionSummary.sessionNote || ''
     },
     teachingSummary: {
@@ -805,13 +909,13 @@ export const canCloseAbaSession = (input: {
 }) => ({
   canClose: !(
     input.openDurations?.length ||
-    input.intervalRun ||
+    isActiveIntervalCollection(input.intervalRun) ||
     input.unsavedLocalCount ||
     input.incompleteTrial
   ),
   blockers: [
     ...(input.openDurations?.length ? [{ key: 'open_duration', label: 'Há eventos de duração em andamento', blocking: true, category: 'blocker' as const, count: input.openDurations.length }] : []),
-    ...(input.intervalRun ? [{ key: 'open_interval_collection', label: 'Há uma coleta por intervalo em andamento', blocking: true, category: 'blocker' as const, count: 1 }] : []),
+    ...(isActiveIntervalCollection(input.intervalRun) ? [{ key: 'open_interval_collection', label: 'Há uma coleta por intervalo em andamento', blocking: true, category: 'blocker' as const, count: 1 }] : []),
     ...(input.unsavedLocalCount ? [{ key: 'unsaved_local_records', label: `${input.unsavedLocalCount} dado(s) não salvo(s) localmente`, blocking: true, category: 'blocker' as const, count: input.unsavedLocalCount }] : []),
     ...(input.incompleteTrial ? [{ key: 'incomplete_trial', label: 'Há uma tentativa de ensino incompleta', blocking: true, category: 'blocker' as const, count: 1 }] : [])
   ] as SessionSummaryPendingItem[]

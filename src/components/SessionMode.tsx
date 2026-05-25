@@ -26,6 +26,14 @@ import { buildSessionReport, calculateSessionSummary, canCloseAbaSession, canRec
 import { isAbaV2Enabled } from '../utils/featureFlags';
 import { buildClinicalActionToast, buildClinicalOfflineToast, buildClinicalSaveErrorToast, type ClinicalActionToast } from '../utils/abaSessionFeedback';
 import { getCrisisShortcutIds, getDockVisibleShortcuts, normalizeQuickBehaviorShortcuts } from '../utils/abaClinicalDock';
+import {
+  buildIntervalAggregateSummary,
+  buildIntervalCancelAudit,
+  getIntervalRunStatus,
+  pauseIntervalRunState,
+  resumeIntervalRunState,
+  type AbaIntervalCollectionStatus
+} from '../utils/abaIntervalLifecycle';
 
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
 type AbcRequirement = 'REQUIRED' | 'RECOMMENDED' | 'OPTIONAL' | 'DISABLED';
@@ -56,9 +64,25 @@ type SessionRecord = {
   intervalEndedAt?: string | null;
   intervalAggregate?: boolean;
   totalIntervals?: number | null;
+  plannedIntervals?: number | null;
+  answeredIntervals?: number | null;
+  yesCount?: number | null;
+  noCount?: number | null;
   occurredCount?: number | null;
   notOccurredCount?: number | null;
   occurrencePercent?: number | null;
+  collectionStatus?: AbaIntervalCollectionStatus | string;
+  status?: AbaIntervalCollectionStatus | string;
+  pausedAt?: string | null;
+  resumedAt?: string | null;
+  endedEarlyAt?: string | null;
+  cancelledAt?: string | null;
+  cancelledBy?: string | null;
+  cancelReason?: string;
+  endReason?: string;
+  intervalCancelled?: boolean;
+  clinicalAudit?: boolean;
+  rawPayload?: Record<string, any>;
   location?: string;
   severity?: number | null;
   antecedent?: string;
@@ -118,6 +142,15 @@ const intervalAlertOptions = [
   { key: 'sound', label: 'Som' },
   { key: 'both', label: 'Ambos' },
   { key: 'silent', label: 'Silencioso' }
+];
+const intervalLifecycleReasonOptions = [
+  { key: '', label: 'Sem motivo informado' },
+  { key: 'crise_intercorrencia', label: 'Crise/intercorrência' },
+  { key: 'pausa_paciente', label: 'Pausa do paciente' },
+  { key: 'erro_configuracao', label: 'Erro de configuração' },
+  { key: 'mudanca_atividade', label: 'Mudança de atividade' },
+  { key: 'encerramento_sessao', label: 'Encerramento da sessão' },
+  { key: 'outro', label: 'Outro' }
 ];
 
 const AbaSessionToast = ({ toast, compact = false }: { toast: ClinicalActionToast; compact?: boolean }) => {
@@ -276,6 +309,10 @@ export const SessionMode = ({
   const [intervalCustomSeconds, setIntervalCustomSeconds] = useState(45);
   const [intervalTotalIntervals, setIntervalTotalIntervals] = useState(10);
   const [intervalAlertType, setIntervalAlertType] = useState('both');
+  const [intervalOptionsOpen, setIntervalOptionsOpen] = useState(false);
+  const [intervalCancelConfirmOpen, setIntervalCancelConfirmOpen] = useState(false);
+  const [intervalEndReason, setIntervalEndReason] = useState('');
+  const [intervalCancelReason, setIntervalCancelReason] = useState('');
   const intervalSeconds = intervalDurationMode === 'custom'
     ? Math.max(1, Math.floor(Number(intervalCustomSeconds) || 1))
     : Number(intervalDurationOptions.find((option) => option.key === intervalDurationMode)?.seconds || 30);
@@ -336,8 +373,11 @@ export const SessionMode = ({
   ), [patient?.abaSettings?.quickBehaviorShortcuts, patient?.clinicSettings?.abaQuickBehaviorShortcuts, patient?.clinicSettings?.quickBehaviorShortcuts, patient?.quickBehaviorShortcuts, patient?.quick_behavior_shortcuts]);
   const dockShortcuts = useMemo(() => getDockVisibleShortcuts(quickBehaviorShortcuts, { crisisMode, limit: 3 }), [crisisMode, quickBehaviorShortcuts]);
   const crisisShortcutIdSet = useMemo(() => new Set(getCrisisShortcutIds()), []);
-  const recentBehaviorRecords = useMemo(() => records.filter((record) => record.kind === 'behavior').slice(0, 5), [records]);
-  const intervalToastCompact = Boolean(intervalRun && !intervalRun.paused && !intervalRun.completed);
+  const recentBehaviorRecords = useMemo(() => records.filter((record) => record.kind === 'behavior' && !isCancelledIntervalClinicalRecord(record)).slice(0, 5), [records]);
+  const intervalRunStatus = getIntervalRunStatus(intervalRun);
+  const intervalRunPaused = intervalRunStatus === 'PAUSED';
+  const intervalRunAwaitingResponse = intervalRunStatus === 'AWAITING_RESPONSE';
+  const intervalToastCompact = Boolean(intervalRun && intervalRunStatus !== 'PAUSED' && intervalRunStatus !== 'COMPLETED' && intervalRunStatus !== 'PARTIALLY_COMPLETED' && intervalRunStatus !== 'CANCELLED');
   const vibrateClinicalAction = (pattern: number | number[]) => {
     if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
     try {
@@ -477,8 +517,8 @@ export const SessionMode = ({
   }, [intervalRun, openDurations.length, rateWindow]);
 
   useEffect(() => {
-    if (intervalRun?.awaitingResponse) setClinicalDockSheetOpen(false);
-  }, [intervalRun?.awaitingResponse]);
+    if (intervalRunAwaitingResponse) setClinicalDockSheetOpen(false);
+  }, [intervalRunAwaitingResponse]);
 
   const triggerIntervalAlert = (alertType: string) => {
     if ((alertType === 'vibration' || alertType === 'both') && typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
@@ -512,13 +552,14 @@ export const SessionMode = ({
   };
 
   useEffect(() => {
-    if (!intervalRun || intervalRun.awaitingResponse || intervalRun.completed || intervalRun.paused) return;
+    const status = getIntervalRunStatus(intervalRun);
+    if (!intervalRun || status !== 'RUNNING') return;
     if (!intervalRun.intervalEndsAt) return;
     if (nowMs < new Date(intervalRun.intervalEndsAt).getTime()) return;
     triggerIntervalAlert(intervalRun.alertType || 'both');
     setIntervalRun((prev: any) => {
-      if (!prev || prev.id !== intervalRun.id || prev.awaitingResponse) return prev;
-      return { ...prev, awaitingResponse: true, alertFiredAt: new Date().toISOString() };
+      if (!prev || prev.id !== intervalRun.id || getIntervalRunStatus(prev) !== 'RUNNING') return prev;
+      return { ...prev, status: 'AWAITING_RESPONSE', collectionStatus: 'AWAITING_RESPONSE', awaitingResponse: true, alertFiredAt: new Date().toISOString() };
     });
   }, [intervalRun, nowMs]);
 
@@ -1054,13 +1095,23 @@ export const SessionMode = ({
       intervalSeconds,
       intervalIndex: 1,
       totalIntervals: Math.max(1, Math.floor(Number(intervalTotalIntervals) || 1)),
+      plannedIntervals: Math.max(1, Math.floor(Number(intervalTotalIntervals) || 1)),
       alertType: intervalAlertType,
+      status: 'RUNNING',
+      collectionStatus: 'RUNNING',
       awaitingResponse: false,
       paused: false,
       pauseRemainingMs: null,
       completedCount: 0,
-      occurredCount: 0
+      answeredIntervals: 0,
+      occurredCount: 0,
+      yesCount: 0,
+      noCount: 0
     });
+    setIntervalOptionsOpen(false);
+    setIntervalCancelConfirmOpen(false);
+    setIntervalEndReason('');
+    setIntervalCancelReason('');
     setIntervalSummary(null);
     setSessionWarning('');
   };
@@ -1147,34 +1198,299 @@ export const SessionMode = ({
     });
   };
 
-  const pauseIntervalRun = () => {
-    if (!intervalRun || intervalRun.awaitingResponse) return;
-    const remainingMs = Math.max(0, new Date(intervalRun.intervalEndsAt).getTime() - nowMs);
-    setIntervalRun({
-      ...intervalRun,
-      paused: true,
-      pausedAt: new Date().toISOString(),
-      pauseRemainingMs: remainingMs
+  const saveIntervalAggregateV2 = (run: any, completedTotal: number, occurredTotal: number, endedAt: string, statusOverride?: AbaIntervalCollectionStatus, endReason = '') => {
+    const aggregate = buildIntervalAggregateSummary(run, {
+      answeredIntervals: completedTotal,
+      yesCount: occurredTotal,
+      endedAt,
+      status: statusOverride,
+      endReason
     });
+    const safeCompletedTotal = aggregate.answeredIntervals;
+    const safeOccurredTotal = aggregate.yesCount;
+    const notOccurredTotal = aggregate.noCount;
+    const percent = aggregate.occurrencePercent;
+    const collectionStatus = aggregate.collectionStatus;
+    const aggregateId = `${run.id}-summary`;
+    const behaviorId = run.behaviorId || selectedBehavior.id;
+    const payload = buildBehaviorPayload(run.behaviorName, run.measurementType, {
+      id: aggregateId,
+      behavior_id: behaviorId,
+      behaviorId,
+      method: run.measurementType,
+      total_intervals: safeCompletedTotal,
+      totalIntervals: safeCompletedTotal,
+      planned_intervals: aggregate.plannedIntervals,
+      plannedIntervals: aggregate.plannedIntervals,
+      answered_intervals: safeCompletedTotal,
+      answeredIntervals: safeCompletedTotal,
+      yes_count: safeOccurredTotal,
+      yesCount: safeOccurredTotal,
+      no_count: notOccurredTotal,
+      noCount: notOccurredTotal,
+      occurrence_percent: percent,
+      occurrencePercent: percent,
+      collection_status: collectionStatus,
+      collectionStatus,
+      started_at: run.startedAt,
+      startedAt: run.startedAt,
+      ended_at: endedAt,
+      endedAt,
+      paused_at: run.pausedAt || null,
+      pausedAt: run.pausedAt || null,
+      resumed_at: run.resumedAt || null,
+      resumedAt: run.resumedAt || null,
+      ended_early_at: aggregate.endedEarlyAt || null,
+      endedEarlyAt: aggregate.endedEarlyAt || null,
+      end_reason: endReason || undefined,
+      endReason: endReason || undefined,
+      count_delta: safeOccurredTotal,
+      countDelta: safeOccurredTotal,
+      location: run.location || selectedLocation,
+      severity: run.severity ?? selectedSeverity,
+      notes: `Resumo da coleta por intervalo: ${safeOccurredTotal} SIM / ${notOccurredTotal} NÃO (${percent}%)`,
+      response_by_therapist: `Resumo da coleta por intervalo: ${safeOccurredTotal} SIM / ${notOccurredTotal} NÃO (${percent}%)`,
+      responseByTherapist: `Resumo da coleta por intervalo: ${safeOccurredTotal} SIM / ${notOccurredTotal} NÃO (${percent}%)`,
+      timestamp: endedAt,
+      raw_payload: {
+        intervalRunId: run.id,
+        intervalAggregate: true,
+        collectionStatus,
+        patientId,
+        sessionId,
+        therapistId: resolvedTherapistId || null,
+        behaviorId,
+        method: run.measurementType,
+        totalIntervals: safeCompletedTotal,
+        plannedIntervals: aggregate.plannedIntervals,
+        plannedTotalIntervals: aggregate.plannedIntervals,
+        answeredIntervals: safeCompletedTotal,
+        occurredCount: safeOccurredTotal,
+        yesCount: safeOccurredTotal,
+        notOccurredCount: notOccurredTotal,
+        noCount: notOccurredTotal,
+        occurrencePercent: percent,
+        collectionStartedAt: run.startedAt,
+        collectionEndedAt: endedAt,
+        pausedAt: run.pausedAt || undefined,
+        resumedAt: run.resumedAt || undefined,
+        endedEarlyAt: aggregate.endedEarlyAt || undefined,
+        endReason: endReason || undefined,
+        location: run.location || selectedLocation,
+        severity: run.severity ?? selectedSeverity,
+        syncStatus: 'local'
+      }
+    });
+    void saveIntervalSummaryRecord(payload, {
+      id: aggregateId,
+      kind: 'behavior',
+      title: run.behaviorName,
+      detail: collectionStatus === 'PARTIALLY_COMPLETED'
+        ? `${getMeasurementLabel(run.measurementType)}: ${safeCompletedTotal}/${aggregate.plannedIntervals} respondidos`
+        : `resumo da coleta: ${safeOccurredTotal} SIM / ${notOccurredTotal} NÃO (${percent}%)`,
+      timestamp: endedAt,
+      measurementType: run.measurementType,
+      behaviorId,
+      intervalAggregate: true,
+      totalIntervals: safeCompletedTotal,
+      plannedIntervals: aggregate.plannedIntervals,
+      answeredIntervals: safeCompletedTotal,
+      yesCount: safeOccurredTotal,
+      noCount: notOccurredTotal,
+      occurredCount: safeOccurredTotal,
+      notOccurredCount: notOccurredTotal,
+      occurrencePercent: percent,
+      collectionStatus,
+      status: collectionStatus,
+      pausedAt: run.pausedAt || null,
+      resumedAt: run.resumedAt || null,
+      endedEarlyAt: aggregate.endedEarlyAt || null,
+      endReason: endReason || undefined,
+      notes: collectionStatus === 'PARTIALLY_COMPLETED'
+        ? `${safeOccurredTotal} SIM • ${notOccurredTotal} NÃO • ${percent}% • finalizada antecipadamente`
+        : `${safeOccurredTotal} SIM • ${notOccurredTotal} NÃO • ${percent}%`,
+      location: run.location || selectedLocation,
+      severity: run.severity ?? selectedSeverity
+    });
+    setIntervalSummary({
+      behaviorName: run.behaviorName,
+      measurementType: run.measurementType,
+      totalIntervals: safeCompletedTotal,
+      plannedTotalIntervals: aggregate.plannedIntervals,
+      plannedIntervals: aggregate.plannedIntervals,
+      answeredIntervals: safeCompletedTotal,
+      occurredCount: safeOccurredTotal,
+      notOccurredCount: notOccurredTotal,
+      percent,
+      endedAt,
+      status: collectionStatus,
+      reason: collectionStatus,
+      endReason
+    });
+    return aggregate;
+  };
+
+  const pauseIntervalRun = () => {
+    if (!intervalRun) return;
+    const pausedRun = pauseIntervalRunState(intervalRun, { nowMs });
+    setIntervalRun(pausedRun);
+    setIntervalOptionsOpen(false);
+    showClinicalToast({
+      id: crypto.randomUUID(),
+      title: '⏸ Coleta pausada',
+      subtitle: `${intervalRun.behaviorName} • intervalo ${Number(intervalRun.intervalIndex || 1)}/${Number(intervalRun.totalIntervals || 1)}`,
+      variant: 'warning'
+    }, 'none');
   };
 
   const resumeIntervalRun = () => {
-    if (!intervalRun?.paused) return;
-    const remainingMs = Math.max(1000, Number(intervalRun.pauseRemainingMs || intervalRun.intervalSeconds * 1000 || 1000));
-    const resumedAt = new Date().toISOString();
-    setIntervalRun({
-      ...intervalRun,
-      paused: false,
-      resumedAt,
-      intervalEndsAt: new Date(new Date(resumedAt).getTime() + remainingMs).toISOString(),
-      pauseRemainingMs: null
-    });
+    if (!intervalRun) return;
+    const resumedRun = resumeIntervalRunState(intervalRun);
+    setIntervalRun(resumedRun);
+    setIntervalOptionsOpen(false);
+    showClinicalToast({
+      id: crypto.randomUUID(),
+      title: '▶ Coleta retomada',
+      subtitle: `${intervalRun.behaviorName} • intervalo ${Number(intervalRun.intervalIndex || 1)}/${Number(intervalRun.totalIntervals || 1)}`,
+      variant: 'info'
+    }, 'none');
   };
 
-  const cancelIntervalRun = () => {
+  const requestCancelIntervalRun = () => {
+    if (!intervalRun) return;
+    setIntervalOptionsOpen(false);
+    setIntervalCancelConfirmOpen(true);
+  };
+
+  const confirmCancelIntervalRun = () => {
+    if (!intervalRun) return;
+    const audit = buildIntervalCancelAudit(intervalRun, {
+      cancelledAt: new Date().toISOString(),
+      cancelledBy: resolvedTherapistId || null,
+      cancelReason: intervalCancelReason
+    });
+    const behaviorId = intervalRun.behaviorId || selectedBehavior.id;
+    const cancelledRecordIds = new Set(records
+      .filter((record) => {
+        const rawPayload = record.rawPayload || {};
+        return rawPayload.intervalRunId === intervalRun.id || record.id.startsWith(`${intervalRun.id}-interval-`);
+      })
+      .map((record) => record.id));
+    setRecords((prev) => prev.map((record) => {
+      const rawPayload = record.rawPayload || {};
+      const belongsToRun = rawPayload.intervalRunId === intervalRun.id || record.id.startsWith(`${intervalRun.id}-interval-`);
+      if (!belongsToRun) return record;
+      return {
+        ...record,
+        intervalCancelled: true,
+        collectionStatus: 'CANCELLED',
+        status: 'CANCELLED',
+        cancelledAt: audit.cancelledAt,
+        cancelledBy: audit.cancelledBy,
+        cancelReason: audit.cancelReason,
+        syncStatus: record.syncStatus === 'synced' ? 'local' : record.syncStatus
+      };
+    }));
+    const auditPayload = buildBehaviorPayload(intervalRun.behaviorName, intervalRun.measurementType, {
+      id: `${intervalRun.id}-cancel-audit`,
+      behavior_id: behaviorId,
+      behaviorId,
+      method: intervalRun.measurementType,
+      total_intervals: audit.totalIntervals,
+      totalIntervals: audit.totalIntervals,
+      planned_intervals: audit.plannedIntervals,
+      plannedIntervals: audit.plannedIntervals,
+      answered_intervals: audit.answeredIntervals,
+      answeredIntervals: audit.answeredIntervals,
+      yes_count: audit.yesCount,
+      yesCount: audit.yesCount,
+      no_count: audit.noCount,
+      noCount: audit.noCount,
+      occurrence_percent: audit.occurrencePercent,
+      occurrencePercent: audit.occurrencePercent,
+      collection_status: 'CANCELLED',
+      collectionStatus: 'CANCELLED',
+      cancelled_at: audit.cancelledAt,
+      cancelledAt: audit.cancelledAt,
+      cancelled_by: audit.cancelledBy,
+      cancelledBy: audit.cancelledBy,
+      cancel_reason: audit.cancelReason || undefined,
+      cancelReason: audit.cancelReason || undefined,
+      started_at: intervalRun.startedAt,
+      startedAt: intervalRun.startedAt,
+      ended_at: audit.cancelledAt,
+      endedAt: audit.cancelledAt,
+      location: intervalRun.location || selectedLocation,
+      severity: intervalRun.severity ?? selectedSeverity,
+      notes: 'Coleta por intervalo cancelada. Não entrou no resumo clínico.',
+      response_by_therapist: 'Coleta por intervalo cancelada. Não entrou no resumo clínico.',
+      responseByTherapist: 'Coleta por intervalo cancelada. Não entrou no resumo clínico.',
+      timestamp: audit.cancelledAt,
+      raw_payload: {
+        intervalRunId: intervalRun.id,
+        intervalAggregate: true,
+        intervalCancelled: true,
+        clinicalAudit: true,
+        collectionStatus: 'CANCELLED',
+        cancelledRecordIds: Array.from(cancelledRecordIds),
+        cancelReason: audit.cancelReason || undefined,
+        cancelledAt: audit.cancelledAt,
+        cancelledBy: audit.cancelledBy,
+        patientId,
+        sessionId,
+        therapistId: resolvedTherapistId || null,
+        behaviorId,
+        method: intervalRun.measurementType,
+        plannedIntervals: audit.plannedIntervals,
+        answeredIntervals: audit.answeredIntervals,
+        totalIntervals: audit.totalIntervals,
+        yesCount: audit.yesCount,
+        noCount: audit.noCount,
+        occurredCount: audit.occurredCount,
+        notOccurredCount: audit.notOccurredCount,
+        occurrencePercent: audit.occurrencePercent,
+        syncStatus: 'local'
+      }
+    });
+    void saveIntervalSummaryRecord(auditPayload, {
+      id: `${intervalRun.id}-cancel-audit`,
+      kind: 'behavior',
+      title: intervalRun.behaviorName,
+      detail: `Coleta cancelada às ${formatSessionTime(audit.cancelledAt)}`,
+      timestamp: audit.cancelledAt,
+      measurementType: intervalRun.measurementType,
+      behaviorId,
+      intervalAggregate: true,
+      intervalCancelled: true,
+      clinicalAudit: true,
+      totalIntervals: audit.totalIntervals,
+      plannedIntervals: audit.plannedIntervals,
+      answeredIntervals: audit.answeredIntervals,
+      yesCount: audit.yesCount,
+      noCount: audit.noCount,
+      occurredCount: audit.occurredCount,
+      notOccurredCount: audit.notOccurredCount,
+      occurrencePercent: audit.occurrencePercent,
+      collectionStatus: 'CANCELLED',
+      status: 'CANCELLED',
+      cancelledAt: audit.cancelledAt,
+      cancelledBy: audit.cancelledBy,
+      cancelReason: audit.cancelReason,
+      notes: 'Não entrou no resumo clínico',
+      location: intervalRun.location || selectedLocation,
+      severity: intervalRun.severity ?? selectedSeverity
+    });
     setIntervalRun(null);
     setIntervalSummary(null);
-    setSessionWarning('Coleta por intervalo cancelada. Intervalos ja salvos permanecem no historico.');
+    setIntervalCancelConfirmOpen(false);
+    setIntervalCancelReason('');
+    setSessionWarning('');
+    showClinicalToast({
+      id: crypto.randomUUID(),
+      title: 'Coleta cancelada',
+      subtitle: 'Não entrou no resumo clínico',
+      variant: 'warning'
+    }, 'none');
   };
 
   const finishIntervalRunNow = () => {
@@ -1182,15 +1498,24 @@ export const SessionMode = ({
     const completedTotal = Number(intervalRun.completedCount || 0);
     const occurredTotal = Number(intervalRun.occurredCount || 0);
     const endedAt = new Date().toISOString();
-    saveIntervalAggregate(intervalRun, completedTotal, occurredTotal, endedAt, 'finished_early');
+    const aggregate = saveIntervalAggregateV2(intervalRun, completedTotal, occurredTotal, endedAt, completedTotal >= Number(intervalRun.totalIntervals || 1) ? 'COMPLETED' : 'PARTIALLY_COMPLETED', intervalEndReason);
     setIntervalRun(null);
+    setIntervalOptionsOpen(false);
+    setIntervalCancelConfirmOpen(false);
+    setIntervalEndReason('');
     setSessionWarning('');
+    showClinicalToast({
+      id: crypto.randomUUID(),
+      title: '✓ Coleta finalizada',
+      subtitle: `${aggregate.answeredIntervals}/${aggregate.plannedIntervals} intervalos • ${aggregate.occurrencePercent}% ocorrência`,
+      variant: 'success'
+    });
   };
 
   const registerInterval = (occurred: boolean) => {
     if (!ensureSessionCanRecord()) return;
     if (!intervalRun) return;
-    if (!intervalRun.awaitingResponse) return;
+    if (getIntervalRunStatus(intervalRun) !== 'AWAITING_RESPONSE') return;
     const intervalNumber = Number(intervalRun.intervalIndex || 1);
     const intervalLockKey = `interval:${intervalRun.id}:${intervalNumber}`;
     if (!lockAction(intervalLockKey, 0)) return;
@@ -1216,12 +1541,15 @@ export const SessionMode = ({
       interval_occurred: occurred,
       intervalOccurred: occurred,
       occurred,
+      collection_status: 'COMPLETED',
+      collectionStatus: 'COMPLETED',
       location: intervalRun.location || selectedLocation,
       severity: intervalRun.severity ?? selectedSeverity,
       timestamp: intervalEndedAt,
       raw_payload: {
         intervalRunId: intervalRun.id,
         intervalAggregate: false,
+        collectionStatus: 'COMPLETED',
         patientId,
         sessionId,
         therapistId: resolvedTherapistId || null,
@@ -1262,12 +1590,21 @@ export const SessionMode = ({
       intervalEndedAt,
       startedAt: intervalStartedAt,
       endedAt: intervalEndedAt,
+      collectionStatus: 'COMPLETED',
+      status: 'COMPLETED',
+      rawPayload: {
+        intervalRunId: intervalRun.id,
+        intervalAggregate: false,
+        collectionStatus: 'COMPLETED'
+      },
       location: intervalRun.location || selectedLocation,
       severity: intervalRun.severity ?? selectedSeverity
     });
     if (intervalNumber >= totalIntervals) {
-      saveIntervalAggregate(intervalRun, nextCompletedCount, nextOccurredCount, intervalEndedAt, 'completed');
+      saveIntervalAggregateV2(intervalRun, nextCompletedCount, nextOccurredCount, intervalEndedAt, 'COMPLETED');
       setIntervalRun(null);
+      setIntervalOptionsOpen(false);
+      setIntervalCancelConfirmOpen(false);
       return;
     }
     const nextStartedAt = new Date().toISOString();
@@ -1277,13 +1614,19 @@ export const SessionMode = ({
       intervalIndex: intervalNumber + 1,
       intervalStartedAt: nextStartedAt,
       intervalEndsAt: nextEndsAt,
+      status: 'RUNNING',
+      collectionStatus: 'RUNNING',
       awaitingResponse: false,
       alertFiredAt: null,
       paused: false,
       pauseRemainingMs: null,
       completedCount: nextCompletedCount,
-      occurredCount: nextOccurredCount
+      answeredIntervals: nextCompletedCount,
+      occurredCount: nextOccurredCount,
+      yesCount: nextOccurredCount,
+      noCount: Math.max(0, nextCompletedCount - nextOccurredCount)
     });
+    setIntervalOptionsOpen(false);
   };
 
   const openAbcModal = (behaviorId = selectedBehaviorId) => {
@@ -1395,7 +1738,7 @@ export const SessionMode = ({
   };
 
   const buildSessionClosureIssues = (): { blockers: SessionSummaryPendingItem[]; warnings: SessionSummaryPendingItem[] } => {
-    const behaviorRecords = records.filter((record) => record.kind === 'behavior' && !record.intervalAggregate);
+    const behaviorRecords = records.filter((record) => record.kind === 'behavior' && !record.intervalAggregate && !isCancelledIntervalClinicalRecord(record));
     const savingLocally = records.filter((record) => record.syncStatus === 'syncing');
     const notSyncedWithServer = records.filter((record) => record.syncStatus === 'local' || record.syncStatus === 'error');
     const abcMissingCounts: Record<AbcRequirement, number> = {
@@ -1443,7 +1786,7 @@ export const SessionMode = ({
       startedAt: activeSession?.startedAt || endedAt,
       endedAt,
       trials: records.filter((record) => record.kind === 'trial'),
-      behaviorEvents: records.filter((record) => record.kind === 'behavior'),
+      behaviorEvents: records.filter((record) => record.kind === 'behavior' && !isCancelledIntervalClinicalRecord(record)),
       masterySummary: teachingMasteryRows,
       blockingItems: closureIssues.blockers,
       warningItems: closureIssues.warnings,
@@ -1513,7 +1856,7 @@ export const SessionMode = ({
 
   const sessionSummary = useMemo(() => {
     const trialTotal = records.filter((record) => record.kind === 'trial').length;
-    const behaviorTotal = records.filter((record) => record.kind === 'behavior').length;
+    const behaviorTotal = records.filter((record) => record.kind === 'behavior' && !isCancelledIntervalClinicalRecord(record)).length;
     const errorTotal = records.filter((record) => record.syncStatus === 'error').length;
     const localTotal = records.filter((record) => record.syncStatus === 'local' || record.syncStatus === 'syncing').length;
     return { trialTotal, behaviorTotal, errorTotal, localTotal };
@@ -1537,7 +1880,7 @@ export const SessionMode = ({
       startedAt: activeSession?.startedAt || endedAt,
       endedAt,
       trials: records.filter((record) => record.kind === 'trial'),
-      behaviorEvents: records.filter((record) => record.kind === 'behavior'),
+      behaviorEvents: records.filter((record) => record.kind === 'behavior' && !isCancelledIntervalClinicalRecord(record)),
       blockingItems: sessionClosureIssues.blockers,
       warningItems: sessionClosureIssues.warnings,
       sessionNote,
@@ -1575,7 +1918,20 @@ export const SessionMode = ({
     const percent = total > 0 ? Math.round((occurred / total) * 100) : 0;
     return { total, occurred, notOccurred, percent };
   }, [intervalSummary]);
-  const visibleHistoryRecords = historyExpanded ? records : records.slice(0, 8);
+  function isCancelledIntervalClinicalRecord(record: SessionRecord) {
+    const rawPayload = record.rawPayload || (record as any).raw_payload || {};
+    return Boolean(
+      record.intervalCancelled ||
+      record.cancelledAt ||
+      record.collectionStatus === 'CANCELLED' ||
+      record.status === 'CANCELLED' ||
+      rawPayload.intervalCancelled ||
+      rawPayload.collectionStatus === 'CANCELLED' ||
+      rawPayload.cancelledAt
+    );
+  }
+  const clinicalHistoryRecords = records.filter((record) => !isCancelledIntervalClinicalRecord(record));
+  const visibleHistoryRecords = historyExpanded ? clinicalHistoryRecords : clinicalHistoryRecords.slice(0, 8);
 
   const renderSyncBadge = (status: SyncStatus) => (
     <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-widest ${syncClasses[status]}`}>
@@ -1649,6 +2005,34 @@ export const SessionMode = ({
       intervalStartedAt: record.intervalStartedAt ?? record.startedAt ?? undefined,
       interval_ended_at: record.intervalEndedAt ?? record.endedAt ?? undefined,
       intervalEndedAt: record.intervalEndedAt ?? record.endedAt ?? undefined,
+      total_intervals: record.totalIntervals ?? undefined,
+      totalIntervals: record.totalIntervals ?? undefined,
+      planned_intervals: record.plannedIntervals ?? undefined,
+      plannedIntervals: record.plannedIntervals ?? undefined,
+      answered_intervals: record.answeredIntervals ?? undefined,
+      answeredIntervals: record.answeredIntervals ?? undefined,
+      yes_count: record.yesCount ?? record.occurredCount ?? undefined,
+      yesCount: record.yesCount ?? record.occurredCount ?? undefined,
+      no_count: record.noCount ?? record.notOccurredCount ?? undefined,
+      noCount: record.noCount ?? record.notOccurredCount ?? undefined,
+      occurrence_percent: record.occurrencePercent ?? undefined,
+      occurrencePercent: record.occurrencePercent ?? undefined,
+      collection_status: record.collectionStatus ?? record.status ?? undefined,
+      collectionStatus: record.collectionStatus ?? record.status ?? undefined,
+      paused_at: record.pausedAt ?? undefined,
+      pausedAt: record.pausedAt ?? undefined,
+      resumed_at: record.resumedAt ?? undefined,
+      resumedAt: record.resumedAt ?? undefined,
+      ended_early_at: record.endedEarlyAt ?? undefined,
+      endedEarlyAt: record.endedEarlyAt ?? undefined,
+      cancelled_at: record.cancelledAt ?? undefined,
+      cancelledAt: record.cancelledAt ?? undefined,
+      cancelled_by: record.cancelledBy ?? undefined,
+      cancelledBy: record.cancelledBy ?? undefined,
+      cancel_reason: record.cancelReason ?? undefined,
+      cancelReason: record.cancelReason ?? undefined,
+      end_reason: record.endReason ?? undefined,
+      endReason: record.endReason ?? undefined,
       location: record.location,
       severity: record.severity,
       antecedent: record.antecedent,
@@ -1667,6 +2051,20 @@ export const SessionMode = ({
         occurredCount: record.occurredCount ?? undefined,
         notOccurredCount: record.notOccurredCount ?? undefined,
         occurrencePercent: record.occurrencePercent ?? undefined,
+        plannedIntervals: record.plannedIntervals ?? undefined,
+        answeredIntervals: record.answeredIntervals ?? undefined,
+        yesCount: record.yesCount ?? undefined,
+        noCount: record.noCount ?? undefined,
+        collectionStatus: record.collectionStatus ?? record.status ?? undefined,
+        pausedAt: record.pausedAt ?? undefined,
+        resumedAt: record.resumedAt ?? undefined,
+        endedEarlyAt: record.endedEarlyAt ?? undefined,
+        cancelledAt: record.cancelledAt ?? undefined,
+        cancelledBy: record.cancelledBy ?? undefined,
+        cancelReason: record.cancelReason ?? undefined,
+        endReason: record.endReason ?? undefined,
+        intervalCancelled: record.intervalCancelled || undefined,
+        clinicalAudit: record.clinicalAudit || undefined,
         source: 'session_mode_history_edit'
       }
     });
@@ -1784,6 +2182,7 @@ export const SessionMode = ({
   const pendingAbcRecords = useMemo(() => records.filter((record) => (
     record.kind === 'behavior' &&
     !record.intervalAggregate &&
+    !isCancelledIntervalClinicalRecord(record) &&
     inferRecordMeasurementType(record) !== 'abc' &&
     !record.antecedent &&
     !record.consequence
@@ -1803,7 +2202,7 @@ export const SessionMode = ({
   const closureWarnings = sessionClosureSummary.warningItems;
   const hasClosureBlockers = closureBlockers.length > 0;
   const hasClosureWarnings = closureWarnings.length > 0;
-  const intervalResponseActive = Boolean(intervalRun?.awaitingResponse && !intervalRun?.paused && !intervalRun?.completed);
+  const intervalResponseActive = Boolean((intervalRunAwaitingResponse || intervalRun?.awaitingResponse) && !intervalRun?.paused && !intervalRun?.completed);
   const scrollBottomPaddingClass = intervalResponseActive
     ? 'pb-[calc(10rem+env(safe-area-inset-bottom))] scroll-pb-[calc(10rem+env(safe-area-inset-bottom))]'
     : 'pb-[calc(12rem+env(safe-area-inset-bottom))] scroll-pb-[calc(12rem+env(safe-area-inset-bottom))]';
@@ -2058,8 +2457,9 @@ export const SessionMode = ({
                           <div key={`${item.behavior}-${item.method}`} className="rounded-xl bg-white border border-gray-100 p-3 text-xs text-gray-600">
                             <p className="font-bold text-gray-900">{item.behavior}</p>
                             <p>Método: {getMeasurementLabel(item.method)}</p>
-                            <p>Total: {item.totalIntervals} | SIM: {item.yes} | NÃO: {item.no}</p>
+                            <p>Respondidos: {item.totalIntervals}/{item.plannedIntervals || item.totalIntervals} | SIM: {item.yes} | NÃO: {item.no}</p>
                             <p>Ocorrência: {item.occurrencePercent}%</p>
+                            <p>Status: {item.status === 'PARTIALLY_COMPLETED' ? 'finalizada antecipadamente' : 'completa'}</p>
                             <p>Duração do intervalo: {item.intervalSeconds ? `${item.intervalSeconds}s` : '-'}</p>
                             <p>Local: {item.location}</p>
                             <p>Severidade média: {item.averageSeverity ?? '-'}</p>
@@ -2327,9 +2727,9 @@ export const SessionMode = ({
     >
       <div className={`mx-auto max-w-3xl rounded-[26px] border p-2 shadow-2xl backdrop-blur-xl ${crisisMode ? 'border-red-300 bg-slate-950/95 shadow-red-950/30' : 'border-blue-100 bg-white/95 shadow-blue-950/15'}`}>
         {intervalRun && (
-          <div className={`mb-2 flex items-center justify-between rounded-2xl px-3 py-2 text-xs font-black ${intervalRun.awaitingResponse ? 'bg-amber-100 text-amber-800' : crisisMode ? 'bg-white/10 text-white' : 'bg-[#F4F7FE] text-[#7a32fc]'}`}>
+          <div className={`mb-2 flex items-center justify-between rounded-2xl px-3 py-2 text-xs font-black ${intervalRunAwaitingResponse ? 'bg-amber-100 text-amber-800' : intervalRunPaused ? 'bg-slate-100 text-slate-700' : crisisMode ? 'bg-white/10 text-white' : 'bg-[#F4F7FE] text-[#7a32fc]'}`}>
             <span>Intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals}</span>
-            <span>{intervalRun.awaitingResponse ? 'Responda no painel' : formatRemainingUntil(intervalRun.intervalEndsAt, nowMs)}</span>
+            <span>{intervalRunAwaitingResponse ? 'Responda no painel' : intervalRunPaused ? 'Pausado' : formatRemainingUntil(intervalRun.intervalEndsAt, nowMs)}</span>
           </div>
         )}
         {openDurations.length > 0 && (
@@ -2603,13 +3003,13 @@ export const SessionMode = ({
           {intervalRun && (
             <div
               data-aba-interval-response-active={intervalResponseActive ? 'true' : 'false'}
-              className={`sticky top-0 ${intervalResponseActive ? 'z-[160]' : 'z-40'} rounded-[24px] sm:rounded-[28px] p-3 sm:p-5 shadow-2xl border transition-all ${intervalRun.awaitingResponse ? 'bg-amber-50 border-amber-300 ring-4 ring-amber-200/70' : intervalRun.paused ? 'bg-slate-50 border-slate-200 ring-2 ring-slate-200/70' : 'bg-white border-blue-100 shadow-blue-900/10'}`}
+              className={`sticky top-0 ${intervalResponseActive ? 'z-[160]' : 'z-40'} rounded-[24px] sm:rounded-[28px] p-3 sm:p-5 shadow-2xl border transition-all ${intervalRunAwaitingResponse ? 'bg-amber-50 border-amber-300 ring-4 ring-amber-200/70' : intervalRunPaused ? 'bg-slate-50 border-slate-200 ring-2 ring-slate-200/70' : 'bg-white border-blue-100 shadow-blue-900/10'}`}
             >
               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <div className="flex items-center gap-2 mb-2">
-                    <Timer size={18} className={intervalRun.awaitingResponse ? 'text-amber-600' : intervalRun.paused ? 'text-slate-500' : 'text-[#7a32fc]'} />
-                    <h2 className="text-sm font-bold text-gray-800">Coleta por intervalo em andamento</h2>
+                    <Timer size={18} className={intervalRunAwaitingResponse ? 'text-amber-600' : intervalRunPaused ? 'text-slate-500' : 'text-[#7a32fc]'} />
+                    <h2 className="text-sm font-bold text-gray-800">{intervalRunPaused ? 'Coleta pausada' : 'Coleta por intervalo em andamento'}</h2>
                   </div>
                   <h3 className="text-xl font-bold text-gray-900">{intervalRun.behaviorName}</h3>
                   <p className="text-xs font-semibold text-gray-500 mt-1">
@@ -2628,10 +3028,10 @@ export const SessionMode = ({
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total</p>
                     <p className="text-2xl font-bold text-gray-900">{intervalRun.totalIntervals}</p>
                   </div>
-                  <div className={`rounded-2xl border p-3 text-center ${intervalRun.awaitingResponse ? 'bg-amber-100 border-amber-200' : 'bg-[#F4F7FE] border-blue-100'}`}>
+                  <div className={`rounded-2xl border p-3 text-center ${intervalRunAwaitingResponse ? 'bg-amber-100 border-amber-200' : 'bg-[#F4F7FE] border-blue-100'}`}>
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Restante</p>
-                    <p className={`text-2xl font-bold ${intervalRun.awaitingResponse ? 'text-amber-700' : 'text-[#7a32fc]'}`}>
-                      {intervalRun.awaitingResponse ? 'Agora' : intervalRun.paused ? 'Pausado' : formatRemainingUntil(intervalRun.intervalEndsAt, nowMs)}
+                    <p className={`text-2xl font-bold ${intervalRunAwaitingResponse ? 'text-amber-700' : 'text-[#7a32fc]'}`}>
+                      {intervalRunAwaitingResponse ? 'Agora' : intervalRunPaused ? 'Pausado' : formatRemainingUntil(intervalRun.intervalEndsAt, nowMs)}
                     </p>
                   </div>
                 </div>
@@ -2640,49 +3040,117 @@ export const SessionMode = ({
                 <p className="text-xs font-semibold text-gray-500">
                   {getIntervalInstruction(intervalRun.measurementType)}
                 </p>
-                <p className={`rounded-2xl px-4 py-3 text-center text-sm font-bold ${intervalRun.awaitingResponse ? 'bg-amber-100 text-amber-800' : 'bg-[#F4F7FE] text-gray-500'}`}>
-                  {intervalRun.awaitingResponse ? 'Responda agora' : 'Aguardando fim do intervalo...'}
+                <p className={`rounded-2xl px-4 py-3 text-center text-sm font-bold ${intervalRunAwaitingResponse ? 'bg-amber-100 text-amber-800' : intervalRunPaused ? 'bg-slate-100 text-slate-700' : 'bg-[#F4F7FE] text-gray-500'}`}>
+                  {intervalRunAwaitingResponse ? 'Responda agora' : intervalRunPaused ? 'Coleta pausada' : 'Aguardando fim do intervalo...'}
                 </p>
                 <div className={`grid w-full grid-cols-2 gap-3 sm:w-auto ${intervalResponseActive ? 'pb-4' : ''}`}>
                   <button
                     onClick={() => registerInterval(true)}
-                    disabled={!intervalRun.awaitingResponse || Boolean(actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`])}
-                    className={`min-h-[56px] px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRun.awaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                    disabled={!intervalRunAwaitingResponse || Boolean(actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`])}
+                    className={`min-h-[56px] px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRunAwaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                   >
                     SIM
                   </button>
                   <button
                     onClick={() => registerInterval(false)}
-                    disabled={!intervalRun.awaitingResponse || Boolean(actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`])}
-                    className={`min-h-[56px] px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRun.awaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                    disabled={!intervalRunAwaitingResponse || Boolean(actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`])}
+                    className={`min-h-[56px] px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRunAwaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                   >
                     NÃO
                   </button>
                 </div>
               </div>
-              {!intervalResponseActive && (
-                <div className="mt-4 grid grid-cols-1 gap-2 border-t border-blue-100 pt-4 sm:flex sm:flex-wrap">
-                  <button
-                    onClick={intervalRun.paused ? resumeIntervalRun : pauseIntervalRun}
-                    disabled={Boolean(intervalRun.awaitingResponse)}
-                    className={`min-h-[44px] rounded-xl px-4 py-2 text-[10px] font-bold uppercase tracking-widest ${intervalRun.awaitingResponse ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-[#1B254B] text-white'}`}
+              <div className={`mt-4 border-t border-blue-100 pt-4 ${intervalResponseActive ? 'pb-2' : ''}`}>
+                {intervalRunPaused ? (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-bold text-slate-800">Coleta pausada</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                      Intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals} preservado. As respostas anteriores foram mantidas.
+                    </p>
+                    <div className="mt-3 grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
+                      <button onClick={resumeIntervalRun} className="min-h-[44px] rounded-xl bg-[#1B254B] px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-white">Retomar</button>
+                      <button onClick={finishIntervalRunNow} className="min-h-[44px] rounded-xl bg-emerald-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700">Finalizar agora</button>
+                      <button onClick={requestCancelIntervalRun} className="min-h-[44px] rounded-xl bg-red-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500">Cancelar coleta</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={pauseIntervalRun}
+                      className="min-h-[40px] rounded-xl bg-[#1B254B] px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-white"
+                    >
+                      Pausar
+                    </button>
+                    <button
+                      onClick={() => setIntervalOptionsOpen((open) => !open)}
+                      className="min-h-[40px] rounded-xl bg-white px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-[#7a32fc] border border-purple-100"
+                    >
+                      Opções
+                    </button>
+                    {intervalResponseActive && (
+                      <span className="text-[11px] font-semibold text-amber-700">SIM/NÃO continuam como prioridade.</span>
+                    )}
+                  </div>
+                )}
+                {intervalOptionsOpen && !intervalRunPaused && (
+                  <div className="mt-3 rounded-2xl border border-blue-100 bg-white p-3 shadow-lg shadow-blue-900/5">
+                    <label className="block text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                      Motivo opcional
+                      <select
+                        value={intervalEndReason}
+                        onChange={(event) => setIntervalEndReason(event.target.value)}
+                        className="mt-1 w-full rounded-xl border border-blue-100 bg-[#F8FAFF] px-3 py-2 text-xs font-bold text-gray-700 outline-none"
+                      >
+                        {intervalLifecycleReasonOptions.map((option) => (
+                          <option key={option.key} value={option.key}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="mt-3 grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
+                      <button onClick={pauseIntervalRun} className="min-h-[42px] rounded-xl bg-[#1B254B] px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-white">Pausar coleta</button>
+                      <button onClick={finishIntervalRunNow} className="min-h-[42px] rounded-xl bg-emerald-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700">Finalizar agora</button>
+                      <button onClick={requestCancelIntervalRun} className="min-h-[42px] rounded-xl bg-red-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500">Cancelar coleta</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {intervalCancelConfirmOpen && intervalRun && (
+            <div className="fixed inset-0 z-[220] flex items-end justify-center bg-gray-950/40 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:items-center sm:p-6">
+              <div className="w-full max-w-md rounded-[24px] border border-red-100 bg-white p-5 shadow-2xl shadow-gray-950/20">
+                <p className="text-lg font-bold text-gray-900">Cancelar esta coleta?</p>
+                <p className="mt-2 text-sm font-semibold text-gray-600">
+                  Os intervalos respondidos não entrarão no resumo clínico.
+                </p>
+                <label className="mt-4 block text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                  Motivo opcional
+                  <select
+                    value={intervalCancelReason}
+                    onChange={(event) => setIntervalCancelReason(event.target.value)}
+                    className="mt-1 w-full rounded-xl border border-blue-100 bg-[#F8FAFF] px-3 py-3 text-xs font-bold text-gray-700 outline-none"
                   >
-                    {intervalRun.paused ? 'Retomar coleta' : 'Pausar coleta'}
+                    {intervalLifecycleReasonOptions.map((option) => (
+                      <option key={option.key} value={option.key}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <button
+                    onClick={() => setIntervalCancelConfirmOpen(false)}
+                    className="min-h-[48px] rounded-2xl bg-gray-100 px-4 py-3 text-xs font-bold uppercase tracking-widest text-gray-600"
+                  >
+                    Voltar
                   </button>
                   <button
-                    onClick={cancelIntervalRun}
-                    className="min-h-[44px] rounded-xl bg-red-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500"
+                    onClick={confirmCancelIntervalRun}
+                    className="min-h-[48px] rounded-2xl bg-red-50 px-4 py-3 text-xs font-bold uppercase tracking-widest text-red-600 border border-red-100"
                   >
-                    Cancelar coleta
-                  </button>
-                  <button
-                    onClick={finishIntervalRunNow}
-                    className="min-h-[44px] rounded-xl bg-emerald-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700"
-                  >
-                    Finalizar agora
+                    Confirmar cancelamento
                   </button>
                 </div>
-              )}
+              </div>
             </div>
           )}
 
@@ -2698,8 +3166,8 @@ export const SessionMode = ({
                   <p className="text-sm font-bold text-emerald-950">{getMeasurementLabel(intervalSummary.measurementType)}</p>
                 </div>
                 <div className="rounded-2xl bg-white/70 border border-emerald-100 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Total</p>
-                  <p className="text-2xl font-bold text-emerald-950">{intervalSummaryTotals.total}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Respondidos</p>
+                  <p className="text-2xl font-bold text-emerald-950">{intervalSummaryTotals.total}/{Number(intervalSummary?.plannedIntervals || intervalSummary?.plannedTotalIntervals || intervalSummaryTotals.total)}</p>
                 </div>
                 <div className="rounded-2xl bg-white/70 border border-emerald-100 p-3">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">SIM</p>
@@ -2714,6 +3182,11 @@ export const SessionMode = ({
                   <p className="text-2xl font-bold text-emerald-700">{intervalSummaryTotals.percent}%</p>
                 </div>
               </div>
+              {intervalSummary?.status === 'PARTIALLY_COMPLETED' && (
+                <p className="mt-3 rounded-2xl bg-white/70 border border-emerald-100 px-4 py-3 text-sm font-bold text-emerald-800">
+                  Finalizada antecipadamente.
+                </p>
+              )}
             </div>
           )}
 
@@ -3179,15 +3652,15 @@ export const SessionMode = ({
               </div>
               );
             })}
-            {records.length > visibleHistoryRecords.length && (
+            {clinicalHistoryRecords.length > visibleHistoryRecords.length && (
               <button
                 onClick={() => setHistoryExpanded(true)}
                 className="w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-4 py-3 text-xs font-bold uppercase tracking-widest text-[#7a32fc]"
               >
-                Ver mais {records.length - visibleHistoryRecords.length} registro(s)
+                Ver mais {clinicalHistoryRecords.length - visibleHistoryRecords.length} registro(s)
               </button>
             )}
-            {historyExpanded && records.length > 8 && (
+            {historyExpanded && clinicalHistoryRecords.length > 8 && (
               <button
                 onClick={() => setHistoryExpanded(false)}
                 className="w-full rounded-2xl border border-gray-100 bg-white px-4 py-3 text-xs font-bold uppercase tracking-widest text-gray-500"
@@ -3400,9 +3873,10 @@ export const SessionMode = ({
                   <div key={`interval-${item.behaviorName}-${item.method}`} className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
                     <p className="font-bold text-gray-900">{item.behaviorName}</p>
                     <p className="text-sm text-gray-500">{getMeasurementLabel(item.method)}</p>
-                    <p className="text-sm text-gray-500">{item.totalIntervals} intervalo(s)</p>
+                    <p className="text-sm text-gray-500">{item.totalIntervals}/{item.plannedIntervals || item.totalIntervals} intervalo(s) respondido(s)</p>
                     <p className="text-sm text-gray-500">{item.occurredCount} SIM - {item.notOccurredCount} NÃO</p>
                     <p className="text-sm font-bold text-[#7a32fc]">ocorrência: {item.occurrencePercent}%</p>
+                    {item.status === 'PARTIALLY_COMPLETED' && <p className="text-sm font-bold text-amber-700">finalizada antecipadamente</p>}
                   </div>
                 ))}
                 {sessionClosureSummary.totalBehaviorEvents === 0 && <p className="text-sm text-gray-500">Nenhum comportamento registrado nesta sessão.</p>}
@@ -3480,8 +3954,9 @@ export const SessionMode = ({
                   <p className="font-bold text-red-700">Há uma coleta por intervalo em andamento</p>
                   <p className="mt-1 text-sm text-red-700">{intervalRun.behaviorName} - {getMeasurementLabel(intervalRun.measurementType)} - intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals}</p>
                   <div className="mt-4 flex flex-wrap gap-2">
+                    {intervalRunPaused && <button onClick={resumeIntervalRun} className="rounded-xl bg-[#1B254B] px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-white">Retomar coleta</button>}
                     <button onClick={finishIntervalRunNow} className="rounded-xl bg-emerald-500 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-white">Finalizar coleta agora</button>
-                    <button onClick={cancelIntervalRun} className="rounded-xl bg-white px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-600 border border-red-100">Cancelar coleta</button>
+                    <button onClick={requestCancelIntervalRun} className="rounded-xl bg-white px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-600 border border-red-100">Cancelar coleta</button>
                     <button onClick={() => setShowSessionSummary(false)} className="rounded-xl bg-gray-100 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-600">Voltar para sessão</button>
                   </div>
                 </div>
