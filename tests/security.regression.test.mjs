@@ -535,12 +535,12 @@ test('aba session mode: trials and behavior events are one-touch and session-sco
   );
   assert.match(
     sessionModeCode,
-    /intervalResponseActive[\s\S]*?intervalRun\?\.awaitingResponse[\s\S]*?scrollBottomPaddingClass[\s\S]*?clinicalDock = !sessionCompleted && !intervalResponseActive[\s\S]*?clinicalDockSheetOpen && !intervalResponseActive[\s\S]*?data-aba-interval-response-active[\s\S]*?min-h-\[56px\]/m,
+    /intervalResponseActive[\s\S]*?intervalRun\?\.awaitingResponse[\s\S]*?scrollBottomPaddingStyle[\s\S]*?clinicalDock = !sessionCompleted && !intervalResponseActive[\s\S]*?clinicalDockSheetOpen && !intervalResponseActive[\s\S]*?data-aba-interval-response-active[\s\S]*?min-h-\[56px\]/m,
     'SessionMode deve ocultar o dock e priorizar SIM/NÃO durante a resposta de intervalo no mobile.'
   );
   assert.match(
     sessionModeCode,
-    /scroll-pb-\[calc\(12rem\+env\(safe-area-inset-bottom\)\)\][\s\S]*?closeAfterAction[\s\S]*?data-aba-dock-duration-active[\s\S]*?animate-pulse[\s\S]*?-top-3 right-2[\s\S]*?data-aba-dock-open-duration-badge[\s\S]*?Local atual[\s\S]*?Severidade atual[\s\S]*?Últimos registros/m,
+    /scrollBottomPaddingStyle[\s\S]*?closeAfterAction[\s\S]*?data-aba-dock-duration-active[\s\S]*?animate-pulse[\s\S]*?-top-3 right-2[\s\S]*?data-aba-dock-open-duration-badge[\s\S]*?Local atual[\s\S]*?Severidade atual[\s\S]*?Últimos registros[\s\S]*?style=\{scrollBottomPaddingStyle\}/m,
     'Dock clínico mobile deve reservar espaço, indicar duração ativa, mostrar +1 flutuante e fechar ações rápidas da sheet.'
   );
   assert.match(
@@ -568,13 +568,13 @@ test('aba persistence: frontend records sessions and structured trials offline-f
   );
   assert.match(
     dataServiceCode,
-    /async getAbaSessions\(patientId: string\)[\s\S]*?\/api\/aba\/sessions\/\$\{encodeURIComponent\(String\(patientId\)\)\}/m,
-    'dataService deve buscar sessoes ABA para exibir no prontuario.'
+    /async getAbaSessions\(patientId: string,[\s\S]*?normalizeListLimit\(options\.pageSize \?\? options\.limit, 20, 50\)[\s\S]*?endpointWithPagination\(`\/api\/aba\/sessions\/\$\{encodeURIComponent\(String\(patientId\)\)\}`/m,
+    'dataService deve buscar sessoes ABA paginadas para exibir no prontuario.'
   );
   assert.match(
     dataServiceCode,
-    /async getAbaTrials\(patientId: string\)[\s\S]*?\/api\/aba\/trials\/\$\{encodeURIComponent\(String\(patientId\)\)\}/m,
-    'dataService deve buscar tentativas ABA para exibir no prontuario.'
+    /async getAbaTrials\(patientId: string,[\s\S]*?normalizeListLimit\(options\.pageSize \?\? options\.limit, 20, 50\)[\s\S]*?endpointWithPagination\(`\/api\/aba\/trials\/\$\{encodeURIComponent\(String\(patientId\)\)\}`/m,
+    'dataService deve buscar tentativas ABA paginadas para exibir no prontuario.'
   );
   assert.match(
     dataServiceCode,
@@ -598,8 +598,8 @@ test('aba persistence: frontend records sessions and structured trials offline-f
   );
   assert.match(
     dataServiceCode,
-    /async getAbaBehaviorEvents\(patientId: string\)[\s\S]*?\/api\/aba\/behavior-events\/\$\{encodeURIComponent\(String\(patientId\)\)\}/m,
-    'dataService deve buscar eventos de comportamento ABA para exibir no prontuario.'
+    /async getAbaBehaviorEvents\(patientId: string,[\s\S]*?normalizeListLimit\(options\.pageSize \?\? options\.limit, 20, 50\)[\s\S]*?endpointWithPagination\(`\/api\/aba\/behavior-events\/\$\{encodeURIComponent\(String\(patientId\)\)\}`/m,
+    'dataService deve buscar eventos de comportamento ABA paginados para exibir no prontuario.'
   );
   assert.match(
     dataServiceCode,
@@ -608,8 +608,8 @@ test('aba persistence: frontend records sessions and structured trials offline-f
   );
   assert.match(
     dataServiceCode,
-    /async getAbaMasteryEvaluations\(patientId: string\)[\s\S]*?\/api\/aba\/mastery-evaluations\/\$\{encodeURIComponent\(String\(patientId\)\)\}/m,
-    'dataService deve buscar avaliacoes de maestria ABA para exibir no prontuario.'
+    /async getAbaMasteryEvaluations\(patientId: string,[\s\S]*?normalizeListLimit\(options\.pageSize \?\? options\.limit, 20, 50\)[\s\S]*?endpointWithPagination\(`\/api\/aba\/mastery-evaluations\/\$\{encodeURIComponent\(String\(patientId\)\)\}`/m,
+    'dataService deve buscar avaliacoes de maestria ABA paginadas para exibir no prontuario.'
   );
   assert.match(
     patientDetailCode,
@@ -623,8 +623,8 @@ test('aba persistence: frontend records sessions and structured trials offline-f
   );
   assert.match(
     patientDetailCode,
-    /dataService\.getAbaSessions\(String\(patient\.id\)\)[\s\S]*?dataService\.getAbaTrials\(String\(patient\.id\)\)[\s\S]*?dataService\.getAbaBehaviorEvents\(String\(patient\.id\)\)[\s\S]*?dataService\.getAbaMasteryEvaluations\(String\(patient\.id\)\)/m,
-    'PatientDetailView deve carregar sessoes, tentativas, comportamentos e maestria ABA.'
+    /recentRecordLimit = 10[\s\S]*?dataService\.getAbaSessions\(String\(patient\.id\), \{ page: 1, pageSize: recentRecordLimit \}\)[\s\S]*?dataService\.getAbaTrials\(String\(patient\.id\), \{ page: 1, pageSize: recentRecordLimit \}\)[\s\S]*?dataService\.getAbaBehaviorEvents\(String\(patient\.id\), \{ page: 1, pageSize: recentRecordLimit \}\)[\s\S]*?dataService\.getAbaMasteryEvaluations\(String\(patient\.id\), \{ page: 1, pageSize: recentRecordLimit \}\)/m,
+    'PatientDetailView deve carregar sessoes, tentativas, comportamentos e maestria ABA com limite recente.'
   );
   assert.match(
     patientDetailCode,

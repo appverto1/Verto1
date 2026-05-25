@@ -1848,13 +1848,19 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
     let running = false;
+    let loadedOnce = false;
+    let lastRefreshAt = 0;
+    const minimumRefreshIntervalMs = 5 * 60 * 1000;
 
-    const fetchPatientScopedData = async () => {
+    const fetchPatientScopedData = async (force = false) => {
       if (!mounted || running) return;
       if (!user || user.role !== 'patient' || !user.email) return;
+      const now = Date.now();
+      if (!force && now - lastRefreshAt < minimumRefreshIntervalMs) return;
+      lastRefreshAt = now;
       running = true;
       try {
-        if (mounted) setPatientContextLoaded(false);
+        if (mounted && !loadedOnce) setPatientContextLoaded(false);
         const identity = resolvePatientIdentityForPortal(user);
         const [historyRes, historyByEmailRes, historyByIdRes, tasksRes, assignedTasksRes, notesRes, protocolsRes] = await Promise.allSettled([
           dataService.getPatientSelfHistory(),
@@ -1994,20 +2000,28 @@ export default function App() {
           return { ...prev, treatmentStatus: fetchedTreatmentStatus };
         });
       }
-        if (mounted) setPatientContextLoaded(true);
+        if (mounted) {
+          loadedOnce = true;
+          setPatientContextLoaded(true);
+        }
       } finally {
         running = false;
       }
     };
 
-    void fetchPatientScopedData();
-    const interval = window.setInterval(() => {
-      void fetchPatientScopedData();
-    }, 15_000);
+    const refreshWhenVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      void fetchPatientScopedData(false);
+    };
+
+    void fetchPatientScopedData(true);
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
 
     return () => {
       mounted = false;
-      window.clearInterval(interval);
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
   }, [user]);
 
@@ -3554,6 +3568,8 @@ export default function App() {
       try {
         await dataService.saveAbaTrial({
           id: abaTrialId,
+          clinic_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || undefined,
+          clinicId: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || undefined,
           patient_id: String(pid),
           patientId: String(pid),
           session_id: sessionMeta?.sessionId || null,
@@ -3585,11 +3601,14 @@ export default function App() {
           timestamp: recordedAt,
           therapist_id: user?.id || undefined,
           therapistId: user?.id || undefined,
+          source: 'verto_web',
           source_history_id: String(sourceHistoryId || newId),
           raw_payload: {
             legacyScore: score,
             normalizedScore: finalScore,
             isKid,
+            clinicId: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+            source: 'verto_web',
             sessionReferenceDate: sessionMeta?.sessionReferenceDate || null,
             promptLevelKey: abaPromptLevel.key,
             promptLevelName: abaPromptLevel.label,

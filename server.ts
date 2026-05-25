@@ -2100,6 +2100,11 @@ function asSafeNumber(value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): n
   return Math.min(max, Math.max(min, num));
 }
 
+function parseBoundedListLimit(value: unknown, fallback = 50, max = 50): number {
+  const parsed = asSafeNumber(value, 1, max);
+  return Math.min(max, Math.max(1, parsed || fallback));
+}
+
 function cleanObject<T extends Record<string, any>>(input: T): Partial<T> {
   return Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
@@ -8979,13 +8984,14 @@ async function startServer() {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
+      const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
       const { data, error } = await supabase
         .from('patient_anamnesis_submissions')
         .select('*')
         .eq('patient_id', patientId)
         .eq('clinic_id', clinicId)
         .order('created_at', { ascending: false })
-        .limit(200);
+        .limit(limit);
 
       if (error) {
         if (String(error?.message || '').toLowerCase().includes('patient_anamnesis_submissions')) {
@@ -9740,7 +9746,14 @@ async function startServer() {
   // Patients
   app.get('/api/patients', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
-      let query = supabase.from('patients').select('*').eq('is_active', true).is('deleted_at', null);
+      const limit = parseBoundedListLimit(req.query?.limit, 200, 500);
+      let query = supabase
+        .from('patients')
+        .select('*')
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .limit(limit);
       const role = req.session.user.role as AppRole;
       const scopedClinicId = currentClinicId(req.session.user);
 
@@ -9763,7 +9776,9 @@ async function startServer() {
           .select('*')
           .eq('therapist_id', sanitizeString(req.session.user?.id, 120))
           .eq('is_active', true)
-          .is('deleted_at', null);
+          .is('deleted_at', null)
+          .order('created_at', { ascending: false })
+          .limit(limit);
         if (scopedClinicId) {
           fallbackQuery = fallbackQuery.eq('clinic_id', scopedClinicId);
         }
@@ -10871,7 +10886,9 @@ async function startServer() {
     patientEmail?: string;
     excludePatientId?: string;
     role: string;
+    limit?: number;
   }) => {
+    const limit = parseBoundedListLimit(params.limit, 20, 50);
     let query = supabase.from('notes').select('*').eq('is_active', true).is('deleted_at', null);
     if (params.patientId) query = query.eq('patient_id', params.patientId);
     if (params.patientEmail) query = query.eq('patient_email', params.patientEmail);
@@ -10882,7 +10899,7 @@ async function startServer() {
       query = query.in('visibility', ['patient', 'shared', 'family', 'shared_patient']);
     }
 
-    let result = await query.order('created_at', { ascending: false });
+    let result = await query.order('created_at', { ascending: false }).limit(limit);
     if (!result.error) return { data: result.data || [], error: null };
 
     if (needsPatientVisibilityFilter && isMissingColumnError(result.error, 'visibility')) {
@@ -10890,7 +10907,7 @@ async function startServer() {
       if (params.patientId) fallbackQuery = fallbackQuery.eq('patient_id', params.patientId);
       if (params.patientEmail) fallbackQuery = fallbackQuery.eq('patient_email', params.patientEmail);
       if (params.excludePatientId) fallbackQuery = fallbackQuery.neq('patient_id', params.excludePatientId);
-      result = await fallbackQuery.order('created_at', { ascending: false });
+      result = await fallbackQuery.order('created_at', { ascending: false }).limit(limit);
       if (result.error) return { data: null, error: result.error };
       const filtered = (result.data || []).filter((note: any) => noteIsReadableByPatient(note));
       return { data: filtered, error: null };
@@ -11019,6 +11036,7 @@ async function startServer() {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const role = sanitizeString((req as any).session?.user?.role, 40).toLowerCase();
+      const limit = parseBoundedListLimit((req as any).query?.limit, 20, 50);
       const { data: patientRow } = await supabase
         .from('patients')
         .select('email')
@@ -11030,7 +11048,8 @@ async function startServer() {
 
       const notesByIdResult = await fetchNotesWithRoleFilter({
         patientId,
-        role
+        role,
+        limit
       });
       const notesById = notesByIdResult.data;
       const notesByIdError = notesByIdResult.error;
@@ -11041,7 +11060,8 @@ async function startServer() {
         const notesByEmailResult = await fetchNotesWithRoleFilter({
           patientEmail,
           excludePatientId: patientId,
-          role: 'patient'
+          role: 'patient',
+          limit
         });
         const notesByEmailData = notesByEmailResult.data;
         const notesByEmailError = notesByEmailResult.error;
@@ -11051,7 +11071,8 @@ async function startServer() {
 
       const merged = [...(Array.isArray(notesById) ? notesById : []), ...notesByEmail];
       const deduped = Array.from(new Map(merged.map((item: any) => [String(item?.id || crypto.randomUUID()), item])).values())
-        .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime());
+        .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
+        .slice(0, limit);
       res.json({ success: true, data: deduped });
     } catch (error) {
       res.status(500).json({ error: 'Erro interno do servidor.' });
@@ -11207,13 +11228,15 @@ async function startServer() {
       }
 
       const roleForFilter = !isPrivileged && isSelfRequest ? 'patient' : userRole;
+      const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
       let query = supabase
         .from('notes')
         .select('*')
         .eq('patient_email', safeEmail)
         .eq('is_active', true)
         .is('deleted_at', null)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
 
       if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
         const clinicId = currentClinicId(req.session.user);
@@ -11232,7 +11255,7 @@ async function startServer() {
         filtered = filtered.filter((note: any) => noteIsReadableByPatient(note));
       }
 
-      res.json({ success: true, data: filtered });
+      res.json({ success: true, data: filtered.slice(0, limit) });
     } catch (error) {
       logRouteDbError('/api/patient-records/:patientId [POST]', error, {
         patientId: sanitizeString(req.params.patientId, 120),
@@ -11351,6 +11374,7 @@ async function startServer() {
 
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
+      const limit = parseBoundedListLimit((req as any).query?.limit, 20, 50);
       const { data: patientRow } = await supabase
         .from('patients')
         .select('email')
@@ -11366,7 +11390,8 @@ async function startServer() {
         .eq('patient_id', patientId)
         .eq('is_active', true)
         .is('deleted_at', null)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
       if (historyByIdError) throw historyByIdError;
 
       let historyByEmail: any[] = [];
@@ -11378,14 +11403,16 @@ async function startServer() {
           .neq('patient_id', patientId)
           .eq('is_active', true)
           .is('deleted_at', null)
-          .order('created_at', { ascending: false });
+          .order('created_at', { ascending: false })
+          .limit(limit);
         if (historyByEmailError) throw historyByEmailError;
         historyByEmail = Array.isArray(historyByEmailData) ? historyByEmailData : [];
       }
 
       const merged = [...(Array.isArray(historyById) ? historyById : []), ...historyByEmail];
       const deduped = Array.from(new Map(merged.map((item: any) => [String(item?.id || crypto.randomUUID()), item])).values())
-        .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime());
+        .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
+        .slice(0, limit);
       const enriched = await Promise.all(deduped.map(signHistoryImageUrl));
       res.json({ success: true, data: enriched });
     } catch (error) {
@@ -11406,13 +11433,15 @@ async function startServer() {
         return res.status(403).json({ error: 'Acesso negado' });
       }
 
+      const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
       let query = supabase
         .from('history')
         .select('*')
         .eq('patient_email', safeEmail)
         .eq('is_active', true)
         .is('deleted_at', null)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
 
       if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
         const clinicId = currentClinicId(req.session.user);
@@ -11425,7 +11454,7 @@ async function startServer() {
       const { data, error } = await query;
       if (error) throw error;
       const enriched = await Promise.all(
-        (Array.isArray(data) ? data : []).map(async (row: any) => {
+        (Array.isArray(data) ? data : []).slice(0, limit).map(async (row: any) => {
           try {
             const directPath = sanitizeString(row?.image_path, 600);
             const signedUrl = sanitizeString(row?.image, 4000);
@@ -11459,6 +11488,7 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
       }
 
+      const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
       const sessionUserId = sanitizeString(req.session.user?.id, 120);
       const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail);
       const scopedPatientIds = Array.from(
@@ -11475,7 +11505,8 @@ async function startServer() {
         .eq('patient_email', patientEmail)
         .eq('is_active', true)
         .is('deleted_at', null)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
       if (historyByEmailError) throw historyByEmailError;
 
       let historyById: any[] = [];
@@ -11486,7 +11517,8 @@ async function startServer() {
           .in('patient_id', scopedPatientIds)
           .eq('is_active', true)
           .is('deleted_at', null)
-          .order('created_at', { ascending: false });
+          .order('created_at', { ascending: false })
+          .limit(limit);
         if (historyByIdError) throw historyByIdError;
         historyById = Array.isArray(historyByIdData) ? historyByIdData : [];
       }
@@ -11507,7 +11539,8 @@ async function startServer() {
         .select('*')
         .eq('status', 'completed')
         .eq('patient_email', patientEmail)
-        .order('completed_at', { ascending: false });
+        .order('completed_at', { ascending: false })
+        .limit(limit);
       if (assignedByEmailError) {
         console.warn('[PatientSelfHistory] assigned_tasks by email warning:', assignedByEmailError.message || String(assignedByEmailError));
       } else if (Array.isArray(assignedByEmail)) {
@@ -11519,7 +11552,8 @@ async function startServer() {
           .select('*')
           .eq('status', 'completed')
           .in('patient_id', scopedPatientIds)
-          .order('completed_at', { ascending: false });
+          .order('completed_at', { ascending: false })
+          .limit(limit);
         if (assignedByIdError) {
           console.warn('[PatientSelfHistory] assigned_tasks by id warning:', assignedByIdError.message || String(assignedByIdError));
         } else if (Array.isArray(assignedById)) {
@@ -11558,7 +11592,8 @@ async function startServer() {
         .from('tasks')
         .select('*')
         .ilike('patient_email', patientEmail)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
       if (tasksByEmailError) {
         console.warn('[PatientSelfHistory] tasks by email warning:', tasksByEmailError.message || String(tasksByEmailError));
       }
@@ -11569,7 +11604,8 @@ async function startServer() {
           .from('tasks')
           .select('*')
           .in('patient_id', scopedPatientIds)
-          .order('created_at', { ascending: false });
+          .order('created_at', { ascending: false })
+          .limit(limit);
         if (tasksByIdError) {
           console.warn('[PatientSelfHistory] tasks by id warning:', tasksByIdError.message || String(tasksByIdError));
         } else {
@@ -11605,7 +11641,8 @@ async function startServer() {
           const aTs = new Date(a?.created_at || 0).getTime();
           const bTs = new Date(b?.created_at || 0).getTime();
           return bTs - aTs;
-        });
+        })
+        .slice(0, limit);
       const enrichedHistory = await Promise.all(
         consolidatedHistory.map(async (row: any) => {
           try {
@@ -12833,6 +12870,7 @@ async function startServer() {
     try {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
+      const limit = parseBoundedListLimit((req as any).query?.limit, 20, 50);
       const { data: patientRow } = await supabase
         .from('patients')
         .select('email')
@@ -12844,7 +12882,8 @@ async function startServer() {
         .from('tasks')
         .select('*')
         .eq('patient_id', patientId)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
       if (tasksByIdError) throw tasksByIdError;
 
       let tasksByEmail: any[] = [];
@@ -12854,14 +12893,16 @@ async function startServer() {
           .select('*')
           .ilike('patient_email', patientEmail)
           .neq('patient_id', patientId)
-          .order('created_at', { ascending: false });
+          .order('created_at', { ascending: false })
+          .limit(limit);
         if (tasksByEmailError) throw tasksByEmailError;
         tasksByEmail = Array.isArray(tasksByEmailData) ? tasksByEmailData : [];
       }
 
       const merged = [...(Array.isArray(tasksById) ? tasksById : []), ...tasksByEmail];
       const deduped = Array.from(new Map(merged.map((item: any) => [String(item?.id || crypto.randomUUID()), item])).values())
-        .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime());
+        .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
+        .slice(0, limit);
       res.json({ success: true, data: deduped });
     } catch (error) {
       res.status(500).json({ error: 'Erro interno do servidor.' });
@@ -12881,11 +12922,13 @@ async function startServer() {
         return res.status(403).json({ error: 'Acesso negado' });
       }
 
+      const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
       let query = supabase
         .from('tasks')
         .select('*')
         .eq('patient_email', safeEmail)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
 
       if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
         const clinicId = currentClinicId(req.session.user);
@@ -12910,12 +12953,14 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
       }
 
+      const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
       const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail);
       const { data: tasksByEmail, error: tasksByEmailError } = await supabase
         .from('tasks')
         .select('*')
         .eq('patient_email', patientEmail)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
       if (tasksByEmailError) throw tasksByEmailError;
 
       let tasksById: any[] = [];
@@ -12924,7 +12969,8 @@ async function startServer() {
           .from('tasks')
           .select('*')
           .in('patient_id', patientIds)
-          .order('created_at', { ascending: false });
+          .order('created_at', { ascending: false })
+          .limit(limit);
         if (tasksByIdError) throw tasksByIdError;
         tasksById = Array.isArray(tasksByIdData) ? tasksByIdData : [];
       }
@@ -12940,7 +12986,7 @@ async function startServer() {
         const aTs = new Date(a?.created_at || 0).getTime();
         const bTs = new Date(b?.created_at || 0).getTime();
         return bTs - aTs;
-      });
+      }).slice(0, limit);
 
       res.json({ success: true, data: merged });
     } catch (error) {
@@ -13342,11 +13388,13 @@ async function startServer() {
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
 
       const clinicId = currentClinicId(req.session.user);
+      const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
       let query = supabase
         .from('assigned_tasks')
         .select('*')
         .eq('patient_id', patientId)
-        .order('scheduled_at', { ascending: false });
+        .order('scheduled_at', { ascending: false })
+        .limit(limit);
 
       if (clinicId && !hasGlobalClinicAccess(req.session.user)) {
         query = query.eq('clinic_id', clinicId);
@@ -13373,12 +13421,14 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
       }
 
+      const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
       const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail);
       const { data: byEmail, error: byEmailError } = await supabase
         .from('assigned_tasks')
         .select('*')
         .ilike('patient_email', patientEmail)
-        .order('scheduled_at', { ascending: false });
+        .order('scheduled_at', { ascending: false })
+        .limit(limit);
       if (byEmailError) {
         if (/assigned_tasks/i.test(String(byEmailError?.message || ''))) {
           return res.status(200).json({ success: true, data: [], warning: 'Tabela assigned_tasks não criada.' });
@@ -13393,7 +13443,8 @@ async function startServer() {
           .from('assigned_tasks')
           .select('*')
           .in('patient_id', patientIds)
-          .order('scheduled_at', { ascending: false });
+          .order('scheduled_at', { ascending: false })
+          .limit(limit);
         if (byIdError) {
           if (/assigned_tasks/i.test(String(byIdError?.message || ''))) {
             return res.status(200).json({ success: true, data: [], warning: 'Tabela assigned_tasks não criada.' });
@@ -13426,7 +13477,8 @@ async function startServer() {
         .from('tasks')
         .select('*')
         .ilike('patient_email', patientEmail)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
       if (legacyTasksByEmailError) {
         console.warn('[PatientSelfAssignedTasks] fallback tasks by email warning:', legacyTasksByEmailError.message || String(legacyTasksByEmailError));
       }
@@ -13437,7 +13489,8 @@ async function startServer() {
           .from('tasks')
           .select('*')
           .in('patient_id', patientIds)
-          .order('created_at', { ascending: false });
+          .order('created_at', { ascending: false })
+          .limit(limit);
         if (legacyTasksByIdError) {
           console.warn('[PatientSelfAssignedTasks] fallback tasks by id warning:', legacyTasksByIdError.message || String(legacyTasksByIdError));
         } else {
@@ -13491,7 +13544,7 @@ async function startServer() {
         return scheduledAt <= nowIso;
       });
 
-      return res.json({ success: true, data: visibleTasks });
+      return res.json({ success: true, data: visibleTasks.slice(0, limit) });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || String(error) });
     }
@@ -14142,6 +14195,16 @@ async function startServer() {
     return ABA_EVENT_STATUSES.has(safe) ? safe : fallback;
   };
 
+  const resolveAbaRequestSource = (body: any) => (
+    sanitizeString(
+      body?.source ||
+      body?.clientSource ||
+      body?.raw_payload?.source ||
+      body?.rawPayload?.source,
+      80
+    ) || 'verto_web'
+  );
+
   const normalizeAbaMasteryStatus = (value: unknown) => {
     const safe = sanitizeString(value, 80).toLowerCase();
     if (safe === 'notmet' || safe === 'not-met') return 'not_met';
@@ -14162,13 +14225,193 @@ async function startServer() {
     return safeScore > 0;
   };
 
+  const ABA_RECORD_LIST_FALLBACK_LIMIT = 20;
+  const ABA_RECORD_LIST_MAX_LIMIT = 50;
+  const ABA_SESSION_LIST_SELECT = [
+    'id',
+    'clinic_id',
+    'patient_id',
+    'patient_name',
+    'therapist_id',
+    'status',
+    'started_at',
+    'ended_at',
+    'duration_seconds',
+    'duration_minutes',
+    'reference_date',
+    'record_count',
+    'sync_status',
+    'created_at',
+    'updated_at'
+  ].join(',');
+  const ABA_TRIAL_LIST_SELECT = [
+    'id',
+    'clinic_id',
+    'patient_id',
+    'session_id',
+    'target_id',
+    'target_name',
+    'program_id',
+    'protocol_id',
+    'protocol_title',
+    'domain_id',
+    'domain_name',
+    'collection_type',
+    'response_score',
+    'max_score',
+    'correct',
+    'independent',
+    'prompt_level_key',
+    'prompt_level_name',
+    'notes',
+    'occurred_at',
+    'therapist_id',
+    'sync_status',
+    'source_history_id',
+    'created_at'
+  ].join(',');
+  const ABA_BEHAVIOR_EVENT_LIST_SELECT = [
+    'id',
+    'clinic_id',
+    'patient_id',
+    'session_id',
+    'behavior_id',
+    'behavior_name',
+    'measurement_type',
+    'count_delta',
+    'started_at',
+    'ended_at',
+    'duration_seconds',
+    'status',
+    'interval_number',
+    'interval_index',
+    'interval_started_at',
+    'interval_ended_at',
+    'interval_occurred',
+    'occurred',
+    'severity',
+    'antecedent',
+    'consequence',
+    'location',
+    'response_by_therapist',
+    'notes',
+    'occurred_at',
+    'therapist_id',
+    'sync_status',
+    'created_at'
+  ].join(',');
+  const ABA_MASTERY_LIST_SELECT = [
+    'id',
+    'clinic_id',
+    'patient_id',
+    'session_id',
+    'target_id',
+    'target_name',
+    'evaluation_status',
+    'suggested_phase',
+    'accuracy_percent',
+    'consecutive_successes',
+    'min_consecutive_successes',
+    'trials_considered',
+    'distinct_therapists_count',
+    'first_trial_independent',
+    'reasons',
+    'evaluated_at',
+    'therapist_id',
+    'source_trial_id',
+    'created_at'
+  ].join(',');
+  const ABA_SESSION_LIVE_SUMMARY_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'patient_id',
+    'session_id',
+    'therapist_id',
+    'total_trials',
+    'independent_trials',
+    'prompted_trials',
+    'error_trials',
+    'accuracy_percent',
+    'independence_percent',
+    'trial_types_used',
+    'total_behavior_events',
+    'frequency_event_count',
+    'duration_event_count',
+    'interval_collection_count',
+    'open_duration_count',
+    'active_interval_collection_count',
+    'last_event_label',
+    'last_event_at',
+    'sync_status',
+    'updated_at'
+  ].join(',');
+  const ABA_PATIENT_SUMMARY_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'patient_id',
+    'total_sessions',
+    'total_trials',
+    'total_behavior_events',
+    'active_targets_count',
+    'mastered_targets_count',
+    'last_session_at',
+    'last_behavior_event_label',
+    'last_behavior_event_at',
+    'updated_at'
+  ].join(',');
+  const ABA_SESSION_REPORT_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'session_id',
+    'patient_id',
+    'therapist_id',
+    'started_at',
+    'ended_at',
+    'duration_seconds',
+    'total_trials',
+    'independent_trials',
+    'prompted_trials',
+    'error_trials',
+    'accuracy_percent',
+    'independence_percent',
+    'total_behavior_events',
+    'frequency_summary',
+    'duration_summary',
+    'interval_summary',
+    'abc_summary',
+    'mastery_summary',
+    'blocking_items',
+    'warning_items',
+    'pending_items',
+    'pending_warnings',
+    'session_note',
+    'sync_status',
+    'source',
+    'summary_payload',
+    'last_event_label',
+    'last_event_at',
+    'created_at',
+    'updated_at'
+  ].join(',');
+  const parseAbaRecordListLimit = (value: unknown) => parseBoundedListLimit(value, ABA_RECORD_LIST_FALLBACK_LIMIT, ABA_RECORD_LIST_MAX_LIMIT);
+  const parseAbaPageParams = (query: any) => {
+    const pageSize = parseAbaRecordListLimit(query?.pageSize ?? query?.limit);
+    const page = Math.max(1, Math.round(asSafeNumber(query?.page, 1, 100000) || 1));
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+    return { page, pageSize, from, to };
+  };
+
   const writeAbaRowWithSchemaFallback = async (tableName: string, payloadBase: Record<string, any>, mode: 'insert' | 'upsert' = 'insert') => {
     let payload: Record<string, any> = { ...payloadBase };
     while (Object.keys(payload).length > 0) {
       const query = mode === 'upsert'
         ? supabase.from(tableName).upsert([payload], { onConflict: 'id' })
         : supabase.from(tableName).insert([payload]);
-      const result = await query.select('*').single();
+      const result = await query.select('id').single();
       if (!result.error) return { data: result.data, error: null };
       const missingColumn = extractMissingColumnName(result.error);
       if (missingColumn && missingColumn in payload) {
@@ -14208,6 +14451,150 @@ async function startServer() {
     return { ok: true };
   };
 
+  const resolveAbaSessionReadScope = async (sessionId: string, user: any) => {
+    const safeSessionId = sanitizeString(sessionId, 180);
+    if (!safeSessionId) return { ok: false, status: 400, error: 'Sessão inválida.' };
+    const clinicId = sanitizeString(currentClinicId(user), 120);
+    let query = supabase
+      .from('aba_sessions')
+      .select('id,clinic_id,patient_id,therapist_id,status')
+      .eq('id', safeSessionId);
+    if (!hasGlobalClinicAccess(user) && clinicId) query = query.eq('clinic_id', clinicId);
+    if (sanitizeString(user?.role, 40).toLowerCase() === 'therapist') {
+      query = query.eq('therapist_id', sanitizeString(user?.id, 120));
+    }
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return { ok: false, status: 503, error: 'Schema ABA ainda não aplicado.' };
+      throw error;
+    }
+    if (!data?.id) return { ok: false, status: 404, error: 'Sessão ABA não encontrada.' };
+    const patientId = sanitizeString(data.patient_id, 120);
+    if (!(await canAccessPatientInCurrentClinic(patientId, user))) {
+      return { ok: false, status: 403, error: 'Paciente fora do escopo da clínica.' };
+    }
+    return { ok: true, session: data, patientId, clinicId: sanitizeString(data.clinic_id || clinicId, 120) };
+  };
+
+  app.get('/api/aba/session-live-summaries/:sessionId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const scope = await resolveAbaSessionReadScope(req.params.sessionId, req.session.user);
+      if (!scope.ok) return res.status((scope as any).status || 400).json({ success: false, error: (scope as any).error });
+      let query = supabase
+        .from('aba_session_live_summaries')
+        .select(ABA_SESSION_LIVE_SUMMARY_SELECT)
+        .eq('session_id', sanitizeString(req.params.sessionId, 180))
+        .eq('patient_id', (scope as any).patientId);
+      if (!hasGlobalClinicAccess(req.session.user) && (scope as any).clinicId) query = query.eq('clinic_id', (scope as any).clinicId);
+      const { data, error } = await query.maybeSingle();
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: null });
+        throw error;
+      }
+      return res.json({ success: true, data: data || null });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/aba/session-reports/:sessionId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const scope = await resolveAbaSessionReadScope(req.params.sessionId, req.session.user);
+      if (!scope.ok) return res.status((scope as any).status || 400).json({ success: false, error: (scope as any).error });
+      let query = supabase
+        .from('aba_session_summaries')
+        .select(ABA_SESSION_REPORT_SELECT)
+        .eq('session_id', sanitizeString(req.params.sessionId, 180))
+        .eq('patient_id', (scope as any).patientId)
+        .order('ended_at', { ascending: false })
+        .limit(1);
+      if (!hasGlobalClinicAccess(req.session.user) && (scope as any).clinicId) query = query.eq('clinic_id', (scope as any).clinicId);
+      const { data, error } = await query.maybeSingle();
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: null });
+        throw error;
+      }
+      return res.json({ success: true, data: data || null });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/aba/recent-session-events/:sessionId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const scope = await resolveAbaSessionReadScope(req.params.sessionId, req.session.user);
+      if (!scope.ok) return res.status((scope as any).status || 400).json({ success: false, error: (scope as any).error });
+      const limit = parseAbaRecordListLimit(req.query?.limit);
+      const sessionId = sanitizeString(req.params.sessionId, 180);
+      const patientId = (scope as any).patientId;
+      const clinicId = (scope as any).clinicId;
+      const applyClinic = (query: any) => (!hasGlobalClinicAccess(req.session.user) && clinicId ? query.eq('clinic_id', clinicId) : query);
+      const [trialsResult, behaviorResult, masteryResult] = await Promise.all([
+        applyClinic(
+          supabase
+            .from('aba_trials')
+            .select(ABA_TRIAL_LIST_SELECT)
+            .eq('session_id', sessionId)
+            .eq('patient_id', patientId)
+            .order('occurred_at', { ascending: false })
+            .limit(limit)
+        ),
+        applyClinic(
+          supabase
+            .from('aba_behavior_events')
+            .select(ABA_BEHAVIOR_EVENT_LIST_SELECT)
+            .eq('session_id', sessionId)
+            .eq('patient_id', patientId)
+            .order('occurred_at', { ascending: false })
+            .limit(limit)
+        ),
+        applyClinic(
+          supabase
+            .from('aba_mastery_evaluations')
+            .select(ABA_MASTERY_LIST_SELECT)
+            .eq('session_id', sessionId)
+            .eq('patient_id', patientId)
+            .order('evaluated_at', { ascending: false })
+            .limit(limit)
+        )
+      ]);
+      const firstError = [trialsResult, behaviorResult, masteryResult].find((result: any) => result.error)?.error;
+      if (firstError) {
+        if (hasMissingFinancialSchema(firstError)) return res.json({ success: true, data: [] });
+        throw firstError;
+      }
+      const rows = [
+        ...((trialsResult as any).data || []).map((row: any) => ({ kind: 'trial', tableName: 'aba_trials', occurredAt: row.occurred_at || row.created_at, ...row })),
+        ...((behaviorResult as any).data || []).map((row: any) => ({ kind: 'behavior', tableName: 'aba_behavior_events', occurredAt: row.occurred_at || row.created_at, ...row })),
+        ...((masteryResult as any).data || []).map((row: any) => ({ kind: 'mastery', tableName: 'aba_mastery_evaluations', occurredAt: row.evaluated_at || row.created_at, ...row }))
+      ].sort((a: any, b: any) => new Date(b.occurredAt || 0).getTime() - new Date(a.occurredAt || 0).getTime()).slice(0, limit);
+      return res.json({ success: true, data: rows });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/aba/patient-summary/:patientId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(patientId)) return res.json({ success: true, data: null });
+      let query = supabase
+        .from('aba_patient_aba_summaries')
+        .select(ABA_PATIENT_SUMMARY_SELECT)
+        .eq('patient_id', patientId);
+      if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
+      const { data, error } = await query.maybeSingle();
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: null });
+        throw error;
+      }
+      return res.json({ success: true, data: data || null });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
   app.post('/api/aba/sessions', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload da sessão ABA')) return;
@@ -14225,7 +14612,7 @@ async function startServer() {
         patient_name: sanitizeString(req.body?.patient_name || req.body?.patientName, 180),
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
         device_id: sanitizeString(req.body?.device_id || req.body?.deviceId, 180),
-        source: sanitizeString(req.body?.source, 80) || 'verto_web',
+        source: resolveAbaRequestSource(req.body),
         status: normalizeAbaSessionStatus(req.body?.status),
         started_at: startedAt,
         ended_at: req.body?.ended_at || req.body?.endedAt ? sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt, startedAt) : null,
@@ -14288,7 +14675,7 @@ async function startServer() {
         if (sanitizeString(req.session.user?.role, 40).toLowerCase() === 'therapist') {
           query = query.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
         }
-        const result = await query.select('*').maybeSingle();
+        const result = await query.select('id,status,ended_at,duration_seconds,duration_minutes,record_count,updated_at').maybeSingle();
         if (!result.error) return res.json({ success: true, data: result.data || { id: sessionId, ...safePatch } });
         const missingColumn = extractMissingColumnName(result.error);
         if (missingColumn && missingColumn in safePatch) {
@@ -14311,12 +14698,13 @@ async function startServer() {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
+      const { page, pageSize, from, to } = parseAbaPageParams(req.query);
       let query = supabase
         .from('aba_sessions')
-        .select('*')
+        .select(ABA_SESSION_LIST_SELECT)
         .eq('patient_id', patientId)
         .order('started_at', { ascending: false })
-        .limit(200);
+        .range(from, to);
       if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
       if (sanitizeString(req.session.user?.role, 40).toLowerCase() === 'therapist') {
         query = query.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
@@ -14326,7 +14714,7 @@ async function startServer() {
         if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
         throw error;
       }
-      return res.json({ success: true, data: data || [] });
+      return res.json({ success: true, data: data || [], page, pageSize });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
     }
@@ -14348,6 +14736,7 @@ async function startServer() {
         ? asSafeNumber(req.body?.duration_seconds ?? req.body?.durationSeconds, 0, 86400)
         : Math.max(0, Math.round((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1000));
 
+      const requestSource = resolveAbaRequestSource(req.body);
       const payload = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.summary_id || req.body?.summaryId || `summary-${sessionId}`, 180),
         clinic_id: clinicId,
@@ -14376,8 +14765,10 @@ async function startServer() {
         pending_warnings: sanitizeClinicalPayload(req.body?.pending_warnings || req.body?.pendingWarnings || []),
         session_note: sanitizeTextField(req.body?.session_note ?? req.body?.sessionNote, 4000),
         sync_status: 'synced',
+        source: requestSource,
         summary_payload: sanitizeClinicalPayload({
           ...(req.body?.summary_payload || req.body?.summaryPayload || {}),
+          source: requestSource,
           patientName: sanitizeString(req.body?.patient_name || req.body?.patientName, 180),
           teachingSummary: req.body?.teaching_summary || req.body?.teachingSummary || undefined,
           trialTypesUsed: req.body?.trial_types_used || req.body?.trialTypesUsed || undefined,
@@ -14437,6 +14828,7 @@ async function startServer() {
       const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null;
       const sessionWrite = await assertAbaSessionCanAcceptClinicalWrite(sessionId, clinicId, req.session.user);
       if (!sessionWrite.ok) return res.status((sessionWrite as any).status || 409).json({ success: false, error: (sessionWrite as any).error });
+      const requestSource = resolveAbaRequestSource(req.body);
       const payload = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.trial_id || req.body?.trialId || crypto.randomUUID(), 180),
         clinic_id: clinicId,
@@ -14464,9 +14856,11 @@ async function startServer() {
         occurred_at: sanitizeIsoDateTime(req.body?.occurred_at || req.body?.occurredAt || req.body?.timestamp, occurredAt),
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
         sync_status: 'synced',
+        source: requestSource,
         source_history_id: sanitizeString(req.body?.source_history_id || req.body?.sourceHistoryId, 180) || null,
         raw_payload: sanitizeClinicalPayload({
           ...(req.body?.raw_payload || req.body?.rawPayload || {}),
+          source: requestSource,
           trialType: sanitizeString(req.body?.trialType || req.body?.trial_type || req.body?.collection_type || req.body?.collectionType, 80),
           promptLevel: promptLevel.key,
           isIndependent: independent,
@@ -14495,19 +14889,20 @@ async function startServer() {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
+      const { page, pageSize, from, to } = parseAbaPageParams(req.query);
       let query = supabase
         .from('aba_trials')
-        .select('*')
+        .select(ABA_TRIAL_LIST_SELECT)
         .eq('patient_id', patientId)
         .order('occurred_at', { ascending: false })
-        .limit(500);
+        .range(from, to);
       if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
       const { data, error } = await query;
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
         throw error;
       }
-      return res.json({ success: true, data: data || [] });
+      return res.json({ success: true, data: data || [], page, pageSize });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
     }
@@ -14551,6 +14946,7 @@ async function startServer() {
           : null;
       const occurred = typeof req.body?.occurred === 'boolean' ? req.body.occurred : intervalOccurred;
       const clientSyncStatus = normalizeAbaSyncStatus(req.body?.sync_status || req.body?.syncStatus, 'local');
+      const requestSource = resolveAbaRequestSource(req.body);
       const isAuthorizedComplement = Boolean(req.body?.clinical_complement || req.body?.clinicalComplement || req.body?.authorizedComplement);
       const sessionWrite = await assertAbaSessionCanAcceptClinicalWrite(sessionId, clinicId, req.session.user, {
         allowCompletedComplement: isAuthorizedComplement
@@ -14589,8 +14985,10 @@ async function startServer() {
         occurred_at: occurredAt,
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
         sync_status: 'synced',
+        source: requestSource,
         raw_payload: sanitizeClinicalPayload({
           ...(req.body?.raw_payload || req.body?.rawPayload || {}),
+          source: requestSource,
           patientId,
           sessionId: sessionId || undefined,
           behaviorId: behaviorId || undefined,
@@ -14675,12 +15073,13 @@ async function startServer() {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
+      const { page, pageSize, from, to } = parseAbaPageParams(req.query);
       let query = supabase
         .from('aba_behavior_events')
-        .select('*')
+        .select(ABA_BEHAVIOR_EVENT_LIST_SELECT)
         .eq('patient_id', patientId)
         .order('occurred_at', { ascending: false })
-        .limit(500);
+        .range(from, to);
       if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
       if (sanitizeString(req.session.user?.role, 40).toLowerCase() === 'therapist') {
         query = query.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
@@ -14690,7 +15089,7 @@ async function startServer() {
         if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
         throw error;
       }
-      return res.json({ success: true, data: data || [] });
+      return res.json({ success: true, data: data || [], page, pageSize });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
     }
@@ -14721,6 +15120,7 @@ async function startServer() {
       const cancelledAt = req.body?.cancelled_at || req.body?.cancelledAt
         ? sanitizeIsoDateTime(req.body?.cancelled_at || req.body?.cancelledAt, intervalEndedAt)
         : null;
+      const requestSource = resolveAbaRequestSource(req.body);
       const payload = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.record_id || req.body?.recordId || crypto.randomUUID(), 180),
         clinic_id: clinicId,
@@ -14742,8 +15142,10 @@ async function startServer() {
         severity: req.body?.severity !== undefined ? asSafeNumber(req.body?.severity, 0, 5) : null,
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
         sync_status: 'synced',
+        source: requestSource,
         raw_payload: sanitizeClinicalPayload({
           ...(req.body?.raw_payload || req.body?.rawPayload || {}),
+          source: requestSource,
           method,
           collectionStatus,
           cancelledAt: cancelledAt || undefined,
@@ -14796,6 +15198,7 @@ async function startServer() {
       const resumedAt = req.body?.resumed_at || req.body?.resumedAt ? sanitizeIsoDateTime(req.body?.resumed_at || req.body?.resumedAt, endedAt) : null;
       const endedEarlyAt = req.body?.ended_early_at || req.body?.endedEarlyAt ? sanitizeIsoDateTime(req.body?.ended_early_at || req.body?.endedEarlyAt, endedAt) : null;
       const cancelledAt = req.body?.cancelled_at || req.body?.cancelledAt ? sanitizeIsoDateTime(req.body?.cancelled_at || req.body?.cancelledAt, endedAt) : null;
+      const requestSource = resolveAbaRequestSource(req.body);
       const payload = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.summary_id || req.body?.summaryId || crypto.randomUUID(), 180),
         clinic_id: clinicId,
@@ -14824,8 +15227,10 @@ async function startServer() {
         severity: req.body?.severity !== undefined ? asSafeNumber(req.body?.severity, 0, 5) : null,
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
         sync_status: 'synced',
+        source: requestSource,
         raw_payload: sanitizeClinicalPayload({
           ...(req.body?.raw_payload || req.body?.rawPayload || {}),
+          source: requestSource,
           method,
           plannedIntervals,
           answeredIntervals,
@@ -14866,11 +15271,19 @@ async function startServer() {
 
       const behaviorName = sanitizeTextField(req.body?.behavior_name || req.body?.behaviorName || req.body?.name, 240);
       if (!behaviorName) return res.status(400).json({ success: false, error: 'Comportamento é obrigatório.' });
+      const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null;
+      const isAuthorizedComplement = Boolean(req.body?.clinical_complement || req.body?.clinicalComplement || req.body?.authorizedComplement);
+      const sessionWrite = await assertAbaSessionCanAcceptClinicalWrite(sessionId, clinicId, req.session.user, {
+        allowCompletedComplement: isAuthorizedComplement
+      });
+      if (!sessionWrite.ok) return res.status((sessionWrite as any).status || 409).json({ success: false, error: (sessionWrite as any).error });
+      const requestSource = resolveAbaRequestSource(req.body);
+      const occurredAt = sanitizeIsoDateTime(req.body?.occurred_at || req.body?.occurredAt || req.body?.created_at || req.body?.createdAt);
       const payload = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.abc_id || req.body?.abcId || crypto.randomUUID(), 180),
         clinic_id: clinicId,
         patient_id: patientId,
-        session_id: sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null,
+        session_id: sessionId,
         behavior_id: sanitizeString(req.body?.behavior_id || req.body?.behaviorId, 180) || null,
         behavior_event_id: sanitizeString(req.body?.behavior_event_id || req.body?.behaviorEventId, 180) || null,
         behavior_name: behaviorName,
@@ -14882,11 +15295,16 @@ async function startServer() {
         notes: sanitizeTextField(req.body?.notes, 4000),
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
         sync_status: 'synced',
+        source: requestSource,
+        occurred_at: occurredAt,
         raw_payload: sanitizeClinicalPayload({
           ...(req.body?.raw_payload || req.body?.rawPayload || {}),
+          source: requestSource,
           patientId,
+          sessionId: sessionId || undefined,
+          timestamp: occurredAt,
           syncStatus: 'synced',
-          clinicalComplement: Boolean(req.body?.clinical_complement || req.body?.clinicalComplement)
+          clinicalComplement: isAuthorizedComplement
         }),
         created_at: req.body?.created_at || req.body?.createdAt ? sanitizeIsoDateTime(req.body?.created_at || req.body?.createdAt) : new Date().toISOString()
       });
@@ -14963,19 +15381,20 @@ async function startServer() {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
+      const { page, pageSize, from, to } = parseAbaPageParams(req.query);
       let query = supabase
         .from('aba_mastery_evaluations')
-        .select('*')
+        .select(ABA_MASTERY_LIST_SELECT)
         .eq('patient_id', patientId)
         .order('evaluated_at', { ascending: false })
-        .limit(500);
+        .range(from, to);
       if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
       const { data, error } = await query;
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
         throw error;
       }
-      return res.json({ success: true, data: data || [] });
+      return res.json({ success: true, data: data || [], page, pageSize });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
     }

@@ -283,7 +283,8 @@ export const SessionMode = ({
   onRequestEndSession,
   onConfirmEndSession,
   onSessionRecordSaved,
-  therapistId
+  therapistId,
+  clinicId
 }: any) => {
   if (!isAbaV2Enabled()) return null;
 
@@ -293,6 +294,7 @@ export const SessionMode = ({
   const sessionId = String(activeSession?.id || `draft-${patient?.id || 'patient'}`);
   const patientId = String(patient?.id || '');
   const resolvedTherapistId = String(therapistId || activeSession?.therapistId || activeSession?.therapist_id || '').trim();
+  const resolvedClinicId = String(clinicId || activeSession?.clinicId || activeSession?.clinic_id || patient?.clinicId || patient?.clinic_id || patient?.organizationId || patient?.organization_id || '').trim();
   const sessionStateKey = `verto.aba_session_state:${patientId}:${sessionId}`;
 
   const [trialCount, setTrialCount] = useState(0);
@@ -300,6 +302,7 @@ export const SessionMode = ({
   const [collectionType, setCollectionType] = useState('dtt');
   const [promptLevelKey, setPromptLevelKey] = useState('verbal');
   const [records, setRecords] = useState<SessionRecord[]>([]);
+  const [sessionLiveSummary, setSessionLiveSummary] = useState<any>(null);
   const [openDurations, setOpenDurations] = useState<OpenDurationEvent[]>([]);
   const [selectedBehaviorId, setSelectedBehaviorId] = useState('crying');
   const [behaviorMeasurementType, setBehaviorMeasurementType] = useState(behaviorPresets[0].defaultMeasurement);
@@ -519,6 +522,26 @@ export const SessionMode = ({
   }, [hydratedSessionStateKey, intervalRun, intervalSummary, openDurations, postClosureSummary, rateWindow, records, sessionCompleted, sessionNote, sessionStateKey, trialCount]);
 
   useEffect(() => {
+    let cancelled = false;
+    const loadLiveSummary = async () => {
+      if (!sessionId || sessionId.startsWith('draft-') || sessionCompleted) {
+        setSessionLiveSummary(null);
+        return;
+      }
+      try {
+        const result = await dataService.getSessionLiveSummary(sessionId);
+        if (!cancelled) setSessionLiveSummary(result?.data || null);
+      } catch {
+        if (!cancelled) setSessionLiveSummary(null);
+      }
+    };
+    void loadLiveSummary();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, sessionCompleted]);
+
+  useEffect(() => {
     const hasRunningTimer = openDurations.length > 0 || rateWindow || intervalRun;
     if (!hasRunningTimer) return;
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
@@ -658,8 +681,11 @@ export const SessionMode = ({
         patientId,
         session_id: sessionId,
         sessionId,
+        clinic_id: resolvedClinicId || undefined,
+        clinicId: resolvedClinicId || undefined,
         therapist_id: resolvedTherapistId || undefined,
-        therapistId: resolvedTherapistId || undefined
+        therapistId: resolvedTherapistId || undefined,
+        source: 'verto_web'
       });
       updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
       showPersistResultToast(result);
@@ -683,8 +709,11 @@ export const SessionMode = ({
         patientId,
         session_id: sessionId,
         sessionId,
+        clinic_id: resolvedClinicId || undefined,
+        clinicId: resolvedClinicId || undefined,
         therapist_id: resolvedTherapistId || undefined,
-        therapistId: resolvedTherapistId || undefined
+        therapistId: resolvedTherapistId || undefined,
+        source: 'verto_web'
       });
       updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
       showPersistResultToast(result);
@@ -708,8 +737,11 @@ export const SessionMode = ({
         patientId,
         session_id: sessionId,
         sessionId,
+        clinic_id: resolvedClinicId || undefined,
+        clinicId: resolvedClinicId || undefined,
         therapist_id: resolvedTherapistId || undefined,
-        therapistId: resolvedTherapistId || undefined
+        therapistId: resolvedTherapistId || undefined,
+        source: 'verto_web'
       });
       updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
       showPersistResultToast(result);
@@ -733,8 +765,11 @@ export const SessionMode = ({
         patientId,
         session_id: sessionId,
         sessionId,
+        clinic_id: resolvedClinicId || undefined,
+        clinicId: resolvedClinicId || undefined,
         therapist_id: resolvedTherapistId || undefined,
-        therapistId: resolvedTherapistId || undefined
+        therapistId: resolvedTherapistId || undefined,
+        source: 'verto_web'
       });
       updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
       showPersistResultToast(result);
@@ -759,8 +794,11 @@ export const SessionMode = ({
         patientId,
         session_id: sessionId,
         sessionId,
+        clinic_id: resolvedClinicId || undefined,
+        clinicId: resolvedClinicId || undefined,
         therapist_id: resolvedTherapistId || undefined,
-        therapistId: resolvedTherapistId || undefined
+        therapistId: resolvedTherapistId || undefined,
+        source: 'verto_web'
       });
       updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
       showPersistResultToast(result);
@@ -801,6 +839,15 @@ export const SessionMode = ({
     const timestamp = overrides.timestamp || new Date().toISOString();
     return {
       id: overrides.id || crypto.randomUUID(),
+      clinic_id: resolvedClinicId || undefined,
+      clinicId: resolvedClinicId || undefined,
+      patient_id: patientId,
+      patientId,
+      session_id: sessionId,
+      sessionId,
+      therapist_id: resolvedTherapistId || undefined,
+      therapistId: resolvedTherapistId || undefined,
+      source: 'verto_web',
       behavior_name: behaviorName,
       behaviorName,
       measurement_type: measurementType,
@@ -813,7 +860,12 @@ export const SessionMode = ({
       notes: overrides.notes || '',
       raw_payload: {
         ...(overrides.raw_payload || {}),
+        clinicId: resolvedClinicId || undefined,
+        patientId,
+        sessionId,
+        therapistId: resolvedTherapistId || null,
         source: 'session_mode_intelligent_behavior',
+        clientSource: 'verto_web',
         sessionReferenceDate: activeSession?.referenceDate || null,
         syncStatus: 'local'
       },
@@ -1120,6 +1172,66 @@ export const SessionMode = ({
     });
   };
 
+  const persistIntervalLifecycleRecord = (run: any, status: AbaIntervalCollectionStatus, occurredAt = new Date().toISOString(), extra: any = {}) => {
+    const behaviorId = run.behaviorId || selectedBehavior.id;
+    const intervalNumber = Math.max(1, Number(run.intervalIndex || 1));
+    const intervalStartedAt = run.intervalStartedAt || run.startedAt || occurredAt;
+    const intervalDurationSeconds = Math.max(1, Number(run.intervalSeconds || intervalSeconds || 1));
+    const lifecycleId = `${run.id}-lifecycle-${String(status).toLowerCase()}-${Date.parse(occurredAt) || Date.now()}`;
+    void dataService.saveAbaIntervalRecord({
+      id: lifecycleId,
+      clinic_id: resolvedClinicId || undefined,
+      clinicId: resolvedClinicId || undefined,
+      patient_id: patientId,
+      patientId,
+      session_id: sessionId,
+      sessionId,
+      behavior_id: behaviorId,
+      behaviorId,
+      behavior_name: run.behaviorName,
+      behaviorName: run.behaviorName,
+      method: run.measurementType || run.method || 'partial_interval',
+      measurement_type: run.measurementType || run.method || 'partial_interval',
+      measurementType: run.measurementType || run.method || 'partial_interval',
+      interval_number: intervalNumber,
+      intervalNumber,
+      interval_duration_seconds: intervalDurationSeconds,
+      intervalDurationSeconds,
+      interval_started_at: intervalStartedAt,
+      intervalStartedAt,
+      interval_ended_at: occurredAt,
+      intervalEndedAt: occurredAt,
+      occurred: false,
+      collection_status: status,
+      collectionStatus: status,
+      location: run.location || selectedLocation,
+      severity: run.severity ?? selectedSeverity,
+      therapist_id: resolvedTherapistId || undefined,
+      therapistId: resolvedTherapistId || undefined,
+      sync_status: 'local',
+      syncStatus: 'local',
+      source: 'verto_web',
+      raw_payload: {
+        intervalRunId: run.id,
+        intervalLifecycle: true,
+        lifecycleStatus: status,
+        lifecycleAction: String(status).toLowerCase(),
+        patientId,
+        sessionId,
+        therapistId: resolvedTherapistId || null,
+        clinicId: resolvedClinicId || undefined,
+        behaviorId,
+        source: 'verto_web',
+        syncStatus: 'local',
+        ...extra
+      }
+    }).then((result) => {
+      if (result?.success || result?.pending || result?.offline) onSessionRecordSaved?.();
+    }).catch((error) => {
+      console.error('Falha ao persistir ciclo de vida do intervalo ABA:', error);
+    });
+  };
+
   const startIntervalRun = (behaviorOverride = selectedBehavior, measurementOverride = behaviorMeasurementType) => {
     if (!ensureSessionCanRecord()) return;
     if (intervalRun) {
@@ -1130,7 +1242,7 @@ export const SessionMode = ({
     }
     const startedAt = new Date().toISOString();
     const intervalEndsAt = new Date(new Date(startedAt).getTime() + intervalSeconds * 1000).toISOString();
-    setIntervalRun({
+    const nextRun = {
       id: crypto.randomUUID(),
       behaviorId: behaviorOverride.id,
       behaviorName: behaviorOverride.name,
@@ -1156,7 +1268,9 @@ export const SessionMode = ({
       occurredCount: 0,
       yesCount: 0,
       noCount: 0
-    });
+    };
+    setIntervalRun(nextRun);
+    persistIntervalLifecycleRecord(nextRun, 'RUNNING', startedAt, { lifecycleAction: 'start' });
     setIntervalOptionsOpen(false);
     setIntervalCancelConfirmOpen(false);
     setIntervalZeroFinishConfirmOpen(false);
@@ -1382,8 +1496,15 @@ export const SessionMode = ({
 
   const pauseIntervalRun = () => {
     if (!intervalRun) return;
-    const pausedRun = pauseIntervalRunState(intervalRun, { nowMs });
+    const pausedAt = new Date(nowMs).toISOString();
+    const pausedRun = pauseIntervalRunState(intervalRun, { nowMs, pausedAt });
     setIntervalRun(pausedRun);
+    persistIntervalLifecycleRecord(pausedRun, 'PAUSED', pausedAt, {
+      lifecycleAction: 'pause',
+      pausedAt,
+      pauseRemainingMs: pausedRun.pauseRemainingMs ?? null,
+      pausedFromStatus: pausedRun.pausedFromStatus || getIntervalRunStatus(intervalRun)
+    });
     setIntervalOptionsOpen(false);
     showClinicalToast({
       id: crypto.randomUUID(),
@@ -1395,8 +1516,15 @@ export const SessionMode = ({
 
   const resumeIntervalRun = () => {
     if (!intervalRun) return;
-    const resumedRun = resumeIntervalRunState(intervalRun);
+    const resumedAt = new Date().toISOString();
+    const resumedRun = resumeIntervalRunState(intervalRun, { resumedAt });
     setIntervalRun(resumedRun);
+    persistIntervalLifecycleRecord(resumedRun, 'RUNNING', resumedAt, {
+      lifecycleAction: 'resume',
+      resumedAt,
+      resumedFromStatus: 'PAUSED',
+      nextIntervalEndsAt: resumedRun.intervalEndsAt
+    });
     setIntervalOptionsOpen(false);
     showClinicalToast({
       id: crypto.randomUUID(),
@@ -1855,15 +1983,17 @@ export const SessionMode = ({
     });
     setSessionEndPreviewAt(endedAt);
     setSessionCompleted(true);
-    setPostClosureSummary(finalSummary);
     setShowPostClosureReport(false);
     setShowComplementEditor(false);
     try {
-      await dataService.saveAbaSessionSummary({
+      const summarySaveResult = await dataService.saveAbaSessionSummary({
         ...finalSummary,
         session_id: finalSummary.sessionId,
         patient_id: finalSummary.patientId,
+        clinic_id: resolvedClinicId || undefined,
+        clinicId: resolvedClinicId || undefined,
         therapist_id: finalSummary.therapistId || undefined,
+        source: 'verto_web',
         started_at: finalSummary.startedAt,
         ended_at: finalSummary.endedAt,
         duration_seconds: finalSummary.durationSeconds,
@@ -1886,6 +2016,8 @@ export const SessionMode = ({
         pending_warnings: finalSummary.pendingWarnings,
         session_note: finalSummary.sessionNote,
         summary_payload: {
+          source: 'verto_web',
+          clinicId: resolvedClinicId || undefined,
           patientName: finalSummary.patientName,
           teachingSummary: finalSummary.teachingSummary,
           trialTypesUsed: finalSummary.trialTypesUsed,
@@ -1896,6 +2028,12 @@ export const SessionMode = ({
           pendingWarnings: finalSummary.pendingWarnings,
           sessionNote
         }
+      });
+      setPostClosureSummary({
+        ...finalSummary,
+        id: String(summarySaveResult?.data?.id || finalSummary.id),
+        syncStatus: summarySaveResult?.success && !summarySaveResult?.pending && !summarySaveResult?.offline ? 'synced' : finalSummary.syncStatus,
+        createdAt: summarySaveResult?.data?.created_at || summarySaveResult?.data?.createdAt || finalSummary.createdAt
       });
       await dataService.updateAbaSession(sessionId, {
         status: 'COMPLETED',
@@ -1908,6 +2046,7 @@ export const SessionMode = ({
       showClinicalToast(buildClinicalActionToast({ action: 'session_end' }));
     } catch (error) {
       console.error('Falha ao persistir encerramento da sessão ABA:', error);
+      setPostClosureSummary({ ...finalSummary, syncStatus: 'error' });
       setSessionWarning('A sessão foi marcada como encerrada localmente, mas houve falha de sincronização.');
       showClinicalToast(buildClinicalSaveErrorToast(), 'error');
     }
@@ -1991,7 +2130,15 @@ export const SessionMode = ({
     );
   }
   const clinicalHistoryRecords = records.filter((record) => !isCancelledIntervalClinicalRecord(record));
-  const visibleHistoryRecords = historyExpanded ? clinicalHistoryRecords : clinicalHistoryRecords.slice(0, 8);
+  const visibleHistoryRecords = historyExpanded ? clinicalHistoryRecords : clinicalHistoryRecords.slice(0, 20);
+  const liveSummaryTotals = useMemo(() => {
+    const totalTrials = Number(sessionLiveSummary?.total_trials ?? sessionLiveSummary?.totalTrials ?? 0) || 0;
+    const totalBehaviors = Number(sessionLiveSummary?.total_behavior_events ?? sessionLiveSummary?.totalBehaviorEvents ?? 0) || 0;
+    return {
+      trialTotal: Math.max(trialCount, totalTrials),
+      recordTotal: Math.max(clinicalHistoryRecords.length, totalTrials + totalBehaviors)
+    };
+  }, [clinicalHistoryRecords.length, sessionLiveSummary, trialCount]);
 
   const renderSyncBadge = (status: SyncStatus) => (
     <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-widest ${syncClasses[status]}`}>
@@ -2196,7 +2343,10 @@ export const SessionMode = ({
         ...updatedSummary,
         session_id: updatedSummary.sessionId,
         patient_id: updatedSummary.patientId,
+        clinic_id: resolvedClinicId || undefined,
+        clinicId: resolvedClinicId || undefined,
         therapist_id: updatedSummary.therapistId || undefined,
+        source: 'verto_web',
         started_at: updatedSummary.startedAt,
         ended_at: updatedSummary.endedAt,
         duration_seconds: updatedSummary.durationSeconds,
@@ -2219,6 +2369,8 @@ export const SessionMode = ({
         pending_warnings: updatedSummary.pendingWarnings,
         session_note: sessionNote,
         summary_payload: {
+          source: 'verto_web',
+          clinicId: resolvedClinicId || undefined,
           patientName: updatedSummary.patientName,
           teachingSummary: updatedSummary.teachingSummary,
           trialTypesUsed: updatedSummary.trialTypesUsed,
@@ -2257,6 +2409,92 @@ export const SessionMode = ({
       sourceRecords: records
     });
   }, [postClosureSummary, records, resolvedTherapistId, sessionNote]);
+
+  const parsePersistedSummaryPayload = (value: any) => {
+    if (!value) return {};
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value) || {};
+      } catch {
+        return {};
+      }
+    }
+    return typeof value === 'object' ? value : {};
+  };
+
+  const normalizePersistedSessionSummary = (row: any): SessionSummary | null => {
+    if (!row) return null;
+    const payload = parsePersistedSummaryPayload(row.summary_payload || row.summaryPayload);
+    const fallback = postClosureSummary || sessionClosureSummary;
+    const trialTypesUsed = Array.isArray(row.trial_types_used)
+      ? row.trial_types_used
+      : Array.isArray(payload.trialTypesUsed)
+        ? payload.trialTypesUsed
+        : fallback.trialTypesUsed || [];
+    const totalTrials = Number(row.total_trials ?? row.totalTrials ?? fallback.totalTrials ?? 0) || 0;
+    const independentTrials = Number(row.independent_trials ?? row.independentTrials ?? fallback.independentTrials ?? 0) || 0;
+    const promptedTrials = Number(row.prompted_trials ?? row.promptedTrials ?? fallback.promptedTrials ?? 0) || 0;
+    const errorTrials = Number(row.error_trials ?? row.errorTrials ?? fallback.errorTrials ?? 0) || 0;
+    const accuracyPercent = Number(row.accuracy_percent ?? row.accuracyPercent ?? fallback.accuracyPercent ?? 0) || 0;
+    const independencePercent = Number(row.independence_percent ?? row.independencePercent ?? fallback.independencePercent ?? 0) || 0;
+    const syncStatusValue = String(row.sync_status || row.syncStatus || fallback.syncStatus || 'synced');
+    const syncStatus = ['local', 'syncing', 'synced', 'error'].includes(syncStatusValue)
+      ? syncStatusValue as SessionSummary['syncStatus']
+      : 'synced';
+    return {
+      ...fallback,
+      id: String(row.id || fallback.id || `summary-${sessionId}`),
+      sessionId: String(row.session_id || row.sessionId || fallback.sessionId || sessionId),
+      patientId: String(row.patient_id || row.patientId || fallback.patientId || patientId),
+      therapistId: row.therapist_id ?? row.therapistId ?? fallback.therapistId ?? resolvedTherapistId ?? null,
+      patientName: payload.patientName || fallback.patientName || patient?.name || 'Paciente',
+      startedAt: row.started_at || row.startedAt || fallback.startedAt,
+      endedAt: row.ended_at || row.endedAt || fallback.endedAt,
+      durationSeconds: Number(row.duration_seconds ?? row.durationSeconds ?? fallback.durationSeconds ?? 0) || 0,
+      totalTrials,
+      independentTrials,
+      promptedTrials,
+      errorTrials,
+      accuracyPercent,
+      independencePercent,
+      trialTypesUsed,
+      totalBehaviorEvents: Number(row.total_behavior_events ?? row.totalBehaviorEvents ?? fallback.totalBehaviorEvents ?? 0) || 0,
+      frequencySummary: Array.isArray(row.frequency_summary) ? row.frequency_summary : fallback.frequencySummary || [],
+      durationSummary: Array.isArray(row.duration_summary) ? row.duration_summary : fallback.durationSummary || [],
+      intervalSummary: Array.isArray(row.interval_summary) ? row.interval_summary : fallback.intervalSummary || [],
+      abcSummary: Array.isArray(row.abc_summary) ? row.abc_summary : Array.isArray(payload.abcSummary) ? payload.abcSummary : fallback.abcSummary || [],
+      masterySummary: Array.isArray(row.mastery_summary) ? row.mastery_summary : Array.isArray(payload.masterySummary) ? payload.masterySummary : fallback.masterySummary || [],
+      teachingSummary: payload.teachingSummary || fallback.teachingSummary || {
+        totalTrials,
+        independentTrials,
+        promptedTrials,
+        errorTrials,
+        accuracyPercent,
+        independencePercent,
+        typesUsed: trialTypesUsed
+      },
+      syncStatus,
+      blockingItems: Array.isArray(row.blocking_items) ? row.blocking_items : Array.isArray(payload.blockingItems) ? payload.blockingItems : fallback.blockingItems || [],
+      warningItems: Array.isArray(row.warning_items) ? row.warning_items : Array.isArray(payload.warningItems) ? payload.warningItems : fallback.warningItems || [],
+      pendingItems: Array.isArray(row.pending_items) ? row.pending_items : fallback.pendingItems || [],
+      pendingWarnings: Array.isArray(row.pending_warnings) ? row.pending_warnings : Array.isArray(payload.pendingWarnings) ? payload.pendingWarnings : fallback.pendingWarnings || [],
+      sessionNote: row.session_note ?? payload.sessionNote ?? fallback.sessionNote ?? '',
+      createdAt: row.created_at || row.createdAt || fallback.createdAt || new Date().toISOString(),
+      sourceRecords: fallback.sourceRecords
+    };
+  };
+
+  const openPersistedPostClosureReport = async () => {
+    try {
+      const result = await dataService.getSessionReport(sessionId);
+      const persistedSummary = result?.success ? normalizePersistedSessionSummary(result.data) : null;
+      if (persistedSummary) setPostClosureSummary(persistedSummary);
+    } catch (error) {
+      console.warn('Relatorio ABA persistido indisponivel; usando resumo local.', error);
+    } finally {
+      setShowPostClosureReport(true);
+    }
+  };
 
   const closureBlockers = sessionClosureSummary.blockingItems;
   const closureWarnings = sessionClosureSummary.warningItems;
@@ -2644,7 +2882,7 @@ export const SessionMode = ({
 
             <div className="mt-7 flex flex-col sm:flex-row gap-3">
               {!showPostClosureReport && (
-                <button onClick={() => setShowPostClosureReport(true)} className="flex-1 inline-flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-5 py-3 font-semibold text-white shadow-lg shadow-purple-500/20">
+                <button onClick={openPersistedPostClosureReport} className="flex-1 inline-flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-5 py-3 font-semibold text-white shadow-lg shadow-purple-500/20">
                   <FileText size={18} /> Ver relatório
                 </button>
               )}
@@ -3631,11 +3869,11 @@ export const SessionMode = ({
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Histórico da sessão</p>
-              <h2 className="text-lg font-bold text-gray-800">{records.length} registro(s)</h2>
+              <h2 className="text-lg font-bold text-gray-800">{liveSummaryTotals.recordTotal} registro(s)</h2>
             </div>
             <div className="text-right">
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tentativas hoje</p>
-              <p className="text-3xl font-bold text-[#7a32fc] leading-none">{trialCount}</p>
+              <p className="text-3xl font-bold text-[#7a32fc] leading-none">{liveSummaryTotals.trialTotal}</p>
             </div>
           </div>
 

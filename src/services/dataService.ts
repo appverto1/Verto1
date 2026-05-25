@@ -84,6 +84,68 @@ function filterActivityLogsForClinicView(logs: any[]): any[] {
   });
 }
 
+function normalizeListLimit(value: unknown, fallback = 50, max = 50): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(1, Math.round(numeric)));
+}
+
+function endpointWithLimit(endpoint: string, limit: number): string {
+  const separator = endpoint.includes('?') ? '&' : '?';
+  return `${endpoint}${separator}limit=${encodeURIComponent(String(limit))}`;
+}
+
+function endpointWithPagination(endpoint: string, options: { page?: number; pageSize?: number; limit?: number } = {}): string {
+  const pageSize = normalizeListLimit(options.pageSize ?? options.limit, 20, 50);
+  const page = Math.max(1, Math.round(Number(options.page || 1) || 1));
+  const separator = endpoint.includes('?') ? '&' : '?';
+  return `${endpoint}${separator}page=${encodeURIComponent(String(page))}&pageSize=${encodeURIComponent(String(pageSize))}`;
+}
+
+function auditClinicalQuery(endpoint: string, options: {
+  operation?: 'list' | 'detail' | 'write';
+  table?: string;
+  hasExplicitColumns?: boolean;
+  requiresPatientOrSession?: boolean;
+  afterWriteRefetch?: boolean;
+} = {}) {
+  if (!import.meta.env?.DEV) return;
+  const isClinical = /\/api\/(aba|notes|history|tasks|assigned-tasks|patient-anamnesis|patients|patient-records)/.test(endpoint);
+  if (!isClinical) return;
+  const warnings: string[] = [];
+  const isList = options.operation === 'list';
+  if (isList && !/[?&](limit|pageSize)=/.test(endpoint)) warnings.push('sem limit/pageSize');
+  if (options.hasExplicitColumns === false) warnings.push("select('*')/payload amplo");
+  if (options.requiresPatientOrSession !== false) {
+    const hasScopedPath = /\/api\/aba\/(session-live-summaries|session-reports|recent-session-events)\/[^/?]+/.test(endpoint) ||
+      /\/api\/(notes|history|tasks|assigned-tasks|patient-anamnesis|patient-records)\/[^/?]+/.test(endpoint) ||
+      /\/api\/aba\/(sessions|trials|behavior-events|mastery-evaluations|patient-summary)\/[^/?]+/.test(endpoint);
+    const hasScopedQuery = /[?&](patientId|patient_id|sessionId|session_id)=/.test(endpoint);
+    if (!hasScopedPath && !hasScopedQuery) warnings.push('sem patientId/sessionId aparente');
+  }
+  if (options.afterWriteRefetch) warnings.push('refetch amplo apos escrita');
+  if (warnings.length > 0) {
+    console.warn('[egress-audit]', endpoint, {
+      table: options.table || 'unknown',
+      operation: options.operation || 'unknown',
+      warnings
+    });
+  }
+}
+
+async function fetchClinical(endpoint: string, init: RequestInit, audit: Parameters<typeof auditClinicalQuery>[1] = {}) {
+  auditClinicalQuery(endpoint, audit);
+  return await fetch(endpoint, init);
+}
+
+function sortByNewest(rows: any[], fields: string[]): any[] {
+  return [...(Array.isArray(rows) ? rows : [])].sort((a: any, b: any) => {
+    const aValue = fields.map((field) => a?.[field]).find(Boolean) || 0;
+    const bValue = fields.map((field) => b?.[field]).find(Boolean) || 0;
+    return new Date(bValue).getTime() - new Date(aValue).getTime();
+  });
+}
+
 async function handleDataError(error: unknown, operationType: OperationType, path: string | null) {
   const supabase = await getSupabase();
   const { data: { user } } = await supabase.auth.getUser();
@@ -455,6 +517,58 @@ function abaV2DisabledResponse(data: any = null) {
   };
 }
 
+const ABA_DEFAULT_SOURCE = 'verto_web';
+
+function firstStringValue(...values: any[]) {
+  for (const value of values) {
+    const normalized = String(value || '').trim();
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
+function buildAbaIntegrityFields(input: any = {}, options: { includeRawPayload?: boolean } = {}) {
+  const rawPayload = input?.raw_payload || input?.rawPayload || {};
+  const clinicId = firstStringValue(
+    input?.clinic_id,
+    input?.clinicId,
+    input?.organization_id,
+    input?.organizationId,
+    rawPayload?.clinicId,
+    rawPayload?.organizationId
+  );
+  const source = firstStringValue(input?.source, input?.clientSource, rawPayload?.source, rawPayload?.clientSource, ABA_DEFAULT_SOURCE);
+  const syncStatus = firstStringValue(input?.sync_status, input?.syncStatus, rawPayload?.syncStatus, 'local');
+  const createdAt = firstStringValue(input?.created_at, input?.createdAt, new Date().toISOString());
+  const fields: any = {
+    source,
+    clientSource: source,
+    created_at: createdAt,
+    createdAt
+  };
+  if (clinicId) {
+    fields.clinic_id = clinicId;
+    fields.clinicId = clinicId;
+    fields.organization_id = firstStringValue(input?.organization_id, input?.organizationId, clinicId);
+    fields.organizationId = firstStringValue(input?.organizationId, input?.organization_id, clinicId);
+  }
+  if (options.includeRawPayload !== false) {
+    const nextRawPayload = {
+      ...rawPayload,
+      source,
+      clientSource: source,
+      syncStatus
+    };
+    if (clinicId) {
+      nextRawPayload.clinicId = clinicId;
+      nextRawPayload.organizationId = fields.organizationId;
+    }
+    fields.raw_payload = nextRawPayload;
+    fields.rawPayload = nextRawPayload;
+  }
+  return fields;
+}
+
 // Helper to handle offline-first saving
 async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'DELETE' = 'POST') {
   const idempotencyKey = createIdempotencyKey(`${method}:${endpoint}`, id);
@@ -558,12 +672,12 @@ export const dataService = {
   },
 
   async getPatients() {
-    const endpoint = '/api/patients';
+    const endpoint = endpointWithLimit('/api/patients', 200);
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'patient'),
         credentials: 'include'
-      });
+      }, { operation: 'list', table: 'patients', hasExplicitColumns: false, requiresPatientOrSession: false });
       if (response.status === 304) {
         const local304 = await getRecordsByType('patient');
         return { success: true, data: local304.map((r) => r.data) };
@@ -860,7 +974,7 @@ export const dataService = {
   },
 
   async getNotes(patientId: string) {
-    const endpoint = `/api/notes/${patientId}`;
+    const endpoint = endpointWithLimit(`/api/notes/${patientId}`, 20);
     try {
       const response = await fetch(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'note'),
@@ -898,7 +1012,7 @@ export const dataService = {
 
   async getNotesByEmail(email: string) {
     try {
-      const response = await fetch(`/api/notes/email/${email}`, {
+      const response = await fetch(endpointWithLimit(`/api/notes/email/${email}`, 20), {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
@@ -950,7 +1064,7 @@ export const dataService = {
 
   async getHistory(patientId: string) {
     try {
-      const response = await fetch(`/api/history/${patientId}`, {
+      const response = await fetch(endpointWithLimit(`/api/history/${patientId}`, 20), {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
@@ -970,7 +1084,7 @@ export const dataService = {
 
   async getHistoryByEmail(email: string) {
     try {
-      const response = await fetch(`/api/history/email/${email}`, {
+      const response = await fetch(endpointWithLimit(`/api/history/email/${email}`, 20), {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
@@ -987,7 +1101,7 @@ export const dataService = {
 
   async getPatientSelfHistory() {
     try {
-      const response = await fetch('/api/patient/self/history', {
+      const response = await fetch(endpointWithLimit('/api/patient/self/history', 20), {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
@@ -1020,12 +1134,14 @@ export const dataService = {
     const id = String(session?.id || session?.session_id || session?.sessionId || generateId());
     const data = {
       ...(session || {}),
+      ...buildAbaIntegrityFields(session),
       id,
       patient_id: session?.patient_id || session?.patientId,
       patientId: session?.patient_id || session?.patientId,
       therapist_id: session?.therapist_id || session?.therapistId,
       therapistId: session?.therapist_id || session?.therapistId,
-      started_at: session?.started_at || session?.startedAt || new Date().toISOString()
+      started_at: session?.started_at || session?.startedAt || new Date().toISOString(),
+      source: session?.source || session?.clientSource || ABA_DEFAULT_SOURCE
     };
     return await saveOfflineFirst(id, data, 'aba', '/api/aba/sessions');
   },
@@ -1046,6 +1162,7 @@ export const dataService = {
     const id = String(summary?.id || summary?.summary_id || summary?.summaryId || generateId());
     const data = {
       ...(summary || {}),
+      ...buildAbaIntegrityFields(summary),
       id,
       session_id: summary?.session_id || summary?.sessionId,
       sessionId: summary?.session_id || summary?.sessionId,
@@ -1073,6 +1190,7 @@ export const dataService = {
       abcSummary: summary?.abc_summary || summary?.abcSummary || [],
       session_note: summary?.session_note ?? summary?.sessionNote ?? '',
       sessionNote: summary?.session_note ?? summary?.sessionNote ?? '',
+      source: summary?.source || summary?.clientSource || ABA_DEFAULT_SOURCE,
       syncStatus: summary?.syncStatus || 'local',
       created_at: summary?.created_at || summary?.createdAt || new Date().toISOString(),
       createdAt: summary?.created_at || summary?.createdAt || new Date().toISOString()
@@ -1080,14 +1198,82 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'aba', '/api/aba/session-summaries');
   },
 
-  async getAbaSessions(patientId: string) {
-    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
-    const endpoint = `/api/aba/sessions/${encodeURIComponent(String(patientId))}`;
+  async getSessionLiveSummary(sessionId: string) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/session-live-summaries/${encodeURIComponent(String(sessionId))}`;
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
-      });
+      }, { operation: 'detail', table: 'aba_session_live_summaries', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+    } catch (error) {
+      console.log('Fetching ABA live summary from local state only...');
+    }
+    return { success: true, data: null };
+  },
+
+  async getRecentSessionEvents(sessionId: string, limit = 20) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    const safeLimit = normalizeListLimit(limit, 20, 20);
+    const endpoint = endpointWithLimit(`/api/aba/recent-session-events/${encodeURIComponent(String(sessionId))}`, safeLimit);
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { operation: 'list', table: 'aba_recent_session_events', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+    } catch (error) {
+      console.log('Fetching recent ABA session events from local state only...');
+    }
+    return { success: true, data: [] };
+  },
+
+  async getPatientAbaSummary(patientId: string) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/patient-summary/${encodeURIComponent(String(patientId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { operation: 'detail', table: 'aba_patient_aba_summaries', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+    } catch (error) {
+      console.log('Fetching ABA patient summary from local state only...');
+    }
+    return { success: true, data: null };
+  },
+
+  async getSessionReport(sessionId: string) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/session-reports/${encodeURIComponent(String(sessionId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { operation: 'detail', table: 'aba_session_summaries', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+    } catch (error) {
+      console.log('Fetching ABA session report from local state only...');
+    }
+    return { success: true, data: null };
+  },
+
+  async getPaginatedBehaviorEvents(patientId: string, page = 1, pageSize = 20) {
+    return await this.getAbaBehaviorEvents(patientId, { page, pageSize });
+  },
+
+  async getAbaSessions(patientId: string, options: { limit?: number; page?: number; pageSize?: number } = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    const limit = normalizeListLimit(options.pageSize ?? options.limit, 20, 50);
+    const page = Math.max(1, Math.round(Number(options.page || 1) || 1));
+    const localStart = (page - 1) * limit;
+    const endpoint = endpointWithPagination(`/api/aba/sessions/${encodeURIComponent(String(patientId))}`, { ...options, page, pageSize: limit });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { operation: 'list', table: 'aba_sessions', hasExplicitColumns: true });
       if (response.ok) {
         const result = await response.json();
         return result;
@@ -1098,12 +1284,12 @@ export const dataService = {
     const local = await getRecordsByType('aba');
     return {
       success: true,
-      data: local
+      data: sortByNewest(local
         .map(r => r.data)
         .filter((row: any) =>
           String(row?.patient_id || row?.patientId || '') === String(patientId) &&
           (row?.started_at || row?.startedAt)
-        )
+        ), ['started_at', 'startedAt', 'created_at', 'createdAt']).slice(localStart, localStart + limit)
     };
   },
 
@@ -1120,6 +1306,7 @@ export const dataService = {
     });
     const data = {
       ...(trial || {}),
+      ...buildAbaIntegrityFields(trial),
       id,
       patient_id: trial?.patient_id || trial?.patientId,
       patientId: trial?.patient_id || trial?.patientId,
@@ -1145,14 +1332,17 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'aba', '/api/aba/trials');
   },
 
-  async getAbaTrials(patientId: string) {
+  async getAbaTrials(patientId: string, options: { limit?: number; page?: number; pageSize?: number } = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
-    const endpoint = `/api/aba/trials/${encodeURIComponent(String(patientId))}`;
+    const limit = normalizeListLimit(options.pageSize ?? options.limit, 20, 50);
+    const page = Math.max(1, Math.round(Number(options.page || 1) || 1));
+    const localStart = (page - 1) * limit;
+    const endpoint = endpointWithPagination(`/api/aba/trials/${encodeURIComponent(String(patientId))}`, { ...options, page, pageSize: limit });
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
-      });
+      }, { operation: 'list', table: 'aba_trials', hasExplicitColumns: true });
       if (response.ok) {
         const result = await response.json();
         return result;
@@ -1163,13 +1353,13 @@ export const dataService = {
     const local = await getRecordsByType('aba');
     return {
       success: true,
-      data: local
+      data: sortByNewest(local
         .map(r => r.data)
         .filter((row: any) =>
           String(row?.patient_id || row?.patientId || '') === String(patientId) &&
           !(row?.evaluation_status || row?.evaluationStatus) &&
           (row?.target_name || row?.targetName || row?.collection_type || row?.collectionType)
-        )
+        ), ['occurred_at', 'occurredAt', 'timestamp', 'created_at', 'createdAt']).slice(localStart, localStart + limit)
     };
   },
 
@@ -1179,6 +1369,7 @@ export const dataService = {
     const timestamp = event?.timestamp || event?.occurred_at || event?.occurredAt || new Date().toISOString();
     const data = {
       ...(event || {}),
+      ...buildAbaIntegrityFields(event),
       id,
       patient_id: event?.patient_id || event?.patientId,
       patientId: event?.patient_id || event?.patientId,
@@ -1213,14 +1404,17 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'aba', `/api/aba/behavior-events/${encodeURIComponent(id)}`, 'DELETE');
   },
 
-  async getAbaBehaviorEvents(patientId: string) {
+  async getAbaBehaviorEvents(patientId: string, options: { limit?: number; page?: number; pageSize?: number } = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
-    const endpoint = `/api/aba/behavior-events/${encodeURIComponent(String(patientId))}`;
+    const limit = normalizeListLimit(options.pageSize ?? options.limit, 20, 50);
+    const page = Math.max(1, Math.round(Number(options.page || 1) || 1));
+    const localStart = (page - 1) * limit;
+    const endpoint = endpointWithPagination(`/api/aba/behavior-events/${encodeURIComponent(String(patientId))}`, { ...options, page, pageSize: limit });
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
-      });
+      }, { operation: 'list', table: 'aba_behavior_events', hasExplicitColumns: true });
       if (response.ok) {
         const result = await response.json();
         return result;
@@ -1231,12 +1425,12 @@ export const dataService = {
     const local = await getRecordsByType('aba');
     return {
       success: true,
-      data: local
+      data: sortByNewest(local
         .map(r => r.data)
         .filter((row: any) =>
           String(row?.patient_id || row?.patientId || '') === String(patientId) &&
           (row?.behavior_name || row?.behaviorName || row?.measurement_type || row?.measurementType)
-        )
+        ), ['occurred_at', 'occurredAt', 'timestamp', 'created_at', 'createdAt']).slice(localStart, localStart + limit)
     };
   },
 
@@ -1246,6 +1440,7 @@ export const dataService = {
     const timestamp = record?.interval_ended_at || record?.intervalEndedAt || record?.occurred_at || record?.occurredAt || new Date().toISOString();
     const data = {
       ...(record || {}),
+      ...buildAbaIntegrityFields(record),
       id,
       patient_id: record?.patient_id || record?.patientId,
       patientId: record?.patient_id || record?.patientId,
@@ -1286,6 +1481,7 @@ export const dataService = {
     const id = String(summary?.id || summary?.summary_id || summary?.summaryId || generateId());
     const data = {
       ...(summary || {}),
+      ...buildAbaIntegrityFields(summary),
       id,
       patient_id: summary?.patient_id || summary?.patientId,
       patientId: summary?.patient_id || summary?.patientId,
@@ -1341,6 +1537,7 @@ export const dataService = {
     const id = String(event?.id || event?.abc_id || event?.abcId || generateId());
     const data = {
       ...(event || {}),
+      ...buildAbaIntegrityFields(event),
       id,
       patient_id: event?.patient_id || event?.patientId,
       patientId: event?.patient_id || event?.patientId,
@@ -1374,14 +1571,17 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'aba', '/api/aba/mastery-evaluations');
   },
 
-  async getAbaMasteryEvaluations(patientId: string) {
+  async getAbaMasteryEvaluations(patientId: string, options: { limit?: number; page?: number; pageSize?: number } = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
-    const endpoint = `/api/aba/mastery-evaluations/${encodeURIComponent(String(patientId))}`;
+    const limit = normalizeListLimit(options.pageSize ?? options.limit, 20, 50);
+    const page = Math.max(1, Math.round(Number(options.page || 1) || 1));
+    const localStart = (page - 1) * limit;
+    const endpoint = endpointWithPagination(`/api/aba/mastery-evaluations/${encodeURIComponent(String(patientId))}`, { ...options, page, pageSize: limit });
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
-      });
+      }, { operation: 'list', table: 'aba_mastery_evaluations', hasExplicitColumns: true });
       if (response.ok) {
         const result = await response.json();
         return result;
@@ -1392,12 +1592,12 @@ export const dataService = {
     const local = await getRecordsByType('aba');
     return {
       success: true,
-      data: local
+      data: sortByNewest(local
         .map(r => r.data)
         .filter((row: any) =>
           String(row?.patient_id || row?.patientId || '') === String(patientId) &&
           (row?.evaluation_status || row?.evaluationStatus || row?.suggested_phase || row?.suggestedPhase)
-        )
+        ), ['evaluated_at', 'evaluatedAt', 'created_at', 'createdAt']).slice(localStart, localStart + limit)
     };
   },
 
@@ -1492,7 +1692,7 @@ export const dataService = {
 
   async getTasks(patientId: string) {
     try {
-      const response = await fetch(`/api/tasks/${patientId}`, {
+      const response = await fetch(endpointWithLimit(`/api/tasks/${patientId}`, 20), {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
@@ -1512,7 +1712,7 @@ export const dataService = {
 
   async getTasksByEmail(email: string) {
     try {
-      const response = await fetch(`/api/tasks/email/${email}`, {
+      const response = await fetch(endpointWithLimit(`/api/tasks/email/${email}`, 20), {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
@@ -1529,7 +1729,7 @@ export const dataService = {
 
   async getPatientSelfTasks() {
     try {
-      const response = await fetch('/api/patient/self/tasks', {
+      const response = await fetch(endpointWithLimit('/api/patient/self/tasks', 20), {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
@@ -1613,7 +1813,7 @@ export const dataService = {
 
   async getAssignedTasks(patientId: string) {
     try {
-      const response = await fetch(`/api/assigned-tasks/${patientId}`, {
+      const response = await fetch(endpointWithLimit(`/api/assigned-tasks/${patientId}`, 20), {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
@@ -1626,7 +1826,7 @@ export const dataService = {
 
   async getPatientSelfAssignedTasks() {
     try {
-      const response = await fetch('/api/patient/self/assigned-tasks', {
+      const response = await fetch(endpointWithLimit('/api/patient/self/assigned-tasks', 20), {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
@@ -2328,7 +2528,7 @@ export const dataService = {
 
   async getPatientAnamnesisSubmissions(patientId: string) {
     try {
-      const response = await fetch(`/api/patient-anamnesis/${patientId}`, {
+      const response = await fetch(endpointWithLimit(`/api/patient-anamnesis/${patientId}`, 20), {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
@@ -2356,7 +2556,7 @@ export const dataService = {
     const [clinicStateResponse, clinicTemplateResponse, patientsResponse] = await Promise.all([
       fetch('/api/clinic/state', { headers: headersWithWorkspace, credentials: 'include' }),
       fetch('/api/clinic/anamnesis-template', { headers: headersWithWorkspace, credentials: 'include' }),
-      fetch('/api/patients', { headers: headersWithWorkspace, credentials: 'include' })
+      fetch(endpointWithLimit('/api/patients', 200), { headers: headersWithWorkspace, credentials: 'include' })
     ]);
 
     const clinicStateRes = await safeJson(clinicStateResponse);
@@ -2382,12 +2582,12 @@ export const dataService = {
       if (!patientId) continue;
 
       const [notesResponse, historyResponse, tasksResponse, assignedTasksResponse, recordResponse, submissionsResponse] = await Promise.all([
-        fetch(`/api/notes/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' }),
-        fetch(`/api/history/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' }),
-        fetch(`/api/tasks/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' }),
-        fetch(`/api/assigned-tasks/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' }),
+        fetch(endpointWithLimit(`/api/notes/${patientId}`, 20), { headers: headersWithWorkspace, credentials: 'include' }),
+        fetch(endpointWithLimit(`/api/history/${patientId}`, 20), { headers: headersWithWorkspace, credentials: 'include' }),
+        fetch(endpointWithLimit(`/api/tasks/${patientId}`, 20), { headers: headersWithWorkspace, credentials: 'include' }),
+        fetch(endpointWithLimit(`/api/assigned-tasks/${patientId}`, 20), { headers: headersWithWorkspace, credentials: 'include' }),
         fetch(`/api/patient-records/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' }),
-        fetch(`/api/patient-anamnesis/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' })
+        fetch(endpointWithLimit(`/api/patient-anamnesis/${patientId}`, 20), { headers: headersWithWorkspace, credentials: 'include' })
       ]);
       const [notesRes, historyRes, tasksRes, assignedTasksRes, patientRecordRes, submissionsRes] = await Promise.all([
         safeJson(notesResponse),

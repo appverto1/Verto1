@@ -485,6 +485,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [abaTrials, setAbaTrials] = useState<any[]>([]);
   const [abaBehaviorEvents, setAbaBehaviorEvents] = useState<any[]>([]);
   const [abaMasteryEvaluations, setAbaMasteryEvaluations] = useState<any[]>([]);
+  const [abaPatientSummary, setAbaPatientSummary] = useState<any>(null);
   const [isLoadingAbaRecords, setIsLoadingAbaRecords] = useState(false);
   const [abaRecordsError, setAbaRecordsError] = useState("");
   const [abaRecordTypeFilter, setAbaRecordTypeFilter] = useState("all");
@@ -520,25 +521,29 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         setAbaTrials([]);
         setAbaBehaviorEvents([]);
         setAbaMasteryEvaluations([]);
+        setAbaPatientSummary(null);
         return;
       }
       setIsLoadingAbaRecords(true);
       setAbaRecordsError("");
       try {
-        const [sessionsResult, trialsResult, behaviorResult, masteryResult] = await Promise.allSettled([
-          dataService.getAbaSessions(String(patient.id)),
-          dataService.getAbaTrials(String(patient.id)),
-          dataService.getAbaBehaviorEvents(String(patient.id)),
-          dataService.getAbaMasteryEvaluations(String(patient.id))
+        const recentRecordLimit = 10;
+        const [patientSummaryResult, sessionsResult, trialsResult, behaviorResult, masteryResult] = await Promise.allSettled([
+          dataService.getPatientAbaSummary(String(patient.id)),
+          dataService.getAbaSessions(String(patient.id), { page: 1, pageSize: recentRecordLimit }),
+          dataService.getAbaTrials(String(patient.id), { page: 1, pageSize: recentRecordLimit }),
+          dataService.getAbaBehaviorEvents(String(patient.id), { page: 1, pageSize: recentRecordLimit }),
+          dataService.getAbaMasteryEvaluations(String(patient.id), { page: 1, pageSize: recentRecordLimit })
         ]);
         if (cancelled) return;
         const readData = (result: PromiseSettledResult<any>) =>
           result.status === 'fulfilled' && Array.isArray(result.value?.data) ? result.value.data : [];
+        setAbaPatientSummary(patientSummaryResult.status === 'fulfilled' ? patientSummaryResult.value?.data || null : null);
         setAbaSessions(readData(sessionsResult));
         setAbaTrials(readData(trialsResult));
         setAbaBehaviorEvents(readData(behaviorResult));
         setAbaMasteryEvaluations(readData(masteryResult));
-        if ([sessionsResult, trialsResult, behaviorResult, masteryResult].some((result) => result.status === 'rejected')) {
+        if ([patientSummaryResult, sessionsResult, trialsResult, behaviorResult, masteryResult].some((result) => result.status === 'rejected')) {
           setAbaRecordsError("Alguns registros ABA nao puderam ser carregados agora.");
         }
       } catch (error) {
@@ -555,7 +560,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return () => {
       cancelled = true;
     };
-  }, [patient?.id, isKidsProfile, abaV2Enabled, activeSession?.recordCount, abaRecordsRefreshKey]);
+  }, [patient?.id, isKidsProfile, abaV2Enabled, abaRecordsRefreshKey]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -689,6 +694,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       patientId: patient?.id,
       patientName: patient?.name || 'Paciente',
       therapistId: resolvedClinicContext?.userId || clinicContext?.userId || null,
+      clinicId: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || null,
       status: 'active',
       durationMinutes,
       startedAt: startedAt.toISOString(),
@@ -702,6 +708,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         id: nextSession.id,
         patient_id: patient?.id,
         patient_name: patient?.name || 'Paciente',
+        clinic_id: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || undefined,
+        clinicId: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || undefined,
         therapist_id: resolvedClinicContext?.userId || clinicContext?.userId || undefined,
         status: 'active',
         started_at: nextSession.startedAt,
@@ -2042,6 +2050,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .sort((a, b) => new Date(b.occurredAt || 0).getTime() - new Date(a.occurredAt || 0).getTime());
   }, [abaTrials, abaBehaviorEvents, abaMasteryEvaluations, abaRecordTypeFilter, abaSessionFilter, abaRecordSearch]);
 
+  const abaSummaryMetrics = useMemo(() => {
+    const summary = abaPatientSummary || {};
+    return {
+      totalSessions: Number(summary.total_sessions ?? summary.totalSessions ?? abaSessionOptions.length) || 0,
+      totalTrials: Number(summary.total_trials ?? summary.totalTrials ?? abaTrials.length) || 0,
+      totalBehaviorEvents: Number(summary.total_behavior_events ?? summary.totalBehaviorEvents ?? abaBehaviorEvents.length) || 0,
+      masteredTargets: Number(summary.mastered_targets_count ?? summary.masteredTargetsCount ?? abaMasteryEvaluations.length) || 0,
+      lastEventLabel: summary.last_behavior_event_label || summary.lastBehaviorEventLabel || '',
+      lastEventAt: summary.last_behavior_event_at || summary.lastBehaviorEventAt || ''
+    };
+  }, [abaPatientSummary, abaSessionOptions.length, abaTrials.length, abaBehaviorEvents.length, abaMasteryEvaluations.length]);
+
   const renderAbaRecordsPanel = () => {
     const latestRecord = abaStructuredRecords[0];
     const hasActiveAbaFilters =
@@ -2066,6 +2086,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 {latestRecord && (
                   <p className={`mt-3 text-[11px] font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
                     Último registro: {latestRecord.title} • {formatAbaDateTime(latestRecord.occurredAt)}
+                  </p>
+                )}
+                {!latestRecord && abaSummaryMetrics.lastEventLabel && (
+                  <p className={`mt-3 text-[11px] font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                    Último evento: {abaSummaryMetrics.lastEventLabel} • {formatAbaDateTime(abaSummaryMetrics.lastEventAt)}
                   </p>
                 )}
               </div>
@@ -2101,7 +2126,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               className={`rounded-2xl border p-4 text-left transition-all ${abaRecordTypeFilter === 'trial' ? 'border-[#7a32fc] ring-2 ring-[#7a32fc]/15' : isPanelDark ? 'border-slate-700' : 'border-slate-100'} ${isPanelDark ? 'bg-slate-900/50' : 'bg-white/80'}`}
             >
               <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Tentativas</p>
-              <p className={`text-3xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{abaTrials.length}</p>
+              <p className={`text-3xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{abaSummaryMetrics.totalTrials}</p>
             </button>
             <button
               type="button"
@@ -2112,7 +2137,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               className={`rounded-2xl border p-4 text-left transition-all ${abaRecordTypeFilter === 'behavior' ? 'border-emerald-500 ring-2 ring-emerald-500/15' : isPanelDark ? 'border-slate-700' : 'border-slate-100'} ${isPanelDark ? 'bg-slate-900/50' : 'bg-white/80'}`}
             >
               <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Comportamentos</p>
-              <p className={`text-3xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{abaBehaviorEvents.length}</p>
+              <p className={`text-3xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{abaSummaryMetrics.totalBehaviorEvents}</p>
             </button>
             <button
               type="button"
@@ -2123,7 +2148,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               className={`rounded-2xl border p-4 text-left transition-all ${abaRecordTypeFilter === 'mastery' ? 'border-amber-500 ring-2 ring-amber-500/15' : isPanelDark ? 'border-slate-700' : 'border-slate-100'} ${isPanelDark ? 'bg-slate-900/50' : 'bg-white/80'}`}
             >
               <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Maestria</p>
-              <p className={`text-3xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{abaMasteryEvaluations.length}</p>
+              <p className={`text-3xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{abaSummaryMetrics.masteredTargets}</p>
             </button>
             <button
               type="button"
@@ -2135,7 +2160,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               className={`rounded-2xl border p-4 text-left transition-all ${isPanelDark ? 'bg-slate-900/50 border-slate-700' : 'bg-white/80 border-slate-100'}`}
             >
               <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Sessões</p>
-              <p className={`text-3xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{abaSessionOptions.length}</p>
+              <p className={`text-3xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{abaSummaryMetrics.totalSessions}</p>
             </button>
           </div>
         </div>
@@ -4191,6 +4216,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           onConfirmEndSession={handleConfirmSessionEnd}
           onSessionRecordSaved={incrementActiveSessionRecordCount}
           therapistId={resolvedClinicContext?.userId || clinicContext?.userId || null}
+          clinicId={resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || null}
         />
       )}
       {isTutorialActive && ( 

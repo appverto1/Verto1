@@ -370,26 +370,39 @@ const trialOutcome = (trial: any) => {
   return { independent, prompted, error, correct };
 };
 
+export const calculateTrialAccuracy = (trials: any[]) => {
+  const outcomes = trials.map(trialOutcome);
+  const totalTrials = outcomes.length;
+  const correctTrials = outcomes.filter((outcome) => outcome.correct).length;
+  return percent(correctTrials, totalTrials);
+};
+
+export const calculateTrialIndependence = (trials: any[]) => {
+  const outcomes = trials.map(trialOutcome);
+  const totalTrials = outcomes.length;
+  const independentTrials = outcomes.filter((outcome) => outcome.independent).length;
+  return percent(independentTrials, totalTrials);
+};
+
 const calculateTeachingSummary = (trials: any[]): TeachingSummary => {
   const outcomes = trials.map(trialOutcome);
   const totalTrials = outcomes.length;
   const independentTrials = outcomes.filter((outcome) => outcome.independent).length;
   const errorTrials = outcomes.filter((outcome) => outcome.error).length;
   const promptedTrials = outcomes.filter((outcome) => outcome.prompted).length;
-  const correctTrials = outcomes.filter((outcome) => outcome.correct).length;
   const typesUsed = Array.from(new Set(trials.map(trialTypeOf).filter(Boolean)));
   return {
     totalTrials,
     independentTrials,
     promptedTrials,
     errorTrials,
-    accuracyPercent: percent(correctTrials, totalTrials),
-    independencePercent: percent(independentTrials, totalTrials),
+    accuracyPercent: calculateTrialAccuracy(trials),
+    independencePercent: calculateTrialIndependence(trials),
     typesUsed
   };
 };
 
-const calculateFrequencySummary = (events: any[]): BehaviorFrequencySummary[] => {
+export const calculateFrequencySummary = (events: any[]): BehaviorFrequencySummary[] => {
   const grouped = new Map<string, BehaviorFrequencySummary>();
   for (const event of events) {
     if (measurementTypeOf(event) !== 'frequency') continue;
@@ -401,7 +414,7 @@ const calculateFrequencySummary = (events: any[]): BehaviorFrequencySummary[] =>
   return Array.from(grouped.values());
 };
 
-const calculateDurationSummary = (events: any[]): BehaviorDurationSummary[] => {
+export const calculateDurationSummary = (events: any[]): BehaviorDurationSummary[] => {
   const grouped = new Map<string, { behaviorName: string; durations: number[] }>();
   for (const event of events) {
     if (measurementTypeOf(event) !== 'duration') continue;
@@ -424,7 +437,7 @@ const calculateDurationSummary = (events: any[]): BehaviorDurationSummary[] => {
   });
 };
 
-const calculateIntervalSummary = (events: any[]): BehaviorIntervalSummary[] => {
+export const calculateIntervalSummary = (events: any[]): BehaviorIntervalSummary[] => {
   const grouped = new Map<string, BehaviorIntervalSummary & { hasAggregate?: boolean }>();
   for (const event of events) {
     const method = measurementTypeOf(event);
