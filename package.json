@@ -17,6 +17,7 @@
     "test:aba-session-summary": "tsx tests/abaSessionSummary.test.ts",
     "test:aba-session-feedback": "tsx tests/abaSessionFeedback.test.ts",
     "test:aba-interval-lifecycle": "tsx tests/abaIntervalLifecycle.test.ts",
+    "test:patient-invitation-fallback": "tsx tests/patientInvitationFallback.test.ts",
     "test:aba-clinical-dock": "tsx tests/abaClinicalDock.test.ts",
     "test:aba-marco1": "tsx tests/abaMarco1Audit.test.ts",
     "test:aba-summary-driven": "tsx tests/abaSummaryDriven.test.ts",
