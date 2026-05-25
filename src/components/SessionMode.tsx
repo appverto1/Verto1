@@ -385,6 +385,7 @@ export const SessionMode = ({
   const intervalRunStatus = getIntervalRunStatus(intervalRun);
   const intervalRunPaused = intervalRunStatus === 'PAUSED';
   const intervalRunAwaitingResponse = intervalRunStatus === 'AWAITING_RESPONSE';
+  const intervalResponseActive = Boolean((intervalRunAwaitingResponse || intervalRun?.awaitingResponse) && !intervalRun?.paused && !intervalRun?.completed);
   const intervalToastCompact = Boolean(intervalRun && intervalRunStatus !== 'PAUSED' && intervalRunStatus !== 'COMPLETED' && intervalRunStatus !== 'PARTIALLY_COMPLETED' && intervalRunStatus !== 'CANCELLED');
   const vibrateClinicalAction = (pattern: number | number[]) => {
     if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
@@ -2261,7 +2262,6 @@ export const SessionMode = ({
   const closureWarnings = sessionClosureSummary.warningItems;
   const hasClosureBlockers = closureBlockers.length > 0;
   const hasClosureWarnings = closureWarnings.length > 0;
-  const intervalResponseActive = Boolean((intervalRunAwaitingResponse || intervalRun?.awaitingResponse) && !intervalRun?.paused && !intervalRun?.completed);
   const scrollBottomPaddingPx = Math.max(24, clinicalDockHeight + 24);
   const scrollBottomPaddingStyle: React.CSSProperties = {
     paddingBottom: `calc(${scrollBottomPaddingPx}px + env(safe-area-inset-bottom))`,
