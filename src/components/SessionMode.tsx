@@ -355,10 +355,14 @@ export const SessionMode = ({
   const [editingRecordNotes, setEditingRecordNotes] = useState('');
   const [hydratedSessionStateKey, setHydratedSessionStateKey] = useState('');
   const [nowMs, setNowMs] = useState(Date.now());
+  const [clinicalDockHeight, setClinicalDockHeight] = useState(0);
   const actionToastTimerRef = useRef<number | null>(null);
   const actionLocksRef = useRef<Record<string, boolean>>({});
   const actionLockTimersRef = useRef<Record<string, number>>({});
   const microFeedbackTimersRef = useRef<Record<string, number>>({});
+  const sessionScrollRef = useRef<HTMLDivElement | null>(null);
+  const clinicalDockRef = useRef<HTMLDivElement | null>(null);
+  const intervalPausedControlsRef = useRef<HTMLDivElement | null>(null);
 
   const selectedBehavior = useMemo(
     () => behaviorPresets.find((behavior) => behavior.id === selectedBehaviorId) || behaviorPresets[0],
@@ -523,6 +527,46 @@ export const SessionMode = ({
   useEffect(() => {
     if (intervalRunAwaitingResponse) setClinicalDockSheetOpen(false);
   }, [intervalRunAwaitingResponse]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const updateDockHeight = () => {
+      const nextHeight = clinicalDockRef.current?.getBoundingClientRect().height || 0;
+      setClinicalDockHeight(Math.ceil(nextHeight));
+    };
+    updateDockHeight();
+    window.addEventListener('resize', updateDockHeight);
+    let resizeObserver: ResizeObserver | null = null;
+    if (clinicalDockRef.current && typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(updateDockHeight);
+      resizeObserver.observe(clinicalDockRef.current);
+    }
+    return () => {
+      window.removeEventListener('resize', updateDockHeight);
+      resizeObserver?.disconnect();
+    };
+  }, [clinicalDockSheetOpen, crisisMode, dockShortcuts.length, intervalResponseActive, intervalRunPaused, openDurations.length]);
+
+  useEffect(() => {
+    if (!intervalRunPaused) return;
+    const animationFrame = window.requestAnimationFrame(() => {
+      const scrollContainer = sessionScrollRef.current;
+      const controls = intervalPausedControlsRef.current;
+      if (!scrollContainer || !controls) return;
+      const containerRect = scrollContainer.getBoundingClientRect();
+      const controlsRect = controls.getBoundingClientRect();
+      const dockGuard = clinicalDockHeight + 24;
+      const visibleBottom = containerRect.bottom - dockGuard;
+      const bottomOverflow = controlsRect.bottom - visibleBottom;
+      const topOverflow = controlsRect.top - containerRect.top;
+      if (bottomOverflow > 0) {
+        scrollContainer.scrollBy({ top: bottomOverflow + 16, behavior: 'smooth' });
+      } else if (topOverflow < 0) {
+        scrollContainer.scrollBy({ top: topOverflow - 16, behavior: 'smooth' });
+      }
+    });
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [clinicalDockHeight, intervalRun?.id, intervalRun?.intervalIndex, intervalRunPaused]);
 
   const triggerIntervalAlert = (alertType: string) => {
     if ((alertType === 'vibration' || alertType === 'both') && typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
@@ -2218,11 +2262,11 @@ export const SessionMode = ({
   const hasClosureBlockers = closureBlockers.length > 0;
   const hasClosureWarnings = closureWarnings.length > 0;
   const intervalResponseActive = Boolean((intervalRunAwaitingResponse || intervalRun?.awaitingResponse) && !intervalRun?.paused && !intervalRun?.completed);
-  const scrollBottomPaddingClass = intervalResponseActive
-    ? 'pb-[calc(8rem+env(safe-area-inset-bottom))] scroll-pb-[calc(8rem+env(safe-area-inset-bottom))]'
-    : intervalRun
-      ? 'pb-[calc(11rem+env(safe-area-inset-bottom))] scroll-pb-[calc(11rem+env(safe-area-inset-bottom))]'
-      : 'pb-[calc(12rem+env(safe-area-inset-bottom))] scroll-pb-[calc(12rem+env(safe-area-inset-bottom))]';
+  const scrollBottomPaddingPx = Math.max(24, clinicalDockHeight + 24);
+  const scrollBottomPaddingStyle: React.CSSProperties = {
+    paddingBottom: `calc(${scrollBottomPaddingPx}px + env(safe-area-inset-bottom))`,
+    scrollPaddingBottom: `calc(${scrollBottomPaddingPx}px + env(safe-area-inset-bottom))`
+  };
   const actionToastPositionClass = intervalRun
     ? 'top-[calc(5rem+env(safe-area-inset-top))] bottom-auto'
     : intervalToastCompact
@@ -2738,32 +2782,59 @@ export const SessionMode = ({
   };
 
   const clinicalDockCompact = Boolean(intervalRun && !intervalResponseActive);
+  const clinicalDockPausedCompact = Boolean(intervalRunPaused && !intervalResponseActive);
   const clinicalDock = !sessionCompleted && !intervalResponseActive ? (
     <div
+      ref={clinicalDockRef}
       data-aba-clinical-dock
       data-aba-clinical-dock-compact={clinicalDockCompact ? 'true' : 'false'}
       className={`xl:hidden fixed inset-x-0 bottom-0 z-[130] px-2 pb-[calc(0.55rem+env(safe-area-inset-bottom))] pt-2 ${clinicalDockSheetOpen ? 'pointer-events-none' : 'pointer-events-auto'}`}
     >
       <div className={`mx-auto max-w-3xl rounded-[24px] border p-1.5 shadow-xl backdrop-blur-xl ${clinicalDockCompact ? 'opacity-95' : 'p-2 shadow-2xl'} ${crisisMode ? 'border-red-300 bg-slate-950/95 shadow-red-950/30' : 'border-blue-100 bg-white/95 shadow-blue-950/15'}`}>
-        {openDurations.length > 0 && (
+        {!clinicalDockPausedCompact && openDurations.length > 0 && (
           <div className={`mb-1.5 flex items-center justify-between rounded-2xl px-3 py-2 text-xs font-black ${crisisMode ? 'bg-white/10 text-white' : 'bg-amber-50 text-amber-800'}`} data-aba-dock-open-duration-badge>
             <span>{openDurations.length} duração em andamento</span>
             <span>{openDurations[0].behaviorName} {formatElapsed(openDurations[0].startedAt, nowMs)} ■</span>
           </div>
         )}
-        <div className="grid grid-cols-[repeat(3,minmax(0,1fr))_64px] gap-2">
-          {dockShortcuts.map((shortcut) => renderDockShortcutButton(shortcut, crisisMode))}
-          <button
-            type="button"
-            onClick={() => {
-              if (crisisMode) openAbcModal();
-              else setClinicalDockSheetOpen(true);
-            }}
-            className={`min-h-[48px] rounded-[18px] border px-2 text-[11px] font-black uppercase tracking-widest shadow-lg transition-all active:scale-[0.98] ${crisisMode ? 'border-white/15 bg-white text-slate-950' : 'border-slate-100 bg-[#1B254B] text-white'}`}
-          >
-            {crisisMode ? 'ABC' : 'Mais'}
-          </button>
-        </div>
+        {clinicalDockPausedCompact ? (
+          <div className="grid grid-cols-2 gap-2" data-aba-clinical-dock-paused-compact>
+            <button
+              type="button"
+              onClick={() => {
+                setCrisisMode(true);
+                setClinicalDockSheetOpen(true);
+              }}
+              className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-[18px] border border-red-100 bg-red-50 px-3 text-[11px] font-black uppercase tracking-widest text-red-600 shadow-sm transition-all active:scale-[0.98]"
+            >
+              <Plus size={15} /> + Crise
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCrisisMode(false);
+                setClinicalDockSheetOpen(true);
+              }}
+              className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-[18px] border border-slate-100 bg-[#1B254B] px-3 text-[11px] font-black uppercase tracking-widest text-white shadow-sm transition-all active:scale-[0.98]"
+            >
+              <MoreHorizontal size={15} /> Mais
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-[repeat(3,minmax(0,1fr))_64px] gap-2">
+            {dockShortcuts.map((shortcut) => renderDockShortcutButton(shortcut, crisisMode))}
+            <button
+              type="button"
+              onClick={() => {
+                if (crisisMode) openAbcModal();
+                else setClinicalDockSheetOpen(true);
+              }}
+              className={`min-h-[48px] rounded-[18px] border px-2 text-[11px] font-black uppercase tracking-widest shadow-lg transition-all active:scale-[0.98] ${crisisMode ? 'border-white/15 bg-white text-slate-950' : 'border-slate-100 bg-[#1B254B] text-white'}`}
+            >
+              {crisisMode ? 'ABC' : 'Mais'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   ) : null;
@@ -2947,8 +3018,8 @@ export const SessionMode = ({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden lg:overflow-hidden grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_390px]">
-        <div className={`p-3 sm:p-4 lg:p-6 space-y-4 sm:space-y-6 lg:overflow-y-auto no-scrollbar ${scrollBottomPaddingClass} xl:pb-[calc(1rem+env(safe-area-inset-bottom))]`}>
+      <div ref={sessionScrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden lg:overflow-hidden grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_390px]">
+        <div className="p-3 sm:p-4 lg:p-6 space-y-4 sm:space-y-6 lg:overflow-y-auto no-scrollbar" style={scrollBottomPaddingStyle}>
           {sessionWarning && (
             <div className="rounded-2xl border border-amber-100 bg-amber-50 px-5 py-4 text-sm font-semibold text-amber-700 flex items-center gap-3">
               <AlertCircle size={18} /> {sessionWarning}
@@ -3072,18 +3143,17 @@ export const SessionMode = ({
                 </div>
                 )}
               </div>
-              <div className={`mt-4 border-t border-blue-100 pt-4 ${intervalResponseActive ? 'pb-2' : ''}`}>
+              <div className={intervalRunPaused ? 'mt-3' : `mt-4 border-t border-blue-100 pt-4 ${intervalResponseActive ? 'pb-2' : ''}`}>
                 {intervalRunPaused ? (
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4" data-aba-interval-paused-controls>
-                    <p className="text-base font-bold text-slate-900">Coleta pausada</p>
-                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                  <div ref={intervalPausedControlsRef} className="rounded-2xl border border-slate-200 bg-white p-3 sm:p-4" data-aba-interval-paused-controls>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      <button onClick={resumeIntervalRun} className="inline-flex min-h-[56px] w-full items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-4 py-3 text-xs font-bold uppercase tracking-widest text-white active:scale-95"><RotateCcw size={16} /> Retomar</button>
+                      <button onClick={finishIntervalRunNow} className="inline-flex min-h-[56px] w-full items-center justify-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-xs font-bold uppercase tracking-widest text-emerald-700 active:scale-95"><Square size={15} /> Finalizar agora</button>
+                      <button onClick={requestCancelIntervalRun} className="inline-flex min-h-[56px] w-full items-center justify-center gap-2 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-xs font-bold uppercase tracking-widest text-red-600 active:scale-95"><X size={15} /> Cancelar coleta</button>
+                    </div>
+                    <p className="mt-3 text-xs font-semibold text-slate-500">
                       Intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals} preservado. As respostas anteriores foram mantidas.
                     </p>
-                    <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      <button onClick={resumeIntervalRun} className="inline-flex min-h-[56px] items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-4 py-3 text-xs font-bold uppercase tracking-widest text-white active:scale-95"><RotateCcw size={16} /> Retomar</button>
-                      <button onClick={finishIntervalRunNow} className="inline-flex min-h-[56px] items-center justify-center gap-2 rounded-2xl bg-emerald-50 px-4 py-3 text-xs font-bold uppercase tracking-widest text-emerald-700 active:scale-95"><Square size={15} /> Finalizar agora</button>
-                      <button onClick={requestCancelIntervalRun} className="inline-flex min-h-[56px] items-center justify-center gap-2 rounded-2xl bg-red-50 px-4 py-3 text-xs font-bold uppercase tracking-widest text-red-600 active:scale-95"><X size={15} /> Cancelar coleta</button>
-                    </div>
                   </div>
                 ) : !intervalRunAwaitingResponse ? (
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" data-aba-interval-running-controls>
