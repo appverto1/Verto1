@@ -502,6 +502,8 @@ export const SessionMode = ({
   const actionLockTimersRef = useRef<Record<string, number>>({});
   const microFeedbackTimersRef = useRef<Record<string, number>>({});
   const sessionScrollRef = useRef<HTMLDivElement | null>(null);
+  const postClosureScrollRef = useRef<HTMLDivElement | null>(null);
+  const sessionSummaryScrollRef = useRef<HTMLDivElement | null>(null);
   const clinicalDockRef = useRef<HTMLDivElement | null>(null);
   const intervalPausedControlsRef = useRef<HTMLDivElement | null>(null);
 
@@ -781,6 +783,22 @@ export const SessionMode = ({
     });
     return () => window.cancelAnimationFrame(animationFrame);
   }, [clinicalDockHeight, intervalRun?.id, intervalRun?.intervalIndex, intervalRunPaused]);
+
+  useEffect(() => {
+    if (!(sessionCompleted && postClosureSummary && !showSessionSummary)) return;
+    const animationFrame = window.requestAnimationFrame(() => {
+      postClosureScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+    });
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [sessionCompleted, postClosureSummary?.id, showPostClosureReport, showSessionSummary]);
+
+  useEffect(() => {
+    if (!showSessionSummary) return;
+    const animationFrame = window.requestAnimationFrame(() => {
+      sessionSummaryScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+    });
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [showSessionSummary]);
 
   const triggerIntervalAlert = (alertType: string) => {
     if ((alertType === 'vibration' || alertType === 'both') && typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
@@ -2895,9 +2913,9 @@ export const SessionMode = ({
 
   if (sessionCompleted && postClosureSummary && !showSessionSummary) {
     const postClosureContent = (
-      <div className="fixed inset-0 z-[100] bg-[#F4F7FE] flex flex-col overflow-y-auto animate-fade-in">
-        <div className="mx-auto flex min-h-full w-full max-w-7xl flex-col justify-center p-6">
-          <div className="rounded-[32px] bg-white border border-blue-100 p-8 shadow-2xl">
+      <div ref={postClosureScrollRef} className="fixed inset-0 z-[100] bg-[#F4F7FE] overflow-y-auto overflow-x-hidden overscroll-contain scroll-pt-4 animate-fade-in">
+        <div className="mx-auto flex min-h-dvh w-full max-w-7xl flex-col px-3 py-4 sm:px-6 sm:py-6">
+          <div className="w-full rounded-[24px] sm:rounded-[32px] bg-white border border-blue-100 p-4 sm:p-8 shadow-2xl">
             <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
               <div>
                 <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Sessão concluída</p>
@@ -4584,8 +4602,8 @@ export const SessionMode = ({
       )}
 
       {showSessionSummary && (
-        <div className="fixed inset-0 z-[145] flex items-end sm:items-center justify-center p-3 sm:p-4 bg-slate-900/30 backdrop-blur-sm">
-          <div className="bg-[#F4F7FE] rounded-[28px] sm:rounded-[32px] p-4 sm:p-6 shadow-2xl max-w-6xl w-full max-h-[calc(100vh-2rem)] overflow-y-auto border border-blue-100">
+        <div ref={sessionSummaryScrollRef} className="fixed inset-0 z-[145] flex items-start justify-center overflow-y-auto overflow-x-hidden overscroll-contain scroll-pt-3 p-3 sm:p-4 bg-slate-900/30 backdrop-blur-sm">
+          <div className="my-0 sm:my-2 bg-[#F4F7FE] rounded-[28px] sm:rounded-[32px] p-4 sm:p-6 shadow-2xl max-w-6xl w-full border border-blue-100">
             <div className="flex items-start justify-between gap-4 mb-5">
               <div>
                 <p className="text-[10px] font-bold text-[#7a32fc] uppercase tracking-widest">Encerramento da sessão ABA</p>
@@ -4679,7 +4697,7 @@ export const SessionMode = ({
 
             <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
               <h4 className="text-lg font-bold text-gray-900">Critérios de maestria</h4>
-              <div className="mt-3 space-y-2 max-h-[260px] overflow-y-auto pr-1">
+              <div className="mt-3 space-y-2">
                 {teachingMasteryRows.length === 0 ? (
                   <p className="text-sm text-gray-500">Nenhum critério de maestria relacionado à meta atual.</p>
                 ) : teachingMasteryRows.map((row) => (
@@ -4701,7 +4719,7 @@ export const SessionMode = ({
 
             <section className="mt-4 rounded-[24px] bg-white border border-amber-100 p-5">
               <h4 className="text-lg font-bold text-amber-700">Manutencao e regressao</h4>
-              <div className="mt-3 space-y-2 max-h-[220px] overflow-y-auto pr-1">
+              <div className="mt-3 space-y-2">
                 {maintenanceProbeRows.length === 0 ? (
                   <p className="text-sm text-gray-500">Nenhum target em manutencao relacionado a esta sessao.</p>
                 ) : maintenanceProbeRows.map((row: any) => (

@@ -1,12 +1,22 @@
 ﻿import Dexie, { Table } from 'dexie';
 import { ensureFreshSession, getSupabase } from '../lib/supabase';
+import {
+  OFFLINE_SYNC_MAX_RETRIES,
+  type OfflineSyncStatus,
+  resolveOfflineSyncFailure,
+  shouldAttemptOfflineRecord
+} from '../utils/offlineSyncResilience';
 
 export interface OfflineRecord {
   id: string;
   data: any;
   type: 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba';
-  sync_status: 'synced' | 'pending';
+  sync_status: OfflineSyncStatus;
   last_updated: number;
+  retry_count?: number;
+  last_attempt_at?: number | null;
+  next_retry_at?: number | null;
+  last_error?: string | null;
   method: 'POST' | 'PATCH' | 'DELETE';
   endpoint: string;
 }
@@ -35,6 +45,10 @@ export class MyDatabase extends Dexie {
       cache_meta: 'endpoint, updated_at'
     });
     this.version(3).stores({
+      records: 'id, type, sync_status, last_updated, [type+last_updated], user_id',
+      cache_meta: 'endpoint, updated_at'
+    });
+    this.version(4).stores({
       records: 'id, type, sync_status, last_updated, [type+last_updated], user_id',
       cache_meta: 'endpoint, updated_at'
     });
@@ -247,6 +261,10 @@ async function mapStoredToOfflineRecord(row: OfflineRecordStored): Promise<Offli
     type: row.type,
     sync_status: row.sync_status,
     last_updated: row.last_updated,
+    retry_count: Number((row as any).retry_count || 0),
+    last_attempt_at: Number((row as any).last_attempt_at || 0) || null,
+    next_retry_at: Number((row as any).next_retry_at || 0) || null,
+    last_error: typeof (row as any).last_error === 'string' ? (row as any).last_error : null,
     method: row.method,
     endpoint: row.endpoint,
     data: decrypted
@@ -263,6 +281,10 @@ export async function saveEncryptedRecord(record: OfflineRecord) {
     type: record.type,
     sync_status: record.sync_status,
     last_updated: record.last_updated,
+    retry_count: record.retry_count || 0,
+    last_attempt_at: record.last_attempt_at || null,
+    next_retry_at: record.next_retry_at || null,
+    last_error: record.last_error || null,
     method: record.method,
     endpoint: record.endpoint,
     user_id: userId
@@ -272,17 +294,50 @@ export async function saveEncryptedRecord(record: OfflineRecord) {
   return true;
 }
 
-export async function markRecordSyncStatus(id: string, status: 'synced' | 'pending') {
+export async function markRecordSyncStatus(
+  id: string,
+  status: OfflineSyncStatus,
+  metadata: Partial<Pick<OfflineRecord, 'retry_count' | 'last_attempt_at' | 'next_retry_at' | 'last_error'>> = {}
+) {
   const row = await db.records.get(id);
   const nextLastUpdated = Date.now();
-  await db.records.update(id, { sync_status: status, last_updated: nextLastUpdated });
+  const patch = {
+    sync_status: status,
+    last_updated: nextLastUpdated,
+    retry_count: status === 'synced' ? 0 : metadata.retry_count ?? (row as any)?.retry_count ?? 0,
+    last_attempt_at: metadata.last_attempt_at ?? (row as any)?.last_attempt_at ?? null,
+    next_retry_at: status === 'synced' || status === 'failed' ? null : metadata.next_retry_at ?? (row as any)?.next_retry_at ?? null,
+    last_error: status === 'synced' ? null : metadata.last_error ?? (row as any)?.last_error ?? null
+  };
+  await db.records.update(id, patch);
   if (row?.type === 'log' && row?.user_id) {
     if (status === 'synced') {
       removeLogBackup(row.user_id, id);
     } else {
-      persistLogBackup({ ...row, sync_status: status, last_updated: nextLastUpdated });
+      persistLogBackup({ ...row, ...patch });
     }
   }
+}
+
+export async function markRecordSyncFailure(id: string, params: { status?: number | null; error?: unknown; retryable?: boolean } = {}) {
+  const row = await db.records.get(id);
+  const resolved = resolveOfflineSyncFailure({
+    currentRetryCount: (row as any)?.retry_count || 0,
+    status: params.retryable === false ? 400 : params.status,
+    error: params.error,
+    maxRetries: OFFLINE_SYNC_MAX_RETRIES
+  });
+  await markRecordSyncStatus(id, resolved.sync_status, resolved);
+  return resolved;
+}
+
+export async function resetFailedSyncRecord(id: string) {
+  await markRecordSyncStatus(id, 'pending', {
+    retry_count: 0,
+    last_attempt_at: null,
+    next_retry_at: null,
+    last_error: null
+  });
 }
 
 export async function getRecordById(id: string): Promise<OfflineRecord | null> {
@@ -307,6 +362,13 @@ export async function getPendingRecords(): Promise<OfflineRecord[]> {
     new Map([...rows, ...backupRows].map((row) => [row.id, row])).values()
   );
   const decoded = await Promise.all(mergedRows.map(mapStoredToOfflineRecord));
+  const now = Date.now();
+  return (decoded.filter(Boolean) as OfflineRecord[]).filter((record) => shouldAttemptOfflineRecord(record, now));
+}
+
+export async function getFailedSyncRecords(): Promise<OfflineRecord[]> {
+  const rows = await db.records.where('sync_status').equals('failed').toArray();
+  const decoded = await Promise.all(rows.map(mapStoredToOfflineRecord));
   return decoded.filter(Boolean) as OfflineRecord[];
 }
 
@@ -354,66 +416,61 @@ export const syncOfflineData = async () => {
     pending.sort((a, b) => a.last_updated - b.last_updated);
 
     for (const record of pending) {
-      let success = false;
-      let retries = 2;
-      let delay = 1000;
+      try {
+        const session = await ensureFreshSession();
+        const token = session?.access_token;
+        await markRecordSyncStatus(record.id, 'pending', {
+          retry_count: record.retry_count || 0,
+          last_attempt_at: Date.now(),
+          next_retry_at: null,
+          last_error: record.last_error || null
+        });
 
-      while (retries >= 0 && !success) {
-        try {
-          const session = await ensureFreshSession();
-          const token = session?.access_token;
+        const response = await fetch(record.endpoint, {
+          method: record.method,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : ''
+          },
+          credentials: 'include',
+          body: JSON.stringify(record.data)
+        });
 
-          const response = await fetch(record.endpoint, {
-            method: record.method,
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': token ? `Bearer ${token}` : ''
-            },
-            credentials: 'include',
-            body: JSON.stringify(record.data)
+        const responsePayload = await response.json().catch(() => ({ error: 'Unknown error' }));
+
+        if (response.ok && responsePayload?.queued !== true) {
+          await markRecordSyncStatus(record.id, 'synced');
+          console.log(`Synced ${record.type}: ${record.id}`);
+        } else if (response.ok && responsePayload?.queued === true) {
+          const failure = await markRecordSyncFailure(record.id, {
+            status: 503,
+            error: responsePayload?.warning || 'Servidor enfileirou o sync para tentar depois.'
           });
-
-          const responsePayload = await response.json().catch(() => ({ error: 'Unknown error' }));
-
-          if (response.ok && responsePayload?.queued !== true) {
-            await markRecordSyncStatus(record.id, 'synced');
-            console.log(`Synced ${record.type}: ${record.id}`);
-            success = true;
-          } else if (response.ok && responsePayload?.queued === true) {
-            console.warn(`Server queued ${record.type} sync for later: ${record.id}`);
-            success = true;
-          } else {
-            if (response.status === 429 && retries > 0) {
-              console.warn(`Rate limit hit during sync of ${record.type}. Retrying in ${delay}ms...`);
-              await new Promise((resolve) => setTimeout(resolve, delay));
-              delay *= 2;
-              retries--;
-              continue;
-            }
-
-            console.error(`Server rejected ${record.type} sync:`, responsePayload);
-
-            if (response.status === 404 || response.status === 400) {
-              console.warn(`Marking ${record.type} ${record.id} as synced (failed permanently) to prevent retry loop.`);
-              await markRecordSyncStatus(record.id, 'synced');
-              success = true;
-            } else {
-              throw new Error(`Server error ${response.status}`);
-            }
+          console.warn(`Server queued ${record.type} sync for later: ${record.id}`, failure);
+        } else {
+          console.error(`Server rejected ${record.type} sync:`, responsePayload);
+          const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+          const failure = await markRecordSyncFailure(record.id, {
+            status: response.status,
+            retryable,
+            error: responsePayload?.error || responsePayload?.message || `Server error ${response.status}`
+          });
+          if (failure.sync_status === 'failed') {
+            console.warn(`Marked ${record.type} ${record.id} as FAILED after ${failure.retry_count} attempt(s).`);
           }
-        } catch (error: any) {
-          if (retries > 0 && (error.name === 'TypeError' || error.message === 'Failed to fetch')) {
-            console.warn(`Network error syncing ${record.type}. Retrying in ${delay}ms...`);
-            await new Promise((resolve) => setTimeout(resolve, delay));
-            delay *= 2;
-            retries--;
-            continue;
-          }
-          console.error(`Failed to sync ${record.type}:`, error);
-          success = true;
-        } finally {
-          (record as any).data = null;
         }
+      } catch (error: any) {
+        const retryable = error?.name === 'TypeError' || error?.message === 'Failed to fetch';
+        const failure = await markRecordSyncFailure(record.id, {
+          retryable,
+          error: error?.message || error
+        });
+        console.error(`Failed to sync ${record.type}:`, error);
+        if (failure.sync_status === 'failed') {
+          console.warn(`Marked ${record.type} ${record.id} as FAILED after ${failure.retry_count} attempt(s).`);
+        }
+      } finally {
+        (record as any).data = null;
       }
     }
   } finally {

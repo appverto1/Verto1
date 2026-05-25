@@ -6,6 +6,7 @@ import {
   getRecordById,
   getRecordsByType,
   markRecordSyncStatus,
+  markRecordSyncFailure,
   saveEncryptedRecord,
   setEndpointCacheMeta
 } from './localDb';
@@ -656,6 +657,10 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
       type,
       sync_status: 'pending',
       last_updated: Date.now(),
+      retry_count: 0,
+      last_attempt_at: null,
+      next_retry_at: null,
+      last_error: null,
       method,
       endpoint
     });
@@ -678,6 +683,11 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
     if (response.ok) {
       const result = await safeJson(response);
       if (result?.queued === true) {
+        await markRecordSyncFailure(id, {
+          status: 503,
+          retryable: true,
+          error: result?.warning || 'Servidor enfileirou o sync para tentar depois.'
+        });
         return {
           success: false,
           offline: true,
@@ -696,8 +706,12 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
     const isRetryable = response.status >= 500 || response.status === 429 || response.status === 408;
 
     if (!isRetryable) {
-      // Validation/auth errors should not remain in pending loop forever.
-      await markRecordSyncStatus(id, 'synced');
+      // Validation/auth errors should not retry forever, but the local record is kept for audit/retry UI.
+      await markRecordSyncFailure(id, {
+        status: response.status,
+        retryable: false,
+        error: errorPayload?.error || errorPayload?.message || `Falha permanente (${response.status})`
+      });
       return {
         success: false,
         offline: false,
@@ -713,6 +727,14 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
       };
     }
 
+    await markRecordSyncFailure(id, {
+      status: response.status,
+      retryable: true,
+      error:
+        errorPayload?.error ||
+        errorPayload?.message ||
+        `Falha temporária (${response.status})`
+    });
     return {
       success: false,
       offline: true,
@@ -728,6 +750,10 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
     };
   } catch (error) {
     console.log(`Working offline: ${type} saved locally.`);
+    await markRecordSyncFailure(id, {
+      retryable: true,
+      error: error instanceof Error ? error.message : String(error)
+    });
     return { success: true, data: payloadWithIdempotency, offline: true, pending: true };
   }
 }

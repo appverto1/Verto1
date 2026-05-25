@@ -2,7 +2,7 @@
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS } from './components/Common';
 import { testSupabaseConnection, getSupabase, ensureFreshSession } from './lib/supabase';
 import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard } from 'lucide-react';
-import { syncOfflineData } from './services/localDb';
+import { getFailedSyncRecords, syncOfflineData } from './services/localDb';
 import { dataService } from './services/dataService';
 import { formatProfessionalRegistry } from './utils/professionalRegistry';
 import { resolveAbaPromptLevel } from './utils/abaPromptLevels';
@@ -46,6 +46,7 @@ export default function App() {
   const [user, setUser] = useState<any>(null); 
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [failedSyncCount, setFailedSyncCount] = useState(0);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
   const [installPromptUnavailable, setInstallPromptUnavailable] = useState(false);
@@ -679,6 +680,33 @@ export default function App() {
     if (user && navigator.onLine) {
       syncOfflineData();
     }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      setFailedSyncCount(0);
+      return;
+    }
+    let cancelled = false;
+    const refreshFailedSyncCount = async () => {
+      try {
+        const failed = await getFailedSyncRecords();
+        if (!cancelled) setFailedSyncCount(failed.length);
+      } catch {
+        if (!cancelled) setFailedSyncCount(0);
+      }
+    };
+    void refreshFailedSyncCount();
+    const interval = window.setInterval(refreshFailedSyncCount, 60_000);
+    const handleFocus = () => void refreshFailedSyncCount();
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('online', handleFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('online', handleFocus);
+    };
   }, [user]);
 
   useEffect(() => {
@@ -4260,6 +4288,11 @@ export default function App() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {user && failedSyncCount > 0 && (
+        <div role="status" className="sticky top-0 z-20 border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs font-bold text-amber-800">
+          {failedSyncCount} registro(s) local(is) não puderam sincronizar. Use a ação de tentativa manual quando disponível.
         </div>
       )}
       <Suspense fallback={lazyFallback}>

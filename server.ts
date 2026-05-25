@@ -77,6 +77,17 @@ import {
   fetchProfileWithSchemaFallback,
   fetchTasksWithSchemaFallback
 } from './src/utils/routeSchemaFallbacks';
+import {
+  HISTORY_WRITE_LEGACY_SELECT_COLUMNS,
+  HISTORY_WRITE_SELECT_COLUMNS,
+  NOTE_WRITE_LEGACY_SELECT_COLUMNS,
+  NOTE_WRITE_SELECT_COLUMNS,
+  classifyClinicalMutationError,
+  clinicalPayloadKeys,
+  normalizeHistoryMutationPayload,
+  normalizeNoteMutationPayload,
+  writeClinicalRowWithSchemaFallback
+} from './src/utils/clinicalPostResilience';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
@@ -938,6 +949,41 @@ function routeDbErrorPayload(error: any) {
 function sendRouteDbError(res: any, route: string, error: any, context: Record<string, any> = {}) {
   logRouteDbError(route, error, context);
   return res.status(500).json(routeDbErrorPayload(error));
+}
+
+function clinicalMutationErrorPayload(route: string, stage: string, error: any, statusCode: number, kind: string) {
+  if (process.env.NODE_ENV === 'production') {
+    return { success: false, error: safeErrorMessageByStatus(statusCode) };
+  }
+
+  return cleanObject({
+    success: false,
+    error: extractSupabaseErrorMessage(error) || safeErrorMessageByStatus(statusCode),
+    code: sanitizeString(error?.code, 40) || undefined,
+    route,
+    stage,
+    kind,
+    details: sanitizeString(error?.details, 500) || undefined,
+    hint: sanitizeString(error?.hint, 500) || undefined
+  });
+}
+
+function sendClinicalMutationError(
+  res: any,
+  route: string,
+  stage: string,
+  error: any,
+  context: Record<string, any> = {}
+) {
+  const classified = classifyClinicalMutationError(error);
+  logRouteDbError(route, error, {
+    ...context,
+    stage,
+    errorKind: classified.kind
+  });
+  return res
+    .status(classified.status)
+    .json(clinicalMutationErrorPayload(route, stage, error, classified.status, classified.kind));
 }
 
 function requestIdForLogs(req: any): string | null {
@@ -11134,33 +11180,17 @@ async function startServer() {
     });
   };
 
-  const upsertNoteWithSchemaFallback = async (basePayload: Record<string, any>) => {
-    let candidate = { ...basePayload };
-    const triedMissingColumns = new Set<string>();
-
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      const { data, error } = await supabase
-        .from('notes')
-        .upsert([candidate], { onConflict: 'id' })
-        .select(NOTE_SELECT)
-        .single();
-
-      if (!error) {
-        return { data, error: null, payload: candidate };
-      }
-
-      const missingColumn = extractMissingColumnName(error);
-      if (!missingColumn || triedMissingColumns.has(missingColumn)) {
-        return { data: null, error, payload: candidate };
-      }
-
-      triedMissingColumns.add(missingColumn);
-      const nextCandidate = { ...candidate };
-      delete nextCandidate[missingColumn];
-      candidate = nextCandidate;
-    }
-
-    return { data: null, error: { message: 'Falha ao salvar anotação após fallback de schema.' }, payload: candidate };
+  const upsertNoteWithSchemaFallback = async (basePayload: Record<string, any>, logContext: Record<string, any> = {}) => {
+    return writeClinicalRowWithSchemaFallback({
+      supabase,
+      route: '/api/notes',
+      table: 'notes',
+      payload: basePayload,
+      selectColumns: NOTE_WRITE_SELECT_COLUMNS,
+      legacySelectColumns: NOTE_WRITE_LEGACY_SELECT_COLUMNS,
+      logContext,
+      logger: console
+    });
   };
 
   const updateNoteWithSchemaFallback = async (noteId: string, baseUpdates: Record<string, any>) => {
@@ -11193,31 +11223,17 @@ async function startServer() {
     return { data: null, error: { message: 'Falha ao atualizar anotação após fallback de schema.' }, payload: candidate };
   };
 
-  const upsertHistoryWithSchemaFallback = async (basePayload: Record<string, any>) => {
-    let candidate = { ...basePayload };
-    const triedMissingColumns = new Set<string>();
-
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      const { data, error } = await supabase
-        .from('history')
-        .upsert([candidate], { onConflict: 'id' })
-        .select(HISTORY_SELECT)
-        .single();
-
-      if (!error) return { data, error: null, payload: candidate };
-
-      const missingColumn = extractMissingColumnName(error);
-      if (!missingColumn || triedMissingColumns.has(missingColumn)) {
-        return { data: null, error, payload: candidate };
-      }
-
-      triedMissingColumns.add(missingColumn);
-      const nextCandidate = { ...candidate };
-      delete nextCandidate[missingColumn];
-      candidate = nextCandidate;
-    }
-
-    return { data: null, error: { message: 'Falha ao salvar histórico após fallback de schema.' }, payload: candidate };
+  const upsertHistoryWithSchemaFallback = async (basePayload: Record<string, any>, logContext: Record<string, any> = {}) => {
+    return writeClinicalRowWithSchemaFallback({
+      supabase,
+      route: '/api/history',
+      table: 'history',
+      payload: basePayload,
+      selectColumns: HISTORY_WRITE_SELECT_COLUMNS,
+      legacySelectColumns: HISTORY_WRITE_LEGACY_SELECT_COLUMNS,
+      logContext,
+      logger: console
+    });
   };
 
   const updateAssignedTaskWithSchemaFallback = async (taskId: string, baseUpdates: Record<string, any>) => {
@@ -11493,49 +11509,43 @@ async function startServer() {
   });
 
   app.post('/api/notes', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
+    const requestId = requestIdForLogs(req);
+    const rawPatientId = sanitizeString(req.body?.patient_id || req.body?.patientId, 120);
     try {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de anotações')) return;
       const resolvedPatientId = await resolvePatientIdForRequest(
-        sanitizeString(req.body?.patient_id, 120),
+        rawPatientId,
         req.session.user,
         { createIfMissing: true, fallbackName: sanitizeString(req.body?.patient_name, 160) }
       );
-      const normalizedVisibility = normalizeNoteVisibility(req.body?.visibility);
-      const normalizedType = (() => {
-        const providedType = sanitizeString(req.body?.type, 40).toLowerCase();
-        if (providedType && NOTE_VISIBILITY_CANONICAL.has(providedType as any)) return providedType;
-        if (providedType === 'shared' || providedType === 'patient' || providedType === 'family') return 'shared';
-        if (providedType === 'professional') return 'professional';
-        if (normalizedVisibility === 'shared_clinic') return 'professional';
-        if (normalizedVisibility === 'shared_patient') return 'shared';
-        return 'private';
-      })();
-      const payload = cleanObject({
-        id: sanitizeString(req.body?.id, 120) || undefined,
-        patient_id: resolvedPatientId,
-        patient_email: sanitizeEmail(req.body?.patient_email),
-        text: sanitizeTextField(req.body?.text, 12000),
-        content: sanitizeTextField(req.body?.text, 12000),
-        visibility: normalizedVisibility,
-        type: normalizedType,
-        subject: sanitizeTextField(req.body?.subject, 100) || 'Geral',
-        score: req.body?.score !== undefined ? asSafeNumber(req.body?.score, 0, 100) : undefined,
-        image: sanitizeUrl(req.body?.image),
-        image_url: sanitizeUrl(req.body?.image_url),
-        original_id: sanitizeString(req.body?.original_id, 120) || undefined,
-        therapist_id: sanitizeString(req.session.user.id, 120),
-        user_id: sanitizeString(req.session.user.id, 120),
-        created_at: sanitizeString(req.body?.created_at, 40) || new Date().toISOString()
+      const normalized = normalizeNoteMutationPayload(req.body, {
+        resolvedPatientId,
+        userId: sanitizeString(req.session.user?.id, 120),
+        userEmail: sanitizeEmail(req.session.user?.email),
+        nowIso: new Date().toISOString()
       });
 
-      if (!payload.patient_id || !payload.text) {
-        return res.status(400).json({ error: 'patient_id e texto são obrigatórios.' });
+      if (normalized.error || !normalized.payload) {
+        return res.status(400).json(cleanObject({
+          success: false,
+          error: normalized.error || 'Payload inválido.',
+          route: process.env.NODE_ENV === 'production' ? undefined : '/api/notes',
+          stage: process.env.NODE_ENV === 'production' ? undefined : 'validation',
+          payloadKeys: process.env.NODE_ENV === 'production' ? undefined : clinicalPayloadKeys(req.body)
+        }));
       }
+      const payload = normalized.payload;
       if (!isUuid(payload.patient_id)) {
         return res.status(400).json({ error: 'patient_id inválido para salvar anotações.' });
       }
 
-      const { data, error } = await upsertNoteWithSchemaFallback(payload);
+      const { data, error } = await upsertNoteWithSchemaFallback(payload, {
+        requestId,
+        userId: sanitizeString(req.session.user?.id, 120),
+        patientId: payload.patient_id,
+        payloadKeys: clinicalPayloadKeys(req.body),
+        table: 'notes'
+      });
       
       if (error) throw error;
       try {
@@ -11552,17 +11562,13 @@ async function startServer() {
       }
       res.json({ success: true, data });
     } catch (error: any) {
-      logRouteDbError('/api/notes', error, {
-        patient_id: sanitizeString(req.body?.patient_id, 120),
-        has_text: Boolean(sanitizeTextField(req.body?.text, 12000))
+      return sendClinicalMutationError(res, '/api/notes', 'write', error, {
+        requestId,
+        userId: sanitizeString(req.session.user?.id, 120),
+        patientId: rawPatientId,
+        payloadKeys: clinicalPayloadKeys(req.body),
+        table: 'notes'
       });
-      if (isMissingRelationError(error)) {
-        return res.status(503).json({
-          error: 'Estrutura de banco para notes indisponível. Verifique migrações em produção.',
-          details: extractSupabaseErrorMessage(error)
-        });
-      }
-      res.status(500).json({ error: 'Falha na operação de dados.' });
     }
   });
 
@@ -11969,10 +11975,12 @@ async function startServer() {
   });
 
   app.post('/api/history', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
+    const requestId = requestIdForLogs(req);
+    const rawPatientId = sanitizeString(req.body?.patient_id || req.body?.patientId, 120);
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload de relatório/evolução')) return;
       const resolvedPatientId = await resolvePatientIdForRequest(
-        sanitizeString(req.body?.patient_id, 120),
+        rawPatientId,
         req.session.user,
         { createIfMissing: true, fallbackName: sanitizeString(req.body?.patient_name, 160) }
       );
@@ -12005,64 +12013,34 @@ async function startServer() {
           });
         }
       }
-      const docData = cleanObject({
-        id: sanitizeString(req.body?.id, 120) || undefined,
-        patient_id: resolvedPatientId,
-        patient_email: sanitizeEmail(req.body?.patient_email || req.session.user?.email),
-        type: safeType,
-        title: sanitizeTextField(req.body?.title, 180),
-        score: asSafeNumber(req.body?.score, 0, 100),
-        energy: asSafeNumber(req.body?.energy, 0, 100),
-        note: sanitizeTextField(req.body?.note, 12000),
-        icon: sanitizeString(req.body?.icon, 40),
-        image: sanitizeUrl(req.body?.image),
-        image_path: sanitizeString(req.body?.image_path, 600) || undefined,
-        therapist_id: sanitizeString(req.session.user.id, 120),
-        created_at: sanitizeString(req.body?.created_at, 40) || new Date().toISOString()
+      const docCreatedAt = sanitizeString(req.body?.created_at || req.body?.createdAt, 40) || new Date().toISOString();
+      const normalized = normalizeHistoryMutationPayload(req.body, {
+        resolvedPatientId,
+        userId: sanitizeString(req.session.user?.id, 120),
+        userEmail: sanitizeEmail(req.session.user?.email),
+        nowIso: docCreatedAt,
+        dateGroup: dateGroupForClinic(docCreatedAt, req.session.user)
       });
-      const docCreatedAt = sanitizeString(docData.created_at, 40) || new Date().toISOString();
-      docData.date_group = dateGroupForClinic(docCreatedAt, req.session.user);
-
-      if (!docData.patient_id || !docData.title) {
-        return res.status(400).json({ error: 'patient_id e título são obrigatórios.' });
+      if (normalized.error || !normalized.payload) {
+        return res.status(400).json(cleanObject({
+          success: false,
+          error: normalized.error || 'Payload inválido.',
+          route: process.env.NODE_ENV === 'production' ? undefined : '/api/history',
+          stage: process.env.NODE_ENV === 'production' ? undefined : 'validation',
+          payloadKeys: process.env.NODE_ENV === 'production' ? undefined : clinicalPayloadKeys(req.body)
+        }));
       }
-
-      let data: any = null;
-      let error: any = null;
-      {
-        const result = await supabase
-          .from('history')
-          .upsert([docData], { onConflict: 'id' })
-          .select(HISTORY_SELECT)
-          .single();
-        data = result.data;
-        error = result.error;
+      const docData = normalized.payload;
+      if (!isUuid(docData.patient_id)) {
+        return res.status(400).json({ success: false, error: 'patient_id inválido para salvar histórico.' });
       }
-
-      if (error && /image_path/i.test(String(error?.message || ''))) {
-        const fallbackDocData = { ...docData } as any;
-        delete fallbackDocData.image_path;
-        const retry = await supabase
-          .from('history')
-          .upsert([fallbackDocData], { onConflict: 'id' })
-          .select(HISTORY_SELECT)
-          .single();
-        data = retry.data;
-        error = retry.error;
-      }
-
-      if (error && /date_group/i.test(String(error?.message || ''))) {
-        const fallbackDocData = { ...docData } as any;
-        delete fallbackDocData.date_group;
-        const retry = await supabase
-          .from('history')
-          .upsert([fallbackDocData], { onConflict: 'id' })
-          .select(HISTORY_SELECT)
-          .single();
-        data = retry.data;
-        error = retry.error;
-      }
-
+      const { data, error } = await upsertHistoryWithSchemaFallback(docData, {
+        requestId,
+        userId: sanitizeString(req.session.user?.id, 120),
+        patientId: docData.patient_id,
+        payloadKeys: clinicalPayloadKeys(req.body),
+        table: 'history'
+      });
       if (error) throw error;
       if (sanitizeString(req.session.user?.role, 40).toLowerCase() !== 'patient') {
         void persistActivityLog({
@@ -12075,8 +12053,14 @@ async function startServer() {
         });
       }
       res.json({ success: true, data });
-    } catch (error) {
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendClinicalMutationError(res, '/api/history', 'write', error, {
+        requestId,
+        userId: sanitizeString(req.session.user?.id, 120),
+        patientId: rawPatientId,
+        payloadKeys: clinicalPayloadKeys(req.body),
+        table: 'history'
+      });
     }
   });
 
