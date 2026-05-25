@@ -11118,6 +11118,7 @@ async function startServer() {
     excludePatientId?: string;
     role: string;
     limit?: number;
+    requestId?: string | null;
   }) => {
     const limit = parseBoundedListLimit(params.limit, 20, 50);
     return fetchNotesWithSchemaFallback({
@@ -11127,6 +11128,8 @@ async function startServer() {
       excludePatientId: params.excludePatientId,
       role: params.role,
       limit,
+      route: '/api/notes/:patientId',
+      requestId: params.requestId,
       logger: console
     });
   };
@@ -11252,9 +11255,11 @@ async function startServer() {
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const role = sanitizeString((req as any).session?.user?.role, 40).toLowerCase();
       const limit = parseBoundedListLimit((req as any).query?.limit, 20, 50);
+      const requestId = requestIdForLogs(req);
       const patientEmailResult = await fetchPatientEmailForNotesWithSchemaFallback({
         supabase,
         patientId,
+        requestId,
         logger: console
       });
       if (patientEmailResult.error) throw patientEmailResult.error;
@@ -11264,7 +11269,8 @@ async function startServer() {
       const notesByIdResult = await fetchNotesWithRoleFilter({
         patientId,
         role,
-        limit
+        limit,
+        requestId
       });
       const notesById = notesByIdResult.data;
       const notesByIdError = notesByIdResult.error;
@@ -11276,7 +11282,8 @@ async function startServer() {
           patientEmail,
           excludePatientId: patientId,
           role: 'patient',
-          limit
+          limit,
+          requestId
         });
         const notesByEmailData = notesByEmailResult.data;
         const notesByEmailError = notesByEmailResult.error;
@@ -13123,10 +13130,12 @@ async function startServer() {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const limit = parseBoundedListLimit((req as any).query?.limit, 20, 50);
+      const requestId = requestIdForLogs(req);
       const patientEmailResult = await fetchPatientEmailForNotesWithSchemaFallback({
         supabase,
         patientId,
         route: '/api/tasks/:patientId',
+        requestId,
         logger: console
       });
       if (patientEmailResult.error) throw patientEmailResult.error;
@@ -13137,6 +13146,7 @@ async function startServer() {
         patientId,
         limit,
         route: '/api/tasks/:patientId',
+        requestId,
         logger: console
       });
       const tasksById = tasksByIdResult.data;
@@ -13152,6 +13162,7 @@ async function startServer() {
           emailMatch: 'ilike',
           limit,
           route: '/api/tasks/:patientId',
+          requestId,
           logger: console
         });
         const tasksByEmailData = tasksByEmailResult.data;

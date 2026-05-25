@@ -579,9 +579,16 @@ const PATIENT_LIST_OPTIONAL_COLUMNS = new Set([
 ]);
 
 const NOTE_OPTIONAL_COLUMNS = new Set([
+  'patient_email',
+  'type',
   'visibility',
+  'subject',
+  'content',
+  'note',
   'assigned_task_id',
   'source',
+  'created_by',
+  'created_at',
   'updated_at',
   'is_active',
   'deleted_at',
@@ -642,7 +649,10 @@ const HISTORY_OPTIONAL_COLUMNS = new Set([
 ]);
 
 const TASK_OPTIONAL_COLUMNS = new Set([
+  'patient_email',
+  'title',
   'description',
+  'type',
   'icon',
   'color',
   'completed',
@@ -652,6 +662,7 @@ const TASK_OPTIONAL_COLUMNS = new Set([
   'therapist_id',
   'pro_score',
   'max_score',
+  'created_at',
   'updated_at'
 ]);
 
@@ -773,6 +784,15 @@ function joinColumns(columns: string[]): string {
   return Array.from(new Set(columns.filter(Boolean))).join(',');
 }
 
+function errorLogFields(error: any) {
+  return {
+    code: cleanString(error?.code, 40) || null,
+    message: cleanString(error?.message || error, 500) || null,
+    details: cleanString(error?.details, 500) || null,
+    hint: cleanString(error?.hint, 500) || null
+  };
+}
+
 export function extractMissingColumnNameFromSupabaseError(error: any): string | null {
   const message = cleanString(error?.message || error?.details || error?.hint || error, 1000);
   if (!message) return null;
@@ -801,11 +821,46 @@ function isMissingRelationError(error: any): boolean {
   );
 }
 
+function isAuthOrPermissionError(error: any): boolean {
+  const code = cleanString(error?.code, 40).toUpperCase();
+  const status = Number(error?.status || error?.statusCode || 0);
+  const message = cleanString(error?.message || error?.details || error?.hint || error, 1000).toLowerCase();
+  return (
+    status === 401 ||
+    status === 403 ||
+    code === '401' ||
+    code === '403' ||
+    code === '42501' ||
+    code === 'PGRST301' ||
+    code === 'PGRST302' ||
+    code === '28P01' ||
+    message.includes('permission denied') ||
+    message.includes('row-level security') ||
+    message.includes('jwt') ||
+    message.includes('unauthorized') ||
+    message.includes('forbidden')
+  );
+}
+
+export function isSchemaFallbackErrorFromSupabase(error: any): boolean {
+  if (!error || isAuthOrPermissionError(error)) return false;
+  const message = cleanString(error?.message || error?.details || error?.hint || error, 1000).toLowerCase();
+  return (
+    Boolean(extractMissingColumnNameFromSupabaseError(error)) ||
+    isMissingRelationError(error) ||
+    (message.includes('schema cache') && message.includes('could not find')) ||
+    (message.includes('column') && message.includes('does not exist')) ||
+    (message.includes('relation') && message.includes('does not exist'))
+  );
+}
+
 function findMentionedColumn(error: any, columns: Set<string>): string | null {
   const message = cleanString(error?.message || error?.details || error?.hint || error, 1000).toLowerCase();
   if (!message) return null;
   for (const column of columns) {
-    if (message.includes(column.toLowerCase())) return column;
+    const escaped = column.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`(^|[^a-z0-9_])${escaped}([^a-z0-9_]|$)`, 'i');
+    if (pattern.test(message)) return column;
   }
   return null;
 }
@@ -813,15 +868,25 @@ function findMentionedColumn(error: any, columns: Set<string>): string | null {
 function warnSchemaFallback(logger: LoggerLike | undefined, params: {
   route: string;
   table: string;
-  missingColumn: string;
+  missingColumn?: string | null;
+  removedColumn?: string | null;
   nextSelect: string;
+  stage?: 'primary_select' | 'legacy_select' | 'fallback_empty';
+  patientId?: string | null;
+  requestId?: string | null;
+  error?: any;
 }) {
-  const nodeProcess = (globalThis as any)?.process;
-  if (nodeProcess?.env?.NODE_ENV === 'production') return;
+  const removedColumn = cleanString(params.removedColumn || params.missingColumn, 120) || null;
   logger?.warn?.(`[Schema fallback:${params.route}]`, {
+    route: params.route,
+    patientId: cleanString(params.patientId, 120) || null,
+    requestId: cleanString(params.requestId, 160) || null,
+    stage: params.stage || 'primary_select',
     table: params.table,
-    missingColumn: params.missingColumn,
-    nextSelect: params.nextSelect
+    removedColumn,
+    missingColumn: removedColumn,
+    nextSelect: params.nextSelect,
+    error: params.error ? errorLogFields(params.error) : undefined
   });
 }
 
@@ -830,55 +895,109 @@ async function fetchListWithColumnFallback(params: {
   route: string;
   table: string;
   initialColumns: string[];
+  legacyColumns?: string[];
   optionalColumns: Set<string>;
   logger?: LoggerLike;
   maxAttempts?: number;
+  fallbackEmptyOnSchemaError?: boolean;
+  patientId?: string | null;
+  requestId?: string | null;
   buildQuery: (selectColumns: string, removedColumns: Set<string>) => any;
 }) {
-  let columns = [...params.initialColumns];
-  const removedColumns = new Set<string>();
-  let lastError: any = null;
+  const runStage = async (stage: 'primary_select' | 'legacy_select', baseColumns: string[]) => {
+    let columns = [...baseColumns];
+    const removedColumns = new Set<string>();
+    let lastError: any = null;
 
-  for (let attempt = 0; attempt < (params.maxAttempts || 12); attempt += 1) {
-    const result = await params.buildQuery(joinColumns(columns), removedColumns);
+    for (let attempt = 0; attempt < (params.maxAttempts || 12); attempt += 1) {
+      const result = await params.buildQuery(joinColumns(columns), removedColumns);
 
-    if (!result.error) {
-      return {
-        data: Array.isArray(result.data) ? result.data : [],
-        error: null,
-        select: joinColumns(columns),
-        removedColumns
-      };
+      if (!result.error) {
+        return {
+          data: Array.isArray(result.data) ? result.data : [],
+          error: null,
+          select: joinColumns(columns),
+          removedColumns,
+          stage
+        };
+      }
+
+      lastError = result.error;
+      const missingColumn =
+        extractMissingColumnNameFromSupabaseError(result.error) ||
+        findMentionedColumn(result.error, params.optionalColumns);
+
+      if (!missingColumn || !params.optionalColumns.has(missingColumn) || removedColumns.has(missingColumn)) {
+        break;
+      }
+
+      removedColumns.add(missingColumn);
+      if (columns.includes(missingColumn)) {
+        columns = columns.filter((column) => column !== missingColumn);
+      }
+
+      warnSchemaFallback(params.logger, {
+        route: params.route,
+        table: params.table,
+        missingColumn,
+        nextSelect: joinColumns(columns),
+        stage,
+        patientId: params.patientId,
+        requestId: params.requestId,
+        error: result.error
+      });
     }
 
-    lastError = result.error;
-    const missingColumn =
-      extractMissingColumnNameFromSupabaseError(result.error) ||
-      findMentionedColumn(result.error, params.optionalColumns);
+    return {
+      data: null,
+      error: lastError,
+      select: joinColumns(columns),
+      removedColumns,
+      stage
+    };
+  };
 
-    if (!missingColumn || !params.optionalColumns.has(missingColumn) || removedColumns.has(missingColumn)) {
-      break;
-    }
+  const primaryResult = await runStage('primary_select', params.initialColumns);
+  if (!primaryResult.error) return primaryResult;
 
-    removedColumns.add(missingColumn);
-    if (columns.includes(missingColumn)) {
-      columns = columns.filter((column) => column !== missingColumn);
-    }
-
+  let finalResult = primaryResult;
+  if (params.legacyColumns?.length) {
     warnSchemaFallback(params.logger, {
       route: params.route,
       table: params.table,
-      missingColumn,
-      nextSelect: joinColumns(columns)
+      missingColumn: extractMissingColumnNameFromSupabaseError(primaryResult.error) || 'schema',
+      nextSelect: joinColumns(params.legacyColumns),
+      stage: 'legacy_select',
+      patientId: params.patientId,
+      requestId: params.requestId,
+      error: primaryResult.error
     });
+    const legacyResult = await runStage('legacy_select', params.legacyColumns);
+    if (!legacyResult.error) return legacyResult;
+    finalResult = legacyResult;
   }
 
-  return {
-    data: null,
-    error: lastError,
-    select: joinColumns(columns),
-    removedColumns
-  };
+  if (params.fallbackEmptyOnSchemaError && isSchemaFallbackErrorFromSupabase(finalResult.error)) {
+    warnSchemaFallback(params.logger, {
+      route: params.route,
+      table: params.table,
+      missingColumn: extractMissingColumnNameFromSupabaseError(finalResult.error) || 'schema',
+      nextSelect: finalResult.select,
+      stage: 'fallback_empty',
+      patientId: params.patientId,
+      requestId: params.requestId,
+      error: finalResult.error
+    });
+    return {
+      data: [],
+      error: null,
+      select: finalResult.select,
+      removedColumns: finalResult.removedColumns,
+      stage: 'fallback_empty'
+    };
+  }
+
+  return finalResult;
 }
 
 async function fetchMaybeSingleWithColumnFallback(params: {
@@ -1039,6 +1158,7 @@ export async function fetchPatientEmailForNotesWithSchemaFallback(params: {
   supabase: SupabaseLike;
   patientId: string | null;
   route?: string;
+  requestId?: string | null;
   logger?: LoggerLike;
 }) {
   let filterIsActive = true;
@@ -1073,8 +1193,26 @@ export async function fetchPatientEmailForNotesWithSchemaFallback(params: {
       route: params.route || '/api/notes/:patientId',
       table: 'patients',
       missingColumn,
-      nextSelect: 'email'
+      nextSelect: 'email',
+      stage: 'primary_select',
+      patientId: params.patientId,
+      requestId: params.requestId,
+      error: result.error
     });
+  }
+
+  if (lastError && isSchemaFallbackErrorFromSupabase(lastError)) {
+    warnSchemaFallback(params.logger, {
+      route: params.route || '/api/notes/:patientId',
+      table: 'patients',
+      missingColumn: extractMissingColumnNameFromSupabaseError(lastError) || 'schema',
+      nextSelect: 'email',
+      stage: 'fallback_empty',
+      patientId: params.patientId,
+      requestId: params.requestId,
+      error: lastError
+    });
+    return { data: null, error: null };
   }
 
   return { data: null, error: lastError };
@@ -1126,6 +1264,7 @@ export async function fetchTasksWithSchemaFallback(params: {
   emailMatch?: 'eq' | 'ilike';
   limit: number;
   route?: string;
+  requestId?: string | null;
   logger?: LoggerLike;
 }) {
   return fetchListWithColumnFallback({
@@ -1133,8 +1272,12 @@ export async function fetchTasksWithSchemaFallback(params: {
     route: params.route || '/api/tasks/:patientId',
     table: 'tasks',
     initialColumns: TASK_SELECT_COLUMNS,
+    legacyColumns: TASK_LEGACY_SELECT_COLUMNS,
     optionalColumns: new Set([...TASK_OPTIONAL_COLUMNS, 'patient_email']),
     logger: params.logger,
+    fallbackEmptyOnSchemaError: true,
+    patientId: params.patientId,
+    requestId: params.requestId,
     buildQuery: (selectColumns, removedColumns) => {
       let query = params.supabase.from('tasks').select(selectColumns);
       const patientId = cleanString(params.patientId, 120);
@@ -1152,7 +1295,8 @@ export async function fetchTasksWithSchemaFallback(params: {
       if (excludePatientId) query = query.neq('patient_id', excludePatientId);
       if (patientIds.length > 0) query = query.in('patient_id', patientIds);
 
-      return query.order('created_at', { ascending: false }).limit(params.limit);
+      if (!removedColumns.has('created_at')) query = query.order('created_at', { ascending: false });
+      return query.limit(params.limit);
     }
   });
 }
@@ -1432,75 +1576,124 @@ export async function fetchNotesWithSchemaFallback(params: {
   excludePatientId?: string | null;
   role: string;
   limit: number;
+  route?: string;
+  requestId?: string | null;
   logger?: LoggerLike;
 }) {
-  let columns = [...NOTE_SELECT_COLUMNS];
-  let filterIsActive = true;
-  let filterDeletedAt = true;
-  let filterVisibility = cleanString(params.role, 40).toLowerCase() === 'patient';
-  let lastError: any = null;
+  const route = params.route || '/api/notes/:patientId';
+  const patientId = cleanString(params.patientId, 120);
+  const patientEmail = cleanString(params.patientEmail, 320).toLowerCase();
+  const excludePatientId = cleanString(params.excludePatientId, 120);
 
-  for (let attempt = 0; attempt < 12; attempt += 1) {
-    let query = params.supabase.from('notes').select(joinColumns(columns));
-    if (params.patientId) query = query.eq('patient_id', cleanString(params.patientId, 120));
-    if (params.patientEmail) query = query.eq('patient_email', cleanString(params.patientEmail, 320).toLowerCase());
-    if (params.excludePatientId) query = query.neq('patient_id', cleanString(params.excludePatientId, 120));
-    if (filterIsActive) query = query.eq('is_active', true);
-    if (filterDeletedAt) query = query.is('deleted_at', null);
-    if (filterVisibility && columns.includes('visibility')) {
-      query = query.in('visibility', ['patient', 'shared', 'family', 'shared_patient']);
+  const runStage = async (stage: 'primary_select' | 'legacy_select', baseColumns: string[]) => {
+    let columns = [...baseColumns];
+    const removedColumns = new Set<string>();
+    let filterIsActive = true;
+    let filterDeletedAt = true;
+    let filterVisibility = cleanString(params.role, 40).toLowerCase() === 'patient';
+    let lastError: any = null;
+
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      if (patientEmail && removedColumns.has('patient_email')) {
+        return { data: [], error: null, select: joinColumns(columns), removedColumns, stage };
+      }
+
+      let query = params.supabase.from('notes').select(joinColumns(columns));
+      if (patientId) query = query.eq('patient_id', patientId);
+      if (patientEmail) query = query.eq('patient_email', patientEmail);
+      if (excludePatientId) query = query.neq('patient_id', excludePatientId);
+      if (filterIsActive && !removedColumns.has('is_active')) query = query.eq('is_active', true);
+      if (filterDeletedAt && !removedColumns.has('deleted_at')) query = query.is('deleted_at', null);
+      if (filterVisibility && !removedColumns.has('visibility')) {
+        query = query.in('visibility', ['patient', 'shared', 'family', 'shared_patient']);
+      }
+      if (!removedColumns.has('created_at')) {
+        query = query.order('created_at', { ascending: false });
+      }
+
+      const result = await query.limit(params.limit);
+
+      if (!result.error) {
+        const rows = Array.isArray(result.data) ? result.data : [];
+        return {
+          data: filterVisibility && removedColumns.has('visibility')
+            ? rows.filter(noteIsReadableWithoutVisibility)
+            : rows,
+          error: null,
+          select: joinColumns(columns),
+          removedColumns,
+          stage
+        };
+      }
+
+      lastError = result.error;
+      const missingColumn =
+        extractMissingColumnNameFromSupabaseError(result.error) ||
+        findMentionedColumn(result.error, NOTE_OPTIONAL_COLUMNS);
+      if (!missingColumn || !NOTE_OPTIONAL_COLUMNS.has(missingColumn) || removedColumns.has(missingColumn)) {
+        break;
+      }
+
+      removedColumns.add(missingColumn);
+      if (columns.includes(missingColumn)) {
+        columns = columns.filter((column) => column !== missingColumn);
+      }
+      if (missingColumn === 'visibility') filterVisibility = false;
+      if (missingColumn === 'is_active') filterIsActive = false;
+      if (missingColumn === 'deleted_at') filterDeletedAt = false;
+
+      warnSchemaFallback(params.logger, {
+        route,
+        table: 'notes',
+        missingColumn,
+        nextSelect: joinColumns(columns),
+        stage,
+        patientId,
+        requestId: params.requestId,
+        error: result.error
+      });
     }
 
-    const result = await query
-      .order('created_at', { ascending: false })
-      .limit(params.limit);
+    return { data: null, error: lastError, select: joinColumns(columns), removedColumns, stage };
+  };
 
-    if (!result.error) {
-      const rows = Array.isArray(result.data) ? result.data : [];
-      return {
-        data: filterVisibility && !columns.includes('visibility')
-          ? rows.filter(noteIsReadableWithoutVisibility)
-          : rows,
-        error: null,
-        select: joinColumns(columns)
-      };
-    }
+  const primaryResult = await runStage('primary_select', NOTE_SELECT_COLUMNS);
+  if (!primaryResult.error) return primaryResult;
 
-    lastError = result.error;
-    const missingColumn =
-      extractMissingColumnNameFromSupabaseError(result.error) ||
-      findMentionedColumn(result.error, NOTE_OPTIONAL_COLUMNS);
-    if (!missingColumn) break;
+  warnSchemaFallback(params.logger, {
+    route,
+    table: 'notes',
+    missingColumn: extractMissingColumnNameFromSupabaseError(primaryResult.error) || 'schema',
+    nextSelect: NOTE_LEGACY_SELECT,
+    stage: 'legacy_select',
+    patientId,
+    requestId: params.requestId,
+    error: primaryResult.error
+  });
+  const legacyResult = await runStage('legacy_select', NOTE_LEGACY_SELECT_COLUMNS);
+  if (!legacyResult.error) return legacyResult;
 
-    let handled = false;
-    if (missingColumn === 'visibility') {
-      filterVisibility = false;
-      columns = columns.filter((column) => column !== 'visibility');
-      handled = true;
-    } else if (missingColumn === 'is_active') {
-      filterIsActive = false;
-      columns = columns.filter((column) => column !== 'is_active');
-      handled = true;
-    } else if (missingColumn === 'deleted_at') {
-      filterDeletedAt = false;
-      columns = columns.filter((column) => column !== 'deleted_at');
-      handled = true;
-    } else if (NOTE_OPTIONAL_COLUMNS.has(missingColumn) && columns.includes(missingColumn)) {
-      columns = columns.filter((column) => column !== missingColumn);
-      handled = true;
-    }
-
-    if (!handled) break;
-
+  if (isSchemaFallbackErrorFromSupabase(legacyResult.error)) {
     warnSchemaFallback(params.logger, {
-      route: '/api/notes/:patientId',
+      route,
       table: 'notes',
-      missingColumn,
-      nextSelect: joinColumns(columns)
+      missingColumn: extractMissingColumnNameFromSupabaseError(legacyResult.error) || 'schema',
+      nextSelect: legacyResult.select,
+      stage: 'fallback_empty',
+      patientId,
+      requestId: params.requestId,
+      error: legacyResult.error
     });
+    return {
+      data: [],
+      error: null,
+      select: legacyResult.select,
+      removedColumns: legacyResult.removedColumns,
+      stage: 'fallback_empty'
+    };
   }
 
-  return { data: null, error: lastError, select: joinColumns(columns) };
+  return legacyResult;
 }
 
 export async function fetchPatientsWithSchemaFallback(params: {
