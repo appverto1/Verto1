@@ -486,6 +486,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [abaBehaviorEvents, setAbaBehaviorEvents] = useState<any[]>([]);
   const [abaMasteryEvaluations, setAbaMasteryEvaluations] = useState<any[]>([]);
   const [abaPatientSummary, setAbaPatientSummary] = useState<any>(null);
+  const [abaMaintenanceOverview, setAbaMaintenanceOverview] = useState<any>({ schedules: [], probeResults: [], alerts: [], summary: null });
   const [isLoadingAbaRecords, setIsLoadingAbaRecords] = useState(false);
   const [abaRecordsError, setAbaRecordsError] = useState("");
   const [abaRecordTypeFilter, setAbaRecordTypeFilter] = useState("all");
@@ -522,18 +523,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         setAbaBehaviorEvents([]);
         setAbaMasteryEvaluations([]);
         setAbaPatientSummary(null);
+        setAbaMaintenanceOverview({ schedules: [], probeResults: [], alerts: [], summary: null });
         return;
       }
       setIsLoadingAbaRecords(true);
       setAbaRecordsError("");
       try {
         const recentRecordLimit = 10;
-        const [patientSummaryResult, sessionsResult, trialsResult, behaviorResult, masteryResult] = await Promise.allSettled([
+        const [patientSummaryResult, sessionsResult, trialsResult, behaviorResult, masteryResult, maintenanceResult] = await Promise.allSettled([
           dataService.getPatientAbaSummary(String(patient.id)),
           dataService.getAbaSessions(String(patient.id), { page: 1, pageSize: recentRecordLimit }),
           dataService.getAbaTrials(String(patient.id), { page: 1, pageSize: recentRecordLimit }),
           dataService.getAbaBehaviorEvents(String(patient.id), { page: 1, pageSize: recentRecordLimit }),
-          dataService.getAbaMasteryEvaluations(String(patient.id), { page: 1, pageSize: recentRecordLimit })
+          dataService.getAbaMasteryEvaluations(String(patient.id), { page: 1, pageSize: recentRecordLimit }),
+          dataService.getAbaMaintenanceOverview(String(patient.id), { page: 1, pageSize: recentRecordLimit })
         ]);
         if (cancelled) return;
         const readData = (result: PromiseSettledResult<any>) =>
@@ -543,7 +546,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         setAbaTrials(readData(trialsResult));
         setAbaBehaviorEvents(readData(behaviorResult));
         setAbaMasteryEvaluations(readData(masteryResult));
-        if ([patientSummaryResult, sessionsResult, trialsResult, behaviorResult, masteryResult].some((result) => result.status === 'rejected')) {
+        setAbaMaintenanceOverview(maintenanceResult.status === 'fulfilled' ? maintenanceResult.value?.data || { schedules: [], probeResults: [], alerts: [], summary: null } : { schedules: [], probeResults: [], alerts: [], summary: null });
+        if ([patientSummaryResult, sessionsResult, trialsResult, behaviorResult, masteryResult, maintenanceResult].some((result) => result.status === 'rejected')) {
           setAbaRecordsError("Alguns registros ABA nao puderam ser carregados agora.");
         }
       } catch (error) {
@@ -1942,7 +1946,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     [
       ...(Array.isArray(abaTrials) ? abaTrials : []),
       ...(Array.isArray(abaBehaviorEvents) ? abaBehaviorEvents : []),
-      ...(Array.isArray(abaMasteryEvaluations) ? abaMasteryEvaluations : [])
+      ...(Array.isArray(abaMasteryEvaluations) ? abaMasteryEvaluations : []),
+      ...(Array.isArray(abaMaintenanceOverview?.probeResults) ? abaMaintenanceOverview.probeResults : [])
     ]
       .forEach((record: any) => {
         const sessionId = String(record?.session_id || record?.sessionId || '').trim();
@@ -1956,7 +1961,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         label: `${formatAbaDateTime(session?.started_at || session?.startedAt || session?.created_at)}${Number(session?.record_count ?? session?.recordCount ?? 0) ? ` - ${Number(session?.record_count ?? session?.recordCount)} registro(s)` : ''}`
       }))
       .sort((a, b) => b.label.localeCompare(a.label));
-  }, [abaSessions, abaTrials, abaBehaviorEvents, abaMasteryEvaluations]);
+  }, [abaSessions, abaTrials, abaBehaviorEvents, abaMasteryEvaluations, abaMaintenanceOverview]);
 
   const abaStructuredRecords = useMemo(() => {
     const search = abaRecordSearch.trim().toLowerCase();
@@ -2043,12 +2048,54 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       };
     });
 
-    return [...trials, ...behaviorEvents, ...masteryEvaluations]
+    const maintenanceProbeResults = (Array.isArray(abaMaintenanceOverview?.probeResults) ? abaMaintenanceOverview.probeResults : []).map((result: any) => {
+      const status = String(result?.status || 'WATCH').toUpperCase();
+      const title = normalizeNoteText(result?.target_name || result?.targetName || result?.raw_payload?.targetName || result?.rawPayload?.targetName || result?.target_id || result?.targetId || 'Meta sem nome');
+      const sessionId = String(result?.session_id || result?.sessionId || '').trim();
+      const occurredAt = result?.occurred_at || result?.occurredAt || result?.created_at || result?.createdAt;
+      const accuracy = result?.accuracy_percent ?? result?.accuracyPercent ?? 0;
+      const independence = result?.independence_percent ?? result?.independencePercent ?? 0;
+      return {
+        id: `maintenance-${String(result?.id || `${title}-${occurredAt}`)}`,
+        kind: 'maintenance',
+        tableName: 'aba_maintenance_probe_results',
+        sessionId,
+        occurredAt,
+        title,
+        label: status === 'MAINTAINED' ? 'Mantido' : status === 'REGRESSION_RISK' ? 'Risco de regressao' : 'Observar',
+        detail: `Acuracia ${accuracy}% - independencia ${independence}%`,
+        note: normalizeNoteText(result?.raw_payload?.reasons?.map?.((reason: any) => reason?.message || reason).join(' ') || ''),
+        meta: result,
+        searchText: `${title} maintenance probe ${status} ${accuracy} ${independence}`.toLowerCase()
+      };
+    });
+
+    const regressionAlerts = (Array.isArray(abaMaintenanceOverview?.alerts) ? abaMaintenanceOverview.alerts : []).map((alert: any) => {
+      const title = normalizeNoteText(alert?.target_name || alert?.targetName || alert?.target_id || alert?.targetId || 'Meta sem nome');
+      const occurredAt = alert?.created_at || alert?.createdAt;
+      const severity = String(alert?.severity || 'LOW').toUpperCase();
+      const message = normalizeNoteText(alert?.message || 'Risco de regressao');
+      return {
+        id: `regression-alert-${String(alert?.id || `${title}-${occurredAt}`)}`,
+        kind: 'maintenance',
+        tableName: 'aba_regression_alerts',
+        sessionId: '',
+        occurredAt,
+        title,
+        label: `Alerta ${severity}`,
+        detail: message,
+        note: '',
+        meta: alert,
+        searchText: `${title} regressao regression risk ${severity} ${message}`.toLowerCase()
+      };
+    });
+
+    return [...trials, ...behaviorEvents, ...masteryEvaluations, ...maintenanceProbeResults, ...regressionAlerts]
       .filter((record) => abaRecordTypeFilter === 'all' || record.kind === abaRecordTypeFilter)
       .filter((record) => abaSessionFilter === 'all' || record.sessionId === abaSessionFilter)
       .filter((record) => !search || record.searchText.includes(search))
       .sort((a, b) => new Date(b.occurredAt || 0).getTime() - new Date(a.occurredAt || 0).getTime());
-  }, [abaTrials, abaBehaviorEvents, abaMasteryEvaluations, abaRecordTypeFilter, abaSessionFilter, abaRecordSearch]);
+  }, [abaTrials, abaBehaviorEvents, abaMasteryEvaluations, abaMaintenanceOverview, abaRecordTypeFilter, abaSessionFilter, abaRecordSearch]);
 
   const abaSummaryMetrics = useMemo(() => {
     const summary = abaPatientSummary || {};
@@ -2057,10 +2104,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       totalTrials: Number(summary.total_trials ?? summary.totalTrials ?? abaTrials.length) || 0,
       totalBehaviorEvents: Number(summary.total_behavior_events ?? summary.totalBehaviorEvents ?? abaBehaviorEvents.length) || 0,
       masteredTargets: Number(summary.mastered_targets_count ?? summary.masteredTargetsCount ?? abaMasteryEvaluations.length) || 0,
+      maintenanceTargets: Number(summary.maintenance_targets_count ?? summary.maintenanceTargetsCount ?? abaMaintenanceOverview?.summary?.maintenance_targets_count ?? abaMaintenanceOverview?.summary?.maintenanceTargetsCount ?? (Array.isArray(abaMaintenanceOverview?.schedules) ? new Set(abaMaintenanceOverview.schedules.map((item: any) => String(item?.target_id || item?.targetId || ''))).size : 0)) || 0,
+      pendingMaintenanceProbes: Number(summary.pending_maintenance_probes_count ?? summary.pendingMaintenanceProbesCount ?? abaMaintenanceOverview?.summary?.pending_maintenance_probes_count ?? abaMaintenanceOverview?.summary?.pendingMaintenanceProbesCount ?? (Array.isArray(abaMaintenanceOverview?.schedules) ? abaMaintenanceOverview.schedules.filter((item: any) => String(item?.status || '').toUpperCase() === 'PENDING').length : 0)) || 0,
+      activeRegressionRisks: Number(summary.active_regression_risks_count ?? summary.activeRegressionRisksCount ?? abaMaintenanceOverview?.summary?.active_regression_risks_count ?? abaMaintenanceOverview?.summary?.activeRegressionRisksCount ?? (Array.isArray(abaMaintenanceOverview?.alerts) ? abaMaintenanceOverview.alerts.filter((item: any) => !(item?.resolved_at || item?.resolvedAt)).length : 0)) || 0,
       lastEventLabel: summary.last_behavior_event_label || summary.lastBehaviorEventLabel || '',
       lastEventAt: summary.last_behavior_event_at || summary.lastBehaviorEventAt || ''
     };
-  }, [abaPatientSummary, abaSessionOptions.length, abaTrials.length, abaBehaviorEvents.length, abaMasteryEvaluations.length]);
+  }, [abaPatientSummary, abaSessionOptions.length, abaTrials.length, abaBehaviorEvents.length, abaMasteryEvaluations.length, abaMaintenanceOverview]);
 
   const renderAbaRecordsPanel = () => {
     const latestRecord = abaStructuredRecords[0];
@@ -2116,7 +2166,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             </div>
           </div>
 
-          <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-4">
+          <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-7">
             <button
               type="button"
               onClick={() => {
@@ -2162,6 +2212,39 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Sessões</p>
               <p className={`text-3xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{abaSummaryMetrics.totalSessions}</p>
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAbaRecordTypeFilter('maintenance');
+                setIsAbaPanelExpanded(true);
+              }}
+              className={`rounded-2xl border p-4 text-left transition-all ${abaRecordTypeFilter === 'maintenance' ? 'border-amber-500 ring-2 ring-amber-500/15' : isPanelDark ? 'border-slate-700' : 'border-slate-100'} ${isPanelDark ? 'bg-slate-900/50' : 'bg-white/80'}`}
+            >
+              <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Manutenção</p>
+              <p className={`text-3xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{abaSummaryMetrics.maintenanceTargets}</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAbaRecordTypeFilter('maintenance');
+                setIsAbaPanelExpanded(true);
+              }}
+              className={`rounded-2xl border p-4 text-left transition-all ${isPanelDark ? 'bg-slate-900/50 border-slate-700' : 'bg-white/80 border-slate-100'}`}
+            >
+              <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Probes pendentes</p>
+              <p className={`text-3xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{abaSummaryMetrics.pendingMaintenanceProbes}</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAbaRecordTypeFilter('maintenance');
+                setIsAbaPanelExpanded(true);
+              }}
+              className={`rounded-2xl border p-4 text-left transition-all ${abaSummaryMetrics.activeRegressionRisks > 0 ? 'border-red-400 ring-2 ring-red-400/15' : isPanelDark ? 'border-slate-700' : 'border-slate-100'} ${isPanelDark ? 'bg-slate-900/50' : 'bg-white/80'}`}
+            >
+              <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Riscos ativos</p>
+              <p className={`text-3xl font-semibold ${abaSummaryMetrics.activeRegressionRisks > 0 ? 'text-red-500' : isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{abaSummaryMetrics.activeRegressionRisks}</p>
+            </button>
           </div>
         </div>
 
@@ -2177,6 +2260,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <option value="trial">Tentativas</option>
                 <option value="behavior">Comportamentos</option>
                 <option value="mastery">Maestria</option>
+                <option value="maintenance">Manutencao</option>
               </select>
               <select
                 value={abaSessionFilter}
@@ -2231,8 +2315,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2 mb-2">
-                          <span className={`rounded-full px-3 py-1 text-[9px] font-semibold uppercase tracking-widest ${record.kind === 'trial' ? 'bg-[#7a32fc]/10 text-[#7a32fc]' : record.kind === 'mastery' ? 'bg-amber-500/10 text-amber-600' : 'bg-emerald-500/10 text-emerald-600'}`}>
-                            {record.kind === 'trial' ? 'Tentativa' : record.kind === 'mastery' ? 'Maestria' : 'Comportamento'}
+                          <span className={`rounded-full px-3 py-1 text-[9px] font-semibold uppercase tracking-widest ${record.kind === 'trial' ? 'bg-[#7a32fc]/10 text-[#7a32fc]' : record.kind === 'mastery' ? 'bg-amber-500/10 text-amber-600' : record.kind === 'maintenance' ? 'bg-red-500/10 text-red-600' : 'bg-emerald-500/10 text-emerald-600'}`}>
+                            {record.kind === 'trial' ? 'Tentativa' : record.kind === 'mastery' ? 'Maestria' : record.kind === 'maintenance' ? 'Manutencao' : 'Comportamento'}
                           </span>
                           <span className={`rounded-full px-3 py-1 text-[9px] font-semibold uppercase tracking-widest ${isPanelDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-500'}`}>
                             {record.label}

@@ -37,7 +37,7 @@ import {
   buildPasswordRecoveryEmailTemplate
 } from './src/services/emailTemplates';
 import { resolveAbaPromptLevel } from './src/utils/abaPromptLevels';
-import { evaluateTargetMastery, formatAbaMasteryCriterion } from './src/utils/abaMasteryEngine';
+import { evaluateMaintenanceStatus, evaluateTargetMastery, formatAbaMasteryCriterion } from './src/utils/abaMasteryEngine';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
@@ -14625,6 +14625,10 @@ async function startServer() {
   ]);
   const ABA_MASTERY_STATUSES = new Set(['not_met', 'met', 'mastered', 'regressed', 'maintenance_due', 'insufficient_data']);
   const ABA_TARGET_PHASES = new Set(['draft', 'baseline', 'teaching', 'mastered', 'maintenance', 'generalization', 'regressed', 'discontinued']);
+  const ABA_TARGET_CLINICAL_STATUSES = new Set(['ACQUISITION', 'READY_FOR_REVIEW', 'MASTERED', 'MAINTENANCE', 'REGRESSION_RISK', 'REGRESSION_CONFIRMED']);
+  const ABA_MAINTENANCE_SCHEDULE_STATUSES = new Set(['PENDING', 'COMPLETED', 'MISSED', 'CANCELLED']);
+  const ABA_MAINTENANCE_PROBE_STATUSES = new Set(['MAINTAINED', 'WATCH', 'REGRESSION_RISK']);
+  const ABA_REGRESSION_ALERT_SEVERITIES = new Set(['LOW', 'MEDIUM', 'HIGH']);
   const ABA_SYNC_STATUSES = new Set(['local', 'local_only', 'queued', 'syncing', 'synced', 'error', 'failed', 'conflict']);
   const ABA_EVENT_STATUSES = new Set(['IN_PROGRESS', 'COMPLETED', 'CANCELED']);
 
@@ -14687,6 +14691,28 @@ async function startServer() {
   const normalizeAbaTargetPhase = (value: unknown) => {
     const safe = sanitizeString(value, 80).toLowerCase();
     return ABA_TARGET_PHASES.has(safe) ? safe : null;
+  };
+
+  const normalizeAbaTargetClinicalStatus = (value: unknown) => {
+    const safe = sanitizeString(value, 80).toUpperCase();
+    if (safe === 'TEACHING' || safe === 'IN_PROGRESS') return 'ACQUISITION';
+    if (safe === 'MASTERED_APPROVED') return 'MASTERED';
+    return ABA_TARGET_CLINICAL_STATUSES.has(safe) ? safe : 'ACQUISITION';
+  };
+
+  const normalizeAbaMaintenanceScheduleStatus = (value: unknown) => {
+    const safe = sanitizeString(value, 40).toUpperCase();
+    return ABA_MAINTENANCE_SCHEDULE_STATUSES.has(safe) ? safe : 'PENDING';
+  };
+
+  const normalizeAbaMaintenanceProbeStatus = (value: unknown) => {
+    const safe = sanitizeString(value, 40).toUpperCase();
+    return ABA_MAINTENANCE_PROBE_STATUSES.has(safe) ? safe : 'WATCH';
+  };
+
+  const normalizeAbaRegressionAlertSeverity = (value: unknown) => {
+    const safe = sanitizeString(value, 40).toUpperCase();
+    return ABA_REGRESSION_ALERT_SEVERITIES.has(safe) ? safe : 'LOW';
   };
 
   const inferAbaCorrect = (score: number | null, maxScore: number | null, explicit: unknown) => {
@@ -14859,10 +14885,58 @@ async function startServer() {
     'total_behavior_events',
     'active_targets_count',
     'mastered_targets_count',
+    'maintenance_targets_count',
+    'pending_maintenance_probes_count',
+    'active_regression_risks_count',
     'last_session_at',
     'last_behavior_event_label',
     'last_behavior_event_at',
     'updated_at'
+  ].join(',');
+  const ABA_MAINTENANCE_SCHEDULE_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'patient_id',
+    'target_id',
+    'mastery_evaluation_id',
+    'schedule_day',
+    'scheduled_for',
+    'status',
+    'completed_at',
+    'created_at'
+  ].join(',');
+  const ABA_MAINTENANCE_PROBE_RESULT_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'patient_id',
+    'target_id',
+    'maintenance_schedule_id',
+    'session_id',
+    'occurred_at',
+    'total_trials',
+    'independent_trials',
+    'prompted_trials',
+    'error_trials',
+    'accuracy_percent',
+    'independence_percent',
+    'status',
+    'raw_payload',
+    'created_at'
+  ].join(',');
+  const ABA_REGRESSION_ALERT_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'patient_id',
+    'target_id',
+    'maintenance_probe_result_id',
+    'severity',
+    'message',
+    'created_at',
+    'resolved_at',
+    'resolved_by'
   ].join(',');
   const ABA_SESSION_REPORT_SELECT = [
     'id',
@@ -14886,6 +14960,7 @@ async function startServer() {
     'interval_summary',
     'abc_summary',
     'mastery_summary',
+    'maintenance_summary',
     'blocking_items',
     'warning_items',
     'pending_items',
@@ -14997,7 +15072,7 @@ async function startServer() {
     if (targetId) {
       const targetRes = await supabase
         .from('aba_targets')
-        .select('id,organization_id,clinic_id,patient_id,program_id,name,mastery_criteria,phase')
+        .select('id,organization_id,clinic_id,patient_id,program_id,name,mastery_criteria,phase,clinical_status')
         .eq('patient_id', params.patientId)
         .eq('id', targetId)
         .limit(1)
@@ -15114,6 +15189,7 @@ async function startServer() {
 
     const grouped = new Map<string, any[]>();
     for (const trial of Array.isArray(trials) ? trials : []) {
+      if (sanitizeString(trial?.collection_type, 80).toLowerCase() === 'maintenance_probe') continue;
       const key = sanitizeString(trial?.target_id, 180) || sanitizeString(trial?.target_name, 240);
       if (!key) continue;
       grouped.set(key, [...(grouped.get(key) || []), trial]);
@@ -15219,6 +15295,169 @@ async function startServer() {
       });
     }
     return masterySummary;
+  };
+
+  const evaluateAndPersistSessionMaintenance = async (params: {
+    sessionId: string;
+    patientId: string;
+    clinicId: string;
+    therapistId: string;
+    evaluatedAt: string;
+  }) => {
+    const sessionId = sanitizeString(params.sessionId, 180);
+    const patientId = sanitizeString(params.patientId, 120);
+    const clinicId = sanitizeString(params.clinicId, 120);
+    if (!sessionId || !isUuid(patientId) || !clinicId) return [];
+
+    const trialSelect = [
+      'id',
+      'organization_id',
+      'clinic_id',
+      'patient_id',
+      'session_id',
+      'target_id',
+      'target_name',
+      'program_id',
+      'collection_type',
+      'response_score',
+      'max_score',
+      'correct',
+      'independent',
+      'prompt_level_key',
+      'occurred_at',
+      'therapist_id',
+      'created_at'
+    ].join(',');
+    const { data: trials, error: trialsError } = await supabase
+      .from('aba_trials')
+      .select(trialSelect)
+      .eq('session_id', sessionId)
+      .eq('patient_id', patientId)
+      .eq('clinic_id', clinicId)
+      .eq('collection_type', 'maintenance_probe')
+      .order('occurred_at', { ascending: true })
+      .limit(1000);
+    if (trialsError) {
+      if (hasMissingFinancialSchema(trialsError)) return [];
+      throw trialsError;
+    }
+
+    const grouped = new Map<string, any[]>();
+    for (const trial of Array.isArray(trials) ? trials : []) {
+      const key = sanitizeString(trial?.target_id, 180) || sanitizeString(trial?.target_name, 240);
+      if (!key) continue;
+      grouped.set(key, [...(grouped.get(key) || []), trial]);
+    }
+
+    const maintenanceSummary: any[] = [];
+    for (const [targetKey, targetTrials] of grouped.entries()) {
+      const firstTrial = targetTrials[0] || {};
+      const organizationId = sanitizeString(firstTrial.organization_id || clinicId, 120);
+      const targetId = sanitizeString(firstTrial.target_id || targetKey, 180);
+      const targetName = sanitizeTextField(firstTrial.target_name || targetKey, 240);
+      const programId = sanitizeString(firstTrial.program_id, 180);
+      const { criterion } = await fetchAbaMasteryCriterion({
+        organizationId,
+        clinicId,
+        patientId,
+        targetId,
+        programId
+      });
+
+      let schedule: any = null;
+      const scheduleRes = await supabase
+        .from('aba_maintenance_schedules')
+        .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('clinic_id', clinicId)
+        .eq('patient_id', patientId)
+        .eq('target_id', targetId)
+        .eq('status', 'PENDING')
+        .lte('scheduled_for', params.evaluatedAt)
+        .order('scheduled_for', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (!scheduleRes.error) schedule = scheduleRes.data || null;
+      if (scheduleRes.error && !hasMissingFinancialSchema(scheduleRes.error)) throw scheduleRes.error;
+
+      let previousProbeResults: any[] = [];
+      const previousRes = await supabase
+        .from('aba_maintenance_probe_results')
+        .select(ABA_MAINTENANCE_PROBE_RESULT_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .eq('target_id', targetId)
+        .order('occurred_at', { ascending: false })
+        .limit(10);
+      if (!previousRes.error) previousProbeResults = previousRes.data || [];
+      if (previousRes.error && !hasMissingFinancialSchema(previousRes.error)) throw previousRes.error;
+
+      const evaluation = evaluateMaintenanceStatus({
+        organizationId,
+        patientId,
+        targetId,
+        targetName,
+        sessionId,
+        maintenanceScheduleId: schedule?.id || null,
+        criteria: criterion,
+        trials: targetTrials,
+        previousProbeResults,
+        occurredAt: params.evaluatedAt
+      });
+      const resultId = `maintenance-${sessionId}-${targetId}`;
+      const payload = cleanObject({
+        id: resultId,
+        organization_id: organizationId,
+        clinic_id: clinicId,
+        patient_id: patientId,
+        target_id: targetId,
+        maintenance_schedule_id: schedule?.id || null,
+        session_id: sessionId,
+        occurred_at: evaluation.occurredAt,
+        total_trials: evaluation.totalTrials,
+        independent_trials: evaluation.independentTrials,
+        prompted_trials: evaluation.promptedTrials,
+        error_trials: evaluation.errorTrials,
+        accuracy_percent: evaluation.accuracyPercent,
+        independence_percent: evaluation.independencePercent,
+        status: evaluation.status,
+        raw_payload: sanitizeClinicalPayload({
+          targetName,
+          criterion,
+          minAccuracyPercent: evaluation.minAccuracyPercent,
+          minIndependencePercent: evaluation.minIndependencePercent,
+          reasons: evaluation.reasons,
+          consecutiveFailureCount: evaluation.consecutiveFailureCount,
+          shouldCreateRegressionAlert: evaluation.shouldCreateRegressionAlert,
+          suggestedClinicalStatus: evaluation.suggestedClinicalStatus,
+          noAutomaticTargetMutation: true,
+          humanReviewRequiredForRegressionConfirmed: true
+        }),
+        created_at: new Date().toISOString()
+      });
+      const writeResult = await writeAbaRowWithSchemaFallback('aba_maintenance_probe_results', payload, 'upsert');
+      if (writeResult.error && !hasMissingFinancialSchema(writeResult.error)) throw writeResult.error;
+
+      maintenanceSummary.push({
+        id: resultId,
+        targetId,
+        name: targetName,
+        maintenanceScheduleId: schedule?.id || null,
+        scheduledFor: schedule?.scheduled_for || null,
+        status: evaluation.status,
+        totalTrials: evaluation.totalTrials,
+        independentTrials: evaluation.independentTrials,
+        promptedTrials: evaluation.promptedTrials,
+        errorTrials: evaluation.errorTrials,
+        accuracyPercent: evaluation.accuracyPercent,
+        independencePercent: evaluation.independencePercent,
+        consecutiveFailureCount: evaluation.consecutiveFailureCount,
+        shouldCreateRegressionAlert: evaluation.shouldCreateRegressionAlert,
+        reasons: evaluation.reasons,
+        performanceText: evaluation.performanceText
+      });
+    }
+    return maintenanceSummary;
   };
 
   const resolveAbaSessionReadScope = async (sessionId: string, user: any) => {
@@ -15365,6 +15604,128 @@ async function startServer() {
     }
   });
 
+  app.get('/api/aba/maintenance-overview/:patientId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(patientId)) return res.json({ success: true, data: { schedules: [], probeResults: [], alerts: [], summary: null } });
+      const { page, pageSize, from, to } = parseAbaPageParams(req.query);
+      const applyClinic = (query: any) => (!hasGlobalClinicAccess(req.session.user) && clinicId ? query.eq('clinic_id', clinicId) : query);
+      const [scheduleResult, probeResult, alertResult, summaryResult] = await Promise.all([
+        applyClinic(
+          supabase
+            .from('aba_maintenance_schedules')
+            .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+            .eq('patient_id', patientId)
+            .in('status', ['PENDING', 'MISSED'])
+            .order('scheduled_for', { ascending: true })
+            .range(from, to)
+        ),
+        applyClinic(
+          supabase
+            .from('aba_maintenance_probe_results')
+            .select(ABA_MAINTENANCE_PROBE_RESULT_SELECT)
+            .eq('patient_id', patientId)
+            .order('occurred_at', { ascending: false })
+            .range(from, to)
+        ),
+        applyClinic(
+          supabase
+            .from('aba_regression_alerts')
+            .select(ABA_REGRESSION_ALERT_SELECT)
+            .eq('patient_id', patientId)
+            .is('resolved_at', null)
+            .order('created_at', { ascending: false })
+            .range(from, to)
+        ),
+        applyClinic(
+          supabase
+            .from('aba_patient_aba_summaries')
+            .select(ABA_PATIENT_SUMMARY_SELECT)
+            .eq('patient_id', patientId)
+            .limit(1)
+        ).maybeSingle()
+      ]);
+      const firstError = [scheduleResult, probeResult, alertResult, summaryResult].find((result: any) => result.error)?.error;
+      if (firstError) {
+        if (hasMissingFinancialSchema(firstError)) {
+          return res.json({ success: true, data: { schedules: [], probeResults: [], alerts: [], summary: null }, page, pageSize });
+        }
+        throw firstError;
+      }
+      return res.json({
+        success: true,
+        data: {
+          schedules: (scheduleResult as any).data || [],
+          probeResults: (probeResult as any).data || [],
+          alerts: (alertResult as any).data || [],
+          summary: (summaryResult as any).data || null
+        },
+        page,
+        pageSize
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.post('/api/aba/maintenance-probe-results', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload de maintenance probe ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+      if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      const targetId = sanitizeString(req.body?.target_id || req.body?.targetId, 180);
+      if (!targetId) return res.status(400).json({ success: false, error: 'Target é obrigatório.' });
+
+      const totalTrials = asSafeNumber(req.body?.total_trials ?? req.body?.totalTrials, 0, 100000) || 0;
+      const independentTrials = asSafeNumber(req.body?.independent_trials ?? req.body?.independentTrials, 0, 100000) || 0;
+      const promptedTrials = asSafeNumber(req.body?.prompted_trials ?? req.body?.promptedTrials, 0, 100000) || 0;
+      const errorTrials = asSafeNumber(req.body?.error_trials ?? req.body?.errorTrials, 0, 100000) || 0;
+      const accuracyPercent = req.body?.accuracy_percent !== undefined || req.body?.accuracyPercent !== undefined
+        ? asSafeNumber(req.body?.accuracy_percent ?? req.body?.accuracyPercent, 0, 100)
+        : (totalTrials > 0 ? Math.round(((independentTrials + promptedTrials) / totalTrials) * 10000) / 100 : 0);
+      const independencePercent = req.body?.independence_percent !== undefined || req.body?.independencePercent !== undefined
+        ? asSafeNumber(req.body?.independence_percent ?? req.body?.independencePercent, 0, 100)
+        : (totalTrials > 0 ? Math.round((independentTrials / totalTrials) * 10000) / 100 : 0);
+      const occurredAt = sanitizeIsoDateTime(req.body?.occurred_at || req.body?.occurredAt);
+      const payload = cleanObject({
+        id: sanitizeString(req.body?.id || req.body?.result_id || req.body?.resultId || crypto.randomUUID(), 180),
+        organization_id: sanitizeString(req.body?.organization_id || req.body?.organizationId || clinicId, 120),
+        clinic_id: clinicId,
+        patient_id: patientId,
+        target_id: targetId,
+        maintenance_schedule_id: sanitizeString(req.body?.maintenance_schedule_id || req.body?.maintenanceScheduleId, 180) || null,
+        session_id: sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null,
+        occurred_at: occurredAt,
+        total_trials: totalTrials,
+        independent_trials: independentTrials,
+        prompted_trials: promptedTrials,
+        error_trials: errorTrials,
+        accuracy_percent: accuracyPercent,
+        independence_percent: independencePercent,
+        status: normalizeAbaMaintenanceProbeStatus(req.body?.status),
+        raw_payload: sanitizeClinicalPayload({
+          ...(req.body?.raw_payload || req.body?.rawPayload || {}),
+          targetName: sanitizeTextField(req.body?.target_name || req.body?.targetName, 240),
+          noAutomaticTargetMutation: true,
+          humanReviewRequiredForRegressionConfirmed: true
+        }),
+        created_at: new Date().toISOString()
+      });
+
+      const result = await writeAbaRowWithSchemaFallback('aba_maintenance_probe_results', payload, 'upsert');
+      if (result.error) {
+        if (hasMissingFinancialSchema(result.error)) return res.status(503).json({ success: false, error: 'Schema ABA de manutencao ainda não aplicado.' });
+        throw result.error;
+      }
+      return res.json({ success: true, data: result.data || payload });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
   app.post('/api/aba/sessions', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload da sessão ABA')) return;
@@ -15506,6 +15867,7 @@ async function startServer() {
         ? asSafeNumber(req.body?.duration_seconds ?? req.body?.durationSeconds, 0, 86400)
         : Math.max(0, Math.round((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1000));
       let masterySummaryPayload = sanitizeClinicalPayload(req.body?.mastery_summary || req.body?.masterySummary || []);
+      let maintenanceSummaryPayload = sanitizeClinicalPayload(req.body?.maintenance_summary || req.body?.maintenanceSummary || []);
       try {
         const evaluatedMastery = await evaluateAndPersistSessionMastery({
           sessionId,
@@ -15519,6 +15881,20 @@ async function startServer() {
         }
       } catch (masteryError: any) {
         console.warn('[ABA Mastery] Falha ao avaliar maestria no encerramento:', masteryError?.message || String(masteryError));
+      }
+      try {
+        const evaluatedMaintenance = await evaluateAndPersistSessionMaintenance({
+          sessionId,
+          patientId,
+          clinicId,
+          therapistId: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
+          evaluatedAt: endedAt
+        });
+        if (evaluatedMaintenance.length > 0) {
+          maintenanceSummaryPayload = sanitizeClinicalPayload(evaluatedMaintenance);
+        }
+      } catch (maintenanceError: any) {
+        console.warn('[ABA Maintenance] Falha ao avaliar manutencao no encerramento:', maintenanceError?.message || String(maintenanceError));
       }
 
       const requestSource = resolveAbaRequestSource(req.body);
@@ -15544,6 +15920,7 @@ async function startServer() {
         interval_summary: sanitizeClinicalPayload(req.body?.interval_summary || req.body?.intervalSummary || []),
         abc_summary: sanitizeClinicalPayload(req.body?.abc_summary || req.body?.abcSummary || []),
         mastery_summary: masterySummaryPayload,
+        maintenance_summary: maintenanceSummaryPayload,
         blocking_items: sanitizeClinicalPayload(req.body?.blocking_items || req.body?.blockingItems || req.body?.pending_items || req.body?.pendingItems || []),
         warning_items: sanitizeClinicalPayload(req.body?.warning_items || req.body?.warningItems || req.body?.pending_warnings || req.body?.pendingWarnings || []),
         pending_items: sanitizeClinicalPayload(req.body?.pending_items || req.body?.pendingItems || []),
@@ -15559,6 +15936,7 @@ async function startServer() {
           trialTypesUsed: req.body?.trial_types_used || req.body?.trialTypesUsed || undefined,
           abcSummary: req.body?.abc_summary || req.body?.abcSummary || undefined,
           masterySummary: masterySummaryPayload,
+          maintenanceSummary: maintenanceSummaryPayload,
           blockingItems: req.body?.blocking_items || req.body?.blockingItems || undefined,
           warningItems: req.body?.warning_items || req.body?.warningItems || undefined,
           pendingWarnings: req.body?.pending_warnings || req.body?.pendingWarnings || undefined,

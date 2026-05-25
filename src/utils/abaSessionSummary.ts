@@ -18,6 +18,17 @@ export type SessionMasterySummaryItem = {
   independentTrials?: number;
 };
 
+export type SessionMaintenanceSummaryItem = {
+  id?: string;
+  targetId?: string | null;
+  name: string;
+  status: string;
+  totalTrials?: number;
+  accuracyPercent?: number;
+  independencePercent?: number;
+  consecutiveFailureCount?: number;
+};
+
 export type SessionSummary = {
   id: string;
   sessionId: string;
@@ -41,6 +52,7 @@ export type SessionSummary = {
   intervalSummary: BehaviorIntervalSummary[];
   abcSummary: BehaviorAbcSummary[];
   masterySummary: SessionMasterySummaryItem[];
+  maintenanceSummary?: SessionMaintenanceSummaryItem[];
   teachingSummary: TeachingSummary;
   syncStatus: 'local' | 'syncing' | 'synced' | 'error';
   blockingItems: SessionSummaryPendingItem[];
@@ -195,6 +207,7 @@ type CalculateSessionSummaryInput = {
   behaviorEvents?: any[];
   abcSummary?: BehaviorAbcSummary[];
   masterySummary?: SessionMasterySummaryItem[];
+  maintenanceSummary?: SessionMaintenanceSummaryItem[];
   blockingItems?: SessionSummaryPendingItem[];
   warningItems?: SessionSummaryPendingItem[];
   pendingItems?: SessionSummaryPendingItem[];
@@ -589,6 +602,7 @@ export const calculateSessionSummary = (sessionId: string, input: CalculateSessi
     intervalSummary,
     abcSummary,
     masterySummary: input.masterySummary || [],
+    maintenanceSummary: input.maintenanceSummary || [],
     teachingSummary,
     syncStatus: input.syncStatus || 'local',
     blockingItems,

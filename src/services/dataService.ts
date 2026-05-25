@@ -1239,6 +1239,8 @@ export const dataService = {
       trialTypesUsed: summary?.trial_types_used || summary?.trialTypesUsed || [],
       mastery_summary: summary?.mastery_summary || summary?.masterySummary || [],
       masterySummary: summary?.mastery_summary || summary?.masterySummary || [],
+      maintenance_summary: summary?.maintenance_summary || summary?.maintenanceSummary || [],
+      maintenanceSummary: summary?.maintenance_summary || summary?.maintenanceSummary || [],
       blocking_items: summary?.blocking_items || summary?.blockingItems || summary?.pending_items || summary?.pendingItems || [],
       blockingItems: summary?.blocking_items || summary?.blockingItems || summary?.pending_items || summary?.pendingItems || [],
       warning_items: summary?.warning_items || summary?.warningItems || summary?.pending_warnings || summary?.pendingWarnings || [],
@@ -1301,6 +1303,35 @@ export const dataService = {
       console.log('Fetching ABA patient summary from local state only...');
     }
     return { success: true, data: null };
+  },
+
+  async getAbaMaintenanceOverview(patientId: string, options: { limit?: number; page?: number; pageSize?: number } = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse({ schedules: [], probeResults: [], alerts: [], summary: null });
+    const limit = normalizeListLimit(options.pageSize ?? options.limit, 20, 50);
+    const page = Math.max(1, Math.round(Number(options.page || 1) || 1));
+    const endpoint = endpointWithPagination(`/api/aba/maintenance-overview/${encodeURIComponent(String(patientId))}`, { ...options, page, pageSize: limit });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: 'getAbaMaintenanceOverview', operation: 'list', table: 'aba_maintenance_schedules,aba_maintenance_probe_results,aba_regression_alerts', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+    } catch (error) {
+      console.log('Fetching ABA maintenance overview from local storage...');
+    }
+    const local = await getRecordsByType('aba');
+    const rows = local.map(r => r.data).filter((row: any) => String(row?.patient_id || row?.patientId || '') === String(patientId));
+    return {
+      success: true,
+      data: {
+        schedules: sortByNewest(rows.filter((row: any) => row?.scheduled_for || row?.scheduledFor || row?.schedule_day || row?.scheduleDay), ['scheduled_for', 'scheduledFor', 'created_at', 'createdAt']).slice(0, limit),
+        probeResults: sortByNewest(rows.filter((row: any) => row?.maintenance_schedule_id || row?.maintenanceScheduleId || row?.maintenanceProbeResult || row?.probeStatus), ['occurred_at', 'occurredAt', 'created_at', 'createdAt']).slice(0, limit),
+        alerts: sortByNewest(rows.filter((row: any) => row?.maintenance_probe_result_id || row?.maintenanceProbeResultId || row?.regressionAlert), ['created_at', 'createdAt']).slice(0, limit),
+        summary: null
+      },
+      page,
+      pageSize: limit
+    };
   },
 
   async getSessionReport(sessionId: string) {
@@ -1672,6 +1703,47 @@ export const dataService = {
       syncStatus: evaluation?.syncStatus || 'local'
     };
     return await saveOfflineFirst(id, data, 'aba', '/api/aba/mastery-evaluations');
+  },
+
+  async saveAbaMaintenanceProbeResult(result: any) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(result || {});
+    const id = String(result?.id || result?.result_id || result?.resultId || generateId());
+    const data = {
+      ...(result || {}),
+      ...buildAbaIntegrityFields(result),
+      id,
+      organization_id: result?.organization_id || result?.organizationId || result?.clinic_id || result?.clinicId,
+      organizationId: result?.organization_id || result?.organizationId || result?.clinic_id || result?.clinicId,
+      patient_id: result?.patient_id || result?.patientId,
+      patientId: result?.patient_id || result?.patientId,
+      target_id: result?.target_id || result?.targetId,
+      targetId: result?.target_id || result?.targetId,
+      target_name: result?.target_name || result?.targetName,
+      targetName: result?.target_name || result?.targetName,
+      maintenance_schedule_id: result?.maintenance_schedule_id || result?.maintenanceScheduleId,
+      maintenanceScheduleId: result?.maintenance_schedule_id || result?.maintenanceScheduleId,
+      session_id: result?.session_id || result?.sessionId,
+      sessionId: result?.session_id || result?.sessionId,
+      occurred_at: result?.occurred_at || result?.occurredAt || new Date().toISOString(),
+      occurredAt: result?.occurred_at || result?.occurredAt || new Date().toISOString(),
+      total_trials: result?.total_trials ?? result?.totalTrials,
+      totalTrials: result?.total_trials ?? result?.totalTrials,
+      independent_trials: result?.independent_trials ?? result?.independentTrials,
+      independentTrials: result?.independent_trials ?? result?.independentTrials,
+      prompted_trials: result?.prompted_trials ?? result?.promptedTrials,
+      promptedTrials: result?.prompted_trials ?? result?.promptedTrials,
+      error_trials: result?.error_trials ?? result?.errorTrials,
+      errorTrials: result?.error_trials ?? result?.errorTrials,
+      accuracy_percent: result?.accuracy_percent ?? result?.accuracyPercent,
+      accuracyPercent: result?.accuracy_percent ?? result?.accuracyPercent,
+      independence_percent: result?.independence_percent ?? result?.independencePercent,
+      independencePercent: result?.independence_percent ?? result?.independencePercent,
+      status: result?.status || result?.probeStatus || 'WATCH',
+      probeStatus: result?.status || result?.probeStatus || 'WATCH',
+      sync_status: result?.sync_status || result?.syncStatus || 'local',
+      syncStatus: result?.syncStatus || 'local'
+    };
+    return await saveOfflineFirst(id, data, 'aba', '/api/aba/maintenance-probe-results');
   },
 
   async getAbaMasteryEvaluations(patientId: string, options: { limit?: number; page?: number; pageSize?: number } = {}) {

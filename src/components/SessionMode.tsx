@@ -37,7 +37,7 @@ import {
   resumeIntervalRunState,
   type AbaIntervalCollectionStatus
 } from '../utils/abaIntervalLifecycle';
-import { evaluateTargetMastery, formatAbaMasteryCriterion } from '../utils/abaMasteryEngine';
+import { evaluateMaintenanceStatus, evaluateTargetMastery, formatAbaMasteryCriterion } from '../utils/abaMasteryEngine';
 
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
 type AbcRequirement = 'REQUIRED' | 'RECOMMENDED' | 'OPTIONAL' | 'DISABLED';
@@ -400,6 +400,16 @@ const masteryStatusLabel = (status: string) => {
   return 'Dados insuficientes';
 };
 
+const isMaintenanceLikeGoal = (goal: any) => {
+  const values = [
+    goal?.clinical_status,
+    goal?.clinicalStatus,
+    goal?.phase,
+    goal?.status
+  ].map((value) => String(value || '').trim().toLowerCase());
+  return values.some((value) => ['completed', 'mastered', 'maintenance', 'maintained', 'ready_for_review', 'regression_risk'].includes(value));
+};
+
 export const SessionMode = ({
   patient,
   onClose,
@@ -415,7 +425,7 @@ export const SessionMode = ({
 }: any) => {
   if (!isAbaV2Enabled()) return null;
 
-  const sessionGoals = (patient.pei?.filter((g: any) => g.isPriority || g.status === 'in_progress') || [])
+  const sessionGoals = (patient.pei?.filter((g: any) => g.isPriority || g.status === 'in_progress' || isMaintenanceLikeGoal(g)) || [])
     .sort((a: any, b: any) => (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0));
 
   const sessionId = String(activeSession?.id || `draft-${patient?.id || 'patient'}`);
@@ -430,6 +440,7 @@ export const SessionMode = ({
   const [promptLevelKey, setPromptLevelKey] = useState('verbal');
   const [records, setRecords] = useState<SessionRecord[]>([]);
   const [sessionLiveSummary, setSessionLiveSummary] = useState<any>(null);
+  const [maintenanceOverview, setMaintenanceOverview] = useState<any>({ schedules: [], probeResults: [], alerts: [], summary: null });
   const [openDurations, setOpenDurations] = useState<OpenDurationEvent[]>([]);
   const [selectedBehaviorId, setSelectedBehaviorId] = useState('crying');
   const [behaviorMeasurementType, setBehaviorMeasurementType] = useState(behaviorPresets[0].defaultMeasurement);
@@ -699,6 +710,26 @@ export const SessionMode = ({
       cancelled = true;
     };
   }, [hydratedSessionStateKey, sessionId, sessionCompleted, sessionStateKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadMaintenanceOverview = async () => {
+      if (!patientId) {
+        setMaintenanceOverview({ schedules: [], probeResults: [], alerts: [], summary: null });
+        return;
+      }
+      try {
+        const result = await dataService.getAbaMaintenanceOverview(patientId, { page: 1, pageSize: 20 });
+        if (!cancelled) setMaintenanceOverview(result?.data || { schedules: [], probeResults: [], alerts: [], summary: null });
+      } catch {
+        if (!cancelled) setMaintenanceOverview({ schedules: [], probeResults: [], alerts: [], summary: null });
+      }
+    };
+    void loadMaintenanceOverview();
+    return () => {
+      cancelled = true;
+    };
+  }, [patientId, sessionId, sessionCompleted]);
 
   useEffect(() => {
     const hasRunningTimer = openDurations.length > 0 || rateWindow || intervalRun;
@@ -2144,6 +2175,7 @@ export const SessionMode = ({
       sessionNote,
       syncStatus: records.some((record) => record.syncStatus === 'error') ? 'error' : records.some((record) => record.syncStatus !== 'synced') ? 'local' : 'synced'
     });
+    const finalMaintenanceSummary = maintenanceProbeRows;
     setSessionEndPreviewAt(endedAt);
     setSessionCompleted(true);
     setShowPostClosureReport(false);
@@ -2173,6 +2205,7 @@ export const SessionMode = ({
         interval_summary: finalSummary.intervalSummary,
         abc_summary: finalSummary.abcSummary,
         mastery_summary: finalSummary.masterySummary,
+        maintenance_summary: finalMaintenanceSummary,
         blocking_items: finalSummary.blockingItems,
         warning_items: finalSummary.warningItems,
         pending_items: finalSummary.pendingItems,
@@ -2186,6 +2219,7 @@ export const SessionMode = ({
           trialTypesUsed: finalSummary.trialTypesUsed,
           abcSummary: finalSummary.abcSummary,
           masterySummary: finalSummary.masterySummary,
+          maintenanceSummary: finalMaintenanceSummary,
           blockingItems: finalSummary.blockingItems,
           warningItems: finalSummary.warningItems,
           pendingWarnings: finalSummary.pendingWarnings,
@@ -2194,6 +2228,7 @@ export const SessionMode = ({
       });
       setPostClosureSummary({
         ...finalSummary,
+        maintenanceSummary: finalMaintenanceSummary,
         id: String(summarySaveResult?.data?.id || finalSummary.id),
         syncStatus: summarySaveResult?.success && !summarySaveResult?.pending && !summarySaveResult?.offline ? 'synced' : finalSummary.syncStatus,
         createdAt: summarySaveResult?.data?.created_at || summarySaveResult?.data?.createdAt || finalSummary.createdAt
@@ -2250,11 +2285,69 @@ export const SessionMode = ({
     });
   }, [activeSession?.startedAt, patient?.name, patientId, records, resolvedTherapistId, sessionClosureIssues, sessionEndPreviewAt, sessionId, sessionNote]);
 
+  const maintenanceSchedules = Array.isArray(maintenanceOverview?.schedules) ? maintenanceOverview.schedules : [];
+  const maintenanceProbeResults = Array.isArray(maintenanceOverview?.probeResults) ? maintenanceOverview.probeResults : [];
+  const regressionAlerts = Array.isArray(maintenanceOverview?.alerts) ? maintenanceOverview.alerts : [];
+
+  const targetMatchesGoal = (row: any, goalId: string, goalName: string) => {
+    const rowTargetId = String(row?.target_id || row?.targetId || '').trim();
+    const rowTargetName = String(row?.target_name || row?.targetName || row?.raw_payload?.targetName || row?.rawPayload?.targetName || '').trim();
+    if (goalId && rowTargetId && rowTargetId === goalId) return true;
+    return Boolean(goalName && rowTargetName && rowTargetName === goalName);
+  };
+
+  const formatMaintenanceDueLabel = (scheduledFor: any) => {
+    const scheduledAt = new Date(scheduledFor || 0);
+    if (Number.isNaN(scheduledAt.getTime())) return 'Sem maintenance probe agendado';
+    const diffDays = Math.ceil((scheduledAt.getTime() - Date.now()) / 86_400_000);
+    if (diffDays > 1) return `Proxima manutencao em ${diffDays} dias`;
+    if (diffDays === 1) return 'Proxima manutencao em 1 dia';
+    if (diffDays === 0) return 'Proxima manutencao hoje';
+    return `Manutencao pendente ha ${Math.abs(diffDays)} dia(s)`;
+  };
+
+  const maintenanceStatusLabel = (status: any) => {
+    const normalized = String(status || '').toUpperCase();
+    if (normalized === 'MAINTAINED') return 'Mantido';
+    if (normalized === 'REGRESSION_RISK') return 'Risco de regressao';
+    if (normalized === 'WATCH') return 'Observar';
+    return 'Sem probe recente';
+  };
+
+  const getGoalMaintenanceInfo = (goal: any) => {
+    const goalId = String(goal?.id || goal?.target_id || goal?.targetId || '').trim();
+    const goalName = String(goal?.name || goal?.target_name || goal?.targetName || 'Meta').trim();
+    const schedules = maintenanceSchedules
+      .filter((schedule: any) => targetMatchesGoal(schedule, goalId, goalName))
+      .sort((a: any, b: any) => new Date(a?.scheduled_for || a?.scheduledFor || 0).getTime() - new Date(b?.scheduled_for || b?.scheduledFor || 0).getTime());
+    const probeResults = maintenanceProbeResults
+      .filter((result: any) => targetMatchesGoal(result, goalId, goalName))
+      .sort((a: any, b: any) => new Date(b?.occurred_at || b?.occurredAt || 0).getTime() - new Date(a?.occurred_at || a?.occurredAt || 0).getTime());
+    const alerts = regressionAlerts
+      .filter((alert: any) => targetMatchesGoal(alert, goalId, goalName))
+      .sort((a: any, b: any) => new Date(b?.created_at || b?.createdAt || 0).getTime() - new Date(a?.created_at || a?.createdAt || 0).getTime());
+    let consecutiveFailures = 0;
+    for (const result of probeResults) {
+      const status = String(result?.status || '').toUpperCase();
+      if (status !== 'WATCH' && status !== 'REGRESSION_RISK') break;
+      consecutiveFailures += 1;
+    }
+    return {
+      isMaintenanceTarget: isMaintenanceLikeGoal(goal) || schedules.length > 0 || probeResults.length > 0 || alerts.length > 0,
+      nextSchedule: schedules.find((schedule: any) => String(schedule?.status || '').toUpperCase() === 'PENDING') || schedules[0] || null,
+      lastResult: probeResults[0] || null,
+      activeAlert: alerts[0] || null,
+      probeResults,
+      consecutiveFailures
+    };
+  };
+
   const teachingMasteryRows = useMemo(() => sessionGoals.map((goal: any) => {
     const goalId = String(goal?.id || goal?.target_id || goal?.targetId || '').trim();
     const goalName = String(goal?.name || goal?.target_name || goal?.targetName || 'Meta').trim();
     const goalTrials = records.filter((record) => {
       if (record.kind !== 'trial') return false;
+      if (String(record.collectionType || '').toLowerCase() === 'maintenance_probe') return false;
       const recordTargetId = String(record.targetId || '').trim();
       if (goalId && recordTargetId && recordTargetId === goalId) return true;
       return String(record.title || record.targetName || '').trim() === goalName;
@@ -2303,6 +2396,63 @@ export const SessionMode = ({
       reasons: evaluation.reasons
     };
   }), [patientId, records, resolvedClinicId, resolvedTherapistId, sessionEndPreviewAt, sessionGoals, sessionId]);
+
+  const maintenanceProbeRows = useMemo(() => sessionGoals
+    .map((goal: any) => {
+      const goalId = String(goal?.id || goal?.target_id || goal?.targetId || '').trim();
+      const goalName = String(goal?.name || goal?.target_name || goal?.targetName || 'Meta').trim();
+      const goalTrials = records.filter((record) => {
+        if (record.kind !== 'trial') return false;
+        if (String(record.collectionType || '').toLowerCase() !== 'maintenance_probe') return false;
+        const recordTargetId = String(record.targetId || '').trim();
+        if (goalId && recordTargetId && recordTargetId === goalId) return true;
+        return String(record.title || record.targetName || '').trim() === goalName;
+      });
+      const info = getGoalMaintenanceInfo(goal);
+      if (goalTrials.length === 0 && !info.isMaintenanceTarget) return null;
+      const criterion = buildSessionGoalMasteryCriterion(goal);
+      const evaluation = evaluateMaintenanceStatus({
+        organizationId: resolvedClinicId || 'local',
+        patientId,
+        targetId: goalId || goalName,
+        targetName: goalName,
+        sessionId,
+        maintenanceScheduleId: info.nextSchedule?.id || null,
+        criteria: criterion,
+        trials: goalTrials.map((record) => ({
+          ...record,
+          target_id: record.targetId || goalId || null,
+          target_name: record.targetName || record.title,
+          response_score: record.score,
+          correct: Boolean(record.correct),
+          independent: Boolean(record.independent),
+          collection_type: record.collectionType,
+          prompt_level_key: record.promptLevelKey,
+          trial_outcome: record.trialOutcome,
+          therapist_id: record.therapistId || resolvedTherapistId || null,
+          occurred_at: record.timestamp
+        })),
+        previousProbeResults: info.probeResults,
+        occurredAt: sessionEndPreviewAt || new Date().toISOString()
+      });
+      return {
+        id: `maintenance-${goalId || goalName}`,
+        targetId: goalId || null,
+        name: goalName,
+        nextSchedule: info.nextSchedule,
+        activeAlert: info.activeAlert,
+        lastResult: info.lastResult,
+        currentStatus: evaluation.status,
+        status: maintenanceStatusLabel(goalTrials.length > 0 ? evaluation.status : info.lastResult?.status),
+        totalTrials: evaluation.totalTrials,
+        accuracyPercent: evaluation.accuracyPercent,
+        independencePercent: evaluation.independencePercent,
+        consecutiveFailureCount: Math.max(evaluation.consecutiveFailureCount, info.consecutiveFailures),
+        performanceText: evaluation.performanceText,
+        reasons: evaluation.reasons
+      };
+    })
+    .filter((row): row is any => Boolean(row)), [patientId, records, resolvedClinicId, resolvedTherapistId, sessionEndPreviewAt, sessionGoals, sessionId, maintenanceOverview]);
 
   const intervalSummaryTotals = useMemo(() => {
     const total = Math.max(0, Number(intervalSummary?.totalIntervals || 0));
@@ -2557,6 +2707,7 @@ export const SessionMode = ({
         interval_summary: updatedSummary.intervalSummary,
         abc_summary: updatedSummary.abcSummary,
         mastery_summary: updatedSummary.masterySummary,
+        maintenance_summary: (updatedSummary as any).maintenanceSummary || [],
         blocking_items: updatedSummary.blockingItems,
         warning_items: updatedSummary.warningItems,
         pending_items: updatedSummary.pendingItems,
@@ -2570,6 +2721,7 @@ export const SessionMode = ({
           trialTypesUsed: updatedSummary.trialTypesUsed,
           abcSummary: updatedSummary.abcSummary,
           masterySummary: updatedSummary.masterySummary,
+          maintenanceSummary: (updatedSummary as any).maintenanceSummary || [],
           blockingItems: updatedSummary.blockingItems,
           warningItems: updatedSummary.warningItems,
           pendingWarnings: updatedSummary.pendingWarnings,
@@ -2658,6 +2810,7 @@ export const SessionMode = ({
       intervalSummary: Array.isArray(row.interval_summary) ? row.interval_summary : fallback.intervalSummary || [],
       abcSummary: Array.isArray(row.abc_summary) ? row.abc_summary : Array.isArray(payload.abcSummary) ? payload.abcSummary : fallback.abcSummary || [],
       masterySummary: Array.isArray(row.mastery_summary) ? row.mastery_summary : Array.isArray(payload.masterySummary) ? payload.masterySummary : fallback.masterySummary || [],
+      maintenanceSummary: Array.isArray(row.maintenance_summary) ? row.maintenance_summary : Array.isArray(payload.maintenanceSummary) ? payload.maintenanceSummary : (fallback as any).maintenanceSummary || [],
       teachingSummary: payload.teachingSummary || fallback.teachingSummary || {
         totalTrials,
         independentTrials,
@@ -2909,6 +3062,22 @@ export const SessionMode = ({
                     )) : <p className="text-sm text-gray-500">Nenhuma meta trabalhada nesta sessão.</p>}
                   </div>
                 </section>
+
+                {Array.isArray((postClosureSummary as any).maintenanceSummary) && (postClosureSummary as any).maintenanceSummary.length > 0 && (
+                  <section className="rounded-[24px] bg-white border border-amber-100 p-5">
+                    <h3 className="text-lg font-bold text-amber-700">Manutencao e regressao</h3>
+                    <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
+                      {(postClosureSummary as any).maintenanceSummary.map((row: any) => (
+                        <div key={row.id || row.name} className="rounded-2xl bg-[#FFFDF7] border border-amber-100 p-4">
+                          <p className="text-sm font-bold text-gray-900">{row.name}</p>
+                          <p className="mt-1 text-xs font-semibold text-gray-500">Status: {row.status}</p>
+                          <p className="mt-2 text-xs text-gray-600">Probes: {row.totalTrials ?? 0} - acuracia {row.accuracyPercent ?? 0}% - independencia {row.independencePercent ?? 0}%</p>
+                          {Number(row.consecutiveFailureCount || 0) >= 2 && <p className="mt-2 text-xs font-bold text-red-600">{row.consecutiveFailureCount} probes consecutivos abaixo do criterio</p>}
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
 
                 <section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <h3 className="text-lg font-bold text-gray-900">Comportamentos registrados</h3>
@@ -3968,10 +4137,57 @@ export const SessionMode = ({
             </div>
           </div>
 
+          {maintenanceProbeRows.length > 0 && (
+            <section className="rounded-[24px] sm:rounded-[28px] border border-amber-100 bg-white p-4 sm:p-5 shadow-xl shadow-amber-900/5">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-amber-600">Manutencao ABA</p>
+                  <h2 className="text-lg font-bold text-gray-900">Targets em manutencao e risco de regressao</h2>
+                </div>
+                <span className="inline-flex w-fit items-center gap-2 rounded-full bg-amber-50 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-amber-700">
+                  <ShieldAlert size={14} /> Revisao humana obrigatoria
+                </span>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
+                {maintenanceProbeRows.slice(0, 3).map((row: any) => (
+                  <div key={row.id} className="rounded-2xl border border-amber-100 bg-[#FFFDF7] p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-bold text-gray-900">{row.name}</p>
+                        <p className="mt-1 text-xs font-semibold text-gray-500">
+                          {row.nextSchedule ? formatMaintenanceDueLabel(row.nextSchedule.scheduled_for || row.nextSchedule.scheduledFor) : 'Sem maintenance probe agendado'}
+                        </p>
+                      </div>
+                      <span className={`shrink-0 rounded-full px-2 py-1 text-[9px] font-bold uppercase tracking-widest ${String(row.currentStatus || row.lastResult?.status).toUpperCase() === 'REGRESSION_RISK' ? 'bg-red-50 text-red-600' : String(row.currentStatus || row.lastResult?.status).toUpperCase() === 'WATCH' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-50 text-emerald-600'}`}>
+                        {row.status}
+                      </span>
+                    </div>
+                    <p className="mt-3 text-xs font-semibold text-gray-500">
+                      {row.totalTrials > 0
+                        ? `${row.totalTrials} probe(s) hoje - ${row.accuracyPercent}% acuracia - ${row.independencePercent}% independencia`
+                        : row.lastResult
+                          ? `Ultimo probe: ${row.lastResult.accuracy_percent ?? row.lastResult.accuracyPercent ?? 0}% acuracia`
+                          : 'Aguardando Maintenance Probe'}
+                    </p>
+                    {row.consecutiveFailureCount >= 2 && (
+                      <p className="mt-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-600">
+                        {row.consecutiveFailureCount} probes consecutivos abaixo do criterio
+                      </p>
+                    )}
+                    {row.activeAlert && (
+                      <p className="mt-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-600">Risco de regressao</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           <div className="space-y-5">
             {sessionGoals.map((goal: any) => {
               const goalKey = String(goal?.id || goal?.name || 'goal');
               const masteryRow = teachingMasteryRows.find((row) => String(row.id || row.targetId || row.name) === goalKey || row.name === goal.name);
+              const maintenanceInfo = getGoalMaintenanceInfo(goal);
               const promptedRenderPrompt = resolveAbaPromptLevel({ promptLevelKey });
               const independentTrialLockKey = `trial:${goalKey}:independent:independent`;
               const promptedTrialLockKey = `trial:${goalKey}:prompted:${promptedRenderPrompt.key}`;
@@ -3996,6 +4212,28 @@ export const SessionMode = ({
                       </div>
                     )}
                   </div>
+
+                  {maintenanceInfo.isMaintenanceTarget && (
+                    <div className="mb-5 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700">Target em manutencao</p>
+                          <p className="text-xs font-semibold text-amber-800">
+                            {maintenanceInfo.nextSchedule ? formatMaintenanceDueLabel(maintenanceInfo.nextSchedule.scheduled_for || maintenanceInfo.nextSchedule.scheduledFor) : 'Sem proximo maintenance probe'}
+                          </p>
+                        </div>
+                        <span className="inline-flex w-fit rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700">
+                          Use Maintenance Probe
+                        </span>
+                      </div>
+                      {maintenanceInfo.consecutiveFailures >= 2 && (
+                        <p className="mt-2 text-xs font-bold text-red-600">{maintenanceInfo.consecutiveFailures} probes consecutivos abaixo do criterio</p>
+                      )}
+                      {maintenanceInfo.activeAlert && (
+                        <p className="mt-2 text-xs font-bold text-red-600">Risco de regressao</p>
+                      )}
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <button
@@ -4456,6 +4694,24 @@ export const SessionMode = ({
                     {Array.isArray(row.reasons) && row.reasons.length > 0 && (
                       <p className="mt-1 text-xs text-gray-500">{row.reasons.map((reason: any) => reason?.message || reason).filter(Boolean).join(' ')}</p>
                     )}
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="mt-4 rounded-[24px] bg-white border border-amber-100 p-5">
+              <h4 className="text-lg font-bold text-amber-700">Manutencao e regressao</h4>
+              <div className="mt-3 space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                {maintenanceProbeRows.length === 0 ? (
+                  <p className="text-sm text-gray-500">Nenhum target em manutencao relacionado a esta sessao.</p>
+                ) : maintenanceProbeRows.map((row: any) => (
+                  <div key={row.id} className="rounded-2xl bg-[#FFFDF7] border border-amber-100 p-3">
+                    <p className="font-bold text-gray-900">{row.name}</p>
+                    <p className="text-xs text-gray-500">{row.nextSchedule ? formatMaintenanceDueLabel(row.nextSchedule.scheduled_for || row.nextSchedule.scheduledFor) : 'Sem maintenance probe agendado'}</p>
+                    <p className="text-xs text-gray-500">status: {row.status}</p>
+                    <p className="text-xs text-gray-500">probes hoje: {row.totalTrials ?? 0} - acuracia {row.accuracyPercent ?? 0}% - independencia {row.independencePercent ?? 0}%</p>
+                    {row.consecutiveFailureCount >= 2 && <p className="text-xs font-bold text-red-600">{row.consecutiveFailureCount} probes consecutivos abaixo do criterio</p>}
+                    {row.activeAlert && <p className="text-xs font-bold text-red-600">Risco de regressao</p>}
                   </div>
                 ))}
               </div>

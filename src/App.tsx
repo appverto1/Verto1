@@ -3516,6 +3516,8 @@ export default function App() {
       icon: "🎯",
       sessionId: sessionMeta?.sessionId || null,
       sessionReferenceDate: sessionMeta?.sessionReferenceDate || sessionStartedAt.slice(0, 10),
+      collection_type: sessionMeta?.collectionType || sessionMeta?.trialType || null,
+      collectionType: sessionMeta?.collectionType || sessionMeta?.trialType || null,
       created_at: recordedAt
     };
     
@@ -3537,6 +3539,8 @@ export default function App() {
         score: finalScore,
         note: evalComment || "",
         icon: "🎯",
+        collection_type: sessionMeta?.collectionType || sessionMeta?.trialType || null,
+        collectionType: sessionMeta?.collectionType || sessionMeta?.trialType || null,
         created_at: recordedAt
       });
       sourceHistoryId = historyResult?.data?.id || newId;
@@ -3627,7 +3631,7 @@ export default function App() {
 
     let updatedPei = sourcePei;
 
-    if (isKid && sourcePei.length > 0) {
+    if (isKid && sourcePei.length > 0 && abaCollectionType !== 'maintenance_probe') {
       const progressResetMarker = (() => {
         const explicitReset = Number(
           peiGoal?.sessionProgressResetAt ??
@@ -3650,6 +3654,7 @@ export default function App() {
           String(h.patientId ?? h.patient_id ?? '') === String(pid) &&
           h.title === title &&
           h.type === 'task' &&
+          String(h.collection_type || h.collectionType || h.trialType || '').toLowerCase() !== 'maintenance_probe' &&
           (!peiGoal || historyProgressMarker(h) > progressResetMarker)
         )
         .sort((a: any, b: any) => historyProgressMarker(b) - historyProgressMarker(a));
