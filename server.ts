@@ -73,6 +73,7 @@ import {
   fetchPatientsWithSchemaFallback,
   fetchPaymentsWithSchemaFallback,
   fetchProfessionalPaymentsWithSchemaFallback,
+  fetchProfileByEmailWithSchemaFallback,
   fetchProfessionalProfileWithSchemaFallback,
   fetchProfileWithSchemaFallback,
   fetchTasksWithSchemaFallback
@@ -951,6 +952,51 @@ function sendRouteDbError(res: any, route: string, error: any, context: Record<s
   return res.status(500).json(routeDbErrorPayload(error));
 }
 
+function classifyAuthRouteError(error: any): { status: number; kind: string } {
+  const code = sanitizeString(error?.code, 40);
+  const message = extractSupabaseErrorMessage(error).toLowerCase();
+  const upstreamStatus = Number(error?.status || error?.statusCode || 0);
+  if (Number.isFinite(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus < 500) {
+    return { status: upstreamStatus, kind: 'auth' };
+  }
+  if (code === '42501' || message.includes('permission denied') || message.includes('row-level security')) {
+    return { status: 403, kind: 'permission' };
+  }
+  if (isMissingRelationError(error) || extractMissingColumnName(error)) {
+    return { status: 503, kind: 'schema' };
+  }
+  if (code === '23505') return { status: 409, kind: 'duplicate' };
+  if (code === '23502' || code === '23503' || code === '23514' || code === '22P02') {
+    return { status: 400, kind: 'validation' };
+  }
+  return { status: 500, kind: 'unexpected' };
+}
+
+function authRouteErrorPayload(route: string, stage: string, error: any, statusCode: number, kind: string) {
+  if (process.env.NODE_ENV === 'production') {
+    return { success: false, error: safeErrorMessageByStatus(statusCode) };
+  }
+
+  return cleanObject({
+    success: false,
+    error: extractSupabaseErrorMessage(error) || safeErrorMessageByStatus(statusCode),
+    code: sanitizeString(error?.code, 40) || undefined,
+    route,
+    stage,
+    kind,
+    details: sanitizeString(error?.details, 500) || undefined,
+    hint: sanitizeString(error?.hint, 500) || undefined
+  });
+}
+
+function sendAuthRouteError(res: any, route: string, stage: string, error: any, context: Record<string, any> = {}) {
+  const classified = classifyAuthRouteError(error);
+  logRouteDbError(route, error, { ...context, stage, errorKind: classified.kind });
+  return res
+    .status(classified.status)
+    .json(authRouteErrorPayload(route, stage, error, classified.status, classified.kind));
+}
+
 function clinicalMutationErrorPayload(route: string, stage: string, error: any, statusCode: number, kind: string) {
   if (process.env.NODE_ENV === 'production') {
     return { success: false, error: safeErrorMessageByStatus(statusCode) };
@@ -1145,7 +1191,7 @@ async function ensureOtpTableAvailability(): Promise<boolean> {
   try {
     const { error } = await supabase
       .from('otp_challenges')
-      .select('key')
+      .select(OTP_CHALLENGE_SELECT)
       .limit(1);
     otpTableAvailable = !error;
     if (error) {
@@ -1188,49 +1234,63 @@ function fromDbOtpRow(row: any): OtpChallenge | null {
   };
 }
 
+function getInMemoryOtpChallenge(key: string): OtpChallenge | null {
+  const challenge = otpStore.get(key);
+  if (!challenge) return null;
+  if (Date.now() > challenge.expiresAt || challenge.consumed) {
+    otpStore.delete(key);
+    return null;
+  }
+  return challenge;
+}
+
 async function setOtpChallenge(challenge: OtpChallenge): Promise<void> {
+  const normalizedChallenge: OtpChallenge = {
+    ...challenge,
+    key: sanitizeString(challenge.key, 200),
+    identifier: sanitizeString(challenge.identifier, 320).toLowerCase(),
+    userId: sanitizeString(challenge.userId, 120) || null,
+    attempts: Math.max(0, Number(challenge.attempts || 0)),
+    consumed: Boolean(challenge.consumed),
+    createdAt: challenge.createdAt || Date.now()
+  };
+  otpStore.set(normalizedChallenge.key, normalizedChallenge);
+
   const useDb = await ensureOtpTableAvailability();
   if (!useDb) {
-    otpStore.set(challenge.key, challenge);
     return;
   }
 
   try {
     const payload = {
-      key: sanitizeString(challenge.key, 200),
-      channel: sanitizeString(challenge.channel, 40),
-      purpose: sanitizeString(challenge.purpose, 60),
-      identifier: sanitizeString(challenge.identifier, 320).toLowerCase(),
-      user_id: sanitizeString(challenge.userId, 120) || null,
-      code_hash: sanitizeString(challenge.codeHash, 500),
-      expires_at: new Date(challenge.expiresAt).toISOString(),
-      attempts: Math.max(0, Number(challenge.attempts || 0)),
-      consumed: Boolean(challenge.consumed),
-      created_at: new Date(challenge.createdAt || Date.now()).toISOString()
+      key: normalizedChallenge.key,
+      channel: sanitizeString(normalizedChallenge.channel, 40),
+      purpose: sanitizeString(normalizedChallenge.purpose, 60),
+      identifier: normalizedChallenge.identifier,
+      user_id: normalizedChallenge.userId,
+      code_hash: sanitizeString(normalizedChallenge.codeHash, 500),
+      expires_at: new Date(normalizedChallenge.expiresAt).toISOString(),
+      attempts: normalizedChallenge.attempts,
+      consumed: normalizedChallenge.consumed,
+      created_at: new Date(normalizedChallenge.createdAt).toISOString()
     };
     const { error } = await supabase
       .from('otp_challenges')
       .upsert(payload, { onConflict: 'key' });
     if (error) {
       console.warn('[OTP] Falha no upsert de otp_challenges, fallback memória:', error.message);
-      otpStore.set(challenge.key, challenge);
+      otpTableAvailable = false;
     }
   } catch (error: any) {
     console.warn('[OTP] Exceção no upsert de otp_challenges, fallback memória:', error?.message || String(error));
-    otpStore.set(challenge.key, challenge);
+    otpTableAvailable = false;
   }
 }
 
 async function getOtpChallenge(key: string): Promise<OtpChallenge | null> {
   const useDb = await ensureOtpTableAvailability();
   if (!useDb) {
-    const challenge = otpStore.get(key);
-    if (!challenge) return null;
-    if (Date.now() > challenge.expiresAt || challenge.consumed) {
-      otpStore.delete(key);
-      return null;
-    }
-    return challenge;
+    return getInMemoryOtpChallenge(key);
   }
 
   try {
@@ -1239,23 +1299,27 @@ async function getOtpChallenge(key: string): Promise<OtpChallenge | null> {
       .select(OTP_CHALLENGE_SELECT)
       .eq('key', key)
       .maybeSingle();
-    if (error || !data) return null;
+    if (error || !data) {
+      if (error) console.warn('[OTP] Falha ao ler otp_challenges, usando fallback memória:', error.message);
+      return getInMemoryOtpChallenge(key);
+    }
     const challenge = fromDbOtpRow(data);
-    if (!challenge) return null;
+    if (!challenge) return getInMemoryOtpChallenge(key);
     if (challenge.consumed || Date.now() > challenge.expiresAt) {
       await consumeOtpChallenge(key);
       return null;
     }
     return challenge;
-  } catch {
-    return null;
+  } catch (error: any) {
+    console.warn('[OTP] Exceção ao ler otp_challenges, usando fallback memória:', error?.message || String(error));
+    return getInMemoryOtpChallenge(key);
   }
 }
 
 async function consumeOtpChallenge(key: string): Promise<void> {
+  otpStore.delete(key);
   const useDb = await ensureOtpTableAvailability();
   if (!useDb) {
-    otpStore.delete(key);
     return;
   }
 
@@ -2225,7 +2289,7 @@ const OTP_CHALLENGE_SELECT = [
   'key',
   'channel',
   'purpose',
-  'identifier_hash',
+  'identifier',
   'user_id',
   'code_hash',
   'expires_at',
@@ -3671,6 +3735,70 @@ async function findAuthUserByEmail(email: string): Promise<any | null> {
   return null;
 }
 
+async function findRecoverableAuthUserByEmail(email: string): Promise<any | null> {
+  const target = sanitizeEmail(email);
+  if (!target) return null;
+
+  const authUser = await findAuthUserByEmail(target);
+  if (authUser?.id) return authUser;
+
+  try {
+    const profileResult = await fetchProfileByEmailWithSchemaFallback({
+      supabase,
+      email: target,
+      logger: console
+    });
+    const profile = profileResult.data as any;
+    if (profile?.id) {
+      console.warn('[Auth] Recuperação usando fallback users.id por e-mail após listUsers não localizar usuário:', {
+        email: maskEmail(target),
+        userId: sanitizeString(profile.id, 120)
+      });
+      return {
+        id: sanitizeString(profile.id, 120),
+        email: sanitizeEmail(profile.email) || target,
+        user_metadata: {
+          full_name: sanitizeString(profile.name, 180) || undefined,
+          type: sanitizeString(profile.type, 80) || undefined
+        }
+      };
+    }
+  } catch (error: any) {
+    console.warn('[Auth] Fallback de recuperação por users.email falhou:', error?.message || String(error));
+  }
+
+  return null;
+}
+
+async function insertUserProfileWithSchemaFallback(basePayload: Record<string, any>) {
+  let payload = cleanObject({ ...basePayload });
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt < 12 && Object.keys(payload).length > 0; attempt += 1) {
+    const { error } = await supabase
+      .from('users')
+      .insert([payload]);
+
+    if (!error) return { error: null, payload };
+
+    lastError = error;
+    const missingColumn = extractMissingColumnName(error);
+    if (!missingColumn || !(missingColumn in payload)) break;
+
+    console.warn('[Auth] Removendo coluna opcional ausente ao criar perfil no login:', {
+      table: 'users',
+      removedColumn: missingColumn,
+      code: sanitizeString(error?.code, 40) || null,
+      message: extractSupabaseErrorMessage(error)
+    });
+    const nextPayload = { ...payload };
+    delete nextPayload[missingColumn];
+    payload = nextPayload;
+  }
+
+  return { error: lastError, payload };
+}
+
 function compactClinicSettingsForSession(settings: any) {
   if (!settings || typeof settings !== 'object') return null;
   return cleanObject({
@@ -4910,7 +5038,18 @@ async function startServer() {
         const { user, error } = await getUserFromAccessToken(token);
         if (!error && user) {
           // Re-populate session if missing but token is valid
-          const { data: profile } = await supabase.from('users').select(USER_PROFILE_SELECT).eq('id', user.id).single();
+          const profileResult = await fetchProfileWithSchemaFallback({
+            supabase,
+            userId: user.id,
+            logger: console
+          });
+          const profile = profileResult.data as any;
+          if (profileResult.error) {
+            logRouteDbError('/api auth middleware [profile_select]', profileResult.error, {
+              requestId: requestIdForLogs(req),
+              userId: sanitizeString(user.id, 120)
+            });
+          }
           if (profile) {
             const workspaces = await fetchUserWorkspaces(user.id);
             const selectedWorkspace = workspaces.find((w: any) => w.clinicId === profile.clinic_id) || workspaces[0] || null;
@@ -5622,14 +5761,18 @@ async function startServer() {
       user_agent: userAgent
     });
 
-    await persistActivityLog({
-      userId: actorId,
-      clinicId: null,
-      actorName,
-      title: sanitizeString(title, 180),
-      content: `${sanitizeString(content, 1200)} | detail=${JSON.stringify(detail)}`,
-      type: 'security'
-    });
+    try {
+      await persistActivityLog({
+        userId: actorId,
+        clinicId: null,
+        actorName,
+        title: sanitizeString(title, 180),
+        content: `${sanitizeString(content, 1200)} | detail=${JSON.stringify(detail)}`,
+        type: 'security'
+      });
+    } catch (auditError: any) {
+      console.warn('[AuthAudit] Falha ao registrar auditoria de identidade:', auditError?.message || String(auditError));
+    }
   };
 
   app.use('/api', (req: any, res: any, next: any) => {
@@ -5973,7 +6116,19 @@ async function startServer() {
         });
       }
       
-      const { data: profile } = await supabase.from('users').select(USER_PROFILE_SELECT).eq('id', user.id).single();
+      const profileResult = await fetchProfileWithSchemaFallback({
+        supabase,
+        userId: user.id,
+        logger: console
+      });
+      if (profileResult.error) {
+        return sendAuthRouteError(res, '/api/auth/2fa/login', 'profile_select', profileResult.error, {
+          requestId: requestIdForLogs(req),
+          userId: sanitizeString(user.id, 120),
+          email: maskEmail(email)
+        });
+      }
+      const profile = profileResult.data as any;
       if (!profile || !profile.two_factor_enabled || !profile.two_factor_secret) {
         return res.status(400).json({ error: "2FA não habilitado para este usuário" });
       }
@@ -6601,7 +6756,7 @@ async function startServer() {
 
     try {
       if (!email) return res.json(genericResponse);
-      const authUser = await findAuthUserByEmail(email);
+      const authUser = await findRecoverableAuthUserByEmail(email);
       if (!authUser?.id) {
         await persistIdentityAuditLog({
           title: 'Recuperação por e-mail solicitada',
@@ -6796,13 +6951,17 @@ async function startServer() {
       return res.json({ success: true, message: 'Senha redefinida com sucesso.' });
     } catch (error: any) {
       console.error('[Auth] recovery verify error:', error.message);
-      return res.status(500).json({ error: 'Falha ao concluir recuperação.' });
+      return sendAuthRouteError(res, '/api/auth/password/recovery/verify', 'verify', error, {
+        requestId: requestIdForLogs(req),
+        email: maskEmail(identifier)
+      });
     }
   });
 
   // --- AUTH ROUTES ---
   // Login (receives Supabase access token from client, verifies it, and sets session)
   app.post('/api/auth/login', authLoginLimiter, async (req, res) => {
+    const requestId = requestIdForLogs(req);
     const { intendedRole } = req.body;
     const activationFlow = Boolean(req.body?.activationFlow);
     const passwordSetupCompleted = Boolean(req.body?.passwordSetupCompleted);
@@ -6925,15 +7084,19 @@ async function startServer() {
       }
 
       // Fetch user profile from 'users' table
-      let { data: profile, error: profileError } = await supabase
-        .from('users')
-        .select(USER_PROFILE_SELECT)
-        .eq('id', user.id)
-        .single();
+      const profileResult = await fetchProfileWithSchemaFallback({
+        supabase,
+        userId: user.id,
+        logger: console
+      });
+      let profile = profileResult.data as any;
 
-      if (profileError && profileError.code !== 'PGRST116') {
-        console.error('Profile fetch error:', profileError);
-        return res.status(500).json({ error: "Erro ao buscar perfil do usuário", details: profileError.message });
+      if (profileResult.error) {
+        return sendAuthRouteError(res, '/api/auth/login', 'profile_select', profileResult.error, {
+          requestId,
+          userId: sanitizeString(user.id, 120),
+          email: maskEmail(safeAuthEmail || credentialEmail)
+        });
       }
 
       // Check for 2FA
@@ -6945,16 +7108,19 @@ async function startServer() {
       if (!profile && user.email) {
         const safeUserEmail = sanitizeEmail(user.email);
         if (safeUserEmail) {
-          const { data: profileByEmail, error: profileByEmailError } = await supabase
-            .from('users')
-            .select(USER_PROFILE_SELECT)
-            .ilike('email', safeUserEmail)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
+          const profileByEmailResult = await fetchProfileByEmailWithSchemaFallback({
+            supabase,
+            email: safeUserEmail,
+            logger: console
+          });
+          const profileByEmail = profileByEmailResult.data as any;
 
-          if (profileByEmailError && profileByEmailError.code !== 'PGRST116') {
-            console.warn('[Auth] profileByEmail lookup warning:', profileByEmailError.message || String(profileByEmailError));
+          if (profileByEmailResult.error) {
+            logRouteDbError('/api/auth/login [profile_by_email]', profileByEmailResult.error, {
+              requestId,
+              userId: sanitizeString(user.id, 120),
+              email: maskEmail(safeUserEmail)
+            });
           }
 
           if (profileByEmail) {
@@ -6986,11 +7152,19 @@ async function startServer() {
               delete safeReconciledPayload[missingColumn];
             }
 
-            const { data: reconciledProfile } = await supabase
-              .from('users')
-              .select(USER_PROFILE_SELECT)
-              .eq('id', user.id)
-              .maybeSingle();
+            const reconciledProfileResult = await fetchProfileWithSchemaFallback({
+              supabase,
+              userId: user.id,
+              logger: console
+            });
+            const reconciledProfile = reconciledProfileResult.data as any;
+            if (reconciledProfileResult.error) {
+              logRouteDbError('/api/auth/login [reconciled_profile_select]', reconciledProfileResult.error, {
+                requestId,
+                userId: sanitizeString(user.id, 120),
+                email: maskEmail(safeUserEmail)
+              });
+            }
             if (reconciledProfile) {
               profile = reconciledProfile;
             }
@@ -7045,16 +7219,19 @@ async function startServer() {
           created_at: new Date().toISOString()
         };
 
-        const { data: createdProfile, error: insertError } = await supabase
-          .from('users')
-          .insert([newProfile])
-          .select(USER_PROFILE_SELECT)
-          .single();
+        const insertResult = await insertUserProfileWithSchemaFallback(newProfile);
 
-        if (insertError) {
-          console.error("Error creating profile during login:", insertError);
-          throw insertError;
+        if (insertResult.error) {
+          console.error("Error creating profile during login:", insertResult.error);
+          throw insertResult.error;
         }
+        const createdProfileResult = await fetchProfileWithSchemaFallback({
+          supabase,
+          userId: user.id,
+          logger: console
+        });
+        if (createdProfileResult.error) throw createdProfileResult.error;
+        const createdProfile = (createdProfileResult.data as any) || insertResult.payload;
 
         // Also update user metadata for onboarding tracking
         await supabase.auth.admin.updateUserById(user.id, {
@@ -7266,7 +7443,11 @@ async function startServer() {
         if (err) {
           console.error("Session save error in login:", err);
           if (!res.headersSent) {
-            return res.status(500).json({ error: "Erro ao salvar sessão" });
+            return sendAuthRouteError(res, '/api/auth/login', 'session_save', err, {
+              requestId,
+              userId: sanitizeString(user.id, 120),
+              email: maskEmail(safeAuthEmail || credentialEmail)
+            });
           }
           return;
         }
@@ -7275,7 +7456,10 @@ async function startServer() {
       });
     } catch (error) {
       console.error("Login verification error:", error);
-      res.status(500).json({ error: "Internal server error" });
+      return sendAuthRouteError(res, '/api/auth/login', 'login', error, {
+        requestId,
+        email: maskEmail(credentialEmail)
+      });
     }
   });
 
@@ -9841,7 +10025,7 @@ async function startServer() {
         if (!patientEmail) {
           return res.status(400).json({ success: false, error: 'Paciente sem e-mail cadastrado.' });
         }
-        const authUser = await findAuthUserByEmail(patientEmail);
+        const authUser = await findRecoverableAuthUserByEmail(patientEmail);
         const isAlreadyConfirmed = Boolean(
           (authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at,
         );
@@ -12214,7 +12398,18 @@ async function startServer() {
           if (tokenMatch.ok) {
             const { user, error } = await getUserFromAccessToken(token);
             if (!error && user?.id) {
-              const { data: profile } = await supabase.from('users').select(USER_PROFILE_SELECT).eq('id', user.id).maybeSingle();
+              const profileResult = await fetchProfileWithSchemaFallback({
+                supabase,
+                userId: user.id,
+                logger: console
+              });
+              const profile = profileResult.data as any;
+              if (profileResult.error) {
+                logRouteDbError('/api/logs [profile_select]', profileResult.error, {
+                  requestId: requestIdForLogs(req),
+                  userId: sanitizeString(user.id, 120)
+                });
+              }
               if (profile) {
                 currentUser = buildSessionUserPayload({
                   id: user.id,
@@ -12355,7 +12550,18 @@ async function startServer() {
           if (tokenMatch.ok) {
             const { user, error } = await getUserFromAccessToken(token);
             if (!error && user?.id) {
-              const { data: profile } = await supabase.from('users').select(USER_PROFILE_SELECT).eq('id', user.id).maybeSingle();
+              const profileResult = await fetchProfileWithSchemaFallback({
+                supabase,
+                userId: user.id,
+                logger: console
+              });
+              const profile = profileResult.data as any;
+              if (profileResult.error) {
+                logRouteDbError('/api/logs [POST profile_select]', profileResult.error, {
+                  requestId: requestIdForLogs(req),
+                  userId: sanitizeString(user.id, 120)
+                });
+              }
               if (profile) {
                 currentUser = buildSessionUserPayload({
                   id: user.id,

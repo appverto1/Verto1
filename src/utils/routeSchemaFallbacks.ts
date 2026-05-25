@@ -1097,6 +1097,61 @@ export async function fetchProfileWithSchemaFallback(params: {
   return { data: null, error: lastError, select: joinColumns(columns) };
 }
 
+export async function fetchProfileByEmailWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  email: string | null;
+  logger?: LoggerLike;
+}) {
+  let columns = [...PROFILE_SELECT_COLUMNS];
+  let lastError: any = null;
+  let shouldOrderByCreatedAt = true;
+  const email = cleanString(params.email, 320).toLowerCase();
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    let query = params.supabase
+      .from('users')
+      .select(joinColumns(columns))
+      .ilike('email', email);
+
+    if (shouldOrderByCreatedAt && columns.includes('created_at')) {
+      query = query.order('created_at', { ascending: false });
+    }
+
+    const result = await query.limit(1).maybeSingle();
+
+    if (!result.error) {
+      return {
+        data: result.data || null,
+        error: null,
+        select: joinColumns(columns)
+      };
+    }
+
+    lastError = result.error;
+    const missingColumn =
+      extractMissingColumnNameFromSupabaseError(result.error) ||
+      findMentionedColumn(result.error, PROFILE_OPTIONAL_COLUMNS);
+    if (!missingColumn || !PROFILE_OPTIONAL_COLUMNS.has(missingColumn)) break;
+
+    if (missingColumn === 'created_at') {
+      shouldOrderByCreatedAt = false;
+    }
+
+    if (columns.includes(missingColumn)) {
+      columns = columns.filter((column) => column !== missingColumn);
+    }
+
+    warnSchemaFallback(params.logger, {
+      route: '/api/auth/login',
+      table: 'users',
+      missingColumn,
+      nextSelect: joinColumns(columns)
+    });
+  }
+
+  return { data: null, error: lastError, select: joinColumns(columns) };
+}
+
 export async function fetchProfessionalProfileWithSchemaFallback(params: {
   supabase: SupabaseLike;
   userId: string | null;

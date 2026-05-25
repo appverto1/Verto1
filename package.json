@@ -22,6 +22,7 @@
     "test:route-schema-fallbacks": "tsx tests/routeSchemaFallbacks.test.ts",
     "test:notes-tasks-fallback": "tsx tests/notesTasksFallback.test.ts",
     "test:offline-sync-resilience": "tsx tests/offlineSyncResilience.test.ts",
+    "test:auth-login-recovery-fallback": "tsx tests/authLoginRecoveryFallback.test.ts",
     "test:aba-clinical-dock": "tsx tests/abaClinicalDock.test.ts",
     "test:aba-marco1": "tsx tests/abaMarco1Audit.test.ts",
     "test:aba-summary-driven": "tsx tests/abaSummaryDriven.test.ts",
