@@ -16,6 +16,8 @@ create table if not exists public.aba_session_metric_snapshots (
       'TARGET_ACCURACY',
       'TARGET_INDEPENDENCE',
       'TARGET_TRIAL_COUNT',
+      'FUNCTIONAL_COMMUNICATION',
+      'ENGAGEMENT',
       'BEHAVIOR_FREQUENCY',
       'BEHAVIOR_DURATION_TOTAL',
       'BEHAVIOR_DURATION_AVG',

@@ -4,6 +4,8 @@ export type AbaMetricType =
   | 'TARGET_ACCURACY'
   | 'TARGET_INDEPENDENCE'
   | 'TARGET_TRIAL_COUNT'
+  | 'FUNCTIONAL_COMMUNICATION'
+  | 'ENGAGEMENT'
   | 'BEHAVIOR_FREQUENCY'
   | 'BEHAVIOR_DURATION_TOTAL'
   | 'BEHAVIOR_DURATION_AVG'
@@ -72,6 +74,8 @@ export const ABA_CLINICAL_CHART_DEFAULT_THRESHOLDS: AbaClinicalChartThresholds =
 export const ABA_METRIC_DIRECTION: Record<string, AbaMetricDirection> = {
   TARGET_ACCURACY: 'HIGHER_IS_BETTER',
   TARGET_INDEPENDENCE: 'HIGHER_IS_BETTER',
+  FUNCTIONAL_COMMUNICATION: 'HIGHER_IS_BETTER',
+  ENGAGEMENT: 'HIGHER_IS_BETTER',
   TARGET_TRIAL_COUNT: 'HIGHER_IS_BETTER',
   BEHAVIOR_FREQUENCY: 'LOWER_IS_BETTER',
   BEHAVIOR_DURATION_TOTAL: 'LOWER_IS_BETTER',
@@ -127,11 +131,31 @@ const metricStatusScore = (metricType: string, status: unknown, fallbackValue: n
   return fallbackValue;
 };
 
+export const isAbaPercentMetric = (metricType: string) => {
+  const normalized = normalizeStatus(metricType);
+  return normalized === 'TARGET_ACCURACY' ||
+    normalized === 'TARGET_INDEPENDENCE' ||
+    normalized === 'FUNCTIONAL_COMMUNICATION' ||
+    normalized === 'ENGAGEMENT' ||
+    normalized === 'BEHAVIOR_INTERVAL_OCCURRENCE';
+};
+
+export const isAbaRelativeChangeMetric = (metricType: string) => {
+  const normalized = normalizeStatus(metricType);
+  return normalized === 'TARGET_TRIAL_COUNT' ||
+    normalized === 'BEHAVIOR_FREQUENCY' ||
+    normalized === 'BEHAVIOR_DURATION_TOTAL' ||
+    normalized === 'BEHAVIOR_DURATION_AVG' ||
+    normalized === 'BEHAVIOR_DURATION_MAX';
+};
+
 const statusLabelFor = (changeStatus: AbaChangeStatus, trendDirection: AbaTrendDirection, currentStatus?: string | null) => {
   const normalizedStatus = normalizeStatus(currentStatus);
   if (changeStatus === 'FIRST_MEASUREMENT') return 'Primeira medição';
   if (changeStatus === 'REGRESSION_SIGNAL') return 'Sinal de regressão';
   if (normalizedStatus === 'READY_FOR_REVIEW') return 'Pronto para revisão';
+  if (changeStatus === 'CLINICALLY_SIGNIFICANT_CHANGE' && trendDirection === 'IMPROVED') return 'Melhora relevante';
+  if (changeStatus === 'CLINICALLY_SIGNIFICANT_CHANGE' && trendDirection === 'WORSENED') return 'Piora relevante';
   if (changeStatus === 'NO_CHANGE' || trendDirection === 'STABLE') return 'Estável';
   if (trendDirection === 'IMPROVED') return 'Melhorou nesta sessão';
   if (trendDirection === 'WORSENED') return 'Piorou nesta sessão';
@@ -143,11 +167,8 @@ export const getAbaMetricDirection = (metricType: string): AbaMetricDirection =>
 
 export const isAbaSignificantChange = (changeStatus: string, trendDirection?: string) => {
   const normalized = normalizeStatus(changeStatus);
-  const trend = normalizeStatus(trendDirection);
   return normalized === 'CLINICALLY_SIGNIFICANT_CHANGE' ||
-    normalized === 'REGRESSION_SIGNAL' ||
-    trend === 'IMPROVED' ||
-    trend === 'WORSENED';
+    normalized === 'REGRESSION_SIGNAL';
 };
 
 export function compareAbaMetric(input: AbaMetricComparisonInput): AbaMetricComparison {
@@ -183,10 +204,9 @@ export function compareAbaMetric(input: AbaMetricComparisonInput): AbaMetricComp
   }
 
   const deltaValue = round2(current - previous);
-  const denominator = Math.abs(previous) > 0 ? Math.abs(previous) : 1;
-  const deltaPercent = round2(((current - previous) / denominator) * 100);
 
   if (direction === 'STATUS_BASED') {
+    const deltaPercent = null;
     const currentStatus = normalizeStatus(input.currentStatus);
     let trendDirection: AbaTrendDirection = 'STABLE';
     if ((deltaValue || 0) > 0) trendDirection = 'IMPROVED';
@@ -217,25 +237,37 @@ export function compareAbaMetric(input: AbaMetricComparisonInput): AbaMetricComp
   const clinicalCriterion = Number.isFinite(Number(input.clinicalCriterion))
     ? Number(input.clinicalCriterion)
     : thresholds.targetClinicalCriterion;
-  const effectiveDeltaPercent = direction === 'LOWER_IS_BETTER' ? -(deltaPercent || 0) : (deltaPercent || 0);
-  const absoluteDeltaPercent = Math.abs(deltaPercent || 0);
+  const percentMetric = isAbaPercentMetric(metricType);
+  const relativeMetric = isAbaRelativeChangeMetric(metricType);
+  const deltaPercent = percentMetric
+    ? deltaValue
+    : relativeMetric && Math.abs(previous) > 0
+      ? round2(((current - previous) / Math.abs(previous)) * 100)
+      : null;
+  const effectiveDeltaValue = direction === 'LOWER_IS_BETTER' ? -(deltaValue || 0) : (deltaValue || 0);
+  const absoluteClinicalDelta = percentMetric
+    ? Math.abs(deltaValue || 0)
+    : Math.abs(deltaPercent ?? deltaValue ?? 0);
 
   let trendDirection: AbaTrendDirection = 'STABLE';
   let changeStatus: AbaChangeStatus = 'NO_CHANGE';
 
-  if (absoluteDeltaPercent >= thresholds.stablePercent || Math.abs(deltaValue || 0) > 0) {
-    if (effectiveDeltaPercent > 0) trendDirection = 'IMPROVED';
-    if (effectiveDeltaPercent < 0) trendDirection = 'WORSENED';
+  if (percentMetric) {
+    if (absoluteClinicalDelta >= thresholds.stablePercent) {
+      if (effectiveDeltaValue > 0) trendDirection = 'IMPROVED';
+      if (effectiveDeltaValue < 0) trendDirection = 'WORSENED';
+      changeStatus = absoluteClinicalDelta >= thresholds.meaningfulPercent
+        ? 'CLINICALLY_SIGNIFICANT_CHANGE'
+        : 'CHANGED';
+    }
+  } else if (Math.abs(deltaValue || 0) > 0) {
+    if (effectiveDeltaValue > 0) trendDirection = 'IMPROVED';
+    if (effectiveDeltaValue < 0) trendDirection = 'WORSENED';
     changeStatus = trendDirection === 'STABLE' ? 'NO_CHANGE' : 'CHANGED';
   }
 
-  if (absoluteDeltaPercent < thresholds.stablePercent) {
-    trendDirection = 'STABLE';
-    changeStatus = 'NO_CHANGE';
-  }
-
   const isTargetMetric = metricType === 'TARGET_ACCURACY' || metricType === 'TARGET_INDEPENDENCE';
-  if (isTargetMetric && previous >= clinicalCriterion && current < clinicalCriterion && effectiveDeltaPercent <= -thresholds.meaningfulPercent) {
+  if (isTargetMetric && previous >= clinicalCriterion && current < clinicalCriterion && effectiveDeltaValue <= -thresholds.meaningfulPercent) {
     changeStatus = 'REGRESSION_SIGNAL';
     trendDirection = 'WORSENED';
   }

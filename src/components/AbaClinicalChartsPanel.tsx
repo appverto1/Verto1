@@ -3,6 +3,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   Line,
   LineChart,
   ReferenceLine,
@@ -10,13 +11,51 @@ import {
   XAxis,
   YAxis
 } from 'recharts';
-import { BarChart3, Filter, Plus, Save, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  BarChart3,
+  CheckCircle2,
+  Filter,
+  Plus,
+  Save,
+  SlidersHorizontal,
+  Sparkles,
+  Target,
+  TrendingDown,
+  TrendingUp,
+  X
+} from 'lucide-react';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { dataService } from '../services/dataService';
 
 type AbaClinicalChartsPanelProps = {
   patientId: string;
   isPanelDark?: boolean;
+};
+
+type ChartPoint = {
+  id?: string;
+  sessionId?: string | null;
+  targetId?: string | null;
+  behaviorId?: string | null;
+  metricType?: string;
+  metricLabel?: string;
+  value?: number | string | null;
+  metricValue?: number | string | null;
+  previousValue?: number | string | null;
+  deltaValue?: number | string | null;
+  deltaPercent?: number | string | null;
+  trendDirection?: string;
+  changeStatus?: string;
+  statusLabel?: string;
+  metricDirection?: string;
+  changedAt?: string;
+  x?: string;
+  chartValue?: number;
+  currentStatus?: string;
+  masteryStatus?: string;
+  mostUsedTrialType?: string;
+  trialTypeMostUsed?: string;
 };
 
 const chartTabs = [
@@ -32,21 +71,72 @@ const metricLabels: Record<string, string> = {
   TARGET_ACCURACY: 'Acurácia',
   TARGET_INDEPENDENCE: 'Independência',
   TARGET_TRIAL_COUNT: 'Tentativas',
+  FUNCTIONAL_COMMUNICATION: 'Comunicação funcional',
+  ENGAGEMENT: 'Engajamento',
   BEHAVIOR_FREQUENCY: 'Frequência',
   BEHAVIOR_DURATION_TOTAL: 'Duração total',
   BEHAVIOR_DURATION_AVG: 'Duração média',
+  BEHAVIOR_DURATION_MAX: 'Duração máxima',
   BEHAVIOR_INTERVAL_OCCURRENCE: 'Ocorrência por intervalo',
   MASTERY_STATUS: 'Status de maestria',
-  MAINTENANCE_STATUS: 'Status de manutenção'
+  MAINTENANCE_STATUS: 'Status de manutenção',
+  REGRESSION_RISK: 'Risco de regressão'
 };
 
-const statusTone = (status: string) => {
+const targetMetricOptions = ['TARGET_INDEPENDENCE', 'TARGET_ACCURACY', 'TARGET_TRIAL_COUNT'];
+const behaviorMetricOptions = [
+  'BEHAVIOR_FREQUENCY',
+  'BEHAVIOR_DURATION_TOTAL',
+  'BEHAVIOR_DURATION_AVG',
+  'BEHAVIOR_INTERVAL_OCCURRENCE'
+];
+const masteryStatuses = ['INSUFFICIENT_DATA', 'NOT_MET', 'MET_TODAY', 'READY_FOR_REVIEW', 'MASTERED_APPROVED'];
+const maintenanceStatuses = ['PENDING', 'MAINTAINED', 'WATCH', 'REGRESSION_RISK', 'MISSED'];
+
+const percentMetrics = new Set([
+  'TARGET_ACCURACY',
+  'TARGET_INDEPENDENCE',
+  'FUNCTIONAL_COMMUNICATION',
+  'ENGAGEMENT',
+  'BEHAVIOR_INTERVAL_OCCURRENCE'
+]);
+const durationMetrics = new Set(['BEHAVIOR_DURATION_TOTAL', 'BEHAVIOR_DURATION_AVG', 'BEHAVIOR_DURATION_MAX']);
+const statusMetrics = new Set(['MASTERY_STATUS', 'MAINTENANCE_STATUS', 'REGRESSION_RISK']);
+
+const metricAxisLabels: Record<string, string> = {
+  TARGET_ACCURACY: 'Acurácia (%)',
+  TARGET_INDEPENDENCE: 'Independência (%)',
+  TARGET_TRIAL_COUNT: 'Tentativas',
+  BEHAVIOR_FREQUENCY: 'Ocorrências',
+  BEHAVIOR_DURATION_TOTAL: 'Duração total',
+  BEHAVIOR_DURATION_AVG: 'Duração média',
+  BEHAVIOR_DURATION_MAX: 'Duração máxima',
+  BEHAVIOR_INTERVAL_OCCURRENCE: '% de ocorrência por intervalo',
+  MASTERY_STATUS: 'Status',
+  MAINTENANCE_STATUS: 'Status'
+};
+
+const statusTone = (status?: string) => {
   if (status === 'REGRESSION_SIGNAL') return 'bg-red-50 text-red-700 border-red-100';
   if (status === 'CLINICALLY_SIGNIFICANT_CHANGE') return 'bg-emerald-50 text-emerald-700 border-emerald-100';
   if (status === 'CHANGED') return 'bg-blue-50 text-blue-700 border-blue-100';
   if (status === 'FIRST_MEASUREMENT') return 'bg-slate-50 text-slate-600 border-slate-100';
   return 'bg-gray-50 text-gray-600 border-gray-100';
 };
+
+const chartColor = (point: ChartPoint) => {
+  if (point.changeStatus === 'REGRESSION_SIGNAL' || point.trendDirection === 'WORSENED') return '#EF4444';
+  if (point.trendDirection === 'IMPROVED') return '#10B981';
+  if (point.changeStatus === 'FIRST_MEASUREMENT') return '#94A3B8';
+  return '#7a32fc';
+};
+
+const safeNumber = (value: any, fallback = 0) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+};
+
+const round1 = (value: number) => Math.round(value * 10) / 10;
 
 const formatDate = (value: any) => {
   const date = new Date(value || 0);
@@ -60,39 +150,123 @@ const formatDateTime = (value: any) => {
   return date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 };
 
+const valueUnit = (metricType?: string) => {
+  const metric = String(metricType || '');
+  if (percentMetrics.has(metric)) return '%';
+  if (durationMetrics.has(metric)) return 's';
+  return '';
+};
+
 const formatValue = (value: any, metricType?: string) => {
   if (value === null || value === undefined || value === '') return '-';
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return String(value);
-  if (String(metricType || '').includes('DURATION')) return `${Math.round(numeric)}s`;
-  if (String(metricType || '').includes('STATUS')) return String(Math.round(numeric));
-  return `${Math.round(numeric * 10) / 10}${String(metricType || '').includes('COUNT') || String(metricType || '').includes('FREQUENCY') ? '' : '%'}`;
+  if (statusMetrics.has(String(metricType || ''))) return String(Math.round(numeric));
+  return `${round1(numeric)}${valueUnit(metricType)}`;
 };
 
-const CustomTooltip = ({ active, payload }: any) => {
-  if (!active || !payload?.length) return null;
-  const row = payload[0]?.payload || {};
-  return (
-    <div className="max-w-[280px] rounded-2xl border border-slate-100 bg-white p-4 text-xs shadow-xl">
-      <p className="font-black uppercase tracking-widest text-slate-900">{formatDateTime(row.changedAt)}</p>
-      <p className="mt-2 font-bold text-slate-700">{row.metricLabel}</p>
-      <div className="mt-3 space-y-1 text-slate-500">
-        <p>Métrica: {metricLabels[row.metricType] || row.metricType}</p>
-        <p>Valor: {formatValue(row.value, row.metricType)}</p>
-        <p>Anterior: {formatValue(row.previousValue, row.metricType)}</p>
-        <p>Delta: {row.deltaPercent === null || row.deltaPercent === undefined ? '-' : `${Number(row.deltaPercent).toFixed(1)}%`}</p>
-        <p>Sessão: {row.sessionId || '-'}</p>
-      </div>
-      <p className="mt-3 rounded-xl bg-slate-50 px-3 py-2 font-bold text-slate-700">{row.statusLabel || 'Estável'}</p>
-    </div>
-  );
+const formatDelta = (point: ChartPoint) => {
+  const metricType = String(point.metricType || '');
+  const previous = point.previousValue;
+  if (previous === null || previous === undefined || previous === '') return 'primeira medição';
+
+  if (percentMetrics.has(metricType)) {
+    const delta = safeNumber(point.deltaValue ?? point.deltaPercent, 0);
+    return `${delta > 0 ? '+' : ''}${round1(delta)} p.p.`;
+  }
+
+  const deltaValue = safeNumber(point.deltaValue, 0);
+  const deltaPercent = Number(point.deltaPercent);
+  const unit = valueUnit(metricType);
+  const absoluteText = `${deltaValue > 0 ? '+' : ''}${round1(deltaValue)}${unit}`;
+  if (Number.isFinite(deltaPercent)) {
+    return `${absoluteText} (${deltaPercent > 0 ? '+' : ''}${round1(deltaPercent)}%)`;
+  }
+  return absoluteText;
+};
+
+const clinicalInterpretation = (point: ChartPoint) => {
+  if (point.changeStatus === 'FIRST_MEASUREMENT') return 'primeira medição';
+  if (point.changeStatus === 'REGRESSION_SIGNAL') return 'sinal de regressão';
+  if (point.changeStatus === 'CLINICALLY_SIGNIFICANT_CHANGE' && point.trendDirection === 'IMPROVED') return 'melhora relevante';
+  if (point.changeStatus === 'CLINICALLY_SIGNIFICANT_CHANGE' && point.trendDirection === 'WORSENED') return 'piora relevante';
+  if (point.trendDirection === 'IMPROVED' && point.metricDirection === 'LOWER_IS_BETTER') return 'melhora por redução';
+  if (point.trendDirection === 'IMPROVED') return 'melhora';
+  if (point.trendDirection === 'WORSENED' && point.metricDirection === 'LOWER_IS_BETTER') return 'piora por aumento';
+  if (point.trendDirection === 'WORSENED') return 'piora';
+  return 'estável';
+};
+
+const changeSentence = (point: ChartPoint, index: number) => {
+  const metricType = String(point.metricType || '');
+  const session = point.sessionId ? `#${String(point.sessionId).slice(-6)}` : `#${index + 1}`;
+  const target = point.metricLabel || point.targetId || point.behaviorId || 'Métrica clínica';
+  const metric = metricLabels[metricType] || metricType || 'Métrica';
+  const previous = formatValue(point.previousValue, metricType);
+  const current = formatValue(point.value ?? point.metricValue, metricType);
+  return `${formatDate(point.changedAt)} ${session} — ${target}: ${metric.toLowerCase()} ${previous} → ${current} (${formatDelta(point)}), ${clinicalInterpretation(point)}.`;
+};
+
+const masteryStatusFromPoint = (point: any) => {
+  const explicit = String(point?.status || point?.currentStatus || point?.masteryStatus || '').toUpperCase();
+  if (explicit) return explicit;
+  const value = Math.round(safeNumber(point?.value ?? point?.metricValue, 0));
+  if (value >= 4) return 'MASTERED_APPROVED';
+  if (value === 3) return 'READY_FOR_REVIEW';
+  if (value === 2) return 'MET_TODAY';
+  if (value === 1) return 'NOT_MET';
+  return 'INSUFFICIENT_DATA';
+};
+
+const masteryStatusLabel: Record<string, string> = {
+  INSUFFICIENT_DATA: 'Dados insuficientes',
+  NOT_MET: 'Critério não atingido',
+  MET_TODAY: 'Critério atingido hoje',
+  READY_FOR_REVIEW: 'Pronto para revisão',
+  MASTERED_APPROVED: 'Masterizado aprovado',
+  REGRESSION_RISK: 'Risco de regressão'
+};
+
+const maintenanceStatusLabel: Record<string, string> = {
+  PENDING: 'Probe pendente',
+  MAINTAINED: 'Mantido',
+  WATCH: 'Watch',
+  REGRESSION_RISK: 'Risco de regressão',
+  MISSED: 'Missed',
+  COMPLETED: 'Probe concluído'
 };
 
 const EmptyState = ({ text }: { text: string }) => (
-  <div className="flex min-h-[260px] items-center justify-center rounded-3xl border border-dashed border-slate-200 bg-white p-8 text-center">
+  <div className="flex min-h-[260px] items-center justify-center rounded-lg border border-dashed border-slate-200 bg-white p-8 text-center">
     <p className="max-w-sm text-sm font-semibold text-slate-400">{text}</p>
   </div>
 );
+
+const CustomTooltip = ({ active, payload }: any) => {
+  if (!active || !payload?.length) return null;
+  const row: ChartPoint = payload[0]?.payload || {};
+  const metricType = String(row.metricType || '');
+  const trialType = row.mostUsedTrialType || row.trialTypeMostUsed || '-';
+  const masteryStatus = row.masteryStatus || row.currentStatus || (metricType === 'MASTERY_STATUS' ? row.statusLabel : '-');
+  return (
+    <div className="max-w-[320px] rounded-lg border border-slate-100 bg-white p-4 text-xs shadow-xl">
+      <p className="font-black uppercase tracking-widest text-slate-900">{formatDateTime(row.changedAt)}</p>
+      <p className="mt-2 font-bold text-slate-700">{row.metricLabel || '-'}</p>
+      <div className="mt-3 space-y-1 text-slate-500">
+        <p>Sessão: {row.sessionId || '-'}</p>
+        <p>Target: {row.targetId ? row.metricLabel || row.targetId : '-'}</p>
+        <p>Comportamento: {row.behaviorId ? row.metricLabel || row.behaviorId : '-'}</p>
+        <p>Métrica: {metricLabels[metricType] || metricType || '-'}</p>
+        <p>Valor anterior: {formatValue(row.previousValue, metricType)}</p>
+        <p>Valor atual: {formatValue(row.value ?? row.metricValue, metricType)}</p>
+        <p>Delta: {formatDelta(row)}</p>
+        <p>Tipo de tentativa mais usado: {trialType}</p>
+        <p>Status de maestria: {masteryStatus}</p>
+      </div>
+      <p className="mt-3 rounded-md bg-slate-50 px-3 py-2 font-bold text-slate-700">{clinicalInterpretation(row)}</p>
+    </div>
+  );
+};
 
 export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaClinicalChartsPanelProps) {
   const [activeTab, setActiveTab] = useState<(typeof chartTabs)[number]['id']>('overview');
@@ -146,13 +320,24 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     if (activeTab !== 'overview') void loadChart(activeTab);
   }, [activeTab, patientId, periodDays, targetId, behaviorId, metricType, significantOnly]);
 
+  useEffect(() => {
+    const validMetrics = activeTab === 'targets'
+      ? targetMetricOptions
+      : activeTab === 'behaviors'
+        ? behaviorMetricOptions
+        : activeTab === 'mastery'
+          ? ['MASTERY_STATUS']
+          : activeTab === 'maintenance'
+            ? ['MAINTENANCE_STATUS', 'REGRESSION_RISK']
+            : [];
+    if (metricType && validMetrics.length > 0 && !validMetrics.includes(metricType)) setMetricType('');
+  }, [activeTab, metricType]);
+
   const overview = dataByTab.overview || {};
   const activeData = dataByTab[activeTab] || {};
-  const activePoints = Array.isArray(activeData.points) ? activeData.points : [];
-  const allKnownPoints = [
-    ...(Array.isArray(overview.points) ? overview.points : []),
-    ...activePoints
-  ];
+  const activePoints: ChartPoint[] = Array.isArray(activeData.points) ? activeData.points : [];
+  const overviewPoints: ChartPoint[] = Array.isArray(overview.points) ? overview.points : [];
+  const allKnownPoints = [...overviewPoints, ...activePoints];
 
   const targetOptions = useMemo(() => {
     const map = new Map<string, string>();
@@ -170,26 +355,93 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     return Array.from(map.entries());
   }, [allKnownPoints]);
 
+  const availableMetrics = useMemo(() => {
+    if (activeTab === 'targets') return targetMetricOptions;
+    if (activeTab === 'behaviors') return behaviorMetricOptions;
+    if (activeTab === 'mastery') return ['MASTERY_STATUS'];
+    if (activeTab === 'maintenance') return ['MAINTENANCE_STATUS', 'REGRESSION_RISK'];
+    return Object.keys(metricLabels);
+  }, [activeTab]);
+
+  const effectiveMetricType = useMemo(() => {
+    if (metricType && availableMetrics.includes(metricType)) return metricType;
+    const pointMetricSet = new Set(activePoints.map((point) => String(point.metricType || '')));
+    if (activeTab === 'targets') {
+      if (pointMetricSet.has('TARGET_INDEPENDENCE')) return 'TARGET_INDEPENDENCE';
+      if (pointMetricSet.has('TARGET_ACCURACY')) return 'TARGET_ACCURACY';
+      return 'TARGET_INDEPENDENCE';
+    }
+    if (activeTab === 'behaviors') {
+      return behaviorMetricOptions.find((metric) => pointMetricSet.has(metric)) || 'BEHAVIOR_FREQUENCY';
+    }
+    if (activeTab === 'mastery') return 'MASTERY_STATUS';
+    if (activeTab === 'maintenance') return 'MAINTENANCE_STATUS';
+    return metricType || '';
+  }, [activePoints, activeTab, availableMetrics, metricType]);
+
+  const focusedTargetId = useMemo(() => {
+    if (targetId) return targetId;
+    const match = activePoints.find((point) => point.targetId && String(point.metricType || '') === effectiveMetricType);
+    return match?.targetId ? String(match.targetId) : '';
+  }, [activePoints, effectiveMetricType, targetId]);
+
+  const focusedBehaviorId = useMemo(() => {
+    if (behaviorId) return behaviorId;
+    const match = activePoints.find((point) => point.behaviorId && String(point.metricType || '') === effectiveMetricType);
+    return match?.behaviorId ? String(match.behaviorId) : '';
+  }, [activePoints, behaviorId, effectiveMetricType]);
+
   const chartRows = useMemo(() => {
-    return activePoints
-      .map((point: any, index: number) => ({
+    const sorted = activePoints
+      .slice()
+      .sort((a: any, b: any) => new Date(a.changedAt || 0).getTime() - new Date(b.changedAt || 0).getTime());
+
+    let rows = sorted;
+    if (activeTab === 'targets') {
+      rows = rows.filter((point) => String(point.metricType || '') === effectiveMetricType);
+      if (focusedTargetId) rows = rows.filter((point) => String(point.targetId || '') === focusedTargetId);
+    }
+    if (activeTab === 'behaviors') {
+      rows = rows.filter((point) => String(point.metricType || '') === effectiveMetricType);
+      if (focusedBehaviorId) rows = rows.filter((point) => String(point.behaviorId || '') === focusedBehaviorId);
+    }
+    if (activeTab === 'mastery') {
+      rows = rows.filter((point) => String(point.metricType || '') === 'MASTERY_STATUS');
+      if (focusedTargetId) rows = rows.filter((point) => String(point.targetId || '') === focusedTargetId);
+    }
+    if (activeTab === 'maintenance') {
+      rows = rows.filter((point) => String(point.metricType || '') === 'MAINTENANCE_STATUS' || String(point.metricType || '') === 'REGRESSION_RISK');
+      if (focusedTargetId) rows = rows.filter((point) => String(point.targetId || '') === focusedTargetId);
+    }
+
+    return rows.map((point: ChartPoint, index: number) => {
+      const rawValue = safeNumber(point.value ?? point.metricValue, 0);
+      const magnitude = Math.abs(safeNumber(point.deltaPercent ?? point.deltaValue, rawValue));
+      return {
         ...point,
         x: `${formatDate(point.changedAt)} #${index + 1}`,
-        value: Number(point.value ?? point.metricValue ?? 0)
-      }))
-      .sort((a: any, b: any) => new Date(a.changedAt || 0).getTime() - new Date(b.changedAt || 0).getTime());
-  }, [activePoints]);
+        value: rawValue,
+        chartValue: activeTab === 'overview' || activeTab === 'session-changes' ? magnitude : rawValue
+      };
+    });
+  }, [activePoints, activeTab, effectiveMetricType, focusedBehaviorId, focusedTargetId]);
 
-  const insights = Array.isArray(overview.insights) ? overview.insights : [];
   const annotations = Array.isArray(activeData.annotations) ? activeData.annotations : [];
   const isLoading = loadingTab === activeTab || (activeTab === 'overview' && loadingTab === 'overview');
-  const showBar = activeTab === 'behaviors' || activeTab === 'maintenance' || activeTab === 'mastery';
+  const showBar = activeTab === 'overview' || activeTab === 'session-changes';
+  const shouldRenderChart = chartRows.length > 0 && activeTab !== 'maintenance' && (activeTab !== 'mastery' || Boolean(focusedTargetId));
+
+  const yAxisLabel = activeTab === 'overview' || activeTab === 'session-changes'
+    ? 'Magnitude das mudanças detectadas'
+    : metricAxisLabels[effectiveMetricType] || 'Valor';
 
   const emptyText = activeTab === 'overview'
     ? 'Ainda não há sessões suficientes para detectar mudança.'
-    : activePoints.length === 1
-      ? 'Primeira medição registrada. A comparação aparecerá após a próxima sessão.'
-      : 'Sem dados no período selecionado.';
+    : activeTab === 'maintenance'
+      ? 'Sem probes no período. A timeline mostra probes pendentes, misses e alertas quando existirem.'
+      : activePoints.length === 1
+        ? 'Primeira medição registrada. A comparação aparecerá após a próxima sessão.'
+        : 'Sem dados no período selecionado.';
 
   const resetFilters = () => {
     setTargetId('');
@@ -206,8 +458,8 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
       label: annotationDraft.label,
       value: annotationDraft.value,
       date: `${annotationDraft.date}T12:00:00.000Z`,
-      targetId: targetId || undefined,
-      behaviorId: behaviorId || undefined
+      targetId: targetId || focusedTargetId || undefined,
+      behaviorId: behaviorId || focusedBehaviorId || undefined
     });
     if (result?.success) {
       setAnnotationDraft({ annotationType: 'NOTE', label: '', value: '', date: new Date().toISOString().slice(0, 10) });
@@ -216,17 +468,135 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     }
   };
 
+  const annotationXLines = useMemo(() => {
+    return annotations
+      .filter((annotation: any) => annotation.annotation_type !== 'GOAL_LINE')
+      .map((annotation: any) => {
+        const annotationTime = new Date(annotation.date || 0).getTime();
+        const nearest = chartRows.reduce((best: any, row: any) => {
+          const diff = Math.abs(new Date(row.changedAt || 0).getTime() - annotationTime);
+          if (!best || diff < best.diff) return { row, diff };
+          return best;
+        }, null);
+        return nearest?.row?.x ? { ...annotation, x: nearest.row.x } : null;
+      })
+      .filter(Boolean);
+  }, [annotations, chartRows]);
+
+  const overviewCards = useMemo(() => {
+    const rows = overviewPoints.filter((point) => point.previousValue !== null && point.previousValue !== undefined);
+    const skillImprovement = rows
+      .filter((point) => ['TARGET_ACCURACY', 'TARGET_INDEPENDENCE', 'FUNCTIONAL_COMMUNICATION', 'ENGAGEMENT'].includes(String(point.metricType || '')) && point.trendDirection === 'IMPROVED')
+      .sort((a, b) => Math.abs(safeNumber(b.deltaValue ?? b.deltaPercent)) - Math.abs(safeNumber(a.deltaValue ?? a.deltaPercent)))[0];
+    const behaviorReduction = rows
+      .filter((point) => String(point.metricType || '').startsWith('BEHAVIOR_') && point.metricDirection === 'LOWER_IS_BETTER' && point.trendDirection === 'IMPROVED')
+      .sort((a, b) => Math.abs(safeNumber(b.deltaValue ?? b.deltaPercent)) - Math.abs(safeNumber(a.deltaValue ?? a.deltaPercent)))[0];
+    const readyReview = overviewPoints.find((point) => point.metricType === 'MASTERY_STATUS' && (point.changeStatus === 'CLINICALLY_SIGNIFICANT_CHANGE' || String(point.statusLabel || '').toLowerCase().includes('revis')));
+    const regression = overviewPoints.find((point) => point.changeStatus === 'REGRESSION_SIGNAL' || point.metricType === 'REGRESSION_RISK');
+    const firstMeasurement = overviewPoints.find((point) => point.changeStatus === 'FIRST_MEASUREMENT');
+
+    return [
+      {
+        title: 'Maior melhora em habilidade',
+        icon: TrendingUp,
+        body: skillImprovement ? changeSentence(skillImprovement, 0) : 'Sem melhora de habilidade detectada no período.'
+      },
+      {
+        title: 'Maior redução de comportamento',
+        icon: TrendingDown,
+        body: behaviorReduction ? changeSentence(behaviorReduction, 0) : 'Sem redução de comportamento detectada no período.'
+      },
+      {
+        title: 'Metas prontas para revisão',
+        icon: CheckCircle2,
+        body: readyReview ? `${readyReview.metricLabel || 'Meta'}: ${readyReview.statusLabel || 'pronto para revisão'}.` : 'Nenhuma meta pronta para revisão no período.'
+      },
+      {
+        title: 'Sinais de regressão',
+        icon: AlertTriangle,
+        body: regression ? changeSentence(regression, 0) : 'Nenhum sinal de regressão detectado no período.'
+      },
+      {
+        title: 'Primeiras medições',
+        icon: Sparkles,
+        body: firstMeasurement ? `${firstMeasurement.metricLabel || 'Métrica clínica'}: primeira medição registrada.` : 'Sem primeiras medições no período.'
+      }
+    ];
+  }, [overviewPoints]);
+
+  const masteryBuckets = useMemo(() => {
+    const latestByTarget = new Map<string, any>();
+    const sourceRows = activePoints.length > 0 ? activePoints : overviewPoints;
+    sourceRows
+      .filter((point) => String(point.metricType || '') === 'MASTERY_STATUS')
+      .forEach((point) => {
+        const key = String(point.targetId || point.metricLabel || point.id || '');
+        const current = latestByTarget.get(key);
+        if (!current || new Date(point.changedAt || 0).getTime() >= new Date(current.changedAt || 0).getTime()) latestByTarget.set(key, point);
+      });
+    const evaluations = Array.isArray(activeData.evaluations) ? activeData.evaluations : [];
+    evaluations.forEach((evaluation: any) => {
+      const key = String(evaluation.target_id || evaluation.targetId || evaluation.id || '');
+      if (!latestByTarget.has(key)) {
+        latestByTarget.set(key, {
+          id: evaluation.id,
+          targetId: evaluation.target_id || evaluation.targetId,
+          metricLabel: evaluation.target_name || evaluation.targetName || evaluation.target_id,
+          metricType: 'MASTERY_STATUS',
+          status: evaluation.status,
+          changedAt: evaluation.evaluated_at || evaluation.evaluatedAt
+        });
+      }
+    });
+    return masteryStatuses.map((status) => {
+      const items = Array.from(latestByTarget.values()).filter((point) => masteryStatusFromPoint(point) === status);
+      return { status, items };
+    });
+  }, [activeData.evaluations, activePoints, overviewPoints]);
+
+  const maintenanceTimeline = useMemo(() => {
+    const schedules = Array.isArray(activeData.schedules) ? activeData.schedules : [];
+    const probes = Array.isArray(activeData.probeResults) ? activeData.probeResults : [];
+    const alerts = Array.isArray(activeData.alerts) ? activeData.alerts : [];
+    return [
+      ...schedules.map((item: any) => ({
+        id: item.id,
+        at: item.scheduled_for || item.scheduledFor,
+        status: String(item.status || 'PENDING').toUpperCase(),
+        label: item.raw_payload?.targetName || item.target_name || item.target_id || 'Probe',
+        kind: 'schedule'
+      })),
+      ...probes.map((item: any) => ({
+        id: item.id,
+        at: item.occurred_at || item.occurredAt,
+        status: String(item.status || 'WATCH').toUpperCase(),
+        label: item.raw_payload?.targetName || item.target_name || item.target_id || 'Probe',
+        kind: 'probe'
+      })),
+      ...alerts.map((item: any) => ({
+        id: item.id,
+        at: item.created_at || item.createdAt,
+        status: 'REGRESSION_RISK',
+        label: item.message || item.target_id || 'Alerta',
+        kind: 'alert'
+      }))
+    ].sort((a, b) => new Date(a.at || 0).getTime() - new Date(b.at || 0).getTime());
+  }, [activeData.alerts, activeData.probeResults, activeData.schedules]);
+
+  const goalLines = annotations.filter((annotation: any) => annotation.annotation_type === 'GOAL_LINE' && annotation.value !== null && annotation.value !== '');
+  const showDefaultCriterion = activeTab === 'targets' && percentMetrics.has(effectiveMetricType) && !goalLines.length;
+
   const Filters = (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
       <div>
         <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Período</label>
-        <div className="grid grid-cols-3 rounded-2xl bg-slate-100 p-1">
+        <div className="grid grid-cols-3 rounded-lg bg-slate-100 p-1">
           {[7, 30, 90].map((days) => (
             <button
               key={days}
               type="button"
               onClick={() => setPeriodDays(days)}
-              className={`rounded-xl px-3 py-2 text-xs font-bold ${periodDays === days ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-slate-500'}`}
+              className={`rounded-md px-3 py-2 text-xs font-bold ${periodDays === days ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-slate-500'}`}
             >
               {days}d
             </button>
@@ -235,42 +605,46 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
       </div>
       <div>
         <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Target</label>
-        <select value={targetId} onChange={(event) => setTargetId(event.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none">
-          <option value="">Todos</option>
+        <select value={targetId} onChange={(event) => setTargetId(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none">
+          <option value="">Auto</option>
           {targetOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
         </select>
       </div>
       <div>
         <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Comportamento</label>
-        <select value={behaviorId} onChange={(event) => setBehaviorId(event.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none">
-          <option value="">Todos</option>
+        <select value={behaviorId} onChange={(event) => setBehaviorId(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none">
+          <option value="">Auto</option>
           {behaviorOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
         </select>
       </div>
       <div>
         <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Métrica</label>
-        <select value={metricType} onChange={(event) => setMetricType(event.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none">
-          <option value="">Todas</option>
-          {Object.entries(metricLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        <select value={metricType} onChange={(event) => setMetricType(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none">
+          <option value="">Auto</option>
+          {availableMetrics.map((id) => <option key={id} value={id}>{metricLabels[id] || id}</option>)}
         </select>
       </div>
       <div className="flex items-end gap-2">
-        <label className="flex min-h-[44px] flex-1 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600">
+        <label className="flex min-h-[44px] flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600">
           <input type="checkbox" checked={significantOnly} onChange={(event) => setSignificantOnly(event.target.checked)} />
           Significativas
         </label>
-        <button type="button" onClick={resetFilters} className="rounded-2xl bg-slate-100 p-3 text-slate-500" title="Limpar filtros">
+        <button type="button" onClick={resetFilters} className="rounded-lg bg-slate-100 p-3 text-slate-500" title="Limpar filtros">
           <X size={16} />
         </button>
       </div>
     </div>
   );
 
+  const metricPills = activeTab === 'targets' || activeTab === 'behaviors'
+    ? (activeTab === 'targets' ? targetMetricOptions : behaviorMetricOptions)
+    : [];
+
   return (
-    <div className={`space-y-5 rounded-[32px] border p-4 shadow-sm sm:p-6 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-100 bg-white'}`}>
+    <div className={`space-y-5 rounded-lg border p-4 shadow-sm sm:p-6 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-100 bg-white'}`}>
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#7a32fc]/10 text-[#7a32fc]">
+          <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-[#7a32fc]/10 text-[#7a32fc]">
             <BarChart3 size={22} />
           </div>
           <div>
@@ -279,10 +653,10 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
           </div>
         </div>
         <div className="flex gap-2">
-          <button type="button" onClick={() => setFilterOpen(true)} className="inline-flex items-center gap-2 rounded-2xl bg-slate-100 px-4 py-3 text-xs font-bold text-slate-600 md:hidden">
+          <button type="button" onClick={() => setFilterOpen(true)} className="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-4 py-3 text-xs font-bold text-slate-600 md:hidden">
             <Filter size={16} /> Filtros
           </button>
-          <button type="button" onClick={() => setAnnotationOpen((value) => !value)} className="inline-flex items-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-xs font-bold text-white">
+          <button type="button" onClick={() => setAnnotationOpen((value) => !value)} className="inline-flex items-center gap-2 rounded-lg bg-[#7a32fc] px-4 py-3 text-xs font-bold text-white">
             <Plus size={16} /> Anotação
           </button>
         </div>
@@ -292,10 +666,10 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
 
       {filterOpen && (
         <div className="fixed inset-0 z-[140] flex items-end bg-black/30 p-3 md:hidden">
-          <div className="w-full rounded-[28px] bg-white p-4 shadow-2xl">
+          <div className="w-full rounded-lg bg-white p-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] shadow-2xl">
             <div className="mb-3 flex items-center justify-between">
               <p className="text-sm font-bold text-slate-900">Filtros</p>
-              <button type="button" onClick={() => setFilterOpen(false)} className="rounded-xl bg-slate-100 p-2 text-slate-500"><X size={16} /></button>
+              <button type="button" onClick={() => setFilterOpen(false)} className="rounded-lg bg-slate-100 p-2 text-slate-500"><X size={16} /></button>
             </div>
             {Filters}
           </div>
@@ -303,87 +677,172 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
       )}
 
       {annotationOpen && (
-        <div className="grid grid-cols-1 gap-3 rounded-3xl border border-slate-100 bg-slate-50 p-4 md:grid-cols-[180px_1fr_140px_160px_auto]">
-          <select value={annotationDraft.annotationType} onChange={(event) => setAnnotationDraft((draft) => ({ ...draft, annotationType: event.target.value }))} className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none">
-            <option value="NOTE">Nota</option>
-            <option value="GOAL_LINE">Linha de meta</option>
-            <option value="CONDITION_LINE">Linha de condição</option>
+        <div className="grid grid-cols-1 gap-3 rounded-lg border border-slate-100 bg-slate-50 p-4 md:grid-cols-[180px_1fr_140px_160px_auto]">
+          <select value={annotationDraft.annotationType} onChange={(event) => setAnnotationDraft((draft) => ({ ...draft, annotationType: event.target.value }))} className="rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none">
+            <option value="NOTE">Evento externo</option>
+            <option value="GOAL_LINE">Linha de critério/meta</option>
+            <option value="CONDITION_LINE">Fase/intervenção</option>
           </select>
-          <input value={annotationDraft.label} onChange={(event) => setAnnotationDraft((draft) => ({ ...draft, label: event.target.value }))} placeholder="Mudança de protocolo" className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none" />
-          <input value={annotationDraft.value} onChange={(event) => setAnnotationDraft((draft) => ({ ...draft, value: event.target.value }))} placeholder="Valor" className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none" />
-          <input type="date" value={annotationDraft.date} onChange={(event) => setAnnotationDraft((draft) => ({ ...draft, date: event.target.value }))} className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none" />
-          <button type="button" onClick={() => void saveAnnotation()} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-xs font-bold text-white">
+          <input value={annotationDraft.label} onChange={(event) => setAnnotationDraft((draft) => ({ ...draft, label: event.target.value }))} placeholder="Início do protocolo" className="rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none" />
+          <input value={annotationDraft.value} onChange={(event) => setAnnotationDraft((draft) => ({ ...draft, value: event.target.value }))} placeholder="Valor" className="rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none" />
+          <input type="date" value={annotationDraft.date} onChange={(event) => setAnnotationDraft((draft) => ({ ...draft, date: event.target.value }))} className="rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none" />
+          <button type="button" onClick={() => void saveAnnotation()} className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-3 text-xs font-bold text-white">
             <Save size={15} /> Salvar
           </button>
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
-        {(insights.length ? insights : ['Ainda não há sessões suficientes para detectar mudança.']).map((insight: string, index: number) => (
-          <div key={`${insight}-${index}`} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-            <Sparkles size={16} className="mb-3 text-[#7a32fc]" />
-            <p className="text-xs font-semibold leading-relaxed text-slate-700">{insight}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="flex gap-2 overflow-x-auto rounded-2xl bg-slate-100 p-1">
+      <div className="flex gap-2 overflow-x-auto rounded-lg bg-slate-100 p-1">
         {chartTabs.map((tab) => (
           <button
             key={tab.id}
             type="button"
             onClick={() => setActiveTab(tab.id)}
-            className={`shrink-0 rounded-xl px-4 py-2 text-xs font-bold transition-all ${activeTab === tab.id ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-slate-500'}`}
+            className={`shrink-0 rounded-md px-4 py-2 text-xs font-bold transition-all ${activeTab === tab.id ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-slate-500'}`}
           >
             {tab.label}
           </button>
         ))}
       </div>
 
-      {error && <div className="rounded-2xl border border-amber-100 bg-amber-50 p-3 text-xs font-bold text-amber-700">{error}</div>}
+      {metricPills.length > 0 && (
+        <div className="flex gap-2 overflow-x-auto">
+          {metricPills.map((id) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setMetricType(id)}
+              className={`inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${effectiveMetricType === id ? 'border-[#7a32fc] bg-[#7a32fc]/10 text-[#7a32fc]' : 'border-slate-200 bg-white text-slate-500'}`}
+            >
+              <Target size={14} />
+              {metricLabels[id]}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {error && <div className="rounded-lg border border-amber-100 bg-amber-50 p-3 text-xs font-bold text-amber-700">{error}</div>}
+
+      {activeTab === 'overview' && (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+          {overviewCards.map((card) => {
+            const Icon = card.icon;
+            return (
+              <div key={card.title} className="rounded-lg border border-slate-100 bg-slate-50 p-4">
+                <Icon size={16} className="mb-3 text-[#7a32fc]" />
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{card.title}</p>
+                <p className="mt-2 text-xs font-semibold leading-relaxed text-slate-700">{card.body}</p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {activeTab === 'mastery' && (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+          {masteryBuckets.map((bucket) => (
+            <div key={bucket.status} className="rounded-lg border border-slate-100 bg-white p-4">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{masteryStatusLabel[bucket.status]}</p>
+                <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-black text-slate-600">{bucket.items.length}</span>
+              </div>
+              <div className="space-y-2">
+                {bucket.items.slice(0, 3).map((item: any) => (
+                  <p key={`${bucket.status}-${item.id || item.targetId || item.metricLabel}`} className="truncate text-xs font-semibold text-slate-700">{item.metricLabel || item.targetId}</p>
+                ))}
+                {bucket.items.length === 0 && <p className="text-xs font-semibold text-slate-300">Sem targets</p>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {activeTab === 'maintenance' && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+            {maintenanceStatuses.map((status) => {
+              const count = maintenanceTimeline.filter((item) => item.status === status).length;
+              return (
+                <div key={status} className="rounded-lg border border-slate-100 bg-white p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{maintenanceStatusLabel[status]}</p>
+                  <p className="mt-2 text-2xl font-black text-slate-900">{count}</p>
+                </div>
+              );
+            })}
+          </div>
+          {maintenanceTimeline.length > 0 ? (
+            <div className="rounded-lg border border-slate-100 bg-white p-4">
+              <p className="mb-4 text-sm font-bold text-slate-900">Timeline de manutenção</p>
+              <div className="space-y-3">
+                {maintenanceTimeline.slice(0, 12).map((item) => (
+                  <div key={`${item.kind}-${item.id}`} className="grid grid-cols-[110px_1fr_auto] items-center gap-3 rounded-lg bg-slate-50 p-3 text-xs">
+                    <span className="font-bold text-slate-500">{formatDateTime(item.at)}</span>
+                    <span className="font-semibold text-slate-700">{item.label}</span>
+                    <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${item.status === 'REGRESSION_RISK' ? 'border-red-100 bg-red-50 text-red-700' : item.status === 'MAINTAINED' ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-100 bg-white text-slate-500'}`}>
+                      {maintenanceStatusLabel[item.status] || item.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <EmptyState text={emptyText} />
+          )}
+        </div>
+      )}
 
       {isLoading ? (
-        <div className="h-[360px] animate-pulse rounded-3xl bg-slate-50" />
-      ) : chartRows.length > 0 ? (
-        <div className="rounded-3xl border border-slate-100 bg-white p-4">
+        <div className="h-[360px] animate-pulse rounded-lg bg-slate-50" />
+      ) : shouldRenderChart ? (
+        <div className="rounded-lg border border-slate-100 bg-white p-4">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-sm font-bold text-slate-900">{chartTabs.find((tab) => tab.id === activeTab)?.label}</p>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{chartRows.length} ponto(s)</p>
+              <p className="text-sm font-bold text-slate-900">
+                {activeTab === 'overview' || activeTab === 'session-changes'
+                  ? 'Magnitude das mudanças detectadas'
+                  : metricAxisLabels[effectiveMetricType] || chartTabs.find((tab) => tab.id === activeTab)?.label}
+              </p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{chartRows.length} ponto(s) · {yAxisLabel}</p>
             </div>
             <SlidersHorizontal size={18} className="text-slate-300" />
           </div>
           <div className="h-[360px] min-w-0">
             <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={320}>
               {showBar ? (
-                <BarChart data={chartRows} margin={{ top: 20, right: 24, left: 0, bottom: 44 }}>
+                <BarChart data={chartRows} margin={{ top: 20, right: 24, left: 8, bottom: 44 }}>
                   <CartesianGrid stroke="#EEF2F7" strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="x" tick={{ fill: '#64748B', fontSize: 10, fontWeight: 700 }} angle={-18} textAnchor="end" height={58} />
-                  <YAxis tick={{ fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} />
+                  <YAxis tick={{ fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} />
                   <Tooltip content={<CustomTooltip />} />
-                  {annotations.filter((annotation: any) => annotation.annotation_type === 'GOAL_LINE' && annotation.value !== null).map((annotation: any) => (
-                    <ReferenceLine key={annotation.id} y={Number(annotation.value)} stroke="#10B981" strokeDasharray="4 4" label={annotation.label} />
+                  {annotationXLines.map((annotation: any) => (
+                    <ReferenceLine key={annotation.id} x={annotation.x} stroke={annotation.annotation_type === 'CONDITION_LINE' ? '#F97316' : '#64748B'} strokeDasharray="4 4" label={annotation.label} />
                   ))}
-                  <Bar dataKey="value" fill="#7a32fc" radius={[8, 8, 0, 0]} maxBarSize={52} />
+                  <Bar dataKey="chartValue" radius={[6, 6, 0, 0]} maxBarSize={52}>
+                    {chartRows.map((point: ChartPoint, index: number) => <Cell key={`${point.id || index}-cell`} fill={chartColor(point)} />)}
+                  </Bar>
                 </BarChart>
               ) : (
-                <LineChart data={chartRows} margin={{ top: 20, right: 24, left: 0, bottom: 44 }}>
+                <LineChart data={chartRows} margin={{ top: 20, right: 24, left: 8, bottom: 44 }}>
                   <CartesianGrid stroke="#EEF2F7" strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="x" tick={{ fill: '#64748B', fontSize: 10, fontWeight: 700 }} angle={-18} textAnchor="end" height={58} />
-                  <YAxis tick={{ fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} />
+                  <YAxis tick={{ fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} />
                   <Tooltip content={<CustomTooltip />} />
-                  {annotations.filter((annotation: any) => annotation.annotation_type === 'GOAL_LINE' && annotation.value !== null).map((annotation: any) => (
+                  {showDefaultCriterion && <ReferenceLine y={80} stroke="#10B981" strokeDasharray="4 4" label="Critério 80%" />}
+                  {goalLines.map((annotation: any) => (
                     <ReferenceLine key={annotation.id} y={Number(annotation.value)} stroke="#10B981" strokeDasharray="4 4" label={annotation.label} />
+                  ))}
+                  {annotationXLines.map((annotation: any) => (
+                    <ReferenceLine key={annotation.id} x={annotation.x} stroke={annotation.annotation_type === 'CONDITION_LINE' ? '#F97316' : '#64748B'} strokeDasharray="4 4" label={annotation.label} />
                   ))}
                   <Line
                     type="monotone"
-                    dataKey="value"
+                    dataKey="chartValue"
                     stroke="#7a32fc"
                     strokeWidth={3}
                     dot={(props: any) => {
                       const row = props?.payload || {};
                       const important = row.changeStatus === 'REGRESSION_SIGNAL' || row.changeStatus === 'CLINICALLY_SIGNIFICANT_CHANGE' || row.trendDirection === 'IMPROVED' || row.trendDirection === 'WORSENED';
-                      return <circle cx={props.cx} cy={props.cy} r={important ? 6 : 4} fill={important ? '#F97316' : '#7a32fc'} stroke="#fff" strokeWidth={2} />;
+                      return <circle cx={props.cx} cy={props.cy} r={important ? 6 : 4} fill={important ? chartColor(row) : '#7a32fc'} stroke="#fff" strokeWidth={2} />;
                     }}
                     activeDot={{ r: 7 }}
                   />
@@ -392,23 +851,42 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
             </SafeResponsiveContainer>
           </div>
         </div>
-      ) : (
+      ) : activeTab !== 'maintenance' && activeTab !== 'mastery' ? (
         <EmptyState text={emptyText} />
+      ) : null}
+
+      {activeTab === 'session-changes' && chartRows.length > 0 && (
+        <div className="rounded-lg border border-slate-100 bg-white p-4">
+          <p className="mb-4 text-sm font-bold text-slate-900">Mudanças por sessão</p>
+          <div className="space-y-3">
+            {chartRows.slice().reverse().map((point: ChartPoint, index: number) => (
+              <div key={`${point.id || point.sessionId}-${point.metricType}-${index}`} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${statusTone(point.changeStatus)}`}>
+                    {point.statusLabel || clinicalInterpretation(point)}
+                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{formatDateTime(point.changedAt)}</span>
+                </div>
+                <p className="text-sm font-semibold text-slate-800">{changeSentence(point, index)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
-      {chartRows.length > 0 && (
+      {chartRows.length > 0 && activeTab !== 'session-changes' && activeTab !== 'maintenance' && (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          {chartRows.slice(-6).reverse().map((point: any) => (
-            <div key={`${point.id}-${point.metricType}`} className="rounded-2xl border border-slate-100 bg-white p-4">
+          {chartRows.slice(-6).reverse().map((point: ChartPoint, index: number) => (
+            <div key={`${point.id || point.sessionId}-${point.metricType}-${index}`} className="rounded-lg border border-slate-100 bg-white p-4">
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${statusTone(point.changeStatus)}`}>
-                  {point.statusLabel}
+                  {point.statusLabel || clinicalInterpretation(point)}
                 </span>
                 <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{formatDateTime(point.changedAt)}</span>
               </div>
               <p className="text-sm font-bold text-slate-900">{point.metricLabel}</p>
               <p className="mt-1 text-xs text-slate-500">
-                {metricLabels[point.metricType] || point.metricType}: {formatValue(point.value, point.metricType)} · anterior {formatValue(point.previousValue, point.metricType)} · delta {point.deltaPercent === null || point.deltaPercent === undefined ? '-' : `${Number(point.deltaPercent).toFixed(1)}%`}
+                {metricLabels[String(point.metricType || '')] || point.metricType}: {formatValue(point.value ?? point.metricValue, point.metricType)} · anterior {formatValue(point.previousValue, point.metricType)} · delta {formatDelta(point)}
               </p>
             </div>
           ))}

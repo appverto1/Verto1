@@ -34,9 +34,12 @@ test('migration cria snapshots e anotações com escopo clínico', () => {
 test('directionality está configurada por métrica', () => {
   assert.equal(getAbaMetricDirection('TARGET_ACCURACY'), 'HIGHER_IS_BETTER');
   assert.equal(getAbaMetricDirection('TARGET_INDEPENDENCE'), 'HIGHER_IS_BETTER');
+  assert.equal(getAbaMetricDirection('FUNCTIONAL_COMMUNICATION'), 'HIGHER_IS_BETTER');
+  assert.equal(getAbaMetricDirection('ENGAGEMENT'), 'HIGHER_IS_BETTER');
   assert.equal(getAbaMetricDirection('BEHAVIOR_FREQUENCY'), 'LOWER_IS_BETTER');
   assert.equal(getAbaMetricDirection('BEHAVIOR_DURATION_TOTAL'), 'LOWER_IS_BETTER');
   assert.equal(getAbaMetricDirection('BEHAVIOR_INTERVAL_OCCURRENCE'), 'LOWER_IS_BETTER');
+  assert.equal(getAbaMetricDirection('MASTERY_STATUS'), 'STATUS_BASED');
   assert.equal(getAbaMetricDirection('MAINTENANCE_STATUS'), 'STATUS_BASED');
 });
 
@@ -47,12 +50,32 @@ test('primeira medição retorna FIRST_MEASUREMENT', () => {
   assert.equal(result.statusLabel, 'Primeira medição');
 });
 
-test('melhora em target é IMPROVED', () => {
+test('métrica percentual usa pontos percentuais e nunca variação relativa explosiva', () => {
+  const result = compareAbaMetric({ metricType: 'TARGET_INDEPENDENCE', previousValue: 1, metricValue: 54 });
+  assert.equal(result.trendDirection, 'IMPROVED');
+  assert.equal(result.changeStatus, 'CLINICALLY_SIGNIFICANT_CHANGE');
+  assert.equal(result.deltaValue, 53);
+  assert.equal(result.deltaPercent, 53);
+  assert.notEqual(result.deltaPercent, 5300);
+  assert.equal(result.statusLabel, 'Melhora relevante');
+});
+
+test('melhora em target é interpretada por p.p. e threshold clínico', () => {
   const result = compareAbaMetric({ metricType: 'TARGET_INDEPENDENCE', previousValue: 60, metricValue: 80 });
   assert.equal(result.trendDirection, 'IMPROVED');
-  assert.equal(result.changeStatus, 'CHANGED');
-  assert.equal(result.deltaPercent, 33.33);
-  assert.equal(result.statusLabel, 'Melhorou nesta sessão');
+  assert.equal(result.changeStatus, 'CLINICALLY_SIGNIFICANT_CHANGE');
+  assert.equal(result.deltaPercent, 20);
+  assert.equal(result.statusLabel, 'Melhora relevante');
+});
+
+test('mudança percentual menor que 5 p.p. é estável e 5 a 9 p.p. é leve', () => {
+  const stable = compareAbaMetric({ metricType: 'TARGET_ACCURACY', previousValue: 80, metricValue: 84.9 });
+  assert.equal(stable.trendDirection, 'STABLE');
+  assert.equal(stable.changeStatus, 'NO_CHANGE');
+
+  const mild = compareAbaMetric({ metricType: 'TARGET_ACCURACY', previousValue: 80, metricValue: 88 });
+  assert.equal(mild.trendDirection, 'IMPROVED');
+  assert.equal(mild.changeStatus, 'CHANGED');
 });
 
 test('redução de comportamento é IMPROVED e aumento é WORSENED', () => {
@@ -65,6 +88,13 @@ test('redução de comportamento é IMPROVED e aumento é WORSENED', () => {
   assert.equal(increased.trendDirection, 'WORSENED');
   assert.equal(increased.deltaPercent, 100);
   assert.equal(increased.statusLabel, 'Piorou nesta sessão');
+});
+
+test('valor anterior zero não gera percentual infinito em contagem de comportamento', () => {
+  const firstIncrease = compareAbaMetric({ metricType: 'BEHAVIOR_FREQUENCY', previousValue: 0, metricValue: 3 });
+  assert.equal(firstIncrease.trendDirection, 'WORSENED');
+  assert.equal(firstIncrease.deltaValue, 3);
+  assert.equal(firstIncrease.deltaPercent, null);
 });
 
 test('READY_FOR_REVIEW e REGRESSION_RISK viram status clínico correto', () => {
@@ -122,6 +152,7 @@ test('compareSessionMetrics calcula deltas por sessão e por direção', () => {
   const mastery = snapshots.find((item) => item.metricType === 'MASTERY_STATUS');
   assert.equal(independence?.trendDirection, 'IMPROVED');
   assert.equal(independence?.previousValue, 60);
+  assert.equal(independence?.deltaPercent, 20);
   assert.equal(behavior?.trendDirection, 'IMPROVED');
   assert.equal(behavior?.deltaPercent, -75);
   assert.equal(mastery?.changeStatus, 'CLINICALLY_SIGNIFICANT_CHANGE');
@@ -161,6 +192,21 @@ test('frontend carrega gráficos ABA lazy e usa dataService dedicado', () => {
   assert.match(panelCode, /chartTabs[\s\S]*?Mudanças por sessão/);
   assert.match(dataServiceCode, /async getAbaClinicalChart\(patientId: string, chart:/);
   assert.match(dataServiceCode, /async saveAbaGraphAnnotation\(patientId: string/);
+});
+
+test('frontend apresenta deltas clínicos, status e timelines sem misturar escalas', () => {
+  assert.match(panelCode, /formatDelta[\s\S]*?p\.p\./m, 'Deltas percentuais devem ser exibidos em pontos percentuais.');
+  assert.doesNotMatch(panelCode, /\$\{Number\(point\.deltaPercent\)\.toFixed\(1\)\}%/, 'Painel não deve renderizar delta percentual cru.');
+  assert.match(panelCode, /overviewCards[\s\S]*?Maior melhora em habilidade[\s\S]*?Maior redução de comportamento[\s\S]*?Metas prontas para revisão[\s\S]*?Sinais de regressão[\s\S]*?Primeiras medições/m);
+  assert.match(panelCode, /metricAxisLabels[\s\S]*?Acurácia \(%\)[\s\S]*?Independência \(%\)[\s\S]*?Ocorrências[\s\S]*?Duração total[\s\S]*?% de ocorrência por intervalo/m);
+  assert.match(panelCode, /masteryBuckets/);
+  assert.match(panelCode, /Dados insuficientes[\s\S]*?Critério não atingido[\s\S]*?Critério atingido hoje[\s\S]*?Pronto para revisão[\s\S]*?Masterizado aprovado/m);
+  assert.match(panelCode, /maintenanceTimeline/);
+  assert.match(panelCode, /Probe pendente[\s\S]*?Mantido[\s\S]*?Watch[\s\S]*?Risco de regressão[\s\S]*?Missed/m);
+  assert.match(panelCode, /changeSentence[\s\S]*?previous[\s\S]*?current[\s\S]*?→/m);
+  assert.match(panelCode, /GOAL_LINE/);
+  assert.match(panelCode, /CONDITION_LINE/);
+  assert.match(panelCode, /Evento externo/);
 });
 
 test('script npm do épico está registrado', () => {

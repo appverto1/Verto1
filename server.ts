@@ -40,6 +40,7 @@ import { resolveAbaPromptLevel } from './src/utils/abaPromptLevels';
 import { evaluateMaintenanceStatus, evaluateTargetMastery, formatAbaMasteryCriterion } from './src/utils/abaMasteryEngine';
 import {
   buildSessionMetricSnapshotsFromSummaries,
+  isAbaPercentMetric,
   isAbaSignificantChange
 } from './src/utils/abaClinicalCharts';
 import {
@@ -15116,30 +15117,61 @@ async function startServer() {
     sourceSummaryId: row?.source_summary_id
   });
 
+  const formatAbaInsightNumber = (value: any) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '-';
+    return String(Math.round(numeric * 10) / 10);
+  };
+
+  const abaMetricUnit = (metric: string) => {
+    if (isAbaPercentMetric(metric)) return '%';
+    if (metric === 'BEHAVIOR_FREQUENCY') return ' ocorrência(s)';
+    if (metric === 'TARGET_TRIAL_COUNT') return ' tentativa(s)';
+    if (metric.includes('DURATION')) return 's';
+    return '';
+  };
+
+  const buildAbaDeltaText = (point: any) => {
+    const metric = sanitizeString(point.metricType, 80);
+    const unit = abaMetricUnit(metric);
+    const previous = point.previousValue;
+    const current = point.value;
+    if (previous === null || previous === undefined) {
+      return `primeira medição registrada: ${formatAbaInsightNumber(current)}${unit}`;
+    }
+    const previousText = `${formatAbaInsightNumber(previous)}${unit}`;
+    const currentText = `${formatAbaInsightNumber(current)}${unit}`;
+    if (isAbaPercentMetric(metric)) {
+      const delta = Number(point.deltaValue ?? point.deltaPercent ?? 0);
+      const sign = delta > 0 ? '+' : '';
+      return `de ${previousText} para ${currentText} (${sign}${formatAbaInsightNumber(delta)} p.p.)`;
+    }
+    const deltaPercent = Number(point.deltaPercent);
+    if (Number.isFinite(deltaPercent)) {
+      const sign = deltaPercent > 0 ? '+' : '';
+      return `de ${previousText} para ${currentText} (${sign}${formatAbaInsightNumber(deltaPercent)}%)`;
+    }
+    const deltaValue = Number(point.deltaValue);
+    const sign = deltaValue > 0 ? '+' : '';
+    return `de ${previousText} para ${currentText} (${sign}${formatAbaInsightNumber(deltaValue)}${unit})`;
+  };
+
   const buildAbaChartInsight = (row: any) => {
     const point = normalizeAbaSnapshotPoint(row);
     const label = sanitizeTextField(point.metricLabel, 160) || 'Métrica clínica';
     const metric = sanitizeString(point.metricType, 80);
-    const delta = Number(point.deltaPercent);
-    const absDelta = Number.isFinite(delta) ? Math.abs(delta) : null;
-    const metricLabel =
-      metric === 'TARGET_INDEPENDENCE' ? 'de independência' :
-      metric === 'TARGET_ACCURACY' ? 'de acurácia' :
-      metric === 'BEHAVIOR_FREQUENCY' ? 'em frequência' :
-      metric === 'BEHAVIOR_DURATION_TOTAL' ? 'em duração total' :
-      metric === 'BEHAVIOR_INTERVAL_OCCURRENCE' ? 'em ocorrência por intervalo' :
-      '';
-    if (point.changeStatus === 'REGRESSION_SIGNAL') return `${label} apresentou sinal de regressão na última medição.`;
+    const deltaText = buildAbaDeltaText(point);
+    if (point.changeStatus === 'FIRST_MEASUREMENT') return `${label}: ${deltaText}.`;
+    if (point.changeStatus === 'REGRESSION_SIGNAL') return `${label} apresentou sinal de regressão: ${deltaText}.`;
     if (point.changeStatus === 'CLINICALLY_SIGNIFICANT_CHANGE' && metric === 'MASTERY_STATUS') return `${label} está pronto para revisão de maestria.`;
-    if (point.changeStatus === 'CLINICALLY_SIGNIFICANT_CHANGE') return `${label} teve mudança clinicamente significativa nesta sessão.`;
+    if (point.changeStatus === 'CLINICALLY_SIGNIFICANT_CHANGE') return `${label} teve mudança clinicamente relevante: ${deltaText}.`;
     if (point.trendDirection === 'IMPROVED') {
-      if (point.metricDirection === 'LOWER_IS_BETTER' && absDelta !== null) return `${label} reduziu ${absDelta.toFixed(0)}% em relação à sessão anterior.`;
-      if (absDelta !== null) return `${label} melhorou +${absDelta.toFixed(0)}% ${metricLabel} na última sessão.`;
-      return `${label} melhorou nesta sessão.`;
+      if (point.metricDirection === 'LOWER_IS_BETTER') return `${label} reduziu: ${deltaText}.`;
+      return `${label} subiu: ${deltaText}.`;
     }
-    if (point.trendDirection === 'WORSENED') return `${label} piorou nesta sessão.`;
-    if (point.trendDirection === 'STABLE') return `${label} está estável nos últimos registros.`;
-    return `${label}: primeira medição registrada.`;
+    if (point.trendDirection === 'WORSENED') return `${label} piorou: ${deltaText}.`;
+    if (point.trendDirection === 'STABLE') return `${label} está estável: ${deltaText}.`;
+    return `${label}: ${deltaText}.`;
   };
 
   const fetchAbaGraphAnnotations = async (params: {
