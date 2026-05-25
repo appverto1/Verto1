@@ -43,19 +43,39 @@ import {
   isAbaSignificantChange
 } from './src/utils/abaClinicalCharts';
 import {
+  ASSIGNED_TASK_SELECT,
+  FINANCIAL_ENTRY_SELECT,
+  HISTORY_SELECT,
   INVITATION_SELECT,
   NOTE_LEGACY_SELECT,
   NOTE_SELECT,
+  PATIENT_ANAMNESIS_SELECT,
+  PATIENT_LOG_SELECT,
   PATIENT_LIST_SELECT,
+  PAYMENT_SELECT,
   PROFILE_SELECT as USER_PROFILE_SELECT,
+  PROFESSIONAL_PAYMENT_SELECT,
   PROFESSIONAL_PROFILE_SELECT,
+  TASK_SELECT,
+  fetchAssignedTasksWithSchemaFallback,
+  fetchClinicAnamnesisTemplateWithSchemaFallback,
   fetchNotesWithSchemaFallback,
   fetchPatientEmailForNotesWithSchemaFallback,
+  fetchFinancialEntriesWithSchemaFallback,
   fetchClinicInvitationsWithSchemaFallback,
   fetchClinicMembershipHistoryWithSchemaFallback,
+  fetchClinicStateWithSchemaFallback,
+  fetchHistoryWithSchemaFallback,
+  fetchPatientAnamnesisWithSchemaFallback,
+  fetchPatientFilesWithSchemaFallback,
+  fetchPatientLogsWithSchemaFallback,
+  fetchPatientRecordWithSchemaFallback,
   fetchPatientsWithSchemaFallback,
+  fetchPaymentsWithSchemaFallback,
+  fetchProfessionalPaymentsWithSchemaFallback,
   fetchProfessionalProfileWithSchemaFallback,
-  fetchProfileWithSchemaFallback
+  fetchProfileWithSchemaFallback,
+  fetchTasksWithSchemaFallback
 } from './src/utils/routeSchemaFallbacks';
 
 if (process.env.NODE_ENV !== 'production') {
@@ -2168,20 +2188,6 @@ const OTP_CHALLENGE_SELECT = [
   'created_at'
 ].join(',');
 
-const PATIENT_ANAMNESIS_SELECT = [
-  'id',
-  'patient_id',
-  'clinic_id',
-  'professional_id',
-  'title',
-  'reference_date',
-  'profile_type',
-  'template_version',
-  'anamnesis_data',
-  'patient_file_id',
-  'created_at'
-].join(',');
-
 const APPOINTMENT_SELECT = [
   'id',
   'clinic_id',
@@ -2214,94 +2220,6 @@ const APPOINTMENT_SELECT = [
   'updated_at'
 ].join(',');
 
-const HISTORY_SELECT = [
-  'id',
-  'patient_id',
-  'patient_email',
-  'type',
-  'title',
-  'score',
-  'energy',
-  'note',
-  'icon',
-  'image',
-  'image_path',
-  'date_group',
-  'therapist_id',
-  'assigned_task_id',
-  'source',
-  'task_data',
-  'pro_score',
-  'max_score',
-  'protocol_id',
-  'protocol_title',
-  'domain_id',
-  'domain_name',
-  'skill_id',
-  'skill_name',
-  'created_at',
-  'updated_at',
-  'is_active',
-  'deleted_at'
-].join(',');
-
-const TASK_SELECT = [
-  'id',
-  'patient_id',
-  'patient_email',
-  'title',
-  'description',
-  'type',
-  'icon',
-  'color',
-  'completed',
-  'is_daily_reminder',
-  'linked_task',
-  'scheduled_at',
-  'therapist_id',
-  'pro_score',
-  'max_score',
-  'created_at',
-  'updated_at'
-].join(',');
-
-const ASSIGNED_TASK_SELECT = [
-  'id',
-  'clinic_id',
-  'patient_id',
-  'patient_email',
-  'professional_id',
-  'task_type',
-  'task_data',
-  'scheduled_at',
-  'patient_effort',
-  'patient_effort_emoji',
-  'patient_effort_label',
-  'patient_comment',
-  'pro_score',
-  'max_score',
-  'pro_review_note',
-  'reviewed_by',
-  'status',
-  'completed_at',
-  'reviewed_at',
-  'last_history_event_id',
-  'last_private_note_id',
-  'parent_assigned_task_id',
-  'created_at',
-  'updated_at'
-].join(',');
-
-const PATIENT_LOG_SELECT = [
-  'id',
-  'patient_id',
-  'professional_id',
-  'type',
-  'value',
-  'timestamp',
-  'created_at'
-].join(',');
-
 const ACTIVITY_LOG_SELECT = [
   'id',
   'user_id',
@@ -2321,64 +2239,6 @@ const ACTIVITY_LOG_SELECT = [
   'created_at',
   'updated_at',
   'deleted_at'
-].join(',');
-
-const PAYMENT_SELECT = [
-  'id',
-  'clinic_id',
-  'patient_id',
-  'patient_name',
-  'amount',
-  'payment_date',
-  'due_date',
-  'method',
-  'status',
-  'receipt_url',
-  'receipt_file_name',
-  'receipt_content_type',
-  'type',
-  'insurance_name',
-  'specialty',
-  'base_amount',
-  'additional_amount',
-  'additional_scope',
-  'is_recurring',
-  'recurrence_group_id',
-  'recurrence_index',
-  'recurrence_total',
-  'recurrence_frequency',
-  'notes',
-  'created_by',
-  'created_at',
-  'updated_at'
-].join(',');
-
-const PROFESSIONAL_PAYMENT_SELECT = [
-  'id',
-  'clinic_id',
-  'professional_id',
-  'professional_name',
-  'specialty',
-  'amount',
-  'payment_date',
-  'due_date',
-  'method',
-  'status',
-  'receipt_url',
-  'receipt_file_name',
-  'receipt_content_type',
-  'base_amount',
-  'additional_amount',
-  'additional_scope',
-  'is_recurring',
-  'recurrence_group_id',
-  'recurrence_index',
-  'recurrence_total',
-  'recurrence_frequency',
-  'notes',
-  'created_by',
-  'created_at',
-  'updated_at'
 ].join(',');
 
 const PROTOCOL_IMPORT_REQUEST_SELECT = [
@@ -2471,22 +2331,6 @@ const OWNER_DELINQUENT_CUSTOMERS_SELECT = [
   'plan_name',
   'delinquency_amount',
   'oldest_due_date'
-].join(',');
-
-const FINANCIAL_ENTRY_SELECT = [
-  'id',
-  'clinic_id',
-  'entry_type',
-  'category',
-  'description',
-  'amount',
-  'occurred_on',
-  'status',
-  'source',
-  'notes',
-  'created_by',
-  'created_at',
-  'updated_at'
 ].join(',');
 
 const FINANCIAL_FEEDBACK_SELECT = [
@@ -8177,11 +8021,13 @@ async function startServer() {
   app.get('/api/clinic/anamnesis-template', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
-      const { data, error } = await supabase
-        .from('clinic_anamnesis_templates')
-        .select('template_json, updated_at')
-        .eq('clinic_id', clinicId)
-        .maybeSingle();
+      const templateResult = await fetchClinicAnamnesisTemplateWithSchemaFallback({
+        supabase,
+        clinicId,
+        logger: console
+      });
+      const data = templateResult.data;
+      const error = templateResult.error;
 
       if (error) {
         if (String(error?.message || '').toLowerCase().includes('clinic_anamnesis_templates')) {
@@ -8192,8 +8038,11 @@ async function startServer() {
 
       const template = sanitizeAnamnesisTemplate(data?.template_json || {});
       return res.json({ success: true, data: { ...template, updatedAt: data?.updated_at || null } });
-    } catch (error) {
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/clinic/anamnesis-template [GET]', error, {
+        clinicId: sanitizeString(currentClinicId(req.session.user), 120),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -8260,11 +8109,13 @@ async function startServer() {
   app.get('/api/clinic/state', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
-      const { data, error } = await supabase
-        .from('clinic_state')
-        .select('clinic_id, rooms, appointments, protocols, specialty_settings, updated_at')
-        .eq('clinic_id', clinicId)
-        .maybeSingle();
+      const stateResult = await fetchClinicStateWithSchemaFallback({
+        supabase,
+        clinicId,
+        logger: console
+      });
+      const data = stateResult.data;
+      const error = stateResult.error;
 
       if (error) {
         if (String(error?.message || '').toLowerCase().includes('clinic_state')) {
@@ -8295,8 +8146,11 @@ async function startServer() {
           updatedAt: data?.updated_at || null
         }
       });
-    } catch (error) {
-      return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/clinic/state [GET]', error, {
+        clinicId: sanitizeString(currentClinicId(req.session.user), 120),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -9371,24 +9225,30 @@ async function startServer() {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      const { data, error } = await supabase
-        .from('patient_anamnesis_submissions')
-        .select(PATIENT_ANAMNESIS_SELECT)
-        .eq('patient_id', patientId)
-        .eq('clinic_id', clinicId)
-        .order('created_at', { ascending: false })
-        .limit(limit);
+      const anamnesisResult = await fetchPatientAnamnesisWithSchemaFallback({
+        supabase,
+        patientId,
+        clinicId,
+        limit,
+        logger: console
+      });
+      const data = anamnesisResult.data;
+      const error = anamnesisResult.error;
 
       if (error) {
-        if (String(error?.message || '').toLowerCase().includes('patient_anamnesis_submissions')) {
+        if (isMissingRelationError(error) || String(error?.message || '').toLowerCase().includes('patient_anamnesis_submissions')) {
           return res.json({ success: true, data: [], warning: 'Tabela patient_anamnesis_submissions não criada.' });
         }
         throw error;
       }
 
       return res.json({ success: true, data: data || [] });
-    } catch (error) {
-      return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patient-anamnesis/:patientId [GET]', error, {
+        patientId: sanitizeString(req.resolvedPatientId || req.params.patientId, 120),
+        limit: parseBoundedListLimit(req.query?.limit, 20, 50),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -10724,16 +10584,18 @@ async function startServer() {
         patientId,
         Array.isArray(fallbackPayload?.payload?.files) ? fallbackPayload.payload.files : []
       );
-      const { data, error } = await supabase
-        .from('patient_files')
-        .select('id, patient_id, clinic_id, file_name, storage_path, mime_type, file_size_bytes, source, created_at, metadata')
-        .eq('patient_id', patientId)
-        .eq('clinic_id', clinicId)
-        .order('created_at', { ascending: false })
-        .limit(parseBoundedListLimit(req.query?.limit, 50, 100));
+      const fileResult = await fetchPatientFilesWithSchemaFallback({
+        supabase,
+        patientId,
+        clinicId,
+        limit: parseBoundedListLimit(req.query?.limit, 50, 100),
+        logger: console
+      });
+      const data = fileResult.data;
+      const error = fileResult.error;
 
       if (error) {
-        if (String(error?.message || '').toLowerCase().includes('patient_files')) {
+        if (isMissingRelationError(error) || String(error?.message || '').toLowerCase().includes('patient_files')) {
           return res.status(200).json({ success: true, data: fallbackFiles, warning: 'Tabela patient_files não criada; usando fallback do prontuário.' });
         }
         throw error;
@@ -10770,7 +10632,11 @@ async function startServer() {
 
       return res.json({ success: true, data: Array.from(merged.values()) });
     } catch (error: any) {
-      return res.status(500).json({ success: false, error: error.message || String(error) });
+      return sendRouteDbError(res, '/api/patient-files/:patientId [GET]', error, {
+        patientId: sanitizeString(req.resolvedPatientId || req.params.patientId, 120),
+        clinicId: sanitizeString(currentClinicId(req.session.user), 120),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -11180,17 +11046,18 @@ async function startServer() {
         return res.status(400).json({ error: 'clinicId inválido' });
       }
 
-      let query = supabase
-        .from('patient_records')
-        .select('patient_id, pseudonym_id, payload_encrypted, payload_preview, updated_at')
-        .eq('patient_id', patientId);
-      if (!hasGlobalClinicAccess(req.session.user)) {
-        query = query.eq('clinic_id', clinicId);
-      }
-      const { data, error } = await query.maybeSingle();
+      const recordResult = await fetchPatientRecordWithSchemaFallback({
+        supabase,
+        patientId,
+        clinicId,
+        scopeByClinic: !hasGlobalClinicAccess(req.session.user),
+        logger: console
+      });
+      const data = recordResult.data;
+      const error = recordResult.error;
 
       if (error) {
-        if (String(error?.message || '').toLowerCase().includes('patient_records')) {
+        if (isMissingRelationError(error) || String(error?.message || '').toLowerCase().includes('patient_records')) {
           return res.status(200).json({ success: true, data: null, warning: 'Tabela patient_records não encontrada.' });
         }
         throw error;
@@ -11218,8 +11085,12 @@ async function startServer() {
             }
           : null
       });
-    } catch (error) {
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patient-records/:patientId [GET]', error, {
+        patientId: sanitizeString(req.resolvedPatientId || req.params.patientId, 120),
+        clinicId: sanitizeString(currentClinicId(req.session.user), 120),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -11724,36 +11595,38 @@ async function startServer() {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const limit = parseBoundedListLimit((req as any).query?.limit, 20, 50);
-      const { data: patientRow } = await supabase
-        .from('patients')
-        .select('email')
-        .eq('id', patientId)
-        .eq('is_active', true)
-        .is('deleted_at', null)
-        .maybeSingle();
-      const patientEmail = sanitizeEmail(patientRow?.email);
+      const patientEmailResult = await fetchPatientEmailForNotesWithSchemaFallback({
+        supabase,
+        patientId,
+        route: '/api/history/:patientId',
+        logger: console
+      });
+      if (patientEmailResult.error) throw patientEmailResult.error;
+      const patientEmail = sanitizeEmail(patientEmailResult.data?.email);
 
-      const { data: historyById, error: historyByIdError } = await supabase
-        .from('history')
-        .select(HISTORY_SELECT)
-        .eq('patient_id', patientId)
-        .eq('is_active', true)
-        .is('deleted_at', null)
-        .order('created_at', { ascending: false })
-        .limit(limit);
+      const historyByIdResult = await fetchHistoryWithSchemaFallback({
+        supabase,
+        patientId,
+        limit,
+        route: '/api/history/:patientId',
+        logger: console
+      });
+      const historyById = historyByIdResult.data;
+      const historyByIdError = historyByIdResult.error;
       if (historyByIdError) throw historyByIdError;
 
       let historyByEmail: any[] = [];
       if (patientEmail) {
-        const { data: historyByEmailData, error: historyByEmailError } = await supabase
-          .from('history')
-          .select(HISTORY_SELECT)
-          .eq('patient_email', patientEmail)
-          .neq('patient_id', patientId)
-          .eq('is_active', true)
-          .is('deleted_at', null)
-          .order('created_at', { ascending: false })
-          .limit(limit);
+        const historyByEmailResult = await fetchHistoryWithSchemaFallback({
+          supabase,
+          patientEmail,
+          excludePatientId: patientId,
+          limit,
+          route: '/api/history/:patientId',
+          logger: console
+        });
+        const historyByEmailData = historyByEmailResult.data;
+        const historyByEmailError = historyByEmailResult.error;
         if (historyByEmailError) throw historyByEmailError;
         historyByEmail = Array.isArray(historyByEmailData) ? historyByEmailData : [];
       }
@@ -11764,8 +11637,12 @@ async function startServer() {
         .slice(0, limit);
       const enriched = await Promise.all(deduped.map(signHistoryImageUrl));
       res.json({ success: true, data: enriched });
-    } catch (error) {
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/history/:patientId [GET]', error, {
+        patientId: sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120),
+        limit: parseBoundedListLimit((req as any).query?.limit, 20, 50),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -11783,24 +11660,26 @@ async function startServer() {
       }
 
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      let query = supabase
-        .from('history')
-        .select(HISTORY_SELECT)
-        .eq('patient_email', safeEmail)
-        .eq('is_active', true)
-        .is('deleted_at', null)
-        .order('created_at', { ascending: false })
-        .limit(limit);
+      let scopedPatientIds: string[] | null = null;
 
       if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
         const clinicId = currentClinicId(req.session.user);
         if (!clinicId) return res.status(403).json({ error: 'Clínica não identificada.' });
         const clinicPatientIds = await getClinicPatientIdsByEmail(clinicId, safeEmail);
         if (clinicPatientIds.length === 0) return res.json({ success: true, data: [] });
-        query = query.in('patient_id', clinicPatientIds);
+        scopedPatientIds = clinicPatientIds;
       }
       
-      const { data, error } = await query;
+      const historyResult = await fetchHistoryWithSchemaFallback({
+        supabase,
+        patientEmail: safeEmail,
+        patientIds: scopedPatientIds || undefined,
+        limit,
+        route: '/api/history/email/:email',
+        logger: console
+      });
+      const data = historyResult.data;
+      const error = historyResult.error;
       if (error) throw error;
       const enriched = await Promise.all(
         (Array.isArray(data) ? data : []).slice(0, limit).map(async (row: any) => {
@@ -11825,8 +11704,12 @@ async function startServer() {
         })
       );
       res.json({ success: true, data: enriched });
-    } catch (error) {
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/history/email/:email [GET]', error, {
+        email: sanitizeEmail(req.params.email),
+        limit: parseBoundedListLimit(req.query?.limit, 20, 50),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -12194,26 +12077,30 @@ async function startServer() {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       if (!patientId) return res.status(400).json({ success: false, error: 'patient_id inválido.' });
+      const limit = parseBoundedListLimit(req.query?.limit, 50, 100);
 
-      const { data, error } = await supabase
-        .from('patient_logs')
-        .select(PATIENT_LOG_SELECT)
-        .eq('patient_id', patientId)
-        .order('timestamp', { ascending: false })
-        .limit(parseBoundedListLimit(req.query?.limit, 50, 100));
+      const logsResult = await fetchPatientLogsWithSchemaFallback({
+        supabase,
+        patientId,
+        limit,
+        logger: console
+      });
+      const data = logsResult.data;
+      const error = logsResult.error;
 
       if (!error) {
         return res.json({ success: true, data: Array.isArray(data) ? data : [] });
       }
 
-      const { data: historyRows, error: historyError } = await supabase
-        .from('history')
-        .select(HISTORY_SELECT)
-        .eq('patient_id', patientId)
-        .eq('is_active', true)
-        .is('deleted_at', null)
-        .order('created_at', { ascending: false })
-        .limit(parseBoundedListLimit(req.query?.limit, 50, 100));
+      const historyResult = await fetchHistoryWithSchemaFallback({
+        supabase,
+        patientId,
+        limit,
+        route: '/api/patient-logs/:patientId',
+        logger: console
+      });
+      const historyRows = historyResult.data;
+      const historyError = historyResult.error;
       if (historyError) throw historyError;
 
       const mapped = (Array.isArray(historyRows) ? historyRows : [])
@@ -12237,7 +12124,11 @@ async function startServer() {
 
       return res.json({ success: true, data: mapped, fallback: 'history' });
     } catch (error: any) {
-      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+      return sendRouteDbError(res, '/api/patient-logs/:patientId [GET]', error, {
+        patientId: sanitizeString(req.resolvedPatientId || req.params.patientId, 120),
+        limit: parseBoundedListLimit(req.query?.limit, 50, 100),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -13232,30 +13123,39 @@ async function startServer() {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const limit = parseBoundedListLimit((req as any).query?.limit, 20, 50);
-      const { data: patientRow } = await supabase
-        .from('patients')
-        .select('email')
-        .eq('id', patientId)
-        .maybeSingle();
-      const patientEmail = sanitizeEmail(patientRow?.email);
+      const patientEmailResult = await fetchPatientEmailForNotesWithSchemaFallback({
+        supabase,
+        patientId,
+        route: '/api/tasks/:patientId',
+        logger: console
+      });
+      if (patientEmailResult.error) throw patientEmailResult.error;
+      const patientEmail = sanitizeEmail(patientEmailResult.data?.email);
 
-      const { data: tasksById, error: tasksByIdError } = await supabase
-        .from('tasks')
-        .select(TASK_SELECT)
-        .eq('patient_id', patientId)
-        .order('created_at', { ascending: false })
-        .limit(limit);
+      const tasksByIdResult = await fetchTasksWithSchemaFallback({
+        supabase,
+        patientId,
+        limit,
+        route: '/api/tasks/:patientId',
+        logger: console
+      });
+      const tasksById = tasksByIdResult.data;
+      const tasksByIdError = tasksByIdResult.error;
       if (tasksByIdError) throw tasksByIdError;
 
       let tasksByEmail: any[] = [];
       if (patientEmail) {
-        const { data: tasksByEmailData, error: tasksByEmailError } = await supabase
-          .from('tasks')
-          .select(TASK_SELECT)
-          .ilike('patient_email', patientEmail)
-          .neq('patient_id', patientId)
-          .order('created_at', { ascending: false })
-          .limit(limit);
+        const tasksByEmailResult = await fetchTasksWithSchemaFallback({
+          supabase,
+          patientEmail,
+          excludePatientId: patientId,
+          emailMatch: 'ilike',
+          limit,
+          route: '/api/tasks/:patientId',
+          logger: console
+        });
+        const tasksByEmailData = tasksByEmailResult.data;
+        const tasksByEmailError = tasksByEmailResult.error;
         if (tasksByEmailError) throw tasksByEmailError;
         tasksByEmail = Array.isArray(tasksByEmailData) ? tasksByEmailData : [];
       }
@@ -13265,8 +13165,12 @@ async function startServer() {
         .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
         .slice(0, limit);
       res.json({ success: true, data: deduped });
-    } catch (error) {
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/tasks/:patientId [GET]', error, {
+        patientId: sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120),
+        limit: parseBoundedListLimit((req as any).query?.limit, 20, 50),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -13284,26 +13188,34 @@ async function startServer() {
       }
 
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      let query = supabase
-        .from('tasks')
-        .select(TASK_SELECT)
-        .eq('patient_email', safeEmail)
-        .order('created_at', { ascending: false })
-        .limit(limit);
+      let scopedPatientIds: string[] | null = null;
 
       if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
         const clinicId = currentClinicId(req.session.user);
         if (!clinicId) return res.status(403).json({ error: 'Clínica não identificada.' });
         const clinicPatientIds = await getClinicPatientIdsByEmail(clinicId, safeEmail);
         if (clinicPatientIds.length === 0) return res.json({ success: true, data: [] });
-        query = query.in('patient_id', clinicPatientIds);
+        scopedPatientIds = clinicPatientIds;
       }
       
-      const { data, error } = await query;
+      const tasksResult = await fetchTasksWithSchemaFallback({
+        supabase,
+        patientEmail: safeEmail,
+        patientIds: scopedPatientIds || undefined,
+        limit,
+        route: '/api/tasks/email/:email',
+        logger: console
+      });
+      const data = tasksResult.data;
+      const error = tasksResult.error;
       if (error) throw error;
       res.json({ success: true, data });
-    } catch (error) {
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/tasks/email/:email [GET]', error, {
+        email: sanitizeEmail(req.params.email),
+        limit: parseBoundedListLimit(req.query?.limit, 20, 50),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -13750,20 +13662,18 @@ async function startServer() {
 
       const clinicId = currentClinicId(req.session.user);
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      let query = supabase
-        .from('assigned_tasks')
-        .select(ASSIGNED_TASK_SELECT)
-        .eq('patient_id', patientId)
-        .order('scheduled_at', { ascending: false })
-        .limit(limit);
-
-      if (clinicId && !hasGlobalClinicAccess(req.session.user)) {
-        query = query.eq('clinic_id', clinicId);
-      }
-
-      const { data, error } = await query;
+      const assignedResult = await fetchAssignedTasksWithSchemaFallback({
+        supabase,
+        patientId,
+        clinicId: clinicId && !hasGlobalClinicAccess(req.session.user) ? clinicId : null,
+        limit,
+        route: '/api/assigned-tasks/:patientId',
+        logger: console
+      });
+      const data = assignedResult.data;
+      const error = assignedResult.error;
       if (error) {
-        if (/assigned_tasks/i.test(String(error?.message || ''))) {
+        if (isMissingRelationError(error) || /assigned_tasks/i.test(String(error?.message || ''))) {
           return res.status(200).json({ success: true, data: [], warning: 'Tabela assigned_tasks não criada.' });
         }
         throw error;
@@ -13771,7 +13681,11 @@ async function startServer() {
 
       return res.json({ success: true, data: data || [] });
     } catch (error: any) {
-      return res.status(500).json({ success: false, error: error?.message || String(error) });
+      return sendRouteDbError(res, '/api/assigned-tasks/:patientId [GET]', error, {
+        patientId: sanitizeString(req.resolvedPatientId || req.params.patientId, 120),
+        limit: parseBoundedListLimit(req.query?.limit, 20, 50),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -17217,22 +17131,22 @@ async function startServer() {
   app.get('/api/payments', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const scopedClinicId = currentClinicId(req.session.user);
-      let query = supabase
-        .from('payments')
-        .select(PAYMENT_SELECT)
-        .order('payment_date', { ascending: false })
-        .limit(parseBoundedListLimit(req.query?.limit, 100, 200));
-
-      if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
-        query = query.eq('clinic_id', scopedClinicId);
-      }
-
-      const { data, error } = await query;
+      const paymentsResult = await fetchPaymentsWithSchemaFallback({
+        supabase,
+        clinicId: !hasGlobalClinicAccess(req.session.user) && scopedClinicId ? scopedClinicId : null,
+        limit: parseBoundedListLimit(req.query?.limit, 100, 200),
+        logger: console
+      });
+      const data = paymentsResult.data;
+      const error = paymentsResult.error;
       
       if (error) throw error;
-      res.json({ success: true, data });
-    } catch (error) {
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+      res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/payments [GET]', error, {
+        limit: parseBoundedListLimit(req.query?.limit, 100, 200),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -17386,22 +17300,24 @@ async function startServer() {
   app.get('/api/financial/professional-payments', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const scopedClinicId = currentClinicId(req.session.user);
-      let query = supabase
-        .from('professional_payments')
-        .select(PROFESSIONAL_PAYMENT_SELECT)
-        .order('due_date', { ascending: false })
-        .limit(parseBoundedListLimit(req.query?.limit, 100, 200));
-      if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
-        query = query.eq('clinic_id', scopedClinicId);
-      }
-      const { data, error } = await query;
+      const professionalPaymentsResult = await fetchProfessionalPaymentsWithSchemaFallback({
+        supabase,
+        clinicId: !hasGlobalClinicAccess(req.session.user) && scopedClinicId ? scopedClinicId : null,
+        limit: parseBoundedListLimit(req.query?.limit, 100, 200),
+        logger: console
+      });
+      const data = professionalPaymentsResult.data;
+      const error = professionalPaymentsResult.error;
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
         throw error;
       }
       res.json({ success: true, data: data || [] });
-    } catch (error) {
-      res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/financial/professional-payments [GET]', error, {
+        limit: parseBoundedListLimit(req.query?.limit, 100, 200),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -17522,22 +17438,24 @@ async function startServer() {
   app.get('/api/financial/entries', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const scopedClinicId = currentClinicId(req.session.user);
-      let query = supabase
-        .from('clinic_financial_entries')
-        .select(FINANCIAL_ENTRY_SELECT)
-        .order('occurred_on', { ascending: false })
-        .limit(parseBoundedListLimit(req.query?.limit, 100, 200));
-      if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
-        query = query.eq('clinic_id', scopedClinicId);
-      }
-      const { data, error } = await query;
+      const entriesResult = await fetchFinancialEntriesWithSchemaFallback({
+        supabase,
+        clinicId: !hasGlobalClinicAccess(req.session.user) && scopedClinicId ? scopedClinicId : null,
+        limit: parseBoundedListLimit(req.query?.limit, 100, 200),
+        logger: console
+      });
+      const data = entriesResult.data;
+      const error = entriesResult.error;
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
         throw error;
       }
       res.json({ success: true, data: data || [] });
-    } catch (error) {
-      res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/financial/entries [GET]', error, {
+        limit: parseBoundedListLimit(req.query?.limit, 100, 200),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 

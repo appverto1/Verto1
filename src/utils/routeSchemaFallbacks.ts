@@ -169,6 +169,333 @@ export const PROFESSIONAL_PROFILE_LEGACY_SELECT_COLUMNS = [
   'metadata'
 ];
 
+export const HISTORY_SELECT_COLUMNS = [
+  'id',
+  'patient_id',
+  'patient_email',
+  'type',
+  'title',
+  'score',
+  'energy',
+  'note',
+  'icon',
+  'image',
+  'image_path',
+  'date_group',
+  'therapist_id',
+  'assigned_task_id',
+  'source',
+  'task_data',
+  'pro_score',
+  'max_score',
+  'protocol_id',
+  'protocol_title',
+  'domain_id',
+  'domain_name',
+  'skill_id',
+  'skill_name',
+  'created_at',
+  'updated_at',
+  'is_active',
+  'deleted_at'
+];
+
+export const HISTORY_LEGACY_SELECT_COLUMNS = [
+  'id',
+  'patient_id',
+  'patient_email',
+  'type',
+  'title',
+  'score',
+  'energy',
+  'note',
+  'icon',
+  'therapist_id',
+  'created_at'
+];
+
+export const TASK_SELECT_COLUMNS = [
+  'id',
+  'patient_id',
+  'patient_email',
+  'title',
+  'description',
+  'type',
+  'icon',
+  'color',
+  'completed',
+  'is_daily_reminder',
+  'linked_task',
+  'scheduled_at',
+  'therapist_id',
+  'pro_score',
+  'max_score',
+  'created_at',
+  'updated_at'
+];
+
+export const TASK_LEGACY_SELECT_COLUMNS = [
+  'id',
+  'patient_id',
+  'patient_email',
+  'title',
+  'description',
+  'type',
+  'completed',
+  'created_at'
+];
+
+export const ASSIGNED_TASK_SELECT_COLUMNS = [
+  'id',
+  'clinic_id',
+  'patient_id',
+  'patient_email',
+  'professional_id',
+  'task_type',
+  'task_data',
+  'scheduled_at',
+  'patient_effort',
+  'patient_effort_emoji',
+  'patient_effort_label',
+  'patient_comment',
+  'pro_score',
+  'max_score',
+  'pro_review_note',
+  'reviewed_by',
+  'status',
+  'completed_at',
+  'reviewed_at',
+  'last_history_event_id',
+  'last_private_note_id',
+  'parent_assigned_task_id',
+  'created_at',
+  'updated_at'
+];
+
+export const ASSIGNED_TASK_LEGACY_SELECT_COLUMNS = [
+  'id',
+  'patient_id',
+  'patient_email',
+  'task_type',
+  'task_data',
+  'scheduled_at',
+  'status',
+  'created_at'
+];
+
+export const PATIENT_LOG_SELECT_COLUMNS = [
+  'id',
+  'patient_id',
+  'professional_id',
+  'type',
+  'value',
+  'timestamp',
+  'created_at'
+];
+
+export const PATIENT_LOG_LEGACY_SELECT_COLUMNS = [
+  'id',
+  'patient_id',
+  'type',
+  'value',
+  'timestamp',
+  'created_at'
+];
+
+export const PATIENT_FILE_SELECT_COLUMNS = [
+  'id',
+  'patient_id',
+  'clinic_id',
+  'file_name',
+  'storage_path',
+  'mime_type',
+  'file_size_bytes',
+  'source',
+  'created_at',
+  'metadata'
+];
+
+export const PATIENT_FILE_LEGACY_SELECT_COLUMNS = [
+  'id',
+  'patient_id',
+  'file_name',
+  'storage_path',
+  'mime_type',
+  'created_at'
+];
+
+export const PATIENT_RECORD_SELECT_COLUMNS = [
+  'patient_id',
+  'clinic_id',
+  'pseudonym_id',
+  'payload_encrypted',
+  'payload_preview',
+  'updated_at'
+];
+
+export const PATIENT_RECORD_LEGACY_SELECT_COLUMNS = [
+  'patient_id',
+  'payload_encrypted'
+];
+
+export const PATIENT_ANAMNESIS_SELECT_COLUMNS = [
+  'id',
+  'patient_id',
+  'clinic_id',
+  'professional_id',
+  'title',
+  'reference_date',
+  'profile_type',
+  'template_version',
+  'anamnesis_data',
+  'patient_file_id',
+  'created_at'
+];
+
+export const PATIENT_ANAMNESIS_LEGACY_SELECT_COLUMNS = [
+  'id',
+  'patient_id',
+  'title',
+  'reference_date',
+  'anamnesis_data',
+  'created_at'
+];
+
+export const CLINIC_STATE_SELECT_COLUMNS = [
+  'clinic_id',
+  'rooms',
+  'appointments',
+  'protocols',
+  'specialty_settings',
+  'updated_at'
+];
+
+export const CLINIC_STATE_LEGACY_SELECT_COLUMNS = [
+  'clinic_id',
+  'rooms',
+  'appointments',
+  'protocols',
+  'updated_at'
+];
+
+export const CLINIC_ANAMNESIS_TEMPLATE_SELECT_COLUMNS = [
+  'template_json',
+  'updated_at'
+];
+
+export const CLINIC_ANAMNESIS_TEMPLATE_LEGACY_SELECT_COLUMNS = [
+  'template_json'
+];
+
+export const PAYMENT_SELECT_COLUMNS = [
+  'id',
+  'clinic_id',
+  'patient_id',
+  'patient_name',
+  'amount',
+  'payment_date',
+  'due_date',
+  'method',
+  'status',
+  'receipt_url',
+  'receipt_file_name',
+  'receipt_content_type',
+  'type',
+  'insurance_name',
+  'specialty',
+  'base_amount',
+  'additional_amount',
+  'additional_scope',
+  'is_recurring',
+  'recurrence_group_id',
+  'recurrence_index',
+  'recurrence_total',
+  'recurrence_frequency',
+  'notes',
+  'created_by',
+  'created_at',
+  'updated_at'
+];
+
+export const PAYMENT_LEGACY_SELECT_COLUMNS = [
+  'id',
+  'patient_id',
+  'patient_name',
+  'amount',
+  'payment_date',
+  'method',
+  'status',
+  'receipt_url',
+  'created_at'
+];
+
+export const PROFESSIONAL_PAYMENT_SELECT_COLUMNS = [
+  'id',
+  'clinic_id',
+  'professional_id',
+  'professional_name',
+  'specialty',
+  'amount',
+  'payment_date',
+  'due_date',
+  'method',
+  'status',
+  'receipt_url',
+  'receipt_file_name',
+  'receipt_content_type',
+  'base_amount',
+  'additional_amount',
+  'additional_scope',
+  'is_recurring',
+  'recurrence_group_id',
+  'recurrence_index',
+  'recurrence_total',
+  'recurrence_frequency',
+  'notes',
+  'created_by',
+  'created_at',
+  'updated_at'
+];
+
+export const PROFESSIONAL_PAYMENT_LEGACY_SELECT_COLUMNS = [
+  'id',
+  'professional_id',
+  'professional_name',
+  'amount',
+  'payment_date',
+  'due_date',
+  'method',
+  'status',
+  'created_at'
+];
+
+export const FINANCIAL_ENTRY_SELECT_COLUMNS = [
+  'id',
+  'clinic_id',
+  'entry_type',
+  'category',
+  'description',
+  'amount',
+  'occurred_on',
+  'status',
+  'source',
+  'notes',
+  'created_by',
+  'created_at',
+  'updated_at'
+];
+
+export const FINANCIAL_ENTRY_LEGACY_SELECT_COLUMNS = [
+  'id',
+  'entry_type',
+  'category',
+  'description',
+  'amount',
+  'occurred_on',
+  'status',
+  'created_at'
+];
+
 export const PROFILE_SELECT = PROFILE_SELECT_COLUMNS.join(',');
 export const PROFILE_LEGACY_SELECT = PROFILE_LEGACY_SELECT_COLUMNS.join(',');
 export const INVITATION_SELECT = INVITATION_SELECT_COLUMNS.join(',');
@@ -179,6 +506,30 @@ export const NOTE_SELECT = NOTE_SELECT_COLUMNS.join(',');
 export const NOTE_LEGACY_SELECT = NOTE_LEGACY_SELECT_COLUMNS.join(',');
 export const PROFESSIONAL_PROFILE_SELECT = PROFESSIONAL_PROFILE_SELECT_COLUMNS.join(',');
 export const PROFESSIONAL_PROFILE_LEGACY_SELECT = PROFESSIONAL_PROFILE_LEGACY_SELECT_COLUMNS.join(',');
+export const HISTORY_SELECT = HISTORY_SELECT_COLUMNS.join(',');
+export const HISTORY_LEGACY_SELECT = HISTORY_LEGACY_SELECT_COLUMNS.join(',');
+export const TASK_SELECT = TASK_SELECT_COLUMNS.join(',');
+export const TASK_LEGACY_SELECT = TASK_LEGACY_SELECT_COLUMNS.join(',');
+export const ASSIGNED_TASK_SELECT = ASSIGNED_TASK_SELECT_COLUMNS.join(',');
+export const ASSIGNED_TASK_LEGACY_SELECT = ASSIGNED_TASK_LEGACY_SELECT_COLUMNS.join(',');
+export const PATIENT_LOG_SELECT = PATIENT_LOG_SELECT_COLUMNS.join(',');
+export const PATIENT_LOG_LEGACY_SELECT = PATIENT_LOG_LEGACY_SELECT_COLUMNS.join(',');
+export const PATIENT_FILE_SELECT = PATIENT_FILE_SELECT_COLUMNS.join(',');
+export const PATIENT_FILE_LEGACY_SELECT = PATIENT_FILE_LEGACY_SELECT_COLUMNS.join(',');
+export const PATIENT_RECORD_SELECT = PATIENT_RECORD_SELECT_COLUMNS.join(',');
+export const PATIENT_RECORD_LEGACY_SELECT = PATIENT_RECORD_LEGACY_SELECT_COLUMNS.join(',');
+export const PATIENT_ANAMNESIS_SELECT = PATIENT_ANAMNESIS_SELECT_COLUMNS.join(',');
+export const PATIENT_ANAMNESIS_LEGACY_SELECT = PATIENT_ANAMNESIS_LEGACY_SELECT_COLUMNS.join(',');
+export const CLINIC_STATE_SELECT = CLINIC_STATE_SELECT_COLUMNS.join(',');
+export const CLINIC_STATE_LEGACY_SELECT = CLINIC_STATE_LEGACY_SELECT_COLUMNS.join(',');
+export const CLINIC_ANAMNESIS_TEMPLATE_SELECT = CLINIC_ANAMNESIS_TEMPLATE_SELECT_COLUMNS.join(',');
+export const CLINIC_ANAMNESIS_TEMPLATE_LEGACY_SELECT = CLINIC_ANAMNESIS_TEMPLATE_LEGACY_SELECT_COLUMNS.join(',');
+export const PAYMENT_SELECT = PAYMENT_SELECT_COLUMNS.join(',');
+export const PAYMENT_LEGACY_SELECT = PAYMENT_LEGACY_SELECT_COLUMNS.join(',');
+export const PROFESSIONAL_PAYMENT_SELECT = PROFESSIONAL_PAYMENT_SELECT_COLUMNS.join(',');
+export const PROFESSIONAL_PAYMENT_LEGACY_SELECT = PROFESSIONAL_PAYMENT_LEGACY_SELECT_COLUMNS.join(',');
+export const FINANCIAL_ENTRY_SELECT = FINANCIAL_ENTRY_SELECT_COLUMNS.join(',');
+export const FINANCIAL_ENTRY_LEGACY_SELECT = FINANCIAL_ENTRY_LEGACY_SELECT_COLUMNS.join(',');
 
 const PROFILE_OPTIONAL_COLUMNS = new Set([
   'clinic_id',
@@ -265,6 +616,155 @@ const PROFESSIONAL_PROFILE_OPTIONAL_COLUMNS = new Set([
   'updated_at'
 ]);
 
+const HISTORY_OPTIONAL_COLUMNS = new Set([
+  'score',
+  'energy',
+  'note',
+  'icon',
+  'image',
+  'image_path',
+  'date_group',
+  'therapist_id',
+  'assigned_task_id',
+  'source',
+  'task_data',
+  'pro_score',
+  'max_score',
+  'protocol_id',
+  'protocol_title',
+  'domain_id',
+  'domain_name',
+  'skill_id',
+  'skill_name',
+  'updated_at',
+  'is_active',
+  'deleted_at'
+]);
+
+const TASK_OPTIONAL_COLUMNS = new Set([
+  'description',
+  'icon',
+  'color',
+  'completed',
+  'is_daily_reminder',
+  'linked_task',
+  'scheduled_at',
+  'therapist_id',
+  'pro_score',
+  'max_score',
+  'updated_at'
+]);
+
+const ASSIGNED_TASK_OPTIONAL_COLUMNS = new Set([
+  'clinic_id',
+  'professional_id',
+  'scheduled_at',
+  'patient_effort',
+  'patient_effort_emoji',
+  'patient_effort_label',
+  'patient_comment',
+  'pro_score',
+  'max_score',
+  'pro_review_note',
+  'reviewed_by',
+  'status',
+  'completed_at',
+  'reviewed_at',
+  'last_history_event_id',
+  'last_private_note_id',
+  'parent_assigned_task_id',
+  'updated_at'
+]);
+
+const PATIENT_LOG_OPTIONAL_COLUMNS = new Set([
+  'professional_id',
+  'timestamp'
+]);
+
+const PATIENT_FILE_OPTIONAL_COLUMNS = new Set([
+  'clinic_id',
+  'file_size_bytes',
+  'source',
+  'metadata'
+]);
+
+const PATIENT_RECORD_OPTIONAL_COLUMNS = new Set([
+  'clinic_id',
+  'pseudonym_id',
+  'payload_preview',
+  'updated_at'
+]);
+
+const PATIENT_ANAMNESIS_OPTIONAL_COLUMNS = new Set([
+  'clinic_id',
+  'professional_id',
+  'profile_type',
+  'template_version',
+  'patient_file_id'
+]);
+
+const CLINIC_STATE_OPTIONAL_COLUMNS = new Set([
+  'specialty_settings',
+  'updated_at'
+]);
+
+const CLINIC_ANAMNESIS_TEMPLATE_OPTIONAL_COLUMNS = new Set([
+  'updated_at'
+]);
+
+const PAYMENT_OPTIONAL_COLUMNS = new Set([
+  'clinic_id',
+  'due_date',
+  'method',
+  'receipt_url',
+  'receipt_file_name',
+  'receipt_content_type',
+  'type',
+  'insurance_name',
+  'specialty',
+  'base_amount',
+  'additional_amount',
+  'additional_scope',
+  'is_recurring',
+  'recurrence_group_id',
+  'recurrence_index',
+  'recurrence_total',
+  'recurrence_frequency',
+  'notes',
+  'created_by',
+  'updated_at'
+]);
+
+const PROFESSIONAL_PAYMENT_OPTIONAL_COLUMNS = new Set([
+  'clinic_id',
+  'professional_id',
+  'specialty',
+  'due_date',
+  'method',
+  'receipt_url',
+  'receipt_file_name',
+  'receipt_content_type',
+  'base_amount',
+  'additional_amount',
+  'additional_scope',
+  'is_recurring',
+  'recurrence_group_id',
+  'recurrence_index',
+  'recurrence_total',
+  'recurrence_frequency',
+  'notes',
+  'created_by',
+  'updated_at'
+]);
+
+const FINANCIAL_ENTRY_OPTIONAL_COLUMNS = new Set([
+  'clinic_id',
+  'source',
+  'notes',
+  'created_by',
+  'updated_at'
+]);
+
 function cleanString(value: unknown, maxLength = 1000): string {
   return String(value ?? '').trim().slice(0, maxLength);
 }
@@ -323,6 +823,118 @@ function warnSchemaFallback(logger: LoggerLike | undefined, params: {
     missingColumn: params.missingColumn,
     nextSelect: params.nextSelect
   });
+}
+
+async function fetchListWithColumnFallback(params: {
+  supabase: SupabaseLike;
+  route: string;
+  table: string;
+  initialColumns: string[];
+  optionalColumns: Set<string>;
+  logger?: LoggerLike;
+  maxAttempts?: number;
+  buildQuery: (selectColumns: string, removedColumns: Set<string>) => any;
+}) {
+  let columns = [...params.initialColumns];
+  const removedColumns = new Set<string>();
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt < (params.maxAttempts || 12); attempt += 1) {
+    const result = await params.buildQuery(joinColumns(columns), removedColumns);
+
+    if (!result.error) {
+      return {
+        data: Array.isArray(result.data) ? result.data : [],
+        error: null,
+        select: joinColumns(columns),
+        removedColumns
+      };
+    }
+
+    lastError = result.error;
+    const missingColumn =
+      extractMissingColumnNameFromSupabaseError(result.error) ||
+      findMentionedColumn(result.error, params.optionalColumns);
+
+    if (!missingColumn || !params.optionalColumns.has(missingColumn) || removedColumns.has(missingColumn)) {
+      break;
+    }
+
+    removedColumns.add(missingColumn);
+    if (columns.includes(missingColumn)) {
+      columns = columns.filter((column) => column !== missingColumn);
+    }
+
+    warnSchemaFallback(params.logger, {
+      route: params.route,
+      table: params.table,
+      missingColumn,
+      nextSelect: joinColumns(columns)
+    });
+  }
+
+  return {
+    data: null,
+    error: lastError,
+    select: joinColumns(columns),
+    removedColumns
+  };
+}
+
+async function fetchMaybeSingleWithColumnFallback(params: {
+  supabase: SupabaseLike;
+  route: string;
+  table: string;
+  initialColumns: string[];
+  optionalColumns: Set<string>;
+  logger?: LoggerLike;
+  maxAttempts?: number;
+  buildQuery: (selectColumns: string, removedColumns: Set<string>) => any;
+}) {
+  let columns = [...params.initialColumns];
+  const removedColumns = new Set<string>();
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt < (params.maxAttempts || 10); attempt += 1) {
+    const result = await params.buildQuery(joinColumns(columns), removedColumns);
+
+    if (!result.error) {
+      return {
+        data: result.data || null,
+        error: null,
+        select: joinColumns(columns),
+        removedColumns
+      };
+    }
+
+    lastError = result.error;
+    const missingColumn =
+      extractMissingColumnNameFromSupabaseError(result.error) ||
+      findMentionedColumn(result.error, params.optionalColumns);
+
+    if (!missingColumn || !params.optionalColumns.has(missingColumn) || removedColumns.has(missingColumn)) {
+      break;
+    }
+
+    removedColumns.add(missingColumn);
+    if (columns.includes(missingColumn)) {
+      columns = columns.filter((column) => column !== missingColumn);
+    }
+
+    warnSchemaFallback(params.logger, {
+      route: params.route,
+      table: params.table,
+      missingColumn,
+      nextSelect: joinColumns(columns)
+    });
+  }
+
+  return {
+    data: null,
+    error: lastError,
+    select: joinColumns(columns),
+    removedColumns
+  };
 }
 
 export async function fetchProfileWithSchemaFallback(params: {
@@ -426,6 +1038,7 @@ export async function fetchProfessionalProfileWithSchemaFallback(params: {
 export async function fetchPatientEmailForNotesWithSchemaFallback(params: {
   supabase: SupabaseLike;
   patientId: string | null;
+  route?: string;
   logger?: LoggerLike;
 }) {
   let filterIsActive = true;
@@ -457,7 +1070,7 @@ export async function fetchPatientEmailForNotesWithSchemaFallback(params: {
     }
 
     warnSchemaFallback(params.logger, {
-      route: '/api/notes/:patientId',
+      route: params.route || '/api/notes/:patientId',
       table: 'patients',
       missingColumn,
       nextSelect: 'email'
@@ -465,6 +1078,344 @@ export async function fetchPatientEmailForNotesWithSchemaFallback(params: {
   }
 
   return { data: null, error: lastError };
+}
+
+export async function fetchHistoryWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  patientId?: string | null;
+  patientEmail?: string | null;
+  excludePatientId?: string | null;
+  patientIds?: string[];
+  limit: number;
+  route?: string;
+  logger?: LoggerLike;
+}) {
+  return fetchListWithColumnFallback({
+    supabase: params.supabase,
+    route: params.route || '/api/history/:patientId',
+    table: 'history',
+    initialColumns: HISTORY_SELECT_COLUMNS,
+    optionalColumns: new Set([...HISTORY_OPTIONAL_COLUMNS, 'patient_email']),
+    logger: params.logger,
+    buildQuery: (selectColumns, removedColumns) => {
+      let query = params.supabase.from('history').select(selectColumns);
+      const patientId = cleanString(params.patientId, 120);
+      const patientEmail = cleanString(params.patientEmail, 320).toLowerCase();
+      const excludePatientId = cleanString(params.excludePatientId, 120);
+      const patientIds = Array.from(new Set((params.patientIds || []).map((id) => cleanString(id, 120)).filter(Boolean)));
+
+      if (patientEmail && removedColumns.has('patient_email')) return { data: [], error: null };
+      if (patientId) query = query.eq('patient_id', patientId);
+      if (patientEmail) query = query.eq('patient_email', patientEmail);
+      if (excludePatientId) query = query.neq('patient_id', excludePatientId);
+      if (patientIds.length > 0) query = query.in('patient_id', patientIds);
+      if (!removedColumns.has('is_active')) query = query.eq('is_active', true);
+      if (!removedColumns.has('deleted_at')) query = query.is('deleted_at', null);
+
+      return query.order('created_at', { ascending: false }).limit(params.limit);
+    }
+  });
+}
+
+export async function fetchTasksWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  patientId?: string | null;
+  patientEmail?: string | null;
+  excludePatientId?: string | null;
+  patientIds?: string[];
+  emailMatch?: 'eq' | 'ilike';
+  limit: number;
+  route?: string;
+  logger?: LoggerLike;
+}) {
+  return fetchListWithColumnFallback({
+    supabase: params.supabase,
+    route: params.route || '/api/tasks/:patientId',
+    table: 'tasks',
+    initialColumns: TASK_SELECT_COLUMNS,
+    optionalColumns: new Set([...TASK_OPTIONAL_COLUMNS, 'patient_email']),
+    logger: params.logger,
+    buildQuery: (selectColumns, removedColumns) => {
+      let query = params.supabase.from('tasks').select(selectColumns);
+      const patientId = cleanString(params.patientId, 120);
+      const patientEmail = cleanString(params.patientEmail, 320).toLowerCase();
+      const excludePatientId = cleanString(params.excludePatientId, 120);
+      const patientIds = Array.from(new Set((params.patientIds || []).map((id) => cleanString(id, 120)).filter(Boolean)));
+
+      if (patientEmail && removedColumns.has('patient_email')) return { data: [], error: null };
+      if (patientId) query = query.eq('patient_id', patientId);
+      if (patientEmail) {
+        query = params.emailMatch === 'ilike'
+          ? query.ilike('patient_email', patientEmail)
+          : query.eq('patient_email', patientEmail);
+      }
+      if (excludePatientId) query = query.neq('patient_id', excludePatientId);
+      if (patientIds.length > 0) query = query.in('patient_id', patientIds);
+
+      return query.order('created_at', { ascending: false }).limit(params.limit);
+    }
+  });
+}
+
+export async function fetchAssignedTasksWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  patientId?: string | null;
+  patientEmail?: string | null;
+  patientIds?: string[];
+  clinicId?: string | null;
+  status?: string | null;
+  emailMatch?: 'eq' | 'ilike';
+  orderBy?: 'scheduled_at' | 'completed_at' | 'created_at';
+  limit: number;
+  route?: string;
+  logger?: LoggerLike;
+}) {
+  return fetchListWithColumnFallback({
+    supabase: params.supabase,
+    route: params.route || '/api/assigned-tasks/:patientId',
+    table: 'assigned_tasks',
+    initialColumns: ASSIGNED_TASK_SELECT_COLUMNS,
+    optionalColumns: new Set([...ASSIGNED_TASK_OPTIONAL_COLUMNS, 'patient_email']),
+    logger: params.logger,
+    buildQuery: (selectColumns, removedColumns) => {
+      let query = params.supabase.from('assigned_tasks').select(selectColumns);
+      const patientId = cleanString(params.patientId, 120);
+      const patientEmail = cleanString(params.patientEmail, 320).toLowerCase();
+      const clinicId = cleanString(params.clinicId, 120);
+      const status = cleanString(params.status, 80);
+      const patientIds = Array.from(new Set((params.patientIds || []).map((id) => cleanString(id, 120)).filter(Boolean)));
+
+      if (patientEmail && removedColumns.has('patient_email')) return { data: [], error: null };
+      if (patientId) query = query.eq('patient_id', patientId);
+      if (patientEmail) {
+        query = params.emailMatch === 'ilike'
+          ? query.ilike('patient_email', patientEmail)
+          : query.eq('patient_email', patientEmail);
+      }
+      if (patientIds.length > 0) query = query.in('patient_id', patientIds);
+      if (clinicId && !removedColumns.has('clinic_id')) query = query.eq('clinic_id', clinicId);
+      if (status && !removedColumns.has('status')) query = query.eq('status', status);
+
+      const preferredOrder = params.orderBy || 'scheduled_at';
+      const orderColumn = removedColumns.has(preferredOrder) ? 'created_at' : preferredOrder;
+      return query.order(orderColumn, { ascending: false }).limit(params.limit);
+    }
+  });
+}
+
+export async function fetchPatientLogsWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  patientId: string | null;
+  limit: number;
+  logger?: LoggerLike;
+}) {
+  return fetchListWithColumnFallback({
+    supabase: params.supabase,
+    route: '/api/patient-logs/:patientId',
+    table: 'patient_logs',
+    initialColumns: PATIENT_LOG_SELECT_COLUMNS,
+    optionalColumns: PATIENT_LOG_OPTIONAL_COLUMNS,
+    logger: params.logger,
+    buildQuery: (selectColumns, removedColumns) => {
+      const orderColumn = removedColumns.has('timestamp') ? 'created_at' : 'timestamp';
+      return params.supabase
+        .from('patient_logs')
+        .select(selectColumns)
+        .eq('patient_id', cleanString(params.patientId, 120))
+        .order(orderColumn, { ascending: false })
+        .limit(params.limit);
+    }
+  });
+}
+
+export async function fetchPatientFilesWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  patientId: string | null;
+  clinicId: string | null;
+  limit: number;
+  logger?: LoggerLike;
+}) {
+  return fetchListWithColumnFallback({
+    supabase: params.supabase,
+    route: '/api/patient-files/:patientId',
+    table: 'patient_files',
+    initialColumns: PATIENT_FILE_SELECT_COLUMNS,
+    optionalColumns: PATIENT_FILE_OPTIONAL_COLUMNS,
+    logger: params.logger,
+    buildQuery: (selectColumns, removedColumns) => {
+      let query = params.supabase
+        .from('patient_files')
+        .select(selectColumns)
+        .eq('patient_id', cleanString(params.patientId, 120));
+
+      const clinicId = cleanString(params.clinicId, 120);
+      if (clinicId && !removedColumns.has('clinic_id')) query = query.eq('clinic_id', clinicId);
+
+      return query.order('created_at', { ascending: false }).limit(params.limit);
+    }
+  });
+}
+
+export async function fetchPatientRecordWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  patientId: string | null;
+  clinicId?: string | null;
+  scopeByClinic?: boolean;
+  logger?: LoggerLike;
+}) {
+  return fetchMaybeSingleWithColumnFallback({
+    supabase: params.supabase,
+    route: '/api/patient-records/:patientId',
+    table: 'patient_records',
+    initialColumns: PATIENT_RECORD_SELECT_COLUMNS,
+    optionalColumns: PATIENT_RECORD_OPTIONAL_COLUMNS,
+    logger: params.logger,
+    buildQuery: (selectColumns, removedColumns) => {
+      let query = params.supabase
+        .from('patient_records')
+        .select(selectColumns)
+        .eq('patient_id', cleanString(params.patientId, 120));
+
+      const clinicId = cleanString(params.clinicId, 120);
+      if (params.scopeByClinic && clinicId && !removedColumns.has('clinic_id')) query = query.eq('clinic_id', clinicId);
+
+      return query.maybeSingle();
+    }
+  });
+}
+
+export async function fetchPatientAnamnesisWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  patientId: string | null;
+  clinicId?: string | null;
+  limit: number;
+  logger?: LoggerLike;
+}) {
+  return fetchListWithColumnFallback({
+    supabase: params.supabase,
+    route: '/api/patient-anamnesis/:patientId',
+    table: 'patient_anamnesis_submissions',
+    initialColumns: PATIENT_ANAMNESIS_SELECT_COLUMNS,
+    optionalColumns: PATIENT_ANAMNESIS_OPTIONAL_COLUMNS,
+    logger: params.logger,
+    buildQuery: (selectColumns, removedColumns) => {
+      let query = params.supabase
+        .from('patient_anamnesis_submissions')
+        .select(selectColumns)
+        .eq('patient_id', cleanString(params.patientId, 120));
+
+      const clinicId = cleanString(params.clinicId, 120);
+      if (clinicId && !removedColumns.has('clinic_id')) query = query.eq('clinic_id', clinicId);
+
+      return query.order('created_at', { ascending: false }).limit(params.limit);
+    }
+  });
+}
+
+export async function fetchClinicStateWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  clinicId: string | null;
+  logger?: LoggerLike;
+}) {
+  return fetchMaybeSingleWithColumnFallback({
+    supabase: params.supabase,
+    route: '/api/clinic/state',
+    table: 'clinic_state',
+    initialColumns: CLINIC_STATE_SELECT_COLUMNS,
+    optionalColumns: CLINIC_STATE_OPTIONAL_COLUMNS,
+    logger: params.logger,
+    buildQuery: (selectColumns) => params.supabase
+      .from('clinic_state')
+      .select(selectColumns)
+      .eq('clinic_id', cleanString(params.clinicId, 120))
+      .maybeSingle()
+  });
+}
+
+export async function fetchClinicAnamnesisTemplateWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  clinicId: string | null;
+  logger?: LoggerLike;
+}) {
+  return fetchMaybeSingleWithColumnFallback({
+    supabase: params.supabase,
+    route: '/api/clinic/anamnesis-template',
+    table: 'clinic_anamnesis_templates',
+    initialColumns: CLINIC_ANAMNESIS_TEMPLATE_SELECT_COLUMNS,
+    optionalColumns: CLINIC_ANAMNESIS_TEMPLATE_OPTIONAL_COLUMNS,
+    logger: params.logger,
+    buildQuery: (selectColumns) => params.supabase
+      .from('clinic_anamnesis_templates')
+      .select(selectColumns)
+      .eq('clinic_id', cleanString(params.clinicId, 120))
+      .maybeSingle()
+  });
+}
+
+export async function fetchPaymentsWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  clinicId?: string | null;
+  limit: number;
+  logger?: LoggerLike;
+}) {
+  return fetchListWithColumnFallback({
+    supabase: params.supabase,
+    route: '/api/payments',
+    table: 'payments',
+    initialColumns: PAYMENT_SELECT_COLUMNS,
+    optionalColumns: PAYMENT_OPTIONAL_COLUMNS,
+    logger: params.logger,
+    buildQuery: (selectColumns, removedColumns) => {
+      let query = params.supabase.from('payments').select(selectColumns);
+      const clinicId = cleanString(params.clinicId, 120);
+      if (clinicId && !removedColumns.has('clinic_id')) query = query.eq('clinic_id', clinicId);
+      return query.order('payment_date', { ascending: false }).limit(params.limit);
+    }
+  });
+}
+
+export async function fetchProfessionalPaymentsWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  clinicId?: string | null;
+  limit: number;
+  logger?: LoggerLike;
+}) {
+  return fetchListWithColumnFallback({
+    supabase: params.supabase,
+    route: '/api/financial/professional-payments',
+    table: 'professional_payments',
+    initialColumns: PROFESSIONAL_PAYMENT_SELECT_COLUMNS,
+    optionalColumns: PROFESSIONAL_PAYMENT_OPTIONAL_COLUMNS,
+    logger: params.logger,
+    buildQuery: (selectColumns, removedColumns) => {
+      let query = params.supabase.from('professional_payments').select(selectColumns);
+      const clinicId = cleanString(params.clinicId, 120);
+      if (clinicId && !removedColumns.has('clinic_id')) query = query.eq('clinic_id', clinicId);
+      return query.order(removedColumns.has('due_date') ? 'payment_date' : 'due_date', { ascending: false }).limit(params.limit);
+    }
+  });
+}
+
+export async function fetchFinancialEntriesWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  clinicId?: string | null;
+  limit: number;
+  logger?: LoggerLike;
+}) {
+  return fetchListWithColumnFallback({
+    supabase: params.supabase,
+    route: '/api/financial/entries',
+    table: 'clinic_financial_entries',
+    initialColumns: FINANCIAL_ENTRY_SELECT_COLUMNS,
+    optionalColumns: FINANCIAL_ENTRY_OPTIONAL_COLUMNS,
+    logger: params.logger,
+    buildQuery: (selectColumns, removedColumns) => {
+      let query = params.supabase.from('clinic_financial_entries').select(selectColumns);
+      const clinicId = cleanString(params.clinicId, 120);
+      if (clinicId && !removedColumns.has('clinic_id')) query = query.eq('clinic_id', clinicId);
+      return query.order('occurred_on', { ascending: false }).limit(params.limit);
+    }
+  });
 }
 
 function noteIsReadableWithoutVisibility(note: any): boolean {
