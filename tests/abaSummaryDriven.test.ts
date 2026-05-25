@@ -96,9 +96,11 @@ test('frontend reads summaries and limits raw clinical lists', () => {
     assert.match(dataServiceCode, new RegExp(`async ${helper}\\(`), `${helper} deve existir no dataService.`);
   }
   assert.match(dataServiceCode, /function auditClinicalQuery[\s\S]*?sem limit\/pageSize[\s\S]*?select\('\*'\)\/payload amplo[\s\S]*?refetch amplo apos escrita/m);
+  assert.match(dataServiceCode, /logClinicalQueryResult[\s\S]*?helper: options\.helperName[\s\S]*?limit: extractEndpointLimit\(endpoint\)[\s\S]*?rows[\s\S]*?approxBytes/m);
   assert.match(patientDetailCode, /recentRecordLimit = 10[\s\S]*?dataService\.getPatientAbaSummary\(String\(patient\.id\)\)[\s\S]*?page: 1, pageSize: recentRecordLimit/m);
   assert.match(patientDetailCode, /abaSummaryMetrics[\s\S]*?total_trials[\s\S]*?total_behavior_events[\s\S]*?mastered_targets_count/m);
   assert.match(sessionModeCode, /dataService\.getSessionLiveSummary\(sessionId\)[\s\S]*?visibleHistoryRecords = historyExpanded \? clinicalHistoryRecords : clinicalHistoryRecords\.slice\(0, 20\)/m);
+  assert.match(sessionModeCode, /dataService\.getRecentSessionEvents\(sessionId, 20\)[\s\S]*?setRecords\(\(prev\) =>/m);
   assert.match(sessionModeCode, /openPersistedPostClosureReport[\s\S]*?dataService\.getSessionReport\(sessionId\)[\s\S]*?setPostClosureSummary\(persistedSummary\)/m);
 });
 

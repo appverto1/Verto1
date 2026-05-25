@@ -102,16 +102,73 @@ function endpointWithPagination(endpoint: string, options: { page?: number; page
   return `${endpoint}${separator}page=${encodeURIComponent(String(page))}&pageSize=${encodeURIComponent(String(pageSize))}`;
 }
 
-function auditClinicalQuery(endpoint: string, options: {
+type ClinicalQueryAuditOptions = {
+  helperName?: string;
   operation?: 'list' | 'detail' | 'write';
   table?: string;
   hasExplicitColumns?: boolean;
   requiresPatientOrSession?: boolean;
   afterWriteRefetch?: boolean;
-} = {}) {
+};
+
+function isClinicalEndpoint(endpoint: string) {
+  return /\/api\/(aba|notes|history|tasks|assigned-tasks|patient-anamnesis|patients|patient-records)/.test(endpoint);
+}
+
+function isDevQueryAuditEnabled() {
+  return Boolean(import.meta.env?.DEV);
+}
+
+function extractEndpointLimit(endpoint: string): number | null {
+  try {
+    const parsed = new URL(endpoint, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
+    const limit = Number(parsed.searchParams.get('pageSize') || parsed.searchParams.get('limit'));
+    return Number.isFinite(limit) && limit > 0 ? limit : null;
+  } catch {
+    const match = endpoint.match(/[?&](?:pageSize|limit)=(\d+)/);
+    return match ? Number(match[1]) : null;
+  }
+}
+
+function countClinicalRows(payload: any): number | null {
+  if (Array.isArray(payload)) return payload.length;
+  if (Array.isArray(payload?.data)) return payload.data.length;
+  if (payload?.data && typeof payload.data === 'object') return 1;
+  if (payload?.data === null) return 0;
+  return null;
+}
+
+async function logClinicalQueryResult(endpoint: string, response: Response, options: ClinicalQueryAuditOptions = {}) {
+  if (!isDevQueryAuditEnabled() || !isClinicalEndpoint(endpoint)) return;
+  try {
+    const responseText = await response.clone().text();
+    let rows: number | null = null;
+    try {
+      rows = countClinicalRows(JSON.parse(responseText));
+    } catch {
+      rows = null;
+    }
+    const approxBytes = typeof TextEncoder !== 'undefined'
+      ? new TextEncoder().encode(responseText).length
+      : responseText.length;
+    console.info('[egress-query]', {
+      helper: options.helperName || 'unknown',
+      table: options.table || 'unknown',
+      operation: options.operation || 'unknown',
+      limit: extractEndpointLimit(endpoint),
+      rows,
+      approxBytes,
+      status: response.status,
+      endpoint
+    });
+  } catch {
+    // Dev-only telemetry must never affect the clinical flow.
+  }
+}
+
+function auditClinicalQuery(endpoint: string, options: ClinicalQueryAuditOptions = {}) {
   if (!import.meta.env?.DEV) return;
-  const isClinical = /\/api\/(aba|notes|history|tasks|assigned-tasks|patient-anamnesis|patients|patient-records)/.test(endpoint);
-  if (!isClinical) return;
+  if (!isClinicalEndpoint(endpoint)) return;
   const warnings: string[] = [];
   const isList = options.operation === 'list';
   if (isList && !/[?&](limit|pageSize)=/.test(endpoint)) warnings.push('sem limit/pageSize');
@@ -133,9 +190,11 @@ function auditClinicalQuery(endpoint: string, options: {
   }
 }
 
-async function fetchClinical(endpoint: string, init: RequestInit, audit: Parameters<typeof auditClinicalQuery>[1] = {}) {
+async function fetchClinical(endpoint: string, init: RequestInit, audit: ClinicalQueryAuditOptions = {}) {
   auditClinicalQuery(endpoint, audit);
-  return await fetch(endpoint, init);
+  const response = await fetch(endpoint, init);
+  void logClinicalQueryResult(endpoint, response, audit);
+  return response;
 }
 
 function sortByNewest(rows: any[], fields: string[]): any[] {
@@ -370,7 +429,7 @@ async function tryFetchLatestProtocolRow(
   patientColumn: string,
   patientId: string
 ) {
-  const baseQuery = () => supabase.from(table).select('*').eq(patientColumn, patientId).limit(1);
+  const baseQuery = () => supabase.from(table).select(patientColumn).eq(patientColumn, patientId).limit(1);
   const attempts = [
     () => baseQuery().order('updated_at', { ascending: false }).order('created_at', { ascending: false }),
     () => baseQuery().order('created_at', { ascending: false }),
@@ -677,7 +736,7 @@ export const dataService = {
       const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'patient'),
         credentials: 'include'
-      }, { operation: 'list', table: 'patients', hasExplicitColumns: false, requiresPatientOrSession: false });
+      }, { helperName: 'getPatients', operation: 'list', table: 'patients', hasExplicitColumns: true, requiresPatientOrSession: false });
       if (response.status === 304) {
         const local304 = await getRecordsByType('patient');
         return { success: true, data: local304.map((r) => r.data) };
@@ -1205,7 +1264,7 @@ export const dataService = {
       const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
-      }, { operation: 'detail', table: 'aba_session_live_summaries', hasExplicitColumns: true });
+      }, { helperName: 'getSessionLiveSummary', operation: 'detail', table: 'aba_session_live_summaries', hasExplicitColumns: true });
       if (response.ok) return await response.json();
     } catch (error) {
       console.log('Fetching ABA live summary from local state only...');
@@ -1221,7 +1280,7 @@ export const dataService = {
       const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
-      }, { operation: 'list', table: 'aba_recent_session_events', hasExplicitColumns: true });
+      }, { helperName: 'getRecentSessionEvents', operation: 'list', table: 'aba_recent_session_events', hasExplicitColumns: true });
       if (response.ok) return await response.json();
     } catch (error) {
       console.log('Fetching recent ABA session events from local state only...');
@@ -1236,7 +1295,7 @@ export const dataService = {
       const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
-      }, { operation: 'detail', table: 'aba_patient_aba_summaries', hasExplicitColumns: true });
+      }, { helperName: 'getPatientAbaSummary', operation: 'detail', table: 'aba_patient_aba_summaries', hasExplicitColumns: true });
       if (response.ok) return await response.json();
     } catch (error) {
       console.log('Fetching ABA patient summary from local state only...');
@@ -1251,7 +1310,7 @@ export const dataService = {
       const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
-      }, { operation: 'detail', table: 'aba_session_summaries', hasExplicitColumns: true });
+      }, { helperName: 'getSessionReport', operation: 'detail', table: 'aba_session_summaries', hasExplicitColumns: true });
       if (response.ok) return await response.json();
     } catch (error) {
       console.log('Fetching ABA session report from local state only...');
@@ -1273,7 +1332,7 @@ export const dataService = {
       const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
-      }, { operation: 'list', table: 'aba_sessions', hasExplicitColumns: true });
+      }, { helperName: 'getAbaSessions', operation: 'list', table: 'aba_sessions', hasExplicitColumns: true });
       if (response.ok) {
         const result = await response.json();
         return result;
@@ -1342,7 +1401,7 @@ export const dataService = {
       const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
-      }, { operation: 'list', table: 'aba_trials', hasExplicitColumns: true });
+      }, { helperName: 'getAbaTrials', operation: 'list', table: 'aba_trials', hasExplicitColumns: true });
       if (response.ok) {
         const result = await response.json();
         return result;
@@ -1414,7 +1473,7 @@ export const dataService = {
       const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
-      }, { operation: 'list', table: 'aba_behavior_events', hasExplicitColumns: true });
+      }, { helperName: 'getAbaBehaviorEvents', operation: 'list', table: 'aba_behavior_events', hasExplicitColumns: true });
       if (response.ok) {
         const result = await response.json();
         return result;
@@ -1564,9 +1623,53 @@ export const dataService = {
     const id = String(evaluation?.id || evaluation?.evaluation_id || evaluation?.evaluationId || generateId());
     const data = {
       ...(evaluation || {}),
+      ...buildAbaIntegrityFields(evaluation),
       id,
+      organization_id: evaluation?.organization_id || evaluation?.organizationId || evaluation?.clinic_id || evaluation?.clinicId,
+      organizationId: evaluation?.organization_id || evaluation?.organizationId || evaluation?.clinic_id || evaluation?.clinicId,
       patient_id: evaluation?.patient_id || evaluation?.patientId,
-      evaluated_at: evaluation?.evaluated_at || evaluation?.evaluatedAt || new Date().toISOString()
+      patientId: evaluation?.patient_id || evaluation?.patientId,
+      session_id: evaluation?.session_id || evaluation?.sessionId,
+      sessionId: evaluation?.session_id || evaluation?.sessionId,
+      target_id: evaluation?.target_id || evaluation?.targetId,
+      targetId: evaluation?.target_id || evaluation?.targetId,
+      target_name: evaluation?.target_name || evaluation?.targetName,
+      targetName: evaluation?.target_name || evaluation?.targetName,
+      criteria_id: evaluation?.criteria_id || evaluation?.criteriaId,
+      criteriaId: evaluation?.criteria_id || evaluation?.criteriaId,
+      status: evaluation?.status || evaluation?.statusCode,
+      statusCode: evaluation?.status || evaluation?.statusCode,
+      evaluation_status: evaluation?.evaluation_status || evaluation?.evaluationStatus,
+      evaluationStatus: evaluation?.evaluation_status || evaluation?.evaluationStatus,
+      suggested_phase: evaluation?.suggested_phase || evaluation?.suggestedPhase,
+      suggestedPhase: evaluation?.suggested_phase || evaluation?.suggestedPhase,
+      total_trials: evaluation?.total_trials ?? evaluation?.totalTrials,
+      totalTrials: evaluation?.total_trials ?? evaluation?.totalTrials,
+      independent_trials: evaluation?.independent_trials ?? evaluation?.independentTrials,
+      independentTrials: evaluation?.independent_trials ?? evaluation?.independentTrials,
+      prompted_trials: evaluation?.prompted_trials ?? evaluation?.promptedTrials,
+      promptedTrials: evaluation?.prompted_trials ?? evaluation?.promptedTrials,
+      error_trials: evaluation?.error_trials ?? evaluation?.errorTrials,
+      errorTrials: evaluation?.error_trials ?? evaluation?.errorTrials,
+      accuracy_percent: evaluation?.accuracy_percent ?? evaluation?.accuracyPercent,
+      accuracyPercent: evaluation?.accuracy_percent ?? evaluation?.accuracyPercent,
+      independence_percent: evaluation?.independence_percent ?? evaluation?.independencePercent,
+      independencePercent: evaluation?.independence_percent ?? evaluation?.independencePercent,
+      consecutive_successful_days: evaluation?.consecutive_successful_days ?? evaluation?.consecutiveSuccessfulDays ?? evaluation?.consecutive_successes ?? evaluation?.consecutiveSuccesses,
+      consecutiveSuccessfulDays: evaluation?.consecutive_successful_days ?? evaluation?.consecutiveSuccessfulDays ?? evaluation?.consecutive_successes ?? evaluation?.consecutiveSuccesses,
+      cold_probe_trials_count: evaluation?.cold_probe_trials_count ?? evaluation?.coldProbeTrialsCount,
+      coldProbeTrialsCount: evaluation?.cold_probe_trials_count ?? evaluation?.coldProbeTrialsCount,
+      distinct_therapists_count: evaluation?.distinct_therapists_count ?? evaluation?.distinctTherapistsCount,
+      distinctTherapistsCount: evaluation?.distinct_therapists_count ?? evaluation?.distinctTherapistsCount,
+      first_trial_independent: evaluation?.first_trial_independent ?? evaluation?.firstTrialIndependent,
+      firstTrialIndependent: evaluation?.first_trial_independent ?? evaluation?.firstTrialIndependent,
+      evaluated_at: evaluation?.evaluated_at || evaluation?.evaluatedAt || new Date().toISOString(),
+      evaluatedAt: evaluation?.evaluated_at || evaluation?.evaluatedAt || new Date().toISOString(),
+      therapist_id: evaluation?.therapist_id || evaluation?.therapistId,
+      therapistId: evaluation?.therapist_id || evaluation?.therapistId,
+      source: evaluation?.source || evaluation?.clientSource || ABA_DEFAULT_SOURCE,
+      sync_status: evaluation?.sync_status || evaluation?.syncStatus || 'local',
+      syncStatus: evaluation?.syncStatus || 'local'
     };
     return await saveOfflineFirst(id, data, 'aba', '/api/aba/mastery-evaluations');
   },
@@ -1581,7 +1684,7 @@ export const dataService = {
       const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
-      }, { operation: 'list', table: 'aba_mastery_evaluations', hasExplicitColumns: true });
+      }, { helperName: 'getAbaMasteryEvaluations', operation: 'list', table: 'aba_mastery_evaluations', hasExplicitColumns: true });
       if (response.ok) {
         const result = await response.json();
         return result;

@@ -37,6 +37,7 @@ import {
   resumeIntervalRunState,
   type AbaIntervalCollectionStatus
 } from '../utils/abaIntervalLifecycle';
+import { evaluateTargetMastery, formatAbaMasteryCriterion } from '../utils/abaMasteryEngine';
 
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
 type AbcRequirement = 'REQUIRED' | 'RECOMMENDED' | 'OPTIONAL' | 'DISABLED';
@@ -48,6 +49,10 @@ type SessionRecord = {
   detail: string;
   timestamp: string;
   syncStatus: SyncStatus;
+  targetId?: string | null;
+  targetName?: string | null;
+  programId?: string | null;
+  therapistId?: string | null;
   measurementType?: string;
   startedAt?: string;
   endedAt?: string;
@@ -261,6 +266,79 @@ const normalizeAbcRequirement = (value: any): AbcRequirement => {
   return 'OPTIONAL';
 };
 
+const mapRecentAbaEventToSessionRecord = (event: any): SessionRecord | null => {
+  const tableName = String(event?.tableName || event?.table_name || '').toLowerCase();
+  const kind = String(event?.kind || '').toLowerCase();
+  const isTrial = kind === 'trial' || tableName === 'aba_trials';
+  const isBehavior = kind === 'behavior' || tableName === 'aba_behavior_events';
+  if (!event?.id || (!isTrial && !isBehavior)) return null;
+
+  if (isTrial) {
+    const correct = Boolean(event.correct ?? event.isCorrect);
+    const independent = Boolean(event.independent ?? event.isIndependent);
+    const outcome: SessionRecord['trialOutcome'] = !correct ? 'error' : independent ? 'independent' : 'prompted';
+    const promptLabel = event.prompt_level_name || event.promptLevelName || event.prompt_level_key || event.promptLevelKey;
+    return {
+      id: String(event.id),
+      kind: 'trial',
+      title: String(event.target_name || event.targetName || 'Tentativa'),
+      detail: outcome === 'independent'
+        ? 'independente'
+        : outcome === 'prompted'
+          ? `com ajuda${promptLabel ? ` - ${promptLabel}` : ''}`
+          : 'erro',
+      timestamp: String(event.occurred_at || event.occurredAt || event.created_at || event.createdAt || new Date().toISOString()),
+      syncStatus: normalizeSyncStatus(event.sync_status || event.syncStatus || 'synced'),
+      targetId: event.target_id || event.targetId || null,
+      targetName: event.target_name || event.targetName || null,
+      programId: event.program_id || event.programId || null,
+      therapistId: event.therapist_id || event.therapistId || null,
+      trialOutcome: outcome,
+      collectionType: event.collection_type || event.collectionType,
+      promptLevelKey: event.prompt_level_key || event.promptLevelKey,
+      score: event.response_score ?? event.responseScore ?? event.score ?? null,
+      correct,
+      independent
+    };
+  }
+
+  const measurementType = String(event.measurement_type || event.measurementType || 'frequency');
+  const durationSeconds = event.duration_seconds ?? event.durationSeconds ?? null;
+  const countDelta = event.count_delta ?? event.countDelta ?? null;
+  const detail = measurementType === 'duration'
+    ? durationSeconds
+      ? `duração ${formatSessionDuration(Number(durationSeconds || 0))}`
+      : 'duração em andamento'
+    : measurementType === 'frequency'
+      ? `frequência +${Number(countDelta || 1)}`
+      : getMeasurementLabel(measurementType);
+
+  return {
+    id: String(event.id),
+    kind: 'behavior',
+    title: String(event.behavior_name || event.behaviorName || 'Comportamento'),
+    detail,
+    timestamp: String(event.occurred_at || event.occurredAt || event.started_at || event.startedAt || event.created_at || event.createdAt || new Date().toISOString()),
+    syncStatus: normalizeSyncStatus(event.sync_status || event.syncStatus || 'synced'),
+    measurementType,
+    startedAt: event.started_at || event.startedAt || null,
+    endedAt: event.ended_at || event.endedAt || null,
+    durationSeconds,
+    countDelta,
+    behaviorId: event.behavior_id || event.behaviorId || null,
+    intervalNumber: event.interval_number ?? event.intervalNumber ?? null,
+    intervalIndex: event.interval_index ?? event.intervalIndex ?? null,
+    intervalOccurred: event.interval_occurred ?? event.intervalOccurred ?? event.occurred ?? null,
+    intervalStartedAt: event.interval_started_at || event.intervalStartedAt || null,
+    intervalEndedAt: event.interval_ended_at || event.intervalEndedAt || null,
+    location: event.location,
+    severity: event.severity ?? null,
+    antecedent: event.antecedent,
+    consequence: event.consequence,
+    notes: event.notes
+  };
+};
+
 const isIntervalMeasurement = (measurementType: string) => (
   measurementType === 'partial_interval' ||
   measurementType === 'whole_interval' ||
@@ -271,6 +349,55 @@ const getIntervalInstruction = (measurementType: string) => {
   if (measurementType === 'partial_interval') return 'SIM = ocorreu em qualquer momento do intervalo.';
   if (measurementType === 'whole_interval') return 'SIM = ocorreu durante o intervalo inteiro.';
   return 'SIM = estava ocorrendo exatamente no momento do alerta.';
+};
+
+const masteryNumber = (value: any, fallback: number, min = 0, max = 100000) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+};
+
+const readMasteryValue = (row: any, ...keys: string[]) => {
+  for (const key of keys) {
+    if (row?.[key] !== undefined && row?.[key] !== null) return row[key];
+  }
+  return undefined;
+};
+
+const buildSessionGoalMasteryCriterion = (goal: any) => {
+  const embedded = goal?.mastery_criteria || goal?.masteryCriteria || {};
+  const legacyDays = masteryNumber(
+    readMasteryValue(goal, 'meta_sucessos', 'metaSucessos', 'masteryTarget', 'mastery_target'),
+    masteryNumber(readMasteryValue(embedded, 'min_consecutive_days', 'minConsecutiveDays'), 1, 1),
+    1
+  );
+  return {
+    id: readMasteryValue(embedded, 'id') || readMasteryValue(goal, 'masteryCriteriaId', 'criteriaId') || null,
+    organization_id: readMasteryValue(goal, 'organization_id', 'organizationId', 'clinic_id', 'clinicId') || null,
+    program_id: readMasteryValue(goal, 'program_id', 'programId', 'protocol_id', 'protocolId') || null,
+    target_id: readMasteryValue(goal, 'id', 'target_id', 'targetId') || null,
+    name: readMasteryValue(embedded, 'name') || 'Criterio da meta',
+    min_accuracy_percent: masteryNumber(readMasteryValue(embedded, 'min_accuracy_percent', 'minAccuracyPercent', 'accuracyPercent'), 80, 0, 100),
+    min_independence_percent: masteryNumber(readMasteryValue(embedded, 'min_independence_percent', 'minIndependencePercent', 'independencePercent'), 80, 0, 100),
+    min_trials_per_session: Math.max(1, Math.round(masteryNumber(readMasteryValue(embedded, 'min_trials_per_session', 'minTrialsPerSession'), 1, 1))),
+    min_consecutive_days: Math.max(1, Math.round(legacyDays)),
+    require_first_trial_independent: Boolean(readMasteryValue(embedded, 'require_first_trial_independent', 'requireFirstTrialIndependent')),
+    cold_probe_only: Boolean(readMasteryValue(embedded, 'cold_probe_only', 'coldProbeOnly')),
+    min_distinct_therapists: Math.max(1, Math.round(masteryNumber(readMasteryValue(embedded, 'min_distinct_therapists', 'minDistinctTherapists'), 1, 1))),
+    maintenance_required: Boolean(readMasteryValue(embedded, 'maintenance_required', 'maintenanceRequired')),
+    maintenance_days: readMasteryValue(embedded, 'maintenance_days', 'maintenanceDays') ?? null,
+    is_active: readMasteryValue(embedded, 'is_active', 'isActive') ?? true
+  };
+};
+
+const masteryStatusLabel = (status: string) => {
+  const normalized = String(status || '').toUpperCase();
+  if (normalized === 'READY_FOR_REVIEW') return 'Pronto para revisão do supervisor';
+  if (normalized === 'MET_TODAY') return 'Critério atingido hoje';
+  if (normalized === 'NOT_MET') return 'Critério não atingido';
+  if (normalized === 'MASTERED_APPROVED') return 'Maestria aprovada';
+  if (normalized === 'REGRESSION_RISK') return 'Risco de regressão';
+  return 'Dados insuficientes';
 };
 
 export const SessionMode = ({
@@ -540,6 +667,38 @@ export const SessionMode = ({
       cancelled = true;
     };
   }, [sessionId, sessionCompleted]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadRecentSessionEvents = async () => {
+      if (hydratedSessionStateKey !== sessionStateKey) return;
+      if (!sessionId || sessionId.startsWith('draft-') || sessionCompleted) return;
+      try {
+        const result = await dataService.getRecentSessionEvents(sessionId, 20);
+        if (cancelled || !Array.isArray(result?.data)) return;
+        const recentRecords = result.data
+          .map(mapRecentAbaEventToSessionRecord)
+          .filter(Boolean) as SessionRecord[];
+        if (recentRecords.length === 0) return;
+        setRecords((prev) => {
+          const existingIds = new Set(prev.map((record) => record.id));
+          const next = [
+            ...prev,
+            ...recentRecords.filter((record) => !existingIds.has(record.id))
+          ];
+          return next
+            .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
+            .slice(0, 40);
+        });
+      } catch {
+        // Recent events are an egress-limited convenience read; local session state remains usable.
+      }
+    };
+    void loadRecentSessionEvents();
+    return () => {
+      cancelled = true;
+    };
+  }, [hydratedSessionStateKey, sessionId, sessionCompleted, sessionStateKey]);
 
   useEffect(() => {
     const hasRunningTimer = openDurations.length > 0 || rateWindow || intervalRun;
@@ -901,6 +1060,10 @@ export const SessionMode = ({
       title: goal.name,
       detail: `${collectionLabel} - ${selectedPrompt.label} - ${score}`,
       timestamp,
+      targetId: goal?.id || null,
+      targetName: goal?.name || null,
+      programId: goal?.programId || goal?.program_id || goal?.protocolId || null,
+      therapistId: resolvedTherapistId || null,
       trialOutcome: outcome,
       collectionType,
       promptLevelKey: selectedPrompt.key,
@@ -2088,27 +2251,58 @@ export const SessionMode = ({
   }, [activeSession?.startedAt, patient?.name, patientId, records, resolvedTherapistId, sessionClosureIssues, sessionEndPreviewAt, sessionId, sessionNote]);
 
   const teachingMasteryRows = useMemo(() => sessionGoals.map((goal: any) => {
-    const goalTrials = records.filter((record) => record.kind === 'trial' && record.title === goal.name);
-    const correctTrials = goalTrials.filter((record) => record.correct || Number(record.score || 0) > 0).length;
-    const independentTrials = goalTrials.filter((record) => record.independent || record.trialOutcome === 'independent').length;
-    const masteryTarget = Number(goal?.meta_sucessos ?? goal?.metaSucessos ?? goal?.masteryTarget ?? goal?.mastery_target) || 0;
-    const performanceText = `${correctTrials}/${goalTrials.length} acertos`;
-    const contributes = correctTrials > 0;
-    const status = goalTrials.length === 0
-      ? 'dados insuficientes'
-      : masteryTarget > 0 && correctTrials >= masteryTarget
-        ? 'critério atingido hoje'
-        : 'critério não atingido';
+    const goalId = String(goal?.id || goal?.target_id || goal?.targetId || '').trim();
+    const goalName = String(goal?.name || goal?.target_name || goal?.targetName || 'Meta').trim();
+    const goalTrials = records.filter((record) => {
+      if (record.kind !== 'trial') return false;
+      const recordTargetId = String(record.targetId || '').trim();
+      if (goalId && recordTargetId && recordTargetId === goalId) return true;
+      return String(record.title || record.targetName || '').trim() === goalName;
+    });
+    const criterion = buildSessionGoalMasteryCriterion(goal);
+    const evaluation = evaluateTargetMastery({
+      organizationId: resolvedClinicId || 'local',
+      patientId,
+      targetId: goalId || goalName,
+      targetName: goalName,
+      sessionId,
+      criteria: criterion,
+      trials: goalTrials.map((record) => ({
+        ...record,
+        target_id: record.targetId || goalId || null,
+        target_name: record.targetName || record.title,
+        program_id: record.programId || goal?.programId || goal?.program_id || goal?.protocolId || null,
+        response_score: record.score,
+        correct: Boolean(record.correct),
+        independent: Boolean(record.independent),
+        collection_type: record.collectionType,
+        prompt_level_key: record.promptLevelKey,
+        trial_outcome: record.trialOutcome,
+        therapist_id: record.therapistId || resolvedTherapistId || null,
+        occurred_at: record.timestamp
+      })),
+      previousEvaluations: [],
+      evaluatedAt: sessionEndPreviewAt || new Date().toISOString()
+    });
     return {
-      id: goal.id,
-      name: goal.name,
-      criterion: masteryTarget > 0 ? `${masteryTarget} acerto(s) configurado(s)` : 'critério não configurado',
-      performanceText,
-      contributes,
-      status,
-      independentTrials
+      id: goal.id || goalId || goalName,
+      targetId: goalId || null,
+      name: goalName,
+      criterion: evaluation.criterionLabel || formatAbaMasteryCriterion(criterion as any),
+      performanceText: evaluation.performanceText,
+      contributes: evaluation.status === 'MET_TODAY' || evaluation.status === 'READY_FOR_REVIEW',
+      status: masteryStatusLabel(evaluation.status),
+      statusCode: evaluation.status,
+      totalTrials: evaluation.totalTrials,
+      independentTrials: evaluation.independentTrials,
+      promptedTrials: evaluation.promptedTrials,
+      errorTrials: evaluation.errorTrials,
+      accuracyPercent: evaluation.accuracyPercent,
+      independencePercent: evaluation.independencePercent,
+      consecutiveSuccessfulDays: evaluation.consecutiveSuccessfulDays,
+      reasons: evaluation.reasons
     };
-  }), [records, sessionGoals]);
+  }), [patientId, records, resolvedClinicId, resolvedTherapistId, sessionEndPreviewAt, sessionGoals, sessionId]);
 
   const intervalSummaryTotals = useMemo(() => {
     const total = Math.max(0, Number(intervalSummary?.totalIntervals || 0));
@@ -3776,16 +3970,8 @@ export const SessionMode = ({
 
           <div className="space-y-5">
             {sessionGoals.map((goal: any) => {
-              const masteryTarget = Number(goal?.meta_sucessos ?? goal?.metaSucessos ?? goal?.masteryTarget ?? goal?.mastery_target) || 5;
-              const skillHistory = (patient.history || [])
-                .filter((h: any) => h.title === goal.name && h.type === 'task')
-                .sort((a: any, b: any) => new Date(b.created_at || b.date || 0).getTime() - new Date(a.created_at || a.date || 0).getTime());
-              let masteryCount = 0;
-              for (const h of skillHistory) {
-                if (h.score === 1) masteryCount += 1;
-                else break;
-              }
               const goalKey = String(goal?.id || goal?.name || 'goal');
+              const masteryRow = teachingMasteryRows.find((row) => String(row.id || row.targetId || row.name) === goalKey || row.name === goal.name);
               const promptedRenderPrompt = resolveAbaPromptLevel({ promptLevelKey });
               const independentTrialLockKey = `trial:${goalKey}:independent:independent`;
               const promptedTrialLockKey = `trial:${goalKey}:prompted:${promptedRenderPrompt.key}`;
@@ -3802,7 +3988,11 @@ export const SessionMode = ({
                     {patient.age <= 12 && (
                       <div className="text-left sm:text-right">
                         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Criterio de maestria</p>
-                        <p className="text-lg font-bold text-[#7a32fc]">{Math.min(masteryCount, masteryTarget)}/{masteryTarget} dias</p>
+                        <p className="max-w-[220px] text-xs font-bold text-[#7a32fc] sm:ml-auto">{masteryRow?.criterion || 'Criterio nao configurado'}</p>
+                        <p className="mt-1 text-[11px] font-semibold text-gray-500">Hoje: {masteryRow?.independencePercent ?? 0}% independencia</p>
+                        <span className={`mt-2 inline-flex rounded-full px-2 py-1 text-[9px] font-bold uppercase tracking-widest ${masteryRow?.statusCode === 'READY_FOR_REVIEW' ? 'bg-emerald-50 text-emerald-600' : masteryRow?.statusCode === 'MET_TODAY' ? 'bg-blue-50 text-blue-600' : masteryRow?.statusCode === 'INSUFFICIENT_DATA' ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-500'}`}>
+                          {masteryRow?.status || 'Dados insuficientes'}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -4259,8 +4449,13 @@ export const SessionMode = ({
                     <p className="font-bold text-gray-900">{row.name}</p>
                     <p className="text-xs text-gray-500">critério: {row.criterion}</p>
                     <p className="text-xs text-gray-500">desempenho: {row.performanceText}</p>
+                    <p className="text-xs text-gray-500">tentativas: {row.totalTrials ?? 0} - acurácia {row.accuracyPercent ?? 0}% - independência {row.independencePercent ?? 0}%</p>
+                    <p className="text-xs text-gray-500">dias consecutivos: {row.consecutiveSuccessfulDays ?? 0}</p>
                     <p className="text-xs text-gray-500">contribuiu para o critério: {row.contributes ? 'sim' : 'não'}</p>
                     <p className="text-xs font-bold text-[#7a32fc]">{row.status}</p>
+                    {Array.isArray(row.reasons) && row.reasons.length > 0 && (
+                      <p className="mt-1 text-xs text-gray-500">{row.reasons.map((reason: any) => reason?.message || reason).filter(Boolean).join(' ')}</p>
+                    )}
                   </div>
                 ))}
               </div>
