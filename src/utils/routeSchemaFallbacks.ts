@@ -6,6 +6,49 @@ type LoggerLike = Pick<Console, 'warn'>;
 
 export type PatientListRole = 'coordinator' | 'receptionist' | 'therapist' | 'admin' | 'owner' | string;
 
+export const PROFILE_SELECT_COLUMNS = [
+  'id',
+  'email',
+  'name',
+  'role',
+  'clinic_id',
+  'subscription_status',
+  'subscription_id',
+  'plan_name',
+  'plan_price',
+  'type',
+  'status',
+  'phone',
+  'age',
+  'cpf',
+  'crp',
+  'council',
+  'council_number',
+  'specialties',
+  'mini_curriculum',
+  'profile_picture',
+  'profile_picture_path',
+  'signature_url',
+  'signature_data_url',
+  'two_factor_enabled',
+  'two_factor_secret',
+  'email_verified_at',
+  'phone_verified_at',
+  'first_login_completed',
+  'created_at',
+  'updated_at'
+];
+
+export const PROFILE_LEGACY_SELECT_COLUMNS = [
+  'id',
+  'email',
+  'name',
+  'role',
+  'clinic_id',
+  'status',
+  'created_at'
+];
+
 export const INVITATION_SELECT_COLUMNS = [
   'id',
   'email',
@@ -62,10 +105,109 @@ export const PATIENT_LIST_LEGACY_SELECT_COLUMNS = [
   'updated_at'
 ];
 
+export const NOTE_SELECT_COLUMNS = [
+  'id',
+  'patient_id',
+  'patient_email',
+  'type',
+  'visibility',
+  'subject',
+  'content',
+  'note',
+  'assigned_task_id',
+  'source',
+  'created_by',
+  'created_at',
+  'updated_at',
+  'is_active',
+  'deleted_at'
+];
+
+export const NOTE_LEGACY_SELECT_COLUMNS = [
+  'id',
+  'patient_id',
+  'patient_email',
+  'type',
+  'subject',
+  'content',
+  'note',
+  'created_by',
+  'created_at'
+];
+
+export const PROFESSIONAL_PROFILE_SELECT_COLUMNS = [
+  'user_id',
+  'full_name',
+  'birth_date',
+  'gender',
+  'country_code',
+  'phone',
+  'profile_photo_url',
+  'clinic_name',
+  'clinic_logo_url',
+  'clinic_phone',
+  'specialty',
+  'council',
+  'council_number',
+  'signature_data_url',
+  'requires_onboarding',
+  'onboarding_completed_at',
+  'address',
+  'metadata',
+  'created_at',
+  'updated_at'
+];
+
+export const PROFESSIONAL_PROFILE_LEGACY_SELECT_COLUMNS = [
+  'user_id',
+  'full_name',
+  'phone',
+  'profile_photo_url',
+  'council',
+  'council_number',
+  'signature_data_url',
+  'metadata'
+];
+
+export const PROFILE_SELECT = PROFILE_SELECT_COLUMNS.join(',');
+export const PROFILE_LEGACY_SELECT = PROFILE_LEGACY_SELECT_COLUMNS.join(',');
 export const INVITATION_SELECT = INVITATION_SELECT_COLUMNS.join(',');
 export const INVITATION_LEGACY_SELECT = INVITATION_LEGACY_SELECT_COLUMNS.join(',');
 export const PATIENT_LIST_SELECT = PATIENT_LIST_SELECT_COLUMNS.join(',');
 export const PATIENT_LIST_LEGACY_SELECT = PATIENT_LIST_LEGACY_SELECT_COLUMNS.join(',');
+export const NOTE_SELECT = NOTE_SELECT_COLUMNS.join(',');
+export const NOTE_LEGACY_SELECT = NOTE_LEGACY_SELECT_COLUMNS.join(',');
+export const PROFESSIONAL_PROFILE_SELECT = PROFESSIONAL_PROFILE_SELECT_COLUMNS.join(',');
+export const PROFESSIONAL_PROFILE_LEGACY_SELECT = PROFESSIONAL_PROFILE_LEGACY_SELECT_COLUMNS.join(',');
+
+const PROFILE_OPTIONAL_COLUMNS = new Set([
+  'clinic_id',
+  'subscription_status',
+  'subscription_id',
+  'plan_name',
+  'plan_price',
+  'type',
+  'status',
+  'phone',
+  'age',
+  'cpf',
+  'crp',
+  'council',
+  'council_number',
+  'specialties',
+  'mini_curriculum',
+  'profile_picture',
+  'profile_picture_path',
+  'signature_url',
+  'signature_data_url',
+  'two_factor_enabled',
+  'two_factor_secret',
+  'email_verified_at',
+  'phone_verified_at',
+  'first_login_completed',
+  'created_at',
+  'updated_at'
+]);
 
 const INVITATION_OPTIONAL_COLUMNS = new Set([
   'clinic_name',
@@ -83,6 +225,44 @@ const PATIENT_LIST_OPTIONAL_COLUMNS = new Set([
   'professional_id',
   'is_active',
   'deleted_at'
+]);
+
+const NOTE_OPTIONAL_COLUMNS = new Set([
+  'visibility',
+  'assigned_task_id',
+  'source',
+  'updated_at',
+  'is_active',
+  'deleted_at',
+  'pinned',
+  'category',
+  'note_type',
+  'author_name',
+  'created_by_name',
+  'organization_id',
+  'clinic_id'
+]);
+
+const PROFESSIONAL_PROFILE_OPTIONAL_COLUMNS = new Set([
+  'full_name',
+  'birth_date',
+  'gender',
+  'country_code',
+  'phone',
+  'profile_photo_url',
+  'clinic_name',
+  'clinic_logo_url',
+  'clinic_phone',
+  'specialty',
+  'council',
+  'council_number',
+  'signature_data_url',
+  'requires_onboarding',
+  'onboarding_completed_at',
+  'address',
+  'metadata',
+  'created_at',
+  'updated_at'
 ]);
 
 function cleanString(value: unknown, maxLength = 1000): string {
@@ -111,6 +291,16 @@ export function extractMissingColumnNameFromSupabaseError(error: any): string | 
   return null;
 }
 
+function isMissingRelationError(error: any): boolean {
+  const code = cleanString(error?.code, 20).toUpperCase();
+  const message = cleanString(error?.message || error?.details || error?.hint || error, 1000).toLowerCase();
+  return (
+    code === '42P01' ||
+    (message.includes('relation') && message.includes('does not exist')) ||
+    (message.includes('could not find') && message.includes('relationship') && message.includes('schema cache'))
+  );
+}
+
 function findMentionedColumn(error: any, columns: Set<string>): string | null {
   const message = cleanString(error?.message || error?.details || error?.hint || error, 1000).toLowerCase();
   if (!message) return null;
@@ -133,6 +323,233 @@ function warnSchemaFallback(logger: LoggerLike | undefined, params: {
     missingColumn: params.missingColumn,
     nextSelect: params.nextSelect
   });
+}
+
+export async function fetchProfileWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  userId: string | null;
+  logger?: LoggerLike;
+}) {
+  let columns = [...PROFILE_SELECT_COLUMNS];
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const result = await params.supabase
+      .from('users')
+      .select(joinColumns(columns))
+      .eq('id', cleanString(params.userId, 120))
+      .maybeSingle();
+
+    if (!result.error) {
+      return {
+        data: result.data || null,
+        error: null,
+        select: joinColumns(columns)
+      };
+    }
+
+    lastError = result.error;
+    const missingColumn =
+      extractMissingColumnNameFromSupabaseError(result.error) ||
+      findMentionedColumn(result.error, PROFILE_OPTIONAL_COLUMNS);
+    if (!missingColumn || !PROFILE_OPTIONAL_COLUMNS.has(missingColumn) || !columns.includes(missingColumn)) break;
+
+    columns = columns.filter((column) => column !== missingColumn);
+    warnSchemaFallback(params.logger, {
+      route: '/api/profile/:userId',
+      table: 'users',
+      missingColumn,
+      nextSelect: joinColumns(columns)
+    });
+  }
+
+  return { data: null, error: lastError, select: joinColumns(columns) };
+}
+
+export async function fetchProfessionalProfileWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  userId: string | null;
+  logger?: LoggerLike;
+}) {
+  let columns = [...PROFESSIONAL_PROFILE_SELECT_COLUMNS];
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const result = await params.supabase
+      .from('professional_profiles')
+      .select(joinColumns(columns))
+      .eq('user_id', cleanString(params.userId, 120))
+      .maybeSingle();
+
+    if (!result.error) {
+      return {
+        data: result.data || null,
+        error: null,
+        select: joinColumns(columns)
+      };
+    }
+
+    if (isMissingRelationError(result.error)) {
+      warnSchemaFallback(params.logger, {
+        route: '/api/profile/:userId',
+        table: 'professional_profiles',
+        missingColumn: 'relation',
+        nextSelect: 'null'
+      });
+      return { data: null, error: null, select: joinColumns(columns) };
+    }
+
+    lastError = result.error;
+    const missingColumn =
+      extractMissingColumnNameFromSupabaseError(result.error) ||
+      findMentionedColumn(result.error, PROFESSIONAL_PROFILE_OPTIONAL_COLUMNS);
+    if (
+      !missingColumn ||
+      !PROFESSIONAL_PROFILE_OPTIONAL_COLUMNS.has(missingColumn) ||
+      !columns.includes(missingColumn)
+    ) {
+      break;
+    }
+
+    columns = columns.filter((column) => column !== missingColumn);
+    warnSchemaFallback(params.logger, {
+      route: '/api/profile/:userId',
+      table: 'professional_profiles',
+      missingColumn,
+      nextSelect: joinColumns(columns)
+    });
+  }
+
+  return { data: null, error: lastError, select: joinColumns(columns) };
+}
+
+export async function fetchPatientEmailForNotesWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  patientId: string | null;
+  logger?: LoggerLike;
+}) {
+  let filterIsActive = true;
+  let filterDeletedAt = true;
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    let query = params.supabase
+      .from('patients')
+      .select('email')
+      .eq('id', cleanString(params.patientId, 120));
+
+    if (filterIsActive) query = query.eq('is_active', true);
+    if (filterDeletedAt) query = query.is('deleted_at', null);
+
+    const result = await query.maybeSingle();
+    if (!result.error) {
+      return { data: result.data || null, error: null };
+    }
+
+    lastError = result.error;
+    const missingColumn = extractMissingColumnNameFromSupabaseError(result.error);
+    if (missingColumn === 'is_active' && filterIsActive) {
+      filterIsActive = false;
+    } else if (missingColumn === 'deleted_at' && filterDeletedAt) {
+      filterDeletedAt = false;
+    } else {
+      break;
+    }
+
+    warnSchemaFallback(params.logger, {
+      route: '/api/notes/:patientId',
+      table: 'patients',
+      missingColumn,
+      nextSelect: 'email'
+    });
+  }
+
+  return { data: null, error: lastError };
+}
+
+function noteIsReadableWithoutVisibility(note: any): boolean {
+  const visibility = cleanString(note?.visibility, 40).toLowerCase();
+  const legacyType = cleanString(note?.type, 40).toLowerCase();
+  return ['patient', 'shared', 'family', 'shared_patient'].includes(visibility) ||
+    ['patient', 'shared', 'family', 'shared_patient'].includes(legacyType);
+}
+
+export async function fetchNotesWithSchemaFallback(params: {
+  supabase: SupabaseLike;
+  patientId?: string | null;
+  patientEmail?: string | null;
+  excludePatientId?: string | null;
+  role: string;
+  limit: number;
+  logger?: LoggerLike;
+}) {
+  let columns = [...NOTE_SELECT_COLUMNS];
+  let filterIsActive = true;
+  let filterDeletedAt = true;
+  let filterVisibility = cleanString(params.role, 40).toLowerCase() === 'patient';
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    let query = params.supabase.from('notes').select(joinColumns(columns));
+    if (params.patientId) query = query.eq('patient_id', cleanString(params.patientId, 120));
+    if (params.patientEmail) query = query.eq('patient_email', cleanString(params.patientEmail, 320).toLowerCase());
+    if (params.excludePatientId) query = query.neq('patient_id', cleanString(params.excludePatientId, 120));
+    if (filterIsActive) query = query.eq('is_active', true);
+    if (filterDeletedAt) query = query.is('deleted_at', null);
+    if (filterVisibility && columns.includes('visibility')) {
+      query = query.in('visibility', ['patient', 'shared', 'family', 'shared_patient']);
+    }
+
+    const result = await query
+      .order('created_at', { ascending: false })
+      .limit(params.limit);
+
+    if (!result.error) {
+      const rows = Array.isArray(result.data) ? result.data : [];
+      return {
+        data: filterVisibility && !columns.includes('visibility')
+          ? rows.filter(noteIsReadableWithoutVisibility)
+          : rows,
+        error: null,
+        select: joinColumns(columns)
+      };
+    }
+
+    lastError = result.error;
+    const missingColumn =
+      extractMissingColumnNameFromSupabaseError(result.error) ||
+      findMentionedColumn(result.error, NOTE_OPTIONAL_COLUMNS);
+    if (!missingColumn) break;
+
+    let handled = false;
+    if (missingColumn === 'visibility') {
+      filterVisibility = false;
+      columns = columns.filter((column) => column !== 'visibility');
+      handled = true;
+    } else if (missingColumn === 'is_active') {
+      filterIsActive = false;
+      columns = columns.filter((column) => column !== 'is_active');
+      handled = true;
+    } else if (missingColumn === 'deleted_at') {
+      filterDeletedAt = false;
+      columns = columns.filter((column) => column !== 'deleted_at');
+      handled = true;
+    } else if (NOTE_OPTIONAL_COLUMNS.has(missingColumn) && columns.includes(missingColumn)) {
+      columns = columns.filter((column) => column !== missingColumn);
+      handled = true;
+    }
+
+    if (!handled) break;
+
+    warnSchemaFallback(params.logger, {
+      route: '/api/notes/:patientId',
+      table: 'notes',
+      missingColumn,
+      nextSelect: joinColumns(columns)
+    });
+  }
+
+  return { data: null, error: lastError, select: joinColumns(columns) };
 }
 
 export async function fetchPatientsWithSchemaFallback(params: {

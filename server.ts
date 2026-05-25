@@ -44,10 +44,18 @@ import {
 } from './src/utils/abaClinicalCharts';
 import {
   INVITATION_SELECT,
+  NOTE_LEGACY_SELECT,
+  NOTE_SELECT,
   PATIENT_LIST_SELECT,
+  PROFILE_SELECT as USER_PROFILE_SELECT,
+  PROFESSIONAL_PROFILE_SELECT,
+  fetchNotesWithSchemaFallback,
+  fetchPatientEmailForNotesWithSchemaFallback,
   fetchClinicInvitationsWithSchemaFallback,
   fetchClinicMembershipHistoryWithSchemaFallback,
-  fetchPatientsWithSchemaFallback
+  fetchPatientsWithSchemaFallback,
+  fetchProfessionalProfileWithSchemaFallback,
+  fetchProfileWithSchemaFallback
 } from './src/utils/routeSchemaFallbacks';
 
 if (process.env.NODE_ENV !== 'production') {
@@ -910,6 +918,17 @@ function routeDbErrorPayload(error: any) {
 function sendRouteDbError(res: any, route: string, error: any, context: Record<string, any> = {}) {
   logRouteDbError(route, error, context);
   return res.status(500).json(routeDbErrorPayload(error));
+}
+
+function requestIdForLogs(req: any): string | null {
+  return sanitizeString(
+    req?.headers?.['x-request-id'] ||
+      req?.headers?.['x-railway-request-id'] ||
+      req?.headers?.['x-correlation-id'] ||
+      req?.headers?.['cf-ray'] ||
+      req?.id,
+    160
+  ) || null;
 }
 
 const OFFICIAL_FROM_CONTACT = 'Verto <contato@appverto.com.br>';
@@ -2149,39 +2168,6 @@ const OTP_CHALLENGE_SELECT = [
   'created_at'
 ].join(',');
 
-const USER_PROFILE_SELECT = [
-  'id',
-  'email',
-  'name',
-  'role',
-  'clinic_id',
-  'subscription_status',
-  'subscription_id',
-  'plan_name',
-  'plan_price',
-  'type',
-  'status',
-  'phone',
-  'age',
-  'cpf',
-  'crp',
-  'council',
-  'council_number',
-  'specialties',
-  'mini_curriculum',
-  'profile_picture',
-  'profile_picture_path',
-  'signature_url',
-  'signature_data_url',
-  'two_factor_enabled',
-  'two_factor_secret',
-  'email_verified_at',
-  'phone_verified_at',
-  'first_login_completed',
-  'created_at',
-  'updated_at'
-].join(',');
-
 const PATIENT_ANAMNESIS_SELECT = [
   'id',
   'patient_id',
@@ -2226,39 +2212,6 @@ const APPOINTMENT_SELECT = [
   'source_payload',
   'created_at',
   'updated_at'
-].join(',');
-
-const NOTE_SELECT = [
-  'id',
-  'patient_id',
-  'patient_email',
-  'type',
-  'visibility',
-  'subject',
-  'content',
-  'note',
-  'assigned_task_id',
-  'source',
-  'created_by',
-  'created_at',
-  'updated_at',
-  'is_active',
-  'deleted_at'
-].join(',');
-
-const NOTE_LEGACY_SELECT = [
-  'id',
-  'patient_id',
-  'patient_email',
-  'type',
-  'subject',
-  'content',
-  'note',
-  'created_by',
-  'created_at',
-  'updated_at',
-  'is_active',
-  'deleted_at'
 ].join(',');
 
 const HISTORY_SELECT = [
@@ -2368,29 +2321,6 @@ const ACTIVITY_LOG_SELECT = [
   'created_at',
   'updated_at',
   'deleted_at'
-].join(',');
-
-const PROFESSIONAL_PROFILE_SELECT = [
-  'user_id',
-  'full_name',
-  'birth_date',
-  'gender',
-  'country_code',
-  'phone',
-  'profile_photo_url',
-  'clinic_name',
-  'clinic_logo_url',
-  'clinic_phone',
-  'specialty',
-  'council',
-  'council_number',
-  'signature_data_url',
-  'requires_onboarding',
-  'onboarding_completed_at',
-  'address',
-  'metadata',
-  'created_at',
-  'updated_at'
 ].join(',');
 
 const PAYMENT_SELECT = [
@@ -11319,31 +11249,15 @@ async function startServer() {
     limit?: number;
   }) => {
     const limit = parseBoundedListLimit(params.limit, 20, 50);
-    let query = supabase.from('notes').select(NOTE_SELECT).eq('is_active', true).is('deleted_at', null);
-    if (params.patientId) query = query.eq('patient_id', params.patientId);
-    if (params.patientEmail) query = query.eq('patient_email', params.patientEmail);
-    if (params.excludePatientId) query = query.neq('patient_id', params.excludePatientId);
-
-    const needsPatientVisibilityFilter = params.role === 'patient';
-    if (needsPatientVisibilityFilter) {
-      query = query.in('visibility', ['patient', 'shared', 'family', 'shared_patient']);
-    }
-
-    let result = await query.order('created_at', { ascending: false }).limit(limit);
-    if (!result.error) return { data: result.data || [], error: null };
-
-    if (needsPatientVisibilityFilter && isMissingColumnError(result.error, 'visibility')) {
-      let fallbackQuery = supabase.from('notes').select(NOTE_LEGACY_SELECT).eq('is_active', true).is('deleted_at', null);
-      if (params.patientId) fallbackQuery = fallbackQuery.eq('patient_id', params.patientId);
-      if (params.patientEmail) fallbackQuery = fallbackQuery.eq('patient_email', params.patientEmail);
-      if (params.excludePatientId) fallbackQuery = fallbackQuery.neq('patient_id', params.excludePatientId);
-      result = await fallbackQuery.order('created_at', { ascending: false }).limit(limit);
-      if (result.error) return { data: null, error: result.error };
-      const filtered = (result.data || []).filter((note: any) => noteIsReadableByPatient(note));
-      return { data: filtered, error: null };
-    }
-
-    return { data: null, error: result.error };
+    return fetchNotesWithSchemaFallback({
+      supabase,
+      patientId: params.patientId,
+      patientEmail: params.patientEmail,
+      excludePatientId: params.excludePatientId,
+      role: params.role,
+      limit,
+      logger: console
+    });
   };
 
   const upsertNoteWithSchemaFallback = async (basePayload: Record<string, any>) => {
@@ -11467,13 +11381,13 @@ async function startServer() {
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const role = sanitizeString((req as any).session?.user?.role, 40).toLowerCase();
       const limit = parseBoundedListLimit((req as any).query?.limit, 20, 50);
-      const { data: patientRow } = await supabase
-        .from('patients')
-        .select('email')
-        .eq('id', patientId)
-        .eq('is_active', true)
-        .is('deleted_at', null)
-        .maybeSingle();
+      const patientEmailResult = await fetchPatientEmailForNotesWithSchemaFallback({
+        supabase,
+        patientId,
+        logger: console
+      });
+      if (patientEmailResult.error) throw patientEmailResult.error;
+      const patientRow = patientEmailResult.data;
       const patientEmail = sanitizeEmail(patientRow?.email);
 
       const notesByIdResult = await fetchNotesWithRoleFilter({
@@ -11504,8 +11418,13 @@ async function startServer() {
         .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
         .slice(0, limit);
       res.json({ success: true, data: deduped });
-    } catch (error) {
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/notes/:patientId [GET]', error, {
+        patientId: sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120),
+        userId: sanitizeString((req as any).session?.user?.id, 120),
+        limit: parseBoundedListLimit((req as any).query?.limit, 20, 50),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -12971,18 +12890,25 @@ async function startServer() {
         return res.status(403).json({ error: 'Acesso negado' });
       }
 
-      const { data, error } = await supabase
-        .from('users')
-        .select(USER_PROFILE_SELECT)
-        .eq('id', req.params.userId)
-        .single();
-      
-      if (error) throw error;
-      const { data: profileExtra } = await supabase
-        .from('professional_profiles')
-        .select(PROFESSIONAL_PROFILE_SELECT)
-        .eq('user_id', req.params.userId)
-        .maybeSingle();
+      const profileResult = await fetchProfileWithSchemaFallback({
+        supabase,
+        userId: req.params.userId,
+        logger: console
+      });
+      if (profileResult.error) throw profileResult.error;
+      if (!profileResult.data?.id) {
+        return res.status(404).json({ success: false, error: 'Perfil não encontrado.' });
+      }
+
+      const professionalProfileResult = await fetchProfessionalProfileWithSchemaFallback({
+        supabase,
+        userId: req.params.userId,
+        logger: console
+      });
+      if (professionalProfileResult.error) throw professionalProfileResult.error;
+
+      const data = profileResult.data;
+      const profileExtra = professionalProfileResult.data;
       const profileOut = profileExtra ? { ...profileExtra } : null;
       if (profileOut) {
         profileOut.crp = resolveStoredCrp(profileOut);
@@ -13013,8 +12939,12 @@ async function startServer() {
         };
       }
       res.json({ success: true, data: { ...data, professional_profile: profileOut } });
-    } catch (error) {
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/profile/:userId [GET]', error, {
+        userId: sanitizeString(req.params?.userId, 120),
+        requesterId: sanitizeString(req.session?.user?.id, 120),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
