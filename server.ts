@@ -38,6 +38,10 @@ import {
 } from './src/services/emailTemplates';
 import { resolveAbaPromptLevel } from './src/utils/abaPromptLevels';
 import { evaluateMaintenanceStatus, evaluateTargetMastery, formatAbaMasteryCriterion } from './src/utils/abaMasteryEngine';
+import {
+  buildSessionMetricSnapshotsFromSummaries,
+  isAbaSignificantChange
+} from './src/utils/abaClinicalCharts';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
@@ -14974,6 +14978,87 @@ async function startServer() {
     'created_at',
     'updated_at'
   ].join(',');
+  const ABA_TARGET_CHART_SUMMARY_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'patient_id',
+    'target_id',
+    'target_key',
+    'target_name',
+    'session_id',
+    'attempts_today',
+    'correct_today',
+    'independent_today',
+    'prompted_today',
+    'errors_today',
+    'accuracy_percent',
+    'independence_percent',
+    'mastery_progress_label',
+    'created_at',
+    'updated_at'
+  ].join(',');
+  const ABA_BEHAVIOR_DAILY_CHART_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'patient_id',
+    'behavior_id',
+    'behavior_key',
+    'behavior_name',
+    'date',
+    'frequency_count',
+    'duration_episode_count',
+    'duration_total_seconds',
+    'duration_avg_seconds',
+    'duration_max_seconds',
+    'interval_collections_count',
+    'interval_total_count',
+    'interval_yes_count',
+    'interval_no_count',
+    'interval_occurrence_percent',
+    'created_at',
+    'updated_at'
+  ].join(',');
+  const ABA_SESSION_METRIC_SNAPSHOT_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'patient_id',
+    'session_id',
+    'target_id',
+    'behavior_id',
+    'metric_type',
+    'metric_label',
+    'metric_value',
+    'previous_value',
+    'delta_value',
+    'delta_percent',
+    'trend_direction',
+    'change_status',
+    'status_label',
+    'metric_direction',
+    'changed_at',
+    'source_summary_id',
+    'created_at'
+  ].join(',');
+  const ABA_GRAPH_ANNOTATION_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'patient_id',
+    'session_id',
+    'target_id',
+    'behavior_id',
+    'chart_type',
+    'annotation_type',
+    'date',
+    'value',
+    'label',
+    'description',
+    'created_by',
+    'created_at'
+  ].join(',');
   const parseAbaRecordListLimit = (value: unknown) => parseBoundedListLimit(value, ABA_RECORD_LIST_FALLBACK_LIMIT, ABA_RECORD_LIST_MAX_LIMIT);
   const parseAbaPageParams = (query: any) => {
     const pageSize = parseAbaRecordListLimit(query?.pageSize ?? query?.limit);
@@ -14981,6 +15066,271 @@ async function startServer() {
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
     return { page, pageSize, from, to };
+  };
+  const ABA_CHART_FALLBACK_DAYS = 30;
+  const ABA_CHART_MAX_POINTS = 180;
+  const parseAbaChartParams = (query: any) => {
+    const periodDays = Math.max(1, Math.min(365, Math.round(asSafeNumber(query?.days || query?.periodDays, ABA_CHART_FALLBACK_DAYS, 365) || ABA_CHART_FALLBACK_DAYS)));
+    const now = new Date();
+    const fallbackFrom = new Date(now);
+    fallbackFrom.setDate(now.getDate() - periodDays);
+    const dateFrom = sanitizeDate(query?.dateFrom) || fallbackFrom.toISOString().slice(0, 10);
+    const dateTo = sanitizeDate(query?.dateTo) || now.toISOString().slice(0, 10);
+    const limit = Math.max(1, Math.min(ABA_CHART_MAX_POINTS, Math.round(asSafeNumber(query?.limit || query?.pageSize, 90, ABA_CHART_MAX_POINTS) || 90)));
+    return {
+      dateFrom,
+      dateTo,
+      dateFromIso: `${dateFrom}T00:00:00.000Z`,
+      dateToIso: `${dateTo}T23:59:59.999Z`,
+      limit,
+      targetId: sanitizeString(query?.targetId || query?.target_id, 180),
+      behaviorId: sanitizeString(query?.behaviorId || query?.behavior_id, 180),
+      metricType: sanitizeString(query?.metricType || query?.metric_type, 80).toUpperCase(),
+      significantOnly: String(query?.significantOnly || query?.significant_only || '').toLowerCase() === 'true'
+    };
+  };
+
+  const applyAbaChartTenantScope = (query: any, user: any, clinicId: string, organizationId: string) => {
+    let scoped = query;
+    if (organizationId) scoped = scoped.eq('organization_id', organizationId);
+    if (!hasGlobalClinicAccess(user) && clinicId) scoped = scoped.eq('clinic_id', clinicId);
+    return scoped;
+  };
+
+  const normalizeAbaSnapshotPoint = (row: any) => ({
+    id: row?.id,
+    sessionId: row?.session_id,
+    targetId: row?.target_id,
+    behaviorId: row?.behavior_id,
+    metricType: row?.metric_type,
+    metricLabel: row?.metric_label,
+    value: Number(row?.metric_value ?? 0),
+    previousValue: row?.previous_value === null || row?.previous_value === undefined ? null : Number(row.previous_value),
+    deltaValue: row?.delta_value === null || row?.delta_value === undefined ? null : Number(row.delta_value),
+    deltaPercent: row?.delta_percent === null || row?.delta_percent === undefined ? null : Number(row.delta_percent),
+    trendDirection: row?.trend_direction,
+    changeStatus: row?.change_status,
+    statusLabel: row?.status_label,
+    metricDirection: row?.metric_direction,
+    changedAt: row?.changed_at,
+    sourceSummaryId: row?.source_summary_id
+  });
+
+  const buildAbaChartInsight = (row: any) => {
+    const point = normalizeAbaSnapshotPoint(row);
+    const label = sanitizeTextField(point.metricLabel, 160) || 'Métrica clínica';
+    const metric = sanitizeString(point.metricType, 80);
+    const delta = Number(point.deltaPercent);
+    const absDelta = Number.isFinite(delta) ? Math.abs(delta) : null;
+    const metricLabel =
+      metric === 'TARGET_INDEPENDENCE' ? 'de independência' :
+      metric === 'TARGET_ACCURACY' ? 'de acurácia' :
+      metric === 'BEHAVIOR_FREQUENCY' ? 'em frequência' :
+      metric === 'BEHAVIOR_DURATION_TOTAL' ? 'em duração total' :
+      metric === 'BEHAVIOR_INTERVAL_OCCURRENCE' ? 'em ocorrência por intervalo' :
+      '';
+    if (point.changeStatus === 'REGRESSION_SIGNAL') return `${label} apresentou sinal de regressão na última medição.`;
+    if (point.changeStatus === 'CLINICALLY_SIGNIFICANT_CHANGE' && metric === 'MASTERY_STATUS') return `${label} está pronto para revisão de maestria.`;
+    if (point.changeStatus === 'CLINICALLY_SIGNIFICANT_CHANGE') return `${label} teve mudança clinicamente significativa nesta sessão.`;
+    if (point.trendDirection === 'IMPROVED') {
+      if (point.metricDirection === 'LOWER_IS_BETTER' && absDelta !== null) return `${label} reduziu ${absDelta.toFixed(0)}% em relação à sessão anterior.`;
+      if (absDelta !== null) return `${label} melhorou +${absDelta.toFixed(0)}% ${metricLabel} na última sessão.`;
+      return `${label} melhorou nesta sessão.`;
+    }
+    if (point.trendDirection === 'WORSENED') return `${label} piorou nesta sessão.`;
+    if (point.trendDirection === 'STABLE') return `${label} está estável nos últimos registros.`;
+    return `${label}: primeira medição registrada.`;
+  };
+
+  const fetchAbaGraphAnnotations = async (params: {
+    patientId: string;
+    clinicId: string;
+    organizationId: string;
+    user: any;
+    chartType: string;
+    dateFromIso: string;
+    dateToIso: string;
+    targetId?: string;
+    behaviorId?: string;
+  }) => {
+    let query = supabase
+      .from('aba_graph_annotations')
+      .select(ABA_GRAPH_ANNOTATION_SELECT)
+      .eq('patient_id', params.patientId)
+      .eq('chart_type', params.chartType)
+      .gte('date', params.dateFromIso)
+      .lte('date', params.dateToIso)
+      .order('date', { ascending: true })
+      .limit(100);
+    query = applyAbaChartTenantScope(query, params.user, params.clinicId, params.organizationId);
+    if (params.targetId) query = query.eq('target_id', params.targetId);
+    if (params.behaviorId) query = query.eq('behavior_id', params.behaviorId);
+    const { data, error } = await query;
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return [];
+      throw error;
+    }
+    return data || [];
+  };
+
+  const fetchAbaSnapshotRows = async (params: {
+    patientId: string;
+    clinicId: string;
+    organizationId: string;
+    user: any;
+    metricTypes?: string[];
+    targetId?: string;
+    behaviorId?: string;
+    metricType?: string;
+    dateFromIso: string;
+    dateToIso: string;
+    limit: number;
+    significantOnly?: boolean;
+    ascending?: boolean;
+  }) => {
+    let query = supabase
+      .from('aba_session_metric_snapshots')
+      .select(ABA_SESSION_METRIC_SNAPSHOT_SELECT)
+      .eq('patient_id', params.patientId)
+      .gte('changed_at', params.dateFromIso)
+      .lte('changed_at', params.dateToIso)
+      .order('changed_at', { ascending: params.ascending !== false })
+      .limit(params.limit);
+    query = applyAbaChartTenantScope(query, params.user, params.clinicId, params.organizationId);
+    if (params.metricTypes?.length) query = query.in('metric_type', params.metricTypes);
+    if (params.targetId) query = query.eq('target_id', params.targetId);
+    if (params.behaviorId) query = query.eq('behavior_id', params.behaviorId);
+    if (params.metricType) query = query.eq('metric_type', params.metricType);
+    const { data, error } = await query;
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return [];
+      throw error;
+    }
+    const rows = data || [];
+    return params.significantOnly
+      ? rows.filter((row: any) => isAbaSignificantChange(row?.change_status, row?.trend_direction))
+      : rows;
+  };
+
+  const buildSessionMetricSnapshots = async (sessionIdValue: string) => {
+    const sessionId = sanitizeString(sessionIdValue, 180);
+    if (!sessionId) return [];
+    const currentResult = await supabase
+      .from('aba_session_summaries')
+      .select(ABA_SESSION_REPORT_SELECT)
+      .eq('session_id', sessionId)
+      .order('ended_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (currentResult.error) {
+      if (hasMissingFinancialSchema(currentResult.error)) return [];
+      throw currentResult.error;
+    }
+    const currentSummary = currentResult.data;
+    if (!currentSummary?.patient_id) return [];
+
+    const patientId = sanitizeString(currentSummary.patient_id, 120);
+    const clinicId = sanitizeString(currentSummary.clinic_id, 120);
+    const organizationId = sanitizeString(currentSummary.organization_id || clinicId, 120);
+    const endedAt = sanitizeIsoDateTime(currentSummary.ended_at || currentSummary.created_at);
+
+    let previousQuery = supabase
+      .from('aba_session_summaries')
+      .select(ABA_SESSION_REPORT_SELECT)
+      .eq('patient_id', patientId)
+      .lt('ended_at', endedAt)
+      .order('ended_at', { ascending: false })
+      .limit(1);
+    if (organizationId) previousQuery = previousQuery.eq('organization_id', organizationId);
+    if (clinicId) previousQuery = previousQuery.eq('clinic_id', clinicId);
+    const previousResult = await previousQuery.maybeSingle();
+    if (previousResult.error && !hasMissingFinancialSchema(previousResult.error)) throw previousResult.error;
+    const previousSummary = previousResult.data || null;
+
+    let currentTargetQuery = supabase
+      .from('aba_target_live_summaries')
+      .select(ABA_TARGET_CHART_SUMMARY_SELECT)
+      .eq('patient_id', patientId)
+      .eq('session_id', sessionId)
+      .limit(100);
+    if (organizationId) currentTargetQuery = currentTargetQuery.eq('organization_id', organizationId);
+    if (clinicId) currentTargetQuery = currentTargetQuery.eq('clinic_id', clinicId);
+    const currentTargetResult = await currentTargetQuery;
+    if (currentTargetResult.error && !hasMissingFinancialSchema(currentTargetResult.error)) throw currentTargetResult.error;
+
+    let previousTargets: any[] = [];
+    const previousSessionId = sanitizeString(previousSummary?.session_id || previousSummary?.sessionId, 180);
+    if (previousSessionId) {
+      let previousTargetQuery = supabase
+        .from('aba_target_live_summaries')
+        .select(ABA_TARGET_CHART_SUMMARY_SELECT)
+        .eq('patient_id', patientId)
+        .eq('session_id', previousSessionId)
+        .limit(100);
+      if (organizationId) previousTargetQuery = previousTargetQuery.eq('organization_id', organizationId);
+      if (clinicId) previousTargetQuery = previousTargetQuery.eq('clinic_id', clinicId);
+      const previousTargetResult = await previousTargetQuery;
+      if (!previousTargetResult.error) previousTargets = previousTargetResult.data || [];
+      if (previousTargetResult.error && !hasMissingFinancialSchema(previousTargetResult.error)) throw previousTargetResult.error;
+    }
+
+    const snapshots = buildSessionMetricSnapshotsFromSummaries({
+      currentSummary,
+      previousSummary,
+      currentTargetSummaries: currentTargetResult.error ? [] : currentTargetResult.data || [],
+      previousTargetSummaries: previousTargets
+    });
+
+    const saved: any[] = [];
+    for (const snapshot of snapshots) {
+      const stableKey = crypto
+        .createHash('sha1')
+        .update([
+          snapshot.sessionId,
+          snapshot.metricType,
+          snapshot.targetId || '',
+          snapshot.behaviorId || '',
+          snapshot.metricLabel
+        ].join('|'))
+        .digest('hex')
+        .slice(0, 24);
+      const payload = cleanObject({
+        id: `snapshot-${stableKey}`,
+        organization_id: sanitizeString(snapshot.organizationId || organizationId, 120),
+        clinic_id: sanitizeString(snapshot.clinicId || clinicId, 120),
+        patient_id: patientId,
+        session_id: sessionId,
+        target_id: sanitizeString(snapshot.targetId, 180) || null,
+        behavior_id: sanitizeString(snapshot.behaviorId, 180) || null,
+        metric_type: sanitizeString(snapshot.metricType, 80),
+        metric_label: sanitizeTextField(snapshot.metricLabel, 240),
+        metric_value: asSafeNumber(snapshot.metricValue, 0, 100000000) || 0,
+        previous_value: snapshot.previousValue === null || snapshot.previousValue === undefined ? null : asSafeNumber(snapshot.previousValue, -100000000, 100000000),
+        delta_value: snapshot.deltaValue === null || snapshot.deltaValue === undefined ? null : asSafeNumber(snapshot.deltaValue, -100000000, 100000000),
+        delta_percent: snapshot.deltaPercent === null || snapshot.deltaPercent === undefined ? null : asSafeNumber(snapshot.deltaPercent, -100000000, 100000000),
+        trend_direction: sanitizeString(snapshot.trendDirection, 40),
+        change_status: sanitizeString(snapshot.changeStatus, 80),
+        status_label: sanitizeTextField(snapshot.statusLabel, 160),
+        metric_direction: sanitizeString(snapshot.metricDirection, 40),
+        changed_at: sanitizeIsoDateTime(snapshot.changedAt, endedAt),
+        source_summary_id: sanitizeString(snapshot.sourceSummaryId, 180) || sanitizeString(currentSummary.id, 180) || null,
+        created_at: new Date().toISOString()
+      });
+      const writeResult = await writeAbaRowWithSchemaFallback('aba_session_metric_snapshots', payload, 'upsert');
+      if (writeResult.error) {
+        if (hasMissingFinancialSchema(writeResult.error)) return saved;
+        throw writeResult.error;
+      }
+      saved.push({ ...payload, id: (writeResult.data as any)?.id || payload.id });
+    }
+    return saved;
+  };
+
+  const resolveAbaChartPatientScope = (req: any) => {
+    const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+    const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+    const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+    return { patientId, clinicId, organizationId };
   };
 
   const writeAbaRowWithSchemaFallback = async (tableName: string, payloadBase: Record<string, any>, mode: 'insert' | 'upsert' = 'insert') => {
@@ -15669,6 +16019,403 @@ async function startServer() {
     }
   });
 
+  app.get('/api/aba/patients/:patientId/charts/targets', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
+      if (!isUuid(patientId)) return res.json({ success: true, data: { points: [], annotations: [] } });
+      const params = parseAbaChartParams(req.query);
+      const targetMetrics = ['TARGET_ACCURACY', 'TARGET_INDEPENDENCE', 'TARGET_TRIAL_COUNT'];
+      const rows = await fetchAbaSnapshotRows({
+        patientId,
+        clinicId,
+        organizationId,
+        user: req.session.user,
+        metricTypes: targetMetrics,
+        targetId: params.targetId,
+        metricType: targetMetrics.includes(params.metricType) ? params.metricType : undefined,
+        dateFromIso: params.dateFromIso,
+        dateToIso: params.dateToIso,
+        limit: params.limit,
+        significantOnly: params.significantOnly
+      });
+      const annotations = await fetchAbaGraphAnnotations({
+        patientId,
+        clinicId,
+        organizationId,
+        user: req.session.user,
+        chartType: 'targets',
+        dateFromIso: params.dateFromIso,
+        dateToIso: params.dateToIso,
+        targetId: params.targetId
+      });
+      return res.json({ success: true, data: { points: rows.map(normalizeAbaSnapshotPoint), annotations }, source: 'aba_session_metric_snapshots' });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/aba/patients/:patientId/charts/behaviors', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
+      if (!isUuid(patientId)) return res.json({ success: true, data: { points: [], annotations: [] } });
+      const params = parseAbaChartParams(req.query);
+      const behaviorMetrics = ['BEHAVIOR_FREQUENCY', 'BEHAVIOR_DURATION_TOTAL', 'BEHAVIOR_DURATION_AVG', 'BEHAVIOR_INTERVAL_OCCURRENCE'];
+      let dailyQuery = supabase
+        .from('aba_behavior_daily_summaries')
+        .select(ABA_BEHAVIOR_DAILY_CHART_SELECT)
+        .eq('patient_id', patientId)
+        .gte('date', params.dateFrom)
+        .lte('date', params.dateTo)
+        .order('date', { ascending: true })
+        .limit(params.limit);
+      dailyQuery = applyAbaChartTenantScope(dailyQuery, req.session.user, clinicId, organizationId);
+      if (params.behaviorId) dailyQuery = dailyQuery.eq('behavior_id', params.behaviorId);
+      const dailyResult = await dailyQuery;
+      if (dailyResult.error && !hasMissingFinancialSchema(dailyResult.error)) throw dailyResult.error;
+
+      const snapshotRows = await fetchAbaSnapshotRows({
+        patientId,
+        clinicId,
+        organizationId,
+        user: req.session.user,
+        metricTypes: behaviorMetrics,
+        behaviorId: params.behaviorId,
+        metricType: behaviorMetrics.includes(params.metricType) ? params.metricType : undefined,
+        dateFromIso: params.dateFromIso,
+        dateToIso: params.dateToIso,
+        limit: params.limit,
+        significantOnly: params.significantOnly
+      });
+
+      const dailyPoints = ((dailyResult.error ? [] : dailyResult.data) || []).flatMap((row: any) => {
+        const base = {
+          id: row.id,
+          sessionId: null,
+          targetId: null,
+          behaviorId: row.behavior_id,
+          metricLabel: row.behavior_name || row.behavior_key || 'Comportamento',
+          previousValue: null,
+          deltaValue: null,
+          deltaPercent: null,
+          trendDirection: 'INSUFFICIENT_DATA',
+          changeStatus: 'FIRST_MEASUREMENT',
+          statusLabel: 'Primeira medição',
+          metricDirection: 'LOWER_IS_BETTER',
+          changedAt: `${row.date}T12:00:00.000Z`
+        };
+        const points = [
+          { ...base, id: `${row.id}-frequency`, metricType: 'BEHAVIOR_FREQUENCY', value: Number(row.frequency_count || 0) },
+          { ...base, id: `${row.id}-duration-total`, metricType: 'BEHAVIOR_DURATION_TOTAL', value: Number(row.duration_total_seconds || 0) },
+          { ...base, id: `${row.id}-interval`, metricType: 'BEHAVIOR_INTERVAL_OCCURRENCE', value: Number(row.interval_occurrence_percent || 0) }
+        ];
+        return params.metricType ? points.filter((point) => point.metricType === params.metricType) : points;
+      });
+
+      const annotations = await fetchAbaGraphAnnotations({
+        patientId,
+        clinicId,
+        organizationId,
+        user: req.session.user,
+        chartType: 'behaviors',
+        dateFromIso: params.dateFromIso,
+        dateToIso: params.dateToIso,
+        behaviorId: params.behaviorId
+      });
+      const points = snapshotRows.length > 0 ? snapshotRows.map(normalizeAbaSnapshotPoint) : dailyPoints.slice(0, params.limit);
+      return res.json({ success: true, data: { points, dailySummaries: dailyResult.error ? [] : dailyResult.data || [], annotations }, source: snapshotRows.length > 0 ? 'aba_session_metric_snapshots' : 'aba_behavior_daily_summaries' });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/aba/patients/:patientId/charts/mastery', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
+      if (!isUuid(patientId)) return res.json({ success: true, data: { points: [], evaluations: [], annotations: [] } });
+      const params = parseAbaChartParams(req.query);
+      let evaluationQuery = supabase
+        .from('aba_mastery_evaluations')
+        .select(ABA_MASTERY_LIST_SELECT)
+        .eq('patient_id', patientId)
+        .gte('evaluated_at', params.dateFromIso)
+        .lte('evaluated_at', params.dateToIso)
+        .order('evaluated_at', { ascending: true })
+        .limit(params.limit);
+      evaluationQuery = applyAbaChartTenantScope(evaluationQuery, req.session.user, clinicId, organizationId);
+      if (params.targetId) evaluationQuery = evaluationQuery.eq('target_id', params.targetId);
+      const evaluationResult = await evaluationQuery;
+      if (evaluationResult.error && !hasMissingFinancialSchema(evaluationResult.error)) throw evaluationResult.error;
+      const snapshotRows = await fetchAbaSnapshotRows({
+        patientId,
+        clinicId,
+        organizationId,
+        user: req.session.user,
+        metricTypes: ['MASTERY_STATUS'],
+        targetId: params.targetId,
+        dateFromIso: params.dateFromIso,
+        dateToIso: params.dateToIso,
+        limit: params.limit,
+        significantOnly: params.significantOnly
+      });
+      const fallbackPoints = ((evaluationResult.error ? [] : evaluationResult.data) || []).map((row: any) => ({
+        id: row.id,
+        sessionId: row.session_id,
+        targetId: row.target_id,
+        behaviorId: null,
+        metricType: 'MASTERY_STATUS',
+        metricLabel: row.target_name || row.target_id || 'Habilidade',
+        value: row.status === 'READY_FOR_REVIEW' ? 3 : row.status === 'MASTERED_APPROVED' ? 4 : row.status === 'MET_TODAY' ? 2 : 1,
+        previousValue: null,
+        deltaValue: null,
+        deltaPercent: null,
+        trendDirection: 'INSUFFICIENT_DATA',
+        changeStatus: row.status === 'READY_FOR_REVIEW' ? 'CLINICALLY_SIGNIFICANT_CHANGE' : 'FIRST_MEASUREMENT',
+        statusLabel: row.status === 'READY_FOR_REVIEW' ? 'Pronto para revisão' : 'Primeira medição',
+        metricDirection: 'STATUS_BASED',
+        changedAt: row.evaluated_at,
+        sourceSummaryId: null
+      }));
+      const annotations = await fetchAbaGraphAnnotations({
+        patientId,
+        clinicId,
+        organizationId,
+        user: req.session.user,
+        chartType: 'mastery',
+        dateFromIso: params.dateFromIso,
+        dateToIso: params.dateToIso,
+        targetId: params.targetId
+      });
+      return res.json({ success: true, data: { points: snapshotRows.length > 0 ? snapshotRows.map(normalizeAbaSnapshotPoint) : fallbackPoints, evaluations: evaluationResult.error ? [] : evaluationResult.data || [], annotations }, source: snapshotRows.length > 0 ? 'aba_session_metric_snapshots' : 'aba_mastery_evaluations' });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/aba/patients/:patientId/charts/maintenance', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
+      if (!isUuid(patientId)) return res.json({ success: true, data: { points: [], schedules: [], probeResults: [], alerts: [], annotations: [] } });
+      const params = parseAbaChartParams(req.query);
+      const applyScope = (query: any) => applyAbaChartTenantScope(query, req.session.user, clinicId, organizationId);
+      const [scheduleResult, probeResult, alertResult] = await Promise.all([
+        applyScope(
+          supabase
+            .from('aba_maintenance_schedules')
+            .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+            .eq('patient_id', patientId)
+            .gte('scheduled_for', params.dateFromIso)
+            .lte('scheduled_for', params.dateToIso)
+            .order('scheduled_for', { ascending: true })
+            .limit(params.limit)
+        ),
+        applyScope(
+          supabase
+            .from('aba_maintenance_probe_results')
+            .select(ABA_MAINTENANCE_PROBE_RESULT_SELECT)
+            .eq('patient_id', patientId)
+            .gte('occurred_at', params.dateFromIso)
+            .lte('occurred_at', params.dateToIso)
+            .order('occurred_at', { ascending: true })
+            .limit(params.limit)
+        ),
+        applyScope(
+          supabase
+            .from('aba_regression_alerts')
+            .select(ABA_REGRESSION_ALERT_SELECT)
+            .eq('patient_id', patientId)
+            .gte('created_at', params.dateFromIso)
+            .lte('created_at', params.dateToIso)
+            .order('created_at', { ascending: true })
+            .limit(params.limit)
+        )
+      ]);
+      const firstError = [scheduleResult, probeResult, alertResult].find((result: any) => result.error)?.error;
+      if (firstError && !hasMissingFinancialSchema(firstError)) throw firstError;
+      const snapshotRows = await fetchAbaSnapshotRows({
+        patientId,
+        clinicId,
+        organizationId,
+        user: req.session.user,
+        metricTypes: ['MAINTENANCE_STATUS', 'REGRESSION_RISK'],
+        targetId: params.targetId,
+        dateFromIso: params.dateFromIso,
+        dateToIso: params.dateToIso,
+        limit: params.limit,
+        significantOnly: params.significantOnly
+      });
+      const fallbackPoints = ((probeResult as any).data || []).map((row: any) => ({
+        id: row.id,
+        sessionId: row.session_id,
+        targetId: row.target_id,
+        behaviorId: null,
+        metricType: 'MAINTENANCE_STATUS',
+        metricLabel: row.raw_payload?.targetName || row.target_id || 'Habilidade',
+        value: row.status === 'MAINTAINED' ? 3 : row.status === 'WATCH' ? 1 : -1,
+        previousValue: null,
+        deltaValue: null,
+        deltaPercent: null,
+        trendDirection: row.status === 'MAINTAINED' ? 'IMPROVED' : row.status === 'REGRESSION_RISK' ? 'WORSENED' : 'STABLE',
+        changeStatus: row.status === 'REGRESSION_RISK' ? 'REGRESSION_SIGNAL' : 'FIRST_MEASUREMENT',
+        statusLabel: row.status === 'REGRESSION_RISK' ? 'Sinal de regressão' : row.status === 'WATCH' ? 'Estável' : 'Melhorou nesta sessão',
+        metricDirection: 'STATUS_BASED',
+        changedAt: row.occurred_at,
+        sourceSummaryId: null
+      }));
+      const annotations = await fetchAbaGraphAnnotations({
+        patientId,
+        clinicId,
+        organizationId,
+        user: req.session.user,
+        chartType: 'maintenance',
+        dateFromIso: params.dateFromIso,
+        dateToIso: params.dateToIso,
+        targetId: params.targetId
+      });
+      return res.json({
+        success: true,
+        data: {
+          points: snapshotRows.length > 0 ? snapshotRows.map(normalizeAbaSnapshotPoint) : fallbackPoints,
+          schedules: (scheduleResult as any).error ? [] : (scheduleResult as any).data || [],
+          probeResults: (probeResult as any).error ? [] : (probeResult as any).data || [],
+          alerts: (alertResult as any).error ? [] : (alertResult as any).data || [],
+          annotations
+        },
+        source: snapshotRows.length > 0 ? 'aba_session_metric_snapshots' : 'aba_maintenance_probe_results'
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/aba/patients/:patientId/charts/session-changes', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
+      if (!isUuid(patientId)) return res.json({ success: true, data: { points: [], annotations: [] } });
+      const params = parseAbaChartParams(req.query);
+      const rows = await fetchAbaSnapshotRows({
+        patientId,
+        clinicId,
+        organizationId,
+        user: req.session.user,
+        targetId: params.targetId,
+        behaviorId: params.behaviorId,
+        metricType: params.metricType || undefined,
+        dateFromIso: params.dateFromIso,
+        dateToIso: params.dateToIso,
+        limit: params.limit,
+        significantOnly: params.significantOnly
+      });
+      const annotations = await fetchAbaGraphAnnotations({
+        patientId,
+        clinicId,
+        organizationId,
+        user: req.session.user,
+        chartType: 'session-changes',
+        dateFromIso: params.dateFromIso,
+        dateToIso: params.dateToIso,
+        targetId: params.targetId,
+        behaviorId: params.behaviorId
+      });
+      return res.json({ success: true, data: { points: rows.map(normalizeAbaSnapshotPoint), annotations }, source: 'aba_session_metric_snapshots' });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/aba/patients/:patientId/charts/overview', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
+      if (!isUuid(patientId)) return res.json({ success: true, data: { summary: null, points: [], insights: [], annotations: [] } });
+      const params = parseAbaChartParams(req.query);
+      let summaryQuery = supabase
+        .from('aba_patient_aba_summaries')
+        .select(ABA_PATIENT_SUMMARY_SELECT)
+        .eq('patient_id', patientId)
+        .limit(1);
+      summaryQuery = applyAbaChartTenantScope(summaryQuery, req.session.user, clinicId, organizationId);
+      const summaryResult = await summaryQuery.maybeSingle();
+      if (summaryResult.error && !hasMissingFinancialSchema(summaryResult.error)) throw summaryResult.error;
+      const rows = await fetchAbaSnapshotRows({
+        patientId,
+        clinicId,
+        organizationId,
+        user: req.session.user,
+        dateFromIso: params.dateFromIso,
+        dateToIso: params.dateToIso,
+        limit: Math.min(params.limit, 40),
+        significantOnly: false,
+        ascending: false
+      });
+      const insightRows = rows
+        .filter((row: any) => isAbaSignificantChange(row?.change_status, row?.trend_direction) || row?.change_status === 'FIRST_MEASUREMENT')
+        .slice(0, 5);
+      const annotations = await fetchAbaGraphAnnotations({
+        patientId,
+        clinicId,
+        organizationId,
+        user: req.session.user,
+        chartType: 'overview',
+        dateFromIso: params.dateFromIso,
+        dateToIso: params.dateToIso
+      });
+      return res.json({
+        success: true,
+        data: {
+          summary: summaryResult.error ? null : summaryResult.data || null,
+          points: rows.map(normalizeAbaSnapshotPoint).reverse(),
+          insights: insightRows.map(buildAbaChartInsight),
+          annotations
+        },
+        source: 'aba_patient_aba_summaries,aba_session_metric_snapshots'
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.post('/api/aba/patients/:patientId/charts/annotations', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload da anotação de gráfico ABA')) return;
+      const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+      if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      const annotationType = sanitizeString(req.body?.annotation_type || req.body?.annotationType || 'NOTE', 40).toUpperCase();
+      if (!['GOAL_LINE', 'CONDITION_LINE', 'NOTE'].includes(annotationType)) {
+        return res.status(400).json({ success: false, error: 'Tipo de anotação inválido.' });
+      }
+      const chartType = sanitizeString(req.body?.chart_type || req.body?.chartType || 'overview', 80);
+      const label = sanitizeTextField(req.body?.label, 180);
+      if (!label) return res.status(400).json({ success: false, error: 'Rótulo é obrigatório.' });
+      const payload = cleanObject({
+        id: sanitizeString(req.body?.id || crypto.randomUUID(), 180),
+        organization_id: organizationId || clinicId,
+        clinic_id: clinicId,
+        patient_id: patientId,
+        session_id: sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null,
+        target_id: sanitizeString(req.body?.target_id || req.body?.targetId, 180) || null,
+        behavior_id: sanitizeString(req.body?.behavior_id || req.body?.behaviorId, 180) || null,
+        chart_type: chartType,
+        annotation_type: annotationType,
+        date: sanitizeIsoDateTime(req.body?.date || req.body?.changed_at || req.body?.changedAt),
+        value: req.body?.value !== undefined && req.body?.value !== null && req.body?.value !== ''
+          ? asSafeNumber(req.body.value, -100000000, 100000000)
+          : null,
+        label,
+        description: sanitizeTextField(req.body?.description, 1000),
+        created_by: sanitizeString(req.session.user?.id, 120),
+        created_at: new Date().toISOString()
+      });
+      const result = await writeAbaRowWithSchemaFallback('aba_graph_annotations', payload, 'upsert');
+      if (result.error) {
+        if (hasMissingFinancialSchema(result.error)) return res.status(503).json({ success: false, error: 'Schema dos gráficos ABA ainda não aplicado.' });
+        throw result.error;
+      }
+      return res.json({ success: true, data: { ...payload, id: (result.data as any)?.id || payload.id } });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
   app.post('/api/aba/maintenance-probe-results', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload de maintenance probe ABA')) return;
@@ -15900,6 +16647,7 @@ async function startServer() {
       const requestSource = resolveAbaRequestSource(req.body);
       const payload = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.summary_id || req.body?.summaryId || `summary-${sessionId}`, 180),
+        organization_id: sanitizeString(req.body?.organization_id || req.body?.organizationId || clinicId, 120),
         clinic_id: clinicId,
         session_id: sessionId,
         patient_id: patientId,
@@ -15952,6 +16700,11 @@ async function startServer() {
           return res.status(503).json({ success: false, error: 'Schema ABA ainda não aplicado.' });
         }
         throw result.error;
+      }
+      try {
+        await buildSessionMetricSnapshots(sessionId);
+      } catch (snapshotError: any) {
+        console.warn('[ABA Charts] Falha ao gerar snapshots da sessão:', snapshotError?.message || String(snapshotError));
       }
       return res.json({ success: true, data: { ...payload, id: (result.data as any)?.id || payload.id } });
     } catch (error: any) {

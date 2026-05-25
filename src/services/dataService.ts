@@ -102,6 +102,17 @@ function endpointWithPagination(endpoint: string, options: { page?: number; page
   return `${endpoint}${separator}page=${encodeURIComponent(String(page))}&pageSize=${encodeURIComponent(String(pageSize))}`;
 }
 
+function endpointWithQuery(endpoint: string, params: Record<string, any> = {}): string {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    search.set(key, String(value));
+  });
+  const query = search.toString();
+  if (!query) return endpoint;
+  return `${endpoint}${endpoint.includes('?') ? '&' : '?'}${query}`;
+}
+
 type ClinicalQueryAuditOptions = {
   helperName?: string;
   operation?: 'list' | 'detail' | 'write';
@@ -175,8 +186,9 @@ function auditClinicalQuery(endpoint: string, options: ClinicalQueryAuditOptions
   if (options.hasExplicitColumns === false) warnings.push("select('*')/payload amplo");
   if (options.requiresPatientOrSession !== false) {
     const hasScopedPath = /\/api\/aba\/(session-live-summaries|session-reports|recent-session-events)\/[^/?]+/.test(endpoint) ||
+      /\/api\/aba\/patients\/[^/?]+\/charts\/[^/?]+/.test(endpoint) ||
       /\/api\/(notes|history|tasks|assigned-tasks|patient-anamnesis|patient-records)\/[^/?]+/.test(endpoint) ||
-      /\/api\/aba\/(sessions|trials|behavior-events|mastery-evaluations|patient-summary)\/[^/?]+/.test(endpoint);
+      /\/api\/aba\/(sessions|trials|behavior-events|mastery-evaluations|patient-summary|maintenance-overview)\/[^/?]+/.test(endpoint);
     const hasScopedQuery = /[?&](patientId|patient_id|sessionId|session_id)=/.test(endpoint);
     if (!hasScopedPath && !hasScopedQuery) warnings.push('sem patientId/sessionId aparente');
   }
@@ -1332,6 +1344,56 @@ export const dataService = {
       page,
       pageSize: limit
     };
+  },
+
+  async getAbaClinicalChart(patientId: string, chart: 'targets' | 'behaviors' | 'mastery' | 'maintenance' | 'session-changes' | 'overview', options: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse({ points: [], insights: [], annotations: [] });
+    const safeChart = ['targets', 'behaviors', 'mastery', 'maintenance', 'session-changes', 'overview'].includes(String(chart))
+      ? String(chart)
+      : 'overview';
+    const limit = normalizeListLimit(options.limit ?? options.pageSize, 90, 180);
+    const endpoint = endpointWithQuery(`/api/aba/patients/${encodeURIComponent(String(patientId))}/charts/${safeChart}`, {
+      dateFrom: options.dateFrom,
+      dateTo: options.dateTo,
+      days: options.days,
+      targetId: options.targetId,
+      behaviorId: options.behaviorId,
+      metricType: options.metricType,
+      significantOnly: options.significantOnly,
+      limit
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: `getAbaClinicalChart:${safeChart}`, operation: 'list', table: 'aba_session_metric_snapshots', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+    } catch (error) {
+      console.log('Fetching ABA clinical chart from local state only...');
+    }
+    return { success: true, data: { points: [], insights: [], annotations: [] } };
+  },
+
+  async saveAbaGraphAnnotation(patientId: string, annotation: any) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(annotation || {});
+    const id = String(annotation?.id || generateId());
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/charts/annotations`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: {
+          ...(await getAuthHeaders()),
+          'Content-Type': 'application/json',
+          'Idempotency-Key': id
+        },
+        credentials: 'include',
+        body: JSON.stringify({ ...(annotation || {}), id })
+      }, { helperName: 'saveAbaGraphAnnotation', operation: 'write', table: 'aba_graph_annotations', hasExplicitColumns: true });
+      return await safeJson(response);
+    } catch (error) {
+      console.log('Saving ABA graph annotation locally...');
+      return await saveOfflineFirst(id, { ...(annotation || {}), id, patient_id: patientId }, 'aba', endpoint);
+    }
   },
 
   async getSessionReport(sessionId: string) {

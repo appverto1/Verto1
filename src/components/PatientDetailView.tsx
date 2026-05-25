@@ -24,6 +24,10 @@ import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Prot
 import { VBMAPP_LEVEL_3_CANONICAL_PROTOCOL } from '../constants/vbmappLevel3Protocol';
 import html2canvas from 'html2canvas';
 
+const AbaClinicalChartsPanel = React.lazy(() =>
+  import('./AbaClinicalChartsPanel').then((module) => ({ default: module.AbaClinicalChartsPanel }))
+);
+
 const getApprovedVertoCanonicalProtocol = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
   if (source.includes('afls') || source.includes('participacao-social') || source.includes('participação social')) {
@@ -236,12 +240,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     String(patient?.therapist_id || patient?.professional_id || '').trim()
   );
 
-  const allTabs: Array<'history' | 'notes' | 'report' | 'plan' | 'session' | 'files'> = [
+  const allTabs: Array<'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'files'> = [
     'history',
     'notes',
     'report',
     'plan',
     'session',
+    'aba-charts',
     'files',
   ];
   const allowedTabsSet = useMemo(() => {
@@ -249,16 +254,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       !Array.isArray(allowedTabs) || allowedTabs.length === 0
         ? allTabs
         : allowedTabs.filter((tab: string) =>
-            allTabs.includes(tab as 'history' | 'notes' | 'report' | 'plan' | 'session' | 'files'),
+            allTabs.includes(tab as 'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'files'),
           );
 
     const filteredByProfile = isKidsProfile
       ? tabsFromProps
-      : tabsFromProps.filter((tab: string) => tab !== 'session');
+      : tabsFromProps.filter((tab: string) => tab !== 'session' && tab !== 'aba-charts');
 
-    return new Set(filteredByProfile as Array<'history' | 'notes' | 'report' | 'plan' | 'session' | 'files'>);
+    return new Set(filteredByProfile as Array<'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'files'>);
   }, [allowedTabs, isKidsProfile]);
-  const canAccessTab = (tab: 'history' | 'notes' | 'report' | 'plan' | 'session' | 'files') =>
+  const canAccessTab = (tab: 'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'files') =>
     allowedTabsSet.has(tab);
   const canOpenAnamnesis = canAccessTab('history') && canAccessTab('notes');
 
@@ -4568,6 +4573,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           {canAccessTab('session') && isKidsProfile && (
             <button id="tab-session" onClick={() => requestSessionStart('tab')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'session' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Sessão</button>
           )}
+          {abaV2Enabled && canAccessTab('aba-charts') && isKidsProfile && (
+            <button id="tab-aba-charts" onClick={() => setActiveTab('aba-charts')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'aba-charts' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Gráficos ABA</button>
+          )}
           {canAccessTab('files') && <button id="tab-files" onClick={() => setActiveTab('files')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'files' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Arquivos</button>}
         </div> 
       </div> 
@@ -5995,6 +6003,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             )}
  
           </div> 
+        ) : activeTab === 'aba-charts' && isKidsProfile && abaV2Enabled ? (
+          <React.Suspense fallback={<div className={`rounded-[32px] border p-8 text-center text-sm font-semibold ${isPanelDark ? 'border-slate-700 bg-[#101b2e] text-slate-300' : 'border-slate-100 bg-white text-slate-400'}`}>Carregando gráficos ABA...</div>}>
+            <AbaClinicalChartsPanel patientId={String(patient.id)} isPanelDark={isPanelDark} />
+          </React.Suspense>
         ) : activeTab === 'session' && isKidsProfile ? (
           <div className="space-y-6 animate-fade-in">
             {abaV2Enabled && renderAbaRecordsPanel()}
