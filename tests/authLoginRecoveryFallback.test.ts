@@ -137,6 +137,55 @@ test('/api/auth/login profile lookup by id tolerates legacy users table without 
   assert.ok(!supabase.calls[2].selectColumns.split(',').includes('email'));
 });
 
+test('/api/auth/login profile lookup keeps removing many optional legacy-missing columns', async () => {
+  const missingColumns = [
+    'subscription_id',
+    'age',
+    'cpf',
+    'crp',
+    'council',
+    'council_number',
+    'specialties',
+    'mini_curriculum',
+    'profile_picture',
+    'profile_picture_path',
+    'signature_url',
+    'signature_data_url',
+    'two_factor_enabled',
+    'two_factor_secret',
+    'email_verified_at',
+    'phone_verified_at',
+    'first_login_completed',
+    'updated_at'
+  ];
+  const supabase = new FakeSupabase({
+    users: [
+      ...missingColumns.map((column) => ({
+        data: null,
+        error: {
+          code: 'PGRST204',
+          message: `Could not find the '${column}' column of 'users' in the schema cache`
+        }
+      })),
+      { data: { id: 'user-1', email: 'owner@example.com', name: 'Owner', role: 'owner' }, error: null }
+    ]
+  });
+
+  const result = await fetchProfileWithSchemaFallback({
+    supabase,
+    userId: 'user-1',
+    logger: silentLogger
+  });
+
+  assert.equal(result.error, null);
+  assert.equal((result.data as any).role, 'owner');
+  assert.equal(supabase.calls.length, missingColumns.length + 1);
+  const finalSelect = supabase.calls.at(-1)?.selectColumns || '';
+  for (const column of missingColumns) {
+    assert.ok(!finalSelect.split(',').includes(column));
+  }
+});
+
 test('/api/auth/login profile lookup by email removes missing created_at order', async () => {
   const supabase = new FakeSupabase({
     users: [

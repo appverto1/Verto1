@@ -562,6 +562,8 @@ const PROFILE_OPTIONAL_COLUMNS = new Set([
   'updated_at'
 ]);
 
+const PROFILE_SCHEMA_FALLBACK_MAX_ATTEMPTS = PROFILE_OPTIONAL_COLUMNS.size + 2;
+
 const INVITATION_OPTIONAL_COLUMNS = new Set([
   'clinic_name',
   'invited_by',
@@ -1066,7 +1068,7 @@ export async function fetchProfileWithSchemaFallback(params: {
   let columns = [...PROFILE_SELECT_COLUMNS];
   let lastError: any = null;
 
-  for (let attempt = 0; attempt < 12; attempt += 1) {
+  for (let attempt = 0; attempt < PROFILE_SCHEMA_FALLBACK_MAX_ATTEMPTS; attempt += 1) {
     const result = await params.supabase
       .from('users')
       .select(joinColumns(columns))
@@ -1109,7 +1111,7 @@ export async function fetchProfileByEmailWithSchemaFallback(params: {
   let shouldOrderByCreatedAt = true;
   const email = cleanString(params.email, 320).toLowerCase();
 
-  for (let attempt = 0; attempt < 12; attempt += 1) {
+  for (let attempt = 0; attempt < PROFILE_SCHEMA_FALLBACK_MAX_ATTEMPTS; attempt += 1) {
     let query = params.supabase
       .from('users')
       .select(joinColumns(columns))
