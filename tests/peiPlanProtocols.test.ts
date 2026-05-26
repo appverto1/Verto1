@@ -100,6 +100,45 @@ test('protocol-import-requests diagnostica filtros e considera escopos aprovados
   assert.ok(routeBlock.includes('possiblyFilteredByScope'));
 });
 
+test('syncApprovedProtocolsToClinicState restaura apenas requests aprovados sem duplicar', () => {
+  const source = readSource('server.ts');
+  const script = readSource('scripts/restore-clinic-protocols-from-import-requests.ts');
+
+  assert.ok(source.includes('const syncApprovedProtocolsToClinicState = async'));
+  assert.ok(source.includes(".eq('status', 'approved')"));
+  assert.ok(source.includes('mergeApprovedProtocolsIntoClinicState'));
+  assert.ok(source.includes('LICENSED_VERTO_PROTOCOLS_BY_KEY'));
+  assert.ok(source.includes('sourceRequestIds'));
+  assert.ok(source.includes('restore_clinic_protocols_from_import_requests'));
+  assert.ok(script.includes("String(row?.status || '').toLowerCase() !== 'approved'"));
+  assert.ok(script.includes('pendingRequestIds'));
+  assert.ok(script.includes('mergeProtocols(currentProtocols, approvedProtocols)'));
+});
+
+test('clinic_state protege protocols vazio quando existem requests aprovados', () => {
+  const source = readSource('server.ts');
+  const clinicPostBlock = source.match(/app\.post\('\/api\/clinic\/state'[\s\S]*?const handleVapidPublicKey/)?.[0] || '';
+  const dataServiceSource = readSource('src/services/dataService.ts');
+
+  assert.ok(source.includes('const getApprovedProtocolImportRequestCount = async'));
+  assert.ok(clinicPostBlock.includes('nextProtocols.length === 0'));
+  assert.ok(clinicPostBlock.includes('forceClearProtocols'));
+  assert.ok(clinicPostBlock.includes('protocols_clear_blocked_with_approved_imports'));
+  assert.ok(dataServiceSource.includes("Array.isArray(payload?.protocols) && payload.protocols.length > 0"));
+});
+
+test('clinic_state vazio e requests aprovados disparam sync para a aba Plano/PEI', () => {
+  const source = readSource('server.ts');
+  const clinicGetBlock = source.match(/app\.get\('\/api\/clinic\/state'[\s\S]*?app\.post\('\/api\/clinic\/state'/)?.[0] || '';
+  const approveBlock = source.match(/app\.post\('\/api\/admin\/protocol-import-requests\/:requestId\/approve'[\s\S]*?app\.post\('\/api\/admin\/protocol-import-requests\/:requestId\/reject'/)?.[0] || '';
+
+  assert.ok(clinicGetBlock.includes('normalizeProtocolArrayForRoute(data?.protocols).length === 0'));
+  assert.ok(clinicGetBlock.includes('getApprovedProtocolImportRequestCount(clinicId)'));
+  assert.ok(clinicGetBlock.includes('syncApprovedProtocolsToClinicState'));
+  assert.ok(approveBlock.includes('syncApprovedProtocolsToClinicState'));
+  assert.ok(approveBlock.includes('protocolSync'));
+});
+
 test('selects explicitos continuam apontando para tabelas que alimentam Plano/PEI', () => {
   const source = readSource('src/utils/routeSchemaFallbacks.ts');
 

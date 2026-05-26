@@ -2791,7 +2791,7 @@ export const dataService = {
     specialtySettings?: Record<string, number>;
   }) {
     try {
-      if (Array.isArray(payload?.protocols)) {
+      if (Array.isArray(payload?.protocols) && payload.protocols.length > 0) {
         writeClinicProtocolsBackup(payload?.workspace_id, payload.protocols);
       }
       const idempotencyKey = createIdempotencyKey('POST:/api/clinic/state');

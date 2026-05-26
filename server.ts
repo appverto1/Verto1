@@ -90,6 +90,10 @@ import {
   normalizeNoteMutationPayload,
   writeClinicalRowWithSchemaFallback
 } from './src/utils/clinicalPostResilience';
+import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from './src/constants/aflsProtocol';
+import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from './src/constants/vbmappLevel1Protocol';
+import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from './src/constants/vbmappLevel2Protocol';
+import { VBMAPP_LEVEL_3_CANONICAL_PROTOCOL } from './src/constants/vbmappLevel3Protocol';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
@@ -645,6 +649,99 @@ const VERTO_PROTOCOL_CATALOG = [
 
 const VERTO_PROTOCOL_BY_KEY = new Map(VERTO_PROTOCOL_CATALOG.map((protocol) => [protocol.key, protocol]));
 const VERTO_PROTOCOL_PANEL_RESET_AT = '2026-05-07T15:38:23.081Z';
+const LICENSED_VERTO_PROTOCOLS_BY_KEY = new Map<string, any>([
+  ['afls-social-participation-adult', AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL],
+  ['vb-mapp-level-1', VBMAPP_LEVEL_1_CANONICAL_PROTOCOL],
+  ['vb-mapp-level-2', VBMAPP_LEVEL_2_CANONICAL_PROTOCOL],
+  ['vb-mapp-level-3', VBMAPP_LEVEL_3_CANONICAL_PROTOCOL]
+]);
+
+function cloneJsonValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value ?? null));
+}
+
+function buildProtocolIdentityKeys(protocol: any): string[] {
+  const keys = [
+    protocol?.canonicalKey,
+    protocol?.canonical_key,
+    protocol?.id,
+    protocol?.title,
+    protocol?.name,
+    protocol?.protocolName
+  ]
+    .map((value) => normalizeApprovedProtocolKey(sanitizeString(value, 180)))
+    .map((value) => normalizeProtocolKey(value))
+    .filter(Boolean);
+  return Array.from(new Set(keys));
+}
+
+function buildClinicProtocolFromApprovedRequest(request: any): any | null {
+  const canonicalKey = normalizeApprovedProtocolKey(
+    request?.approved_canonical_key ||
+    request?.canonicalKey ||
+    request?.suggested_canonical_key ||
+    identifyVertoProtocolCandidate(`${request?.approved_canonical_name || ''} ${request?.protocol_name || ''}`).canonicalKey
+  );
+  const canonicalProtocol = LICENSED_VERTO_PROTOCOLS_BY_KEY.get(canonicalKey);
+  if (!canonicalProtocol || !Array.isArray(canonicalProtocol.data) || canonicalProtocol.data.length === 0) {
+    return null;
+  }
+
+  const approvedAt = sanitizeString(request?.reviewed_at || request?.updated_at || request?.created_at, 80) || new Date().toISOString();
+  const requestId = sanitizeString(request?.id, 120);
+  const protocol = cloneJsonValue(canonicalProtocol);
+  return sanitizeClinicalPayload({
+    ...protocol,
+    id: protocol.canonicalKey || canonicalKey,
+    canonicalKey,
+    title: protocol.title || request?.approved_canonical_name || request?.protocol_name || canonicalKey,
+    category: protocol.category || 'evaluation',
+    origin: 'verto_approved_import',
+    source: 'protocol_import_requests',
+    sourceRequestId: requestId || null,
+    importedAt: sanitizeString(request?.created_at, 80) || approvedAt,
+    approvedAt,
+    status: 'approved',
+    requestStatus: 'approved',
+    isApprovedImport: false,
+    isManualProtocol: false,
+    isLicensed: true
+  });
+}
+
+function mergeApprovedProtocolsIntoClinicState(existingProtocols: any[], approvedProtocols: any[]) {
+  const merged = normalizeProtocolArrayForRoute(existingProtocols);
+  const indexByIdentity = new Map<string, number>();
+  const registerProtocol = (protocol: any, index: number) => {
+    for (const key of buildProtocolIdentityKeys(protocol)) {
+      if (!indexByIdentity.has(key)) indexByIdentity.set(key, index);
+    }
+  };
+
+  merged.forEach(registerProtocol);
+  let added = 0;
+  let refreshed = 0;
+
+  for (const protocol of approvedProtocols) {
+    const keys = buildProtocolIdentityKeys(protocol);
+    const existingIndex = keys.map((key) => indexByIdentity.get(key)).find((index) => typeof index === 'number');
+    if (typeof existingIndex === 'number') {
+      merged[existingIndex] = {
+        ...merged[existingIndex],
+        ...protocol,
+        createdAt: merged[existingIndex]?.createdAt || protocol.createdAt || protocol.importedAt || null
+      };
+      refreshed += 1;
+      registerProtocol(merged[existingIndex], existingIndex);
+      continue;
+    }
+    merged.push(protocol);
+    registerProtocol(protocol, merged.length - 1);
+    added += 1;
+  }
+
+  return { protocols: merged, added, refreshed };
+}
 
 function buildProtocolAccessScopeKeys(params: { clinicId?: any; requesterUserId?: any; requesterEmail?: any }): string[] {
   const keys: string[] = [];
@@ -5590,6 +5687,140 @@ async function startServer() {
     }
   };
 
+  const getApprovedProtocolImportRequestCount = async (clinicId: string): Promise<number> => {
+    const safeClinicId = sanitizeString(clinicId, 120);
+    if (!isUuid(safeClinicId)) return 0;
+    try {
+      const { count, error } = await supabase
+        .from('protocol_import_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('clinic_id', safeClinicId)
+        .eq('status', 'approved');
+      if (error) return 0;
+      return Number(count || 0);
+    } catch {
+      return 0;
+    }
+  };
+
+  const syncApprovedProtocolsToClinicState = async (params: {
+    clinicId: string;
+    performedBy?: string | null;
+    actorName?: string | null;
+    auditAction?: string;
+    forceAudit?: boolean;
+  }) => {
+    const clinicId = sanitizeString(params.clinicId, 120);
+    if (!isUuid(clinicId)) {
+      return { success: false, synced: 0, added: 0, refreshed: 0, skipped: 0, sourceRequestIds: [], error: 'invalid_clinic_id' };
+    }
+
+    const { data: approvedRows, error: requestsError } = await supabase
+      .from('protocol_import_requests')
+      .select(PROTOCOL_IMPORT_REQUEST_SELECT)
+      .eq('clinic_id', clinicId)
+      .eq('status', 'approved')
+      .order('reviewed_at', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: true });
+    if (requestsError) throw requestsError;
+
+    const requestsByProtocolKey = new Map<string, any>();
+    for (const row of approvedRows || []) {
+      const canonicalKey = normalizeApprovedProtocolKey(
+        row?.approved_canonical_key ||
+        row?.suggested_canonical_key ||
+        identifyVertoProtocolCandidate(`${row?.approved_canonical_name || ''} ${row?.protocol_name || ''}`).canonicalKey
+      );
+      if (!LICENSED_VERTO_PROTOCOLS_BY_KEY.has(canonicalKey)) continue;
+      requestsByProtocolKey.set(canonicalKey, row);
+    }
+
+    const sourceRequests = Array.from(requestsByProtocolKey.values());
+    const approvedProtocols = sourceRequests
+      .map((row) => buildClinicProtocolFromApprovedRequest(row))
+      .filter(Boolean);
+
+    const { data: currentState, error: stateError } = await supabase
+      .from('clinic_state')
+      .select('clinic_id, rooms, appointments, protocols, specialty_settings, updated_at')
+      .eq('clinic_id', clinicId)
+      .maybeSingle();
+    if (stateError) throw stateError;
+
+    const currentProtocols = normalizeProtocolArrayForRoute(currentState?.protocols);
+    const merged = mergeApprovedProtocolsIntoClinicState(currentProtocols, approvedProtocols);
+    const sourceRequestIds = sourceRequests.map((row) => sanitizeString(row?.id, 120)).filter(Boolean);
+    const synced = merged.added + merged.refreshed;
+
+    if (synced > 0 || !currentState) {
+      const nowIso = new Date().toISOString();
+      const payload = cleanObject({
+        clinic_id: clinicId,
+        protocols: merged.protocols,
+        updated_by: sanitizeString(params.performedBy, 120) || null,
+        updated_at: nowIso
+      });
+      const writeResult = currentState
+        ? await supabase
+            .from('clinic_state')
+            .update(payload)
+            .eq('clinic_id', clinicId)
+            .select('clinic_id, protocols, updated_at')
+            .maybeSingle()
+        : await supabase
+            .from('clinic_state')
+            .insert([cleanObject({
+              clinic_id: clinicId,
+              rooms: [],
+              appointments: [],
+              protocols: merged.protocols,
+              specialty_settings: {},
+              updated_by: sanitizeString(params.performedBy, 120) || null,
+              updated_at: nowIso
+            })])
+            .select('clinic_id, protocols, updated_at')
+            .maybeSingle();
+      if (writeResult.error) throw writeResult.error;
+    }
+
+    if ((synced > 0 || params.forceAudit) && sourceRequestIds.length > 0) {
+      await persistActivityLog({
+        userId: sanitizeString(params.performedBy, 120),
+        clinicId,
+        actorName: sanitizeString(params.actorName, 180) || 'Sistema Verto',
+        title: 'Protocolos da clinica restaurados',
+        content: `Sincronizados ${approvedProtocols.length} protocolo(s) aprovados para a clinica.`,
+        type: 'clinical',
+        actionType: params.auditAction || 'sync_approved_protocols_to_clinic_state',
+        payloadDetails: JSON.stringify({
+          action: params.auditAction || 'sync_approved_protocols_to_clinic_state',
+          clinicId,
+          restoredProtocols: approvedProtocols.map((protocol: any) => ({
+            id: sanitizeString(protocol?.id, 120),
+            canonicalKey: sanitizeString(protocol?.canonicalKey, 180),
+            title: sanitizeString(protocol?.title, 180)
+          })),
+          sourceRequestIds,
+          added: merged.added,
+          refreshed: merged.refreshed,
+          skipped: Math.max(0, (approvedRows || []).length - approvedProtocols.length),
+          performedAt: new Date().toISOString(),
+          performedBy: sanitizeString(params.performedBy, 120) || 'system'
+        })
+      });
+    }
+
+    return {
+      success: true,
+      synced,
+      added: merged.added,
+      refreshed: merged.refreshed,
+      skipped: Math.max(0, (approvedRows || []).length - approvedProtocols.length),
+      sourceRequestIds,
+      protocols: merged.protocols
+    };
+  };
+
   const summarizePayloadForAudit = (input: any): string => {
     const redact = (value: any): any => {
       if (typeof value === 'string') {
@@ -8490,7 +8721,7 @@ async function startServer() {
         clinicId,
         logger: console
       });
-      const data = stateResult.data;
+      let data = stateResult.data;
       const error = stateResult.error;
 
       if (error) {
@@ -8509,6 +8740,31 @@ async function startServer() {
           });
         }
         throw error;
+      }
+
+      if (isUuid(clinicId) && normalizeProtocolArrayForRoute(data?.protocols).length === 0) {
+        const approvedProtocolCount = await getApprovedProtocolImportRequestCount(clinicId);
+        if (approvedProtocolCount > 0) {
+          try {
+            await syncApprovedProtocolsToClinicState({
+              clinicId,
+              performedBy: sanitizeString(req.session.user?.id, 120),
+              actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Sistema Verto', 180),
+              auditAction: 'restore_clinic_protocols_from_import_requests'
+            });
+            const refreshedState = await fetchClinicStateWithSchemaFallback({
+              supabase,
+              clinicId,
+              logger: console
+            });
+            if (!refreshedState.error && refreshedState.data) data = refreshedState.data;
+          } catch (syncError: any) {
+            console.warn('[Protocol Sync] Nao foi possivel restaurar protocolos aprovados durante GET /api/clinic/state:', {
+              clinicId,
+              message: syncError?.message || String(syncError)
+            });
+          }
+        }
       }
 
       return res.json({
@@ -8619,6 +8875,27 @@ async function startServer() {
         .select('rooms, appointments, protocols, specialty_settings')
         .eq('clinic_id', clinicId)
         .maybeSingle();
+
+      if (
+        nextProtocols !== undefined &&
+        nextProtocols.length === 0 &&
+        !Boolean(req.body?.forceClearProtocols)
+      ) {
+        const approvedProtocolCount = await getApprovedProtocolImportRequestCount(clinicId);
+        if (approvedProtocolCount > 0) {
+          console.warn('[Protocol Sync] Bloqueado clear acidental de clinic_state.protocols com requests aprovados.', {
+            clinicId,
+            approvedProtocolCount,
+            actorId
+          });
+          return res.status(409).json({
+            success: false,
+            error: 'Existem protocolos aprovados para esta clinica. Para limpar a biblioteca, confirme explicitamente forceClearProtocols.',
+            warning: 'protocols_clear_blocked_with_approved_imports',
+            approvedProtocolCount
+          });
+        }
+      }
 
       const appointmentsForPayload =
         nextAppointments !== undefined
@@ -19099,6 +19376,28 @@ async function startServer() {
         }
       }
 
+      let protocolSyncResult: any = null;
+      if (enabled && requestId) {
+        try {
+          const { data: requestRow } = await supabase
+            .from('protocol_import_requests')
+            .select('clinic_id')
+            .eq('id', requestId)
+            .maybeSingle();
+          const requestClinicId = sanitizeString((requestRow as any)?.clinic_id, 120);
+          if (isUuid(requestClinicId)) {
+            protocolSyncResult = await syncApprovedProtocolsToClinicState({
+              clinicId: requestClinicId,
+              performedBy: sanitizeString(req.session.user?.id, 120),
+              actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
+              auditAction: 'sync_approved_protocols_to_clinic_state'
+            });
+          }
+        } catch (syncError: any) {
+          console.warn('[Protocol Sync] Falha ao sincronizar protocolos apos atualizacao do acervo:', syncError?.message || String(syncError));
+        }
+      }
+
       await persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId: sanitizeString(currentClinicId(req.session.user), 120),
@@ -19124,7 +19423,14 @@ async function startServer() {
           protocolKeys,
           requestStatus: enabled ? 'approved' : undefined,
           canonicalKey: changedProtocol?.key || protocolKey,
-          canonicalName: changedProtocol?.name || protocolKey
+          canonicalName: changedProtocol?.name || protocolKey,
+          protocolSync: protocolSyncResult
+            ? {
+                synced: protocolSyncResult.synced,
+                added: protocolSyncResult.added,
+                refreshed: protocolSyncResult.refreshed
+              }
+            : null
         }
       });
     } catch (error: any) {
@@ -19149,12 +19455,14 @@ async function startServer() {
       }
 
       let updatedTable = false;
+      let requestClinicId = '';
       try {
         const { data: currentRequest } = await supabase
           .from('protocol_import_requests')
-          .select('scan_status, quarantine_status, file_type, file_data_url, scan_report')
+          .select('clinic_id, scan_status, quarantine_status, file_type, file_data_url, scan_report')
           .eq('id', requestId)
           .maybeSingle();
+        requestClinicId = sanitizeString((currentRequest as any)?.clinic_id, 120);
         const currentScanReport = parseStoredJsonObject((currentRequest as any)?.scan_report);
         const screenshotEvidence = currentScanReport?.evidence?.mode === 'screenshots'
           ? (currentScanReport?.evidence?.screenshots || [])
@@ -19184,6 +19492,20 @@ async function startServer() {
         updatedTable = false;
       }
 
+      let protocolSyncResult: any = null;
+      if (updatedTable && isUuid(requestClinicId)) {
+        try {
+          protocolSyncResult = await syncApprovedProtocolsToClinicState({
+            clinicId: requestClinicId,
+            performedBy: sanitizeString(req.session.user?.id, 120),
+            actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
+            auditAction: 'sync_approved_protocols_to_clinic_state'
+          });
+        } catch (syncError: any) {
+          console.warn('[Protocol Sync] Falha ao sincronizar protocolos apos aprovacao:', syncError?.message || String(syncError));
+        }
+      }
+
       await persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId: sanitizeString(currentClinicId(req.session.user), 120),
@@ -19192,10 +19514,22 @@ async function startServer() {
         content: `Solicitacao ${requestId} aprovada e vinculada ao protocolo Verto ${canonicalName}.`,
         type: 'protocol_import_review',
         actionType: 'protocol_import_approved',
-        payloadDetails: JSON.stringify({ requestId, canonicalKey, canonicalName, updatedTable })
+        payloadDetails: JSON.stringify({
+          requestId,
+          canonicalKey,
+          canonicalName,
+          updatedTable,
+          protocolSync: protocolSyncResult
+            ? {
+                synced: protocolSyncResult.synced,
+                added: protocolSyncResult.added,
+                refreshed: protocolSyncResult.refreshed
+              }
+            : null
+        })
       });
 
-      return res.json({ success: true, data: { requestId, status: 'approved', canonicalKey, canonicalName } });
+      return res.json({ success: true, data: { requestId, status: 'approved', canonicalKey, canonicalName, protocolSync: protocolSyncResult } });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Nao foi possivel aprovar o protocolo.' });
     }
