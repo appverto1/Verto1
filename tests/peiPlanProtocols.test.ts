@@ -56,6 +56,50 @@ test('rotas de protocolos retornam arrays normalizados em vez de vazio silencios
   assert.ok(patientSelfBlock.includes('const protocols = normalizeProtocolArrayForRoute(selectedState?.protocols);'));
 });
 
+test('rota protocol-import-requests dinamica nao depende de cache/etag', () => {
+  const source = readSource('server.ts');
+  const routeBlock = source.match(/app\.get\('\/api\/protocol-import-requests'[\s\S]*?app\.delete\('\/api\/protocol-import-requests\/:requestId'/)?.[0] || '';
+
+  assert.ok(source.includes("'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate'"));
+  assert.ok(source.includes("Pragma: 'no-cache'"));
+  assert.ok(source.includes("Expires: '0'"));
+  assert.ok(source.includes("'Surrogate-Control': 'no-store'"));
+  assert.ok(source.includes("delete req.headers['if-none-match']"));
+  assert.ok(source.includes("delete req.headers['if-modified-since']"));
+  assert.ok(routeBlock.includes('noStoreDynamicResponse'));
+  assert.ok(routeBlock.includes('sendNoStoreJson(res, { success: true, data: requests })'));
+  assert.ok(!routeBlock.includes('res.json({ success: true, data: requests })'));
+});
+
+test('PEI e biblioteca buscam protocol-import-requests sem cache do navegador', () => {
+  const patientSource = readSource('src/components/PatientDetailView.tsx');
+  const protocolsSource = readSource('src/components/Protocols.tsx');
+  const patientFetch = patientSource.match(/fetch\('\/api\/protocol-import-requests'[\s\S]*?\}\);/)?.[0] || '';
+  const protocolsFetch = protocolsSource.match(/fetch\('\/api\/protocol-import-requests'[\s\S]*?\}\);/)?.[0] || '';
+
+  assert.ok(patientFetch.includes("cache: 'no-store'"));
+  assert.ok(patientFetch.includes("'Cache-Control': 'no-store'"));
+  assert.ok(patientFetch.includes("Pragma: 'no-cache'"));
+  assert.ok(protocolsFetch.includes("cache: 'no-store'"));
+  assert.ok(protocolsFetch.includes("'Cache-Control': 'no-store'"));
+  assert.ok(protocolsFetch.includes("Pragma: 'no-cache'"));
+});
+
+test('protocol-import-requests diagnostica filtros e considera escopos aprovados', () => {
+  const source = readSource('server.ts');
+  const routeBlock = source.match(/app\.get\('\/api\/protocol-import-requests'[\s\S]*?app\.delete\('\/api\/protocol-import-requests\/:requestId'/)?.[0] || '';
+
+  assert.ok(source.includes('function buildProtocolAccessScopeKeys'));
+  assert.ok(routeBlock.includes('table: \'protocol_import_requests\''));
+  assert.ok(routeBlock.includes('totalProtocolImportRequests'));
+  assert.ok(routeBlock.includes('filteredProtocolImportRequests'));
+  assert.ok(routeBlock.includes('totalCanonicalProtocols'));
+  assert.ok(routeBlock.includes('totalLegacyProtocolImportLogs'));
+  assert.ok(routeBlock.includes('scopeKeys.flatMap'));
+  assert.ok(routeBlock.includes('accessMap.get(scopeKey)'));
+  assert.ok(routeBlock.includes('possiblyFilteredByScope'));
+});
+
 test('selects explicitos continuam apontando para tabelas que alimentam Plano/PEI', () => {
   const source = readSource('src/utils/routeSchemaFallbacks.ts');
 

@@ -432,7 +432,14 @@ export const ProtocolManagementSystem = ({
 
     const loadImportedStatuses = async () => {
       try {
-        const response = await fetch('/api/protocol-import-requests', { credentials: 'include' });
+        const response = await fetch('/api/protocol-import-requests', {
+          credentials: 'include',
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-store',
+            Pragma: 'no-cache'
+          }
+        });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || !data.success) return;
         if (!cancelled) {

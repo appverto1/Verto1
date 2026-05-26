@@ -646,14 +646,19 @@ const VERTO_PROTOCOL_CATALOG = [
 const VERTO_PROTOCOL_BY_KEY = new Map(VERTO_PROTOCOL_CATALOG.map((protocol) => [protocol.key, protocol]));
 const VERTO_PROTOCOL_PANEL_RESET_AT = '2026-05-07T15:38:23.081Z';
 
-function buildProtocolAccessScopeKey(params: { clinicId?: any; requesterUserId?: any; requesterEmail?: any }): string {
+function buildProtocolAccessScopeKeys(params: { clinicId?: any; requesterUserId?: any; requesterEmail?: any }): string[] {
+  const keys: string[] = [];
   const clinicId = sanitizeString(params.clinicId, 120);
-  if (clinicId) return `clinic:${clinicId}`;
+  if (clinicId) keys.push(`clinic:${clinicId}`);
   const requesterUserId = sanitizeString(params.requesterUserId, 120);
-  if (requesterUserId) return `user:${requesterUserId}`;
+  if (requesterUserId) keys.push(`user:${requesterUserId}`);
   const requesterEmail = sanitizeEmail(params.requesterEmail);
-  if (requesterEmail) return `email:${requesterEmail}`;
-  return 'unknown';
+  if (requesterEmail) keys.push(`email:${requesterEmail}`);
+  return Array.from(new Set(keys.length > 0 ? keys : ['unknown']));
+}
+
+function buildProtocolAccessScopeKey(params: { clinicId?: any; requesterUserId?: any; requesterEmail?: any }): string {
+  return buildProtocolAccessScopeKeys(params)[0] || 'unknown';
 }
 
 async function loadProtocolAccessMap(): Promise<Map<string, string[]>> {
@@ -996,6 +1001,39 @@ function sendAuthRouteError(res: any, route: string, stage: string, error: any, 
   return res
     .status(classified.status)
     .json(authRouteErrorPayload(route, stage, error, classified.status, classified.kind));
+}
+
+const NO_STORE_DYNAMIC_HEADERS = {
+  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+  Pragma: 'no-cache',
+  Expires: '0',
+  'Surrogate-Control': 'no-store'
+};
+
+function applyNoStoreHeaders(res: any) {
+  for (const [key, value] of Object.entries(NO_STORE_DYNAMIC_HEADERS)) {
+    res.setHeader(key, value);
+  }
+  res.removeHeader?.('ETag');
+}
+
+function noStoreDynamicResponse(req: any, res: any, next: any) {
+  if (req.headers) {
+    delete req.headers['if-none-match'];
+    delete req.headers['if-modified-since'];
+  }
+  applyNoStoreHeaders(res);
+  return next();
+}
+
+function sendNoStoreJson(res: any, body: any, statusCode = 200) {
+  const payload = JSON.stringify(body);
+  res.statusCode = statusCode;
+  applyNoStoreHeaders(res);
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Length', Buffer.byteLength(payload));
+  res.removeHeader?.('ETag');
+  return res.end(payload);
 }
 
 function isRecoverableSessionSaveError(error: any): boolean {
@@ -18626,11 +18664,38 @@ async function startServer() {
     }
   });
 
-  app.get('/api/protocol-import-requests', checkAuth, async (req: any, res) => {
+  app.get('/api/protocol-import-requests', noStoreDynamicResponse, checkAuth, async (req: any, res) => {
     try {
+      applyNoStoreHeaders(res);
       const user = req.session.user;
       const userId = sanitizeString(user?.id, 120);
       const clinicId = sanitizeString(currentClinicId(user), 120);
+      const workspaceId = sanitizeString(user?.activeWorkspaceId || user?.workspaceId || user?.workspace_id, 120);
+      const organizationId = sanitizeString(user?.organizationId || user?.organization_id, 120);
+      const tableFilters = [
+        `created_at >= ${VERTO_PROTOCOL_PANEL_RESET_AT}`,
+        isUuid(clinicId)
+          ? `clinic_id = ${clinicId}`
+          : userId
+            ? `requester_user_id = ${userId}`
+            : 'no clinic_id/requester_user_id filter'
+      ];
+      const diagnostics: Record<string, any> | null = isProd ? null : {
+        route: 'GET /api/protocol-import-requests',
+        userId,
+        workspaceId: workspaceId || null,
+        organizationId: organizationId || null,
+        clinicId: clinicId || null,
+        table: 'protocol_import_requests',
+        filters: tableFilters,
+        tableRowsReturned: 0,
+        legacyRowsMatched: 0,
+        authorizedScopeKeys: [],
+        authorizedProtocolKeys: 0,
+        returnedCount: 0,
+        wouldReturnEmpty: true,
+        possiblyFilteredByScope: false
+      };
       let requests: any[] = [];
 
       try {
@@ -18649,6 +18714,7 @@ async function startServer() {
 
         const { data, error } = await query;
         if (!error && Array.isArray(data)) {
+          if (diagnostics) diagnostics.tableRowsReturned = data.length;
           requests = data.map((row: any) => {
             const scanReport = parseStoredJsonObject(row.scan_report);
             return {
@@ -18668,8 +18734,18 @@ async function startServer() {
               reviewedAt: sanitizeString(row.reviewed_at, 80) || null
             };
           });
+        } else if (error && diagnostics) {
+          diagnostics.tableError = {
+            code: sanitizeString(error?.code, 40) || null,
+            message: extractSupabaseErrorMessage(error)
+          };
         }
-      } catch {
+      } catch (tableError: any) {
+        if (diagnostics) {
+          diagnostics.tableError = {
+            message: sanitizeString(tableError?.message || String(tableError), 500)
+          };
+        }
         requests = [];
       }
 
@@ -18682,12 +18758,14 @@ async function startServer() {
           .order('timestamp', { ascending: false })
           .limit(50);
 
+        let legacyRowsMatched = 0;
         requests = (logs || []).map((log: any) => {
           try {
             const payload = JSON.parse(String(log.payload_details || '{}'));
             const requesterUserId = sanitizeString(payload.requesterUserId, 120);
             const payloadClinicId = sanitizeString(payload.clinicId, 120);
             if ((userId && requesterUserId === userId) || (clinicId && payloadClinicId === clinicId)) {
+              legacyRowsMatched += 1;
               return {
                 id: sanitizeString(payload.id, 120),
                 protocolName: sanitizeString(payload.protocolName, 180),
@@ -18707,11 +18785,18 @@ async function startServer() {
             return null;
           }
         }).filter(Boolean);
+        if (diagnostics) diagnostics.legacyRowsMatched = legacyRowsMatched;
       }
 
       const accessMap = await loadProtocolAccessMap();
-      const scopeKey = buildProtocolAccessScopeKey({ clinicId, requesterUserId: userId, requesterEmail: user?.email });
-      const authorizedProtocolKeys = accessMap.get(scopeKey) || [];
+      const scopeKeys = buildProtocolAccessScopeKeys({ clinicId, requesterUserId: userId, requesterEmail: user?.email });
+      const authorizedProtocolKeys = Array.from(new Set(
+        scopeKeys.flatMap((scopeKey) => accessMap.get(scopeKey) || [])
+      )).filter((protocolKey) => VERTO_PROTOCOL_BY_KEY.has(protocolKey));
+      if (diagnostics) {
+        diagnostics.authorizedScopeKeys = scopeKeys;
+        diagnostics.authorizedProtocolKeys = authorizedProtocolKeys.length;
+      }
       const existingAuthorizedKeys = new Set(
         requests
           .filter((request) => String(request.status || '').toLowerCase() === 'approved')
@@ -18722,7 +18807,7 @@ async function startServer() {
         const protocol = VERTO_PROTOCOL_BY_KEY.get(protocolKey);
         if (!protocol) continue;
         requests.unshift({
-          id: `access-${scopeKey}-${protocolKey}`,
+          id: `access-${scopeKeys[0]}-${protocolKey}`,
           protocolName: protocol.name,
           fileName: 'Acervo Verto',
           status: 'approved',
@@ -18740,9 +18825,52 @@ async function startServer() {
         });
       }
 
-      return res.json({ success: true, data: requests });
+      if (diagnostics) {
+        try {
+          let filteredCountQuery = supabase
+            .from('protocol_import_requests')
+            .select('id', { count: 'exact', head: true })
+            .gte('created_at', VERTO_PROTOCOL_PANEL_RESET_AT);
+          if (isUuid(clinicId)) {
+            filteredCountQuery = filteredCountQuery.eq('clinic_id', clinicId);
+          } else if (userId) {
+            filteredCountQuery = filteredCountQuery.eq('requester_user_id', userId);
+          }
+          const [totalRequests, filteredRequests, canonicalProtocols, legacyRequests] = await Promise.all([
+            supabase
+              .from('protocol_import_requests')
+              .select('id', { count: 'exact', head: true })
+              .gte('created_at', VERTO_PROTOCOL_PANEL_RESET_AT),
+            filteredCountQuery,
+            supabase
+              .from('verto_canonical_protocols')
+              .select('id', { count: 'exact', head: true }),
+            supabase
+              .from('activity_logs')
+              .select('id', { count: 'exact', head: true })
+              .eq('type', 'protocol_import_request')
+              .gte('timestamp', VERTO_PROTOCOL_PANEL_RESET_AT)
+          ]);
+          diagnostics.totalProtocolImportRequests = totalRequests.count ?? null;
+          diagnostics.filteredProtocolImportRequests = filteredRequests.count ?? null;
+          diagnostics.totalCanonicalProtocols = canonicalProtocols.count ?? null;
+          diagnostics.totalLegacyProtocolImportLogs = legacyRequests.count ?? null;
+          diagnostics.possiblyFilteredByScope =
+            Number(totalRequests.count || 0) > 0 &&
+            Number(filteredRequests.count || 0) === 0 &&
+            requests.length === 0;
+        } catch (diagnosticError: any) {
+          diagnostics.countError = sanitizeString(diagnosticError?.message || String(diagnosticError), 500);
+        }
+
+        diagnostics.returnedCount = requests.length;
+        diagnostics.wouldReturnEmpty = requests.length === 0;
+        console.info('[Protocol Import] list diagnostics', redactForLogs(diagnostics));
+      }
+
+      return sendNoStoreJson(res, { success: true, data: requests });
     } catch (error: any) {
-      return res.status(500).json({ success: false, error: 'Nao foi possivel listar seus protocolos importados.' });
+      return sendNoStoreJson(res, { success: false, error: 'Nao foi possivel listar seus protocolos importados.' }, 500);
     }
   });
 
