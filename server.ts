@@ -998,6 +998,20 @@ function sendAuthRouteError(res: any, route: string, stage: string, error: any, 
     .json(authRouteErrorPayload(route, stage, error, classified.status, classified.kind));
 }
 
+function isRecoverableSessionSaveError(error: any): boolean {
+  const classified = classifyAuthRouteError(error);
+  if (classified.kind === 'schema') return true;
+
+  const message = extractSupabaseErrorMessage(error).toLowerCase();
+  return (
+    message.includes('session') ||
+    message.includes('connection') ||
+    message.includes('timeout') ||
+    message.includes('econn') ||
+    message.includes('terminat')
+  );
+}
+
 function clinicalMutationErrorPayload(route: string, stage: string, error: any, statusCode: number, kind: string) {
   if (process.env.NODE_ENV === 'production') {
     return { success: false, error: safeErrorMessageByStatus(statusCode) };
@@ -4197,6 +4211,35 @@ if (!encryptionKey) {
   console.warn("AVISO: DATA_ENCRYPTION_KEY ausente/inválida. O endpoint de prontuário criptografado ficará desabilitado.");
 }
 
+function quotePgIdentifier(identifier: string): string {
+  return `"${sanitizeString(identifier, 80).replace(/"/g, '""')}"`;
+}
+
+async function ensurePostgresSessionTable(pool: any, tableName = 'session') {
+  const table = quotePgIdentifier(tableName || 'session');
+  await pool.query(`
+    create table if not exists ${table} (
+      "sid" varchar not null,
+      "sess" json not null,
+      "expire" timestamp(6) not null
+    )
+  `);
+  await pool.query(`alter table ${table} add column if not exists "sid" varchar`);
+  await pool.query(`alter table ${table} add column if not exists "sess" json`);
+  await pool.query(`alter table ${table} add column if not exists "expire" timestamp(6)`);
+  await pool.query(`create unique index if not exists "session_sid_unique_idx" on ${table} ("sid")`);
+  await pool.query(`create index if not exists "IDX_session_expire" on ${table} ("expire")`);
+}
+
+function deploymentReleaseId(): string | undefined {
+  return (
+    sanitizeString(process.env.RAILWAY_GIT_COMMIT_SHA, 80) ||
+    sanitizeString(process.env.RAILWAY_DEPLOYMENT_ID, 80) ||
+    sanitizeString(process.env.SOURCE_VERSION, 80) ||
+    sanitizeString(process.env.COMMIT_SHA, 80)
+  ).slice(0, 12) || undefined;
+}
+
 async function startServer() {
   const app = express();
   const parsedPort = Number.parseInt(String(process.env.PORT || '8080'), 10);
@@ -4864,6 +4907,11 @@ async function startServer() {
           const client = await pool.connect();
           console.log('PostgreSQL connection successful.');
           client.release();
+          try {
+            await ensurePostgresSessionTable(pool, 'session');
+          } catch (tableErr: any) {
+            console.warn('PostgreSQL session table preflight warning:', tableErr?.message || String(tableErr));
+          }
 
           const PostgresStore = pgSession(session);
           sessionStore = new PostgresStore({
@@ -6013,11 +6061,13 @@ async function startServer() {
   // - Production must not expose internal env/integration details.
   // - Detailed diagnostics are available only outside production.
   app.get('/api/health', async (req, res) => {
+    const release = deploymentReleaseId();
     if (isProd) {
-      return res.json({ status: 'ok' });
+      return res.json(cleanObject({ status: 'ok', release }));
     }
 
     const status: any = {
+      release,
       supabase: 'unknown',
       stripe: 'unknown',
       env: {
@@ -7416,6 +7466,7 @@ async function startServer() {
         email: user.email,
         role: roleForSession,
         name: profile.name,
+        sessionToken: issueSessionToken(sanitizeString(user.id, 120)),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
         address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
         type: profile.type || user.user_metadata?.type || null,
@@ -7439,11 +7490,27 @@ async function startServer() {
       };
 
       req.session.user = buildSessionUserPayload(userData);
+      const loginResponse = { success: true, user: userData, isFirstLogin: Boolean(req.session.isFirstLogin) };
       console.log(`[Auth] Saving session for ${user.email}. Session ID: ${req.sessionID}`);
       req.session.save((err) => {
         if (err) {
           console.error("Session save error in login:", err);
           if (!res.headersSent) {
+            if (isRecoverableSessionSaveError(err)) {
+              logRouteDbError('/api/auth/login', err, {
+                requestId,
+                userId: sanitizeString(user.id, 120),
+                email: maskEmail(safeAuthEmail || credentialEmail),
+                stage: 'session_save_degraded',
+                errorKind: 'session_persistence'
+              });
+              const degradedResponse = {
+                ...loginResponse,
+                sessionPersistence: 'bearer_fallback'
+              };
+              delete req.session.isFirstLogin;
+              return res.json(degradedResponse);
+            }
             return sendAuthRouteError(res, '/api/auth/login', 'session_save', err, {
               requestId,
               userId: sanitizeString(user.id, 120),
@@ -7452,7 +7519,7 @@ async function startServer() {
           }
           return;
         }
-        res.json({ success: true, user: userData, isFirstLogin: req.session.isFirstLogin });
+        res.json(loginResponse);
         delete req.session.isFirstLogin;
       });
     } catch (error) {

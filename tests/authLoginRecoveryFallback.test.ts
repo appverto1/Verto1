@@ -182,6 +182,31 @@ test('/api/auth/login no longer uses broad profile select directly inside login 
   assert.ok(!loginBlock.includes('select(USER_PROFILE_SELECT)'));
 });
 
+test('/api/auth/login degrades session store schema failures to bearer fallback after auth succeeds', () => {
+  const serverSource = fs.readFileSync(path.resolve('server.ts'), 'utf8');
+  const loginBlock = serverSource.match(/app\.post\('\/api\/auth\/login'[\s\S]*?app\.post\('\/api\/auth\/logout'/)?.[0] || '';
+
+  assert.ok(serverSource.includes('function isRecoverableSessionSaveError'));
+  assert.ok(loginBlock.includes('sessionToken: issueSessionToken'));
+  assert.ok(loginBlock.includes("sessionPersistence: 'bearer_fallback'"));
+  assert.ok(loginBlock.includes('isRecoverableSessionSaveError(err)'));
+});
+
+test('production health exposes short release id for deploy verification', () => {
+  const serverSource = fs.readFileSync(path.resolve('server.ts'), 'utf8');
+
+  assert.ok(serverSource.includes('function deploymentReleaseId'));
+  assert.ok(serverSource.includes("return res.json(cleanObject({ status: 'ok', release }))"));
+});
+
+test('postgres session store preflights session table columns before use', () => {
+  const serverSource = fs.readFileSync(path.resolve('server.ts'), 'utf8');
+
+  assert.ok(serverSource.includes('async function ensurePostgresSessionTable'));
+  assert.ok(serverSource.includes('alter table ${table} add column if not exists "sess" json'));
+  assert.ok(serverSource.includes('create unique index if not exists "session_sid_unique_idx"'));
+});
+
 for (const { name, fn } of tests) {
   await fn();
   console.log(`[ok] ${name}`);
