@@ -1659,7 +1659,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     };
   }, [history, protocols, patient.id, selectedChartProtocolId, selectedSnapshotDate]);
 
-  const safeProtocols = protocols || []; 
+  const safeProtocols = Array.isArray(protocols) ? protocols : []; 
   useEffect(() => {
     let cancelled = false;
 
@@ -1723,6 +1723,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const selectedDomain = selectedProtocol?.data.find((d: any) => String(d.id) === String(selectedDomainId)); 
   const targetProtocol = planProtocolCatalog.find((p: any) => String(p.id) === String(targetProtocolId)); 
   const targetDomain = targetProtocol?.data.find((d: any) => String(d.id) === String(targetDomainId)); 
+  const selectedPEIProtocol = planProtocolCatalog.find((p: any) => String(p.id) === String(selectedPEIProtocolId));
+  const selectedPEIDomain = selectedPEIProtocol?.data.find((d: any) => String(d.id) === String(selectedPEIDomainId));
 
   useEffect(() => { 
     if (!isCreatingNewTask && selectedSkillId && selectedDomain) { 
@@ -5338,7 +5340,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                             }}
                           >
                             <option value="">Selecione...</option>
-                            {protocols.map((p: any) => (
+                            {planProtocolCatalog.map((p: any) => (
                               <option key={p.id} value={p.id}>{p.title}</option>
                             ))}
                           </select>
@@ -5355,7 +5357,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                             disabled={!selectedPEIProtocolId}
                           >
                             <option value="">Selecione...</option>
-                            {protocols.find((p: any) => String(p.id) === String(selectedPEIProtocolId))?.data.map((d: any) => (
+                            {(selectedPEIProtocol?.data || []).map((d: any) => (
                               <option key={d.id} value={d.id}>{d.name}</option>
                             ))}
                           </select>
@@ -5366,12 +5368,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         <div className="space-y-3 animate-fade-in">
                           <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Habilidade / Meta</label>
                           <div className="grid grid-cols-1 gap-2">
-                            {protocols.find((p: any) => String(p.id) === String(selectedPEIProtocolId))?.data.find((d: any) => String(d.id) === String(selectedPEIDomainId))?.skills.map((s: any) => (
+                            {(selectedPEIDomain?.skills || []).map((s: any) => (
                               <button 
                                 key={s.id}
                                 onClick={() => {
                                   const peiGoal = {
                                     id: Date.now(),
+                                    protocolId: selectedPEIProtocol?.id,
+                                    domainId: selectedPEIDomain?.id,
                                     skillId: s.id,
                                     name: s.name,
                                     objective: s.objective,
@@ -5382,8 +5386,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                     progress: 0,
                                     term: 'short',
                                     isPriority: false,
-                                    protocolTitle: protocols.find((p: any) => String(p.id) === String(selectedPEIProtocolId))?.title,
-                                    domainName: protocols.find((p: any) => String(p.id) === String(selectedPEIProtocolId))?.data.find((d: any) => String(d.id) === String(selectedPEIDomainId))?.name
+                                    protocolTitle: selectedPEIProtocol?.title,
+                                    domainName: selectedPEIDomain?.name
                                   };
                                   const updatedPatient = {
                                     ...patient,

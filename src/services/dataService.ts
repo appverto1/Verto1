@@ -473,20 +473,77 @@ async function tryFetchLatestProtocolRow(
   return { row: null, error: null };
 }
 
-function parseJsonObject(value: any) {
-  if (!value) return null;
+function parseJsonValue(value: any) {
+  if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'object') return value;
   if (typeof value !== 'string') return null;
   try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' ? parsed : null;
+    return JSON.parse(value);
   } catch {
     return null;
   }
 }
 
+function parseJsonObject(value: any) {
+  const parsed = parseJsonValue(value);
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+}
+
 function ensureArray(value: any) {
   return Array.isArray(value) ? value : [];
+}
+
+function normalizeArrayLike(value: any, nestedKeys: string[] = []) {
+  if (Array.isArray(value)) return value;
+
+  const parsed = parseJsonValue(value);
+  if (Array.isArray(parsed)) return parsed;
+
+  const source =
+    parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : value && typeof value === 'object' && !Array.isArray(value)
+        ? value
+        : null;
+
+  if (!source) return [];
+
+  for (const key of nestedKeys) {
+    const nested = source[key];
+    if (Array.isArray(nested)) return nested;
+    const parsedNested = parseJsonValue(nested);
+    if (Array.isArray(parsedNested)) return parsedNested;
+  }
+
+  return [];
+}
+
+function normalizeProtocolList(value: any) {
+  return normalizeArrayLike(value, ['protocols', 'items', 'data', 'value']).filter(Boolean);
+}
+
+function firstDefinedValue(source: any, keys: string[]) {
+  if (!source || typeof source !== 'object') return undefined;
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      return source[key];
+    }
+  }
+  return undefined;
+}
+
+function normalizePeiGoals(recordPayload: any, patientFallback?: any) {
+  const peiKeys = ['pei', 'peiGoals', 'pei_goals', 'goals', 'metas'];
+  const recordSource = firstDefinedValue(recordPayload, peiKeys);
+  if (recordSource !== undefined) {
+    return normalizeArrayLike(recordSource, peiKeys);
+  }
+
+  const wrappedRecordGoals = normalizeArrayLike(recordPayload, peiKeys);
+  if (wrappedRecordGoals.length > 0) return wrappedRecordGoals;
+
+  const patientSource = firstDefinedValue(patientFallback, peiKeys);
+  return patientSource !== undefined ? normalizeArrayLike(patientSource, peiKeys) : [];
 }
 
 function clinicProtocolsBackupKey(workspaceId?: string | null) {
@@ -498,7 +555,7 @@ function readClinicProtocolsBackup(workspaceId?: string | null) {
     const raw = localStorage.getItem(clinicProtocolsBackupKey(workspaceId));
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return ensureArray(parsed?.protocols);
+    return normalizeProtocolList(parsed?.protocols);
   } catch {
     return [];
   }
@@ -510,7 +567,7 @@ function writeClinicProtocolsBackup(workspaceId: string | undefined | null, prot
       clinicProtocolsBackupKey(workspaceId),
       JSON.stringify({
         updatedAt: new Date().toISOString(),
-        protocols: ensureArray(protocols),
+        protocols: normalizeProtocolList(protocols),
       }),
     );
   } catch (error) {
@@ -2692,7 +2749,7 @@ export const dataService = {
       });
       const result = await safeJson(response);
       const clinicData = result?.data || {};
-      const remoteProtocols = ensureArray(clinicData?.protocols);
+      const remoteProtocols = normalizeProtocolList(clinicData?.protocols);
       const backupProtocols = readClinicProtocolsBackup(workspaceId);
       const protocols = remoteProtocols.length > 0 || clinicData?.updatedAt ? remoteProtocols : backupProtocols;
       return {
@@ -2932,11 +2989,12 @@ export const dataService = {
       const recordPayload = parseJsonObject(patientRecordRes?.data?.payload) || {};
       const anamnesisData = parseJsonObject(recordPayload?.anamnese) || null;
       const submissions = ensureArray(submissionsRes?.data);
+      const peiGoals = normalizePeiGoals(recordPayload, patient);
 
       hydratedPatients.push({
         ...patient,
         anamnesisData,
-        pei: Array.isArray(recordPayload?.pei) ? recordPayload.pei : Array.isArray(patient?.pei) ? patient.pei : [],
+        pei: peiGoals,
         evaluationLinks:
           recordPayload?.evaluationLinks && typeof recordPayload.evaluationLinks === 'object'
             ? recordPayload.evaluationLinks
@@ -2969,7 +3027,7 @@ export const dataService = {
         patientId,
         diagnosis: recordPayload?.diagnosis || patient?.diagnosis || null,
         anamnesisData,
-        pei: Array.isArray(recordPayload?.pei) ? recordPayload.pei : Array.isArray(patient?.pei) ? patient.pei : [],
+        pei: peiGoals,
         evaluationLinks:
           recordPayload?.evaluationLinks && typeof recordPayload.evaluationLinks === 'object'
             ? recordPayload.evaluationLinks
@@ -2991,7 +3049,7 @@ export const dataService = {
       specialtySettings: {},
       updatedAt: null
     };
-    const remoteProtocols = ensureArray(clinicStateData?.protocols);
+    const remoteProtocols = normalizeProtocolList(clinicStateData?.protocols);
     const backupProtocols = readClinicProtocolsBackup(workspaceId);
     const clinicStateWithProtocolFallback = {
       ...clinicStateData,

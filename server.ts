@@ -2473,6 +2473,46 @@ function cleanObject<T extends Record<string, any>>(input: T): Partial<T> {
   return Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
 
+function parseJsonValueForRoute(value: any): any {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeJsonArrayForRoute(value: any, nestedKeys: string[] = []): any[] {
+  if (Array.isArray(value)) return value;
+
+  const parsed = parseJsonValueForRoute(value);
+  if (Array.isArray(parsed)) return parsed;
+
+  const source =
+    parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : value && typeof value === 'object' && !Array.isArray(value)
+        ? value
+        : null;
+
+  if (!source) return [];
+
+  for (const key of nestedKeys) {
+    const nested = source[key];
+    if (Array.isArray(nested)) return nested;
+    const parsedNested = parseJsonValueForRoute(nested);
+    if (Array.isArray(parsedNested)) return parsedNested;
+  }
+
+  return [];
+}
+
+function normalizeProtocolArrayForRoute(value: any): any[] {
+  return normalizeJsonArrayForRoute(value, ['protocols', 'items', 'data', 'value']).filter(Boolean);
+}
+
 function effortEmojiForPercent(value: number | null | undefined): string | null {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return null;
   const percent = Number(value);
@@ -8439,7 +8479,7 @@ async function startServer() {
           clinicId,
           rooms: Array.isArray(data?.rooms) ? data.rooms : [],
           appointments: Array.isArray(data?.appointments) ? data.appointments : [],
-          protocols: Array.isArray(data?.protocols) ? data.protocols : [],
+          protocols: normalizeProtocolArrayForRoute(data?.protocols),
           specialtySettings: data?.specialty_settings && typeof data.specialty_settings === 'object' ? data.specialty_settings : {},
           updatedAt: data?.updated_at || null
         }
@@ -8645,7 +8685,7 @@ async function startServer() {
           clinicId: data.clinic_id,
           rooms: Array.isArray(data.rooms) ? data.rooms : [],
           appointments: Array.isArray(data.appointments) ? data.appointments : [],
-          protocols: Array.isArray(data.protocols) ? data.protocols : [],
+          protocols: normalizeProtocolArrayForRoute(data.protocols),
           specialtySettings: data.specialty_settings && typeof data.specialty_settings === 'object' ? data.specialty_settings : {},
           updatedAt: data.updated_at || null
         }
@@ -12218,8 +12258,9 @@ async function startServer() {
           return bTs - aTs;
         });
 
-      const selectedState = orderedStates.find((s: any) => Array.isArray(s?.protocols) && s.protocols.length > 0) || orderedStates[0];
-      const protocols = Array.isArray(selectedState?.protocols) ? selectedState.protocols : [];
+      const selectedState =
+        orderedStates.find((s: any) => normalizeProtocolArrayForRoute(s?.protocols).length > 0) || orderedStates[0];
+      const protocols = normalizeProtocolArrayForRoute(selectedState?.protocols);
       return res.json({ success: true, data: protocols });
     } catch (error) {
       return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });

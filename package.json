@@ -20,6 +20,7 @@
     "test:patient-invitation-fallback": "tsx tests/patientInvitationFallback.test.ts",
     "test:profile-notes-fallback": "tsx tests/profileNotesFallback.test.ts",
     "test:route-schema-fallbacks": "tsx tests/routeSchemaFallbacks.test.ts",
+    "test:pei-plan-protocols": "tsx tests/peiPlanProtocols.test.ts",
     "test:notes-tasks-fallback": "tsx tests/notesTasksFallback.test.ts",
     "test:offline-sync-resilience": "tsx tests/offlineSyncResilience.test.ts",
     "test:auth-login-recovery-fallback": "tsx tests/authLoginRecoveryFallback.test.ts",

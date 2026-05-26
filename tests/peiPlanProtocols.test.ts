@@ -1,0 +1,71 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const tests: Array<{ name: string; fn: () => void }> = [];
+const test = (name: string, fn: () => void) => tests.push({ name, fn });
+
+const readSource = (file: string) => fs.readFileSync(path.resolve(file), 'utf8');
+
+test('aba Plano usa catalogo consolidado no seletor de protocolo do PEI', () => {
+  const source = readSource('src/components/PatientDetailView.tsx');
+  const peiBlock = source.match(/Adicionar Meta do Protocolo[\s\S]*?Nenhuma meta definida no PEI ainda/)?.[0] || '';
+
+  assert.ok(peiBlock.includes('planProtocolCatalog.map'), 'dropdown do PEI deve usar catalogo consolidado');
+  assert.ok(!peiBlock.includes('protocols.map((p: any)'), 'dropdown do PEI nao deve depender da lista crua');
+  assert.ok(!/protocols\.find\([\s\S]{0,180}selectedPEIProtocolId/.test(peiBlock), 'dominios/metas nao devem buscar no protocols cru');
+  assert.ok(peiBlock.includes('selectedPEIProtocol?.data || []'));
+  assert.ok(peiBlock.includes('selectedPEIDomain?.skills || []'));
+});
+
+test('metas adicionadas pelo PEI preservam ids de protocolo e dominio', () => {
+  const source = readSource('src/components/PatientDetailView.tsx');
+  const peiGoalBlock = source.match(/const peiGoal = \{[\s\S]*?\};/)?.[0] || '';
+
+  assert.ok(peiGoalBlock.includes('protocolId: selectedPEIProtocol?.id'));
+  assert.ok(peiGoalBlock.includes('domainId: selectedPEIDomain?.id'));
+  assert.ok(peiGoalBlock.includes('protocolTitle: selectedPEIProtocol?.title'));
+  assert.ok(peiGoalBlock.includes('domainName: selectedPEIDomain?.name'));
+});
+
+test('dataService normaliza protocolos e metas PEI legadas antes de hidratar a tela', () => {
+  const source = readSource('src/services/dataService.ts');
+
+  assert.ok(source.includes('function normalizeProtocolList'));
+  assert.ok(source.includes("['protocols', 'items', 'data', 'value']"));
+  assert.ok(source.includes('function firstDefinedValue'));
+  assert.ok(/function\s+normalizePeiGoals/.test(source));
+  assert.ok(source.includes("const peiKeys = ['pei', 'peiGoals', 'pei_goals', 'goals', 'metas'];"));
+  assert.ok(source.includes('const recordSource = firstDefinedValue(recordPayload, peiKeys);'));
+  assert.ok(source.includes('const remoteProtocols = normalizeProtocolList(clinicData?.protocols);'));
+  assert.ok(source.includes('const remoteProtocols = normalizeProtocolList(clinicStateData?.protocols);'));
+  assert.ok(source.includes('const peiGoals = normalizePeiGoals(recordPayload, patient);'));
+  assert.ok(source.includes('pei: peiGoals'));
+});
+
+test('rotas de protocolos retornam arrays normalizados em vez de vazio silencioso', () => {
+  const source = readSource('server.ts');
+  const clinicGetBlock = source.match(/app\.get\('\/api\/clinic\/state'[\s\S]*?app\.post\('\/api\/clinic\/state'/)?.[0] || '';
+  const clinicPostBlock = source.match(/app\.post\('\/api\/clinic\/state'[\s\S]*?const handleVapidPublicKey/)?.[0] || '';
+  const patientSelfBlock = source.match(/app\.get\('\/api\/patient\/self\/protocols'[\s\S]*?app\.post\('\/api\/history'/)?.[0] || '';
+
+  assert.ok(source.includes('function normalizeProtocolArrayForRoute'));
+  assert.ok(clinicGetBlock.includes('protocols: normalizeProtocolArrayForRoute(data?.protocols)'));
+  assert.ok(clinicPostBlock.includes('protocols: normalizeProtocolArrayForRoute(data.protocols)'));
+  assert.ok(patientSelfBlock.includes('normalizeProtocolArrayForRoute(s?.protocols).length > 0'));
+  assert.ok(patientSelfBlock.includes('const protocols = normalizeProtocolArrayForRoute(selectedState?.protocols);'));
+});
+
+test('selects explicitos continuam apontando para tabelas que alimentam Plano/PEI', () => {
+  const source = readSource('src/utils/routeSchemaFallbacks.ts');
+
+  assert.ok(source.includes('export const CLINIC_STATE_SELECT_COLUMNS'));
+  assert.ok(source.includes("'protocols'"));
+  assert.ok(source.includes('export const PATIENT_RECORD_SELECT_COLUMNS'));
+  assert.ok(source.includes("'payload_encrypted'"));
+});
+
+for (const { name, fn } of tests) {
+  fn();
+  console.log(`[ok] ${name}`);
+}
