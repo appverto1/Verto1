@@ -720,7 +720,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
                       <p className="text-[10px] font-bold uppercase tracking-widest">AtenÃ§Ã£o</p>
                     </div>
                     <p className="text-xs text-orange-800 font-medium leading-relaxed">
-                      A migraÃ§Ã£o do Supabase para o Firebase estÃ¡ em fase final. Alguns dados legados ainda podem estar sendo sincronizados em ambos os bancos.
+                      A migraÃ§Ã£o de dados legados estÃ¡ em fase final. Alguns registros antigos ainda podem estar em sincronizaÃ§Ã£o.
                     </p>
                   </div>
                 </div>

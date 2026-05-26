@@ -18,6 +18,7 @@ import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 import { isAbaV2Enabled } from '../utils/featureFlags';
+import { filterHumanDisplayEntries, formatSessionLabel, safeDisplayValue } from '../utils/displayLabels';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
 import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
 import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
@@ -725,6 +726,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       patientId: patient?.id,
       patientName: patient?.name || 'Paciente',
       therapistId: resolvedClinicContext?.userId || clinicContext?.userId || null,
+      therapistName: resolvedClinicContext?.professionalName || resolvedClinicContext?.userName || clinicContext?.professionalName || clinicContext?.userName || patient?.therapistName || patient?.therapist_name || null,
       clinicId: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || null,
       status: 'active',
       durationMinutes,
@@ -742,6 +744,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         clinic_id: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || undefined,
         clinicId: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || undefined,
         therapist_id: resolvedClinicContext?.userId || clinicContext?.userId || undefined,
+        therapistName: resolvedClinicContext?.professionalName || resolvedClinicContext?.userName || clinicContext?.professionalName || clinicContext?.userName || patient?.therapistName || patient?.therapist_name || undefined,
         status: 'active',
         started_at: nextSession.startedAt,
         duration_minutes: durationMinutes,
@@ -1130,9 +1133,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         if (value === "child") return "Criança";
         return String(value);
       }
-      if (Array.isArray(value)) return value.join(", ");
+      if (Array.isArray(value)) return safeDisplayValue(value, "");
       if (typeof value === "object") return "";
-      return String(value);
+      return safeDisplayValue(value, "");
     };
 
     const priorityFields = [
@@ -1175,7 +1178,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       "template_snapshot",
       "questionLabels",
     ]);
-    const rawEntries = Object.entries(anamnesis || {}).filter(
+    const rawEntries = filterHumanDisplayEntries(anamnesis || {}).filter(
       ([key]) => !excludedKeys.has(key),
     );
     const prioritySet = new Set(priorityFields);
@@ -2013,13 +2016,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         correct: trial?.correct,
         independent: trial?.independent
       }).label;
-      const title = normalizeNoteText(trial?.target_name || trial?.targetName || trial?.title || 'Meta sem nome');
+      const title = normalizeNoteText(safeDisplayValue(trial?.target_name || trial?.targetName || trial?.title, 'Meta sem nome'));
       const sessionId = String(trial?.session_id || trial?.sessionId || '').trim();
       const occurredAt = trial?.occurred_at || trial?.occurredAt || trial?.created_at || trial?.createdAt;
       return {
         id: `trial-${String(trial?.id || `${title}-${occurredAt}`)}`,
         kind: 'trial',
         tableName: 'aba_trials',
+        sourceLabel: 'Tentativa ABA',
         sessionId,
         occurredAt,
         title,
@@ -2033,7 +2037,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
     const behaviorEvents = (Array.isArray(abaBehaviorEvents) ? abaBehaviorEvents : []).map((event: any) => {
       const measurementType = String(event?.measurement_type || event?.measurementType || 'frequency').toLowerCase();
-      const title = normalizeNoteText(event?.behavior_name || event?.behaviorName || event?.name || 'Comportamento sem nome');
+      const title = normalizeNoteText(safeDisplayValue(event?.behavior_name || event?.behaviorName || event?.name, 'Comportamento sem nome'));
       const sessionId = String(event?.session_id || event?.sessionId || '').trim();
       const occurredAt = event?.occurred_at || event?.occurredAt || event?.created_at || event?.createdAt;
       const countDelta = event?.count_delta ?? event?.countDelta;
@@ -2045,6 +2049,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         id: `behavior-${String(event?.id || `${title}-${occurredAt}`)}`,
         kind: 'behavior',
         tableName: 'aba_behavior_events',
+        sourceLabel: 'Registro comportamental',
         sessionId,
         occurredAt,
         title,
@@ -2061,7 +2066,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
     const masteryEvaluations = (Array.isArray(abaMasteryEvaluations) ? abaMasteryEvaluations : []).map((evaluation: any) => {
       const status = String(evaluation?.evaluation_status || evaluation?.evaluationStatus || 'not_met').toLowerCase();
-      const title = normalizeNoteText(evaluation?.target_name || evaluation?.targetName || evaluation?.title || 'Meta sem nome');
+      const title = normalizeNoteText(safeDisplayValue(evaluation?.target_name || evaluation?.targetName || evaluation?.title, 'Meta sem nome'));
       const sessionId = String(evaluation?.session_id || evaluation?.sessionId || '').trim();
       const occurredAt = evaluation?.evaluated_at || evaluation?.evaluatedAt || evaluation?.created_at || evaluation?.createdAt;
       const consecutive = Number(evaluation?.consecutive_successes ?? evaluation?.consecutiveSuccesses ?? 0) || 0;
@@ -2073,6 +2078,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         id: `mastery-${String(evaluation?.id || `${title}-${occurredAt}`)}`,
         kind: 'mastery',
         tableName: 'aba_mastery_evaluations',
+        sourceLabel: 'Avaliacao de maestria',
         sessionId,
         occurredAt,
         title,
@@ -2086,7 +2092,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
     const maintenanceProbeResults = (Array.isArray(abaMaintenanceOverview?.probeResults) ? abaMaintenanceOverview.probeResults : []).map((result: any) => {
       const status = String(result?.status || 'WATCH').toUpperCase();
-      const title = normalizeNoteText(result?.target_name || result?.targetName || result?.raw_payload?.targetName || result?.rawPayload?.targetName || result?.target_id || result?.targetId || 'Meta sem nome');
+      const title = normalizeNoteText(safeDisplayValue(result?.target_name || result?.targetName || result?.raw_payload?.targetName || result?.rawPayload?.targetName || result?.target_id || result?.targetId, 'Meta sem nome'));
       const sessionId = String(result?.session_id || result?.sessionId || '').trim();
       const occurredAt = result?.occurred_at || result?.occurredAt || result?.created_at || result?.createdAt;
       const accuracy = result?.accuracy_percent ?? result?.accuracyPercent ?? 0;
@@ -2095,6 +2101,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         id: `maintenance-${String(result?.id || `${title}-${occurredAt}`)}`,
         kind: 'maintenance',
         tableName: 'aba_maintenance_probe_results',
+        sourceLabel: 'Manutencao',
         sessionId,
         occurredAt,
         title,
@@ -2107,7 +2114,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     });
 
     const regressionAlerts = (Array.isArray(abaMaintenanceOverview?.alerts) ? abaMaintenanceOverview.alerts : []).map((alert: any) => {
-      const title = normalizeNoteText(alert?.target_name || alert?.targetName || alert?.target_id || alert?.targetId || 'Meta sem nome');
+      const title = normalizeNoteText(safeDisplayValue(alert?.target_name || alert?.targetName || alert?.target_id || alert?.targetId, 'Meta sem nome'));
       const occurredAt = alert?.created_at || alert?.createdAt;
       const severity = String(alert?.severity || 'LOW').toUpperCase();
       const message = normalizeNoteText(alert?.message || 'Risco de regressao');
@@ -2115,6 +2122,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         id: `regression-alert-${String(alert?.id || `${title}-${occurredAt}`)}`,
         kind: 'maintenance',
         tableName: 'aba_regression_alerts',
+        sourceLabel: 'Alerta clinico',
         sessionId: '',
         occurredAt,
         title,
@@ -2167,7 +2175,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#7a32fc]">Central ABA</p>
                 <h3 className={`mt-1 text-xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-gray-900'}`}>Registros estruturados da sessão</h3>
                 <p className={`mt-1 max-w-3xl text-xs leading-relaxed ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>
-                  Tentativas ficam em <span className="font-semibold">aba_trials</span>; comportamentos em <span className="font-semibold">aba_behavior_events</span>; maestria em <span className="font-semibold">aba_mastery_evaluations</span>. Offline, entram antes em <span className="font-semibold">OfflineVertoDB.records</span>.
+                  Acompanhe tentativas, comportamentos, maestria e manutencao em uma lista clinica unificada.
                 </p>
                 {latestRecord && (
                   <p className={`mt-3 text-[11px] font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
@@ -2368,11 +2376,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         )}
                       </div>
                       <div className="shrink-0 text-left sm:text-right">
-                        <p className={`text-[9px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>Tabela</p>
-                        <p className={`text-[11px] font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>{record.tableName}</p>
+                        <p className={`text-[9px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>Origem</p>
+                        <p className={`text-[11px] font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>{record.sourceLabel}</p>
                         {record.sessionId && (
-                          <p className={`mt-2 max-w-[180px] truncate text-[10px] ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`} title={record.sessionId}>
-                            {record.sessionId}
+                          <p className={`mt-2 max-w-[180px] truncate text-[10px] ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`} title={formatSessionLabel({ id: record.sessionId, startedAt: record.occurredAt })}>
+                            {formatSessionLabel({ id: record.sessionId, startedAt: record.occurredAt })}
                           </p>
                         )}
                       </div>
@@ -4336,6 +4344,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           onConfirmEndSession={handleConfirmSessionEnd}
           onSessionRecordSaved={incrementActiveSessionRecordCount}
           therapistId={resolvedClinicContext?.userId || clinicContext?.userId || null}
+          therapistName={resolvedClinicContext?.professionalName || resolvedClinicContext?.userName || clinicContext?.professionalName || clinicContext?.userName || patient?.therapistName || patient?.therapist_name || null}
           clinicId={resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || null}
         />
       )}

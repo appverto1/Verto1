@@ -1,4 +1,5 @@
 import { getIntervalRunStatus, isActiveIntervalCollection, type AbaIntervalCollectionStatus } from './abaIntervalLifecycle';
+import { formatPatientLabel, formatTherapistLabel, isTechnicalId, safeDisplayValue } from './displayLabels';
 
 export type SessionSummaryPendingItem = {
   key: string;
@@ -201,6 +202,7 @@ type CalculateSessionSummaryInput = {
   patientId?: string;
   patientName?: string;
   therapistId?: string | null;
+  therapistName?: string | null;
   startedAt?: string;
   endedAt?: string;
   trials?: any[];
@@ -585,6 +587,7 @@ export const calculateSessionSummary = (sessionId: string, input: CalculateSessi
     sessionId,
     patientId: input.patientId || '',
     therapistId: input.therapistId || null,
+    therapistName: input.therapistName || null,
     patientName: input.patientName,
     startedAt,
     endedAt,
@@ -672,9 +675,9 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
             ? 'critério atingido hoje'
             : 'critério não atingido';
         return {
-          targetId,
-          targetName,
-          program: String(valueOf(trials[0], 'programName', 'program_name', 'programTitle', 'program_title', 'domainName', 'domain_name') || 'Não informado'),
+          targetId: isTechnicalId(targetId) ? undefined : targetId,
+          targetName: safeDisplayValue(targetName, 'Meta sem nome'),
+          program: safeDisplayValue(valueOf(trials[0], 'programName', 'program_name', 'programTitle', 'program_title', 'domainName', 'domain_name'), 'Nao informado'),
           totalTrials: trials.length,
           independentCorrect,
           promptedCorrect,
@@ -686,9 +689,9 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
         };
       })
     : (sessionSummary.masterySummary || []).map((item) => ({
-        targetId: item.id,
-        targetName: item.name,
-        program: 'Não informado',
+        targetId: isTechnicalId(item.id) ? undefined : item.id,
+        targetName: safeDisplayValue(item.name, 'Meta sem nome'),
+        program: 'Nao informado',
         totalTrials: 0,
         independentCorrect: Number(item.independentTrials || 0),
         promptedCorrect: 0,
@@ -873,8 +876,8 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
 
   return {
     header: {
-      patient: sessionSummary.patientName || sessionSummary.patientId || 'Paciente',
-      therapist: sessionSummary.therapistName || sessionSummary.therapistId || 'Não informado',
+      patient: formatPatientLabel({ name: sessionSummary.patientName, patientName: sessionSummary.patientName, id: sessionSummary.patientId }),
+      therapist: formatTherapistLabel({ name: sessionSummary.therapistName, therapistName: sessionSummary.therapistName, id: sessionSummary.therapistId }),
       date: formatReportDate(sessionSummary.startedAt),
       startedAt: formatReportTime(sessionSummary.startedAt),
       endedAt: formatReportTime(sessionSummary.endedAt),

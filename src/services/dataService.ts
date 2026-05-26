@@ -12,6 +12,7 @@ import {
 } from './localDb';
 import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 import { isAbaV2Enabled } from '../utils/featureFlags';
+import { sanitizeTechnicalErrorMessage } from '../utils/displayLabels';
 
 enum OperationType {
   CREATE = 'create',
@@ -231,8 +232,12 @@ async function handleDataError(error: unknown, operationType: OperationType, pat
     operationType,
     path
   }
-  console.error('Data Error: ', JSON.stringify(errInfo));
-  throw new Error(errInfo.error);
+  if (import.meta.env.DEV) {
+    console.error('Data Error: ', JSON.stringify(errInfo));
+  } else {
+    console.error('Data Error: ', sanitizeTechnicalErrorMessage(errInfo.error));
+  }
+  throw new Error(sanitizeTechnicalErrorMessage(errInfo.error));
 }
 
 async function fileToDataUrl(file: Blob): Promise<string> {
@@ -360,17 +365,17 @@ async function safeJson(response: Response) {
 }
 
 function normalizeApiErrorMessage(value: any): string {
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string') return sanitizeTechnicalErrorMessage(value);
   if (value && typeof value === 'object') {
     const message = value.message || value.error || value.details;
-    if (typeof message === 'string') return message;
+    if (typeof message === 'string') return sanitizeTechnicalErrorMessage(message);
     try {
-      return JSON.stringify(value);
+      return sanitizeTechnicalErrorMessage(JSON.stringify(value));
     } catch {
       return '[erro nÃ£o serializÃ¡vel]';
     }
   }
-  return String(value || 'Erro desconhecido');
+  return sanitizeTechnicalErrorMessage(String(value || 'Erro desconhecido'));
 }
 
 function extractLatestProtocolReference(row: any) {
@@ -2428,7 +2433,9 @@ export const dataService = {
 
       return { success: true, url: signedData.signedUrl, path: data.path };
     } catch (error: any) {
-      console.warn('Direct Supabase upload failed, trying backend fallback:', error.message);
+      if (import.meta.env.DEV) {
+        console.warn('Upload direto indisponivel; tentando fallback pelo servidor:', sanitizeTechnicalErrorMessage(error?.message));
+      }
       try {
         const toBase64 = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();

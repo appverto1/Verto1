@@ -7,6 +7,7 @@ import { dataService } from './services/dataService';
 import { formatProfessionalRegistry } from './utils/professionalRegistry';
 import { resolveAbaPromptLevel } from './utils/abaPromptLevels';
 import { isAbaV2Enabled } from './utils/featureFlags';
+import { formatPatientLabel, safeDisplayValue, sanitizeTechnicalErrorMessage } from './utils/displayLabels';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -755,7 +756,7 @@ export default function App() {
                 activationEmail: activationEmail || null,
               });
             } else if (event === 'SIGNED_OUT') {
-              console.log('Supabase SIGNED_OUT event received');
+              if (import.meta.env.DEV) console.log('Sessao encerrada pelo provedor de autenticacao.');
               if (manualLogoutInProgressRef.current) {
                 setUser(null);
                 setProfilePicture(null);
@@ -772,11 +773,11 @@ export default function App() {
                   }
                 }
               } catch (error) {
-                console.warn('SIGNED_OUT recovery via /api/auth/me failed:', error);
+                if (import.meta.env.DEV) console.warn('Recuperacao de sessao via /api/auth/me falhou:', sanitizeTechnicalErrorMessage(error));
               }
             }
           } catch (authChangeError) {
-            console.error('Auth state change handler error:', authChangeError);
+            if (import.meta.env.DEV) console.error('Falha no handler de autenticacao:', sanitizeTechnicalErrorMessage(authChangeError));
           } finally {
             setLoading(false);
           }
@@ -784,7 +785,7 @@ export default function App() {
 
         return () => subscription.unsubscribe();
       } catch (error) {
-        console.error('initSupabase error:', error);
+        if (import.meta.env.DEV) console.error('Falha ao iniciar autenticacao:', sanitizeTechnicalErrorMessage(error));
         setLoading(false);
       }
     };
@@ -874,7 +875,7 @@ export default function App() {
             setShowWorkspacePicker(false);
           }
         } else if (!authData) {
-          console.error('Initial auth check error after retries:', lastError);
+          if (import.meta.env.DEV) console.error('Falha na checagem inicial de autenticacao apos retentativas:', sanitizeTechnicalErrorMessage(lastError));
           // Mantém estado atual para evitar queda falsa para LP em falha transitória.
         } else {
           setUser(null);
@@ -882,7 +883,7 @@ export default function App() {
           setShowWorkspacePicker(false);
         }
       } catch (error) {
-        console.error('Session check error:', error);
+        if (import.meta.env.DEV) console.error('Falha na checagem de sessao:', sanitizeTechnicalErrorMessage(error));
         // Evita logout visual por erro temporário de rede no refresh.
       } finally {
         window.clearTimeout(timeoutId);
@@ -2106,7 +2107,7 @@ export default function App() {
         }
         await dataService.saveClinicState(payload);
       } catch (error) {
-        console.error('Erro ao sincronizar estado clÃ­nico no Supabase:', error);
+        if (import.meta.env.DEV) console.error('Erro ao sincronizar estado clinico:', sanitizeTechnicalErrorMessage(error));
       }
     }, 800);
 
@@ -2218,7 +2219,7 @@ export default function App() {
     }
 
     setTasks(prev => [...prev, taskToPersist]);
-    onAddActivityLog('Criação de Tarefa', `Tarefa "${taskToPersist.title}" criada para o paciente ID ${taskToPersist.patientId}.`);
+    onAddActivityLog('Criação de Tarefa', `Tarefa "${taskToPersist.title}" criada para ${formatPatientLabel(patient || { id: taskToPersist.patientId })}.`);
 
     if (!isAdultTask) {
       // Sync to Backend (fluxo legado/kids)
@@ -2247,7 +2248,7 @@ export default function App() {
       mergedTask = { ...t, ...fields };
       return mergedTask;
     }));
-    onAddActivityLog("AtualizaÃ§Ã£o de Tarefa", `Tarefa ID ${id} atualizada.`);
+    onAddActivityLog("AtualizaÃ§Ã£o de Tarefa", `Tarefa "${safeDisplayValue(mergedTask?.title, 'selecionada')}" atualizada.`);
 
     // Sync to Backend
     if (mergedTask) {
@@ -2319,7 +2320,7 @@ export default function App() {
       subject: subject || "Geral" 
     };
     setTherapistNotes(prev => [newNote, ...prev]);
-    onAddActivityLog("Registro de EvoluÃ§Ã£o", `Nova nota (${normalizedVisibility}) adicionada ao prontuÃ¡rio do paciente ID ${pid}.`);
+    onAddActivityLog("Registro de EvoluÃ§Ã£o", `Nova nota (${normalizedVisibility}) adicionada ao prontuario de ${formatPatientLabel({ name: patientIdentity.patientName, id: patientIdentity.patientId || pid })}.`);
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -2465,7 +2466,7 @@ export default function App() {
       const noteText = `📝 ATUALIZAÇÃO DE REGISTRO\nAtividade: ${updatedItem.title}\nPontuação: ${updatedItem.score}\nObs: ${updatedItem.evalComment || "Nenhuma observação."}`;
       handleAddNote(item.patientId, noteText, 'private', 'Sessão');
       setHistory(prev => prev.map(i => (String(i.id) === rawId ? updatedItem : i)));
-      onAddActivityLog("Edição de Histórico", `Registro de atividade "${item.title}" (ID ${id}) editado.`);
+      onAddActivityLog("Edição de Histórico", `Registro de atividade "${safeDisplayValue(item.title, 'selecionado')}" editado.`);
       try {
         await dataService.updateHistoryItem(String(id), {
           score,
@@ -2751,11 +2752,15 @@ export default function App() {
           return String(a.time || '').localeCompare(String(b.time || ''));
         }),
     );
+    const appointmentLabel = formatPatientLabel({
+      name: appointmentsToUpdate[0]?.patientName || appointmentsToUpdate[0]?.name,
+      id: appointmentsToUpdate[0]?.patientId
+    }, 'consulta selecionada');
     onAddActivityLog(
       "Edição de Agendamento",
       shouldUpdateFutureRecurrence
         ? `${appointmentsToUpdate.length} agendamentos recorrentes atualizados a partir de ${nextDate} às ${nextTime}.`
-        : `Agendamento ID ${id} atualizado: ${JSON.stringify(appointmentUpdates)}`,
+        : `Agendamento de ${appointmentLabel} atualizado para ${nextDate} às ${nextTime}.`,
       'management',
     );
     return { success: true, updatedCount: appointmentsToUpdate.length };
@@ -2827,7 +2832,7 @@ export default function App() {
         color: 'bg-blue-100 text-blue-600'
       }].sort((a,b) => a.time.localeCompare(b.time)));
     } 
-    onAddActivityLog("Cadastro de Paciente", `Paciente ID ${newId} cadastrado no sistema.`, 'management');
+    onAddActivityLog("Cadastro de Paciente", `${formatPatientLabel(newPatient)} cadastrado no sistema.`, 'management');
     const rollbackOptimisticPatient = () => {
       setAllPatients(prev => prev.filter((p: any) => String(p.id) !== String(newId)));
       setClinicalRecords(prev => prev.filter((r: any) => String(r.patientId) !== String(newId)));
@@ -3093,7 +3098,7 @@ export default function App() {
       setAllPatients(prev => prev.filter(p => p.id !== updatedData.id));
       setClinicalRecords(prev => prev.filter(r => r.patientId !== updatedData.id));
       setTherapistAgenda(prev => prev.filter(a => a.id !== updatedData.id));
-      onAddActivityLog("Desvinculação de Paciente", `Paciente ID ${updatedData.id} foi desvinculado.`, 'management');
+      onAddActivityLog("Desvinculação de Paciente", `${formatPatientLabel(mergedIdentityPatient)} foi desvinculado.`, 'management');
     } else {
       if (Object.keys(identityData).length > 1) { // More than just 'id'
         setAllPatients(prev => prev.map(p => p.id === updatedData.id ? {
@@ -3125,7 +3130,7 @@ export default function App() {
       }
 
       setTherapistAgenda(prev => prev.map(a => a.id === updatedData.id ? { ...a, name: updatedData.name || a.name } : a)); 
-      onAddActivityLog("Atualização de Cadastro", `Dados do paciente ID ${updatedData.id} atualizados.`, 'management');
+      onAddActivityLog("Atualização de Cadastro", `Dados de ${formatPatientLabel(mergedIdentityPatient)} atualizados.`, 'management');
     }
 
     // Sync to Backend
@@ -3563,7 +3568,7 @@ export default function App() {
     const noteText = `🎯 NOVO REGISTRO\nAtividade: ${title}\nPontuação: ${finalScore}${evalComment ? `\nAnotações do Profissional: ${evalComment}` : ""}`;
     handleAddNote(pid, noteText, 'private', 'Sessão');
 
-    onAddActivityLog("Registro de Avaliação", `Avaliação da habilidade "${title}" registrada para o paciente ID ${pid}. Pontuação: ${score}.`);
+    onAddActivityLog("Registro de Avaliação", `Avaliação da habilidade "${title}" registrada para ${formatPatientLabel(targetPatient || { id: pid })}. Pontuação: ${score}.`);
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -3806,7 +3811,7 @@ export default function App() {
   const handleDeleteHistoryItem = async (id: any) => {
     const item = history.find(h => h.id === id);
     setHistory(prev => prev.filter(h => h.id !== id));
-    onAddActivityLog("ExclusÃ£o de Registro", `Registro de atividade "${item?.title}" (ID ${id}) excluÃ­do do histÃ³rico.`, 'system');
+    onAddActivityLog("ExclusÃ£o de Registro", `Registro de atividade "${safeDisplayValue(item?.title, 'selecionado')}" excluÃ­do do histÃ³rico.`, 'system');
     try {
       await dataService.deleteHistoryItem(String(id));
     } catch (error) {
@@ -3838,7 +3843,7 @@ export default function App() {
       }
 
       const patient = allPatients.find((p: any) => String(p.id) === patientId);
-      const originalPatientName = patient?.name || `ID ${patientId}`;
+      const originalPatientName = formatPatientLabel(patient || { id: patientId });
       const { dataService } = await import('./services/dataService');
 
       // Removing a copy directly
@@ -4006,7 +4011,7 @@ export default function App() {
     // Also add to history timeline
     setHistory(prev => [newHistoryItem, ...prev]);
 
-    onAddActivityLog("Registro da Família", `Nova anotação da família adicionada para o paciente ID ${pid}.`);
+    onAddActivityLog("Registro da Família", `Nova anotação da família adicionada para ${formatPatientLabel({ name: identity.patientName, id: targetPatientId })}.`);
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');

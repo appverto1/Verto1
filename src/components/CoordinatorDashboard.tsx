@@ -87,6 +87,7 @@ import {
   getDefaultAnamnesisTemplate,
   normalizeAnamnesisTemplate,
 } from "../lib/anamnesisSchema";
+import { formatTherapistLabel } from "../utils/displayLabels";
 
 interface CoordinatorDashboardProps {
   user: any;
@@ -6551,9 +6552,6 @@ export function CoordinatorDashboard({
                               </span>
                             )}
                           </h4>
-                          <p className="text-[10px] text-slate-400 font-medium">
-                            ID: {patient.id}
-                          </p>
                           {(() => {
                             const therapistId = String(
                               patient?.therapist_id || patient?.professional_id || "",
@@ -6566,8 +6564,7 @@ export function CoordinatorDashboard({
                               );
                             }
                             const therapist = therapistMembersById[therapistId];
-                            const therapistName =
-                              therapist?.name || therapist?.email || `ID ${therapistId.slice(0, 8)}`;
+                            const therapistName = formatTherapistLabel({ ...therapist, id: therapistId });
                             return (
                               <p className="text-[10px] mt-1 font-semibold text-indigo-600">
                                 Terapeuta: {therapistName}

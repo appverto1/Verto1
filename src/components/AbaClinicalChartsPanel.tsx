@@ -33,6 +33,7 @@ import {
   type AbaAggregatedClinicalChangeGroup,
   type AbaClinicalChangeCategory
 } from '../utils/abaClinicalCharts';
+import { formatSessionLabel, safeDisplayValue } from '../utils/displayLabels';
 
 type AbaClinicalChartsPanelProps = {
   patientId: string;
@@ -221,8 +222,10 @@ const clinicalInterpretation = (point: ChartPoint) => {
 
 const changeSentence = (point: ChartPoint, index: number) => {
   const metricType = String(point.metricType || '');
-  const session = point.sessionId ? `#${String(point.sessionId).slice(-6)}` : `#${index + 1}`;
-  const target = point.metricLabel || point.targetId || point.behaviorId || 'Métrica clínica';
+  const session = point.sessionId
+    ? formatSessionLabel({ id: point.sessionId, startedAt: point.changedAt })
+    : `Sessao ${index + 1}`;
+  const target = safeDisplayValue(point.metricLabel || point.targetId || point.behaviorId, 'Metrica clinica');
   const metric = metricLabels[metricType] || metricType || 'Métrica';
   const previous = formatValue(point.previousValue, metricType);
   const current = formatValue(point.value ?? point.metricValue, metricType);
@@ -268,16 +271,19 @@ const CustomTooltip = ({ active, payload }: any) => {
   if (!active || !payload?.length) return null;
   const row: ChartPoint = payload[0]?.payload || {};
   const metricType = String(row.metricType || '');
-  const trialType = row.mostUsedTrialType || row.trialTypeMostUsed || '-';
-  const masteryStatus = row.masteryStatus || row.currentStatus || (metricType === 'MASTERY_STATUS' ? row.statusLabel : '-');
+  const trialType = safeDisplayValue(row.mostUsedTrialType || row.trialTypeMostUsed, '-');
+  const masteryStatus = safeDisplayValue(row.masteryStatus || row.currentStatus || (metricType === 'MASTERY_STATUS' ? row.statusLabel : '-'), '-');
+  const sessionLabel = formatSessionLabel({ id: row.sessionId, startedAt: row.changedAt });
+  const targetLabel = safeDisplayValue(row.metricLabel || row.targetId, '-');
+  const behaviorLabel = safeDisplayValue(row.metricLabel || row.behaviorId, '-');
   return (
     <div className="max-w-[320px] rounded-lg border border-slate-100 bg-white p-4 text-xs shadow-xl">
       <p className="font-black uppercase tracking-widest text-slate-900">{formatDateTime(row.changedAt)}</p>
       <p className="mt-2 font-bold text-slate-700">{row.metricLabel || '-'}</p>
       <div className="mt-3 space-y-1 text-slate-500">
-        <p>Sessão: {row.sessionId || '-'}</p>
-        <p>Target: {row.targetId ? row.metricLabel || row.targetId : '-'}</p>
-        <p>Comportamento: {row.behaviorId ? row.metricLabel || row.behaviorId : '-'}</p>
+        <p>Sessão: {row.sessionId || row.changedAt ? sessionLabel : '-'}</p>
+        <p>Habilidade: {row.targetId || row.metricLabel ? targetLabel : '-'}</p>
+        <p>Comportamento: {row.behaviorId || row.metricLabel ? behaviorLabel : '-'}</p>
         <p>Métrica: {metricLabels[metricType] || metricType || '-'}</p>
         <p>Valor anterior: {formatValue(row.previousValue, metricType)}</p>
         <p>Valor atual: {formatValue(row.value ?? row.metricValue, metricType)}</p>
@@ -408,7 +414,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
   const targetOptions = useMemo(() => {
     const map = new Map<string, string>();
     allKnownPoints.forEach((point: any) => {
-      if (point?.targetId) map.set(String(point.targetId), String(point.metricLabel || point.targetId));
+      if (point?.targetId) map.set(String(point.targetId), safeDisplayValue(point.metricLabel || point.targetId, 'Habilidade sem nome'));
     });
     return Array.from(map.entries());
   }, [allKnownPoints]);
@@ -416,7 +422,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
   const behaviorOptions = useMemo(() => {
     const map = new Map<string, string>();
     allKnownPoints.forEach((point: any) => {
-      if (point?.behaviorId) map.set(String(point.behaviorId), String(point.metricLabel || point.behaviorId));
+      if (point?.behaviorId) map.set(String(point.behaviorId), safeDisplayValue(point.metricLabel || point.behaviorId, 'Comportamento sem nome'));
     });
     return Array.from(map.entries());
   }, [allKnownPoints]);
@@ -672,21 +678,21 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
         id: item.id,
         at: item.scheduled_for || item.scheduledFor,
         status: String(item.status || 'PENDING').toUpperCase(),
-        label: item.raw_payload?.targetName || item.target_name || item.target_id || 'Probe',
+        label: safeDisplayValue(item.raw_payload?.targetName || item.target_name || item.target_id, 'Probe'),
         kind: 'schedule'
       })),
       ...probes.map((item: any) => ({
         id: item.id,
         at: item.occurred_at || item.occurredAt,
         status: String(item.status || 'WATCH').toUpperCase(),
-        label: item.raw_payload?.targetName || item.target_name || item.target_id || 'Probe',
+        label: safeDisplayValue(item.raw_payload?.targetName || item.target_name || item.target_id, 'Probe'),
         kind: 'probe'
       })),
       ...alerts.map((item: any) => ({
         id: item.id,
         at: item.created_at || item.createdAt,
         status: 'REGRESSION_RISK',
-        label: item.message || item.target_id || 'Alerta',
+        label: safeDisplayValue(item.message || item.target_id, 'Alerta'),
         kind: 'alert'
       }))
     ].sort((a, b) => new Date(a.at || 0).getTime() - new Date(b.at || 0).getTime());
@@ -878,7 +884,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
               </div>
               <div className="space-y-2">
                 {bucket.items.slice(0, 3).map((item: any) => (
-                  <p key={`${bucket.status}-${item.id || item.targetId || item.metricLabel}`} className="truncate text-xs font-semibold text-slate-700">{item.metricLabel || item.targetId}</p>
+                  <p key={`${bucket.status}-${item.id || item.targetId || item.metricLabel}`} className="truncate text-xs font-semibold text-slate-700">{safeDisplayValue(item.metricLabel || item.targetId, 'Meta sem nome')}</p>
                 ))}
                 {bucket.items.length === 0 && <p className="text-xs font-semibold text-slate-300">Sem targets</p>}
               </div>

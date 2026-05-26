@@ -17286,6 +17286,7 @@ async function startServer() {
           ...(req.body?.summary_payload || req.body?.summaryPayload || {}),
           source: requestSource,
           patientName: sanitizeString(req.body?.patient_name || req.body?.patientName, 180),
+          therapistName: sanitizeString(req.body?.therapist_name || req.body?.therapistName, 180),
           teachingSummary: req.body?.teaching_summary || req.body?.teachingSummary || undefined,
           trialTypesUsed: req.body?.trial_types_used || req.body?.trialTypesUsed || undefined,
           abcSummary: req.body?.abc_summary || req.body?.abcSummary || undefined,

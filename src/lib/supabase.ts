@@ -1,28 +1,30 @@
 ﻿import { createClient } from '@supabase/supabase-js';
 
+import { sanitizeTechnicalErrorMessage } from '../utils/displayLabels';
+
 // Fetch the Supabase configuration from the server to keep it out of the bundle
 const fetchConfig = async (retries = 3, delay = 1000) => {
   for (let i = 0; i < retries; i++) {
     try {
       const response = await fetch('/api/config');
       if (response.status === 429) {
-        console.warn(`Config fetch rate limited (429). Retrying in ${delay}ms... (Attempt ${i + 1}/${retries})`);
+        if (import.meta.env.DEV) console.warn(`Config fetch rate limited (429). Retrying in ${delay}ms... (Attempt ${i + 1}/${retries})`);
         await new Promise(resolve => setTimeout(resolve, delay));
         delay *= 2; // Exponential backoff
         continue;
       }
       if (!response.ok) {
-        console.error(`Config fetch failed with status: ${response.status}`);
+        if (import.meta.env.DEV) console.error(`Config fetch failed with status: ${response.status}`);
         return null;
       }
       const contentType = response.headers.get('content-type');
       if (!contentType || !contentType.includes('application/json')) {
-        console.error(`Config fetch returned non-JSON content: ${contentType}`);
+        if (import.meta.env.DEV) console.error(`Config fetch returned non-JSON content: ${contentType}`);
         return null;
       }
       return await response.json();
     } catch (error) {
-      console.error('Failed to fetch Supabase config:', error);
+      if (import.meta.env.DEV) console.error('Falha ao buscar configuracao de autenticacao:', sanitizeTechnicalErrorMessage(error));
       if (i === retries - 1) return null;
       await new Promise(resolve => setTimeout(resolve, delay));
       delay *= 2;
@@ -58,7 +60,7 @@ export const ensureFreshSession = async () => {
   try {
     const { data, error } = await client.auth.getSession();
     if (error) {
-      console.warn('Supabase getSession warning:', error.message);
+      if (import.meta.env.DEV) console.warn('Aviso ao validar sessao:', sanitizeTechnicalErrorMessage(error.message));
       return null;
     }
     // We keep this lightweight and avoid forced manual refresh here.
@@ -79,11 +81,11 @@ export const ensureFreshSession = async () => {
         return retried?.data?.session || null;
       } catch (retryError: any) {
         sessionRetryPromise = null;
-        console.warn('ensureFreshSession retry failed:', retryError?.message || String(retryError));
+        if (import.meta.env.DEV) console.warn('Retry de sessao falhou:', sanitizeTechnicalErrorMessage(retryError?.message || String(retryError)));
         return null;
       }
     }
-    console.warn('ensureFreshSession failed:', error?.message || String(error));
+    if (import.meta.env.DEV) console.warn('Validacao de sessao falhou:', sanitizeTechnicalErrorMessage(error?.message || String(error)));
     return null;
   }
 };
@@ -114,16 +116,18 @@ export const getSupabase = async () => {
       
       return supabaseClient;
     } else {
-      console.error('ERRO CRÍTICO: Configurações do Supabase não encontradas!', {
-        hasUrl: !!url,
-        hasKey: !!key,
-        configError: config?.error || null,
-        origin: window.location.origin
-      });
+      if (import.meta.env.DEV) {
+        console.error('ERRO CRITICO: Configuracoes de autenticacao nao encontradas.', {
+          hasUrl: !!url,
+          hasKey: !!key,
+          configError: sanitizeTechnicalErrorMessage(config?.error || null),
+          origin: window.location.origin
+        });
+      }
       initPromise = null; // Allow retry
       throw new Error(
         isProd
-          ? 'Falha de configuração segura do ambiente de autenticação (AUTH_CONFIG_PROD_MISSING).'
+          ? 'Nao foi possivel carregar os dados agora. Tente novamente em alguns instantes.'
           : 'O sistema não pôde inicializar a conexão com o banco de dados.'
       );
     }
@@ -138,12 +142,12 @@ export const supabase = {} as any;
 export const testSupabaseConnection = async () => {
   try {
     const client = await getSupabase();
-    if (!client) return { success: false, error: 'Supabase client not initialized' };
+    if (!client) return { success: false, error: 'Servico de autenticacao indisponivel' };
     
     const { data, error } = await client.auth.getSession();
-    if (error) return { success: false, error: error.message };
+    if (error) return { success: false, error: sanitizeTechnicalErrorMessage(error.message) };
     return { success: true };
   } catch (err: any) {
-    return { success: false, error: err.message };
+    return { success: false, error: sanitizeTechnicalErrorMessage(err.message) };
   }
 };

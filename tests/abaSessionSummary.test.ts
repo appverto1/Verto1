@@ -180,6 +180,53 @@ test('relatório da sessão deriva dados sem nova tabela ou duplicação clínic
   assert.equal(report.pendingComplements.guardianSignature, 'pending');
 });
 
+test('relatorio da sessao nao usa UUID bruto como terapeuta', () => {
+  const technicalId = '1bbf0c80-dfe0-4801-8a4f-7447e06cc0d6';
+  const summary = calculateSessionSummary(technicalId, {
+    patientId: technicalId,
+    patientName: 'Paciente Teste',
+    therapistId: technicalId,
+    startedAt: '2026-05-26T21:19:00.000Z',
+    endedAt: '2026-05-26T22:00:00.000Z'
+  });
+  const report = buildSessionReport(summary);
+  assert.equal(report.header.patient, 'Paciente Teste');
+  assert.equal(report.header.therapist, 'Terapeuta nao informado');
+  assert.doesNotMatch(report.header.therapist, /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i);
+});
+
+test('relatorio da sessao mostra nome do terapeuta quando disponivel', () => {
+  const technicalId = '1bbf0c80-dfe0-4801-8a4f-7447e06cc0d6';
+  const summary = calculateSessionSummary('session-1', {
+    patientId: technicalId,
+    patientName: 'Paciente Teste',
+    therapistId: technicalId,
+    therapistName: 'Terapeuta Teste'
+  });
+  const report = buildSessionReport(summary);
+  assert.equal(report.header.therapist, 'Terapeuta Teste');
+});
+
+test('campos visiveis do relatorio clinico nao contem UUID', () => {
+  const technicalId = '1bbf0c80-dfe0-4801-8a4f-7447e06cc0d6';
+  const summary = calculateSessionSummary('session-1', {
+    patientId: technicalId,
+    therapistId: technicalId,
+    trials: [
+      { sessionId: 'session-1', targetId: technicalId, collectionType: 'dtt', trialOutcome: 'independent', score: 1 }
+    ]
+  });
+  const report = buildSessionReport(summary);
+  const visibleText = [
+    report.header.patient,
+    report.header.therapist,
+    ...report.targetSummaries.map((target) => `${target.targetName} ${target.program}`),
+    ...report.behaviorSummaries.frequency.map((behavior) => behavior.behavior),
+    ...report.abcEvents.map((event) => `${event.behavior} ${event.location} ${event.note}`)
+  ].join(' ');
+  assert.doesNotMatch(visibleText, /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i);
+});
+
 test('aba_v2=false preserva o fluxo antigo fora da ABA V2', () => {
   assert.equal(isAbaV2Enabled({ overrides: { aba_v2: false } }), false);
   assert.equal(resolveFeatureFlag('aba_v2', { defaultValue: true, overrides: { VITE_FEATURE_ABA_V2: 'false' } }), false);

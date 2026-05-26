@@ -29,6 +29,7 @@ import { buildSessionReport, calculateSessionSummary, canCloseAbaSession, canRec
 import { isAbaV2Enabled } from '../utils/featureFlags';
 import { buildClinicalActionToast, buildClinicalOfflineToast, buildClinicalSaveErrorToast, type ClinicalActionToast } from '../utils/abaSessionFeedback';
 import { getCrisisShortcutIds, getDockVisibleShortcuts, normalizeQuickBehaviorShortcuts } from '../utils/abaClinicalDock';
+import { formatPatientLabel, formatTherapistLabel, safeDisplayValue } from '../utils/displayLabels';
 import {
   buildIntervalAggregateSummary,
   buildIntervalCancelAudit,
@@ -421,6 +422,7 @@ export const SessionMode = ({
   onConfirmEndSession,
   onSessionRecordSaved,
   therapistId,
+  therapistName,
   clinicId
 }: any) => {
   if (!isAbaV2Enabled()) return null;
@@ -432,6 +434,13 @@ export const SessionMode = ({
   const patientId = String(patient?.id || '');
   const resolvedTherapistId = String(therapistId || activeSession?.therapistId || activeSession?.therapist_id || '').trim();
   const resolvedClinicId = String(clinicId || activeSession?.clinicId || activeSession?.clinic_id || patient?.clinicId || patient?.clinic_id || patient?.organizationId || patient?.organization_id || '').trim();
+  const patientDisplayName = formatPatientLabel(patient);
+  const therapistDisplayName = formatTherapistLabel({
+    therapistName,
+    professionalName: activeSession?.professionalName || activeSession?.professional_name || patient?.professionalName || patient?.professional_name,
+    displayName: activeSession?.therapistName || activeSession?.therapist_name || patient?.therapistName || patient?.therapist_name,
+    id: resolvedTherapistId
+  });
   const sessionStateKey = `verto.aba_session_state:${patientId}:${sessionId}`;
 
   const [trialCount, setTrialCount] = useState(0);
@@ -2181,8 +2190,9 @@ export const SessionMode = ({
       id: `summary-${sessionId}`,
       sessionId,
       patientId,
-      patientName: patient?.name || 'Paciente',
+      patientName: patientDisplayName,
       therapistId: resolvedTherapistId || null,
+      therapistName: therapistDisplayName,
       startedAt: activeSession?.startedAt || endedAt,
       endedAt,
       trials: records.filter((record) => record.kind === 'trial'),
@@ -2233,6 +2243,7 @@ export const SessionMode = ({
           source: 'verto_web',
           clinicId: resolvedClinicId || undefined,
           patientName: finalSummary.patientName,
+          therapistName: finalSummary.therapistName,
           teachingSummary: finalSummary.teachingSummary,
           trialTypesUsed: finalSummary.trialTypesUsed,
           abcSummary: finalSummary.abcSummary,
@@ -2290,8 +2301,9 @@ export const SessionMode = ({
       id: `summary-${sessionId}`,
       sessionId,
       patientId,
-      patientName: patient?.name || 'Paciente',
+      patientName: patientDisplayName,
       therapistId: resolvedTherapistId || null,
+      therapistName: therapistDisplayName,
       startedAt: activeSession?.startedAt || endedAt,
       endedAt,
       trials: records.filter((record) => record.kind === 'trial'),
@@ -2301,7 +2313,7 @@ export const SessionMode = ({
       sessionNote,
       syncStatus
     });
-  }, [activeSession?.startedAt, patient?.name, patientId, records, resolvedTherapistId, sessionClosureIssues, sessionEndPreviewAt, sessionId, sessionNote]);
+  }, [activeSession?.startedAt, patientDisplayName, patientId, records, resolvedTherapistId, sessionClosureIssues, sessionEndPreviewAt, sessionId, sessionNote, therapistDisplayName]);
 
   const maintenanceSchedules = Array.isArray(maintenanceOverview?.schedules) ? maintenanceOverview.schedules : [];
   const maintenanceProbeResults = Array.isArray(maintenanceOverview?.probeResults) ? maintenanceOverview.probeResults : [];
@@ -2768,11 +2780,12 @@ export const SessionMode = ({
     if (!postClosureSummary) return null;
     return buildSessionReport({
       ...postClosureSummary,
-      therapistName: resolvedTherapistId || null,
+      patientName: postClosureSummary.patientName || patientDisplayName,
+      therapistName: postClosureSummary.therapistName || therapistDisplayName,
       sessionNote: sessionNote || postClosureSummary.sessionNote || '',
       sourceRecords: records
     });
-  }, [postClosureSummary, records, resolvedTherapistId, sessionNote]);
+  }, [patientDisplayName, postClosureSummary, records, sessionNote, therapistDisplayName]);
 
   const parsePersistedSummaryPayload = (value: any) => {
     if (!value) return {};
@@ -2805,13 +2818,18 @@ export const SessionMode = ({
     const syncStatus = ['local', 'syncing', 'synced', 'error'].includes(syncStatusValue)
       ? syncStatusValue as SessionSummary['syncStatus']
       : 'synced';
+    const resolvedPersistedTherapistId = row.therapist_id ?? row.therapistId ?? fallback.therapistId ?? resolvedTherapistId ?? null;
     return {
       ...fallback,
       id: String(row.id || fallback.id || `summary-${sessionId}`),
       sessionId: String(row.session_id || row.sessionId || fallback.sessionId || sessionId),
       patientId: String(row.patient_id || row.patientId || fallback.patientId || patientId),
-      therapistId: row.therapist_id ?? row.therapistId ?? fallback.therapistId ?? resolvedTherapistId ?? null,
-      patientName: payload.patientName || fallback.patientName || patient?.name || 'Paciente',
+      therapistId: resolvedPersistedTherapistId,
+      therapistName: formatTherapistLabel({
+        therapistName: row.therapist_name || row.therapistName || payload.therapistName || fallback.therapistName || therapistDisplayName,
+        id: resolvedPersistedTherapistId
+      }),
+      patientName: formatPatientLabel({ name: payload.patientName || fallback.patientName || patientDisplayName, id: row.patient_id || row.patientId || fallback.patientId || patientId }),
       startedAt: row.started_at || row.startedAt || fallback.startedAt,
       endedAt: row.ended_at || row.endedAt || fallback.endedAt,
       durationSeconds: Number(row.duration_seconds ?? row.durationSeconds ?? fallback.durationSeconds ?? 0) || 0,
@@ -2934,7 +2952,7 @@ export const SessionMode = ({
               <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="rounded-2xl bg-white border border-gray-100 p-4">
                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Paciente</p>
-                  <p className="text-lg font-bold text-gray-900">{postClosureSummary.patientName || patient.name}</p>
+                  <p className="text-lg font-bold text-gray-900">{formatPatientLabel({ name: postClosureSummary.patientName || patientDisplayName, id: postClosureSummary.patientId })}</p>
                 </div>
                 <div className="rounded-2xl bg-white border border-gray-100 p-4">
                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Início</p>
@@ -2984,7 +3002,7 @@ export const SessionMode = ({
                     ].map(([label, value]) => (
                       <div key={label} className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
                         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{label}</p>
-                        <p className="mt-1 text-base font-bold text-gray-900">{value}</p>
+                        <p className="mt-1 text-base font-bold text-gray-900">{safeDisplayValue(value, String(label) === 'Terapeuta' ? 'Terapeuta nao informado' : 'Nao informado')}</p>
                       </div>
                     ))}
                   </div>

@@ -28,6 +28,7 @@ import {
 } from 'recharts';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { LogoVerto } from './Common';
+import { TechnicalDetails } from './TechnicalDetails';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { getSupabase } from '../lib/supabase';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
@@ -838,7 +839,11 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       <p className="text-sm font-bold text-slate-800">
                         {item.user_email || "UsuÃ¡rio sem e-mail"}
                       </p>
-                      <p className="text-[11px] text-slate-500 mb-2">ClÃ­nica: {item.clinic_id}</p>
+                      <TechnicalDetails
+                        role="super_admin"
+                        details={{ clinic_id: item.clinic_id, user_id: item.user_id }}
+                        className="mb-2"
+                      />
                       <div className="flex flex-wrap gap-1.5">
                         {(item.selected_features || []).map((feature: string) => (
                           <span
@@ -1298,6 +1303,4 @@ const SidebarItem = ({ icon, label, active, onClick }: any) => (
     {icon} <span className="text-sm">{label}</span>
   </button>
 );
-
-
 
