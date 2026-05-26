@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  aggregateClinicalChangesBySession,
   buildSessionMetricSnapshotsFromSummaries,
   compareAbaMetric,
   compareSessionMetrics,
+  getClinicalChangeDrilldown,
   getAbaMetricDirection
 } from '../src/utils/abaClinicalCharts.ts';
 
@@ -158,6 +160,168 @@ test('compareSessionMetrics calcula deltas por sessão e por direção', () => {
   assert.equal(mastery?.changeStatus, 'CLINICALLY_SIGNIFICANT_CHANGE');
 });
 
+test('aggregateClinicalChangesBySession consolida várias mudanças em uma barra por sessão', () => {
+  const points = [
+    {
+      id: 'skill-1',
+      sessionId: 'session-40',
+      metricType: 'TARGET_INDEPENDENCE',
+      metricLabel: 'Nomeia 2 itens',
+      changedAt: '2026-05-25T12:00:00.000Z',
+      previousValue: 0,
+      metricValue: 100,
+      deltaValue: 100,
+      deltaPercent: 100,
+      trendDirection: 'IMPROVED',
+      changeStatus: 'CLINICALLY_SIGNIFICANT_CHANGE',
+      metricDirection: 'HIGHER_IS_BETTER'
+    },
+    {
+      id: 'behavior-1',
+      sessionId: 'session-40',
+      metricType: 'BEHAVIOR_FREQUENCY',
+      metricLabel: 'Agressão',
+      changedAt: '2026-05-25T12:02:00.000Z',
+      previousValue: 11,
+      metricValue: 1,
+      deltaValue: -10,
+      deltaPercent: -91,
+      trendDirection: 'IMPROVED',
+      changeStatus: 'CLINICALLY_SIGNIFICANT_CHANGE',
+      metricDirection: 'LOWER_IS_BETTER'
+    },
+    {
+      id: 'mastery-1',
+      sessionId: 'session-40',
+      metricType: 'MASTERY_STATUS',
+      metricLabel: 'Contato visual',
+      changedAt: '2026-05-25T12:04:00.000Z',
+      previousValue: 2,
+      metricValue: 3,
+      currentStatus: 'READY_FOR_REVIEW',
+      deltaValue: 1,
+      deltaPercent: null,
+      trendDirection: 'IMPROVED',
+      changeStatus: 'CLINICALLY_SIGNIFICANT_CHANGE',
+      statusLabel: 'Pronto para revisão',
+      metricDirection: 'STATUS_BASED'
+    },
+    {
+      id: 'maintenance-1',
+      sessionId: 'session-40',
+      metricType: 'MAINTENANCE_STATUS',
+      metricLabel: 'Probe de manutenção',
+      changedAt: '2026-05-25T12:06:00.000Z',
+      previousValue: 1,
+      metricValue: 3,
+      currentStatus: 'MAINTAINED',
+      deltaValue: 2,
+      deltaPercent: null,
+      trendDirection: 'IMPROVED',
+      changeStatus: 'CHANGED',
+      metricDirection: 'STATUS_BASED'
+    },
+    {
+      id: 'regression-1',
+      sessionId: 'session-40',
+      metricType: 'REGRESSION_RISK',
+      metricLabel: 'Estereotipia',
+      changedAt: '2026-05-25T12:08:00.000Z',
+      previousValue: 3,
+      metricValue: -1,
+      currentStatus: 'REGRESSION_RISK',
+      deltaValue: -4,
+      deltaPercent: null,
+      trendDirection: 'WORSENED',
+      changeStatus: 'REGRESSION_SIGNAL',
+      metricDirection: 'STATUS_BASED'
+    }
+  ];
+
+  const groups = aggregateClinicalChangesBySession(points, { groupBy: 'session', visualMagnitudeCap: 120 });
+  assert.equal(groups.length, 1);
+  const group = groups[0];
+  assert.equal(group.totalChanges, 5);
+  assert.equal(group.relevantChanges, 5);
+  assert.equal(group.categoryCounts.skill, 1);
+  assert.equal(group.categoryCounts.behavior, 1);
+  assert.equal(group.categoryCounts.mastery, 1);
+  assert.equal(group.categoryCounts.maintenance, 1);
+  assert.equal(group.categoryCounts.regression, 1);
+  assert.equal(group.skillMagnitude, 100);
+  assert.equal(group.behaviorMagnitude, 91);
+  assert.equal(group.masteryCount, 1);
+  assert.equal(group.maintenanceCount, 1);
+  assert.equal(group.regressionCount, 1);
+  assert.equal(group.hasRegressionAlert, true);
+  assert.equal(group.hasReviewReady, true);
+  assert.equal(getClinicalChangeDrilldown(groups, group.groupKey)?.changes.length, 5);
+});
+
+test('aggregateClinicalChangesBySession agrupa por dia sem misturar eventos brutos', () => {
+  const points = [
+    {
+      sessionId: 'session-a',
+      metricType: 'TARGET_ACCURACY',
+      metricLabel: 'Imitação',
+      changedAt: '2026-05-25T09:00:00.000Z',
+      previousValue: 40,
+      metricValue: 60,
+      deltaValue: 20,
+      deltaPercent: 20,
+      trendDirection: 'IMPROVED',
+      changeStatus: 'CLINICALLY_SIGNIFICANT_CHANGE',
+      metricDirection: 'HIGHER_IS_BETTER'
+    },
+    {
+      sessionId: 'session-b',
+      metricType: 'BEHAVIOR_FREQUENCY',
+      metricLabel: 'Agressão',
+      changedAt: '2026-05-25T15:00:00.000Z',
+      previousValue: 5,
+      metricValue: 3,
+      deltaValue: -2,
+      deltaPercent: -40,
+      trendDirection: 'IMPROVED',
+      changeStatus: 'CLINICALLY_SIGNIFICANT_CHANGE',
+      metricDirection: 'LOWER_IS_BETTER'
+    }
+  ];
+
+  const bySession = aggregateClinicalChangesBySession(points, { groupBy: 'session' });
+  const byDay = aggregateClinicalChangesBySession(points, { groupBy: 'day' });
+  assert.equal(bySession.length, 2);
+  assert.equal(byDay.length, 1);
+  assert.equal(byDay[0].groupKey, 'day:2026-05-25');
+  assert.equal(byDay[0].totalChanges, 2);
+  assert.equal(byDay[0].skillMagnitude, 20);
+  assert.equal(byDay[0].behaviorMagnitude, 40);
+});
+
+test('aggregateClinicalChangesBySession cap visual preserva magnitude real de outlier', () => {
+  const [group] = aggregateClinicalChangesBySession([
+    {
+      sessionId: 'session-outlier',
+      metricType: 'BEHAVIOR_DURATION_TOTAL',
+      metricLabel: 'Birra',
+      changedAt: '2026-05-25T16:00:00.000Z',
+      previousValue: 10,
+      metricValue: 100,
+      deltaValue: 90,
+      deltaPercent: 900,
+      trendDirection: 'WORSENED',
+      changeStatus: 'CLINICALLY_SIGNIFICANT_CHANGE',
+      metricDirection: 'LOWER_IS_BETTER'
+    }
+  ], { groupBy: 'session', visualMagnitudeCap: 120 });
+
+  assert.equal(group.totalRawMagnitude, 900);
+  assert.equal(group.totalVisualMagnitude, 120);
+  assert.equal(group.behaviorMagnitude, 120);
+  assert.equal(group.topChange?.rawMagnitude, 900);
+  assert.equal(group.topChange?.visualMagnitude, 120);
+});
+
 test('buildSessionMetricSnapshotsFromSummaries cria snapshot geral quando não há target por sessão', () => {
   const snapshots = buildSessionMetricSnapshotsFromSummaries({
     currentSummary: { session_id: 's2', patient_id: 'p1', clinic_id: 'c1', ended_at: '2026-05-25T10:00:00.000Z', accuracy_percent: 90, independence_percent: 80 },
@@ -207,6 +371,21 @@ test('frontend apresenta deltas clínicos, status e timelines sem misturar escal
   assert.match(panelCode, /GOAL_LINE/);
   assert.match(panelCode, /CONDITION_LINE/);
   assert.match(panelCode, /Evento externo/);
+});
+
+test('frontend usa visão agregada com drilldown em vez de plotar todos os targets', () => {
+  assert.match(panelCode, /aggregateClinicalChangesBySession/);
+  assert.match(panelCode, /getClinicalChangeDrilldown/);
+  assert.match(panelCode, /showAggregatedChart[\s\S]*activeTab === 'overview'[\s\S]*activeTab === 'session-changes'/m);
+  assert.match(panelCode, /\(activeTab === 'targets' && !hasSpecificTarget\)/);
+  assert.match(panelCode, /\(activeTab === 'behaviors' && !hasSpecificBehavior\)/);
+  assert.match(panelCode, /stackId="changes"/);
+  assert.match(panelCode, /setSelectedChangeGroupKey/);
+  assert.match(panelCode, /Linha do tempo clínica/);
+  assert.match(panelCode, /Ver detalhes/);
+  assert.match(panelCode, /<option value="">Todos<\/option>/);
+  assert.match(panelCode, /!showAggregatedChart && chartRows\.length > 0/);
+  assert.doesNotMatch(panelCode, /activeTab === 'session-changes' && chartRows\.length > 0/);
 });
 
 test('script npm do épico está registrado', () => {

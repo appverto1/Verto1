@@ -115,6 +115,29 @@ test('syncApprovedProtocolsToClinicState restaura apenas requests aprovados sem 
   assert.ok(script.includes('mergeProtocols(currentProtocols, approvedProtocols)'));
 });
 
+test('backend importa constantes de protocolo com extensao TS para deploy ESM', () => {
+  const source = readSource('server.ts');
+  const script = readSource('scripts/restore-clinic-protocols-from-import-requests.ts');
+
+  for (const importPath of [
+    './src/constants/aflsProtocol.ts',
+    './src/constants/vbmappLevel1Protocol.ts',
+    './src/constants/vbmappLevel2Protocol.ts',
+    './src/constants/vbmappLevel3Protocol.ts'
+  ]) {
+    assert.ok(source.includes(importPath), `${importPath} deve ter extensao explicita no server.ts`);
+  }
+
+  for (const importPath of [
+    '../src/constants/aflsProtocol.ts',
+    '../src/constants/vbmappLevel1Protocol.ts',
+    '../src/constants/vbmappLevel2Protocol.ts',
+    '../src/constants/vbmappLevel3Protocol.ts'
+  ]) {
+    assert.ok(script.includes(importPath), `${importPath} deve ter extensao explicita no script de restore`);
+  }
+});
+
 test('clinic_state protege protocols vazio quando existem requests aprovados', () => {
   const source = readSource('server.ts');
   const clinicPostBlock = source.match(/app\.post\('\/api\/clinic\/state'[\s\S]*?const handleVapidPublicKey/)?.[0] || '';

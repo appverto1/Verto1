@@ -90,10 +90,10 @@ import {
   normalizeNoteMutationPayload,
   writeClinicalRowWithSchemaFallback
 } from './src/utils/clinicalPostResilience';
-import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from './src/constants/aflsProtocol';
-import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from './src/constants/vbmappLevel1Protocol';
-import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from './src/constants/vbmappLevel2Protocol';
-import { VBMAPP_LEVEL_3_CANONICAL_PROTOCOL } from './src/constants/vbmappLevel3Protocol';
+import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from './src/constants/aflsProtocol.ts';
+import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from './src/constants/vbmappLevel1Protocol.ts';
+import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from './src/constants/vbmappLevel2Protocol.ts';
+import { VBMAPP_LEVEL_3_CANONICAL_PROTOCOL } from './src/constants/vbmappLevel3Protocol.ts';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config();

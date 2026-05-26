@@ -3,7 +3,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
+  Legend,
   Line,
   LineChart,
   ReferenceLine,
@@ -27,6 +27,12 @@ import {
 } from 'lucide-react';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { dataService } from '../services/dataService';
+import {
+  aggregateClinicalChangesBySession,
+  getClinicalChangeDrilldown,
+  type AbaAggregatedClinicalChangeGroup,
+  type AbaClinicalChangeCategory
+} from '../utils/abaClinicalCharts';
 
 type AbaClinicalChartsPanelProps = {
   patientId: string;
@@ -92,6 +98,22 @@ const behaviorMetricOptions = [
 ];
 const masteryStatuses = ['INSUFFICIENT_DATA', 'NOT_MET', 'MET_TODAY', 'READY_FOR_REVIEW', 'MASTERED_APPROVED'];
 const maintenanceStatuses = ['PENDING', 'MAINTAINED', 'WATCH', 'REGRESSION_RISK', 'MISSED'];
+const clinicalChangeCategoryLabels: Record<AbaClinicalChangeCategory, string> = {
+  skill: 'Habilidades',
+  behavior: 'Comportamentos',
+  mastery: 'Maestria',
+  maintenance: 'Manutenção',
+  regression: 'Regressão/alertas'
+};
+const clinicalChangeCategoryOrder: AbaClinicalChangeCategory[] = ['skill', 'behavior', 'mastery', 'maintenance', 'regression'];
+
+const aggregateBarColors = {
+  skillMagnitude: '#10B981',
+  behaviorMagnitude: '#0EA5E9',
+  masteryCount: '#A855F7',
+  maintenanceCount: '#F59E0B',
+  regressionCount: '#EF4444'
+};
 
 const percentMetrics = new Set([
   'TARGET_ACCURACY',
@@ -268,12 +290,50 @@ const CustomTooltip = ({ active, payload }: any) => {
   );
 };
 
+const AggregatedTooltip = ({ active, payload }: any) => {
+  if (!active || !payload?.length) return null;
+  const row: AbaAggregatedClinicalChangeGroup = payload[0]?.payload || {};
+  const topChange = row.topChange;
+  return (
+    <div className="max-w-[340px] rounded-lg border border-slate-100 bg-white p-4 text-xs shadow-xl">
+      <p className="font-black uppercase tracking-widest text-slate-900">{row.label || 'Sessão'}</p>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-slate-500">
+        <p>Total: <strong className="text-slate-800">{row.totalChanges || 0}</strong></p>
+        <p>Relevantes: <strong className="text-slate-800">{row.relevantChanges || 0}</strong></p>
+        <p>Habilidades: <strong className="text-slate-800">{row.categoryCounts?.skill || 0}</strong></p>
+        <p>Comportamentos: <strong className="text-slate-800">{row.categoryCounts?.behavior || 0}</strong></p>
+        <p>Maestria: <strong className="text-slate-800">{row.categoryCounts?.mastery || 0}</strong></p>
+        <p>Manutenção: <strong className="text-slate-800">{row.categoryCounts?.maintenance || 0}</strong></p>
+      </div>
+      {topChange && (
+        <p className="mt-3 rounded-md bg-slate-50 px-3 py-2 font-bold text-slate-700">
+          Maior mudança: {topChange.metricLabel || 'Métrica'} · {round1(topChange.rawMagnitude)} real / {round1(topChange.visualMagnitude)} visual
+        </p>
+      )}
+      {(row.hasRegressionAlert || row.hasReviewReady) && (
+        <p className="mt-2 text-[11px] font-bold text-red-600">
+          {row.hasRegressionAlert ? 'Alerta de regressão presente. ' : ''}{row.hasReviewReady ? 'Há item pronto para revisão.' : ''}
+        </p>
+      )}
+    </div>
+  );
+};
+
+const aggregateBadgeTone = (group: AbaAggregatedClinicalChangeGroup) => {
+  if (group.hasRegressionAlert) return 'border-red-100 bg-red-50 text-red-700';
+  if (group.hasReviewReady) return 'border-emerald-100 bg-emerald-50 text-emerald-700';
+  return 'border-slate-100 bg-white text-slate-500';
+};
+
 export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaClinicalChartsPanelProps) {
   const [activeTab, setActiveTab] = useState<(typeof chartTabs)[number]['id']>('overview');
   const [periodDays, setPeriodDays] = useState(30);
   const [targetId, setTargetId] = useState('');
   const [behaviorId, setBehaviorId] = useState('');
   const [metricType, setMetricType] = useState('');
+  const [groupBy, setGroupBy] = useState<'session' | 'day'>('session');
+  const [groupByTouched, setGroupByTouched] = useState(false);
+  const [selectedChangeGroupKey, setSelectedChangeGroupKey] = useState('');
   const [significantOnly, setSignificantOnly] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [dataByTab, setDataByTab] = useState<Record<string, any>>({});
@@ -337,7 +397,13 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
   const activeData = dataByTab[activeTab] || {};
   const activePoints: ChartPoint[] = Array.isArray(activeData.points) ? activeData.points : [];
   const overviewPoints: ChartPoint[] = Array.isArray(overview.points) ? overview.points : [];
-  const allKnownPoints = [...overviewPoints, ...activePoints];
+  const allKnownPoints = useMemo(() => [...overviewPoints, ...activePoints], [activePoints, overviewPoints]);
+
+  useEffect(() => {
+    if (groupByTouched) return;
+    const sessionCount = new Set(allKnownPoints.map((point) => String(point.sessionId || point.changedAt || '')).filter(Boolean)).size;
+    setGroupBy(sessionCount > 12 ? 'day' : 'session');
+  }, [allKnownPoints, groupByTouched]);
 
   const targetOptions = useMemo(() => {
     const map = new Map<string, string>();
@@ -391,6 +457,43 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     return match?.behaviorId ? String(match.behaviorId) : '';
   }, [activePoints, behaviorId, effectiveMetricType]);
 
+  const hasSpecificTarget = Boolean(targetId);
+  const hasSpecificBehavior = Boolean(behaviorId);
+
+  const aggregateSourcePoints = useMemo(() => {
+    const source = activeTab === 'overview' ? overviewPoints : activePoints;
+    if (activeTab === 'targets') {
+      return source.filter((point) => ['TARGET_ACCURACY', 'TARGET_INDEPENDENCE', 'TARGET_TRIAL_COUNT', 'FUNCTIONAL_COMMUNICATION', 'ENGAGEMENT'].includes(String(point.metricType || '')));
+    }
+    if (activeTab === 'behaviors') {
+      return source.filter((point) => String(point.metricType || '').startsWith('BEHAVIOR_'));
+    }
+    if (activeTab === 'mastery') {
+      return source.filter((point) => String(point.metricType || '') === 'MASTERY_STATUS');
+    }
+    if (activeTab === 'maintenance') {
+      return source.filter((point) => String(point.metricType || '') === 'MAINTENANCE_STATUS' || String(point.metricType || '') === 'REGRESSION_RISK');
+    }
+    return source;
+  }, [activePoints, activeTab, overviewPoints]);
+
+  const aggregatedChangeRows = useMemo(
+    () => aggregateClinicalChangesBySession(aggregateSourcePoints, { groupBy, visualMagnitudeCap: 120 }),
+    [aggregateSourcePoints, groupBy]
+  );
+
+  const selectedChangeGroup = useMemo(
+    () => getClinicalChangeDrilldown(aggregatedChangeRows, selectedChangeGroupKey),
+    [aggregatedChangeRows, selectedChangeGroupKey]
+  );
+
+  const aggregateTopChanges = useMemo(() => {
+    return aggregatedChangeRows
+      .flatMap((group) => group.topChanges.map((change) => ({ group, change })))
+      .sort((a, b) => b.change.rawMagnitude - a.change.rawMagnitude)
+      .slice(0, 6);
+  }, [aggregatedChangeRows]);
+
   const chartRows = useMemo(() => {
     const sorted = activePoints
       .slice()
@@ -399,19 +502,19 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     let rows = sorted;
     if (activeTab === 'targets') {
       rows = rows.filter((point) => String(point.metricType || '') === effectiveMetricType);
-      if (focusedTargetId) rows = rows.filter((point) => String(point.targetId || '') === focusedTargetId);
+      if (hasSpecificTarget) rows = rows.filter((point) => String(point.targetId || '') === targetId);
     }
     if (activeTab === 'behaviors') {
       rows = rows.filter((point) => String(point.metricType || '') === effectiveMetricType);
-      if (focusedBehaviorId) rows = rows.filter((point) => String(point.behaviorId || '') === focusedBehaviorId);
+      if (hasSpecificBehavior) rows = rows.filter((point) => String(point.behaviorId || '') === behaviorId);
     }
     if (activeTab === 'mastery') {
       rows = rows.filter((point) => String(point.metricType || '') === 'MASTERY_STATUS');
-      if (focusedTargetId) rows = rows.filter((point) => String(point.targetId || '') === focusedTargetId);
+      if (hasSpecificTarget) rows = rows.filter((point) => String(point.targetId || '') === targetId);
     }
     if (activeTab === 'maintenance') {
       rows = rows.filter((point) => String(point.metricType || '') === 'MAINTENANCE_STATUS' || String(point.metricType || '') === 'REGRESSION_RISK');
-      if (focusedTargetId) rows = rows.filter((point) => String(point.targetId || '') === focusedTargetId);
+      if (hasSpecificTarget) rows = rows.filter((point) => String(point.targetId || '') === targetId);
     }
 
     return rows.map((point: ChartPoint, index: number) => {
@@ -424,19 +527,25 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
         chartValue: activeTab === 'overview' || activeTab === 'session-changes' ? magnitude : rawValue
       };
     });
-  }, [activePoints, activeTab, effectiveMetricType, focusedBehaviorId, focusedTargetId]);
+  }, [activePoints, activeTab, behaviorId, effectiveMetricType, hasSpecificBehavior, hasSpecificTarget, targetId]);
 
   const annotations = Array.isArray(activeData.annotations) ? activeData.annotations : [];
   const isLoading = loadingTab === activeTab || (activeTab === 'overview' && loadingTab === 'overview');
-  const showBar = activeTab === 'overview' || activeTab === 'session-changes';
-  const shouldRenderChart = chartRows.length > 0 && activeTab !== 'maintenance' && (activeTab !== 'mastery' || Boolean(focusedTargetId));
+  const showAggregatedChart =
+    activeTab === 'overview' ||
+    activeTab === 'session-changes' ||
+    activeTab === 'mastery' ||
+    activeTab === 'maintenance' ||
+    (activeTab === 'targets' && !hasSpecificTarget) ||
+    (activeTab === 'behaviors' && !hasSpecificBehavior);
+  const shouldRenderChart = showAggregatedChart ? aggregatedChangeRows.length > 0 : chartRows.length > 0;
 
-  const yAxisLabel = activeTab === 'overview' || activeTab === 'session-changes'
-    ? 'Magnitude das mudanças detectadas'
+  const yAxisLabel = showAggregatedChart
+    ? 'Magnitude agregada'
     : metricAxisLabels[effectiveMetricType] || 'Valor';
 
-  const emptyText = activeTab === 'overview'
-    ? 'Ainda não há sessões suficientes para detectar mudança.'
+  const emptyText = activeTab === 'overview' || activeTab === 'session-changes'
+    ? 'Sem mudanças clínicas detectadas neste período.'
     : activeTab === 'maintenance'
       ? 'Sem probes no período. A timeline mostra probes pendentes, misses e alertas quando existirem.'
       : activePoints.length === 1
@@ -587,7 +696,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
   const showDefaultCriterion = activeTab === 'targets' && percentMetrics.has(effectiveMetricType) && !goalLines.length;
 
   const Filters = (
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-6">
       <div>
         <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Período</label>
         <div className="grid grid-cols-3 rounded-lg bg-slate-100 p-1">
@@ -604,16 +713,37 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
         </div>
       </div>
       <div>
+        <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Agrupar por</label>
+        <div className="grid grid-cols-2 rounded-lg bg-slate-100 p-1">
+          {[
+            { id: 'session', label: 'Sessão' },
+            { id: 'day', label: 'Dia' }
+          ].map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => {
+                setGroupBy(option.id as 'session' | 'day');
+                setGroupByTouched(true);
+              }}
+              className={`rounded-md px-3 py-2 text-xs font-bold ${groupBy === option.id ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-slate-500'}`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
         <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Target</label>
         <select value={targetId} onChange={(event) => setTargetId(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none">
-          <option value="">Auto</option>
+          <option value="">Todos</option>
           {targetOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
         </select>
       </div>
       <div>
         <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Comportamento</label>
         <select value={behaviorId} onChange={(event) => setBehaviorId(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none">
-          <option value="">Auto</option>
+          <option value="">Todos</option>
           {behaviorOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
         </select>
       </div>
@@ -798,28 +928,30 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-sm font-bold text-slate-900">
-                {activeTab === 'overview' || activeTab === 'session-changes'
+                {showAggregatedChart
                   ? 'Magnitude das mudanças detectadas'
                   : metricAxisLabels[effectiveMetricType] || chartTabs.find((tab) => tab.id === activeTab)?.label}
               </p>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{chartRows.length} ponto(s) · {yAxisLabel}</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                {showAggregatedChart ? `${aggregatedChangeRows.length} grupo(s) · ${groupBy === 'day' ? 'por dia' : 'por sessão'}` : `${chartRows.length} ponto(s) · ${yAxisLabel}`}
+              </p>
             </div>
             <SlidersHorizontal size={18} className="text-slate-300" />
           </div>
           <div className="h-[360px] min-w-0">
             <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={320}>
-              {showBar ? (
-                <BarChart data={chartRows} margin={{ top: 20, right: 24, left: 8, bottom: 44 }}>
+              {showAggregatedChart ? (
+                <BarChart data={aggregatedChangeRows} margin={{ top: 20, right: 24, left: 8, bottom: 44 }}>
                   <CartesianGrid stroke="#EEF2F7" strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="x" tick={{ fill: '#64748B', fontSize: 10, fontWeight: 700 }} angle={-18} textAnchor="end" height={58} />
+                  <XAxis dataKey="label" tick={{ fill: '#64748B', fontSize: 10, fontWeight: 700 }} angle={-18} textAnchor="end" height={58} interval="preserveStartEnd" />
                   <YAxis tick={{ fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} />
-                  <Tooltip content={<CustomTooltip />} />
-                  {annotationXLines.map((annotation: any) => (
-                    <ReferenceLine key={annotation.id} x={annotation.x} stroke={annotation.annotation_type === 'CONDITION_LINE' ? '#F97316' : '#64748B'} strokeDasharray="4 4" label={annotation.label} />
-                  ))}
-                  <Bar dataKey="chartValue" radius={[6, 6, 0, 0]} maxBarSize={52}>
-                    {chartRows.map((point: ChartPoint, index: number) => <Cell key={`${point.id || index}-cell`} fill={chartColor(point)} />)}
-                  </Bar>
+                  <Tooltip content={<AggregatedTooltip />} />
+                  <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />
+                  <Bar dataKey="skillMagnitude" name="Habilidades" stackId="changes" fill={aggregateBarColors.skillMagnitude} maxBarSize={56} onClick={(entry: any) => setSelectedChangeGroupKey(entry?.payload?.groupKey || '')} />
+                  <Bar dataKey="behaviorMagnitude" name="Comportamentos" stackId="changes" fill={aggregateBarColors.behaviorMagnitude} maxBarSize={56} onClick={(entry: any) => setSelectedChangeGroupKey(entry?.payload?.groupKey || '')} />
+                  <Bar dataKey="masteryCount" name="Maestria" stackId="changes" fill={aggregateBarColors.masteryCount} maxBarSize={56} onClick={(entry: any) => setSelectedChangeGroupKey(entry?.payload?.groupKey || '')} />
+                  <Bar dataKey="maintenanceCount" name="Manutenção" stackId="changes" fill={aggregateBarColors.maintenanceCount} maxBarSize={56} onClick={(entry: any) => setSelectedChangeGroupKey(entry?.payload?.groupKey || '')} />
+                  <Bar dataKey="regressionCount" name="Regressão/alertas" stackId="changes" fill={aggregateBarColors.regressionCount} radius={[6, 6, 0, 0]} maxBarSize={56} onClick={(entry: any) => setSelectedChangeGroupKey(entry?.payload?.groupKey || '')} />
                 </BarChart>
               ) : (
                 <LineChart data={chartRows} margin={{ top: 20, right: 24, left: 8, bottom: 44 }}>
@@ -855,26 +987,73 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
         <EmptyState text={emptyText} />
       ) : null}
 
-      {activeTab === 'session-changes' && chartRows.length > 0 && (
+      {activeTab === 'session-changes' && aggregatedChangeRows.length > 0 && (
         <div className="rounded-lg border border-slate-100 bg-white p-4">
-          <p className="mb-4 text-sm font-bold text-slate-900">Mudanças por sessão</p>
+          <p className="mb-4 text-sm font-bold text-slate-900">Linha do tempo clínica</p>
           <div className="space-y-3">
-            {chartRows.slice().reverse().map((point: ChartPoint, index: number) => (
-              <div key={`${point.id || point.sessionId}-${point.metricType}-${index}`} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-                <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${statusTone(point.changeStatus)}`}>
-                    {point.statusLabel || clinicalInterpretation(point)}
-                  </span>
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{formatDateTime(point.changedAt)}</span>
+            {aggregatedChangeRows.slice().reverse().map((group) => (
+              <div key={group.groupKey} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${aggregateBadgeTone(group)}`}>
+                      {group.hasRegressionAlert ? 'Alerta' : group.hasReviewReady ? 'Pronto para revisão' : `${group.totalChanges} mudanças`}
+                    </span>
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{group.label}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedChangeGroupKey(group.groupKey)}
+                    className="rounded-md bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-[#7a32fc] shadow-sm"
+                  >
+                    Ver detalhes
+                  </button>
                 </div>
-                <p className="text-sm font-semibold text-slate-800">{changeSentence(point, index)}</p>
+                <p className="text-sm font-semibold text-slate-800">
+                  {group.relevantChanges} relevantes de {group.totalChanges} mudanças. Maior mudança: {group.topChange?.metricLabel || 'sem destaque'}.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {clinicalChangeCategoryOrder.map((category) => (
+                    <span key={category} className="rounded-full bg-white px-2 py-1 text-[10px] font-bold text-slate-500">
+                      {clinicalChangeCategoryLabels[category]}: {group.categoryCounts[category] || 0}
+                    </span>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {chartRows.length > 0 && activeTab !== 'session-changes' && activeTab !== 'maintenance' && (
+      {showAggregatedChart && activeTab !== 'session-changes' && aggregateTopChanges.length > 0 && (
+        <div className="rounded-lg border border-slate-100 bg-white p-4">
+          <p className="mb-4 text-sm font-bold text-slate-900">
+            {activeTab === 'overview' ? 'Maiores mudanças recentes' : 'Ranking clínico agregado'}
+          </p>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {aggregateTopChanges.map(({ group, change }, index) => (
+              <button
+                key={`${group.groupKey}-${change.id || change.metricType}-${index}`}
+                type="button"
+                onClick={() => setSelectedChangeGroupKey(group.groupKey)}
+                className="rounded-lg border border-slate-100 bg-slate-50 p-4 text-left transition hover:border-[#7a32fc]/30 hover:bg-white"
+              >
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${statusTone(change.changeStatus)}`}>
+                    {change.statusLabel || clinicalInterpretation(change)}
+                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{group.label}</span>
+                </div>
+                <p className="text-sm font-bold text-slate-900">{change.metricLabel || 'Métrica clínica'}</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {clinicalChangeCategoryLabels[change.changeCategory]} · magnitude real {round1(change.rawMagnitude)} · visual {round1(change.visualMagnitude)}
+                </p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!showAggregatedChart && chartRows.length > 0 && activeTab !== 'session-changes' && activeTab !== 'maintenance' && (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {chartRows.slice(-6).reverse().map((point: ChartPoint, index: number) => (
             <div key={`${point.id || point.sessionId}-${point.metricType}-${index}`} className="rounded-lg border border-slate-100 bg-white p-4">
@@ -890,6 +1069,65 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
               </p>
             </div>
           ))}
+        </div>
+      )}
+
+      {selectedChangeGroup && (
+        <div className="fixed inset-0 z-[150] flex items-end bg-black/30 p-3 md:items-stretch md:justify-end md:p-4" onClick={() => setSelectedChangeGroupKey('')}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Detalhes das mudanças clínicas"
+            className="max-h-[86vh] w-full overflow-y-auto rounded-lg bg-white p-4 shadow-2xl md:h-full md:max-h-none md:w-[440px]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">{selectedChangeGroup.groupBy === 'day' ? 'Dia' : 'Sessão'}</p>
+                <h4 className="mt-1 text-lg font-black text-slate-900">{selectedChangeGroup.label}</h4>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {selectedChangeGroup.totalChanges} mudanças · {selectedChangeGroup.relevantChanges} relevantes
+                </p>
+              </div>
+              <button type="button" onClick={() => setSelectedChangeGroupKey('')} className="rounded-lg bg-slate-100 p-2 text-slate-500" title="Fechar detalhes">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              {clinicalChangeCategoryOrder.map((category) => (
+                <div key={category} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{clinicalChangeCategoryLabels[category]}</p>
+                  <p className="mt-1 text-xl font-black text-slate-900">{selectedChangeGroup.categoryCounts[category] || 0}</p>
+                </div>
+              ))}
+            </div>
+
+            {selectedChangeGroup.topChange && (
+              <div className="mt-4 rounded-lg border border-violet-100 bg-violet-50 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-[#7a32fc]">Maior mudança</p>
+                <p className="mt-1 text-sm font-bold text-slate-900">{selectedChangeGroup.topChange.metricLabel || 'Métrica clínica'}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  magnitude real {round1(selectedChangeGroup.topChange.rawMagnitude)} · visual {round1(selectedChangeGroup.topChange.visualMagnitude)}
+                </p>
+              </div>
+            )}
+
+            <div className="mt-4 space-y-3">
+              <p className="text-sm font-bold text-slate-900">Mudanças individuais</p>
+              {selectedChangeGroup.changes.map((change, index) => (
+                <div key={`${change.id || change.sessionId}-${change.metricType}-${index}`} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${statusTone(change.changeStatus)}`}>
+                      {clinicalChangeCategoryLabels[change.changeCategory]}
+                    </span>
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{formatDateTime(change.changedAt)}</span>
+                  </div>
+                  <p className="text-sm font-semibold text-slate-800">{changeSentence(change, index)}</p>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>

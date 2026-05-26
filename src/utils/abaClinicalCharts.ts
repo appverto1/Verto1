@@ -53,6 +53,7 @@ export type AbaMetricComparison = {
 };
 
 export type AbaSessionMetricSnapshot = AbaMetricComparison & {
+  id?: string | null;
   organizationId?: string | null;
   clinicId?: string | null;
   patientId?: string | null;
@@ -63,6 +64,39 @@ export type AbaSessionMetricSnapshot = AbaMetricComparison & {
   metricLabel: string;
   changedAt: string;
   sourceSummaryId?: string | null;
+};
+
+export type AbaClinicalChangeCategory = 'skill' | 'behavior' | 'mastery' | 'maintenance' | 'regression';
+
+export type AbaAggregatedClinicalChange = AbaSessionMetricSnapshot & {
+  changeCategory: AbaClinicalChangeCategory;
+  rawMagnitude: number;
+  visualMagnitude: number;
+  realMagnitude: number;
+};
+
+export type AbaAggregatedClinicalChangeGroup = {
+  groupKey: string;
+  groupBy: 'session' | 'day';
+  label: string;
+  sessionId?: string | null;
+  date: string;
+  sortAt: string;
+  totalChanges: number;
+  relevantChanges: number;
+  skillMagnitude: number;
+  behaviorMagnitude: number;
+  masteryCount: number;
+  maintenanceCount: number;
+  regressionCount: number;
+  totalRawMagnitude: number;
+  totalVisualMagnitude: number;
+  categoryCounts: Record<AbaClinicalChangeCategory, number>;
+  topChange?: AbaAggregatedClinicalChange | null;
+  topChanges: AbaAggregatedClinicalChange[];
+  changes: AbaAggregatedClinicalChange[];
+  hasRegressionAlert: boolean;
+  hasReviewReady: boolean;
 };
 
 export const ABA_CLINICAL_CHART_DEFAULT_THRESHOLDS: AbaClinicalChartThresholds = {
@@ -170,6 +204,158 @@ export const isAbaSignificantChange = (changeStatus: string, trendDirection?: st
   return normalized === 'CLINICALLY_SIGNIFICANT_CHANGE' ||
     normalized === 'REGRESSION_SIGNAL';
 };
+
+const clinicalChangeCategoryFor = (point: any): AbaClinicalChangeCategory => {
+  const metricType = normalizeStatus(point?.metricType);
+  const changeStatus = normalizeStatus(point?.changeStatus);
+  const currentStatus = normalizeStatus(point?.currentStatus || point?.masteryStatus || point?.statusLabel);
+  if (
+    changeStatus === 'REGRESSION_SIGNAL' ||
+    metricType === 'REGRESSION_RISK' ||
+    currentStatus === 'REGRESSION_RISK'
+  ) {
+    return 'regression';
+  }
+  if (metricType === 'MASTERY_STATUS') return 'mastery';
+  if (metricType === 'MAINTENANCE_STATUS') return 'maintenance';
+  if (metricType.startsWith('BEHAVIOR_')) return 'behavior';
+  return 'skill';
+};
+
+const rawClinicalMagnitudeFor = (point: any) => {
+  const metricType = normalizeStatus(point?.metricType);
+  const statusMetric = metricType === 'MASTERY_STATUS' || metricType === 'MAINTENANCE_STATUS' || metricType === 'REGRESSION_RISK';
+  if (statusMetric) return 1;
+  const deltaPercent = Number(point?.deltaPercent);
+  if (Number.isFinite(deltaPercent)) return Math.abs(deltaPercent);
+  const deltaValue = Number(point?.deltaValue);
+  if (Number.isFinite(deltaValue)) return Math.abs(deltaValue);
+  if (normalizeStatus(point?.changeStatus) === 'FIRST_MEASUREMENT') return 1;
+  return Math.abs(safeNumber(point?.value ?? point?.metricValue, 0));
+};
+
+const aggregateDateKey = (value: any) => {
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return 'sem-data';
+  return date.toISOString().slice(0, 10);
+};
+
+const aggregateDateLabel = (value: any) => {
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return 'Sem data';
+  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+};
+
+export function aggregateClinicalChangesBySession(
+  points: Array<Partial<AbaSessionMetricSnapshot> & Record<string, any>>,
+  options: { groupBy?: 'session' | 'day'; visualMagnitudeCap?: number } = {}
+): AbaAggregatedClinicalChangeGroup[] {
+  const groupBy = options.groupBy || 'session';
+  const visualMagnitudeCap = Math.max(1, Number(options.visualMagnitudeCap || 120));
+  const groups = new Map<string, AbaAggregatedClinicalChangeGroup>();
+
+  for (const point of Array.isArray(points) ? points : []) {
+    const changedAt = String(point?.changedAt || point?.changed_at || '');
+    const sessionId = String(point?.sessionId || point?.session_id || '').trim() || null;
+    const groupKey = groupBy === 'day'
+      ? `day:${aggregateDateKey(changedAt)}`
+      : `session:${sessionId || aggregateDateKey(changedAt)}`;
+    const category = clinicalChangeCategoryFor(point);
+    const rawMagnitude = rawClinicalMagnitudeFor(point);
+    const visualMagnitude = Math.min(rawMagnitude, visualMagnitudeCap);
+    const date = aggregateDateKey(changedAt);
+    const change = {
+      ...(point as AbaSessionMetricSnapshot),
+      changeCategory: category,
+      rawMagnitude,
+      realMagnitude: rawMagnitude,
+      visualMagnitude
+    };
+
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, {
+        groupKey,
+        groupBy,
+        label: groupBy === 'day'
+          ? aggregateDateLabel(changedAt)
+          : `${aggregateDateLabel(changedAt)} ${sessionId ? `#${sessionId.slice(-4)}` : ''}`.trim(),
+        sessionId,
+        date,
+        sortAt: changedAt || date,
+        totalChanges: 0,
+        relevantChanges: 0,
+        skillMagnitude: 0,
+        behaviorMagnitude: 0,
+        masteryCount: 0,
+        maintenanceCount: 0,
+        regressionCount: 0,
+        totalRawMagnitude: 0,
+        totalVisualMagnitude: 0,
+        categoryCounts: {
+          skill: 0,
+          behavior: 0,
+          mastery: 0,
+          maintenance: 0,
+          regression: 0
+        },
+        topChange: null,
+        topChanges: [],
+        changes: [],
+        hasRegressionAlert: false,
+        hasReviewReady: false
+      });
+    }
+
+    const group = groups.get(groupKey)!;
+    if (new Date(changedAt || 0).getTime() < new Date(group.sortAt || 0).getTime()) {
+      group.sortAt = changedAt || group.sortAt;
+    }
+    group.totalChanges += 1;
+    if (
+      isAbaSignificantChange(String(point?.changeStatus || ''), String(point?.trendDirection || '')) ||
+      normalizeStatus(point?.changeStatus) === 'CHANGED' ||
+      normalizeStatus(point?.changeStatus) === 'FIRST_MEASUREMENT'
+    ) {
+      group.relevantChanges += 1;
+    }
+    group.categoryCounts[category] += 1;
+    group.totalRawMagnitude += rawMagnitude;
+    group.totalVisualMagnitude += visualMagnitude;
+    if (category === 'skill') group.skillMagnitude += visualMagnitude;
+    if (category === 'behavior') group.behaviorMagnitude += visualMagnitude;
+    if (category === 'mastery') group.masteryCount += 1;
+    if (category === 'maintenance') group.maintenanceCount += 1;
+    if (category === 'regression') group.regressionCount += 1;
+    group.hasRegressionAlert = group.hasRegressionAlert || category === 'regression';
+    group.hasReviewReady = group.hasReviewReady || normalizeStatus(point?.currentStatus || point?.statusLabel) === 'READY_FOR_REVIEW' || String(point?.statusLabel || '').toLowerCase().includes('revis');
+    group.changes.push(change);
+  }
+
+  return Array.from(groups.values())
+    .map((group) => {
+      const sortedChanges = group.changes
+        .slice()
+        .sort((a, b) => b.rawMagnitude - a.rawMagnitude || new Date(b.changedAt || 0).getTime() - new Date(a.changedAt || 0).getTime());
+      return {
+        ...group,
+        skillMagnitude: round2(group.skillMagnitude) || 0,
+        behaviorMagnitude: round2(group.behaviorMagnitude) || 0,
+        totalRawMagnitude: round2(group.totalRawMagnitude) || 0,
+        totalVisualMagnitude: round2(group.totalVisualMagnitude) || 0,
+        topChange: sortedChanges[0] || null,
+        topChanges: sortedChanges.slice(0, 8),
+        changes: group.changes.slice().sort((a, b) => {
+          const categoryOrder: Record<AbaClinicalChangeCategory, number> = { regression: 0, skill: 1, behavior: 2, mastery: 3, maintenance: 4 };
+          return categoryOrder[a.changeCategory] - categoryOrder[b.changeCategory] || b.rawMagnitude - a.rawMagnitude;
+        })
+      };
+    })
+    .sort((a, b) => new Date(a.sortAt || 0).getTime() - new Date(b.sortAt || 0).getTime());
+}
+
+export function getClinicalChangeDrilldown(groups: AbaAggregatedClinicalChangeGroup[], groupKey: string) {
+  return (Array.isArray(groups) ? groups : []).find((group) => group.groupKey === groupKey) || null;
+}
 
 export function compareAbaMetric(input: AbaMetricComparisonInput): AbaMetricComparison {
   const metricType = normalizeStatus(input.metricType);
