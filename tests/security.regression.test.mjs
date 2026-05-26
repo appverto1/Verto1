@@ -8,6 +8,12 @@ const coordinatorPath = path.resolve(process.cwd(), 'src/components/CoordinatorD
 const coordinatorCode = fs.readFileSync(coordinatorPath, 'utf8');
 const appPath = path.resolve(process.cwd(), 'src/App.tsx');
 const appCode = fs.readFileSync(appPath, 'utf8');
+const indexPath = path.resolve(process.cwd(), 'index.html');
+const indexCode = fs.readFileSync(indexPath, 'utf8');
+const mainPath = path.resolve(process.cwd(), 'src/main.tsx');
+const mainCode = fs.readFileSync(mainPath, 'utf8');
+const clarityPath = path.resolve(process.cwd(), 'src/clarity.ts');
+const clarityCode = fs.existsSync(clarityPath) ? fs.readFileSync(clarityPath, 'utf8') : '';
 const dataServicePath = path.resolve(process.cwd(), 'src/services/dataService.ts');
 const dataServiceCode = fs.readFileSync(dataServicePath, 'utf8');
 const patientDetailPath = path.resolve(process.cwd(), 'src/components/PatientDetailView.tsx');
@@ -122,6 +128,21 @@ test('xss: notes and history write paths escape HTML via sanitizeTextField', () 
   expectPattern(
     /app\.post\('\/api\/history'[\s\S]*?note: sanitizeTextField\(req\.body\?\.note, 12000\)/m,
     'POST /api/history deve sanitizar note com sanitizeTextField.'
+  );
+});
+
+test('csp: Clarity tracking is loaded from bundled code, not inline HTML', () => {
+  assert.doesNotMatch(indexCode, /clarity\.ms\/tag|<script\s+type="text\/javascript"/i);
+  assert.match(indexCode, /<meta name="mobile-web-app-capable" content="yes" \/>/);
+  assert.match(mainCode, /installClarityTracking\(\)/);
+  assert.match(clarityCode, /https:\/\/www\.clarity\.ms\/tag\/\$\{CLARITY_TAG_ID\}/);
+  expectPattern(
+    /scriptSrc: \["'self'", "https:\/\/www\.clarity\.ms", "https:\/\/\*\.clarity\.ms"\]/,
+    'CSP deve permitir script externo do Microsoft Clarity sem unsafe-inline.'
+  );
+  expectPattern(
+    /const connectSrc = \["'self'", "https:\/\/\*\.supabase\.co", "wss:\/\/\*\.supabase\.co", "https:\/\/\*\.clarity\.ms"\]/,
+    'CSP deve permitir conexoes do Microsoft Clarity.'
   );
 });
 

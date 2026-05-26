@@ -2550,6 +2550,22 @@ const PROTOCOL_IMPORT_REQUEST_SELECT = [
   'updated_at'
 ].join(',');
 
+const PROTOCOL_IMPORT_REQUEST_SYNC_SELECT_COLUMNS = [
+  'id',
+  'clinic_id',
+  'protocol_name',
+  'status',
+  'suggested_canonical_key',
+  'suggested_canonical_name',
+  'approved_canonical_key',
+  'approved_canonical_name',
+  'reviewed_at',
+  'created_at',
+  'updated_at'
+];
+
+const PROTOCOL_IMPORT_REQUEST_SYNC_SELECT = PROTOCOL_IMPORT_REQUEST_SYNC_SELECT_COLUMNS.join(',');
+
 const CANONICAL_PROTOCOL_SELECT = [
   'id',
   'canonical_key',
@@ -4472,7 +4488,7 @@ async function startServer() {
   console.log('[Config] SUPABASE_SERVICE_ROLE_KEY defined:', !!process.env.SUPABASE_SERVICE_ROLE_KEY);
 
   // Security Headers (Helmet)
-  const connectSrc = ["'self'", "https://*.supabase.co", "wss://*.supabase.co"];
+  const connectSrc = ["'self'", "https://*.supabase.co", "wss://*.supabase.co", "https://*.clarity.ms"];
   if (!isProd) {
     connectSrc.push("ws://localhost:*", "http://localhost:*");
   }
@@ -4482,9 +4498,9 @@ async function startServer() {
       useDefaults: true,
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'"],
+        scriptSrc: ["'self'", "https://www.clarity.ms", "https://*.clarity.ms"],
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-        imgSrc: ["'self'", "data:", "blob:", "https://*.supabase.co", "https://*.googleusercontent.com", "https://www.gstatic.com"],
+        imgSrc: ["'self'", "data:", "blob:", "https://*.supabase.co", "https://*.googleusercontent.com", "https://www.gstatic.com", "https://*.clarity.ms", "https://c.bing.com"],
         fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
         connectSrc,
         frameSrc: ["'self'", "blob:", "data:", "https://*.supabase.co", "https://accounts.google.com", "https://*.google.com"],
@@ -5725,15 +5741,38 @@ async function startServer() {
   const loadApprovedProtocolImportRequestsForClinic = async (clinicId: string): Promise<any[]> => {
     const safeClinicId = sanitizeString(clinicId, 120);
     if (!isUuid(safeClinicId)) return [];
-    const { data, error } = await supabase
-      .from('protocol_import_requests')
-      .select(PROTOCOL_IMPORT_REQUEST_SELECT)
-      .eq('clinic_id', safeClinicId)
-      .eq('status', 'approved')
-      .order('reviewed_at', { ascending: true, nullsFirst: false })
-      .order('created_at', { ascending: true });
-    if (error) throw error;
-    return Array.isArray(data) ? data : [];
+    let columns = [...PROTOCOL_IMPORT_REQUEST_SYNC_SELECT_COLUMNS];
+
+    for (let attempt = 0; attempt < PROTOCOL_IMPORT_REQUEST_SYNC_SELECT_COLUMNS.length; attempt += 1) {
+      const { data, error } = await supabase
+        .from('protocol_import_requests')
+        .select(columns.join(',') || PROTOCOL_IMPORT_REQUEST_SYNC_SELECT)
+        .eq('clinic_id', safeClinicId)
+        .eq('status', 'approved')
+        .order('created_at', { ascending: true });
+
+      if (!error) return Array.isArray(data) ? data : [];
+      if (isMissingRelationError(error)) {
+        console.warn('[Protocol Sync] Tabela protocol_import_requests indisponivel; pulando sync automatico.', {
+          clinicId: safeClinicId,
+          message: extractSupabaseErrorMessage(error)
+        });
+        return [];
+      }
+
+      const missingColumn = extractMissingColumnName(error);
+      if (!missingColumn || !columns.includes(missingColumn) || missingColumn === 'status' || missingColumn === 'clinic_id') {
+        console.warn('[Protocol Sync] Nao foi possivel consultar requests aprovados; pulando sync automatico.', {
+          clinicId: safeClinicId,
+          missingColumn,
+          message: extractSupabaseErrorMessage(error)
+        });
+        return [];
+      }
+      columns = columns.filter((column) => column !== missingColumn);
+    }
+
+    return [];
   };
 
   const getApprovedProtocolImportRequestKeys = async (clinicId: string): Promise<string[]> => {
@@ -8791,12 +8830,12 @@ async function startServer() {
       }
 
       if (isUuid(clinicId)) {
-        const { missingApprovedProtocolKeys } = await findMissingApprovedProtocolKeysForClinicState(
-          clinicId,
-          normalizeProtocolArrayForRoute(data?.protocols)
-        );
-        if (missingApprovedProtocolKeys.length > 0) {
-          try {
+        try {
+          const { missingApprovedProtocolKeys } = await findMissingApprovedProtocolKeysForClinicState(
+            clinicId,
+            normalizeProtocolArrayForRoute(data?.protocols)
+          );
+          if (missingApprovedProtocolKeys.length > 0) {
             await syncApprovedProtocolsToClinicState({
               clinicId,
               performedBy: sanitizeString(req.session.user?.id, 120),
@@ -8809,13 +8848,12 @@ async function startServer() {
               logger: console
             });
             if (!refreshedState.error && refreshedState.data) data = refreshedState.data;
-          } catch (syncError: any) {
-            console.warn('[Protocol Sync] Nao foi possivel restaurar protocolos aprovados durante GET /api/clinic/state:', {
-              clinicId,
-              missingApprovedProtocolKeys,
-              message: syncError?.message || String(syncError)
-            });
           }
+        } catch (syncError: any) {
+          console.warn('[Protocol Sync] Nao foi possivel restaurar protocolos aprovados durante GET /api/clinic/state:', {
+            clinicId,
+            message: syncError?.message || String(syncError)
+          });
         }
       }
 

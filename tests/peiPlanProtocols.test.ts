@@ -167,6 +167,7 @@ test('clinic_state preserva protocolos aprovados contra salvamento parcial do cl
   const clinicPostBlock = source.match(/app\.post\('\/api\/clinic\/state'[\s\S]*?const handleVapidPublicKey/)?.[0] || '';
 
   assert.ok(source.includes('function resolveApprovedProtocolKeyFromRequest'));
+  assert.ok(source.includes('PROTOCOL_IMPORT_REQUEST_SYNC_SELECT_COLUMNS'));
   assert.ok(source.includes('loadApprovedProtocolImportRequestsForClinic'));
   assert.ok(source.includes('getApprovedProtocolImportRequestKeys'));
   assert.ok(source.includes('findMissingApprovedProtocolKeysForClinicState'));
@@ -174,6 +175,17 @@ test('clinic_state preserva protocolos aprovados contra salvamento parcial do cl
   assert.ok(clinicPostBlock.includes('approvedProtocolsForSave'));
   assert.ok(clinicPostBlock.includes('mergeApprovedProtocolsIntoClinicState(nextProtocols, approvedProtocolsForSave)'));
   assert.ok(clinicPostBlock.includes('Preservando protocolos aprovados durante POST /api/clinic/state'));
+});
+
+test('falha ao carregar clinic_state nao dispara salvamento vazio de protocolos', () => {
+  const appSource = readSource('src/App.tsx');
+  const dataServiceSource = readSource('src/services/dataService.ts');
+
+  assert.ok(appSource.includes('clinicStateSyncReady'));
+  assert.ok(appSource.includes('setClinicStateSyncReady(hydratedSuccessfully)'));
+  assert.ok(appSource.includes('if (!clinicStateSyncReady) return;'));
+  assert.ok(dataServiceSource.includes('!clinicStateResponse.ok || clinicStateRes?.success === false'));
+  assert.ok(dataServiceSource.includes('Falha ao carregar estado da clínica'));
 });
 
 test('selects explicitos continuam apontando para tabelas que alimentam Plano/PEI', () => {

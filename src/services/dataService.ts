@@ -2883,6 +2883,13 @@ export const dataService = {
     const clinicTemplateRes = await safeJson(clinicTemplateResponse);
     const patientsRes = await safeJson(patientsResponse);
 
+    if (!clinicStateResponse.ok || clinicStateRes?.success === false) {
+      return {
+        success: false,
+        error: clinicStateRes?.error || clinicStateRes?.warning || `Falha ao carregar estado da clínica (HTTP ${clinicStateResponse.status}).`
+      };
+    }
+
     if (!patientsResponse.ok || !patientsRes?.success) {
       return {
         success: false,

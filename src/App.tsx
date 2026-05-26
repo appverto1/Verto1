@@ -1587,6 +1587,7 @@ export default function App() {
     });
   };
   const [clinicStateHydrated, setClinicStateHydrated] = useState(false);
+  const [clinicStateSyncReady, setClinicStateSyncReady] = useState(false);
   const clinicStateSyncTimerRef = useRef<any>(null);
   const inactivityTimerRef = useRef<any>(null);
   const autoLogoutInProgressRef = useRef(false);
@@ -1752,6 +1753,7 @@ export default function App() {
       nextUser.role !== 'receptionist'
     ) {
       setClinicStateHydrated(true);
+      setClinicStateSyncReady(false);
       return;
     }
 
@@ -1759,11 +1761,14 @@ export default function App() {
     if (!workspaceId) {
       // Fail-safe: sem workspace não pode travar a interface em loading infinito.
       setClinicStateHydrated(true);
+      setClinicStateSyncReady(false);
       return;
     }
 
     setClinicStateHydrated(false);
+    setClinicStateSyncReady(false);
     resetWorkspaceScopedState();
+    let hydratedSuccessfully = false;
     try {
       const result = await withTimeout(
         dataService.hydrateWorkspaceState(workspaceId),
@@ -1799,16 +1804,19 @@ export default function App() {
       setHistory(Array.isArray(hydrated.history) ? hydrated.history : []);
       setTasks(Array.isArray(hydrated.tasks) ? hydrated.tasks : []);
       setClinicalRecords(Array.isArray(hydrated.clinicalRecords) ? hydrated.clinicalRecords : []);
+      hydratedSuccessfully = true;
     } catch (error) {
       console.error('hydrateState failed:', error);
     } finally {
       setClinicStateHydrated(true);
+      setClinicStateSyncReady(hydratedSuccessfully);
     }
   };
 
   useEffect(() => {
     if (!user) {
       setClinicStateHydrated(false);
+      setClinicStateSyncReady(false);
       return;
     }
 
@@ -1816,6 +1824,7 @@ export default function App() {
     // receber sobreposição do estado clínico global após F5.
     if (user.role === 'patient') {
       setClinicStateHydrated(false);
+      setClinicStateSyncReady(false);
       return;
     }
 
@@ -2074,6 +2083,7 @@ export default function App() {
     if (!user) return;
     if (!(user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist')) return;
     if (!clinicStateHydrated) return;
+    if (!clinicStateSyncReady) return;
 
     if (clinicStateSyncTimerRef.current) {
       clearTimeout(clinicStateSyncTimerRef.current);
@@ -2105,7 +2115,7 @@ export default function App() {
         clearTimeout(clinicStateSyncTimerRef.current);
       }
     };
-  }, [user, clinicStateHydrated, rooms, therapistAgenda, protocols, specialtySettings]);
+  }, [user, clinicStateHydrated, clinicStateSyncReady, rooms, therapistAgenda, protocols, specialtySettings]);
 
   // Fetch activity logs from Backend on load
   useEffect(() => {
