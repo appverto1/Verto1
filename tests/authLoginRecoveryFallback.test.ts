@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   PROFILE_SELECT,
-  fetchProfileByEmailWithSchemaFallback
+  fetchProfileByEmailWithSchemaFallback,
+  fetchProfileWithSchemaFallback
 } from '../src/utils/routeSchemaFallbacks.ts';
 
 type FakeResult = { data?: any[] | Record<string, any> | null; error?: any | null };
@@ -24,6 +25,11 @@ class FakeQuery {
 
   ilike(column: string, value: any) {
     this.filters.push({ op: 'ilike', column, value });
+    return this;
+  }
+
+  eq(column: string, value: any) {
+    this.filters.push({ op: 'eq', column, value });
     return this;
   }
 
@@ -95,6 +101,40 @@ test('/api/auth/login profile lookup by email removes optional missing column', 
   assert.equal(supabase.calls[0].selectColumns, PROFILE_SELECT);
   assert.ok(!supabase.calls[1].selectColumns.includes('phone_verified_at'));
   assert.equal(supabase.calls[1].filters.find((filter) => filter.op === 'ilike')?.value, 'owner@example.com');
+});
+
+test('/api/auth/login profile lookup by id tolerates legacy users table without name/email columns', async () => {
+  const supabase = new FakeSupabase({
+    users: [
+      {
+        data: null,
+        error: {
+          code: '42703',
+          message: 'column users.name does not exist'
+        }
+      },
+      {
+        data: null,
+        error: {
+          code: 'PGRST204',
+          message: "Could not find the 'email' column of 'users' in the schema cache"
+        }
+      },
+      { data: { id: 'user-1', role: 'owner' }, error: null }
+    ]
+  });
+
+  const result = await fetchProfileWithSchemaFallback({
+    supabase,
+    userId: 'user-1',
+    logger: silentLogger
+  });
+
+  assert.equal(result.error, null);
+  assert.equal((result.data as any).role, 'owner');
+  assert.equal(supabase.calls[0].selectColumns, PROFILE_SELECT);
+  assert.ok(!supabase.calls[1].selectColumns.split(',').includes('name'));
+  assert.ok(!supabase.calls[2].selectColumns.split(',').includes('email'));
 });
 
 test('/api/auth/login profile lookup by email removes missing created_at order', async () => {

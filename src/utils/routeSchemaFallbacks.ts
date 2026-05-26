@@ -532,6 +532,8 @@ export const FINANCIAL_ENTRY_SELECT = FINANCIAL_ENTRY_SELECT_COLUMNS.join(',');
 export const FINANCIAL_ENTRY_LEGACY_SELECT = FINANCIAL_ENTRY_LEGACY_SELECT_COLUMNS.join(',');
 
 const PROFILE_OPTIONAL_COLUMNS = new Set([
+  'email',
+  'name',
   'clinic_id',
   'subscription_status',
   'subscription_id',
