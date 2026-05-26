@@ -231,6 +231,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [selectedPEIProtocolId, setSelectedPEIProtocolId] = useState("");
   const [selectedPEIDomainId, setSelectedPEIDomainId] = useState("");
   const [selectedPEISkillId, setSelectedPEISkillId] = useState("");
+  const [confirmedPEIGoalId, setConfirmedPEIGoalId] = useState<any>(null);
+  const [confirmedPEISkillId, setConfirmedPEISkillId] = useState<any>(null);
+  const peiConfirmationTimerRef = React.useRef<number | null>(null);
   const [isSessionModeOpen, setIsSessionModeOpen] = useState(false);
   const [isUnlinkingModalOpen, setIsUnlinkingModalOpen] = useState(false);
   const [approvedVertoProtocolStatuses, setApprovedVertoProtocolStatuses] = useState<any[]>([]);
@@ -239,6 +242,25 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [selectedTherapistId, setSelectedTherapistId] = useState<string>(
     String(patient?.therapist_id || patient?.professional_id || '').trim()
   );
+
+  const flashPEIConfirmation = (goalId: any, skillId: any) => {
+    if (peiConfirmationTimerRef.current) {
+      window.clearTimeout(peiConfirmationTimerRef.current);
+    }
+    setConfirmedPEIGoalId(goalId);
+    setConfirmedPEISkillId(skillId);
+    peiConfirmationTimerRef.current = window.setTimeout(() => {
+      setConfirmedPEIGoalId(null);
+      setConfirmedPEISkillId(null);
+      peiConfirmationTimerRef.current = null;
+    }, 1500);
+  };
+
+  useEffect(() => () => {
+    if (peiConfirmationTimerRef.current) {
+      window.clearTimeout(peiConfirmationTimerRef.current);
+    }
+  }, []);
 
   const allTabs: Array<'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'files'> = [
     'history',
@@ -5379,8 +5401,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                               <button 
                                 key={s.id}
                                 onClick={() => {
+                                  const peiGoalId = Date.now();
                                   const peiGoal = {
-                                    id: Date.now(),
+                                    id: peiGoalId,
                                     protocolId: selectedPEIProtocol?.id,
                                     domainId: selectedPEIDomain?.id,
                                     skillId: s.id,
@@ -5401,10 +5424,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                     pei: [...(patient.pei || []), peiGoal]
                                   };
                                   onUpdatePatient(updatedPatient);
-                                  setSelectedPEISkillId("");
+                                  setSelectedPEISkillId(String(s.id));
+                                  flashPEIConfirmation(peiGoalId, s.id);
                                 }}
-                                className="text-left p-4 bg-white border border-gray-100 rounded-2xl hover:border-[#05CD99] hover:bg-[#05CD99]/5 transition-all group"
+                                className="relative overflow-hidden text-left p-4 bg-white border border-gray-100 rounded-2xl hover:border-[#05CD99] hover:bg-[#05CD99]/5 transition-all group"
                               >
+                                {String(confirmedPEISkillId) === String(s.id) && (
+                                  <span className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-[#05CD99]/10 backdrop-blur-[1px] animate-pop">
+                                    <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#05CD99] text-white shadow-xl shadow-emerald-500/30">
+                                      <CheckCircle2 size={24} />
+                                    </span>
+                                  </span>
+                                )}
                                 <div className="flex justify-between items-center">
                                   <div>
                                     <p className="text-sm font-semibold text-gray-800">{s.name}</p>
@@ -5441,6 +5472,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                     ? 'bg-[#101b2e] border-slate-700'
                                     : 'bg-white border-slate-200'
                               }`}>
+                                {String(confirmedPEIGoalId) === String(goal.id) && (
+                                  <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-[#05CD99]/10 backdrop-blur-[1px] animate-pop">
+                                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#05CD99] text-white shadow-xl shadow-emerald-500/30">
+                                      <CheckCircle2 size={26} />
+                                    </div>
+                                  </div>
+                                )}
                                 {isGoalAcquired(goal) && (
                                   <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-emerald-400 via-green-500 to-teal-400 pointer-events-none" />
                                 )}

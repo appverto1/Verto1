@@ -28,6 +28,19 @@ test('metas adicionadas pelo PEI preservam ids de protocolo e dominio', () => {
   assert.ok(peiGoalBlock.includes('domainName: selectedPEIDomain?.name'));
 });
 
+test('metas adicionadas pelo PEI exibem confirmacao rapida na tarefa', () => {
+  const source = readSource('src/components/PatientDetailView.tsx');
+
+  assert.ok(source.includes('confirmedPEIGoalId'));
+  assert.ok(source.includes('confirmedPEISkillId'));
+  assert.ok(source.includes('flashPEIConfirmation(peiGoalId, s.id)'));
+  assert.ok(source.includes('window.setTimeout(() => {'));
+  assert.ok(source.includes('}, 1500);'));
+  assert.ok(source.includes('String(confirmedPEISkillId) === String(s.id)'));
+  assert.ok(source.includes('String(confirmedPEIGoalId) === String(goal.id)'));
+  assert.ok(source.includes('<CheckCircle2 size={26} />'));
+});
+
 test('dataService normaliza protocolos e metas PEI legadas antes de hidratar a tela', () => {
   const source = readSource('src/services/dataService.ts');
 
