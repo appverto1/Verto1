@@ -155,11 +155,25 @@ test('clinic_state vazio e requests aprovados disparam sync para a aba Plano/PEI
   const clinicGetBlock = source.match(/app\.get\('\/api\/clinic\/state'[\s\S]*?app\.post\('\/api\/clinic\/state'/)?.[0] || '';
   const approveBlock = source.match(/app\.post\('\/api\/admin\/protocol-import-requests\/:requestId\/approve'[\s\S]*?app\.post\('\/api\/admin\/protocol-import-requests\/:requestId\/reject'/)?.[0] || '';
 
-  assert.ok(clinicGetBlock.includes('normalizeProtocolArrayForRoute(data?.protocols).length === 0'));
-  assert.ok(clinicGetBlock.includes('getApprovedProtocolImportRequestCount(clinicId)'));
+  assert.ok(clinicGetBlock.includes('findMissingApprovedProtocolKeysForClinicState'));
+  assert.ok(clinicGetBlock.includes('missingApprovedProtocolKeys.length > 0'));
   assert.ok(clinicGetBlock.includes('syncApprovedProtocolsToClinicState'));
   assert.ok(approveBlock.includes('syncApprovedProtocolsToClinicState'));
   assert.ok(approveBlock.includes('protocolSync'));
+});
+
+test('clinic_state preserva protocolos aprovados contra salvamento parcial do cliente', () => {
+  const source = readSource('server.ts');
+  const clinicPostBlock = source.match(/app\.post\('\/api\/clinic\/state'[\s\S]*?const handleVapidPublicKey/)?.[0] || '';
+
+  assert.ok(source.includes('function resolveApprovedProtocolKeyFromRequest'));
+  assert.ok(source.includes('loadApprovedProtocolImportRequestsForClinic'));
+  assert.ok(source.includes('getApprovedProtocolImportRequestKeys'));
+  assert.ok(source.includes('findMissingApprovedProtocolKeysForClinicState'));
+  assert.ok(clinicPostBlock.includes('let nextProtocols'));
+  assert.ok(clinicPostBlock.includes('approvedProtocolsForSave'));
+  assert.ok(clinicPostBlock.includes('mergeApprovedProtocolsIntoClinicState(nextProtocols, approvedProtocolsForSave)'));
+  assert.ok(clinicPostBlock.includes('Preservando protocolos aprovados durante POST /api/clinic/state'));
 });
 
 test('selects explicitos continuam apontando para tabelas que alimentam Plano/PEI', () => {

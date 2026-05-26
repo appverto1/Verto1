@@ -592,20 +592,30 @@ function identifyVertoProtocolCandidate(input?: string | null): { canonicalKey: 
 }
 
 function normalizeApprovedProtocolKey(input?: string | null): string {
-  const key = sanitizeString(input, 180);
-  if (key === 'afls' || key === 'afls-social-participation' || key === 'afls-community') {
+  const rawKey = sanitizeString(input, 180);
+  const key = normalizeProtocolKey(rawKey);
+  if (!key) return '';
+  if (
+    key === 'afls' ||
+    key === 'afls social participation' ||
+    key === 'afls social participation adult' ||
+    key === 'afls community' ||
+    key.includes('habilidades de participacao social') ||
+    key.includes('functional living skills')
+  ) {
     return 'afls-social-participation-adult';
   }
-  if (key === 'vb-mapp-level-2' || key === 'vb-mapp-nivel-2' || key === 'vbmapp2' || key === 'vb-mapp2') {
-    return 'vb-mapp-level-2';
-  }
-  if (key === 'vb-mapp-level-3' || key === 'vb-mapp-nivel-3' || key === 'vbmapp3' || key === 'vb-mapp3') {
-    return 'vb-mapp-level-3';
-  }
-  if (key === 'vb-mapp' || key === 'vbmapp' || key === 'vb mapp' || key === 'vb-mapp-nivel-1') {
+  const looksLikeVbMapp = /\bvb\s*mapp\b|\bvbmapp/.test(key);
+  if (looksLikeVbMapp) {
+    if (/\b(level|nivel)\s*3\b|\bvbmapp\s*3\b|\b30\s*a\s*48\b|\b30\s*48\b|\b3\b/.test(key)) {
+      return 'vb-mapp-level-3';
+    }
+    if (/\b(level|nivel)\s*2\b|\bvbmapp\s*2\b|\b18\s*a\s*30\b|\b18\s*30\b|\b2\b/.test(key)) {
+      return 'vb-mapp-level-2';
+    }
     return 'vb-mapp-level-1';
   }
-  return key;
+  return rawKey;
 }
 
 const VERTO_PROTOCOL_CATALOG = [
@@ -675,13 +685,22 @@ function buildProtocolIdentityKeys(protocol: any): string[] {
   return Array.from(new Set(keys));
 }
 
-function buildClinicProtocolFromApprovedRequest(request: any): any | null {
-  const canonicalKey = normalizeApprovedProtocolKey(
+function resolveApprovedProtocolKeyFromRequest(request: any): string {
+  const explicit = normalizeApprovedProtocolKey(
     request?.approved_canonical_key ||
     request?.canonicalKey ||
-    request?.suggested_canonical_key ||
-    identifyVertoProtocolCandidate(`${request?.approved_canonical_name || ''} ${request?.protocol_name || ''}`).canonicalKey
+    request?.suggested_canonical_key
   );
+  if (LICENSED_VERTO_PROTOCOLS_BY_KEY.has(explicit) || VERTO_PROTOCOL_BY_KEY.has(explicit)) return explicit;
+  return normalizeApprovedProtocolKey(
+    identifyVertoProtocolCandidate(
+      `${request?.approved_canonical_name || ''} ${request?.suggested_canonical_name || ''} ${request?.protocol_name || ''}`
+    ).canonicalKey
+  );
+}
+
+function buildClinicProtocolFromApprovedRequest(request: any): any | null {
+  const canonicalKey = resolveApprovedProtocolKeyFromRequest(request);
   const canonicalProtocol = LICENSED_VERTO_PROTOCOLS_BY_KEY.get(canonicalKey);
   if (!canonicalProtocol || !Array.isArray(canonicalProtocol.data) || canonicalProtocol.data.length === 0) {
     return null;
@@ -5703,6 +5722,46 @@ async function startServer() {
     }
   };
 
+  const loadApprovedProtocolImportRequestsForClinic = async (clinicId: string): Promise<any[]> => {
+    const safeClinicId = sanitizeString(clinicId, 120);
+    if (!isUuid(safeClinicId)) return [];
+    const { data, error } = await supabase
+      .from('protocol_import_requests')
+      .select(PROTOCOL_IMPORT_REQUEST_SELECT)
+      .eq('clinic_id', safeClinicId)
+      .eq('status', 'approved')
+      .order('reviewed_at', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  };
+
+  const getApprovedProtocolImportRequestKeys = async (clinicId: string): Promise<string[]> => {
+    const approvedRows = await loadApprovedProtocolImportRequestsForClinic(clinicId);
+    return Array.from(new Set(
+      approvedRows
+        .map((row) => resolveApprovedProtocolKeyFromRequest(row))
+        .filter((key) => LICENSED_VERTO_PROTOCOLS_BY_KEY.has(key))
+    ));
+  };
+
+  const findMissingApprovedProtocolKeysForClinicState = async (clinicId: string, currentProtocols: any[]) => {
+    const approvedKeys = await getApprovedProtocolImportRequestKeys(clinicId);
+    if (approvedKeys.length === 0) return { approvedKeys, missingApprovedProtocolKeys: [] as string[] };
+
+    const existingKeys = new Set(
+      normalizeProtocolArrayForRoute(currentProtocols)
+        .flatMap((protocol) => buildProtocolIdentityKeys(protocol))
+        .filter(Boolean)
+    );
+    const missingApprovedProtocolKeys = approvedKeys.filter((key) => {
+      const normalizedKey = normalizeProtocolKey(normalizeApprovedProtocolKey(key));
+      return normalizedKey && !existingKeys.has(normalizedKey);
+    });
+
+    return { approvedKeys, missingApprovedProtocolKeys };
+  };
+
   const syncApprovedProtocolsToClinicState = async (params: {
     clinicId: string;
     performedBy?: string | null;
@@ -5715,22 +5774,11 @@ async function startServer() {
       return { success: false, synced: 0, added: 0, refreshed: 0, skipped: 0, sourceRequestIds: [], error: 'invalid_clinic_id' };
     }
 
-    const { data: approvedRows, error: requestsError } = await supabase
-      .from('protocol_import_requests')
-      .select(PROTOCOL_IMPORT_REQUEST_SELECT)
-      .eq('clinic_id', clinicId)
-      .eq('status', 'approved')
-      .order('reviewed_at', { ascending: true, nullsFirst: false })
-      .order('created_at', { ascending: true });
-    if (requestsError) throw requestsError;
+    const approvedRows = await loadApprovedProtocolImportRequestsForClinic(clinicId);
 
     const requestsByProtocolKey = new Map<string, any>();
     for (const row of approvedRows || []) {
-      const canonicalKey = normalizeApprovedProtocolKey(
-        row?.approved_canonical_key ||
-        row?.suggested_canonical_key ||
-        identifyVertoProtocolCandidate(`${row?.approved_canonical_name || ''} ${row?.protocol_name || ''}`).canonicalKey
-      );
+      const canonicalKey = resolveApprovedProtocolKeyFromRequest(row);
       if (!LICENSED_VERTO_PROTOCOLS_BY_KEY.has(canonicalKey)) continue;
       requestsByProtocolKey.set(canonicalKey, row);
     }
@@ -8742,9 +8790,12 @@ async function startServer() {
         throw error;
       }
 
-      if (isUuid(clinicId) && normalizeProtocolArrayForRoute(data?.protocols).length === 0) {
-        const approvedProtocolCount = await getApprovedProtocolImportRequestCount(clinicId);
-        if (approvedProtocolCount > 0) {
+      if (isUuid(clinicId)) {
+        const { missingApprovedProtocolKeys } = await findMissingApprovedProtocolKeysForClinicState(
+          clinicId,
+          normalizeProtocolArrayForRoute(data?.protocols)
+        );
+        if (missingApprovedProtocolKeys.length > 0) {
           try {
             await syncApprovedProtocolsToClinicState({
               clinicId,
@@ -8761,6 +8812,7 @@ async function startServer() {
           } catch (syncError: any) {
             console.warn('[Protocol Sync] Nao foi possivel restaurar protocolos aprovados durante GET /api/clinic/state:', {
               clinicId,
+              missingApprovedProtocolKeys,
               message: syncError?.message || String(syncError)
             });
           }
@@ -8805,7 +8857,7 @@ async function startServer() {
 
       const nextRooms = canManageRooms && Array.isArray(req.body?.rooms) ? req.body.rooms.slice(0, 400) : undefined;
       const nextAppointments = Array.isArray(req.body?.appointments) ? req.body.appointments.slice(0, 5000) : undefined;
-      const nextProtocols = canManageProtocols && Array.isArray(req.body?.protocols) ? req.body.protocols.slice(0, 600) : undefined;
+      let nextProtocols = canManageProtocols && Array.isArray(req.body?.protocols) ? req.body.protocols.slice(0, 600) : undefined;
       const nextSpecialtySettings =
         canManageSpecialtySettings && req.body?.specialtySettings && typeof req.body.specialtySettings === 'object'
           ? req.body.specialtySettings
@@ -8894,6 +8946,29 @@ async function startServer() {
             warning: 'protocols_clear_blocked_with_approved_imports',
             approvedProtocolCount
           });
+        }
+      }
+
+      if (
+        nextProtocols !== undefined &&
+        nextProtocols.length > 0 &&
+        !Boolean(req.body?.forceClearProtocols)
+      ) {
+        const approvedRowsForSave = await loadApprovedProtocolImportRequestsForClinic(clinicId);
+        const approvedProtocolsForSave = approvedRowsForSave
+          .map((row) => buildClinicProtocolFromApprovedRequest(row))
+          .filter(Boolean);
+        if (approvedProtocolsForSave.length > 0) {
+          const mergedProtocolsForSave = mergeApprovedProtocolsIntoClinicState(nextProtocols, approvedProtocolsForSave);
+          if (mergedProtocolsForSave.added > 0) {
+            nextProtocols = mergedProtocolsForSave.protocols;
+            console.info('[Protocol Sync] Preservando protocolos aprovados durante POST /api/clinic/state.', {
+              clinicId,
+              approvedProtocolCount: approvedProtocolsForSave.length,
+              added: mergedProtocolsForSave.added,
+              refreshed: mergedProtocolsForSave.refreshed
+            });
+          }
         }
       }
 
@@ -12559,12 +12634,50 @@ async function startServer() {
         return res.json({ success: true, data: [] });
       }
 
-      const { data: states, error: statesError } = await supabase
+      let { data: states, error: statesError } = await supabase
         .from('clinic_state')
         .select('clinic_id, protocols, updated_at')
         .in('clinic_id', clinicIds);
 
       if (statesError) throw statesError;
+
+      const stateByClinicId = new Map((Array.isArray(states) ? states : []).map((state: any) => [
+        sanitizeString(state?.clinic_id, 120),
+        state
+      ]));
+      const clinicsNeedingProtocolSync: string[] = [];
+      for (const clinicId of clinicIds) {
+        const state = stateByClinicId.get(clinicId);
+        const { missingApprovedProtocolKeys } = await findMissingApprovedProtocolKeysForClinicState(
+          clinicId,
+          normalizeProtocolArrayForRoute(state?.protocols)
+        );
+        if (missingApprovedProtocolKeys.length > 0) clinicsNeedingProtocolSync.push(clinicId);
+      }
+
+      if (clinicsNeedingProtocolSync.length > 0) {
+        await Promise.all(clinicsNeedingProtocolSync.map((clinicId) =>
+          syncApprovedProtocolsToClinicState({
+            clinicId,
+            performedBy: sanitizeString(req.session.user?.id, 120),
+            actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Paciente', 180),
+            auditAction: 'restore_clinic_protocols_from_import_requests'
+          }).catch((syncError: any) => {
+            console.warn('[Protocol Sync] Nao foi possivel restaurar protocolos aprovados durante GET /api/patient/self/protocols:', {
+              clinicId,
+              message: syncError?.message || String(syncError)
+            });
+            return null;
+          })
+        ));
+
+        const refreshedStates = await supabase
+          .from('clinic_state')
+          .select('clinic_id, protocols, updated_at')
+          .in('clinic_id', clinicIds);
+        if (refreshedStates.error) throw refreshedStates.error;
+        states = refreshedStates.data;
+      }
 
       const orderedStates = (Array.isArray(states) ? states : [])
         .sort((a: any, b: any) => {
