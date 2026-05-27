@@ -189,6 +189,7 @@ function auditClinicalQuery(endpoint: string, options: ClinicalQueryAuditOptions
   if (options.requiresPatientOrSession !== false) {
     const hasScopedPath = /\/api\/aba\/(session-live-summaries|session-reports|recent-session-events)\/[^/?]+/.test(endpoint) ||
       /\/api\/aba\/patients\/[^/?]+\/charts\/[^/?]+/.test(endpoint) ||
+      /\/api\/aba\/patients\/[^/?]+\/(maintenance-schedules|next-session\/recommendations|next-session\/plan-items)/.test(endpoint) ||
       /\/api\/(notes|history|tasks|assigned-tasks|patient-anamnesis|patient-records)\/[^/?]+/.test(endpoint) ||
       /\/api\/aba\/(sessions|trials|behavior-events|mastery-evaluations|patient-summary|maintenance-overview)\/[^/?]+/.test(endpoint);
     const hasScopedQuery = /[?&](patientId|patient_id|sessionId|session_id)=/.test(endpoint);
@@ -1432,6 +1433,221 @@ export const dataService = {
       page,
       pageSize: limit
     };
+  },
+
+  async getAbaMaintenanceSchedules(patientId: string, options: { limit?: number; status?: string } = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    const limit = normalizeListLimit(options.limit, 20, 50);
+    const endpoint = endpointWithQuery(`/api/aba/patients/${encodeURIComponent(String(patientId))}/maintenance-schedules`, {
+      limit,
+      status: options.status
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: 'getAbaMaintenanceSchedules', operation: 'list', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+    } catch (error) {
+      if (import.meta.env.DEV) console.log('Fetching ABA maintenance schedules from local state only...');
+    }
+    return { success: true, data: [] };
+  },
+
+  async createMaintenanceScheduleForTarget(targetId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    const endpoint = `/api/aba/targets/${encodeURIComponent(String(targetId))}/maintenance-schedules`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, { helperName: 'createMaintenanceScheduleForTarget', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: 'Não foi possível agendar a sondagem agora.' };
+    }
+  },
+
+  async scheduleMaintenanceForNextSession(targetId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    const endpoint = `/api/aba/targets/${encodeURIComponent(String(targetId))}/maintenance-schedules/next-session`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, { helperName: 'scheduleMaintenanceForNextSession', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: 'Não foi possível agendar para a próxima sessão agora.' };
+    }
+  },
+
+  async getNextMaintenanceProbeForTarget(targetId: string, patientId: string) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = endpointWithQuery(`/api/aba/targets/${encodeURIComponent(String(targetId))}/next-maintenance-probe`, { patientId });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: 'getNextMaintenanceProbeForTarget', operation: 'detail', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+    } catch (error) {
+      if (import.meta.env.DEV) console.log('Fetching next maintenance probe from local state only...');
+    }
+    return { success: true, data: null };
+  },
+
+  async completeMaintenanceSchedule(scheduleId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/maintenance-schedules/${encodeURIComponent(String(scheduleId))}/complete`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, { helperName: 'completeMaintenanceSchedule', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: 'Não foi possível concluir o agendamento agora.' };
+    }
+  },
+
+  async getNextSessionRecommendations(patientId: string, options: { sourceSessionId?: string; focusType?: string; limit?: number } = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    const endpoint = endpointWithQuery(`/api/aba/patients/${encodeURIComponent(String(patientId))}/next-session/recommendations`, {
+      sourceSessionId: options.sourceSessionId,
+      focusType: options.focusType,
+      limit: normalizeListLimit(options.limit, 20, 50)
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: 'getNextSessionRecommendations', operation: 'list', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+    } catch (error) {
+      if (import.meta.env.DEV) console.log('Fetching ABA recommendations from local state only...');
+    }
+    return { success: true, data: [] };
+  },
+
+  async generateNextSessionRecommendations(patientId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/next-session/recommendations/generate`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, { helperName: 'generateNextSessionRecommendations', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: 'Não foi possível gerar sugestões agora.' };
+    }
+  },
+
+  async acceptAbaRecommendation(recommendationId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/recommendations/${encodeURIComponent(String(recommendationId))}/accept`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, { helperName: 'acceptAbaRecommendation', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: 'Não foi possível aceitar a sugestão agora.' };
+    }
+  },
+
+  async rejectAbaRecommendation(recommendationId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/recommendations/${encodeURIComponent(String(recommendationId))}/reject`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, { helperName: 'rejectAbaRecommendation', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: 'Não foi possível recusar a sugestão agora.' };
+    }
+  },
+
+  async updateAbaRecommendation(recommendationId: string, patch: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/recommendations/${encodeURIComponent(String(recommendationId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(patch || {})
+      }, { helperName: 'updateAbaRecommendation', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: 'Não foi possível editar a sugestão agora.' };
+    }
+  },
+
+  async applyAbaRecommendationToNextSession(recommendationId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/recommendations/${encodeURIComponent(String(recommendationId))}/apply-to-next-session`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, { helperName: 'applyAbaRecommendationToNextSession', operation: 'write', table: 'aba_next_session_plan_items', hasExplicitColumns: true });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: 'Não foi possível aplicar ao plano agora.' };
+    }
+  },
+
+  async getAbaNextSessionPlanItems(patientId: string, options: { status?: string; limit?: number } = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    const endpoint = endpointWithQuery(`/api/aba/patients/${encodeURIComponent(String(patientId))}/next-session/plan-items`, {
+      status: options.status || 'PLANNED',
+      limit: normalizeListLimit(options.limit, 8, 20)
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: 'getAbaNextSessionPlanItems', operation: 'list', table: 'aba_next_session_plan_items', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+    } catch (error) {
+      if (import.meta.env.DEV) console.log('Fetching ABA next-session plan from local state only...');
+    }
+    return { success: true, data: [] };
+  },
+
+  async updateAbaNextSessionPlanItem(planItemId: string, patch: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/next-session-plan-items/${encodeURIComponent(String(planItemId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(patch || {})
+      }, { helperName: 'updateAbaNextSessionPlanItem', operation: 'write', table: 'aba_next_session_plan_items', hasExplicitColumns: true });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: 'Não foi possível atualizar o plano agora.' };
+    }
   },
 
   async getAbaClinicalChart(patientId: string, chart: 'targets' | 'behaviors' | 'mastery' | 'maintenance' | 'session-changes' | 'overview', options: any = {}) {

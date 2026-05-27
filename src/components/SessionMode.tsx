@@ -46,6 +46,7 @@ import {
   type AbaIntervalCollectionStatus
 } from '../utils/abaIntervalLifecycle';
 import { evaluateMaintenanceStatus, evaluateTargetMastery, formatAbaMasteryCriterion } from '../utils/abaMasteryEngine';
+import { formatMaintenanceScheduleDueLabel } from '../utils/abaMaintenanceScheduling';
 
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
 type AbcRequirement = 'REQUIRED' | 'RECOMMENDED' | 'OPTIONAL' | 'DISABLED';
@@ -500,6 +501,16 @@ export const SessionMode = ({
   const [records, setRecords] = useState<SessionRecord[]>([]);
   const [sessionLiveSummary, setSessionLiveSummary] = useState<any>(null);
   const [maintenanceOverview, setMaintenanceOverview] = useState<any>({ schedules: [], probeResults: [], alerts: [], summary: null });
+  const [maintenanceScheduleModalGoal, setMaintenanceScheduleModalGoal] = useState<any>(null);
+  const [maintenanceScheduleMode, setMaintenanceScheduleMode] = useState('DEFAULT_SEQUENCE');
+  const [maintenanceCustomDate, setMaintenanceCustomDate] = useState('');
+  const [maintenanceScheduleSaving, setMaintenanceScheduleSaving] = useState(false);
+  const [planningFocusType, setPlanningFocusType] = useState('BALANCED');
+  const [planningRecommendations, setPlanningRecommendations] = useState<any[]>([]);
+  const [planningLoading, setPlanningLoading] = useState(false);
+  const [planningMessage, setPlanningMessage] = useState('');
+  const [nextSessionPlanItems, setNextSessionPlanItems] = useState<any[]>([]);
+  const [planActionMessage, setPlanActionMessage] = useState('');
   const [openDurations, setOpenDurations] = useState<OpenDurationEvent[]>([]);
   const [selectedBehaviorId, setSelectedBehaviorId] = useState('crying');
   const [behaviorMeasurementType, setBehaviorMeasurementType] = useState(behaviorPresets[0].defaultMeasurement);
@@ -797,6 +808,26 @@ export const SessionMode = ({
       cancelled = true;
     };
   }, [patientId, sessionId, sessionCompleted]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadNextSessionPlanItems = async () => {
+      if (!patientId || sessionCompleted) {
+        setNextSessionPlanItems([]);
+        return;
+      }
+      try {
+        const result = await dataService.getAbaNextSessionPlanItems(patientId, { status: 'PLANNED', limit: 8 });
+        if (!cancelled) setNextSessionPlanItems(Array.isArray(result?.data) ? result.data : []);
+      } catch {
+        if (!cancelled) setNextSessionPlanItems([]);
+      }
+    };
+    void loadNextSessionPlanItems();
+    return () => {
+      cancelled = true;
+    };
+  }, [patientId, sessionCompleted, sessionId]);
 
   useEffect(() => {
     const hasRunningTimer = openDurations.length > 0 || rateWindow || intervalRun;
@@ -1407,14 +1438,17 @@ export const SessionMode = ({
     await persistTrialRecord({ goal, score, outcome, selectedPrompt, activeCollectionType });
   };
 
-  const activateMaintenanceProbeMode = () => {
+  const activateMaintenanceProbeMode = (goal?: any) => {
     setCollectionType('maintenance_probe');
+    if (goal?.id) setActiveCriteria(goal.id);
+    setPlanActionMessage('Maintenance Probe ativo para esta tentativa.');
     setMaintenanceProbeFeedback('Maintenance Probe ativo para a próxima tentativa');
     if (maintenanceProbeFeedbackTimerRef.current) window.clearTimeout(maintenanceProbeFeedbackTimerRef.current);
     maintenanceProbeFeedbackTimerRef.current = window.setTimeout(() => {
       setMaintenanceProbeFeedback('');
+      if (goal?.id) setActiveCriteria(null);
       maintenanceProbeFeedbackTimerRef.current = null;
-    }, 2500);
+    }, 1500);
     showClinicalToast({
       variant: 'success',
       title: 'Maintenance Probe ativo',
@@ -2575,15 +2609,11 @@ export const SessionMode = ({
     return Boolean(goalName && rowTargetName && rowTargetName === goalName);
   };
 
-  const formatMaintenanceDueLabel = (scheduledFor: any) => {
-    const scheduledAt = new Date(scheduledFor || 0);
-    if (Number.isNaN(scheduledAt.getTime())) return 'Sem maintenance probe agendado';
-    const diffDays = Math.ceil((scheduledAt.getTime() - Date.now()) / 86_400_000);
-    if (diffDays > 1) return `Proxima manutencao em ${diffDays} dias`;
-    if (diffDays === 1) return 'Proxima manutencao em 1 dia';
-    if (diffDays === 0) return 'Proxima manutencao hoje';
-    return `Manutencao pendente ha ${Math.abs(diffDays)} dia(s)`;
-  };
+  const formatMaintenanceDueLabel = (schedule: any) => (
+    typeof schedule === 'object'
+      ? formatMaintenanceScheduleDueLabel(schedule)
+      : formatMaintenanceScheduleDueLabel({ scheduled_for: schedule })
+  );
 
   const maintenanceStatusLabel = (status: any) => {
     const normalized = String(status || '').toUpperCase();
@@ -2598,7 +2628,7 @@ export const SessionMode = ({
     const goalName = String(goal?.name || goal?.target_name || goal?.targetName || 'Meta').trim();
     const schedules = maintenanceSchedules
       .filter((schedule: any) => targetMatchesGoal(schedule, goalId, goalName))
-      .sort((a: any, b: any) => new Date(a?.scheduled_for || a?.scheduledFor || 0).getTime() - new Date(b?.scheduled_for || b?.scheduledFor || 0).getTime());
+      .sort((a: any, b: any) => new Date(a?.scheduled_for || a?.scheduledFor || a?.target_due_date || a?.targetDueDate || 0).getTime() - new Date(b?.scheduled_for || b?.scheduledFor || b?.target_due_date || b?.targetDueDate || 0).getTime());
     const probeResults = maintenanceProbeResults
       .filter((result: any) => targetMatchesGoal(result, goalId, goalName))
       .sort((a: any, b: any) => new Date(b?.occurred_at || b?.occurredAt || 0).getTime() - new Date(a?.occurred_at || a?.occurredAt || 0).getTime());
@@ -2613,7 +2643,7 @@ export const SessionMode = ({
     }
     return {
       isMaintenanceTarget: isMaintenanceLikeGoal(goal) || schedules.length > 0 || probeResults.length > 0 || alerts.length > 0,
-      nextSchedule: schedules.find((schedule: any) => String(schedule?.status || '').toUpperCase() === 'PENDING') || schedules[0] || null,
+      nextSchedule: schedules.find((schedule: any) => ['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'MISSED'].includes(String(schedule?.status || '').toUpperCase())) || schedules[0] || null,
       lastResult: probeResults[0] || null,
       activeAlert: alerts[0] || null,
       probeResults,
@@ -2732,6 +2762,154 @@ export const SessionMode = ({
       };
     })
     .filter((row): row is any => Boolean(row)), [patientId, records, resolvedClinicId, resolvedTherapistId, sessionEndPreviewAt, sessionGoals, sessionId, maintenanceOverview]);
+
+  const pendingMaintenanceProbeItems = useMemo(() => {
+    const today = new Date();
+    return maintenanceProbeRows
+      .filter((row: any) => {
+        const schedule = row.nextSchedule;
+        if (!schedule) return true;
+        const status = String(schedule?.status || '').toUpperCase();
+        const due = new Date(schedule?.scheduled_for || schedule?.scheduledFor || schedule?.target_due_date || schedule?.targetDueDate || 0);
+        const sameDay = !Number.isNaN(due.getTime()) && due.toISOString().slice(0, 10) === today.toISOString().slice(0, 10);
+        const overdue = !Number.isNaN(due.getTime()) && due.getTime() < today.getTime();
+        return status === 'UNSCHEDULED' || status === 'MISSED' || sameDay || overdue;
+      })
+      .slice(0, 6);
+  }, [maintenanceProbeRows]);
+
+  const refreshMaintenanceOverview = async () => {
+    try {
+      const result = await dataService.getAbaMaintenanceOverview(patientId, { page: 1, pageSize: 20 });
+      setMaintenanceOverview(result?.data || { schedules: [], probeResults: [], alerts: [], summary: null });
+    } catch {
+      setMaintenanceOverview((prev: any) => prev || { schedules: [], probeResults: [], alerts: [], summary: null });
+    }
+  };
+
+  const buildMaintenanceSchedulePayload = (goal: any, extra: any = {}) => ({
+    patient_id: patientId,
+    patientId,
+    organization_id: resolvedClinicId,
+    organizationId: resolvedClinicId,
+    scheduleMode: maintenanceScheduleMode,
+    dueDate: maintenanceCustomDate ? new Date(`${maintenanceCustomDate}T12:00:00`).toISOString() : undefined,
+    intervals: [7, 14, 30, 60],
+    target_name: goal?.name || goal?.target_name || goal?.targetName,
+    ...extra
+  });
+
+  const openMaintenanceScheduleModal = (goal: any) => {
+    setMaintenanceScheduleModalGoal(goal);
+    setMaintenanceScheduleMode('DEFAULT_SEQUENCE');
+    setMaintenanceCustomDate('');
+    setPlanningMessage('');
+  };
+
+  const handleScheduleMaintenanceGoal = async () => {
+    if (!maintenanceScheduleModalGoal) return;
+    setMaintenanceScheduleSaving(true);
+    try {
+      const targetId = String(maintenanceScheduleModalGoal?.id || maintenanceScheduleModalGoal?.target_id || maintenanceScheduleModalGoal?.targetId || '').trim();
+      const result = await dataService.createMaintenanceScheduleForTarget(targetId, buildMaintenanceSchedulePayload(maintenanceScheduleModalGoal));
+      if (result?.success === false) {
+        setPlanningMessage(result?.error || 'Nao foi possivel agendar a sondagem agora.');
+        return;
+      }
+      await refreshMaintenanceOverview();
+      setMaintenanceScheduleModalGoal(null);
+      showClinicalToast({ variant: 'success', title: 'Sondagem agendada', subtitle: 'O schedule de Maintenance Probe foi salvo.' }, 'none');
+    } finally {
+      setMaintenanceScheduleSaving(false);
+    }
+  };
+
+  const handleScheduleMaintenanceForNextSession = async (goal: any) => {
+    const targetId = String(goal?.id || goal?.target_id || goal?.targetId || '').trim();
+    if (!targetId) return;
+    setMaintenanceScheduleSaving(true);
+    try {
+      const result = await dataService.scheduleMaintenanceForNextSession(targetId, buildMaintenanceSchedulePayload(goal, { scheduleMode: 'NEXT_PATIENT_SESSION' }));
+      if (result?.success === false) {
+        openMaintenanceScheduleModal(goal);
+        setMaintenanceScheduleMode('CUSTOM_DATE');
+        setPlanningMessage(result?.error || 'Nao ha proxima sessao agendada. Escolha uma data manualmente.');
+        return;
+      }
+      await refreshMaintenanceOverview();
+      showClinicalToast({ variant: 'success', title: 'Agendada para a proxima sessao', subtitle: 'A sondagem foi vinculada ao proximo atendimento.' }, 'none');
+    } finally {
+      setMaintenanceScheduleSaving(false);
+    }
+  };
+
+  const handleGeneratePlanningRecommendations = async () => {
+    setPlanningLoading(true);
+    setPlanningMessage('');
+    try {
+      const result = await dataService.generateNextSessionRecommendations(patientId, {
+        sourceSessionId: postClosureSummary?.sessionId || sessionId,
+        focusType: planningFocusType
+      });
+      if (result?.success === false) {
+        setPlanningMessage(result?.error || 'Nao foi possivel gerar sugestoes agora.');
+        return;
+      }
+      setPlanningRecommendations(Array.isArray(result?.data) ? result.data : []);
+      if (result?.reusedExisting) setPlanningMessage('Sugestoes existentes reutilizadas para este contexto.');
+    } finally {
+      setPlanningLoading(false);
+    }
+  };
+
+  const handleAcceptRecommendation = async (recommendation: any, applyToNextSession = false) => {
+    const result = applyToNextSession
+      ? await dataService.applyAbaRecommendationToNextSession(recommendation.id)
+      : await dataService.acceptAbaRecommendation(recommendation.id);
+    if (result?.success === false) {
+      setPlanningMessage(result?.error || 'Nao foi possivel atualizar a sugestao agora.');
+      return;
+    }
+    setPlanningRecommendations((prev) => prev.map((item) => item.id === recommendation.id ? (result.data || item) : item));
+    if (result?.planItem) setNextSessionPlanItems((prev) => [result.planItem, ...prev.filter((item) => item.id !== result.planItem.id)]);
+  };
+
+  const handleRejectRecommendation = async (recommendation: any) => {
+    const result = await dataService.rejectAbaRecommendation(recommendation.id);
+    if (result?.success === false) {
+      setPlanningMessage(result?.error || 'Nao foi possivel recusar a sugestao agora.');
+      return;
+    }
+    setPlanningRecommendations((prev) => prev.filter((item) => item.id !== recommendation.id));
+  };
+
+  const handleEditRecommendation = async (recommendation: any) => {
+    const nextAction = window.prompt('Editar acao sugerida', recommendation.suggested_action || '');
+    if (nextAction === null) return;
+    const result = await dataService.updateAbaRecommendation(recommendation.id, { suggested_action: nextAction });
+    if (result?.success === false) {
+      setPlanningMessage(result?.error || 'Nao foi possivel editar a sugestao agora.');
+      return;
+    }
+    setPlanningRecommendations((prev) => [result.data, ...prev.filter((item) => item.id !== recommendation.id)]);
+  };
+
+  const handleApplyPlanItemNow = (item: any) => {
+    if (item?.planned_trial_type) setCollectionType(String(item.planned_trial_type));
+    if (String(item?.planned_trial_type || '').toLowerCase() === 'maintenance_probe') {
+      const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(item?.target_id || item?.targetId || ''));
+      activateMaintenanceProbeMode(goal);
+      setPlanActionMessage('Maintenance Probe ativo para esta tentativa.');
+    } else {
+      setPlanActionMessage('Item do plano selecionado para esta sessao.');
+    }
+    void dataService.updateAbaNextSessionPlanItem(item.id, { status: 'USED_IN_SESSION' });
+  };
+
+  const handleSkipPlanItem = async (item: any) => {
+    const result = await dataService.updateAbaNextSessionPlanItem(item.id, { status: 'SKIPPED' });
+    if (result?.success !== false) setNextSessionPlanItems((prev) => prev.filter((entry) => entry.id !== item.id));
+  };
 
   const intervalSummaryTotals = useMemo(() => {
     const total = Math.max(0, Number(intervalSummary?.totalIntervals || 0));
@@ -3389,6 +3567,93 @@ export const SessionMode = ({
                     </div>
                   </section>
                 )}
+
+                <section className="rounded-[24px] bg-white border border-emerald-100 p-5">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Planejamento sugerido para a proxima sessao</p>
+                      <h3 className="mt-1 text-lg font-bold text-gray-900">Qual foco voce quer priorizar?</h3>
+                      <p className="mt-1 text-xs font-semibold text-gray-500">Sugestoes baseadas nos dados disponiveis. Revise antes de aplicar.</p>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <select value={planningFocusType} onChange={(event) => setPlanningFocusType(event.target.value)} className="min-h-[42px] rounded-2xl border border-emerald-100 bg-[#F6FFFB] px-3 text-xs font-bold text-gray-700 outline-none">
+                        <option value="MAINTENANCE">Manutencao</option>
+                        <option value="NEW_SKILLS">Novas habilidades</option>
+                        <option value="BEHAVIOR_REDUCTION">Reducao comportamental</option>
+                        <option value="GENERALIZATION">Generalizacao</option>
+                        <option value="MASTERY_REVIEW">Revisao de maestria</option>
+                        <option value="BALANCED">Equilibrado</option>
+                      </select>
+                      <button type="button" onClick={handleGeneratePlanningRecommendations} disabled={planningLoading} className="min-h-[42px] rounded-2xl bg-emerald-600 px-4 text-xs font-bold uppercase tracking-widest text-white disabled:opacity-60">
+                        {planningLoading ? 'Gerando...' : 'Gerar sugestoes'}
+                      </button>
+                    </div>
+                  </div>
+                  {planningMessage && <p className="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">{planningMessage}</p>}
+                  <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
+                    {planningRecommendations.map((recommendation) => (
+                      <div key={recommendation.id} className="rounded-2xl border border-emerald-100 bg-[#F6FFFB] p-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-700">{recommendation.priority || 'MEDIUM'}</span>
+                          <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500">{recommendation.recommendation_type}</span>
+                        </div>
+                        <h4 className="mt-3 text-sm font-bold text-gray-900">{recommendation.title}</h4>
+                        <p className="mt-1 text-xs font-semibold text-gray-600">{recommendation.rationale}</p>
+                        <p className="mt-2 rounded-xl bg-white px-3 py-2 text-xs font-bold text-emerald-800">{recommendation.suggested_action}</p>
+                        <p className="mt-2 text-[11px] font-semibold text-gray-500">
+                          Vinculo: {recommendation.target_id ? 'target do PEI' : recommendation.behavior_id ? 'comportamento' : 'resumo clinico'}
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {recommendation.recommendation_type === 'MAINTENANCE_PROBE' && (
+                            <>
+                              <button type="button" onClick={() => {
+                                void handleAcceptRecommendation(recommendation, true);
+                                const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(recommendation.target_id || ''));
+                                if (goal) void handleScheduleMaintenanceForNextSession(goal);
+                              }} className="rounded-full bg-emerald-600 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white">
+                                Aceitar e agendar para proxima sessao
+                              </button>
+                              <button type="button" onClick={() => {
+                                void handleAcceptRecommendation(recommendation);
+                                const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(recommendation.target_id || ''));
+                                if (goal) {
+                                  openMaintenanceScheduleModal(goal);
+                                  setMaintenanceScheduleMode('CUSTOM_DATE');
+                                }
+                              }} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
+                                Aceitar e escolher data
+                              </button>
+                              <button type="button" onClick={() => {
+                                void handleAcceptRecommendation(recommendation);
+                                const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(recommendation.target_id || ''));
+                                if (goal) {
+                                  openMaintenanceScheduleModal(goal);
+                                  setMaintenanceScheduleMode('DEFAULT_SEQUENCE');
+                                }
+                              }} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
+                                Aceitar e usar 7/14/30/60
+                              </button>
+                            </>
+                          )}
+                          <button type="button" onClick={() => handleAcceptRecommendation(recommendation)} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
+                            Aceitar
+                          </button>
+                          <button type="button" onClick={() => handleEditRecommendation(recommendation)} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-500">
+                            Editar
+                          </button>
+                          <button type="button" onClick={() => handleRejectRecommendation(recommendation)} className="rounded-full bg-red-50 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500">
+                            Recusar
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {planningRecommendations.length === 0 && (
+                      <p className="rounded-2xl border border-dashed border-emerald-100 bg-[#F6FFFB] p-4 text-sm font-semibold text-gray-500">
+                        Gere sugestoes quando o supervisor for planejar a proxima sessao.
+                      </p>
+                    )}
+                  </div>
+                </section>
 
                 <section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <h3 className="text-lg font-bold text-gray-900">Comportamentos registrados</h3>
@@ -4448,6 +4713,64 @@ export const SessionMode = ({
             </div>
           </div>
 
+          {nextSessionPlanItems.length > 0 && (
+            <section className="rounded-[24px] sm:rounded-[28px] border border-emerald-100 bg-white p-4 sm:p-5 shadow-xl shadow-emerald-900/5">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-emerald-600">Plano sugerido para hoje</p>
+                  <h2 className="text-lg font-bold text-gray-900">Itens aceitos pelo supervisor</h2>
+                </div>
+                {planActionMessage && <span className="rounded-full bg-emerald-50 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700">{planActionMessage}</span>}
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {nextSessionPlanItems.slice(0, 4).map((item: any) => (
+                  <div key={item.id} className="rounded-2xl border border-emerald-100 bg-[#F6FFFB] p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-gray-900">{item.instructions || 'Sugestao para revisar na sessao'}</p>
+                        <p className="mt-1 text-xs font-semibold text-gray-500">{item.planned_trial_type === 'maintenance_probe' ? 'Maintenance Probe' : 'Plano clinico'} - {item.priority || 'MEDIUM'}</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button type="button" onClick={() => handleApplyPlanItemNow(item)} className="inline-flex min-h-[36px] items-center justify-center rounded-full bg-emerald-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white">
+                        Usar agora
+                      </button>
+                      <button type="button" onClick={() => handleSkipPlanItem(item)} className="inline-flex min-h-[36px] items-center justify-center rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500">
+                        Pular
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {pendingMaintenanceProbeItems.length > 0 && (
+            <section className="rounded-[24px] sm:rounded-[28px] border border-amber-100 bg-white p-4 sm:p-5 shadow-xl shadow-amber-900/5">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-amber-600">Probes de manutencao pendentes</p>
+                  <h2 className="text-lg font-bold text-gray-900">Sondagens para revisar nesta sessao</h2>
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {pendingMaintenanceProbeItems.map((row: any) => {
+                  const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(row.targetId || '')) || sessionGoals.find((entry: any) => String(entry?.name || '') === String(row.name || ''));
+                  return (
+                    <div key={`pending-${row.id}`} className="rounded-2xl border border-amber-100 bg-[#FFFDF7] p-4">
+                      <p className="text-sm font-bold text-gray-900">{row.name}</p>
+                      <p className="mt-1 text-xs font-semibold text-amber-700">{row.nextSchedule ? formatMaintenanceDueLabel(row.nextSchedule) : 'Sem sondagem agendada'}</p>
+                      <p className="mt-1 text-xs text-gray-500">{row.activeAlert ? 'Alerta ativo de regressao/manutencao' : 'Use somente se for intencao clinica da tentativa.'}</p>
+                      <button type="button" onClick={() => activateMaintenanceProbeMode(goal)} className="mt-3 inline-flex min-h-[36px] items-center justify-center rounded-full bg-amber-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white">
+                        Usar Maintenance Probe
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
           {maintenanceProbeRows.length > 0 && (
             <section className="rounded-[24px] sm:rounded-[28px] border border-amber-100 bg-white p-4 sm:p-5 shadow-xl shadow-amber-900/5">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -4466,7 +4789,7 @@ export const SessionMode = ({
                       <div className="min-w-0">
                         <p className="truncate text-sm font-bold text-gray-900">{row.name}</p>
                         <p className="mt-1 text-xs font-semibold text-gray-500">
-                          {row.nextSchedule ? formatMaintenanceDueLabel(row.nextSchedule.scheduled_for || row.nextSchedule.scheduledFor) : 'Sem maintenance probe agendado'}
+                          {row.nextSchedule ? formatMaintenanceDueLabel(row.nextSchedule) : 'Sem sondagem agendada'}
                         </p>
                       </div>
                       <span className={`shrink-0 rounded-full px-2 py-1 text-[9px] font-bold uppercase tracking-widest ${String(row.currentStatus || row.lastResult?.status).toUpperCase() === 'REGRESSION_RISK' ? 'bg-red-50 text-red-600' : String(row.currentStatus || row.lastResult?.status).toUpperCase() === 'WATCH' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-50 text-emerald-600'}`}>
@@ -4534,16 +4857,41 @@ export const SessionMode = ({
                           </p>
                           <p className="mt-1 text-xs font-semibold text-amber-800">Para avaliar manutenção, use Maintenance Probe.</p>
                           <p className="text-xs font-semibold text-amber-800">
-                            {maintenanceInfo.nextSchedule ? formatMaintenanceDueLabel(maintenanceInfo.nextSchedule.scheduled_for || maintenanceInfo.nextSchedule.scheduledFor) : 'Sem proximo maintenance probe'}
+                            {maintenanceInfo.nextSchedule ? formatMaintenanceDueLabel(maintenanceInfo.nextSchedule) : 'Sem sondagem agendada'}
                           </p>
+                          {!maintenanceInfo.nextSchedule && (
+                            <p className="mt-1 text-xs font-semibold text-amber-800">
+                              Este target esta em manutencao, mas ainda nao ha sondagem agendada.
+                            </p>
+                          )}
                         </div>
-                        <button
-                          type="button"
-                          onClick={activateMaintenanceProbeMode}
-                          className="inline-flex min-h-[38px] w-fit items-center justify-center rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700 shadow-sm transition-all active:scale-95"
-                        >
-                          Use Maintenance Probe
-                        </button>
+                        <div className="flex flex-wrap gap-2">
+                          {!maintenanceInfo.nextSchedule && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => openMaintenanceScheduleModal(goal)}
+                                className="inline-flex min-h-[38px] w-fit items-center justify-center rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700 shadow-sm transition-all active:scale-95"
+                              >
+                                Agendar probe
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleScheduleMaintenanceForNextSession(goal)}
+                                className="inline-flex min-h-[38px] w-fit items-center justify-center rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700 shadow-sm transition-all active:scale-95"
+                              >
+                                Agendar para proxima sessao
+                              </button>
+                            </>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => activateMaintenanceProbeMode(goal)}
+                            className="inline-flex min-h-[38px] w-fit items-center justify-center rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700 shadow-sm transition-all active:scale-95"
+                          >
+                            Usar Maintenance Probe agora
+                          </button>
+                        </div>
                       </div>
                       {maintenanceProbeFeedback && (
                         <p className="mt-2 inline-flex rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
@@ -4794,6 +5142,59 @@ export const SessionMode = ({
           </div>
         </aside>
       </div>
+
+      {maintenanceScheduleModalGoal && (
+        <div className="fixed inset-0 z-[218] flex items-end justify-center bg-gray-950/40 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:items-center sm:p-6">
+          <div className="w-full max-w-xl rounded-[28px] border border-amber-100 bg-white p-5 shadow-2xl shadow-gray-950/20">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-amber-600">Agendar probe</p>
+                <h2 className="mt-1 text-xl font-black text-gray-900">{maintenanceScheduleModalGoal.name || maintenanceScheduleModalGoal.target_name || maintenanceScheduleModalGoal.targetName}</h2>
+              </div>
+              <button type="button" onClick={() => setMaintenanceScheduleModalGoal(null)} className="rounded-full bg-gray-100 p-2 text-gray-500">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                Modo
+                <select value={maintenanceScheduleMode} onChange={(event) => setMaintenanceScheduleMode(event.target.value)} className="mt-1 w-full rounded-xl border border-amber-100 bg-[#FFFDF7] px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                  <option value="DEFAULT_SEQUENCE">Sequencia 7/14/30/60</option>
+                  <option value="NEXT_PATIENT_SESSION">Proxima sessao do paciente</option>
+                  <option value="CUSTOM_DATE">Data personalizada</option>
+                </select>
+              </label>
+              <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                Data personalizada
+                <input type="date" value={maintenanceCustomDate} onChange={(event) => setMaintenanceCustomDate(event.target.value)} disabled={maintenanceScheduleMode !== 'CUSTOM_DATE'} className="mt-1 w-full rounded-xl border border-amber-100 bg-[#FFFDF7] px-3 py-3 text-xs font-bold text-gray-700 outline-none disabled:opacity-50" />
+              </label>
+            </div>
+            <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700">Previa</p>
+              <div className="mt-2 grid grid-cols-2 gap-2 text-xs font-semibold text-amber-900 sm:grid-cols-4">
+                {[7, 14, 30, 60].map((day) => (
+                  <span key={day} className="rounded-xl bg-white/70 px-3 py-2">Marco {day} dias</span>
+                ))}
+              </div>
+              <p className="mt-2 text-xs font-semibold text-amber-800">
+                Os marcos sao datas clinicas desejadas. O sistema vincula a sessao mais proxima dentro da janela; se nao houver agenda, salva como sem sessao vinculada.
+              </p>
+              {planningMessage && <p className="mt-2 text-xs font-bold text-red-600">{planningMessage}</p>}
+            </div>
+            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <button type="button" onClick={handleScheduleMaintenanceGoal} disabled={maintenanceScheduleSaving} className="min-h-[46px] rounded-2xl bg-amber-600 px-4 py-3 text-xs font-bold uppercase tracking-widest text-white disabled:opacity-60">
+                Salvar
+              </button>
+              <button type="button" onClick={() => handleScheduleMaintenanceForNextSession(maintenanceScheduleModalGoal)} disabled={maintenanceScheduleSaving} className="min-h-[46px] rounded-2xl bg-amber-50 px-4 py-3 text-xs font-bold uppercase tracking-widest text-amber-700 disabled:opacity-60">
+                Proxima sessao
+              </button>
+              <button type="button" onClick={() => setMaintenanceScheduleModalGoal(null)} className="min-h-[46px] rounded-2xl border border-gray-100 bg-white px-4 py-3 text-xs font-bold uppercase tracking-widest text-gray-500">
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {pendingMaintenanceProbeTrial && (
         <div className="fixed inset-0 z-[220] flex items-end justify-center bg-gray-950/40 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:items-center sm:p-6">

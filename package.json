@@ -30,6 +30,7 @@
     "test:aba-marco1": "tsx tests/abaMarco1Audit.test.ts",
     "test:aba-summary-driven": "tsx tests/abaSummaryDriven.test.ts",
     "test:aba-mastery-engine": "tsx tests/abaMasteryEngine.test.ts",
+    "test:aba-planning-engine": "tsx tests/abaPlanningEngine.test.ts",
     "test:aba-maintenance-engine": "tsx tests/abaMaintenanceEngine.test.ts",
     "test:aba-clinical-charts": "tsx tests/abaClinicalCharts.test.ts",
     "stripe:create-active-patient-price": "node scripts/create-stripe-active-patient-price.mjs",

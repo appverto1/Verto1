@@ -14,7 +14,7 @@ export type AbaTargetClinicalStatus =
   | 'REGRESSION_RISK'
   | 'REGRESSION_CONFIRMED';
 
-export type AbaMaintenanceScheduleStatus = 'PENDING' | 'COMPLETED' | 'MISSED' | 'CANCELLED';
+export type AbaMaintenanceScheduleStatus = 'PENDING' | 'SCHEDULED' | 'UNSCHEDULED' | 'COMPLETED' | 'MISSED' | 'CANCELLED';
 
 export type AbaMaintenanceProbeStatus = 'MAINTAINED' | 'WATCH' | 'REGRESSION_RISK';
 
@@ -83,14 +83,21 @@ export type EvaluateTargetMasteryInput = {
 export type AbaMaintenanceSchedule = {
   id: string;
   organization_id: string;
+  clinic_id?: string | null;
   patient_id: string;
   target_id: string;
   mastery_evaluation_id: string;
   schedule_day: number;
-  scheduled_for: string;
+  target_due_date: string;
+  scheduled_for: string | null;
+  appointment_id?: string | null;
+  schedule_mode?: 'DEFAULT_SEQUENCE' | 'CUSTOM_DATE' | 'NEXT_PATIENT_SESSION' | 'NEXT_AVAILABLE_SESSION';
+  window_start?: string | null;
+  window_end?: string | null;
   status: AbaMaintenanceScheduleStatus;
   completed_at: string | null;
   created_at: string;
+  updated_at?: string;
 };
 
 export type AbaMaintenanceEvaluationResult = {
@@ -453,6 +460,7 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
 
 export function buildMaintenanceSchedulesForMasteryApproval(input: {
   organizationId: string;
+  clinicId?: string | null;
   patientId: string;
   targetId: string;
   masteryEvaluationId: string;
@@ -467,18 +475,28 @@ export function buildMaintenanceSchedulesForMasteryApproval(input: {
   const approvedAt = isoOrNow(input.approvedAt);
   const createdAt = isoOrNow(input.createdAt);
   const days = normalizeMaintenanceDayList(input.maintenanceDays);
-  return days.map((day) => ({
-    id: `maintenance-${input.targetId}-${masteryEvaluationId}-${day}`,
-    organization_id: input.organizationId,
-    patient_id: input.patientId,
-    target_id: input.targetId,
-    mastery_evaluation_id: masteryEvaluationId,
-    schedule_day: day,
-    scheduled_for: addDaysIso(approvedAt, day),
-    status: 'PENDING',
-    completed_at: null,
-    created_at: createdAt
-  }));
+  return days.map((day) => {
+    const targetDueDate = addDaysIso(approvedAt, day);
+    return {
+      id: `maintenance-${input.targetId}-${masteryEvaluationId}-${day}`,
+      organization_id: input.organizationId,
+      clinic_id: input.clinicId || input.organizationId || null,
+      patient_id: input.patientId,
+      target_id: input.targetId,
+      mastery_evaluation_id: masteryEvaluationId,
+      schedule_day: day,
+      target_due_date: targetDueDate,
+      scheduled_for: null,
+      appointment_id: null,
+      schedule_mode: 'DEFAULT_SEQUENCE',
+      window_start: null,
+      window_end: null,
+      status: 'UNSCHEDULED',
+      completed_at: null,
+      created_at: createdAt,
+      updated_at: createdAt
+    };
+  });
 }
 
 export function evaluateMaintenanceStatus(input: EvaluateMaintenanceStatusInput): AbaMaintenanceEvaluationResult {

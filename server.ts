@@ -39,6 +39,20 @@ import {
 import { resolveAbaPromptLevel } from './src/utils/abaPromptLevels';
 import { evaluateMaintenanceStatus, evaluateTargetMastery, formatAbaMasteryCriterion } from './src/utils/abaMasteryEngine';
 import {
+  buildDefaultMaintenanceSchedulePreview,
+  getNextMaintenanceProbeForTarget,
+  normalizeMaintenanceDayList,
+  normalizeMaintenanceScheduleMode as normalizeMaintenanceScheduleModeValue
+} from './src/utils/abaMaintenanceScheduling';
+import {
+  acceptRecommendationForNextSession,
+  generateNextSessionRecommendations,
+  normalizePlanningFocusType,
+  rejectRecommendation,
+  type AbaClinicalRecommendation,
+  type AbaNextSessionPlanItem
+} from './src/utils/abaPlanningEngine';
+import {
   buildSessionMetricSnapshotsFromSummaries,
   isAbaPercentMetric,
   isAbaSignificantChange
@@ -15205,8 +15219,14 @@ async function startServer() {
   const ABA_MASTERY_STATUSES = new Set(['not_met', 'met', 'mastered', 'regressed', 'maintenance_due', 'insufficient_data']);
   const ABA_TARGET_PHASES = new Set(['draft', 'baseline', 'teaching', 'mastered', 'maintenance', 'generalization', 'regressed', 'discontinued']);
   const ABA_TARGET_CLINICAL_STATUSES = new Set(['ACQUISITION', 'READY_FOR_REVIEW', 'MASTERED', 'MAINTENANCE', 'REGRESSION_RISK', 'REGRESSION_CONFIRMED']);
-  const ABA_MAINTENANCE_SCHEDULE_STATUSES = new Set(['PENDING', 'COMPLETED', 'MISSED', 'CANCELLED']);
+  const ABA_MAINTENANCE_SCHEDULE_STATUSES = new Set(['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'COMPLETED', 'MISSED', 'CANCELLED']);
   const ABA_MAINTENANCE_PROBE_STATUSES = new Set(['MAINTAINED', 'WATCH', 'REGRESSION_RISK']);
+  const ABA_PLANNING_FOCUS_TYPES = new Set(['MAINTENANCE', 'NEW_SKILLS', 'BEHAVIOR_REDUCTION', 'GENERALIZATION', 'MASTERY_REVIEW', 'BALANCED']);
+  const ABA_RECOMMENDATION_TYPES = new Set(['MAINTENANCE_PROBE', 'REGRESSION_ATTENTION', 'MASTERY_REVIEW', 'CONTINUE_TRAINING', 'INTRODUCE_NEW_TARGET', 'BEHAVIOR_MONITORING', 'ABC_COLLECTION', 'PROMPT_FADING', 'GENERALIZATION']);
+  const ABA_RECOMMENDATION_PRIORITIES = new Set(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
+  const ABA_RECOMMENDATION_STATUSES = new Set(['SUGGESTED', 'ACCEPTED', 'EDITED', 'REJECTED', 'APPLIED_TO_NEXT_SESSION', 'EXPIRED']);
+  const ABA_PLAN_ITEM_STATUSES = new Set(['PLANNED', 'USED_IN_SESSION', 'SKIPPED', 'CANCELLED']);
+  const ABA_PLAN_TRIAL_TYPES = new Set(['dtt', 'net', 'cold_probe', 'baseline_probe', 'maintenance_probe']);
   const ABA_REGRESSION_ALERT_SEVERITIES = new Set(['LOW', 'MEDIUM', 'HIGH']);
   const ABA_SYNC_STATUSES = new Set(['local', 'local_only', 'queued', 'syncing', 'synced', 'error', 'failed', 'conflict']);
   const ABA_EVENT_STATUSES = new Set(['IN_PROGRESS', 'COMPLETED', 'CANCELED']);
@@ -15284,9 +15304,41 @@ async function startServer() {
     return ABA_MAINTENANCE_SCHEDULE_STATUSES.has(safe) ? safe : 'PENDING';
   };
 
+  const normalizeAbaMaintenanceScheduleMode = (value: unknown) => normalizeMaintenanceScheduleModeValue(value);
+
   const normalizeAbaMaintenanceProbeStatus = (value: unknown) => {
     const safe = sanitizeString(value, 40).toUpperCase();
     return ABA_MAINTENANCE_PROBE_STATUSES.has(safe) ? safe : 'WATCH';
+  };
+
+  const normalizeAbaPlanningFocusType = (value: unknown) => {
+    const safe = sanitizeString(value, 80).toUpperCase();
+    return ABA_PLANNING_FOCUS_TYPES.has(safe) ? safe : 'BALANCED';
+  };
+
+  const normalizeAbaRecommendationType = (value: unknown) => {
+    const safe = sanitizeString(value, 80).toUpperCase();
+    return ABA_RECOMMENDATION_TYPES.has(safe) ? safe : 'CONTINUE_TRAINING';
+  };
+
+  const normalizeAbaRecommendationPriority = (value: unknown) => {
+    const safe = sanitizeString(value, 40).toUpperCase();
+    return ABA_RECOMMENDATION_PRIORITIES.has(safe) ? safe : 'MEDIUM';
+  };
+
+  const normalizeAbaRecommendationStatus = (value: unknown) => {
+    const safe = sanitizeString(value, 60).toUpperCase();
+    return ABA_RECOMMENDATION_STATUSES.has(safe) ? safe : 'SUGGESTED';
+  };
+
+  const normalizeAbaPlanItemStatus = (value: unknown) => {
+    const safe = sanitizeString(value, 60).toUpperCase();
+    return ABA_PLAN_ITEM_STATUSES.has(safe) ? safe : 'PLANNED';
+  };
+
+  const normalizeAbaPlanTrialType = (value: unknown) => {
+    const safe = sanitizeString(value, 80).toLowerCase();
+    return ABA_PLAN_TRIAL_TYPES.has(safe) ? safe : null;
   };
 
   const normalizeAbaRegressionAlertSeverity = (value: unknown) => {
@@ -15480,9 +15532,18 @@ async function startServer() {
     'target_id',
     'mastery_evaluation_id',
     'schedule_day',
+    'target_due_date',
     'scheduled_for',
+    'appointment_id',
+    'schedule_mode',
+    'sequence_index',
+    'window_start',
+    'window_end',
     'status',
     'completed_at',
+    'created_by',
+    'updated_at',
+    'raw_payload',
     'created_at'
   ].join(',');
   const ABA_MAINTENANCE_PROBE_RESULT_SELECT = [
@@ -15633,6 +15694,110 @@ async function startServer() {
     'description',
     'created_by',
     'created_at'
+  ].join(',');
+  const ABA_TARGET_RECOMMENDATION_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'patient_id',
+    'program_id',
+    'name',
+    'description',
+    'target_type',
+    'phase',
+    'protocol_id',
+    'protocol_title',
+    'domain_id',
+    'domain_name',
+    'mastery_criteria',
+    'clinical_status',
+    'updated_at',
+    'created_at'
+  ].join(',');
+  const ABA_APPOINTMENT_MAINTENANCE_SELECT = [
+    'id',
+    'clinic_id',
+    'patient_id',
+    'therapist_id',
+    'scheduled_at',
+    'status',
+    'is_active',
+    'deleted_at'
+  ].join(',');
+  const ABA_NEXT_SESSION_FOCUS_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'patient_id',
+    'source_session_id',
+    'focus_type',
+    'status',
+    'created_by',
+    'created_at',
+    'updated_at'
+  ].join(',');
+  const ABA_CLINICAL_RECOMMENDATION_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'patient_id',
+    'source_session_id',
+    'next_session_focus_id',
+    'recommendation_type',
+    'priority',
+    'title',
+    'summary',
+    'rationale',
+    'suggested_action',
+    'target_id',
+    'behavior_id',
+    'program_id',
+    'domain',
+    'metric_name',
+    'previous_value',
+    'current_value',
+    'delta_value',
+    'evidence',
+    'status',
+    'accepted_by',
+    'accepted_at',
+    'rejected_by',
+    'rejected_at',
+    'edited_from_id',
+    'context_hash',
+    'created_at',
+    'updated_at'
+  ].join(',');
+  const ABA_NEXT_SESSION_PLAN_ITEM_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'patient_id',
+    'source_session_id',
+    'source_recommendation_id',
+    'target_id',
+    'behavior_id',
+    'planned_trial_type',
+    'planned_prompt',
+    'priority',
+    'instructions',
+    'status',
+    'created_by',
+    'created_at',
+    'updated_at'
+  ].join(',');
+  const ABA_RECOMMENDATION_AUDIT_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'patient_id',
+    'recommendation_id',
+    'action',
+    'previous_status',
+    'new_status',
+    'performed_by',
+    'performed_at',
+    'metadata'
   ].join(',');
   const parseAbaRecordListLimit = (value: unknown) => parseBoundedListLimit(value, ABA_RECORD_LIST_FALLBACK_LIMIT, ABA_RECORD_LIST_MAX_LIMIT);
   const parseAbaPageParams = (query: any) => {
@@ -15955,6 +16120,505 @@ async function startServer() {
       return { data: null, error: result.error };
     }
     return { data: null, error: { message: 'Payload ABA vazio após fallback de schema.' } };
+  };
+
+  const abaPlanningHash = (parts: any[]) => crypto
+    .createHash('sha1')
+    .update(parts.map((part) => sanitizeString(part, 240)).join('|'))
+    .digest('hex')
+    .slice(0, 24);
+
+  const logAbaPlanningEgress = (details: Record<string, any>) => {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[ABA Planning Egress]', cleanObject(details));
+    }
+  };
+
+  const applyAbaTenantScope = (query: any, user: any, clinicId: string, organizationId?: string) => {
+    if (hasGlobalClinicAccess(user)) return query;
+    if (clinicId) return query.eq('clinic_id', clinicId);
+    if (organizationId) return query.eq('organization_id', organizationId);
+    return query;
+  };
+
+  const fetchFutureAppointmentsForMaintenance = async (params: {
+    patientId: string;
+    clinicId: string;
+    fromIso?: string;
+    limit?: number;
+  }) => {
+    const limit = Math.min(50, Math.max(1, Math.round(Number(params.limit || 20) || 20)));
+    let query = supabase
+      .from('appointments')
+      .select(ABA_APPOINTMENT_MAINTENANCE_SELECT)
+      .eq('patient_id', params.patientId)
+      .gte('scheduled_at', sanitizeIsoDateTime(params.fromIso || new Date().toISOString()))
+      .is('deleted_at', null)
+      .order('scheduled_at', { ascending: true })
+      .limit(limit);
+    if (params.clinicId) query = query.eq('clinic_id', params.clinicId);
+    const result = await query;
+    if (result.error) {
+      if (hasMissingFinancialSchema(result.error)) return [];
+      throw result.error;
+    }
+    logAbaPlanningEgress({ helper: 'fetchFutureAppointmentsForMaintenance', table: 'appointments', limit, rows: (result.data || []).length });
+    return result.data || [];
+  };
+
+  const fetchTargetForMaintenance = async (params: {
+    targetId: string;
+    patientId: string;
+    clinicId: string;
+    organizationId: string;
+  }) => {
+    let query = supabase
+      .from('aba_targets')
+      .select(ABA_TARGET_RECOMMENDATION_SELECT)
+      .eq('id', params.targetId)
+      .eq('organization_id', params.organizationId)
+      .eq('clinic_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .limit(1);
+    const result = await query.maybeSingle();
+    if (result.error) {
+      if (hasMissingFinancialSchema(result.error)) return null;
+      throw result.error;
+    }
+    return result.data || null;
+  };
+
+  const createMaintenanceScheduleForTarget = async (params: {
+    targetId: string;
+    patientId: string;
+    organizationId: string;
+    clinicId: string;
+    scheduleMode?: unknown;
+    dueDate?: unknown;
+    appointmentId?: unknown;
+    intervals?: unknown;
+    createdBy?: string;
+    masteryEvaluationId?: string | null;
+    approvedAt?: unknown;
+  }) => {
+    const targetId = sanitizeString(params.targetId, 180);
+    const patientId = sanitizeString(params.patientId, 120);
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const organizationId = sanitizeString(params.organizationId || clinicId, 120);
+    const scheduleMode = normalizeAbaMaintenanceScheduleMode(params.scheduleMode);
+    const createdBy = sanitizeString(params.createdBy, 120) || null;
+    if (!targetId || !isUuid(patientId) || !clinicId) {
+      return { ok: false, status: 400, error: 'Dados insuficientes para agendar a sondagem.' };
+    }
+
+    const now = new Date().toISOString();
+    const target = await fetchTargetForMaintenance({ targetId, patientId, clinicId, organizationId });
+    const masteryEvaluationId = sanitizeString(params.masteryEvaluationId, 180) || `manual-${targetId}`;
+    const rows: any[] = [];
+
+    if (scheduleMode === 'DEFAULT_SEQUENCE') {
+      const intervals = normalizeMaintenanceDayList(params.intervals);
+      const approvedAt = sanitizeIsoDateTime(params.approvedAt || now);
+      const maxDay = Math.max(...intervals, 60);
+      const appointments = await fetchFutureAppointmentsForMaintenance({
+        patientId,
+        clinicId,
+        fromIso: approvedAt,
+        limit: Math.min(50, intervals.length * 12)
+      });
+      const preview = buildDefaultMaintenanceSchedulePreview({
+        approvedAt,
+        maintenanceDays: intervals,
+        appointments
+      });
+      for (const item of preview) {
+        const id = `maintenance-${abaPlanningHash([targetId, masteryEvaluationId, item.scheduleDay, item.targetDueDate])}`;
+        rows.push(cleanObject({
+          id,
+          organization_id: organizationId,
+          clinic_id: clinicId,
+          patient_id: patientId,
+          target_id: targetId,
+          mastery_evaluation_id: masteryEvaluationId,
+          schedule_day: item.scheduleDay,
+          target_due_date: item.targetDueDate,
+          scheduled_for: item.scheduledFor,
+          appointment_id: item.appointmentId,
+          schedule_mode: 'DEFAULT_SEQUENCE',
+          sequence_index: intervals.indexOf(item.scheduleDay) + 1,
+          window_start: item.toleranceStart,
+          window_end: item.toleranceEnd,
+          status: item.status,
+          created_by: createdBy,
+          raw_payload: sanitizeClinicalPayload({
+            targetName: target?.name || null,
+            previewMessage: item.message,
+            maxAppointmentLookupDay: maxDay,
+            noAutomaticClinicalMutation: true
+          }),
+          created_at: now,
+          updated_at: now
+        }));
+      }
+    } else if (scheduleMode === 'NEXT_PATIENT_SESSION' || scheduleMode === 'NEXT_AVAILABLE_SESSION') {
+      const appointments = await fetchFutureAppointmentsForMaintenance({ patientId, clinicId, fromIso: now, limit: 10 });
+      const appointment = appointments[0] || null;
+      if (!appointment) {
+        return { ok: false, status: 404, error: 'Não há próxima sessão agendada. Escolha uma data manualmente.', data: [] };
+      }
+      rows.push(cleanObject({
+        id: `maintenance-${abaPlanningHash([targetId, 'next-session', appointment.id])}`,
+        organization_id: organizationId,
+        clinic_id: clinicId,
+        patient_id: patientId,
+        target_id: targetId,
+        mastery_evaluation_id: masteryEvaluationId,
+        schedule_day: 1,
+        target_due_date: appointment.scheduled_at,
+        scheduled_for: appointment.scheduled_at,
+        appointment_id: String(appointment.id),
+        schedule_mode: scheduleMode,
+        sequence_index: 1,
+        status: 'SCHEDULED',
+        created_by: createdBy,
+        raw_payload: sanitizeClinicalPayload({
+          targetName: target?.name || null,
+          scheduledForNextSession: true,
+          noAutomaticClinicalMutation: true
+        }),
+        created_at: now,
+        updated_at: now
+      }));
+    } else {
+      const dueDate = sanitizeIsoDateTime(params.dueDate || now);
+      const appointmentId = sanitizeString(params.appointmentId, 180) || null;
+      rows.push(cleanObject({
+        id: `maintenance-${abaPlanningHash([targetId, 'custom', dueDate, appointmentId || 'date'])}`,
+        organization_id: organizationId,
+        clinic_id: clinicId,
+        patient_id: patientId,
+        target_id: targetId,
+        mastery_evaluation_id: masteryEvaluationId,
+        schedule_day: Math.max(1, Math.ceil((new Date(dueDate).getTime() - new Date(now).getTime()) / 86_400_000)),
+        target_due_date: dueDate,
+        scheduled_for: dueDate,
+        appointment_id: appointmentId,
+        schedule_mode: 'CUSTOM_DATE',
+        sequence_index: 1,
+        status: appointmentId ? 'SCHEDULED' : 'PENDING',
+        created_by: createdBy,
+        raw_payload: sanitizeClinicalPayload({
+          targetName: target?.name || null,
+          noAutomaticClinicalMutation: true
+        }),
+        created_at: now,
+        updated_at: now
+      }));
+    }
+
+    const saved: any[] = [];
+    for (const row of rows) {
+      const result = await writeAbaRowWithSchemaFallback('aba_maintenance_schedules', row, 'upsert');
+      if (result.error) return { ok: false, status: hasMissingFinancialSchema(result.error) ? 503 : 500, error: 'Não foi possível salvar o agendamento agora.' };
+      saved.push({ ...row, id: (result.data as any)?.id || row.id });
+    }
+    logAbaPlanningEgress({ helper: 'createMaintenanceScheduleForTarget', table: 'aba_maintenance_schedules', limit: rows.length, rows: saved.length });
+    return { ok: true, status: 200, data: saved };
+  };
+
+  const fetchNextMaintenanceProbeForTarget = async (params: {
+    targetId: string;
+    patientId: string;
+    clinicId: string;
+    organizationId: string;
+  }) => {
+    let query = supabase
+      .from('aba_maintenance_schedules')
+      .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+      .eq('organization_id', params.organizationId)
+      .eq('patient_id', params.patientId)
+      .eq('target_id', params.targetId)
+      .in('status', ['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'MISSED'])
+      .order('target_due_date', { ascending: true })
+      .limit(10);
+    query = applyAbaTenantScope(query, { role: 'owner' }, params.clinicId, params.organizationId);
+    const result = await query;
+    if (result.error) {
+      if (hasMissingFinancialSchema(result.error)) return getNextMaintenanceProbeForTarget([]);
+      throw result.error;
+    }
+    logAbaPlanningEgress({ helper: 'getNextMaintenanceProbeForTarget', table: 'aba_maintenance_schedules', limit: 10, rows: (result.data || []).length });
+    return getNextMaintenanceProbeForTarget(result.data || []);
+  };
+
+  const fetchAbaPlanningContextSummaryDriven = async (params: {
+    patientId: string;
+    clinicId: string;
+    organizationId: string;
+    sourceSessionId?: string | null;
+    focusType: string;
+  }) => {
+    const patientId = params.patientId;
+    const clinicId = params.clinicId;
+    const organizationId = params.organizationId;
+    const sourceSessionId = sanitizeString(params.sourceSessionId, 180) || null;
+    const activeScheduleStatuses = ['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'MISSED'];
+    const recommendationStatuses = ['SUGGESTED', 'ACCEPTED', 'EDITED', 'APPLIED_TO_NEXT_SESSION'];
+    const limit = 40;
+
+    const summaryQueryBase = supabase
+      .from('aba_session_summaries')
+      .select(ABA_SESSION_REPORT_SELECT)
+      .eq('patient_id', patientId)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    let summaryQuery = sourceSessionId ? summaryQueryBase.eq('session_id', sourceSessionId) : summaryQueryBase;
+    summaryQuery = applyAbaTenantScope(summaryQuery, { role: 'owner' }, clinicId, organizationId);
+
+    const queries = await Promise.all([
+      summaryQuery.maybeSingle(),
+      applyAbaTenantScope(
+        supabase
+          .from('aba_session_metric_snapshots')
+          .select(ABA_SESSION_METRIC_SNAPSHOT_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .order('changed_at', { ascending: false })
+          .limit(limit),
+        { role: 'owner' },
+        clinicId,
+        organizationId
+      ),
+      applyAbaTenantScope(
+        supabase
+          .from('aba_mastery_evaluations')
+          .select(ABA_MASTERY_LIST_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .order('evaluated_at', { ascending: false })
+          .limit(20),
+        { role: 'owner' },
+        clinicId,
+        organizationId
+      ),
+      applyAbaTenantScope(
+        supabase
+          .from('aba_maintenance_schedules')
+          .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .in('status', activeScheduleStatuses)
+          .order('target_due_date', { ascending: true })
+          .limit(40),
+        { role: 'owner' },
+        clinicId,
+        organizationId
+      ),
+      applyAbaTenantScope(
+        supabase
+          .from('aba_maintenance_probe_results')
+          .select(ABA_MAINTENANCE_PROBE_RESULT_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .order('occurred_at', { ascending: false })
+          .limit(20),
+        { role: 'owner' },
+        clinicId,
+        organizationId
+      ),
+      applyAbaTenantScope(
+        supabase
+          .from('aba_regression_alerts')
+          .select(ABA_REGRESSION_ALERT_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .is('resolved_at', null)
+          .order('created_at', { ascending: false })
+          .limit(20),
+        { role: 'owner' },
+        clinicId,
+        organizationId
+      ),
+      applyAbaTenantScope(
+        supabase
+          .from('aba_targets')
+          .select(ABA_TARGET_RECOMMENDATION_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .in('clinical_status', ['ACQUISITION', 'READY_FOR_REVIEW', 'MASTERED', 'MAINTENANCE', 'REGRESSION_RISK'])
+          .order('updated_at', { ascending: false })
+          .limit(60),
+        { role: 'owner' },
+        clinicId,
+        organizationId
+      ),
+      applyAbaTenantScope(
+        supabase
+          .from('aba_behavior_daily_summaries')
+          .select(ABA_BEHAVIOR_DAILY_CHART_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .order('date', { ascending: false })
+          .limit(20),
+        { role: 'owner' },
+        clinicId,
+        organizationId
+      ),
+      applyAbaTenantScope(
+        supabase
+          .from('aba_clinical_recommendations')
+          .select(ABA_CLINICAL_RECOMMENDATION_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .in('status', recommendationStatuses)
+          .order('created_at', { ascending: false })
+          .limit(30),
+        { role: 'owner' },
+        clinicId,
+        organizationId
+      )
+    ]);
+
+    for (const result of queries) {
+      if ((result as any).error && !hasMissingFinancialSchema((result as any).error)) throw (result as any).error;
+    }
+    const safeData = (index: number, fallback: any) => (queries[index] as any).error ? fallback : ((queries[index] as any).data ?? fallback);
+    logAbaPlanningEgress({
+      helper: 'fetchAbaPlanningContextSummaryDriven',
+      tables: 'aba_session_summaries,aba_session_metric_snapshots,aba_mastery_evaluations,aba_maintenance_schedules,aba_maintenance_probe_results,aba_regression_alerts,aba_targets,aba_behavior_daily_summaries,aba_clinical_recommendations',
+      limit,
+      rows: queries.map((result: any) => Array.isArray(result.data) ? result.data.length : (result.data ? 1 : 0))
+    });
+    return {
+      sessionSummary: safeData(0, null),
+      metricSnapshots: safeData(1, []),
+      masteryEvaluations: safeData(2, []),
+      maintenanceSchedules: safeData(3, []),
+      maintenanceProbeResults: safeData(4, []),
+      regressionAlerts: safeData(5, []),
+      targets: safeData(6, []),
+      behaviorDailySummaries: safeData(7, []),
+      existingRecommendations: safeData(8, [])
+    };
+  };
+
+  const persistGeneratedRecommendations = async (params: {
+    recommendations: AbaClinicalRecommendation[];
+    clinicId: string;
+    createdBy: string;
+  }) => {
+    const saved: any[] = [];
+    for (const recommendation of params.recommendations) {
+      const payload = cleanObject({
+        ...recommendation,
+        clinic_id: params.clinicId,
+        patient_id: sanitizeString(recommendation.patient_id, 120),
+        organization_id: sanitizeString(recommendation.organization_id, 120),
+        source_session_id: sanitizeString(recommendation.source_session_id, 180) || null,
+        recommendation_type: normalizeAbaRecommendationType(recommendation.recommendation_type),
+        priority: normalizeAbaRecommendationPriority(recommendation.priority),
+        title: sanitizeTextField(recommendation.title, 240),
+        summary: sanitizeTextField(recommendation.summary, 500),
+        rationale: sanitizeTextField(recommendation.rationale, 1000),
+        suggested_action: sanitizeTextField(recommendation.suggested_action, 1000),
+        evidence: sanitizeClinicalPayload(recommendation.evidence || {}),
+        status: normalizeAbaRecommendationStatus(recommendation.status),
+        created_at: recommendation.created_at || new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      });
+      const result = await writeAbaRowWithSchemaFallback('aba_clinical_recommendations', payload, 'upsert');
+      if (result.error) {
+        if (hasMissingFinancialSchema(result.error)) return { ok: false, status: 503, error: 'Schema de planejamento ABA ainda não aplicado.', data: saved };
+        throw result.error;
+      }
+      saved.push({ ...payload, id: (result.data as any)?.id || payload.id });
+      const auditPayload = cleanObject({
+        id: `audit-${abaPlanningHash([payload.id, 'GENERATED', payload.context_hash])}`,
+        organization_id: payload.organization_id,
+        clinic_id: params.clinicId,
+        patient_id: payload.patient_id,
+        recommendation_id: payload.id,
+        action: 'GENERATED',
+        previous_status: null,
+        new_status: payload.status,
+        performed_by: params.createdBy,
+        performed_at: new Date().toISOString(),
+        metadata: sanitizeClinicalPayload({ contextHash: payload.context_hash, summaryDriven: true })
+      });
+      await writeAbaRowWithSchemaFallback('aba_clinical_recommendation_audit_logs', auditPayload, 'upsert');
+    }
+    return { ok: true, status: 200, data: saved };
+  };
+
+  const fetchAbaRecommendationById = async (recommendationId: string, clinicId: string) => {
+    let query = supabase
+      .from('aba_clinical_recommendations')
+      .select(ABA_CLINICAL_RECOMMENDATION_SELECT)
+      .eq('id', recommendationId);
+    if (clinicId) query = query.eq('clinic_id', clinicId);
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return null;
+      throw error;
+    }
+    return data || null;
+  };
+
+  const persistRecommendationState = async (params: {
+    recommendation: AbaClinicalRecommendation;
+    clinicId: string;
+    auditLog: any;
+    planItem?: AbaNextSessionPlanItem | null;
+  }) => {
+    const recommendationPatch = cleanObject({
+      status: normalizeAbaRecommendationStatus(params.recommendation.status),
+      accepted_by: sanitizeString(params.recommendation.accepted_by, 120) || null,
+      accepted_at: params.recommendation.accepted_at || null,
+      rejected_by: sanitizeString(params.recommendation.rejected_by, 120) || null,
+      rejected_at: params.recommendation.rejected_at || null,
+      title: sanitizeTextField(params.recommendation.title, 240),
+      summary: sanitizeTextField(params.recommendation.summary, 500),
+      rationale: sanitizeTextField(params.recommendation.rationale, 1000),
+      suggested_action: sanitizeTextField(params.recommendation.suggested_action, 1000),
+      evidence: sanitizeClinicalPayload(params.recommendation.evidence || {}),
+      updated_at: new Date().toISOString()
+    });
+    const recResult = await supabase
+      .from('aba_clinical_recommendations')
+      .update(recommendationPatch)
+      .eq('id', params.recommendation.id)
+      .eq('clinic_id', params.clinicId)
+      .select(ABA_CLINICAL_RECOMMENDATION_SELECT)
+      .maybeSingle();
+    if (recResult.error) {
+      if (hasMissingFinancialSchema(recResult.error)) return { ok: false, status: 503, error: 'Schema de planejamento ABA ainda não aplicado.' };
+      throw recResult.error;
+    }
+    const auditPayload = cleanObject({
+      ...params.auditLog,
+      clinic_id: params.clinicId,
+      metadata: sanitizeClinicalPayload(params.auditLog?.metadata || {})
+    });
+    await writeAbaRowWithSchemaFallback('aba_clinical_recommendation_audit_logs', auditPayload, 'upsert');
+    let planItem: any = null;
+    if (params.planItem) {
+      const planPayload = cleanObject({
+        ...params.planItem,
+        clinic_id: params.clinicId,
+        patient_id: sanitizeString(params.planItem.patient_id, 120),
+        organization_id: sanitizeString(params.planItem.organization_id, 120),
+        planned_trial_type: normalizeAbaPlanTrialType(params.planItem.planned_trial_type),
+        priority: normalizeAbaRecommendationPriority(params.planItem.priority),
+        status: normalizeAbaPlanItemStatus(params.planItem.status),
+        instructions: sanitizeTextField(params.planItem.instructions, 1000),
+        created_at: params.planItem.created_at || new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      });
+      const planResult = await writeAbaRowWithSchemaFallback('aba_next_session_plan_items', planPayload, 'upsert');
+      if (planResult.error && !hasMissingFinancialSchema(planResult.error)) throw planResult.error;
+      if (!planResult.error) planItem = { ...planPayload, id: (planResult.data as any)?.id || planPayload.id };
+    }
+    return { ok: true, status: 200, data: recResult.data, planItem };
   };
 
   const assertAbaSessionCanAcceptClinicalWrite = async (
@@ -16328,12 +16992,16 @@ async function startServer() {
         .eq('clinic_id', clinicId)
         .eq('patient_id', patientId)
         .eq('target_id', targetId)
-        .eq('status', 'PENDING')
-        .lte('scheduled_for', params.evaluatedAt)
-        .order('scheduled_for', { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      if (!scheduleRes.error) schedule = scheduleRes.data || null;
+        .in('status', ['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'MISSED'])
+        .order('target_due_date', { ascending: true })
+        .limit(10);
+      if (!scheduleRes.error) {
+        const evaluatedMs = new Date(params.evaluatedAt).getTime();
+        schedule = (scheduleRes.data || []).find((item: any) => {
+          const due = new Date(item?.scheduled_for || item?.target_due_date || 0).getTime();
+          return Number.isFinite(due) && due <= evaluatedMs;
+        }) || (scheduleRes.data || [])[0] || null;
+      }
       if (scheduleRes.error && !hasMissingFinancialSchema(scheduleRes.error)) throw scheduleRes.error;
 
       let previousProbeResults: any[] = [];
@@ -16400,6 +17068,8 @@ async function startServer() {
         name: targetName,
         maintenanceScheduleId: schedule?.id || null,
         scheduledFor: schedule?.scheduled_for || null,
+        targetDueDate: schedule?.target_due_date || null,
+        appointmentId: schedule?.appointment_id || null,
         status: evaluation.status,
         totalTrials: evaluation.totalTrials,
         independentTrials: evaluation.independentTrials,
@@ -16573,8 +17243,8 @@ async function startServer() {
             .from('aba_maintenance_schedules')
             .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
             .eq('patient_id', patientId)
-            .in('status', ['PENDING', 'MISSED'])
-            .order('scheduled_for', { ascending: true })
+            .in('status', ['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'MISSED'])
+            .order('target_due_date', { ascending: true })
             .range(from, to)
         ),
         applyClinic(
@@ -16622,6 +17292,393 @@ async function startServer() {
       });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/aba/patients/:patientId/maintenance-schedules', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      if (!isUuid(patientId)) return res.json({ success: true, data: [] });
+      const limit = parseAbaRecordListLimit(req.query?.limit);
+      let query = supabase
+        .from('aba_maintenance_schedules')
+        .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .order('target_due_date', { ascending: true })
+        .limit(limit);
+      if (req.query?.status) query = query.eq('status', normalizeAbaMaintenanceScheduleStatus(req.query.status));
+      query = applyAbaTenantScope(query, req.session.user, clinicId, organizationId);
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível carregar os agendamentos agora.' });
+    }
+  });
+
+  app.post('/api/aba/targets/:targetId/maintenance-schedules', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de agendamento de Maintenance Probe')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.body?.organization_id || req.body?.organizationId || req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const targetId = sanitizeString(req.params.targetId, 180);
+      let patientId = sanitizeString(req.body?.patient_id || req.body?.patientId, 120);
+      if (!patientId && targetId) {
+        let targetQuery = supabase
+          .from('aba_targets')
+          .select('id,clinic_id,patient_id,organization_id')
+          .eq('id', targetId)
+          .limit(1);
+        targetQuery = applyAbaTenantScope(targetQuery, req.session.user, clinicId, organizationId);
+        const targetResult = await targetQuery.maybeSingle();
+        if (targetResult.error && !hasMissingFinancialSchema(targetResult.error)) throw targetResult.error;
+        patientId = sanitizeString(targetResult.data?.patient_id, 120);
+      }
+      if (!isUuid(patientId) || !(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
+      }
+      const result = await createMaintenanceScheduleForTarget({
+        targetId,
+        patientId,
+        organizationId,
+        clinicId,
+        scheduleMode: req.body?.scheduleMode || req.body?.schedule_mode,
+        dueDate: req.body?.dueDate || req.body?.due_date,
+        appointmentId: req.body?.appointmentId || req.body?.appointment_id,
+        intervals: req.body?.intervals || req.body?.maintenanceDays || req.body?.maintenance_days,
+        createdBy: sanitizeString(req.session.user?.id, 120),
+        masteryEvaluationId: req.body?.masteryEvaluationId || req.body?.mastery_evaluation_id,
+        approvedAt: req.body?.approvedAt || req.body?.approved_at
+      });
+      if (!result.ok) return res.status((result as any).status || 400).json({ success: false, error: (result as any).error });
+      return res.json({ success: true, data: result.data });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível agendar a sondagem agora.' });
+    }
+  });
+
+  app.post('/api/aba/targets/:targetId/maintenance-schedules/next-session', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de agendamento para próxima sessão')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.body?.organization_id || req.body?.organizationId || req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const patientId = sanitizeString(req.body?.patient_id || req.body?.patientId, 120);
+      if (!isUuid(patientId) || !(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
+      }
+      const result = await createMaintenanceScheduleForTarget({
+        targetId: sanitizeString(req.params.targetId, 180),
+        patientId,
+        organizationId,
+        clinicId,
+        scheduleMode: 'NEXT_PATIENT_SESSION',
+        createdBy: sanitizeString(req.session.user?.id, 120),
+        masteryEvaluationId: req.body?.masteryEvaluationId || req.body?.mastery_evaluation_id
+      });
+      if (!result.ok) return res.status((result as any).status || 400).json({ success: false, error: (result as any).error, data: (result as any).data || [] });
+      return res.json({ success: true, data: result.data });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível agendar para a próxima sessão agora.' });
+    }
+  });
+
+  app.get('/api/aba/targets/:targetId/next-maintenance-probe', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.query?.organizationId || req.query?.organization_id || req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const patientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120);
+      const targetId = sanitizeString(req.params.targetId, 180);
+      if (!isUuid(patientId) || !(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
+      }
+      const data = await fetchNextMaintenanceProbeForTarget({ targetId, patientId, clinicId, organizationId });
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível carregar a próxima sondagem agora.' });
+    }
+  });
+
+  app.post('/api/aba/maintenance-schedules/:scheduleId/complete', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de conclusão de Maintenance Probe')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const scheduleId = sanitizeString(req.params.scheduleId, 180);
+      let query = supabase
+        .from('aba_maintenance_schedules')
+        .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+        .eq('id', scheduleId);
+      query = applyAbaTenantScope(query, req.session.user, clinicId);
+      const existing = await query.maybeSingle();
+      if (existing.error) {
+        if (hasMissingFinancialSchema(existing.error)) return res.status(503).json({ success: false, error: 'Schema ABA de manutenção ainda não aplicado.' });
+        throw existing.error;
+      }
+      if (!existing.data?.id || !(await canAccessPatientInCurrentClinic(sanitizeString(existing.data.patient_id, 120), req.session.user))) {
+        return res.status(404).json({ success: false, error: 'Agendamento não encontrado.' });
+      }
+      const completedAt = sanitizeIsoDateTime(req.body?.completed_at || req.body?.completedAt || new Date().toISOString());
+      const update = await supabase
+        .from('aba_maintenance_schedules')
+        .update({ status: 'COMPLETED', completed_at: completedAt, updated_at: new Date().toISOString() })
+        .eq('id', scheduleId)
+        .eq('clinic_id', existing.data.clinic_id)
+        .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+        .maybeSingle();
+      if (update.error) throw update.error;
+      return res.json({ success: true, data: update.data || { ...existing.data, status: 'COMPLETED', completed_at: completedAt } });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível concluir o agendamento agora.' });
+    }
+  });
+
+  app.get('/api/aba/patients/:patientId/next-session/recommendations', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const sourceSessionId = sanitizeString(req.query?.sourceSessionId || req.query?.source_session_id, 180);
+      const limit = parseAbaRecordListLimit(req.query?.limit);
+      let query = supabase
+        .from('aba_clinical_recommendations')
+        .select(ABA_CLINICAL_RECOMMENDATION_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .in('status', ['SUGGESTED', 'ACCEPTED', 'EDITED', 'APPLIED_TO_NEXT_SESSION'])
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (sourceSessionId) query = query.eq('source_session_id', sourceSessionId);
+      query = applyAbaTenantScope(query, req.session.user, clinicId, organizationId);
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível carregar as sugestões agora.' });
+    }
+  });
+
+  app.post('/api/aba/patients/:patientId/next-session/recommendations/generate', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de geração de planejamento ABA')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.body?.organization_id || req.body?.organizationId || req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const focusType = normalizePlanningFocusType(req.body?.focusType || req.body?.focus_type || req.query?.focusType || req.query?.focus_type);
+      const sourceSessionId = sanitizeString(req.body?.sourceSessionId || req.body?.source_session_id || req.query?.sourceSessionId || req.query?.source_session_id, 180) || null;
+      const context = await fetchAbaPlanningContextSummaryDriven({ patientId, clinicId, organizationId, sourceSessionId, focusType });
+      const generated = generateNextSessionRecommendations({
+        organizationId,
+        patientId,
+        sourceSessionId,
+        focusType,
+        supervisorId: sanitizeString(req.session.user?.id, 120),
+        ...context
+      });
+      if (generated.reusedExisting) {
+        return res.json({ success: true, data: generated.recommendations, contextHash: generated.contextHash, reusedExisting: true });
+      }
+      const focusId = `focus-${abaPlanningHash([organizationId, patientId, sourceSessionId || '', focusType, generated.contextHash])}`;
+      const focusPayload = cleanObject({
+        id: focusId,
+        organization_id: organizationId,
+        clinic_id: clinicId,
+        patient_id: patientId,
+        source_session_id: sourceSessionId,
+        focus_type: normalizeAbaPlanningFocusType(focusType),
+        status: 'GENERATED',
+        created_by: sanitizeString(req.session.user?.id, 120),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      });
+      await writeAbaRowWithSchemaFallback('aba_next_session_focuses', focusPayload, 'upsert');
+      const persisted = await persistGeneratedRecommendations({
+        recommendations: generated.recommendations.map((recommendation) => ({ ...recommendation, next_session_focus_id: focusId })),
+        clinicId,
+        createdBy: sanitizeString(req.session.user?.id, 120)
+      });
+      if (!persisted.ok) return res.status((persisted as any).status || 503).json({ success: false, error: (persisted as any).error });
+      return res.json({ success: true, data: persisted.data, contextHash: generated.contextHash, reusedExisting: false });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível gerar sugestões agora.' });
+    }
+  });
+
+  app.post('/api/aba/recommendations/:recommendationId/accept', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de aceite de sugestão ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const recommendation = await fetchAbaRecommendationById(sanitizeString(req.params.recommendationId, 180), clinicId);
+      if (!recommendation?.id) return res.status(404).json({ success: false, error: 'Sugestão não encontrada.' });
+      if (!(await canAccessPatientInCurrentClinic(sanitizeString(recommendation.patient_id, 120), req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
+      }
+      const accepted = acceptRecommendationForNextSession({
+        recommendation,
+        acceptedBy: sanitizeString(req.session.user?.id, 120),
+        createPlanItem: Boolean(req.body?.applyToNextSession || req.body?.createPlanItem),
+        now: new Date().toISOString()
+      });
+      const persisted = await persistRecommendationState({ ...accepted, clinicId });
+      if (!persisted.ok) return res.status((persisted as any).status || 500).json({ success: false, error: (persisted as any).error });
+      return res.json({ success: true, data: persisted.data, planItem: persisted.planItem || null });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível aceitar a sugestão agora.' });
+    }
+  });
+
+  app.post('/api/aba/recommendations/:recommendationId/reject', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de recusa de sugestão ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const recommendation = await fetchAbaRecommendationById(sanitizeString(req.params.recommendationId, 180), clinicId);
+      if (!recommendation?.id) return res.status(404).json({ success: false, error: 'Sugestão não encontrada.' });
+      if (!(await canAccessPatientInCurrentClinic(sanitizeString(recommendation.patient_id, 120), req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
+      }
+      const rejected = rejectRecommendation({
+        recommendation,
+        rejectedBy: sanitizeString(req.session.user?.id, 120),
+        reason: sanitizeTextField(req.body?.reason || req.body?.motivo, 500),
+        now: new Date().toISOString()
+      });
+      const persisted = await persistRecommendationState({ ...rejected, clinicId });
+      if (!persisted.ok) return res.status((persisted as any).status || 500).json({ success: false, error: (persisted as any).error });
+      return res.json({ success: true, data: persisted.data });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível recusar a sugestão agora.' });
+    }
+  });
+
+  app.patch('/api/aba/recommendations/:recommendationId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de edição de sugestão ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const recommendation = await fetchAbaRecommendationById(sanitizeString(req.params.recommendationId, 180), clinicId);
+      if (!recommendation?.id) return res.status(404).json({ success: false, error: 'Sugestão não encontrada.' });
+      if (!(await canAccessPatientInCurrentClinic(sanitizeString(recommendation.patient_id, 120), req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
+      }
+      const edited = cleanObject({
+        ...recommendation,
+        id: `rec-edit-${abaPlanningHash([recommendation.id, new Date().toISOString()])}`,
+        title: sanitizeTextField(req.body?.title ?? recommendation.title, 240),
+        summary: sanitizeTextField(req.body?.summary ?? recommendation.summary, 500),
+        rationale: sanitizeTextField(req.body?.rationale ?? recommendation.rationale, 1000),
+        suggested_action: sanitizeTextField(req.body?.suggested_action ?? req.body?.suggestedAction ?? recommendation.suggested_action, 1000),
+        priority: normalizeAbaRecommendationPriority(req.body?.priority ?? recommendation.priority),
+        status: 'EDITED',
+        edited_from_id: recommendation.id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      });
+      const result = await writeAbaRowWithSchemaFallback('aba_clinical_recommendations', edited, 'upsert');
+      if (result.error) {
+        if (hasMissingFinancialSchema(result.error)) return res.status(503).json({ success: false, error: 'Schema de planejamento ABA ainda não aplicado.' });
+        throw result.error;
+      }
+      const auditPayload = cleanObject({
+        id: `audit-${abaPlanningHash([edited.id, 'EDITED'])}`,
+        organization_id: edited.organization_id,
+        clinic_id: clinicId,
+        patient_id: edited.patient_id,
+        recommendation_id: edited.id,
+        action: 'EDITED',
+        previous_status: recommendation.status,
+        new_status: 'EDITED',
+        performed_by: sanitizeString(req.session.user?.id, 120),
+        performed_at: new Date().toISOString(),
+        metadata: sanitizeClinicalPayload({ editedFromId: recommendation.id, humanEdited: true })
+      });
+      await writeAbaRowWithSchemaFallback('aba_clinical_recommendation_audit_logs', auditPayload, 'upsert');
+      return res.json({ success: true, data: { ...edited, id: (result.data as any)?.id || edited.id } });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível editar a sugestão agora.' });
+    }
+  });
+
+  app.post('/api/aba/recommendations/:recommendationId/apply-to-next-session', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de aplicação ao plano ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const recommendation = await fetchAbaRecommendationById(sanitizeString(req.params.recommendationId, 180), clinicId);
+      if (!recommendation?.id) return res.status(404).json({ success: false, error: 'Sugestão não encontrada.' });
+      if (!(await canAccessPatientInCurrentClinic(sanitizeString(recommendation.patient_id, 120), req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
+      }
+      const accepted = acceptRecommendationForNextSession({
+        recommendation,
+        acceptedBy: sanitizeString(req.session.user?.id, 120),
+        createPlanItem: true,
+        now: new Date().toISOString()
+      });
+      const persisted = await persistRecommendationState({ ...accepted, clinicId });
+      if (!persisted.ok) return res.status((persisted as any).status || 500).json({ success: false, error: (persisted as any).error });
+      return res.json({ success: true, data: persisted.data, planItem: persisted.planItem || null });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível aplicar a sugestão ao plano agora.' });
+    }
+  });
+
+  app.get('/api/aba/patients/:patientId/next-session/plan-items', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const limit = parseAbaRecordListLimit(req.query?.limit);
+      let query = supabase
+        .from('aba_next_session_plan_items')
+        .select(ABA_NEXT_SESSION_PLAN_ITEM_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .eq('status', normalizeAbaPlanItemStatus(req.query?.status || 'PLANNED'))
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      query = applyAbaTenantScope(query, req.session.user, clinicId, organizationId);
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível carregar o plano sugerido agora.' });
+    }
+  });
+
+  app.patch('/api/aba/next-session-plan-items/:planItemId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de item do plano ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const planItemId = sanitizeString(req.params.planItemId, 180);
+      const patch = cleanObject({
+        status: req.body?.status !== undefined ? normalizeAbaPlanItemStatus(req.body.status) : undefined,
+        instructions: req.body?.instructions !== undefined ? sanitizeTextField(req.body.instructions, 1000) : undefined,
+        planned_trial_type: req.body?.planned_trial_type !== undefined || req.body?.plannedTrialType !== undefined
+          ? normalizeAbaPlanTrialType(req.body?.planned_trial_type || req.body?.plannedTrialType)
+          : undefined,
+        updated_at: new Date().toISOString()
+      });
+      let query = supabase
+        .from('aba_next_session_plan_items')
+        .update(patch)
+        .eq('id', planItemId);
+      if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
+      const { data, error } = await query.select(ABA_NEXT_SESSION_PLAN_ITEM_SELECT).maybeSingle();
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Schema de planejamento ABA ainda não aplicado.' });
+        throw error;
+      }
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível atualizar o plano sugerido agora.' });
     }
   });
 
@@ -17905,7 +18962,29 @@ async function startServer() {
         }
         throw result.error;
       }
-      return res.json({ success: true, data: result.data || payload });
+      let maintenanceSchedules: any[] = [];
+      const supervisorApprovedMastery = Boolean(
+        req.body?.approved ||
+        req.body?.approvedBySupervisor ||
+        req.body?.approved_by_supervisor ||
+        sanitizeString(payload.status, 80).toUpperCase() === 'MASTERED_APPROVED' ||
+        sanitizeString(payload.evaluation_status, 80).toLowerCase() === 'mastered'
+      );
+      if (supervisorApprovedMastery && payload.target_id) {
+        const scheduleResult = await createMaintenanceScheduleForTarget({
+          targetId: payload.target_id,
+          patientId,
+          organizationId: payload.organization_id,
+          clinicId,
+          scheduleMode: req.body?.maintenanceScheduleMode || req.body?.maintenance_schedule_mode || 'DEFAULT_SEQUENCE',
+          intervals: payload.criteria?.maintenance_days || payload.criteria?.maintenanceDays || req.body?.maintenance_days || req.body?.maintenanceDays,
+          createdBy: sanitizeString(req.session.user?.id, 120),
+          masteryEvaluationId: payload.id,
+          approvedAt: payload.evaluated_at
+        });
+        if ((scheduleResult as any).ok) maintenanceSchedules = (scheduleResult as any).data || [];
+      }
+      return res.json({ success: true, data: result.data || payload, maintenanceSchedules });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
     }
