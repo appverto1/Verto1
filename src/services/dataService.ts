@@ -125,7 +125,7 @@ type ClinicalQueryAuditOptions = {
 };
 
 function isClinicalEndpoint(endpoint: string) {
-  return /\/api\/(aba|notes|history|tasks|assigned-tasks|patient-anamnesis|patients|patient-records)/.test(endpoint);
+  return /\/api\/(aba|calendar|notes|history|tasks|assigned-tasks|patient-anamnesis|patients|patient-records)/.test(endpoint);
 }
 
 function isDevQueryAuditEnabled() {
@@ -188,11 +188,12 @@ function auditClinicalQuery(endpoint: string, options: ClinicalQueryAuditOptions
   if (options.hasExplicitColumns === false) warnings.push("select('*')/payload amplo");
   if (options.requiresPatientOrSession !== false) {
     const hasScopedPath = /\/api\/aba\/(session-live-summaries|session-reports|recent-session-events)\/[^/?]+/.test(endpoint) ||
+      /\/api\/calendar\/events(?:\/[^/?]+\/detail)?/.test(endpoint) ||
       /\/api\/aba\/patients\/[^/?]+\/charts\/[^/?]+/.test(endpoint) ||
       /\/api\/aba\/patients\/[^/?]+\/(maintenance-schedules|next-session\/recommendations|next-session\/plan-items)/.test(endpoint) ||
       /\/api\/(notes|history|tasks|assigned-tasks|patient-anamnesis|patient-records)\/[^/?]+/.test(endpoint) ||
       /\/api\/aba\/(sessions|trials|behavior-events|mastery-evaluations|patient-summary|maintenance-overview)\/[^/?]+/.test(endpoint);
-    const hasScopedQuery = /[?&](patientId|patient_id|sessionId|session_id)=/.test(endpoint);
+    const hasScopedQuery = /[?&](patientId|patient_id|sessionId|session_id|from|time_min)=/.test(endpoint);
     if (!hasScopedPath && !hasScopedQuery) warnings.push('sem patientId/sessionId aparente');
   }
   if (options.afterWriteRefetch) warnings.push('refetch amplo apos escrita');
@@ -1373,6 +1374,61 @@ export const dataService = {
       console.log('Fetching ABA live summary from local state only...');
     }
     return { success: true, data: null };
+  },
+
+  async getCalendarEvents(options: {
+    from: string;
+    to: string;
+    therapistId?: string;
+    patientId?: string;
+    type?: string;
+    status?: string;
+    limit?: number;
+  }) {
+    const endpoint = endpointWithQuery('/api/calendar/events', {
+      from: options.from,
+      to: options.to,
+      therapistId: options.therapistId,
+      patientId: options.patientId,
+      type: options.type,
+      status: options.status,
+      limit: normalizeListLimit(options.limit, 120, 200)
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getCalendarEvents',
+        operation: 'list',
+        table: 'appointments',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch (error) {
+      if (import.meta.env.DEV) console.log('Fetching calendar events from local agenda only...');
+      return { success: false, data: [], error: 'Não foi possível carregar a agenda agora.' };
+    }
+  },
+
+  async getCalendarEventDetail(eventId: string) {
+    const endpoint = `/api/calendar/events/${encodeURIComponent(String(eventId))}/detail`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getCalendarEventDetail',
+        operation: 'detail',
+        table: 'appointments,aba_next_session_plan_items,aba_maintenance_schedules',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, data: null, error: 'Não foi possível carregar os detalhes da sessão agora.' };
+    }
   },
 
   async getRecentSessionEvents(sessionId: string, limit = 20) {

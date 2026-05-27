@@ -33,6 +33,7 @@
     "test:aba-planning-engine": "tsx tests/abaPlanningEngine.test.ts",
     "test:aba-maintenance-engine": "tsx tests/abaMaintenanceEngine.test.ts",
     "test:aba-clinical-charts": "tsx tests/abaClinicalCharts.test.ts",
+    "test:calendar-events": "tsx tests/calendarEvents.test.ts",
     "stripe:create-active-patient-price": "node scripts/create-stripe-active-patient-price.mjs",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"

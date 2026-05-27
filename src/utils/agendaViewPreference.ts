@@ -1,6 +1,6 @@
 export type AgendaView = "day" | "week" | "month";
 
-const DEFAULT_AGENDA_VIEW: AgendaView = "day";
+const DEFAULT_AGENDA_VIEW: AgendaView = "week";
 
 const isAgendaView = (value: unknown): value is AgendaView =>
   value === "day" || value === "week" || value === "month";

@@ -1,5 +1,36 @@
-import React from 'react';
-import { ChevronLeft, ChevronRight, Calendar, X, Plus } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertCircle,
+  Ban,
+  BarChart3,
+  Calendar as CalendarIcon,
+  CalendarDays,
+  CalendarRange,
+  CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  ClipboardCheck,
+  Clock,
+  Edit2,
+  FileText,
+  Filter,
+  Home,
+  Loader2,
+  MapPin,
+  Monitor,
+  Play,
+  Plus,
+  RefreshCcw,
+  Search,
+  Stethoscope,
+  User,
+  Users,
+  X,
+  Zap
+} from 'lucide-react';
+import { dataService } from '../services/dataService';
 
 const normalizeAgendaStatus = (status: any) => String(status || 'pending').toLowerCase();
 
@@ -123,7 +154,7 @@ export const DayDetailsModal = ({ isOpen, onClose, date, agenda, onAddSession, o
            {dateDisplay}
         </h2>
         <div className="flex items-center gap-2 mb-6">
-            <Calendar size={16} className="text-[#4318FF]"/>
+            <CalendarIcon size={16} className="text-[#4318FF]"/>
             <p className={`text-xs font-bold uppercase tracking-wider ${isDark ? 'text-slate-400' : 'text-gray-500'}`}>{appointments.length} Agendamentos</p>
         </div>
         
@@ -154,3 +185,1224 @@ export const DayDetailsModal = ({ isOpen, onClose, date, agenda, onAddSession, o
     </div>
   );
 }
+
+type ClinicalAgendaView = 'day' | 'week' | 'month';
+
+const CLINICAL_SESSION_TYPES = [
+  'ABA',
+  'Fonoaudiologia',
+  'Terapia Ocupacional',
+  'Psicologia',
+  'Psicopedagogia',
+  'Avaliação',
+  'Supervisão',
+  'Reunião interdisciplinar',
+  'Orientação familiar',
+  'Outro'
+];
+
+const CLINICAL_STATUS_OPTIONS = [
+  { value: 'scheduled', label: 'Agendada' },
+  { value: 'confirmed', label: 'Confirmada' },
+  { value: 'in_progress', label: 'Em andamento' },
+  { value: 'completed', label: 'Concluída' },
+  { value: 'missed', label: 'Faltou' },
+  { value: 'canceled', label: 'Cancelada' },
+  { value: 'session_registered', label: 'Sessão registrada' },
+  { value: 'report_pending', label: 'Relatório pendente' },
+  { value: 'signature_pending', label: 'Assinatura pendente' }
+];
+
+const LOCATION_FILTERS = [
+  { value: 'sala', label: 'Sala', icon: MapPin },
+  { value: 'online', label: 'Online', icon: Monitor },
+  { value: 'domicilio', label: 'Domicílio', icon: Home },
+  { value: 'escola', label: 'Escola', icon: Users },
+  { value: 'outro', label: 'Outro', icon: MapPin }
+];
+
+const HOUR_START = 7;
+const HOUR_END = 20;
+const HOUR_HEIGHT = 72;
+
+const SESSION_TYPE_STYLES: Record<string, any> = {
+  aba: {
+    label: 'ABA',
+    card: 'border-orange-300 bg-orange-50/90 text-orange-950',
+    badge: 'bg-orange-100 text-orange-700 border-orange-200',
+    stripe: 'bg-orange-400'
+  },
+  fonoaudiologia: {
+    label: 'Fono',
+    card: 'border-emerald-300 bg-emerald-50/90 text-emerald-950',
+    badge: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+    stripe: 'bg-emerald-500'
+  },
+  terapiaocupacional: {
+    label: 'TO',
+    card: 'border-sky-300 bg-sky-50/90 text-sky-950',
+    badge: 'bg-sky-100 text-sky-700 border-sky-200',
+    stripe: 'bg-sky-500'
+  },
+  psicologia: {
+    label: 'Psico',
+    card: 'border-purple-300 bg-purple-50/90 text-purple-950',
+    badge: 'bg-purple-100 text-purple-700 border-purple-200',
+    stripe: 'bg-purple-500'
+  },
+  psicopedagogia: {
+    label: 'Psicoped.',
+    card: 'border-teal-300 bg-teal-50/90 text-teal-950',
+    badge: 'bg-teal-100 text-teal-700 border-teal-200',
+    stripe: 'bg-teal-500'
+  },
+  avaliacao: {
+    label: 'Avaliação',
+    card: 'border-amber-300 bg-amber-50/90 text-amber-950',
+    badge: 'bg-amber-100 text-amber-700 border-amber-200',
+    stripe: 'bg-amber-500'
+  },
+  supervisao: {
+    label: 'Supervisão',
+    card: 'border-indigo-300 bg-indigo-50/90 text-indigo-950',
+    badge: 'bg-indigo-100 text-indigo-700 border-indigo-200',
+    stripe: 'bg-indigo-500'
+  },
+  reuniaointerdisciplinar: {
+    label: 'Reunião',
+    card: 'border-slate-300 bg-slate-100 text-slate-900',
+    badge: 'bg-slate-200 text-slate-700 border-slate-300',
+    stripe: 'bg-slate-500'
+  },
+  orientacaofamiliar: {
+    label: 'Família',
+    card: 'border-rose-200 bg-rose-50/90 text-rose-950',
+    badge: 'bg-rose-100 text-rose-700 border-rose-200',
+    stripe: 'bg-rose-400'
+  },
+  outro: {
+    label: 'Outro',
+    card: 'border-stone-300 bg-stone-50 text-stone-900',
+    badge: 'bg-stone-100 text-stone-700 border-stone-200',
+    stripe: 'bg-stone-500'
+  }
+};
+
+const removeDiacritics = (value: any) =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+
+const getSessionTypeStyle = (type: any) => {
+  const key = removeDiacritics(type || 'outro');
+  if (key.includes('aba')) return SESSION_TYPE_STYLES.aba;
+  if (key.includes('fono')) return SESSION_TYPE_STYLES.fonoaudiologia;
+  if (key.includes('ocupacional') || key === 'to') return SESSION_TYPE_STYLES.terapiaocupacional;
+  if (key.includes('psicologia')) return SESSION_TYPE_STYLES.psicologia;
+  if (key.includes('psicoped')) return SESSION_TYPE_STYLES.psicopedagogia;
+  if (key.includes('avali')) return SESSION_TYPE_STYLES.avaliacao;
+  if (key.includes('supervis')) return SESSION_TYPE_STYLES.supervisao;
+  if (key.includes('reuniao') || key.includes('interdisciplinar')) return SESSION_TYPE_STYLES.reuniaointerdisciplinar;
+  if (key.includes('orientacao') || key.includes('famil')) return SESSION_TYPE_STYLES.orientacaofamiliar;
+  return SESSION_TYPE_STYLES.outro;
+};
+
+const getClinicalStatusStyle = (status: any, event?: any) => {
+  const normalized = removeDiacritics(status || '');
+  if (event?.has_session_record || normalized.includes('completed') || normalized.includes('conclu')) {
+    return { label: 'Registrada', className: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: CheckCircle2 };
+  }
+  if (normalized.includes('confirm')) {
+    return { label: 'Confirmada', className: 'bg-sky-100 text-sky-700 border-sky-200', icon: CheckCircle2 };
+  }
+  if (normalized.includes('progress') || normalized.includes('andamento')) {
+    return { label: 'Em andamento', className: 'bg-indigo-100 text-indigo-700 border-indigo-200', icon: Play };
+  }
+  if (normalized.includes('miss') || normalized.includes('falt')) {
+    return { label: 'Faltou', className: 'bg-orange-100 text-orange-700 border-orange-200', icon: AlertCircle };
+  }
+  if (normalized.includes('cancel')) {
+    return { label: 'Cancelada', className: 'bg-rose-100 text-rose-700 border-rose-200', icon: Ban };
+  }
+  return { label: 'Agendada', className: 'bg-slate-100 text-slate-600 border-slate-200', icon: Clock };
+};
+
+const pad2 = (value: number) => String(value).padStart(2, '0');
+
+const toDateKey = (date: Date) =>
+  `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+
+const dateFromKey = (key: string) => {
+  const parsed = new Date(`${key}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+};
+
+const startOfWeekMonday = (date: Date) => {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const day = start.getDay();
+  const offset = day === 0 ? -6 : 1 - day;
+  start.setDate(start.getDate() + offset);
+  return start;
+};
+
+const addDays = (date: Date, amount: number) => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + amount);
+  return next;
+};
+
+const formatTime = (date: Date) => `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+
+const parseEventStart = (event: any) => {
+  const value = event?.start_time || event?.startTime || event?.scheduled_at || event?.scheduledAt || event?.start;
+  if (value) {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  const date = event?.date || new Date().toISOString().slice(0, 10);
+  const time = event?.time || '08:00';
+  const parsed = new Date(`${date}T${String(time).length === 5 ? `${time}:00` : time}`);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+};
+
+const parseEventEnd = (event: any, start: Date) => {
+  const value = event?.end_time || event?.endTime || event?.end;
+  if (value) {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  const duration = Number(event?.duration_minutes || event?.durationMinutes || event?.duration || 50);
+  return new Date(start.getTime() + (Number.isFinite(duration) && duration > 0 ? duration : 50) * 60 * 1000);
+};
+
+const classifyLocation = (event: any) => {
+  const value = removeDiacritics(`${event?.location || ''} ${event?.room || ''} ${event?.roomDisplayName || ''}`);
+  if (value.includes('online') || value.includes('remoto')) return 'online';
+  if (value.includes('domic')) return 'domicilio';
+  if (value.includes('escola')) return 'escola';
+  if (value.includes('sala') || event?.room || event?.roomDisplayName) return 'sala';
+  return 'outro';
+};
+
+const normalizeClinicalEvent = (event: any) => {
+  const start = parseEventStart(event);
+  const end = parseEventEnd(event, start);
+  const patientName = event?.patient_name || event?.patientName || event?.name || 'Paciente';
+  const therapistName = event?.therapist_name || event?.therapistName || event?.therapistDisplayName || event?.professional || 'Equipe';
+  const patientId = event?.patient_id || event?.patientId || null;
+  const therapistId = event?.therapist_id || event?.therapistId || event?.professionalId || null;
+  const type = event?.type || event?.approach || 'Sessão';
+  const room = event?.room || event?.roomDisplayName || event?.roomName || '';
+  const normalized = {
+    ...event,
+    id: String(event?.id || `${patientName}-${start.toISOString()}`),
+    patient_id: patientId,
+    patientId,
+    patient_name: patientName,
+    patientName,
+    therapist_id: therapistId,
+    therapistId,
+    therapist_name: therapistName,
+    therapistName,
+    type,
+    status: event?.status || 'scheduled',
+    room,
+    location: event?.location || classifyLocation(event),
+    start,
+    end,
+    date: toDateKey(start),
+    time: formatTime(start),
+    endTime: formatTime(end),
+    has_session_record: Boolean(event?.has_session_record ?? event?.hasSessionRecord),
+    has_report: Boolean(event?.has_report ?? event?.hasReport),
+    has_pending_signature: Boolean(event?.has_pending_signature ?? event?.hasPendingSignature),
+    has_next_session_plan: Boolean(event?.has_next_session_plan ?? event?.hasNextSessionPlan),
+    has_maintenance_probe: Boolean(event?.has_maintenance_probe ?? event?.hasMaintenanceProbe),
+    maintenance_probe_count: Number(event?.maintenance_probe_count ?? event?.maintenanceProbeCount ?? 0),
+    plan_item_count: Number(event?.plan_item_count ?? event?.planItemCount ?? 0)
+  };
+  return normalized;
+};
+
+const formatLongDate = (date: Date) =>
+  date.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' });
+
+const toggleArrayValue = (values: string[], value: string) =>
+  values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
+
+const getInitials = (name: any) =>
+  String(name || 'V')
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('') || 'V';
+
+export const ClinicalAgendaBoard = ({
+  agenda = [],
+  patients = [],
+  rooms = [],
+  teamMembers = [],
+  currentUser = null,
+  currentDate,
+  view = 'week',
+  onDateChange,
+  onViewChange,
+  onCreateAppointment,
+  onEditAppointment,
+  onConfirmAppointment,
+  onCancelAppointment,
+  onOpenPatient,
+  onStartSession,
+  theme = 'light'
+}: any) => {
+  const isDark = theme === 'dark';
+  const activeDate = currentDate instanceof Date ? currentDate : new Date(currentDate || Date.now());
+  const [selectedTherapistIds, setSelectedTherapistIds] = useState<string[]>([]);
+  const [selectedPatientIds, setSelectedPatientIds] = useState<string[]>([]);
+  const [selectedLocations, setSelectedLocations] = useState<string[]>([]);
+  const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+  const [patientSearch, setPatientSearch] = useState('');
+  const [significantOnly, setSignificantOnly] = useState(false);
+  const [improvementOnly, setImprovementOnly] = useState(false);
+  const [worseningOnly, setWorseningOnly] = useState(false);
+  const [alertsOnly, setAlertsOnly] = useState(false);
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    calendar: true,
+    team: true,
+    patients: true,
+    location: true,
+    type: true,
+    status: false
+  });
+  const [remoteEvents, setRemoteEvents] = useState<any[]>([]);
+  const [remoteState, setRemoteState] = useState<{ loading: boolean; error: string; loaded: boolean }>({
+    loading: false,
+    error: '',
+    loaded: false
+  });
+  const [selectedEvent, setSelectedEvent] = useState<any>(null);
+  const [eventDetail, setEventDetail] = useState<any>(null);
+  const [detailState, setDetailState] = useState<{ loading: boolean; error: string }>({ loading: false, error: '' });
+  const cacheRef = useRef<Map<string, any[]>>(new Map());
+
+  const visibleRange = useMemo(() => {
+    if (view === 'month') {
+      const start = new Date(activeDate.getFullYear(), activeDate.getMonth(), 1);
+      const end = new Date(activeDate.getFullYear(), activeDate.getMonth() + 1, 0);
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
+      return { start, end };
+    }
+    if (view === 'day') {
+      const start = new Date(activeDate);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(activeDate);
+      end.setHours(23, 59, 59, 999);
+      return { start, end };
+    }
+    const start = startOfWeekMonday(activeDate);
+    const end = addDays(start, 4);
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
+  }, [activeDate, view]);
+
+  const agendaVersion = useMemo(
+    () => (agenda || []).map((item: any) => `${item?.id || ''}:${item?.date || ''}:${item?.time || ''}:${item?.status || ''}`).join('|'),
+    [agenda]
+  );
+
+  useEffect(() => {
+    cacheRef.current.clear();
+  }, [agendaVersion]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const params = {
+      from: visibleRange.start.toISOString(),
+      to: visibleRange.end.toISOString(),
+      therapistId: selectedTherapistIds.join(','),
+      patientId: selectedPatientIds.join(','),
+      type: selectedTypes.join(','),
+      status: selectedStatuses.join(','),
+      limit: 180
+    };
+    const key = JSON.stringify(params);
+    const cached = cacheRef.current.get(key);
+    if (cached) {
+      setRemoteEvents(cached);
+      setRemoteState({ loading: false, error: '', loaded: true });
+      return;
+    }
+
+    setRemoteState((prev) => ({ ...prev, loading: true, error: '' }));
+    dataService.getCalendarEvents(params)
+      .then((result: any) => {
+        if (cancelled) return;
+        if (result?.success && Array.isArray(result?.data)) {
+          cacheRef.current.set(key, result.data);
+          setRemoteEvents(result.data);
+          setRemoteState({ loading: false, error: '', loaded: true });
+          return;
+        }
+        setRemoteState({ loading: false, error: result?.error || 'Não foi possível carregar a agenda agora.', loaded: false });
+      })
+      .catch(() => {
+        if (!cancelled) setRemoteState({ loading: false, error: 'Não foi possível carregar a agenda agora.', loaded: false });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    visibleRange.start,
+    visibleRange.end,
+    selectedTherapistIds.join(','),
+    selectedPatientIds.join(','),
+    selectedTypes.join(','),
+    selectedStatuses.join(',')
+  ]);
+
+  const localEvents = useMemo(() => (agenda || []).map(normalizeClinicalEvent), [agenda]);
+  const serverEvents = useMemo(() => (remoteEvents || []).map(normalizeClinicalEvent), [remoteEvents]);
+  const baseEvents = remoteState.loaded ? serverEvents : localEvents;
+
+  const selectedDateKey = toDateKey(activeDate);
+  const weekDays = useMemo(() => Array.from({ length: 5 }, (_, index) => addDays(startOfWeekMonday(activeDate), index)), [activeDate]);
+  const hourSlots = useMemo(() => Array.from({ length: HOUR_END - HOUR_START + 1 }, (_, index) => HOUR_START + index), []);
+
+  const matchesQuickFilters = (event: any) => {
+    const normalizedText = removeDiacritics(`${event?.status || ''} ${event?.clinicalTrend || ''} ${event?.interpretation || ''}`);
+    const isAlert = Boolean(event.has_maintenance_probe || event.has_pending_signature || event.has_report === false && normalizedText.includes('conclu') || normalizedText.includes('alert') || normalizedText.includes('regress') || normalizedText.includes('piora'));
+    const isSignificant = Boolean(event.has_next_session_plan || event.has_maintenance_probe || event.has_pending_signature || event.has_session_record || isAlert);
+    if (significantOnly && !isSignificant) return false;
+    if (alertsOnly && !isAlert) return false;
+    if (improvementOnly && !(normalizedText.includes('melhora') || normalizedText.includes('improvement'))) return false;
+    if (worseningOnly && !(normalizedText.includes('piora') || normalizedText.includes('regress') || normalizedText.includes('wors'))) return false;
+    return true;
+  };
+
+  const filteredEvents = useMemo(() => {
+    const fromTime = visibleRange.start.getTime();
+    const toTime = visibleRange.end.getTime();
+    return baseEvents
+      .filter((event: any) => {
+        const startTime = event.start.getTime();
+        if (startTime < fromTime || startTime > toTime) return false;
+        if (selectedTherapistIds.length > 0 && !selectedTherapistIds.includes(String(event.therapist_id || ''))) return false;
+        if (selectedPatientIds.length > 0 && !selectedPatientIds.includes(String(event.patient_id || ''))) return false;
+        if (selectedTypes.length > 0 && !selectedTypes.some((type) => removeDiacritics(event.type) === removeDiacritics(type))) return false;
+        if (selectedLocations.length > 0 && !selectedLocations.includes(classifyLocation(event))) return false;
+        if (selectedStatuses.length > 0) {
+          const status = removeDiacritics(event.status);
+          const matches = selectedStatuses.some((item) => {
+            if (item === 'session_registered') return event.has_session_record;
+            if (item === 'report_pending') return !event.has_report && status.includes('conclu');
+            if (item === 'signature_pending') return event.has_pending_signature;
+            return status.includes(removeDiacritics(item));
+          });
+          if (!matches) return false;
+        }
+        return matchesQuickFilters(event);
+      })
+      .sort((a: any, b: any) => a.start.getTime() - b.start.getTime());
+  }, [
+    baseEvents,
+    visibleRange,
+    selectedTherapistIds,
+    selectedPatientIds,
+    selectedTypes,
+    selectedLocations,
+    selectedStatuses,
+    significantOnly,
+    improvementOnly,
+    worseningOnly,
+    alertsOnly
+  ]);
+
+  const periodLabel = useMemo(() => {
+    if (view === 'month') return activeDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+    if (view === 'day') return activeDate.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
+    const start = visibleRange.start.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
+    const end = visibleRange.end.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
+    return `${start} - ${end}`;
+  }, [activeDate, view, visibleRange]);
+
+  const kpis = useMemo(() => {
+    const total = filteredEvents.length;
+    const registered = filteredEvents.filter((event: any) => event.has_session_record).length;
+    const plan = filteredEvents.filter((event: any) => event.has_next_session_plan).length;
+    const probes = filteredEvents.filter((event: any) => event.has_maintenance_probe).length;
+    const pending = filteredEvents.filter((event: any) => event.has_pending_signature || (!event.has_report && removeDiacritics(event.status).includes('conclu'))).length;
+    return { total, registered, plan, probes, pending };
+  }, [filteredEvents]);
+
+  const filteredPatientOptions = useMemo(() => {
+    const search = patientSearch.trim().toLowerCase();
+    const recentIds = new Set(baseEvents.slice(0, 30).map((event: any) => String(event.patient_id || '')).filter(Boolean));
+    return (patients || [])
+      .filter((patient: any) => !search || String(patient?.name || '').toLowerCase().includes(search))
+      .sort((a: any, b: any) => Number(recentIds.has(String(b?.id))) - Number(recentIds.has(String(a?.id))))
+      .slice(0, 8);
+  }, [patients, patientSearch, baseEvents]);
+
+  const moveDate = (direction: -1 | 1) => {
+    const next = new Date(activeDate);
+    if (view === 'month') next.setMonth(next.getMonth() + direction);
+    else if (view === 'week') next.setDate(next.getDate() + direction * 7);
+    else next.setDate(next.getDate() + direction);
+    onDateChange?.(next);
+  };
+
+  const moveMiniCalendarMonth = (direction: -1 | 1) => {
+    const next = new Date(activeDate);
+    next.setMonth(next.getMonth() + direction);
+    onDateChange?.(next);
+  };
+
+  const openEventDetail = (event: any) => {
+    const normalized = normalizeClinicalEvent(event);
+    setSelectedEvent(normalized);
+    setEventDetail(null);
+    setDetailState({ loading: true, error: '' });
+    dataService.getCalendarEventDetail(normalized.id)
+      .then((result: any) => {
+        if (result?.success) {
+          setEventDetail(result.data || null);
+          setDetailState({ loading: false, error: '' });
+          return;
+        }
+        setDetailState({ loading: false, error: result?.error || 'Não foi possível carregar os detalhes da sessão agora.' });
+      })
+      .catch(() => setDetailState({ loading: false, error: 'Não foi possível carregar os detalhes da sessão agora.' }));
+  };
+
+  const renderSection = (id: string, title: string, count: number | null, children: React.ReactNode) => {
+    const expanded = expandedSections[id] !== false;
+    return (
+      <div className={`border-b pb-4 last:border-b-0 last:pb-0 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
+        <button
+          type="button"
+          onClick={() => setExpandedSections((prev) => ({ ...prev, [id]: !expanded }))}
+          className="flex w-full items-center justify-between gap-3 py-2 text-left"
+        >
+          <span className={`text-[11px] font-bold uppercase tracking-[0.16em] ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>
+            {title}
+          </span>
+          <span className="flex items-center gap-2">
+            {count !== null && (
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-500'}`}>
+                {count}
+              </span>
+            )}
+            {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </span>
+        </button>
+        {expanded && <div className="pt-2">{children}</div>}
+      </div>
+    );
+  };
+
+  const renderMiniCalendar = () => {
+    const year = activeDate.getFullYear();
+    const month = activeDate.getMonth();
+    const first = new Date(year, month, 1);
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const firstDay = first.getDay();
+    const blanks = Array.from({ length: firstDay }, (_, index) => index);
+    const eventDays = new Set(baseEvents.map((event: any) => event.date));
+    return (
+      <div>
+        <div className="mb-3 flex items-center justify-between">
+          <button type="button" onClick={() => moveMiniCalendarMonth(-1)} className={`rounded-xl p-2 ${isDark ? 'hover:bg-slate-800' : 'hover:bg-slate-100'}`} aria-label="Mês anterior">
+            <ChevronLeft size={16} />
+          </button>
+          <p className={`text-sm font-bold capitalize ${isDark ? 'text-white' : 'text-slate-900'}`}>
+            {activeDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
+          </p>
+          <button type="button" onClick={() => moveMiniCalendarMonth(1)} className={`rounded-xl p-2 ${isDark ? 'hover:bg-slate-800' : 'hover:bg-slate-100'}`} aria-label="Próximo mês">
+            <ChevronRight size={16} />
+          </button>
+        </div>
+        <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold uppercase text-slate-400">
+          {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}
+        </div>
+        <div className="mt-2 grid grid-cols-7 gap-1">
+          {blanks.map((item) => <span key={`blank-${item}`} />)}
+          {Array.from({ length: daysInMonth }, (_, index) => {
+            const day = index + 1;
+            const date = new Date(year, month, day);
+            const key = toDateKey(date);
+            const selected = key === selectedDateKey;
+            const today = key === toDateKey(new Date());
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => onDateChange?.(date)}
+                className={`relative h-8 rounded-xl text-xs font-semibold transition-all ${
+                  selected
+                    ? 'bg-[#7a32fc] text-white shadow-lg shadow-violet-500/20'
+                    : today
+                      ? isDark ? 'bg-slate-800 text-sky-200' : 'bg-sky-50 text-sky-700'
+                      : isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                {day}
+                {eventDays.has(key) && <span className={`absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full ${selected ? 'bg-white' : 'bg-[#7a32fc]'}`} />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const chipClass = (active: boolean) =>
+    `inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition-all ${
+      active
+        ? 'border-[#7a32fc]/30 bg-[#7a32fc] text-white shadow-sm'
+        : isDark ? 'border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+    }`;
+
+  const renderSidebarContent = () => (
+    <div className="space-y-4">
+      {renderSection('calendar', 'Mini calendário', null, renderMiniCalendar())}
+      {renderSection('team', 'Equipe', selectedTherapistIds.length, (
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => setSelectedTherapistIds([])} className={chipClass(selectedTherapistIds.length === 0)}>
+              Todos
+            </button>
+            {currentUser?.id && (
+              <button type="button" onClick={() => setSelectedTherapistIds([String(currentUser.id)])} className={chipClass(selectedTherapistIds.includes(String(currentUser.id)))}>
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/25 text-[10px]">{getInitials(currentUser.name || currentUser.email)}</span>
+                Eu
+              </button>
+            )}
+          </div>
+          <div className="space-y-2">
+            {(teamMembers || []).slice(0, 8).map((member: any) => (
+              <button
+                type="button"
+                key={member.id || member.label}
+                onClick={() => setSelectedTherapistIds((prev) => toggleArrayValue(prev, String(member.id || member.label)))}
+                className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-2 text-left transition-all ${
+                  selectedTherapistIds.includes(String(member.id || member.label))
+                    ? 'border-[#7a32fc]/40 bg-[#7a32fc]/10'
+                    : isDark ? 'border-slate-700 bg-slate-900 hover:bg-slate-800' : 'border-slate-100 bg-white hover:bg-slate-50'
+                }`}
+              >
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[11px] font-bold text-white">
+                  {getInitials(member.label || member.name)}
+                </span>
+                <span className="min-w-0">
+                  <span className={`block truncate text-xs font-semibold ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>{member.label || member.name}</span>
+                  {member.specialty && <span className="block truncate text-[10px] text-slate-400">{member.specialty}</span>}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+      {renderSection('patients', 'Paciente', selectedPatientIds.length, (
+        <div className="space-y-3">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              value={patientSearch}
+              onChange={(event) => setPatientSearch(event.target.value)}
+              placeholder="Buscar paciente..."
+              className={`w-full rounded-2xl border py-2.5 pl-9 pr-3 text-sm outline-none transition-all ${
+                isDark ? 'border-slate-700 bg-slate-900 text-slate-100 placeholder:text-slate-500' : 'border-slate-200 bg-white text-slate-700 placeholder:text-slate-400'
+              }`}
+            />
+          </div>
+          <div className="space-y-2">
+            {filteredPatientOptions.map((patient: any) => (
+              <button
+                type="button"
+                key={patient.id || patient.name}
+                onClick={() => setSelectedPatientIds((prev) => toggleArrayValue(prev, String(patient.id)))}
+                className={chipClass(selectedPatientIds.includes(String(patient.id)))}
+              >
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/25 text-[10px]">{getInitials(patient.name)}</span>
+                <span className="max-w-[170px] truncate">{patient.name}</span>
+              </button>
+            ))}
+            {filteredPatientOptions.length === 0 && <p className="text-xs text-slate-400">Nenhum paciente encontrado.</p>}
+          </div>
+        </div>
+      ))}
+      {renderSection('location', 'Local/Sala', selectedLocations.length, (
+        <div className="flex flex-wrap gap-2">
+          {LOCATION_FILTERS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button key={item.value} type="button" onClick={() => setSelectedLocations((prev) => toggleArrayValue(prev, item.value))} className={chipClass(selectedLocations.includes(item.value))}>
+                <Icon size={13} />
+                {item.label}
+              </button>
+            );
+          })}
+          {(rooms || []).slice(0, 4).map((room: any) => (
+            <span key={room.id || room.name} className={`rounded-xl px-3 py-2 text-xs font-semibold ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-500'}`}>
+              {room.name}
+            </span>
+          ))}
+        </div>
+      ))}
+      {renderSection('type', 'Tipo de sessão', selectedTypes.length, (
+        <div className="flex flex-wrap gap-2">
+          {CLINICAL_SESSION_TYPES.map((type) => {
+            const style = getSessionTypeStyle(type);
+            const active = selectedTypes.includes(type);
+            return (
+              <button key={type} type="button" onClick={() => setSelectedTypes((prev) => toggleArrayValue(prev, type))} className={`${chipClass(active)} ${active ? '' : style.badge}`}>
+                <span className={`h-2 w-2 rounded-full ${style.stripe}`} />
+                {type}
+              </button>
+            );
+          })}
+        </div>
+      ))}
+      {renderSection('status', 'Status e pendências', selectedStatuses.length, (
+        <div className="flex flex-wrap gap-2">
+          {CLINICAL_STATUS_OPTIONS.map((item) => (
+            <button key={item.value} type="button" onClick={() => setSelectedStatuses((prev) => toggleArrayValue(prev, item.value))} className={chipClass(selectedStatuses.includes(item.value))}>
+              {item.label}
+            </button>
+          ))}
+        </div>
+      ))}
+      <div className="space-y-2 pt-1">
+        {[
+          { label: 'Somente significativas', value: significantOnly, set: setSignificantOnly },
+          { label: 'Somente melhora', value: improvementOnly, set: setImprovementOnly },
+          { label: 'Somente piora', value: worseningOnly, set: setWorseningOnly },
+          { label: 'Somente alertas', value: alertsOnly, set: setAlertsOnly }
+        ].map((item) => (
+          <label key={item.label} className={`flex items-center justify-between rounded-2xl border px-3 py-2 text-xs font-semibold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-200' : 'border-slate-100 bg-white text-slate-600'}`}>
+            {item.label}
+            <input type="checkbox" checked={item.value} onChange={(event) => item.set(event.target.checked)} className="h-4 w-4 rounded border-slate-300 text-[#7a32fc]" />
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+
+  const eventsByDate = useMemo(() => {
+    const grouped: Record<string, any[]> = {};
+    filteredEvents.forEach((event: any) => {
+      if (!grouped[event.date]) grouped[event.date] = [];
+      grouped[event.date].push(event);
+    });
+    return grouped;
+  }, [filteredEvents]);
+
+  const renderIndicators = (event: any) => {
+    const indicators = [
+      event.has_next_session_plan ? { label: 'Plano', icon: Zap, className: 'bg-violet-100 text-violet-700' } : null,
+      event.has_maintenance_probe ? { label: `Probe${event.maintenance_probe_count > 1 ? ` ${event.maintenance_probe_count}` : ''}`, icon: AlertCircle, className: 'bg-amber-100 text-amber-700' } : null,
+      event.has_session_record ? { label: 'Registrada', icon: CheckCircle2, className: 'bg-emerald-100 text-emerald-700' } : null,
+      event.has_pending_signature ? { label: 'Assinatura', icon: ClipboardCheck, className: 'bg-rose-100 text-rose-700' } : null,
+      !event.has_report && removeDiacritics(event.status).includes('conclu') ? { label: 'Relatório', icon: FileText, className: 'bg-orange-100 text-orange-700' } : null
+    ].filter(Boolean) as any[];
+    if (indicators.length === 0) return null;
+    return (
+      <div className="mt-2 flex flex-wrap gap-1">
+        {indicators.slice(0, 3).map((item) => {
+          const Icon = item.icon;
+          return (
+            <span key={item.label} className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-bold ${item.className}`}>
+              <Icon size={10} />
+              {item.label}
+            </span>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderEventCard = (event: any, compact = false) => {
+    const style = getSessionTypeStyle(event.type);
+    const status = getClinicalStatusStyle(event.status, event);
+    const StatusIcon = status.icon;
+    return (
+      <button
+        key={event.id}
+        type="button"
+        onClick={(clickEvent) => {
+          clickEvent.stopPropagation();
+          openEventDetail(event);
+        }}
+        className={`group relative w-full overflow-hidden rounded-xl border p-2 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${style.card}`}
+      >
+        <span className={`absolute inset-y-0 left-0 w-1 ${style.stripe}`} />
+        <div className="pl-1">
+          <div className="flex items-start justify-between gap-2">
+            <span className="text-[10px] font-semibold leading-tight opacity-75">
+              {event.time} - {event.endTime}
+            </span>
+            <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${status.className}`}>
+              <StatusIcon size={10} />
+              {!compact && status.label}
+            </span>
+          </div>
+          <p className={`mt-1 truncate text-sm font-semibold leading-tight ${compact ? 'text-xs' : ''}`}>{event.patientName}</p>
+          <p className="mt-1 truncate text-[11px] font-medium opacity-75">
+            {style.label} {event.room ? `· ${event.room}` : event.location ? `· ${event.location}` : ''}
+          </p>
+          {!compact && <p className="mt-1 truncate text-[10px] opacity-65">{event.therapistName}</p>}
+          {!compact && renderIndicators(event)}
+        </div>
+      </button>
+    );
+  };
+
+  const renderTimeline = (days: Date[]) => {
+    const now = new Date();
+    const timelineTop = ((now.getHours() * 60 + now.getMinutes()) - HOUR_START * 60) / 60 * HOUR_HEIGHT;
+    const showLine = now.getHours() >= HOUR_START && now.getHours() <= HOUR_END;
+    const gridHeight = (HOUR_END - HOUR_START + 1) * HOUR_HEIGHT;
+    return (
+      <div className={`overflow-x-auto rounded-3xl border ${isDark ? 'border-slate-700 bg-slate-950' : 'border-slate-200 bg-white'}`}>
+        <div className={`min-w-[980px] grid ${days.length === 1 ? 'grid-cols-[82px_1fr]' : 'grid-cols-[82px_repeat(5,minmax(0,1fr))]'}`}>
+          <div className={`sticky left-0 z-20 border-b px-3 py-4 text-[10px] font-bold uppercase tracking-[0.18em] ${isDark ? 'border-slate-700 bg-slate-950 text-slate-400' : 'border-slate-200 bg-white text-slate-400'}`}>
+            Hora
+          </div>
+          {days.map((day) => {
+            const key = toDateKey(day);
+            const isToday = key === toDateKey(new Date());
+            return (
+              <div key={key} className={`border-b border-l px-4 py-3 text-center ${isDark ? 'border-slate-700 bg-slate-950' : 'border-slate-200 bg-white'}`}>
+                <p className={`text-xs font-semibold capitalize ${isToday ? 'text-[#7a32fc]' : isDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                  {day.toLocaleDateString('pt-BR', { weekday: 'short' })}
+                </p>
+                <p className={`text-2xl font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{day.getDate()}</p>
+              </div>
+            );
+          })}
+
+          <div className={`sticky left-0 z-10 ${isDark ? 'bg-slate-950' : 'bg-white'}`} style={{ height: gridHeight }}>
+            {hourSlots.map((hour) => (
+              <div key={hour} className={`h-[72px] border-b px-3 pt-2 text-xs font-semibold ${isDark ? 'border-slate-800 text-slate-500' : 'border-slate-100 text-slate-400'}`}>
+                {pad2(hour)}:00
+              </div>
+            ))}
+          </div>
+          {days.map((day) => {
+            const key = toDateKey(day);
+            const dayEvents = eventsByDate[key] || [];
+            const isToday = key === toDateKey(new Date());
+            return (
+              <div
+                key={key}
+                className={`relative border-l ${isDark ? 'border-slate-800 bg-slate-950' : 'border-slate-100 bg-white'}`}
+                style={{ height: gridHeight }}
+                onClick={() => onCreateAppointment?.(key, '08:00')}
+              >
+                {hourSlots.map((hour) => (
+                  <div key={`${key}-${hour}`} className={`h-[72px] border-b ${isDark ? 'border-slate-800/80' : 'border-slate-100'}`} />
+                ))}
+                {isToday && showLine && (
+                  <div className="pointer-events-none absolute left-0 right-0 z-20" style={{ top: timelineTop }}>
+                    <div className="relative h-[2px] bg-sky-500">
+                      <span className="absolute -left-1 -top-1.5 h-3 w-3 rounded-full bg-sky-500" />
+                    </div>
+                  </div>
+                )}
+                {dayEvents.map((event: any, index: number) => {
+                  const startMinutes = event.start.getHours() * 60 + event.start.getMinutes();
+                  const endMinutes = event.end.getHours() * 60 + event.end.getMinutes();
+                  const top = Math.max(0, ((startMinutes - HOUR_START * 60) / 60) * HOUR_HEIGHT);
+                  const height = Math.max(48, ((endMinutes - startMinutes) / 60) * HOUR_HEIGHT - 6);
+                  const sameStartIndex = dayEvents.slice(0, index).filter((item: any) => item.time === event.time).length;
+                  return (
+                    <div
+                      key={event.id}
+                      className="absolute z-10 px-2"
+                      style={{
+                        top,
+                        height,
+                        left: `${sameStartIndex * 4 + 4}%`,
+                        right: '4%'
+                      }}
+                    >
+                      {renderEventCard(event, height < 72)}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const renderMobileList = () => {
+    const dayEvents = eventsByDate[selectedDateKey] || [];
+    return (
+      <div className={`rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-slate-200 bg-white'}`}>
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">Hoje no foco</p>
+            <h3 className={`text-base font-bold capitalize ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatLongDate(activeDate)}</h3>
+          </div>
+          <button type="button" onClick={() => onCreateAppointment?.(selectedDateKey, '08:00')} className="rounded-2xl bg-[#7a32fc] p-3 text-white shadow-lg shadow-violet-500/20">
+            <Plus size={18} />
+          </button>
+        </div>
+        <div className="space-y-3">
+          {dayEvents.map((event: any) => renderEventCard(event))}
+          {dayEvents.length === 0 && <p className="rounded-2xl border border-dashed border-slate-200 py-8 text-center text-sm text-slate-400">Nenhuma sessão neste período.</p>}
+        </div>
+      </div>
+    );
+  };
+
+  const renderMonthView = () => {
+    const year = activeDate.getFullYear();
+    const month = activeDate.getMonth();
+    const first = new Date(year, month, 1);
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const blanks = Array.from({ length: first.getDay() }, (_, index) => index);
+    return (
+      <div className={`rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-slate-200 bg-white'}`}>
+        <div className="grid grid-cols-7 gap-2 text-center text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+          {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((day) => <span key={day}>{day}</span>)}
+        </div>
+        <div className="mt-3 grid grid-cols-7 gap-2">
+          {blanks.map((blank) => <div key={`month-blank-${blank}`} />)}
+          {Array.from({ length: daysInMonth }, (_, index) => {
+            const day = index + 1;
+            const date = new Date(year, month, day);
+            const key = toDateKey(date);
+            const items = eventsByDate[key] || [];
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => {
+                  onDateChange?.(date);
+                  onViewChange?.('day');
+                }}
+                className={`min-h-[108px] rounded-2xl border p-2 text-left transition-all ${
+                  key === selectedDateKey
+                    ? 'border-[#7a32fc]/40 bg-[#7a32fc]/5'
+                    : isDark ? 'border-slate-800 bg-slate-900 hover:bg-slate-800' : 'border-slate-100 bg-slate-50/60 hover:bg-white'
+                }`}
+              >
+                <span className={`text-xs font-bold ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>{day}</span>
+                <div className="mt-2 space-y-1">
+                  {items.slice(0, 2).map((event: any) => {
+                    const style = getSessionTypeStyle(event.type);
+                    return (
+                      <span key={event.id} className={`block truncate rounded-lg border px-2 py-1 text-[10px] font-semibold ${style.badge}`}>
+                        {event.time} {event.patientName}
+                      </span>
+                    );
+                  })}
+                  {items.length > 2 && <span className="block text-[10px] font-bold text-slate-400">+{items.length - 2} sessões</span>}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const detail = eventDetail || {};
+  const detailEvent = normalizeClinicalEvent(detail.event || selectedEvent || {});
+  const planItems = Array.isArray(detail.nextSessionPlanItems) ? detail.nextSessionPlanItems : [];
+  const maintenanceProbes = [
+    ...(Array.isArray(detail.maintenanceProbes) ? detail.maintenanceProbes : []),
+    ...(Array.isArray(detail.overdueMaintenanceProbes) ? detail.overdueMaintenanceProbes : [])
+  ];
+  const recommendations = Array.isArray(detail.acceptedRecommendations) ? detail.acceptedRecommendations : [];
+
+  return (
+    <div className="space-y-4 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:pb-4">
+      <div className={`rounded-[28px] border p-4 shadow-sm ${isDark ? 'border-slate-700 bg-[#101827] text-slate-100' : 'border-slate-100 bg-white text-slate-900'}`}>
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-[#7a32fc]">Agenda clínica</p>
+            <h2 className="mt-1 text-2xl font-bold tracking-tight">Operação semanal</h2>
+            <p className={`mt-1 text-sm ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>Sessões, plano sugerido, probes e pendências em um só lugar.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => onDateChange?.(new Date())} className={`rounded-2xl border px-4 py-2 text-xs font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
+              Hoje
+            </button>
+            <button type="button" onClick={() => moveDate(-1)} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Período anterior">
+              <ChevronLeft size={18} />
+            </button>
+            <button type="button" onClick={() => moveDate(1)} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Próximo período">
+              <ChevronRight size={18} />
+            </button>
+            <div className="min-w-[190px] text-sm font-bold capitalize">{periodLabel}</div>
+            <div className={`flex rounded-2xl p-1 ${isDark ? 'bg-slate-900' : 'bg-slate-100'}`}>
+              {[
+                { value: 'day', label: 'Dia', icon: CalendarIcon },
+                { value: 'week', label: 'Semana', icon: CalendarRange },
+                { value: 'month', label: 'Mês', icon: CalendarDays }
+              ].map((item) => {
+                const Icon = item.icon;
+                const active = view === item.value;
+                return (
+                  <button
+                    key={item.value}
+                    type="button"
+                    onClick={() => onViewChange?.(item.value as ClinicalAgendaView)}
+                    className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold transition-all ${active ? 'bg-white text-[#7a32fc] shadow-sm' : isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-800'}`}
+                  >
+                    <Icon size={14} />
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+            <button type="button" onClick={() => setFilterSheetOpen(true)} className="inline-flex rounded-2xl bg-slate-900 p-2 text-white xl:hidden" aria-label="Abrir filtros">
+              <Filter size={18} />
+            </button>
+            <button type="button" onClick={() => onCreateAppointment?.(selectedDateKey, '08:00')} className="inline-flex items-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-2 text-xs font-bold text-white shadow-lg shadow-violet-500/20">
+              <Plus size={16} />
+              Nova sessão
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-5">
+          {[
+            { label: 'Mudanças', value: kpis.total, icon: BarChart3, color: 'text-slate-700', bg: 'bg-slate-100' },
+            { label: 'Registradas', value: kpis.registered, icon: CheckCircle2, color: 'text-emerald-700', bg: 'bg-emerald-100' },
+            { label: 'Com plano', value: kpis.plan, icon: Zap, color: 'text-violet-700', bg: 'bg-violet-100' },
+            { label: 'Probes', value: kpis.probes, icon: AlertCircle, color: 'text-amber-700', bg: 'bg-amber-100' },
+            { label: 'Pendências', value: kpis.pending, icon: ClipboardCheck, color: 'text-rose-700', bg: 'bg-rose-100' }
+          ].map((item) => {
+            const Icon = item.icon;
+            return (
+              <div key={item.label} className={`rounded-2xl border px-4 py-3 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/80'}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">{item.label}</p>
+                  <span className={`rounded-xl p-1.5 ${item.bg} ${item.color}`}><Icon size={14} /></span>
+                </div>
+                <p className={`mt-2 text-2xl font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{item.value}</p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <aside className={`hidden rounded-[28px] border p-4 shadow-sm xl:block ${isDark ? 'border-slate-700 bg-[#101827] text-slate-100' : 'border-slate-100 bg-white text-slate-900'}`}>
+          {renderSidebarContent()}
+        </aside>
+        <main className="min-w-0 space-y-4">
+          {remoteState.loading && (
+            <div className={`flex items-center gap-2 rounded-2xl border px-4 py-3 text-sm font-semibold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-100 bg-white text-slate-500'}`}>
+              <Loader2 size={16} className="animate-spin" />
+              Carregando agenda...
+            </div>
+          )}
+          {remoteState.error && !remoteState.loaded && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+              {remoteState.error}
+            </div>
+          )}
+          <div className="xl:hidden">{renderMobileList()}</div>
+          <div className="hidden xl:block">
+            {view === 'month' ? renderMonthView() : renderTimeline(view === 'day' ? [activeDate] : weekDays)}
+          </div>
+          {filteredEvents.length === 0 && !remoteState.loading && (
+            <div className={`rounded-3xl border border-dashed px-6 py-10 text-center ${isDark ? 'border-slate-700 bg-slate-900 text-slate-400' : 'border-slate-200 bg-white text-slate-400'}`}>
+              <Stethoscope className="mx-auto mb-3" size={24} />
+              <p className="text-sm font-semibold">
+                {selectedTherapistIds.length || selectedPatientIds.length || selectedTypes.length || selectedStatuses.length || selectedLocations.length || significantOnly || alertsOnly
+                  ? 'Nenhum resultado para os filtros selecionados.'
+                  : 'Nenhuma sessão neste período.'}
+              </p>
+            </div>
+          )}
+        </main>
+      </div>
+
+      {filterSheetOpen && (
+        <div className="fixed inset-0 z-[145] flex items-end bg-black/40 p-3 backdrop-blur-sm xl:hidden" onClick={() => setFilterSheetOpen(false)}>
+          <div className={`max-h-[88vh] w-full overflow-y-auto rounded-t-[28px] p-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] shadow-2xl ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`} onClick={(event) => event.stopPropagation()}>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-lg font-bold">Filtros da agenda</h3>
+              <button type="button" onClick={() => setFilterSheetOpen(false)} className="rounded-xl p-2 hover:bg-slate-100">
+                <X size={18} />
+              </button>
+            </div>
+            {renderSidebarContent()}
+          </div>
+        </div>
+      )}
+
+      {selectedEvent && (
+        <div className="fixed inset-0 z-[140] flex items-end justify-center bg-black/40 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => setSelectedEvent(null)}>
+          <div className={`max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-[28px] p-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] shadow-2xl sm:rounded-[28px] sm:p-6 ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`} onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase ${getSessionTypeStyle(detailEvent.type).badge}`}>
+                    {detailEvent.type}
+                  </span>
+                  <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase ${getClinicalStatusStyle(detailEvent.status, detailEvent).className}`}>
+                    {getClinicalStatusStyle(detailEvent.status, detailEvent).label}
+                  </span>
+                </div>
+                <h3 className="text-xl font-bold">{detailEvent.patientName}</h3>
+                <p className={`mt-1 text-sm ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                  {formatLongDate(detailEvent.start)} · {detailEvent.time} - {detailEvent.endTime}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => onEditAppointment?.(detailEvent)} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Editar sessão">
+                  <Edit2 size={18} />
+                </button>
+                <button type="button" onClick={() => setSelectedEvent(null)} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Fechar detalhes">
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {detailState.loading && (
+              <div className="mt-5 flex items-center gap-2 rounded-2xl bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-500">
+                <Loader2 size={16} className="animate-spin" />
+                Carregando detalhes da sessão...
+              </div>
+            )}
+            {detailState.error && (
+              <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+                {detailState.error}
+              </div>
+            )}
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              {[
+                { label: 'Duração', value: `${Math.max(1, Math.round((detailEvent.end.getTime() - detailEvent.start.getTime()) / 60000))} min`, icon: Clock },
+                { label: 'Sala/local', value: detailEvent.room || detailEvent.location || 'Não informado', icon: MapPin },
+                { label: 'Equipe', value: detailEvent.therapistName || 'Equipe', icon: Users },
+                { label: 'Responsável', value: detailEvent.therapistName || 'Não informado', icon: User }
+              ].map((item) => {
+                const Icon = item.icon;
+                return (
+                  <div key={item.label} className={`rounded-2xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/70'}`}>
+                    <p className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                      <Icon size={13} />
+                      {item.label}
+                    </p>
+                    <p className={`mt-2 text-sm font-semibold ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>{item.value}</p>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <button type="button" onClick={() => onStartSession?.(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/20">
+                <Play size={16} />
+                Iniciar sessão
+              </button>
+              <button type="button" onClick={() => onOpenPatient?.(detailEvent.patientId, { tab: 'history' }, detailEvent.patientName)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
+                <FileText size={16} />
+                Ver prontuário
+              </button>
+              <button type="button" onClick={() => onOpenPatient?.(detailEvent.patientId, { tab: 'plan' }, detailEvent.patientName)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
+                <Zap size={16} />
+                Ver plano sugerido
+              </button>
+              <button type="button" onClick={() => onOpenPatient?.(detailEvent.patientId, { tab: 'report' }, detailEvent.patientName)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
+                <FileText size={16} />
+                Ver relatório
+              </button>
+              <button type="button" onClick={() => onOpenPatient?.(detailEvent.patientId, { tab: 'history' }, detailEvent.patientName)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
+                <BarChart3 size={16} />
+                Ver gráficos
+              </button>
+              <button type="button" onClick={() => onEditAppointment?.(detailEvent)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
+                <RefreshCcw size={16} />
+                Remarcar
+              </button>
+              <button type="button" onClick={() => onCancelAppointment?.(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-200 px-4 py-3 text-sm font-bold text-rose-600 hover:bg-rose-50">
+                <Ban size={16} />
+                Cancelar
+              </button>
+            </div>
+
+            {detailEvent.has_session_record && (
+              <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+                Sessão registrada. Use os botões acima para abrir relatório e gráficos.
+              </div>
+            )}
+
+            <div className="mt-5 space-y-3">
+              {planItems.length > 0 && (
+                <div className={`rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-violet-100 bg-violet-50/70'}`}>
+                  <h4 className="flex items-center gap-2 text-sm font-bold">
+                    <Zap size={16} className="text-violet-600" />
+                    Plano sugerido para esta sessão
+                  </h4>
+                  <div className="mt-3 space-y-2">
+                    {planItems.slice(0, 6).map((item: any, index: number) => (
+                      <div key={item.id || index} className="rounded-2xl bg-white/70 px-3 py-2 text-sm">
+                        <p className="font-semibold text-slate-800">{item.instructions || item.planned_trial_type || 'Item planejado'}</p>
+                        <p className="mt-1 text-xs text-slate-500">Prioridade: {item.priority || 'média'} · Ação: {item.planned_prompt || item.planned_trial_type || 'coleta clínica'}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {maintenanceProbes.length > 0 && (
+                <div className={`rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-amber-100 bg-amber-50/70'}`}>
+                  <h4 className="flex items-center gap-2 text-sm font-bold">
+                    <AlertCircle size={16} className="text-amber-600" />
+                    Maintenance Probes pendentes
+                  </h4>
+                  <div className="mt-3 space-y-2">
+                    {maintenanceProbes.slice(0, 6).map((probe: any, index: number) => {
+                      const raw = typeof probe.raw_payload === 'object' && probe.raw_payload ? probe.raw_payload : {};
+                      return (
+                        <div key={probe.id || index} className="rounded-2xl bg-white/70 px-3 py-2 text-sm">
+                          <p className="font-semibold text-slate-800">{raw.targetName || raw.target_name || 'Target em manutenção'}</p>
+                          <p className="mt-1 text-xs text-slate-500">Marco clínico: {probe.target_due_date ? new Date(probe.target_due_date).toLocaleDateString('pt-BR') : 'a definir'} · Status: {probe.status || 'PENDING'}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {recommendations.length > 0 && (
+                <div className={`rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50'}`}>
+                  <h4 className="flex items-center gap-2 text-sm font-bold">
+                    <ClipboardCheck size={16} className="text-slate-600" />
+                    Recomendações aceitas
+                  </h4>
+                  <div className="mt-3 space-y-2">
+                    {recommendations.slice(0, 4).map((item: any, index: number) => (
+                      <div key={item.id || index} className="rounded-2xl bg-white px-3 py-2 text-sm">
+                        <p className="font-semibold text-slate-800">{item.title || item.summary || 'Recomendação clínica aceita'}</p>
+                        <p className="mt-1 text-xs text-slate-500">{item.suggested_action || item.rationale || 'Aplicar no plano da próxima sessão.'}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

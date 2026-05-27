@@ -2513,6 +2513,27 @@ const APPOINTMENT_SELECT = [
   'updated_at'
 ].join(',');
 
+const CALENDAR_EVENT_SELECT = [
+  'id',
+  'clinic_id',
+  'patient_id',
+  'patient_name',
+  'therapist_id',
+  'therapist_name',
+  'scheduled_at',
+  'date',
+  'time',
+  'duration_minutes',
+  'approach',
+  'status',
+  'notes',
+  'source_payload',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const CALENDAR_EVENT_DETAIL_SELECT = CALENDAR_EVENT_SELECT;
+
 const ACTIVITY_LOG_SELECT = [
   'id',
   'user_id',
@@ -16140,6 +16161,400 @@ async function startServer() {
     if (organizationId) return query.eq('organization_id', organizationId);
     return query;
   };
+
+  const parseCalendarFilterList = (value: unknown, max = 24) =>
+    String(Array.isArray(value) ? value.join(',') : value || '')
+      .split(',')
+      .map((item) => sanitizeString(item, 120))
+      .filter(Boolean)
+      .slice(0, max);
+
+  const parseCalendarRangeParams = (query: any) => {
+    const now = new Date();
+    const fallbackFrom = new Date(now);
+    fallbackFrom.setHours(0, 0, 0, 0);
+    const fallbackTo = new Date(fallbackFrom);
+    fallbackTo.setDate(fallbackTo.getDate() + 7);
+    fallbackTo.setHours(23, 59, 59, 999);
+    const fromIso = sanitizeIsoDateTime(query?.from || query?.time_min || query?.timeMin, fallbackFrom.toISOString());
+    const toIso = sanitizeIsoDateTime(query?.to || query?.time_max || query?.timeMax, fallbackTo.toISOString());
+    const fromTime = new Date(fromIso).getTime();
+    const toTime = new Date(toIso).getTime();
+    if (!Number.isFinite(fromTime) || !Number.isFinite(toTime) || toTime < fromTime) {
+      return { ok: false as const, fromIso, toIso, limit: parseBoundedListLimit(query?.limit, 120, 200) };
+    }
+    return {
+      ok: true as const,
+      fromIso,
+      toIso,
+      limit: parseBoundedListLimit(query?.limit, 120, 200)
+    };
+  };
+
+  const parseCalendarSourcePayload = (value: any) => {
+    if (!value) return {};
+    if (typeof value === 'object' && !Array.isArray(value)) return value;
+    if (typeof value !== 'string') return {};
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const readCalendarBooleanFlag = (source: any, keys: string[]) =>
+    keys.some((key) => {
+      const value = source?.[key];
+      if (typeof value === 'boolean') return value;
+      if (typeof value === 'string') return ['1', 'true', 'yes', 'sim', 'pending', 'pendente'].includes(value.toLowerCase());
+      return Boolean(value);
+    });
+
+  const buildCalendarAppointmentStart = (row: any) => {
+    const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
+    const scheduledAt = row?.scheduled_at || row?.scheduledAt || source?.scheduled_at || source?.scheduledAt || source?.start_time || source?.startTime;
+    if (scheduledAt) {
+      const date = new Date(scheduledAt);
+      if (!Number.isNaN(date.getTime())) return date;
+    }
+    const dateKey = sanitizeDate(row?.date || source?.date);
+    const rawTime = sanitizeString(row?.time || source?.time || '08:00', 12);
+    const time = /^\d{2}:\d{2}$/.test(rawTime) ? `${rawTime}:00` : rawTime;
+    const date = new Date(`${dateKey || new Date().toISOString().slice(0, 10)}T${time || '08:00:00'}`);
+    return Number.isNaN(date.getTime()) ? new Date() : date;
+  };
+
+  const getCalendarAppointmentDuration = (row: any) => {
+    const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
+    const duration = Number(
+      row?.duration_minutes ||
+      row?.durationMinutes ||
+      source?.duration_minutes ||
+      source?.durationMinutes ||
+      source?.duration ||
+      50
+    );
+    return Number.isFinite(duration) && duration > 0 ? Math.min(360, Math.round(duration)) : 50;
+  };
+
+  const normalizeCalendarAppointmentRow = (row: any, counters: any = {}) => {
+    const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
+    const start = buildCalendarAppointmentStart(row);
+    const end = new Date(start.getTime() + getCalendarAppointmentDuration(row) * 60 * 1000);
+    const appointmentId = sanitizeString(row?.id || source?.id, 180);
+    const patientId = sanitizeString(row?.patient_id || row?.patientId || source?.patient_id || source?.patientId, 120);
+    const status = normalizeAppointmentStatusForUi(row?.status || source?.status || 'pending');
+    const statusText = sanitizeString(row?.status || source?.status, 80).toLowerCase();
+    const hasSessionRecord =
+      readCalendarBooleanFlag(source, ['has_session_record', 'hasSessionRecord', 'session_registered', 'sessionRegistered', 'registeredSession']) ||
+      /registered|registrad|completed|conclu/.test(statusText);
+    const hasReport = readCalendarBooleanFlag(source, ['has_report', 'hasReport', 'report_ready', 'reportReady', 'reportId', 'report_id']);
+    const hasPendingSignature = readCalendarBooleanFlag(source, ['has_pending_signature', 'hasPendingSignature', 'pendingSignature', 'signaturePending']);
+    const planCount = Number(counters.planCountByPatient?.get(patientId) || source?.plan_item_count || source?.planItemCount || 0);
+    const probeCount = Number(counters.probeCountByAppointment?.get(appointmentId) || source?.maintenance_probe_count || source?.maintenanceProbeCount || 0);
+    const room = sanitizeString(
+      source?.roomDisplayName ||
+      source?.roomName ||
+      source?.room_name ||
+      source?.room ||
+      row?.roomDisplayName ||
+      row?.roomName ||
+      row?.room,
+      180
+    );
+    const location = sanitizeString(
+      source?.location ||
+      source?.locationType ||
+      source?.local ||
+      source?.place ||
+      (String(room || '').toLowerCase().includes('online') ? 'online' : ''),
+      120
+    );
+
+    return {
+      id: appointmentId,
+      patient_id: patientId || null,
+      patient_name: sanitizeString(row?.patient_name || row?.patientName || source?.patientName || source?.name || source?.patient_name, 180) || 'Paciente',
+      therapist_id: sanitizeString(row?.therapist_id || row?.therapistId || source?.therapist_id || source?.therapistId || source?.professionalId, 120) || null,
+      therapist_name: sanitizeString(row?.therapist_name || row?.therapistName || source?.therapistName || source?.professional || source?.therapist_name, 180) || 'Equipe',
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
+      type: sanitizeString(row?.approach || row?.type || source?.approach || source?.type, 120) || 'Sessão',
+      status,
+      location: location || (room ? 'sala' : 'clinica'),
+      room: room || null,
+      has_session_record: hasSessionRecord,
+      has_report: hasReport,
+      has_pending_signature: hasPendingSignature,
+      has_next_session_plan: planCount > 0 || readCalendarBooleanFlag(source, ['has_next_session_plan', 'hasNextSessionPlan']),
+      has_maintenance_probe: probeCount > 0 || readCalendarBooleanFlag(source, ['has_maintenance_probe', 'hasMaintenanceProbe']),
+      maintenance_probe_count: probeCount,
+      plan_item_count: planCount
+    };
+  };
+
+  const calendarEventMatchesFilters = (event: any, filters: any) => {
+    if (filters.therapistIds.length > 0 && !filters.therapistIds.includes(String(event.therapist_id || ''))) return false;
+    if (filters.patientIds.length > 0 && !filters.patientIds.includes(String(event.patient_id || ''))) return false;
+    if (filters.types.length > 0) {
+      const type = sanitizeString(event.type, 120).toLowerCase();
+      if (!filters.types.some((item: string) => type === item.toLowerCase())) return false;
+    }
+    if (filters.statuses.length > 0) {
+      const statusSet = filters.statuses.map((item: string) => item.toLowerCase());
+      const status = sanitizeString(event.status, 80).toLowerCase();
+      const matchesStatus =
+        statusSet.includes(status) ||
+        (statusSet.includes('sessao_registrada') && event.has_session_record) ||
+        (statusSet.includes('session_registered') && event.has_session_record) ||
+        (statusSet.includes('relatorio_pendente') && !event.has_report && status.includes('concl')) ||
+        (statusSet.includes('report_pending') && !event.has_report && status.includes('concl')) ||
+        (statusSet.includes('assinatura_pendente') && event.has_pending_signature) ||
+        (statusSet.includes('signature_pending') && event.has_pending_signature);
+      if (!matchesStatus) return false;
+    }
+    return true;
+  };
+
+  const countCalendarPlanItemsByPatient = async (patientIds: string[], clinicId: string, organizationId: string, user: any) => {
+    const validPatientIds = Array.from(new Set(patientIds.filter((id) => isUuid(id)))).slice(0, 100);
+    const counts = new Map<string, number>();
+    if (validPatientIds.length === 0) return counts;
+    let query = supabase
+      .from('aba_next_session_plan_items')
+      .select('id, patient_id, status')
+      .eq('organization_id', organizationId)
+      .in('patient_id', validPatientIds)
+      .eq('status', 'PLANNED')
+      .limit(Math.min(300, Math.max(40, validPatientIds.length * 12)));
+    query = applyAbaTenantScope(query, user, clinicId, organizationId);
+    const { data, error } = await query;
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return counts;
+      throw error;
+    }
+    (data || []).forEach((row: any) => {
+      const patientId = sanitizeString(row?.patient_id, 120);
+      if (patientId) counts.set(patientId, (counts.get(patientId) || 0) + 1);
+    });
+    return counts;
+  };
+
+  const countCalendarMaintenanceProbesByAppointment = async (appointmentIds: string[], clinicId: string, organizationId: string, user: any) => {
+    const validAppointmentIds = Array.from(new Set(appointmentIds.filter((id) => isUuid(id)))).slice(0, 150);
+    const counts = new Map<string, number>();
+    if (validAppointmentIds.length === 0) return counts;
+    let query = supabase
+      .from('aba_maintenance_schedules')
+      .select('id, appointment_id, status')
+      .eq('organization_id', organizationId)
+      .in('appointment_id', validAppointmentIds)
+      .in('status', ['PENDING', 'SCHEDULED', 'UNSCHEDULED'])
+      .limit(Math.min(300, Math.max(40, validAppointmentIds.length * 8)));
+    query = applyAbaTenantScope(query, user, clinicId, organizationId);
+    const { data, error } = await query;
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return counts;
+      throw error;
+    }
+    (data || []).forEach((row: any) => {
+      const appointmentId = sanitizeString(row?.appointment_id, 180);
+      if (appointmentId) counts.set(appointmentId, (counts.get(appointmentId) || 0) + 1);
+    });
+    return counts;
+  };
+
+  const fetchCalendarEventsFromClinicState = async (clinicId: string, range: any, filters: any, counters: any = {}) => {
+    const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId, logger: console });
+    if (stateResult.error) {
+      if (hasMissingFinancialSchema(stateResult.error)) return [];
+      throw stateResult.error;
+    }
+    const fromTime = new Date(range.fromIso).getTime();
+    const toTime = new Date(range.toIso).getTime();
+    return (Array.isArray(stateResult.data?.appointments) ? stateResult.data.appointments : [])
+      .map((appointment: any) => normalizeCalendarAppointmentRow({ ...appointment, source_payload: appointment }, counters))
+      .filter((event: any) => {
+        const start = new Date(event.start_time).getTime();
+        return start >= fromTime && start <= toTime && calendarEventMatchesFilters(event, filters);
+      })
+      .slice(0, range.limit);
+  };
+
+  const fetchCalendarAppointmentDetailRow = async (eventId: string, clinicId: string, user: any) => {
+    if (isUuid(eventId)) {
+      let query = supabase
+        .from('appointments')
+        .select(CALENDAR_EVENT_DETAIL_SELECT)
+        .eq('id', eventId)
+        .limit(1);
+      if (!hasGlobalClinicAccess(user) && clinicId) query = query.eq('clinic_id', clinicId);
+      const { data, error } = await query.maybeSingle();
+      if (!error && data) return data;
+      if (error && !hasMissingFinancialSchema(error)) throw error;
+    }
+    const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId, logger: console });
+    if (stateResult.error) {
+      if (hasMissingFinancialSchema(stateResult.error)) return null;
+      throw stateResult.error;
+    }
+    const appointment = (Array.isArray(stateResult.data?.appointments) ? stateResult.data.appointments : [])
+      .find((item: any) => String(item?.id) === eventId);
+    return appointment ? { ...appointment, source_payload: appointment } : null;
+  };
+
+  app.get('/api/calendar/events', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const range = parseCalendarRangeParams(req.query);
+      if (!range.ok) return res.status(400).json({ success: false, error: 'Intervalo da agenda inválido.' });
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const filters = {
+        therapistIds: parseCalendarFilterList(req.query?.therapistId || req.query?.therapistIds).filter((id) => id !== 'all'),
+        patientIds: parseCalendarFilterList(req.query?.patientId || req.query?.patientIds).filter((id) => id !== 'all'),
+        types: parseCalendarFilterList(req.query?.type || req.query?.types),
+        statuses: parseCalendarFilterList(req.query?.status || req.query?.statuses)
+      };
+
+      let query = supabase
+        .from('appointments')
+        .select(CALENDAR_EVENT_SELECT)
+        .gte('scheduled_at', range.fromIso)
+        .lte('scheduled_at', range.toIso)
+        .order('scheduled_at', { ascending: true })
+        .limit(range.limit);
+      if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
+      if (filters.therapistIds.length > 0) query = query.in('therapist_id', filters.therapistIds);
+      if (filters.patientIds.length > 0) query = query.in('patient_id', filters.patientIds);
+      if (filters.statuses.length === 1 && !filters.statuses[0].includes('_')) query = query.eq('status', filters.statuses[0]);
+
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) {
+          const fallback = await fetchCalendarEventsFromClinicState(clinicId, range, filters);
+          return res.json({ success: true, data: fallback, source: 'clinic_state_fallback' });
+        }
+        throw error;
+      }
+
+      const rows = Array.isArray(data) ? data : [];
+      const patientIds = rows.map((row: any) => sanitizeString(row?.patient_id, 120)).filter(Boolean);
+      const appointmentIds = rows.map((row: any) => sanitizeString(row?.id, 180)).filter(Boolean);
+      const [planCountByPatient, probeCountByAppointment] = await Promise.all([
+        countCalendarPlanItemsByPatient(patientIds, clinicId, organizationId, req.session.user),
+        countCalendarMaintenanceProbesByAppointment(appointmentIds, clinicId, organizationId, req.session.user)
+      ]);
+      const counters = { planCountByPatient, probeCountByAppointment };
+      const events = rows
+        .map((row: any) => normalizeCalendarAppointmentRow(row, counters))
+        .filter((event: any) => calendarEventMatchesFilters(event, filters))
+        .slice(0, range.limit);
+      return res.json({ success: true, data: events, source: 'appointments' });
+    } catch (error: any) {
+      console.warn('[Calendar] event list failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar a agenda agora.' });
+    }
+  });
+
+  app.get('/api/calendar/events/:eventId/detail', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const eventId = sanitizeString(req.params.eventId, 180);
+      if (!eventId) return res.status(400).json({ success: false, error: 'Sessão inválida.' });
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const row = await fetchCalendarAppointmentDetailRow(eventId, clinicId, req.session.user);
+      if (!row) return res.status(404).json({ success: false, error: 'Sessão não encontrada.' });
+      const event = normalizeCalendarAppointmentRow(row);
+      const patientId = sanitizeString(event.patient_id, 120);
+
+      let planItems: any[] = [];
+      let maintenanceProbes: any[] = [];
+      let overdueMaintenanceProbes: any[] = [];
+      let acceptedRecommendations: any[] = [];
+
+      if (isUuid(patientId)) {
+        let planQuery = supabase
+          .from('aba_next_session_plan_items')
+          .select(ABA_NEXT_SESSION_PLAN_ITEM_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .eq('status', 'PLANNED')
+          .order('created_at', { ascending: false })
+          .limit(20);
+        planQuery = applyAbaTenantScope(planQuery, req.session.user, clinicId, organizationId);
+        const planResult = await planQuery;
+        if (!planResult.error) planItems = planResult.data || [];
+        else if (!hasMissingFinancialSchema(planResult.error)) throw planResult.error;
+
+        let recommendationQuery = supabase
+          .from('aba_clinical_recommendations')
+          .select(ABA_CLINICAL_RECOMMENDATION_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .in('status', ['ACCEPTED', 'APPLIED_TO_NEXT_SESSION'])
+          .order('updated_at', { ascending: false })
+          .limit(20);
+        recommendationQuery = applyAbaTenantScope(recommendationQuery, req.session.user, clinicId, organizationId);
+        const recommendationResult = await recommendationQuery;
+        if (!recommendationResult.error) acceptedRecommendations = recommendationResult.data || [];
+        else if (!hasMissingFinancialSchema(recommendationResult.error)) throw recommendationResult.error;
+
+        if (isUuid(eventId)) {
+          let linkedProbeQuery = supabase
+            .from('aba_maintenance_schedules')
+            .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+            .eq('organization_id', organizationId)
+            .eq('patient_id', patientId)
+            .eq('appointment_id', eventId)
+            .in('status', ['PENDING', 'SCHEDULED', 'UNSCHEDULED'])
+            .order('target_due_date', { ascending: true })
+            .limit(20);
+          linkedProbeQuery = applyAbaTenantScope(linkedProbeQuery, req.session.user, clinicId, organizationId);
+          const linkedProbeResult = await linkedProbeQuery;
+          if (!linkedProbeResult.error) maintenanceProbes = linkedProbeResult.data || [];
+          else if (!hasMissingFinancialSchema(linkedProbeResult.error)) throw linkedProbeResult.error;
+        }
+
+        let overdueProbeQuery = supabase
+          .from('aba_maintenance_schedules')
+          .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .is('appointment_id', null)
+          .in('status', ['PENDING', 'UNSCHEDULED'])
+          .lte('target_due_date', event.start_time)
+          .order('target_due_date', { ascending: true })
+          .limit(20);
+        overdueProbeQuery = applyAbaTenantScope(overdueProbeQuery, req.session.user, clinicId, organizationId);
+        const overdueProbeResult = await overdueProbeQuery;
+        if (!overdueProbeResult.error) overdueMaintenanceProbes = overdueProbeResult.data || [];
+        else if (!hasMissingFinancialSchema(overdueProbeResult.error)) throw overdueProbeResult.error;
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          event: {
+            ...event,
+            notes: sanitizeTextField(row?.notes || parseCalendarSourcePayload(row?.source_payload)?.notes || parseCalendarSourcePayload(row?.source_payload)?.note, 1200) || null,
+            duration_minutes: getCalendarAppointmentDuration(row)
+          },
+          team: event.therapist_name ? [{ id: event.therapist_id, name: event.therapist_name, role: 'Responsável' }] : [],
+          nextSessionPlanItems: planItems,
+          acceptedRecommendations,
+          maintenanceProbes,
+          overdueMaintenanceProbes,
+          sessionRecord: event.has_session_record ? { label: 'Sessão registrada', status: 'registered' } : null,
+          report: event.has_report ? { label: 'Relatório disponível', status: 'ready' } : null,
+          pendingSignature: event.has_pending_signature
+        }
+      });
+    } catch (error: any) {
+      console.warn('[Calendar] event detail failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar os detalhes da sessão agora.' });
+    }
+  });
 
   const fetchFutureAppointmentsForMaintenance = async (params: {
     patientId: string;

@@ -57,7 +57,7 @@ import { RoomReservation } from "./RoomReservation";
 import { ProtocolManagementSystem } from "./Protocols";
 import { StackedDomainStatusChart } from "./StackedDomainStatusChart";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
-import { CalendarWidget, DayDetailsModal } from "./Calendar";
+import { ClinicalAgendaBoard } from "./Calendar";
 import { LogoVerto } from "./Common";
 import { SecureImage } from "./SecureMedia";
 import { motion, AnimatePresence } from "framer-motion";
@@ -492,6 +492,7 @@ export function CoordinatorDashboard({
   const [sessionRoom, setSessionRoom] = useState("");
   const [sessionProfessional, setSessionProfessional] = useState("");
   const [sessionNumSessions, setSessionNumSessions] = useState(1);
+  const [sessionRecurrencePattern, setSessionRecurrencePattern] = useState("weekly");
   const [editingAppointmentId, setEditingAppointmentId] = useState<
     string | number | null
   >(null);
@@ -1533,6 +1534,7 @@ export function CoordinatorDashboard({
     setSessionApproach("");
     setSessionProfessional("");
     setSessionNumSessions(1);
+    setSessionRecurrencePattern("weekly");
     setEditingAppointmentId(null);
     setAppointmentEditScope("single");
   };
@@ -1580,6 +1582,7 @@ export function CoordinatorDashboard({
         type: sessionApproach || "Consulta Padrão",
         room: sessionRoom,
         professional: sessionProfessional,
+        recurrencePattern: sessionRecurrencePattern,
         recurrenceScope: isEditingRecurringAppointment
           ? appointmentEditScope
           : "single",
@@ -1612,6 +1615,7 @@ export function CoordinatorDashboard({
       room: sessionRoom,
       professional: sessionProfessional,
       numSessions: Math.min(52, Math.max(1, Number(sessionNumSessions) || 1)),
+      recurrencePattern: sessionRecurrencePattern,
     };
     const result = onScheduleSession(newSession);
     if (result && !result.success) {
@@ -2258,11 +2262,12 @@ export function CoordinatorDashboard({
     setEditingAppointmentId(appointment.id);
     setAppointmentEditScope("single");
     setSessionNumSessions(1);
+    setSessionRecurrencePattern(appointment.recurrencePattern || appointment.recurrence_pattern || "weekly");
     setSessionPatientName(appointment.patientName || appointment.name || "");
     setSessionDate(appointment.date);
     setSessionTime(appointment.time);
     setSessionApproach(appointment.type || appointment.approach || "");
-    setSessionRoom(appointment.room || "");
+    setSessionRoom(appointment.room || appointment.location || "");
     setSessionProfessional(
       appointment.therapistName || appointment.professional || "",
     );
@@ -3810,193 +3815,32 @@ export function CoordinatorDashboard({
 
   const COLORS = ["#7a32fc", "#6AD2FF", "#EFF4FB", "#A3AED0"];
 
-  const renderAgendaContent = () => {
-    const dark = theme === "dark";
-    const panelClass = dark
-      ? "bg-[#101827] border-slate-700/80 text-slate-100"
-      : "bg-white border-slate-100 text-slate-900";
-    const mutedTextClass = dark ? "text-slate-300" : "text-slate-500";
-    const softPanelClass = dark ? "bg-[#0b1220]" : "bg-slate-100";
-    const inactivePillClass = dark
-      ? "bg-[#132033] text-slate-300 hover:bg-[#172b46]"
-      : "bg-slate-50 text-slate-500 hover:bg-slate-100";
-    const activeTabClass = dark
-      ? "bg-[#172b46] text-white shadow-sm"
-      : "bg-white text-[#7a32fc] shadow-sm";
-    const inputClass = dark
-      ? "w-full bg-[#0b1220] border border-slate-700 rounded-xl py-2.5 pl-9 pr-3 text-xs font-medium text-slate-100 placeholder:text-slate-500 outline-none focus:border-[#7a32fc]/60"
-      : "w-full bg-slate-50 border border-slate-100 rounded-xl py-2.5 pl-9 pr-3 text-xs font-medium text-slate-600 outline-none focus:border-[#7a32fc]/40";
-
-    return (
-    <div className="space-y-6">
-      <div className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 sm:p-6 rounded-[32px] shadow-sm border gap-4 ${panelClass}`}>
-        <div className="flex flex-col sm:flex-row sm:items-center gap-6">
-          <div>
-            <h3 className={`text-lg sm:text-xl font-bold ${dark ? "text-white" : "text-slate-900"}`}>
-              Agenda Global
-            </h3>
-            <p className={`${mutedTextClass} text-sm hidden sm:block`}>
-              Visualização diária, semanal e mensal estilo calendário.
-            </p>
-          </div>
-          {canCreatePatients && (
-            <button
-              onClick={() => {
-                resetPatientForm();
-                setIsPatientRegistrationModalOpen(true);
-              }}
-              className="flex items-center gap-2 px-4 py-2.5 bg-[#7a32fc] text-white rounded-2xl text-xs font-bold hover:opacity-90 transition-all shadow-lg shadow-[#7a32fc]/20"
-            >
-              <UserPlus size={16} />
-              Novo Paciente
-            </button>
-          )}
-        </div>
-        <div className="flex items-center gap-3 w-full sm:w-auto overflow-x-auto no-scrollbar pb-1 sm:pb-0">
-          <button
-            onClick={() => setCalendarDate(new Date())}
-            className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all ${
-              dark ? "border-slate-600 text-slate-100 hover:bg-[#172b46]" : "border-slate-200 text-slate-700 hover:bg-slate-50"
-            }`}
-          >
-            Hoje
-          </button>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => moveAgendaDate(-1)}
-              className={`p-2 rounded-xl transition-all ${dark ? "text-slate-300 hover:bg-[#172b46]" : "text-slate-500 hover:bg-slate-100"}`}
-              aria-label="Período anterior"
-            >
-              <ChevronLeft size={18} />
-            </button>
-            <button
-              onClick={() => moveAgendaDate(1)}
-              className={`p-2 rounded-xl transition-all ${dark ? "text-slate-300 hover:bg-[#172b46]" : "text-slate-500 hover:bg-slate-100"}`}
-              aria-label="Próximo período"
-            >
-              <ChevronRight size={18} />
-            </button>
-          </div>
-          <div className={`min-w-[180px] text-sm font-bold capitalize ${dark ? "text-white" : "text-slate-800"}`}>
-            {agendaPeriodLabel}
-          </div>
-          <div className={`${softPanelClass} p-1 rounded-xl flex gap-1 w-full sm:w-auto`}>
-            <button
-              onClick={() => handleAgendaViewChange("day")}
-              className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === "day" ? activeTabClass : "text-slate-400"}`}
-            >
-              <Calendar size={14} /> Dia
-            </button>
-            <button
-              onClick={() => handleAgendaViewChange("week")}
-              className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === "week" ? activeTabClass : "text-slate-400"}`}
-            >
-              <CalendarRange size={14} /> Semana
-            </button>
-            <button
-              onClick={() => handleAgendaViewChange("month")}
-              className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center justify-center gap-2 ${agendaView === "month" ? activeTabClass : "text-slate-400"}`}
-            >
-              <CalendarDays size={14} /> Mês
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className={`p-4 sm:p-6 rounded-[32px] shadow-sm border ${panelClass}`}>
-        <div className="mb-6 space-y-3">
-          <div className="flex items-center gap-3 overflow-x-auto no-scrollbar pb-2">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap hidden sm:inline">
-              Filtrar profissional:
-            </span>
-            <button
-              onClick={() => setProfessionalFilter("all")}
-              className={`px-4 py-1.5 rounded-xl text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${professionalFilter === "all" ? "bg-[#7a32fc] text-white shadow-md" : inactivePillClass}`}
-            >
-              Todos
-            </button>
-            {Array.from(new Set(normalizedAgenda.map((a: any) => a.therapistName).filter(Boolean))).map((prof) => (
-              <button
-                key={String(prof)}
-                onClick={() => setProfessionalFilter(String(prof))}
-                className={`px-4 py-1.5 rounded-xl text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${professionalFilter === prof ? "bg-[#7a32fc] text-white shadow-md" : inactivePillClass}`}
-              >
-                {String(prof)}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex flex-col md:flex-row md:items-center gap-2">
-            <div className={`${softPanelClass} p-1 rounded-xl flex gap-1 w-full md:w-auto`}>
-              <button
-                onClick={() => setAgendaSearchMode("patient")}
-                className={`flex-1 md:flex-none px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${agendaSearchMode === "patient" ? activeTabClass : "text-slate-500"}`}
-              >
-                Paciente
-              </button>
-              <button
-                onClick={() => setAgendaSearchMode("professional")}
-                className={`flex-1 md:flex-none px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${agendaSearchMode === "professional" ? activeTabClass : "text-slate-500"}`}
-              >
-                Profissional
-              </button>
-            </div>
-            <div className="relative flex-1">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                value={agendaSearchTerm}
-                onChange={(e) => setAgendaSearchTerm(e.target.value)}
-                placeholder={`Filtrar por ${agendaSearchMode === "patient" ? "paciente" : "profissional"}...`}
-                className={inputClass}
-              />
-            </div>
-          </div>
-        </div>
-
-        {agendaView === "day" ? (
-          <div className="space-y-4">
-            <button
-              onClick={() => setIsAddSessionModalOpen(true)}
-              className="w-full bg-white rounded-2xl border-2 border-dashed border-[#7a32fc]/40 p-3 sm:p-4 flex items-center justify-center cursor-pointer hover:bg-[#F4F7FE] transition-all gap-3 group"
-            >
-              <div className="w-8 h-8 rounded-full bg-[#7a32fc]/10 text-[#7a32fc] flex items-center justify-center group-hover:scale-110 transition-transform">
-                <Plus size={18} />
-              </div>
-              <span className="text-[10px] sm:text-xs font-semibold text-[#7a32fc] uppercase tracking-wider">
-                Novo Agendamento
-              </span>
-            </button>
-            {renderGoogleDayGrid()}
-          </div>
-        ) : agendaView === "month" ? (
-                  <CalendarWidget
-                    agenda={filteredAgenda}
-                    currentDate={calendarDate}
-                    onDateChange={setCalendarDate}
-                    theme={theme}
-                    onDateSelect={(dateStr: string) => {
-                      setSessionDate(dateStr);
-                      setIsDayDetailsModalOpen(true);
-            }}
-          />
-        ) : (
-          renderGoogleWeekGrid()
-        )}
-      </div>
-
-      <DayDetailsModal
-        isOpen={isDayDetailsModalOpen}
-        onClose={() => setIsDayDetailsModalOpen(false)}
-        date={sessionDate}
-        agenda={filteredAgenda}
-        onAddSession={() => openNewAppointmentAt(sessionDate, "08:00")}
-        onPatientClick={onPatientClick}
-        onAppointmentClick={openAgendaActionModal}
-        theme={theme}
-      />
-    </div>
-    );
-  };
+  const renderAgendaContent = () => (
+    <ClinicalAgendaBoard
+      agenda={normalizedAgenda}
+      patients={allPatients}
+      rooms={rooms}
+      teamMembers={therapistFilterOptions}
+      currentUser={user}
+      currentDate={calendarDate}
+      view={agendaView}
+      onDateChange={setCalendarDate}
+      onViewChange={handleAgendaViewChange}
+      onCreateAppointment={openNewAppointmentAt}
+      onEditAppointment={handleEditAppointment}
+      onConfirmAppointment={handleConfirmAppointmentFromAgenda}
+      onCancelAppointment={handleCancelAppointmentFromAgenda}
+      onOpenPatient={onPatientClick}
+      onStartSession={(appointment: any) =>
+        onPatientClick(
+          appointment?.patientId || appointment?.patient_id,
+          { tab: "session" },
+          appointment?.patientName || appointment?.patient_name,
+        )
+      }
+      theme={theme}
+    />
+  );
 
   const renderRoomsContent = () => (
     <div className="space-y-6">
@@ -7398,7 +7242,7 @@ export function CoordinatorDashboard({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
-                    Abordagem
+                    Tipo de sessão
                   </label>
                   <select
                     className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
@@ -7406,17 +7250,21 @@ export function CoordinatorDashboard({
                     onChange={(e) => setSessionApproach(e.target.value)}
                   >
                     <option value="">Selecione...</option>
-                    <option value="Consulta Padrão">Consulta Padrão</option>
-                    <option value="TCC">TCC</option>
                     <option value="ABA">ABA</option>
-                    <option value="Integração Sensorial">
-                      Integração Sensorial
-                    </option>
+                    <option value="Fonoaudiologia">Fonoaudiologia</option>
+                    <option value="Terapia Ocupacional">Terapia Ocupacional</option>
+                    <option value="Psicologia">Psicologia</option>
+                    <option value="Psicopedagogia">Psicopedagogia</option>
+                    <option value="Avaliação">Avaliação</option>
+                    <option value="Supervisão">Supervisão</option>
+                    <option value="Reunião interdisciplinar">Reunião interdisciplinar</option>
+                    <option value="Orientação familiar">Orientação familiar</option>
+                    <option value="Outro">Outro</option>
                   </select>
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
-                    Sala
+                    Sala/local
                   </label>
                   <select
                     className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
@@ -7424,6 +7272,10 @@ export function CoordinatorDashboard({
                     onChange={(e) => setSessionRoom(e.target.value)}
                   >
                     <option value="">Selecione...</option>
+                    <option value="online">Online</option>
+                    <option value="domicilio">Domicílio</option>
+                    <option value="escola">Escola</option>
+                    <option value="outro">Outro</option>
                     {rooms.map((room: any) => (
                       <option key={room.id} value={room.id}>
                         {room.name}
@@ -7509,7 +7361,22 @@ export function CoordinatorDashboard({
                     </span>
                   </label>
                   {Number(sessionNumSessions) > 1 && (
-                    <div className="mt-4 grid grid-cols-[1fr_auto] items-end gap-3">
+                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] items-end gap-3">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                          Recorrência
+                        </label>
+                        <select
+                          className="w-full bg-white border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                          value={sessionRecurrencePattern}
+                          onChange={(e) => setSessionRecurrencePattern(e.target.value)}
+                        >
+                          <option value="weekly">Semanal</option>
+                          <option value="biweekly">Quinzenal</option>
+                          <option value="monthly">Mensal</option>
+                          <option value="custom">Personalizada</option>
+                        </select>
+                      </div>
                       <div>
                         <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
                           Quantidade de sessões
@@ -7528,7 +7395,7 @@ export function CoordinatorDashboard({
                         />
                       </div>
                       <span className="pb-3 text-xs font-bold text-slate-400">
-                        semanas
+                        ocorrências
                       </span>
                     </div>
                   )}

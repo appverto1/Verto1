@@ -14,10 +14,14 @@ import {
 import {
   AlertTriangle,
   BarChart3,
+  ChevronDown,
+  ChevronRight,
   CheckCircle2,
   Filter,
+  ListTree,
   Plus,
   Save,
+  Search,
   SlidersHorizontal,
   Sparkles,
   Target,
@@ -30,6 +34,7 @@ import { dataService } from '../services/dataService';
 import {
   aggregateClinicalChangesBySession,
   getClinicalChangeDrilldown,
+  type AbaAggregatedClinicalChange,
   type AbaAggregatedClinicalChangeGroup,
   type AbaClinicalChangeCategory
 } from '../utils/abaClinicalCharts';
@@ -64,6 +69,10 @@ type ChartPoint = {
   mostUsedTrialType?: string;
   trialTypeMostUsed?: string;
 };
+
+type ChangeCategoryFilter = AbaClinicalChangeCategory | 'all';
+type ChangeDetailMode = 'summary' | 'detail';
+type ChangeTrendFilter = 'all' | 'improved' | 'worsened' | 'alerts';
 
 const chartTabs = [
   { id: 'overview', label: 'Visão geral' },
@@ -107,6 +116,55 @@ const clinicalChangeCategoryLabels: Record<AbaClinicalChangeCategory, string> = 
   regression: 'Regressão/alertas'
 };
 const clinicalChangeCategoryOrder: AbaClinicalChangeCategory[] = ['skill', 'behavior', 'mastery', 'maintenance', 'regression'];
+const clinicalChangeCategoryTone: Record<AbaClinicalChangeCategory, {
+  accent: string;
+  badge: string;
+  header: string;
+  panel: string;
+  ring: string;
+  softText: string;
+}> = {
+  skill: {
+    accent: 'bg-emerald-500',
+    badge: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    header: 'border-emerald-100 bg-emerald-50 text-emerald-800',
+    panel: 'border-emerald-100 bg-emerald-50/35',
+    ring: 'ring-2 ring-emerald-200',
+    softText: 'text-emerald-700'
+  },
+  behavior: {
+    accent: 'bg-sky-500',
+    badge: 'border-sky-200 bg-sky-50 text-sky-700',
+    header: 'border-sky-100 bg-sky-50 text-sky-800',
+    panel: 'border-sky-100 bg-sky-50/35',
+    ring: 'ring-2 ring-sky-200',
+    softText: 'text-sky-700'
+  },
+  mastery: {
+    accent: 'bg-violet-500',
+    badge: 'border-violet-200 bg-violet-50 text-violet-700',
+    header: 'border-violet-100 bg-violet-50 text-violet-800',
+    panel: 'border-violet-100 bg-violet-50/35',
+    ring: 'ring-2 ring-violet-200',
+    softText: 'text-violet-700'
+  },
+  maintenance: {
+    accent: 'bg-amber-500',
+    badge: 'border-amber-200 bg-amber-50 text-amber-800',
+    header: 'border-amber-100 bg-amber-50 text-amber-900',
+    panel: 'border-amber-100 bg-amber-50/40',
+    ring: 'ring-2 ring-amber-200',
+    softText: 'text-amber-800'
+  },
+  regression: {
+    accent: 'bg-red-500',
+    badge: 'border-red-200 bg-red-50 text-red-700',
+    header: 'border-red-100 bg-red-50 text-red-800',
+    panel: 'border-red-100 bg-red-50/35',
+    ring: 'ring-2 ring-red-200',
+    softText: 'text-red-700'
+  }
+};
 
 const aggregateBarColors = {
   skillMagnitude: '#10B981',
@@ -145,6 +203,41 @@ const statusTone = (status?: string) => {
   if (status === 'CHANGED') return 'bg-blue-50 text-blue-700 border-blue-100';
   if (status === 'FIRST_MEASUREMENT') return 'bg-slate-50 text-slate-600 border-slate-100';
   return 'bg-gray-50 text-gray-600 border-gray-100';
+};
+
+const normalizeFilterText = (value: unknown) =>
+  String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+
+const isAlertChange = (point: Partial<ChartPoint> & { changeCategory?: AbaClinicalChangeCategory }) =>
+  point.changeCategory === 'regression' ||
+  point.changeStatus === 'REGRESSION_SIGNAL' ||
+  String(point.metricType || '') === 'REGRESSION_RISK' ||
+  String(point.currentStatus || '').toUpperCase() === 'REGRESSION_RISK';
+
+const isImprovedChange = (point: Partial<ChartPoint>) => point.trendDirection === 'IMPROVED';
+const isWorsenedChange = (point: Partial<ChartPoint>) => point.trendDirection === 'WORSENED' || point.changeStatus === 'REGRESSION_SIGNAL';
+const isStableChange = (point: Partial<ChartPoint>) =>
+  point.trendDirection === 'STABLE' ||
+  point.changeStatus === 'NO_CHANGE' ||
+  (!isImprovedChange(point) && !isWorsenedChange(point) && point.changeStatus !== 'FIRST_MEASUREMENT');
+
+const isClinicallySignificantChange = (point: Partial<ChartPoint>) =>
+  point.changeStatus === 'CLINICALLY_SIGNIFICANT_CHANGE' || point.changeStatus === 'REGRESSION_SIGNAL';
+
+const stateTone = (point: Partial<ChartPoint> & { changeCategory?: AbaClinicalChangeCategory }) => {
+  if (isAlertChange(point) || isWorsenedChange(point)) return 'border-red-200 bg-red-50 text-red-700';
+  if (isImprovedChange(point)) return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  return 'border-slate-200 bg-slate-50 text-slate-600';
+};
+
+const dateInputValue = (value: any) => {
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString().slice(0, 10);
 };
 
 const chartColor = (point: ChartPoint) => {
@@ -231,6 +324,24 @@ const changeSentence = (point: ChartPoint, index: number) => {
   const current = formatValue(point.value ?? point.metricValue, metricType);
   return `${formatDate(point.changedAt)} ${session} — ${target}: ${metric.toLowerCase()} ${previous} → ${current} (${formatDelta(point)}), ${clinicalInterpretation(point)}.`;
 };
+
+const changePrimaryLabel = (point: Partial<ChartPoint>) =>
+  safeDisplayValue(point.metricLabel || point.targetId || point.behaviorId, 'Métrica clínica');
+
+const changeSessionLabel = (point: Partial<ChartPoint>, fallbackIndex = 0) =>
+  point.sessionId
+    ? formatSessionLabel({ id: point.sessionId, startedAt: point.changedAt })
+    : `Sessão #${fallbackIndex + 1}`;
+
+const changeSearchText = (point: Partial<ChartPoint>) => normalizeFilterText([
+  point.metricLabel,
+  point.targetId,
+  point.behaviorId,
+  point.metricType,
+  point.statusLabel,
+  point.currentStatus,
+  clinicalInterpretation(point as ChartPoint)
+].filter(Boolean).join(' '));
 
 const masteryStatusFromPoint = (point: any) => {
   const explicit = String(point?.status || point?.currentStatus || point?.masteryStatus || '').toUpperCase();
@@ -331,6 +442,52 @@ const aggregateBadgeTone = (group: AbaAggregatedClinicalChangeGroup) => {
   return 'border-slate-100 bg-white text-slate-500';
 };
 
+const ClinicalChangeCard: React.FC<{ change: AbaAggregatedClinicalChange; index: number }> = ({ change, index }) => {
+  const metricType = String(change.metricType || '');
+  const categoryTone = clinicalChangeCategoryTone[change.changeCategory];
+  const interpretation = clinicalInterpretation(change);
+  const sessionLabel = changeSessionLabel(change, index);
+  const previous = formatValue(change.previousValue, metricType);
+  const current = formatValue((change as ChartPoint).value ?? change.metricValue, metricType);
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest ${categoryTone.badge}`}>
+          {clinicalChangeCategoryLabels[change.changeCategory]}
+        </span>
+        <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest ${stateTone(change)}`}>
+          {interpretation}
+        </span>
+      </div>
+      <h5 className="text-sm font-semibold leading-snug text-slate-900">{changePrimaryLabel(change)}</h5>
+      <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+        {clinicalChangeCategoryLabels[change.changeCategory]} • {formatDateTime(change.changedAt)} • {sessionLabel}
+      </p>
+      <p className="mt-1 text-[11px] text-slate-400">{metricLabels[metricType] || metricType || 'Métrica clínica'}</p>
+      <div className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
+        <div className="rounded-md bg-slate-50 px-3 py-2">
+          <p className="text-[10px] font-medium uppercase tracking-widest text-slate-400">Anterior</p>
+          <p className="mt-1 font-semibold text-slate-800">{previous}</p>
+        </div>
+        <div className="rounded-md bg-slate-50 px-3 py-2">
+          <p className="text-[10px] font-medium uppercase tracking-widest text-slate-400">Atual</p>
+          <p className="mt-1 font-semibold text-slate-800">{current}</p>
+        </div>
+        <div className="rounded-md bg-slate-50 px-3 py-2">
+          <p className="text-[10px] font-medium uppercase tracking-widest text-slate-400">Delta</p>
+          <p className={`mt-1 font-semibold ${isWorsenedChange(change) ? 'text-red-700' : isImprovedChange(change) ? 'text-emerald-700' : 'text-slate-700'}`}>
+            {formatDelta(change)}
+          </p>
+        </div>
+      </div>
+      <p className="mt-3 text-xs leading-relaxed text-slate-600">
+        <span className="font-medium text-slate-700">Interpretação:</span> {interpretation}
+      </p>
+    </div>
+  );
+};
+
 export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaClinicalChartsPanelProps) {
   const [activeTab, setActiveTab] = useState<(typeof chartTabs)[number]['id']>('overview');
   const [periodDays, setPeriodDays] = useState(30);
@@ -340,6 +497,14 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
   const [groupBy, setGroupBy] = useState<'session' | 'day'>('session');
   const [groupByTouched, setGroupByTouched] = useState(false);
   const [selectedChangeGroupKey, setSelectedChangeGroupKey] = useState('');
+  const [changeDetailMode, setChangeDetailMode] = useState<ChangeDetailMode>('summary');
+  const [detailCategoryFilter, setDetailCategoryFilter] = useState<ChangeCategoryFilter>('all');
+  const [detailSessionFilter, setDetailSessionFilter] = useState('');
+  const [detailDayFilter, setDetailDayFilter] = useState('');
+  const [detailTargetFilter, setDetailTargetFilter] = useState('');
+  const [detailTrendFilter, setDetailTrendFilter] = useState<ChangeTrendFilter>('all');
+  const [detailSignificantOnly, setDetailSignificantOnly] = useState(false);
+  const [collapsedChangeCategories, setCollapsedChangeCategories] = useState<Partial<Record<AbaClinicalChangeCategory, boolean>>>({});
   const [significantOnly, setSignificantOnly] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [dataByTab, setDataByTab] = useState<Record<string, any>>({});
@@ -493,6 +658,65 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     [aggregatedChangeRows, selectedChangeGroupKey]
   );
 
+  const detailSessionOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    (selectedChangeGroup?.changes || []).forEach((change, index) => {
+      const id = String(change.sessionId || '').trim();
+      if (id) map.set(id, changeSessionLabel(change, index));
+    });
+    return Array.from(map.entries());
+  }, [selectedChangeGroup]);
+
+  const detailDayOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    (selectedChangeGroup?.changes || []).forEach((change) => {
+      const value = dateInputValue(change.changedAt);
+      if (value) map.set(value, formatDate(change.changedAt));
+    });
+    return Array.from(map.entries());
+  }, [selectedChangeGroup]);
+
+  const selectedFilteredChanges = useMemo(() => {
+    if (!selectedChangeGroup) return [] as AbaAggregatedClinicalChange[];
+    const query = normalizeFilterText(detailTargetFilter);
+    return selectedChangeGroup.changes.filter((change) => {
+      if (detailCategoryFilter !== 'all' && change.changeCategory !== detailCategoryFilter) return false;
+      if (detailSessionFilter && String(change.sessionId || '') !== detailSessionFilter) return false;
+      if (detailDayFilter && dateInputValue(change.changedAt) !== detailDayFilter) return false;
+      if (query && !changeSearchText(change).includes(query)) return false;
+      if (detailSignificantOnly && !isClinicallySignificantChange(change)) return false;
+      if (detailTrendFilter === 'improved' && !isImprovedChange(change)) return false;
+      if (detailTrendFilter === 'worsened' && !isWorsenedChange(change)) return false;
+      if (detailTrendFilter === 'alerts' && !isAlertChange(change)) return false;
+      return true;
+    });
+  }, [
+    detailCategoryFilter,
+    detailDayFilter,
+    detailSessionFilter,
+    detailSignificantOnly,
+    detailTargetFilter,
+    detailTrendFilter,
+    selectedChangeGroup
+  ]);
+
+  const visibleDetailChanges = useMemo(() => selectedFilteredChanges.slice(0, 80), [selectedFilteredChanges]);
+
+  const detailKpis = useMemo(() => ({
+    total: selectedFilteredChanges.length,
+    improved: selectedFilteredChanges.filter(isImprovedChange).length,
+    worsened: selectedFilteredChanges.filter(isWorsenedChange).length,
+    stable: selectedFilteredChanges.filter(isStableChange).length,
+    alerts: selectedFilteredChanges.filter(isAlertChange).length
+  }), [selectedFilteredChanges]);
+
+  const detailGroups = useMemo(() => clinicalChangeCategoryOrder
+    .filter((category) => detailCategoryFilter === 'all' || detailCategoryFilter === category)
+    .map((category) => ({
+      category,
+      changes: visibleDetailChanges.filter((change) => change.changeCategory === category)
+    })), [detailCategoryFilter, visibleDetailChanges]);
+
   const aggregateTopChanges = useMemo(() => {
     return aggregatedChangeRows
       .flatMap((group) => group.topChanges.map((change) => ({ group, change })))
@@ -563,6 +787,36 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     setBehaviorId('');
     setMetricType('');
     setSignificantOnly(false);
+  };
+
+  const resetDetailFilters = (category: ChangeCategoryFilter = 'all') => {
+    setDetailCategoryFilter(category);
+    setDetailSessionFilter('');
+    setDetailDayFilter('');
+    setDetailTargetFilter('');
+    setDetailTrendFilter('all');
+    setDetailSignificantOnly(false);
+    setCollapsedChangeCategories({});
+  };
+
+  const openChangeGroup = (
+    groupKey: string,
+    category: ChangeCategoryFilter = 'all',
+    mode: ChangeDetailMode = 'summary'
+  ) => {
+    if (!groupKey) return;
+    setSelectedChangeGroupKey(groupKey);
+    setChangeDetailMode(mode);
+    resetDetailFilters(category);
+  };
+
+  const closeChangeGroup = () => setSelectedChangeGroupKey('');
+
+  const toggleChangeCategory = (category: AbaClinicalChangeCategory) => {
+    setCollapsedChangeCategories((current) => ({
+      ...current,
+      [category]: !current[category]
+    }));
   };
 
   const saveAnnotation = async () => {
@@ -953,11 +1207,11 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                   <YAxis tick={{ fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} />
                   <Tooltip content={<AggregatedTooltip />} />
                   <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />
-                  <Bar dataKey="skillMagnitude" name="Habilidades" stackId="changes" fill={aggregateBarColors.skillMagnitude} maxBarSize={56} onClick={(entry: any) => setSelectedChangeGroupKey(entry?.payload?.groupKey || '')} />
-                  <Bar dataKey="behaviorMagnitude" name="Comportamentos" stackId="changes" fill={aggregateBarColors.behaviorMagnitude} maxBarSize={56} onClick={(entry: any) => setSelectedChangeGroupKey(entry?.payload?.groupKey || '')} />
-                  <Bar dataKey="masteryCount" name="Maestria" stackId="changes" fill={aggregateBarColors.masteryCount} maxBarSize={56} onClick={(entry: any) => setSelectedChangeGroupKey(entry?.payload?.groupKey || '')} />
-                  <Bar dataKey="maintenanceCount" name="Manutenção" stackId="changes" fill={aggregateBarColors.maintenanceCount} maxBarSize={56} onClick={(entry: any) => setSelectedChangeGroupKey(entry?.payload?.groupKey || '')} />
-                  <Bar dataKey="regressionCount" name="Regressão/alertas" stackId="changes" fill={aggregateBarColors.regressionCount} radius={[6, 6, 0, 0]} maxBarSize={56} onClick={(entry: any) => setSelectedChangeGroupKey(entry?.payload?.groupKey || '')} />
+                  <Bar dataKey="skillMagnitude" name="Habilidades" stackId="changes" fill={aggregateBarColors.skillMagnitude} maxBarSize={56} onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', 'skill', 'detail')} />
+                  <Bar dataKey="behaviorMagnitude" name="Comportamentos" stackId="changes" fill={aggregateBarColors.behaviorMagnitude} maxBarSize={56} onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', 'behavior', 'detail')} />
+                  <Bar dataKey="masteryCount" name="Maestria" stackId="changes" fill={aggregateBarColors.masteryCount} maxBarSize={56} onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', 'mastery', 'detail')} />
+                  <Bar dataKey="maintenanceCount" name="Manutenção" stackId="changes" fill={aggregateBarColors.maintenanceCount} maxBarSize={56} onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', 'maintenance', 'detail')} />
+                  <Bar dataKey="regressionCount" name="Regressão/alertas" stackId="changes" fill={aggregateBarColors.regressionCount} radius={[6, 6, 0, 0]} maxBarSize={56} onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', 'regression', 'detail')} />
                 </BarChart>
               ) : (
                 <LineChart data={chartRows} margin={{ top: 20, right: 24, left: 8, bottom: 44 }}>
@@ -1008,7 +1262,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                   </div>
                   <button
                     type="button"
-                    onClick={() => setSelectedChangeGroupKey(group.groupKey)}
+                    onClick={() => openChangeGroup(group.groupKey, 'all', 'summary')}
                     className="rounded-md bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-[#7a32fc] shadow-sm"
                   >
                     Ver detalhes
@@ -1040,7 +1294,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
               <button
                 key={`${group.groupKey}-${change.id || change.metricType}-${index}`}
                 type="button"
-                onClick={() => setSelectedChangeGroupKey(group.groupKey)}
+                onClick={() => openChangeGroup(group.groupKey, change.changeCategory, 'detail')}
                 className="rounded-lg border border-slate-100 bg-slate-50 p-4 text-left transition hover:border-[#7a32fc]/30 hover:bg-white"
               >
                 <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -1079,60 +1333,225 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
       )}
 
       {selectedChangeGroup && (
-        <div className="fixed inset-0 z-[150] flex items-end bg-black/30 p-3 md:items-stretch md:justify-end md:p-4" onClick={() => setSelectedChangeGroupKey('')}>
+        <div className="fixed inset-0 z-[150] flex items-end bg-black/30 p-3 md:items-stretch md:justify-end md:p-4" onClick={closeChangeGroup}>
           <div
             role="dialog"
             aria-modal="true"
             aria-label="Detalhes das mudanças clínicas"
-            className="max-h-[86vh] w-full overflow-y-auto rounded-lg bg-white p-4 shadow-2xl md:h-full md:max-h-none md:w-[440px]"
+            className="max-h-[88vh] w-full overflow-y-auto rounded-lg bg-white p-4 shadow-2xl md:h-full md:max-h-none md:w-[620px]"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">{selectedChangeGroup.groupBy === 'day' ? 'Dia' : 'Sessão'}</p>
-                <h4 className="mt-1 text-lg font-black text-slate-900">{selectedChangeGroup.label}</h4>
-                <p className="mt-1 text-xs font-semibold text-slate-500">
-                  {selectedChangeGroup.totalChanges} mudanças · {selectedChangeGroup.relevantChanges} relevantes
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">{selectedChangeGroup.groupBy === 'day' ? 'Dia selecionado' : 'Sessão selecionada'}</p>
+                <h4 className="mt-1 text-lg font-semibold text-slate-900">{selectedChangeGroup.label}</h4>
+                <p className="mt-1 text-xs text-slate-500">
+                  {selectedChangeGroup.totalChanges} mudanças · {selectedChangeGroup.relevantChanges} relevantes · {detailKpis.total} no filtro atual
                 </p>
               </div>
-              <button type="button" onClick={() => setSelectedChangeGroupKey('')} className="rounded-lg bg-slate-100 p-2 text-slate-500" title="Fechar detalhes">
+              <button type="button" onClick={closeChangeGroup} className="rounded-lg bg-slate-100 p-2 text-slate-500" title="Fechar detalhes">
                 <X size={16} />
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-2">
-              {clinicalChangeCategoryOrder.map((category) => (
-                <div key={category} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{clinicalChangeCategoryLabels[category]}</p>
-                  <p className="mt-1 text-xl font-black text-slate-900">{selectedChangeGroup.categoryCounts[category] || 0}</p>
+            <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
+              {[
+                { label: 'Mudanças', value: detailKpis.total, className: 'border-slate-200 bg-slate-50 text-slate-700' },
+                { label: 'Melhoras', value: detailKpis.improved, className: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+                { label: 'Pioras', value: detailKpis.worsened, className: 'border-red-200 bg-red-50 text-red-700' },
+                { label: 'Estáveis', value: detailKpis.stable, className: 'border-slate-200 bg-white text-slate-600' },
+                { label: 'Alertas', value: detailKpis.alerts, className: 'border-red-200 bg-red-50 text-red-700' }
+              ].map((item) => (
+                <div key={item.label} className={`rounded-lg border p-3 ${item.className}`}>
+                  <p className="text-[10px] font-medium uppercase tracking-widest opacity-75">{item.label}</p>
+                  <p className="mt-1 text-2xl font-semibold">{item.value}</p>
                 </div>
               ))}
             </div>
 
-            {selectedChangeGroup.topChange && (
-              <div className="mt-4 rounded-lg border border-violet-100 bg-violet-50 p-3">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-[#7a32fc]">Maior mudança</p>
-                <p className="mt-1 text-sm font-bold text-slate-900">{selectedChangeGroup.topChange.metricLabel || 'Métrica clínica'}</p>
-                <p className="mt-1 text-xs font-semibold text-slate-500">
-                  magnitude real {round1(selectedChangeGroup.topChange.rawMagnitude)} · visual {round1(selectedChangeGroup.topChange.visualMagnitude)}
-                </p>
+            <div className="mb-4 rounded-lg border border-slate-100 bg-slate-50 p-3">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-slate-900">Resumo por sessão</p>
+                <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[10px] font-medium uppercase tracking-widest text-slate-500">
+                  {selectedChangeGroup.totalChanges} total
+                </span>
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-5">
+                {clinicalChangeCategoryOrder.map((category) => {
+                  const tone = clinicalChangeCategoryTone[category];
+                  const active = detailCategoryFilter === category;
+                  return (
+                    <button
+                      key={category}
+                      type="button"
+                      onClick={() => {
+                        setDetailCategoryFilter(active ? 'all' : category);
+                        setChangeDetailMode('detail');
+                      }}
+                      className={`rounded-lg border p-3 text-left transition ${tone.header} ${active ? tone.ring : ''}`}
+                    >
+                      <span className={`mb-2 block h-1 w-8 rounded-full ${tone.accent}`} />
+                      <span className="block text-[10px] font-medium uppercase tracking-widest">{clinicalChangeCategoryLabels[category]}</span>
+                      <span className="mt-1 block text-xl font-semibold">{selectedChangeGroup.categoryCounts[category] || 0}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="mb-4 flex flex-col gap-3 rounded-lg border border-slate-100 bg-white p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="inline-grid grid-cols-2 rounded-lg bg-slate-100 p-1">
+                  {[
+                    { id: 'summary', label: 'Resumo' },
+                    { id: 'detail', label: 'Detalhado' }
+                  ].map((mode) => (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      onClick={() => setChangeDetailMode(mode.id as ChangeDetailMode)}
+                      className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-xs font-medium ${changeDetailMode === mode.id ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-slate-500'}`}
+                    >
+                      <ListTree size={14} />
+                      {mode.label}
+                    </button>
+                  ))}
+                </div>
+                <button type="button" onClick={() => resetDetailFilters('all')} className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-medium text-slate-500">
+                  Limpar filtros
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-[10px] font-medium uppercase tracking-widest text-slate-400">Categoria</label>
+                  <select value={detailCategoryFilter} onChange={(event) => setDetailCategoryFilter(event.target.value as ChangeCategoryFilter)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-medium text-slate-700 outline-none">
+                    <option value="all">Todas</option>
+                    {clinicalChangeCategoryOrder.map((category) => (
+                      <option key={category} value={category}>{clinicalChangeCategoryLabels[category]}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10px] font-medium uppercase tracking-widest text-slate-400">Sessão</label>
+                  <select value={detailSessionFilter} onChange={(event) => setDetailSessionFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-medium text-slate-700 outline-none">
+                    <option value="">Todas</option>
+                    {detailSessionOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10px] font-medium uppercase tracking-widest text-slate-400">Dia</label>
+                  <select value={detailDayFilter} onChange={(event) => setDetailDayFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-medium text-slate-700 outline-none">
+                    <option value="">Todos</option>
+                    {detailDayOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10px] font-medium uppercase tracking-widest text-slate-400">Target/meta</label>
+                  <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+                    <Search size={14} className="text-slate-400" />
+                    <input value={detailTargetFilter} onChange={(event) => setDetailTargetFilter(event.target.value)} placeholder="Filtrar por nome" className="min-w-0 flex-1 bg-transparent text-xs font-medium text-slate-700 outline-none placeholder:text-slate-300" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <label className="inline-flex min-h-[34px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600">
+                  <input type="checkbox" checked={detailSignificantOnly} onChange={(event) => setDetailSignificantOnly(event.target.checked)} />
+                  Somente significativas
+                </label>
+                {[
+                  { id: 'all', label: 'Todos' },
+                  { id: 'improved', label: 'Somente melhora' },
+                  { id: 'worsened', label: 'Somente piora' },
+                  { id: 'alerts', label: 'Somente alertas' }
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setDetailTrendFilter(item.id as ChangeTrendFilter)}
+                    className={`rounded-lg border px-3 py-2 text-xs font-medium ${detailTrendFilter === item.id ? 'border-[#7a32fc] bg-[#7a32fc]/10 text-[#7a32fc]' : 'border-slate-200 bg-white text-slate-500'}`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {changeDetailMode === 'summary' ? (
+              <div className="space-y-3">
+                {detailGroups.map(({ category, changes }) => {
+                  const tone = clinicalChangeCategoryTone[category];
+                  return (
+                    <button
+                      key={category}
+                      type="button"
+                      onClick={() => {
+                        setDetailCategoryFilter(category);
+                        setChangeDetailMode('detail');
+                      }}
+                      className={`w-full rounded-lg border p-3 text-left transition hover:bg-white ${tone.panel} ${detailCategoryFilter === category ? tone.ring : ''}`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`h-2.5 w-2.5 rounded-full ${tone.accent}`} />
+                          <span className={`text-sm font-semibold ${tone.softText}`}>{clinicalChangeCategoryLabels[category]}</span>
+                        </div>
+                        <span className={`rounded-full border px-3 py-1 text-[10px] font-medium uppercase tracking-widest ${tone.badge}`}>
+                          {changes.length} itens
+                        </span>
+                      </div>
+                      <div className="mt-3 space-y-2">
+                        {changes.slice(0, 3).map((change, index) => (
+                          <div key={`${change.id || change.sessionId}-${change.metricType}-${index}`} className="rounded-md bg-white/80 px-3 py-2">
+                            <p className="truncate text-xs font-medium text-slate-800">{changePrimaryLabel(change)}</p>
+                            <p className="mt-1 text-[11px] text-slate-500">
+                              {formatValue(change.previousValue, change.metricType)} → {formatValue((change as ChartPoint).value ?? change.metricValue, change.metricType)} · {formatDelta(change)} · {clinicalInterpretation(change)}
+                            </p>
+                          </div>
+                        ))}
+                        {changes.length === 0 && <p className="rounded-md bg-white/70 px-3 py-2 text-xs text-slate-400">Nenhum item nesta seleção.</p>}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {detailGroups.map(({ category, changes }) => {
+                  const tone = clinicalChangeCategoryTone[category];
+                  const collapsed = Boolean(collapsedChangeCategories[category]);
+                  return (
+                    <section key={category} className={`rounded-lg border p-3 ${tone.panel} ${detailCategoryFilter === category ? tone.ring : ''}`}>
+                      <button type="button" onClick={() => toggleChangeCategory(category)} className="flex w-full items-center justify-between gap-3 text-left">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${tone.accent}`} />
+                          <span className={`truncate text-sm font-semibold ${tone.softText}`}>{clinicalChangeCategoryLabels[category]}</span>
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${tone.badge}`}>{changes.length}</span>
+                        </div>
+                        {collapsed ? <ChevronRight size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
+                      </button>
+                      {!collapsed && (
+                        <div className="mt-3 space-y-3">
+                          {changes.length > 0 ? (
+                            changes.map((change, index) => (
+                              <ClinicalChangeCard key={`${change.id || change.sessionId}-${change.metricType}-${index}`} change={change} index={index} />
+                            ))
+                          ) : (
+                            <p className="rounded-lg bg-white/70 px-3 py-4 text-center text-xs text-slate-400">Nenhum item nesta categoria com os filtros atuais.</p>
+                          )}
+                        </div>
+                      )}
+                    </section>
+                  );
+                })}
+                {selectedFilteredChanges.length > visibleDetailChanges.length && (
+                  <p className="text-center text-[11px] text-slate-400">
+                    Mostrando {visibleDetailChanges.length} de {selectedFilteredChanges.length} itens filtrados.
+                  </p>
+                )}
               </div>
             )}
-
-            <div className="mt-4 space-y-3">
-              <p className="text-sm font-bold text-slate-900">Mudanças individuais</p>
-              {selectedChangeGroup.changes.map((change, index) => (
-                <div key={`${change.id || change.sessionId}-${change.metricType}-${index}`} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-                  <div className="mb-2 flex flex-wrap items-center gap-2">
-                    <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${statusTone(change.changeStatus)}`}>
-                      {clinicalChangeCategoryLabels[change.changeCategory]}
-                    </span>
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{formatDateTime(change.changedAt)}</span>
-                  </div>
-                  <p className="text-sm font-semibold text-slate-800">{changeSentence(change, index)}</p>
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       )}
