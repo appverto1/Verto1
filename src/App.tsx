@@ -3609,7 +3609,7 @@ export default function App() {
       : abaCorrect && abaPromptLevel.isIndependent;
     const abaCollectionType = String(sessionMeta?.collectionType || 'dtt').toLowerCase();
     const abaTargetId = String(sessionMeta?.targetId || peiGoal?.id || matchedSkill?.id || title);
-    const abaTrialId = `trial-${newId}`;
+    const abaTrialId = String(sessionMeta?.trialId || sessionMeta?.trial_id || `trial-${newId}`);
 
     if (isAbaV2Enabled()) {
       try {
@@ -3657,6 +3657,7 @@ export default function App() {
             clinicId: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
             source: 'verto_web',
             sessionReferenceDate: sessionMeta?.sessionReferenceDate || null,
+            clientTrialId: sessionMeta?.trialId || sessionMeta?.trial_id || null,
             promptLevelKey: abaPromptLevel.key,
             promptLevelName: abaPromptLevel.label,
             promptLevelSource: sessionMeta?.promptLevelSource || null,

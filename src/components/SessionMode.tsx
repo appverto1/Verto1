@@ -31,6 +31,13 @@ import { buildClinicalActionToast, buildClinicalOfflineToast, buildClinicalSaveE
 import { getCrisisShortcutIds, getDockVisibleShortcuts, normalizeQuickBehaviorShortcuts } from '../utils/abaClinicalDock';
 import { formatPatientLabel, formatTherapistLabel, safeDisplayValue } from '../utils/displayLabels';
 import {
+  formatAbaTrialHistoryLabel,
+  getAbaCollectionLabel,
+  isDuplicateRiskTrainingCollection,
+  isMaintenanceProbeCollection,
+  normalizeAbaCollectionType
+} from '../utils/abaTrialLabels';
+import {
   buildIntervalAggregateSummary,
   buildIntervalCancelAudit,
   getIntervalRunStatus,
@@ -106,6 +113,26 @@ type OpenDurationEvent = {
   startedAt: string;
   location?: string;
   severity?: number | null;
+};
+
+type PendingMaintenanceProbeTrial = {
+  goal: any;
+  score: number;
+  outcome: 'independent' | 'prompted' | 'error';
+  selectedPrompt: any;
+  previousRecordId: string;
+};
+
+type TrialAuditEvent = {
+  id: string;
+  action: 'convert_trial_collection_type';
+  recordId: string;
+  targetId?: string | null;
+  targetName?: string | null;
+  fromCollectionType?: string | null;
+  toCollectionType: string;
+  sessionId: string;
+  occurredAt: string;
 };
 
 const collectionOptions = [
@@ -278,16 +305,13 @@ const mapRecentAbaEventToSessionRecord = (event: any): SessionRecord | null => {
     const correct = Boolean(event.correct ?? event.isCorrect);
     const independent = Boolean(event.independent ?? event.isIndependent);
     const outcome: SessionRecord['trialOutcome'] = !correct ? 'error' : independent ? 'independent' : 'prompted';
-    const promptLabel = event.prompt_level_name || event.promptLevelName || event.prompt_level_key || event.promptLevelKey;
+    const collectionType = event.collection_type || event.collectionType || event.trial_type || event.trialType || 'dtt';
+    const score = event.response_score ?? event.responseScore ?? event.score ?? null;
     return {
       id: String(event.id),
       kind: 'trial',
       title: String(event.target_name || event.targetName || 'Tentativa'),
-      detail: outcome === 'independent'
-        ? 'independente'
-        : outcome === 'prompted'
-          ? `com ajuda${promptLabel ? ` - ${promptLabel}` : ''}`
-          : 'erro',
+      detail: formatAbaTrialHistoryLabel({ collectionType, outcome, score }),
       timestamp: String(event.occurred_at || event.occurredAt || event.created_at || event.createdAt || new Date().toISOString()),
       syncStatus: normalizeSyncStatus(event.sync_status || event.syncStatus || 'synced'),
       targetId: event.target_id || event.targetId || null,
@@ -295,9 +319,9 @@ const mapRecentAbaEventToSessionRecord = (event: any): SessionRecord | null => {
       programId: event.program_id || event.programId || null,
       therapistId: event.therapist_id || event.therapistId || null,
       trialOutcome: outcome,
-      collectionType: event.collection_type || event.collectionType,
+      collectionType,
       promptLevelKey: event.prompt_level_key || event.promptLevelKey,
-      score: event.response_score ?? event.responseScore ?? event.score ?? null,
+      score,
       correct,
       independent
     };
@@ -338,6 +362,32 @@ const mapRecentAbaEventToSessionRecord = (event: any): SessionRecord | null => {
     consequence: event.consequence,
     notes: event.notes
   };
+};
+
+const normalizePersistedSessionRecord = (record: any): SessionRecord => {
+  const normalizedRecord: SessionRecord = {
+    ...record,
+    syncStatus: normalizeSyncStatus(record?.syncStatus || record?.sync_status)
+  };
+  if (normalizedRecord.kind === 'trial') {
+    const collectionType = normalizeAbaCollectionType(normalizedRecord.collectionType || record?.collection_type || record?.trialType || 'dtt');
+    const score = normalizedRecord.score ?? record?.response_score ?? 0;
+    const scoreNumber = Number(score);
+    const isCorrect = typeof normalizedRecord.correct === 'boolean' ? normalizedRecord.correct : Number.isFinite(scoreNumber) && scoreNumber > 0;
+    const isIndependent = typeof normalizedRecord.independent === 'boolean' ? normalizedRecord.independent : Number.isFinite(scoreNumber) && scoreNumber >= 1;
+    const outcome = normalizedRecord.trialOutcome || (!isCorrect ? 'error' : isIndependent ? 'independent' : 'prompted');
+    return {
+      ...normalizedRecord,
+      collectionType,
+      trialOutcome: outcome,
+      detail: formatAbaTrialHistoryLabel({
+        collectionType,
+        outcome,
+        score
+      })
+    };
+  }
+  return normalizedRecord;
 };
 
 const isIntervalMeasurement = (measurementType: string) => (
@@ -495,9 +545,13 @@ export const SessionMode = ({
   const [actionToast, setActionToast] = useState<ClinicalActionToast | null>(null);
   const [actionLocks, setActionLocks] = useState<Record<string, boolean>>({});
   const [microFeedback, setMicroFeedback] = useState<Record<string, 'pulse' | 'check' | 'plus'>>({});
+  const [maintenanceProbeFeedback, setMaintenanceProbeFeedback] = useState('');
+  const [pendingMaintenanceProbeTrial, setPendingMaintenanceProbeTrial] = useState<PendingMaintenanceProbeTrial | null>(null);
+  const [, setTrialAuditEvents] = useState<TrialAuditEvent[]>([]);
   const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
   const [editingRecordTitle, setEditingRecordTitle] = useState('');
   const [editingRecordDetail, setEditingRecordDetail] = useState('');
+  const [editingRecordCollectionType, setEditingRecordCollectionType] = useState('dtt');
   const [editingRecordLocation, setEditingRecordLocation] = useState('');
   const [editingRecordSeverity, setEditingRecordSeverity] = useState(2);
   const [editingRecordAntecedent, setEditingRecordAntecedent] = useState('');
@@ -510,6 +564,7 @@ export const SessionMode = ({
   const actionLocksRef = useRef<Record<string, boolean>>({});
   const actionLockTimersRef = useRef<Record<string, number>>({});
   const microFeedbackTimersRef = useRef<Record<string, number>>({});
+  const maintenanceProbeFeedbackTimerRef = useRef<number | null>(null);
   const sessionScrollRef = useRef<HTMLDivElement | null>(null);
   const postClosureScrollRef = useRef<HTMLDivElement | null>(null);
   const sessionSummaryScrollRef = useRef<HTMLDivElement | null>(null);
@@ -610,6 +665,7 @@ export const SessionMode = ({
 
   useEffect(() => () => {
     if (actionToastTimerRef.current) window.clearTimeout(actionToastTimerRef.current);
+    if (maintenanceProbeFeedbackTimerRef.current) window.clearTimeout(maintenanceProbeFeedbackTimerRef.current);
     Object.values(actionLockTimersRef.current).forEach((timer) => window.clearTimeout(Number(timer)));
     Object.values(microFeedbackTimersRef.current).forEach((timer) => window.clearTimeout(Number(timer)));
   }, []);
@@ -623,7 +679,7 @@ export const SessionMode = ({
     try {
       const persisted = JSON.parse(localStorage.getItem(sessionStateKey) || '{}');
       setRecords(Array.isArray(persisted.records)
-        ? persisted.records.map((record: any) => ({ ...record, syncStatus: normalizeSyncStatus(record?.syncStatus) }))
+        ? persisted.records.map(normalizePersistedSessionRecord)
         : []);
       setOpenDurations(Array.isArray(persisted.openDurations) ? persisted.openDurations : []);
       setRateWindow(persisted.rateWindow || null);
@@ -1090,44 +1146,191 @@ export const SessionMode = ({
     };
   };
 
-  const handleTrialClick = async (goal: any, score: number, outcome: 'independent' | 'prompted' | 'error', promptedPromptKey?: string) => {
-    if (!ensureSessionCanRecord()) return;
-    const maxScore = Number(goal?.maxScore || 1);
-    const timestamp = new Date().toISOString();
-    const selectedPrompt = outcome === 'independent'
-      ? resolveAbaPromptLevel({ promptLevelKey: 'independent' })
-      : outcome === 'error'
-        ? resolveAbaPromptLevel({ promptLevelKey: 'error' })
-        : resolveAbaPromptLevel({ promptLevelKey: promptedPromptKey || promptLevelKey });
-    if (outcome === 'prompted' && !promptedPromptKeys.includes(selectedPrompt.key)) {
-      setPromptWarning('Selecione visual, gestual, verbal, modelo, fisica parcial ou fisica total antes de salvar.');
-      setPromptSelectionGoal(goal);
+  const recordMatchesGoal = (record: SessionRecord, goal: any) => {
+    const goalId = String(goal?.id || goal?.target_id || goal?.targetId || '').trim();
+    const goalName = String(goal?.name || goal?.target_name || goal?.targetName || '').trim();
+    const recordTargetId = String(record.targetId || '').trim();
+    const recordTargetName = String(record.targetName || record.title || '').trim();
+    if (goalId && recordTargetId && recordTargetId === goalId) return true;
+    return Boolean(goalName && recordTargetName && recordTargetName === goalName);
+  };
+
+  const findPreviousTrainingTrialForGoal = (goal: any) => {
+    return records
+      .filter((record) => record.kind === 'trial' && recordMatchesGoal(record, goal) && isDuplicateRiskTrainingCollection(record.collectionType))
+      .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())[0] || null;
+  };
+
+  const persistTrialAudit = (audit: Omit<TrialAuditEvent, 'id' | 'sessionId' | 'occurredAt'>) => {
+    const auditEvent: TrialAuditEvent = {
+      id: `trial-audit-${crypto.randomUUID()}`,
+      sessionId,
+      occurredAt: new Date().toISOString(),
+      ...audit
+    };
+    const toCollectionLabel = getAbaCollectionLabel(audit.toCollectionType);
+    setTrialAuditEvents((prev) => [auditEvent, ...prev].slice(0, 25));
+    void dataService.saveActivityLog({
+      type: 'clinical_audit',
+      title: 'Conversão de tentativa ABA',
+      content: `Tentativa de ${audit.targetName || 'target'} convertida de ${getAbaCollectionLabel(audit.fromCollectionType)} para ${toCollectionLabel}.`,
+      details: 'Score, prompt, horário original e target foram preservados.',
+      action: 'convert_trial_collection_type',
+      action_type: 'convert_trial_collection_type',
+      target_name: audit.targetName || null,
+      patient_name: patientDisplayName,
+      therapist_name: therapistDisplayName,
+      created_at: auditEvent.occurredAt
+    }).catch((error) => {
+      if (import.meta.env.DEV) console.warn('Falha ao registrar auditoria da conversão ABA:', error);
+    });
+  };
+
+  const persistConvertedTrialRecord = async (record: SessionRecord, fromCollectionType: string) => {
+    const canUpdatePersistedTrial = !String(record.id || '').startsWith('trial-ui-') || record.rawPayload?.clientTrialId === record.id;
+    if (!canUpdatePersistedTrial) return;
+    try {
+      const maxScore = Number(record.rawPayload?.targetMaxScore || record.rawPayload?.maxScore || 1);
+      const result = await dataService.saveAbaTrial({
+        id: record.id,
+        clinic_id: resolvedClinicId || undefined,
+        clinicId: resolvedClinicId || undefined,
+        patient_id: patientId,
+        patientId,
+        session_id: sessionId,
+        sessionId,
+        target_id: record.targetId || record.targetName || record.title,
+        targetId: record.targetId || record.targetName || record.title,
+        target_name: record.targetName || record.title,
+        targetName: record.targetName || record.title,
+        program_id: record.programId || null,
+        programId: record.programId || null,
+        collection_type: 'maintenance_probe',
+        collectionType: 'maintenance_probe',
+        trialType: 'maintenance_probe',
+        response_score: record.score,
+        score: record.score,
+        max_score: maxScore,
+        maxScore,
+        correct: Boolean(record.correct),
+        isCorrect: Boolean(record.correct),
+        independent: Boolean(record.independent),
+        isIndependent: Boolean(record.independent),
+        prompt_level_key: record.promptLevelKey,
+        promptLevelKey: record.promptLevelKey,
+        occurred_at: record.timestamp,
+        occurredAt: record.timestamp,
+        timestamp: record.timestamp,
+        therapist_id: record.therapistId || resolvedTherapistId || undefined,
+        therapistId: record.therapistId || resolvedTherapistId || undefined,
+        source: 'verto_web',
+        raw_payload: {
+          ...(record.rawPayload || {}),
+          convertedFromCollectionType: fromCollectionType,
+          convertedToCollectionType: 'maintenance_probe',
+          conversionPreservedOriginalTimestamp: true,
+          source: 'session_mode_trial_conversion'
+        }
+      });
+      updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
+      showPersistResultToast(result);
+      onSessionRecordSaved?.();
+    } catch (error) {
+      updateRecordStatus(record.id, 'error');
+      showClinicalToast(buildClinicalSaveErrorToast(), 'error');
+      if (import.meta.env.DEV) console.error('Falha ao persistir conversão da tentativa ABA:', error);
+    }
+  };
+
+  const convertPreviousTrialToMaintenanceProbe = (recordId: string) => {
+    const original = records.find((record) => record.id === recordId);
+    if (!original) {
+      setPendingMaintenanceProbeTrial(null);
       return;
     }
+    const fromCollectionType = normalizeAbaCollectionType(original.collectionType);
+    const convertedAt = new Date().toISOString();
+    const convertedRecord: SessionRecord = {
+      ...original,
+      collectionType: 'maintenance_probe',
+      detail: formatAbaTrialHistoryLabel({
+        collectionType: 'maintenance_probe',
+        outcome: original.trialOutcome || (original.correct ? 'independent' : 'error'),
+        score: original.score ?? 0
+      }),
+      syncStatus: 'local',
+      editedAt: convertedAt,
+      rawPayload: {
+        ...(original.rawPayload || {}),
+        convertedFromCollectionType: fromCollectionType,
+        convertedToCollectionType: 'maintenance_probe',
+        convertedAt,
+        conversionPreservedOriginalTimestamp: true
+      }
+    };
+    updateRecord(recordId, convertedRecord);
+    persistTrialAudit({
+      action: 'convert_trial_collection_type',
+      recordId,
+      targetId: original.targetId || null,
+      targetName: original.targetName || original.title || null,
+      fromCollectionType,
+      toCollectionType: 'maintenance_probe'
+    });
+    void persistConvertedTrialRecord(convertedRecord, fromCollectionType);
+    showClinicalToast({
+      variant: 'success',
+      title: 'Tentativa convertida',
+      subtitle: 'Score, prompt e horário original foram preservados.'
+    });
+    setPendingMaintenanceProbeTrial(null);
+  };
+
+  const persistTrialRecord = async ({
+    goal,
+    score,
+    outcome,
+    selectedPrompt,
+    activeCollectionType
+  }: {
+    goal: any;
+    score: number;
+    outcome: 'independent' | 'prompted' | 'error';
+    selectedPrompt: any;
+    activeCollectionType: string;
+  }) => {
+    const maxScore = Number(goal?.maxScore || 1);
+    const timestamp = new Date().toISOString();
+    const normalizedCollectionType = normalizeAbaCollectionType(activeCollectionType);
     const trialLockKey = `trial:${String(goal?.id || goal?.name || 'goal')}:${outcome}:${selectedPrompt.key}`;
     if (!lockAction(trialLockKey, 600)) return;
-    setPromptWarning('');
     const isCorrect = outcome !== 'error' && score > 0;
     const isIndependent = outcome === 'independent';
-    const trialId = `trial-ui-${crypto.randomUUID()}`;
-    const collectionLabel = collectionOptions.find((option) => option.key === collectionType)?.label || collectionType;
+    const trialId = `trial-${crypto.randomUUID()}`;
+    const collectionLabel = getAbaCollectionLabel(normalizedCollectionType);
 
     addRecord({
       id: trialId,
       kind: 'trial',
       title: goal.name,
-      detail: `${collectionLabel} - ${selectedPrompt.label} - ${score}`,
+      detail: formatAbaTrialHistoryLabel({ collectionType: normalizedCollectionType, outcome, score }),
       timestamp,
       targetId: goal?.id || null,
       targetName: goal?.name || null,
       programId: goal?.programId || goal?.program_id || goal?.protocolId || null,
       therapistId: resolvedTherapistId || null,
       trialOutcome: outcome,
-      collectionType,
+      collectionType: normalizedCollectionType,
       promptLevelKey: selectedPrompt.key,
       score,
       correct: isCorrect,
-      independent: isIndependent
+      independent: isIndependent,
+      rawPayload: {
+        source: 'session_mode_trial',
+        clientTrialId: trialId,
+        targetMaxScore: maxScore,
+        sessionReferenceDate: activeSession?.referenceDate || timestamp.slice(0, 10)
+      }
     });
     triggerMicroFeedback(trialLockKey, 'check');
     showClinicalToast(buildClinicalActionToast({
@@ -1150,8 +1353,9 @@ export const SessionMode = ({
         protocolTitle: goal?.protocolTitle || null,
         domainId: goal?.domainId || null,
         domainName: goal?.domainName || null,
-        collectionType,
-        trialType: collectionType,
+        trialId,
+        collectionType: normalizedCollectionType,
+        trialType: normalizedCollectionType,
         promptLevelKey: selectedPrompt.key,
         promptLevelName: selectedPrompt.label,
         promptLevel: selectedPrompt.key,
@@ -1171,6 +1375,51 @@ export const SessionMode = ({
       showClinicalToast(buildClinicalSaveErrorToast(), 'error');
       console.error('Falha ao persistir tentativa ABA:', error);
     }
+  };
+
+  const handleTrialClick = async (goal: any, score: number, outcome: 'independent' | 'prompted' | 'error', promptedPromptKey?: string) => {
+    if (!ensureSessionCanRecord()) return;
+    const selectedPrompt = outcome === 'independent'
+      ? resolveAbaPromptLevel({ promptLevelKey: 'independent' })
+      : outcome === 'error'
+        ? resolveAbaPromptLevel({ promptLevelKey: 'error' })
+        : resolveAbaPromptLevel({ promptLevelKey: promptedPromptKey || promptLevelKey });
+    if (outcome === 'prompted' && !promptedPromptKeys.includes(selectedPrompt.key)) {
+      setPromptWarning('Selecione visual, gestual, verbal, modelo, fisica parcial ou fisica total antes de salvar.');
+      setPromptSelectionGoal(goal);
+      return;
+    }
+    setPromptWarning('');
+    const activeCollectionType = normalizeAbaCollectionType(collectionType);
+    if (isMaintenanceProbeCollection(activeCollectionType)) {
+      const previousTrial = findPreviousTrainingTrialForGoal(goal);
+      if (previousTrial) {
+        setPendingMaintenanceProbeTrial({
+          goal,
+          score,
+          outcome,
+          selectedPrompt,
+          previousRecordId: previousTrial.id
+        });
+        return;
+      }
+    }
+    await persistTrialRecord({ goal, score, outcome, selectedPrompt, activeCollectionType });
+  };
+
+  const activateMaintenanceProbeMode = () => {
+    setCollectionType('maintenance_probe');
+    setMaintenanceProbeFeedback('Maintenance Probe ativo para a próxima tentativa');
+    if (maintenanceProbeFeedbackTimerRef.current) window.clearTimeout(maintenanceProbeFeedbackTimerRef.current);
+    maintenanceProbeFeedbackTimerRef.current = window.setTimeout(() => {
+      setMaintenanceProbeFeedback('');
+      maintenanceProbeFeedbackTimerRef.current = null;
+    }, 2500);
+    showClinicalToast({
+      variant: 'success',
+      title: 'Maintenance Probe ativo',
+      subtitle: 'A próxima tentativa será uma sondagem de manutenção.'
+    }, 'none');
   };
 
   const registerFrequency = (behaviorName = selectedBehavior.name, countDelta = 1) => {
@@ -2377,7 +2626,7 @@ export const SessionMode = ({
     const goalName = String(goal?.name || goal?.target_name || goal?.targetName || 'Meta').trim();
     const goalTrials = records.filter((record) => {
       if (record.kind !== 'trial') return false;
-      if (String(record.collectionType || '').toLowerCase() === 'maintenance_probe') return false;
+      if (isMaintenanceProbeCollection(record.collectionType)) return false;
       const recordTargetId = String(record.targetId || '').trim();
       if (goalId && recordTargetId && recordTargetId === goalId) return true;
       return String(record.title || record.targetName || '').trim() === goalName;
@@ -2433,7 +2682,7 @@ export const SessionMode = ({
       const goalName = String(goal?.name || goal?.target_name || goal?.targetName || 'Meta').trim();
       const goalTrials = records.filter((record) => {
         if (record.kind !== 'trial') return false;
-        if (String(record.collectionType || '').toLowerCase() !== 'maintenance_probe') return false;
+        if (!isMaintenanceProbeCollection(record.collectionType)) return false;
         const recordTargetId = String(record.targetId || '').trim();
         if (goalId && recordTargetId && recordTargetId === goalId) return true;
         return String(record.title || record.targetName || '').trim() === goalName;
@@ -2531,6 +2780,7 @@ export const SessionMode = ({
     setEditingRecordId(record.id);
     setEditingRecordTitle(record.title);
     setEditingRecordDetail(record.detail);
+    setEditingRecordCollectionType(normalizeAbaCollectionType(record.collectionType));
     setEditingRecordLocation(record.location || selectedLocation);
     setEditingRecordSeverity(Number(record.severity || selectedSeverity || 1));
     setEditingRecordAntecedent(record.antecedent || '');
@@ -2542,6 +2792,7 @@ export const SessionMode = ({
     setEditingRecordId(null);
     setEditingRecordTitle('');
     setEditingRecordDetail('');
+    setEditingRecordCollectionType('dtt');
     setEditingRecordLocation('');
     setEditingRecordSeverity(2);
     setEditingRecordAntecedent('');
@@ -2659,10 +2910,20 @@ export const SessionMode = ({
       return;
     }
     const isLockedIntervalRecord = isIntervalHistoryRecord(original);
+    const editedCollectionType = original.kind === 'trial'
+      ? normalizeAbaCollectionType(editingRecordCollectionType)
+      : original.collectionType;
     const editedRecord: SessionRecord = {
       ...original,
       title: isLockedIntervalRecord ? original.title : (editingRecordTitle.trim() || original.title),
-      detail: isLockedIntervalRecord ? original.detail : (editingRecordDetail.trim() || original.detail),
+      detail: original.kind === 'trial'
+        ? formatAbaTrialHistoryLabel({
+            collectionType: editedCollectionType,
+            outcome: original.trialOutcome || (original.correct ? 'independent' : 'error'),
+            score: original.score ?? 0
+          })
+        : isLockedIntervalRecord ? original.detail : (editingRecordDetail.trim() || original.detail),
+      collectionType: editedCollectionType,
       location: editingRecordLocation || undefined,
       severity: editingRecordSeverity,
       antecedent: editingRecordAntecedent.trim() || undefined,
@@ -2703,6 +2964,20 @@ export const SessionMode = ({
       }
     } else {
       updateRecord(editingRecordId, editedRecord);
+      const originalCollectionType = normalizeAbaCollectionType(original.collectionType);
+      if (originalCollectionType !== editedCollectionType) {
+        persistTrialAudit({
+          action: 'convert_trial_collection_type',
+          recordId: original.id,
+          targetId: original.targetId || null,
+          targetName: original.targetName || original.title || null,
+          fromCollectionType: originalCollectionType,
+          toCollectionType: editedCollectionType
+        });
+        if (isMaintenanceProbeCollection(editedCollectionType)) {
+          void persistConvertedTrialRecord(editedRecord, originalCollectionType);
+        }
+      }
     }
     showClinicalToast(buildClinicalActionToast({ action: 'edit' }));
     cancelEditingRecord();
@@ -4251,17 +4526,30 @@ export const SessionMode = ({
 
                   {maintenanceInfo.isMaintenanceTarget && (
                     <div className="mb-5 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div>
-                          <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700">Target em manutencao</p>
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700">Este target está em manutenção.</p>
+                          <p className="mt-1 text-xs font-bold text-amber-900">
+                            Tipo atual da próxima tentativa: {getAbaCollectionLabel(collectionType)}
+                          </p>
+                          <p className="mt-1 text-xs font-semibold text-amber-800">Para avaliar manutenção, use Maintenance Probe.</p>
                           <p className="text-xs font-semibold text-amber-800">
                             {maintenanceInfo.nextSchedule ? formatMaintenanceDueLabel(maintenanceInfo.nextSchedule.scheduled_for || maintenanceInfo.nextSchedule.scheduledFor) : 'Sem proximo maintenance probe'}
                           </p>
                         </div>
-                        <span className="inline-flex w-fit rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700">
+                        <button
+                          type="button"
+                          onClick={activateMaintenanceProbeMode}
+                          className="inline-flex min-h-[38px] w-fit items-center justify-center rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700 shadow-sm transition-all active:scale-95"
+                        >
                           Use Maintenance Probe
-                        </span>
+                        </button>
                       </div>
+                      {maintenanceProbeFeedback && (
+                        <p className="mt-2 inline-flex rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
+                          {maintenanceProbeFeedback}
+                        </p>
+                      )}
                       {maintenanceInfo.consecutiveFailures >= 2 && (
                         <p className="mt-2 text-xs font-bold text-red-600">{maintenanceInfo.consecutiveFailures} probes consecutivos abaixo do criterio</p>
                       )}
@@ -4370,11 +4658,29 @@ export const SessionMode = ({
                           onChange={(event) => setEditingRecordTitle(event.target.value)}
                           className="w-full rounded-xl border border-blue-100 bg-white px-3 py-2 text-sm font-bold text-gray-800 outline-none focus:border-[#7a32fc]"
                         />
-                        <textarea
-                          value={editingRecordDetail}
-                          onChange={(event) => setEditingRecordDetail(event.target.value)}
-                          className="w-full min-h-[74px] rounded-xl border border-blue-100 bg-white px-3 py-2 text-xs text-gray-600 outline-none resize-none focus:border-[#7a32fc]"
-                        />
+                        {record.kind === 'trial' ? (
+                          <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-3">
+                            <label className="text-[10px] font-bold text-amber-700 uppercase tracking-widest">
+                              Tipo da tentativa
+                              <select
+                                value={editingRecordCollectionType}
+                                onChange={(event) => setEditingRecordCollectionType(event.target.value)}
+                                className="mt-1 w-full rounded-xl border border-amber-100 bg-white px-3 py-2 text-xs font-bold text-gray-700 outline-none"
+                              >
+                                {collectionOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+                              </select>
+                            </label>
+                            <p className="mt-2 text-[11px] font-semibold text-amber-800">
+                              Alterar o tipo pode mudar cálculos de aquisição, manutenção e gráficos.
+                            </p>
+                          </div>
+                        ) : (
+                          <textarea
+                            value={editingRecordDetail}
+                            onChange={(event) => setEditingRecordDetail(event.target.value)}
+                            className="w-full min-h-[74px] rounded-xl border border-blue-100 bg-white px-3 py-2 text-xs text-gray-600 outline-none resize-none focus:border-[#7a32fc]"
+                          />
+                        )}
                       </>
                     )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -4488,6 +4794,64 @@ export const SessionMode = ({
           </div>
         </aside>
       </div>
+
+      {pendingMaintenanceProbeTrial && (
+        <div className="fixed inset-0 z-[220] flex items-end justify-center bg-gray-950/40 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:items-center sm:p-6">
+          <div className="w-full max-w-lg rounded-[28px] border border-amber-100 bg-white p-5 shadow-2xl shadow-gray-950/20">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-amber-600">Possível duplicidade</p>
+            <h2 className="mt-2 text-xl font-black text-gray-900">
+              Já existe uma tentativa registrada para este target nesta sessão.
+            </h2>
+            <p className="mt-2 text-sm font-semibold leading-relaxed text-gray-600">
+              Você quer registrar uma nova sondagem de manutenção ou converter a tentativa anterior?
+            </p>
+            {(() => {
+              const previousRecord = records.find((record) => record.id === pendingMaintenanceProbeTrial.previousRecordId);
+              return previousRecord ? (
+                <div className="mt-4 rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Tentativa anterior</p>
+                  <p className="mt-1 text-sm font-bold text-gray-800">{previousRecord.title}</p>
+                  <p className="mt-1 text-xs font-semibold text-gray-500">{previousRecord.detail}</p>
+                </div>
+              ) : null;
+            })()}
+            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <button
+                type="button"
+                onClick={() => {
+                  const pending = pendingMaintenanceProbeTrial;
+                  setPendingMaintenanceProbeTrial(null);
+                  if (!pending) return;
+                  void persistTrialRecord({
+                    goal: pending.goal,
+                    score: pending.score,
+                    outcome: pending.outcome,
+                    selectedPrompt: pending.selectedPrompt,
+                    activeCollectionType: 'maintenance_probe'
+                  });
+                }}
+                className="min-h-[48px] rounded-2xl bg-emerald-500 px-4 py-3 text-xs font-bold uppercase tracking-widest text-white shadow-lg shadow-emerald-500/20"
+              >
+                Registrar nova tentativa
+              </button>
+              <button
+                type="button"
+                onClick={() => convertPreviousTrialToMaintenanceProbe(pendingMaintenanceProbeTrial.previousRecordId)}
+                className="min-h-[48px] rounded-2xl bg-[#7a32fc] px-4 py-3 text-xs font-bold uppercase tracking-widest text-white shadow-lg shadow-purple-500/20"
+              >
+                Converter tentativa anterior
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingMaintenanceProbeTrial(null)}
+                className="min-h-[48px] rounded-2xl border border-gray-100 bg-white px-4 py-3 text-xs font-bold uppercase tracking-widest text-gray-500"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {abcModalOpen && (
         <div className="fixed inset-0 z-[140] flex items-end sm:items-center justify-center p-3 sm:p-4 bg-black/30 backdrop-blur-sm">

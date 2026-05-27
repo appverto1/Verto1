@@ -170,6 +170,36 @@ test('Maintenance Probe nao regride PEI nem target automaticamente no legado', (
   assert.doesNotMatch(serverCode, /from\('aba_targets'\)[\s\S]{0,240}\.update\([\s\S]{0,240}REGRESSION_CONFIRMED/m);
 });
 
+test('SessionMode previne duplicidade explicita entre treino e Maintenance Probe', () => {
+  assert.match(sessionModeCode, /setPendingMaintenanceProbeTrial/);
+  assert.match(sessionModeCode, /findPreviousTrainingTrialForGoal/);
+  assert.match(sessionModeCode, /isDuplicateRiskTrainingCollection\(record\.collectionType\)/);
+  assert.match(sessionModeCode, /Registrar nova tentativa/);
+  assert.match(sessionModeCode, /Converter tentativa anterior/);
+  assert.match(sessionModeCode, /convertPreviousTrialToMaintenanceProbe/);
+  assert.match(sessionModeCode, /collectionType: 'maintenance_probe'/);
+  assert.match(sessionModeCode, /conversionPreservedOriginalTimestamp/);
+  assert.match(sessionModeCode, /saveActivityLog/);
+});
+
+test('banner de manutencao comunica tipo atual e botao nao registra tentativa', () => {
+  const activationStart = sessionModeCode.indexOf('const activateMaintenanceProbeMode');
+  const activationEnd = sessionModeCode.indexOf('const registerFrequency', activationStart);
+  const activationBody = sessionModeCode.slice(activationStart, activationEnd);
+  assert.match(sessionModeCode, /Este target está em manutenção\./);
+  assert.match(sessionModeCode, /Tipo atual da próxima tentativa/);
+  assert.match(sessionModeCode, /Para avaliar manutenção, use Maintenance Probe\./);
+  assert.match(sessionModeCode, /Maintenance Probe ativo para a próxima tentativa/);
+  assert.match(activationBody, /setCollectionType\('maintenance_probe'\)[\s\S]*?showClinicalToast/m);
+  assert.doesNotMatch(activationBody, /handleTrialClick|persistTrialRecord|addRecord/m);
+});
+
+test('resumos separam treino/aquisicao de sondagem de manutencao no front', () => {
+  assert.match(sessionModeCode, /if \(isMaintenanceProbeCollection\(record\.collectionType\)\) return false/);
+  assert.match(sessionModeCode, /if \(!isMaintenanceProbeCollection\(record\.collectionType\)\) return false/);
+  assert.doesNotMatch(sessionModeCode, /REGRESSION_CONFIRMED[\s\S]{0,240}updateRecord/m);
+});
+
 let passed = 0;
 for (const item of tests) {
   item.fn();

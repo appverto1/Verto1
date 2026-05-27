@@ -5,6 +5,11 @@ import {
   buildClinicalOfflineToast,
   buildClinicalSaveErrorToast
 } from '../src/utils/abaSessionFeedback.ts';
+import {
+  formatAbaTrialHistoryLabel,
+  isDuplicateRiskTrainingCollection,
+  isMaintenanceProbeCollection
+} from '../src/utils/abaTrialLabels.ts';
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -94,6 +99,28 @@ test('intervalo SIM/NÃO não permite dupla resposta no mesmo intervalo', () => 
   assert.equal(gate.acquire('interval:run-1:4', 0, 1000), true);
   assert.equal(gate.acquire('interval:run-1:4', 0, 1001), false);
   assert.equal(gate.acquire('interval:run-1:5', 0, 1002), true);
+});
+
+test('historico usa labels humanos para DTT e Maintenance Probe', () => {
+  assert.equal(formatAbaTrialHistoryLabel({
+    collectionType: 'dtt',
+    outcome: 'independent',
+    score: 1
+  }), 'Treino DTT · Independente · 1');
+  assert.equal(formatAbaTrialHistoryLabel({
+    collectionType: 'maintenance_probe',
+    outcome: 'independent',
+    score: 1
+  }), 'Sondagem de manutenção · Independente · 1');
+});
+
+test('detector separa treino de sondagem de manutencao', () => {
+  assert.equal(isDuplicateRiskTrainingCollection('dtt'), true);
+  assert.equal(isDuplicateRiskTrainingCollection('net'), true);
+  assert.equal(isDuplicateRiskTrainingCollection('cold_probe'), true);
+  assert.equal(isDuplicateRiskTrainingCollection('maintenance_probe'), false);
+  assert.equal(isMaintenanceProbeCollection('maintenance_probe'), true);
+  assert.equal(isMaintenanceProbeCollection('dtt'), false);
 });
 
 for (const item of tests) {
