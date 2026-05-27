@@ -312,22 +312,42 @@ const getSessionTypeStyle = (type: any) => {
 
 const getClinicalStatusStyle = (status: any, event?: any) => {
   const normalized = removeDiacritics(status || '');
-  if (event?.has_session_record || normalized.includes('completed') || normalized.includes('conclu')) {
-    return { label: 'Registrada', className: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: CheckCircle2 };
+  if (normalized.includes('cancel')) {
+    return { label: 'Cancelada', className: 'bg-rose-100 text-rose-700 border-rose-200', icon: Ban };
   }
-  if (normalized.includes('confirm')) {
-    return { label: 'Confirmada', className: 'bg-sky-100 text-sky-700 border-sky-200', icon: CheckCircle2 };
+  if (normalized.includes('reschedule') || normalized.includes('remarc') || normalized.includes('reagend')) {
+    return { label: 'Remarcação', className: 'bg-amber-100 text-amber-700 border-amber-200', icon: RefreshCcw };
+  }
+  if (normalized.includes('miss') || normalized.includes('falt')) {
+    return { label: 'Faltou', className: 'bg-rose-100 text-rose-700 border-rose-200', icon: AlertCircle };
   }
   if (normalized.includes('progress') || normalized.includes('andamento')) {
     return { label: 'Em andamento', className: 'bg-indigo-100 text-indigo-700 border-indigo-200', icon: Play };
   }
-  if (normalized.includes('miss') || normalized.includes('falt')) {
-    return { label: 'Faltou', className: 'bg-orange-100 text-orange-700 border-orange-200', icon: AlertCircle };
+  if (event?.has_session_record || normalized.includes('completed') || normalized.includes('conclu')) {
+    return { label: 'Registrada', className: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: CheckCircle2 };
   }
-  if (normalized.includes('cancel')) {
-    return { label: 'Cancelada', className: 'bg-rose-100 text-rose-700 border-rose-200', icon: Ban };
+  if (normalized.includes('confirm')) {
+    return { label: 'Confirmada', className: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: CheckCircle2 };
   }
-  return { label: 'Agendada', className: 'bg-slate-100 text-slate-600 border-slate-200', icon: Clock };
+  return { label: 'Pendente', className: 'bg-slate-100 text-slate-600 border-slate-200', icon: Clock };
+};
+
+const getEventStatusVisual = (status: any, event?: any) => {
+  const normalized = removeDiacritics(status || '');
+  if (normalized.includes('cancel') || normalized.includes('miss') || normalized.includes('falt')) {
+    return { card: 'border-rose-200 bg-rose-50/80 text-rose-950', stripe: 'bg-rose-500' };
+  }
+  if (normalized.includes('reschedule') || normalized.includes('remarc') || normalized.includes('reagend')) {
+    return { card: 'border-amber-200 bg-amber-50/85 text-amber-950', stripe: 'bg-amber-500' };
+  }
+  if (normalized.includes('confirm') || event?.has_session_record || normalized.includes('completed') || normalized.includes('conclu')) {
+    return { card: 'border-emerald-200 bg-emerald-50/80 text-emerald-950', stripe: 'bg-emerald-500' };
+  }
+  if (normalized.includes('progress') || normalized.includes('andamento')) {
+    return { card: 'border-indigo-200 bg-indigo-50/80 text-indigo-950', stripe: 'bg-indigo-500' };
+  }
+  return { card: 'border-slate-200 bg-white text-slate-900', stripe: 'bg-slate-300' };
 };
 
 const pad2 = (value: number) => String(value).padStart(2, '0');
@@ -473,6 +493,7 @@ export const ClinicalAgendaBoard = ({
   const [worseningOnly, setWorseningOnly] = useState(false);
   const [alertsOnly, setAlertsOnly] = useState(false);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+  const [timeReportOpen, setTimeReportOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     calendar: true,
     team: true,
@@ -976,8 +997,9 @@ export const ClinicalAgendaBoard = ({
   };
 
   const renderEventCard = (event: any, compact = false) => {
-    const style = getSessionTypeStyle(event.type);
+    const typeStyle = getSessionTypeStyle(event.type);
     const status = getClinicalStatusStyle(event.status, event);
+    const statusVisual = getEventStatusVisual(event.status, event);
     const StatusIcon = status.icon;
     return (
       <button
@@ -987,9 +1009,9 @@ export const ClinicalAgendaBoard = ({
           clickEvent.stopPropagation();
           openEventDetail(event);
         }}
-        className={`group relative w-full overflow-hidden rounded-xl border p-2 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${style.card}`}
+        className={`group relative w-full overflow-hidden rounded-xl border p-2 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${statusVisual.card}`}
       >
-        <span className={`absolute inset-y-0 left-0 w-1 ${style.stripe}`} />
+        <span className={`absolute inset-y-0 left-0 w-1 ${statusVisual.stripe}`} />
         <div className="pl-1">
           <div className="flex items-start justify-between gap-2">
             <span className="text-[10px] font-semibold leading-tight opacity-75">
@@ -1001,10 +1023,11 @@ export const ClinicalAgendaBoard = ({
             </span>
           </div>
           <p className={`mt-1 truncate text-sm font-semibold leading-tight ${compact ? 'text-xs' : ''}`}>{event.patientName}</p>
-          <p className="mt-1 truncate text-[11px] font-medium opacity-75">
-            {style.label} {event.room ? `· ${event.room}` : event.location ? `· ${event.location}` : ''}
-          </p>
-          {!compact && <p className="mt-1 truncate text-[10px] opacity-65">{event.therapistName}</p>}
+          <div className="mt-1 flex min-w-0 items-center gap-1.5">
+            <span className={`inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase ${typeStyle.badge}`}>{typeStyle.label}</span>
+            <span className="truncate text-[11px] font-medium opacity-70">{event.room || event.location || 'Sem local'}</span>
+          </div>
+          {!compact && <p className="mt-1 truncate text-[10px] opacity-60">{event.therapistName}</p>}
           {!compact && renderIndicators(event)}
         </div>
       </button>
@@ -1148,10 +1171,12 @@ export const ClinicalAgendaBoard = ({
                 <span className={`text-xs font-bold ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>{day}</span>
                 <div className="mt-2 space-y-1">
                   {items.slice(0, 2).map((event: any) => {
-                    const style = getSessionTypeStyle(event.type);
+                    const typeStyle = getSessionTypeStyle(event.type);
+                    const statusVisual = getEventStatusVisual(event.status, event);
                     return (
-                      <span key={event.id} className={`block truncate rounded-lg border px-2 py-1 text-[10px] font-semibold ${style.badge}`}>
-                        {event.time} {event.patientName}
+                      <span key={event.id} className={`flex min-w-0 items-center gap-1 truncate rounded-lg border px-2 py-1 text-[10px] font-semibold ${statusVisual.card}`}>
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${typeStyle.stripe}`} />
+                        <span className="truncate">{event.time} {event.patientName}</span>
                       </span>
                     );
                   })}
@@ -1174,15 +1199,69 @@ export const ClinicalAgendaBoard = ({
   ];
   const recommendations = Array.isArray(detail.acceptedRecommendations) ? detail.acceptedRecommendations : [];
 
-  return (
-    <div className="space-y-4 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:pb-4">
-      <div className={`rounded-[28px] border p-4 shadow-sm ${isDark ? 'border-slate-700 bg-[#101827] text-slate-100' : 'border-slate-100 bg-white text-slate-900'}`}>
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+  const compactKpis = [
+    { label: 'Sessões', value: kpis.total, tone: 'bg-slate-100 text-slate-700' },
+    { label: 'Registradas', value: kpis.registered, tone: 'bg-emerald-100 text-emerald-700' },
+    { label: 'Planos', value: kpis.plan, tone: 'bg-violet-100 text-violet-700' },
+    { label: 'Probes', value: kpis.probes, tone: 'bg-amber-100 text-amber-700' },
+    { label: 'Pendências', value: kpis.pending, tone: 'bg-rose-100 text-rose-700' }
+  ];
+
+  const renderTimeReportPanel = () => {
+    if (filteredEvents.length === 0) return null;
+    return (
+      <div className={`shrink-0 rounded-3xl border ${isDark ? 'border-slate-700 bg-[#101827] text-slate-100' : 'border-slate-100 bg-white text-slate-900'}`}>
+        <button
+          type="button"
+          onClick={() => setTimeReportOpen((prev) => !prev)}
+          className="flex w-full flex-col gap-3 p-3 text-left sm:flex-row sm:items-center sm:justify-between"
+        >
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-[#7a32fc]">Agenda clínica</p>
-            <h2 className="mt-1 text-2xl font-bold tracking-tight">Operação semanal</h2>
-            <p className={`mt-1 text-sm ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>Sessões, plano sugerido, probes e pendências em um só lugar.</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">Tempo clínico</p>
+            <h3 className="text-sm font-bold">Carga do período</h3>
           </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-slate-500">
+            <span className="rounded-xl bg-slate-100 px-3 py-2">Previsto: {formatMinutesHuman(timeReports.scheduledMinutes)}</span>
+            <span className="rounded-xl bg-emerald-100 px-3 py-2 text-emerald-700">Realizado: {formatMinutesHuman(timeReports.actualMinutes)}</span>
+            <span className={`rounded-xl p-2 ${isDark ? 'bg-slate-900' : 'bg-slate-100'}`}>{timeReportOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</span>
+          </div>
+        </button>
+        {timeReportOpen && (
+          <div className="grid gap-3 border-t border-slate-100 p-3 lg:grid-cols-4">
+            {[
+              { title: 'Pacientes', rows: timeReports.topPatients.map((row: any) => `${row.name}: ${formatMinutesHuman(row.scheduledMinutes)}`) },
+              { title: 'Profissionais', rows: timeReports.topProfessionals.map((row: any) => `${row.name}: ${formatMinutesHuman(row.scheduledMinutes)} · ${row.workedDays} dias`) },
+              { title: 'Especialidades', rows: timeReports.serviceDistribution.map((row: any) => `${row.serviceType}: ${formatMinutesHuman(row.minutes)}`) },
+              { title: 'Salas/locais', rows: timeReports.roomDistribution.map((row: any) => `${row.room}: ${formatMinutesHuman(row.minutes)}`) }
+            ].map((section) => (
+              <div key={section.title} className={`rounded-2xl border p-3 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/70'}`}>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{section.title}</p>
+                <div className="mt-2 space-y-1">
+                  {section.rows.length > 0
+                    ? section.rows.map((row: string) => <p key={row} className="truncate text-xs font-semibold text-slate-600">{row}</p>)
+                    : <p className="text-xs font-semibold text-slate-400">Sem dados no período.</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="xl:flex xl:h-[calc(100vh-7rem)] xl:min-h-[680px] xl:flex-col xl:overflow-hidden">
+      <div className={`shrink-0 rounded-[28px] border p-4 shadow-sm ${isDark ? 'border-slate-700 bg-[#101827] text-slate-100' : 'border-slate-100 bg-white text-slate-900'}`}>
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Agenda clínica</p>
+            <div className="mt-1 flex flex-wrap items-center gap-3">
+              <h2 className="text-xl font-bold tracking-tight xl:text-2xl">Agenda da clínica</h2>
+              <span className={`rounded-full px-3 py-1 text-xs font-bold capitalize ${isDark ? 'bg-slate-900 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{periodLabel}</span>
+            </div>
+            <p className={`mt-1 max-w-2xl text-sm ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>Sessões, status e pendências com foco no calendário.</p>
+          </div>
+
           <div className="flex flex-wrap items-center gap-2">
             <button type="button" onClick={() => onDateChange?.(new Date())} className={`rounded-2xl border px-4 py-2 text-xs font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
               Hoje
@@ -1193,7 +1272,6 @@ export const ClinicalAgendaBoard = ({
             <button type="button" onClick={() => moveDate(1)} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Próximo período">
               <ChevronRight size={18} />
             </button>
-            <div className="min-w-[190px] text-sm font-bold capitalize">{periodLabel}</div>
             <div className={`flex rounded-2xl p-1 ${isDark ? 'bg-slate-900' : 'bg-slate-100'}`}>
               {[
                 { value: 'day', label: 'Dia', icon: CalendarIcon },
@@ -1225,81 +1303,45 @@ export const ClinicalAgendaBoard = ({
           </div>
         </div>
 
-        <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-5">
-          {[
-            { label: 'Mudanças', value: kpis.total, icon: BarChart3, color: 'text-slate-700', bg: 'bg-slate-100' },
-            { label: 'Registradas', value: kpis.registered, icon: CheckCircle2, color: 'text-emerald-700', bg: 'bg-emerald-100' },
-            { label: 'Com plano', value: kpis.plan, icon: Zap, color: 'text-violet-700', bg: 'bg-violet-100' },
-            { label: 'Probes', value: kpis.probes, icon: AlertCircle, color: 'text-amber-700', bg: 'bg-amber-100' },
-            { label: 'Pendências', value: kpis.pending, icon: ClipboardCheck, color: 'text-rose-700', bg: 'bg-rose-100' }
-          ].map((item) => {
-            const Icon = item.icon;
+        <div className="mt-3 flex flex-wrap gap-2">
+          {compactKpis.map((item) => {
+            const quietZero = item.value === 0;
             return (
-              <div key={item.label} className={`rounded-2xl border px-4 py-3 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/80'}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">{item.label}</p>
-                  <span className={`rounded-xl p-1.5 ${item.bg} ${item.color}`}><Icon size={14} /></span>
-                </div>
-                <p className={`mt-2 text-2xl font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{item.value}</p>
-              </div>
+              <span key={item.label} className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-bold ${quietZero ? (isDark ? 'bg-slate-900 text-slate-500' : 'bg-slate-100 text-slate-400') : item.tone}`}>
+                <span>{item.label}</span>
+                <span>{item.value}</span>
+              </span>
             );
           })}
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className={`hidden rounded-[28px] border p-4 shadow-sm xl:block ${isDark ? 'border-slate-700 bg-[#101827] text-slate-100' : 'border-slate-100 bg-white text-slate-900'}`}>
-          {renderSidebarContent()}
+      <div className="mt-4 grid min-h-0 flex-1 gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
+        <aside className={`hidden min-h-0 overflow-hidden rounded-[28px] border shadow-sm xl:flex xl:flex-col ${isDark ? 'border-slate-700 bg-[#101827] text-slate-100' : 'border-slate-100 bg-white text-slate-900'}`}>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
+            {renderSidebarContent()}
+          </div>
         </aside>
-        <main className="min-w-0 space-y-4">
+
+        <main className="min-w-0 space-y-4 xl:flex xl:min-h-0 xl:flex-col xl:space-y-3 xl:overflow-hidden">
           {remoteState.loading && (
-            <div className={`flex items-center gap-2 rounded-2xl border px-4 py-3 text-sm font-semibold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-100 bg-white text-slate-500'}`}>
+            <div className={`shrink-0 flex items-center gap-2 rounded-2xl border px-4 py-3 text-sm font-semibold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-100 bg-white text-slate-500'}`}>
               <Loader2 size={16} className="animate-spin" />
               Carregando agenda...
             </div>
           )}
           {remoteState.error && !remoteState.loaded && (
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+            <div className="shrink-0 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
               {remoteState.error}
             </div>
           )}
           <div className="xl:hidden">{renderMobileList()}</div>
-          <div className="hidden xl:block">
+          <div className="hidden xl:block xl:min-h-0 xl:flex-1 xl:overflow-auto custom-scrollbar">
             {view === 'month' ? renderMonthView() : renderTimeline(view === 'day' ? [activeDate] : weekDays)}
           </div>
-          {filteredEvents.length > 0 && (
-            <div className={`rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-[#101827] text-slate-100' : 'border-slate-100 bg-white text-slate-900'}`}>
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">Relatórios de tempo</p>
-                  <h3 className="text-base font-bold">Tempo clínico e carga operacional</h3>
-                </div>
-                <div className="flex flex-wrap gap-2 text-xs font-bold text-slate-500">
-                  <span className="rounded-xl bg-slate-100 px-3 py-2">Previsto: {formatMinutesHuman(timeReports.scheduledMinutes)}</span>
-                  <span className="rounded-xl bg-emerald-100 px-3 py-2 text-emerald-700">Realizado: {formatMinutesHuman(timeReports.actualMinutes)}</span>
-                </div>
-              </div>
-              <div className="mt-4 grid gap-3 lg:grid-cols-4">
-                {[
-                  { title: 'Pacientes', rows: timeReports.topPatients.map((row: any) => `${row.name}: ${formatMinutesHuman(row.scheduledMinutes)}`) },
-                  { title: 'Profissionais', rows: timeReports.topProfessionals.map((row: any) => `${row.name}: ${formatMinutesHuman(row.scheduledMinutes)} · ${row.workedDays} dias`) },
-                  { title: 'Especialidades', rows: timeReports.serviceDistribution.map((row: any) => `${row.serviceType}: ${formatMinutesHuman(row.minutes)}`) },
-                  { title: 'Salas/locais', rows: timeReports.roomDistribution.map((row: any) => `${row.room}: ${formatMinutesHuman(row.minutes)}`) }
-                ].map((section) => (
-                  <div key={section.title} className={`rounded-2xl border p-3 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/70'}`}>
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{section.title}</p>
-                    <div className="mt-2 space-y-1">
-                      {section.rows.length > 0
-                        ? section.rows.map((row: string) => <p key={row} className="truncate text-xs font-semibold text-slate-600">{row}</p>)
-                        : <p className="text-xs font-semibold text-slate-400">Sem dados no período.</p>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {renderTimeReportPanel()}
           {filteredEvents.length === 0 && !remoteState.loading && (
-            <div className={`rounded-3xl border border-dashed px-6 py-10 text-center ${isDark ? 'border-slate-700 bg-slate-900 text-slate-400' : 'border-slate-200 bg-white text-slate-400'}`}>
+            <div className={`shrink-0 rounded-3xl border border-dashed px-6 py-10 text-center ${isDark ? 'border-slate-700 bg-slate-900 text-slate-400' : 'border-slate-200 bg-white text-slate-400'}`}>
               <Stethoscope className="mx-auto mb-3" size={24} />
               <p className="text-sm font-semibold">
                 {selectedTherapistIds.length || selectedPatientIds.length || selectedTypes.length || selectedStatuses.length || selectedLocations.length || significantOnly || alertsOnly
