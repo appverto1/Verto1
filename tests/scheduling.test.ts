@@ -1,0 +1,214 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  buildPatientTimeReport,
+  buildProfessionalWorkReport,
+  checkLocalScheduleConflicts,
+} from '../src/utils/scheduling';
+
+const root = process.cwd();
+const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
+const migrationCode = readFileSync(join(root, 'supabase/migrations/20260527143000_clinic_rooms_schedule_conflicts_time_reports.sql'), 'utf8');
+const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
+
+const tests: Array<{ name: string; fn: () => void }> = [];
+const test = (name: string, fn: () => void) => tests.push({ name, fn });
+
+const baseAppointments = [
+  {
+    id: 'a1',
+    date: '2026-05-27',
+    time: '08:00',
+    duration_minutes: 60,
+    patientId: 'p1',
+    patientName: 'Pedro',
+    professionalId: 't1',
+    professional: 'Mateus',
+    room: 'room-aba',
+    roomName: 'Sala ABA',
+    location_type: 'clinica',
+    type: 'ABA',
+    status: 'scheduled',
+  },
+];
+
+test('local Clínica exige sala', () => {
+  const result = checkLocalScheduleConflicts({
+    appointments: [],
+    patient_id: 'p2',
+    professional_ids: ['t2'],
+    location_type: 'clinica',
+    date: '2026-05-27',
+    start_time: '09:00',
+    duration_minutes: 45,
+  });
+  assert.equal(result.hasConflict, false);
+  assert.match(serverCode, /Selecione uma sala da clinica|Selecione uma sala da clínica/);
+});
+
+test('detecta conflito de sala sobreposto e permite horário adjacente', () => {
+  const conflict = checkLocalScheduleConflicts({
+    appointments: baseAppointments,
+    patient_id: 'p2',
+    professional_ids: ['t2'],
+    room_id: 'room-aba',
+    room_name: 'Sala ABA',
+    location_type: 'clinica',
+    date: '2026-05-27',
+    start_time: '08:45',
+    duration_minutes: 45,
+  });
+  assert.equal(conflict.blocking, true);
+  assert.equal(conflict.conflicts.some((item) => item.conflictType === 'room'), true);
+
+  const adjacent = checkLocalScheduleConflicts({
+    appointments: baseAppointments,
+    patient_id: 'p2',
+    professional_ids: ['t2'],
+    room_id: 'room-aba',
+    room_name: 'Sala ABA',
+    location_type: 'clinica',
+    date: '2026-05-27',
+    start_time: '09:00',
+    duration_minutes: 45,
+  });
+  assert.equal(adjacent.hasConflict, false);
+});
+
+test('detecta conflito de profissional, paciente e recorrência', () => {
+  const professional = checkLocalScheduleConflicts({
+    appointments: baseAppointments,
+    patient_id: 'p2',
+    professional_ids: ['t1'],
+    room_id: 'room-fono',
+    location_type: 'clinica',
+    date: '2026-05-27',
+    start_time: '08:30',
+    duration_minutes: 30,
+  });
+  assert.equal(professional.conflicts.some((item) => item.conflictType === 'professional'), true);
+
+  const patient = checkLocalScheduleConflicts({
+    appointments: baseAppointments,
+    patient_id: 'p1',
+    professional_ids: ['t2'],
+    room_id: 'room-fono',
+    location_type: 'clinica',
+    date: '2026-05-27',
+    start_time: '08:30',
+    duration_minutes: 30,
+  });
+  assert.equal(patient.conflicts.some((item) => item.conflictType === 'patient'), true);
+
+  const recurrence = checkLocalScheduleConflicts({
+    appointments: baseAppointments,
+    patient_id: 'p2',
+    professional_ids: ['t2'],
+    room_id: 'room-aba',
+    room_name: 'Sala ABA',
+    location_type: 'clinica',
+    start_time: '08:30',
+    duration_minutes: 30,
+    recurrence_dates: ['2026-05-20', '2026-05-27'],
+  });
+  assert.equal(recurrence.blocking, true);
+  assert.equal(recurrence.conflicts[0].date, '2026-05-27');
+});
+
+test('relatórios somam paciente e profissional com duração real', () => {
+  const appointments = [
+    ...baseAppointments.map((item) => ({
+      ...item,
+      status: 'completed',
+      actual_duration_minutes: 50,
+    })),
+    {
+      id: 'a2',
+      date: '2026-05-28',
+      time: '10:00',
+      duration_minutes: 45,
+      actual_duration_minutes: 40,
+      patientId: 'p1',
+      patientName: 'Pedro',
+      professionalId: 't1',
+      professional: 'Mateus',
+      type: 'Fonoaudiologia',
+      status: 'completed',
+    },
+    {
+      id: 'a3',
+      date: '2026-05-29',
+      time: '11:00',
+      duration_minutes: 60,
+      patientId: 'p1',
+      patientName: 'Pedro',
+      professionalId: 't1',
+      professional: 'Mateus',
+      type: 'ABA',
+      status: 'canceled',
+    },
+  ];
+
+  const patientReport = buildPatientTimeReport(appointments, { patient_id: 'p1', from: '2026-05-01', to: '2026-05-31' });
+  assert.equal(patientReport.scheduledMinutes, 165);
+  assert.equal(patientReport.actualMinutes, 90);
+  assert.equal(patientReport.cancelledCount, 1);
+  assert.equal(patientReport.byServiceType.find((row: any) => row.serviceType === 'ABA')?.actualMinutes, 50);
+
+  const professionalReport = buildProfessionalWorkReport(appointments, { professional_id: 't1', from: '2026-05-01', to: '2026-05-31' });
+  assert.equal(professionalReport.actualMinutes, 90);
+  assert.equal(professionalReport.workedDaysCount, 3);
+  assert.equal(professionalReport.byDay.find((row: any) => row.workDate === '2026-05-28')?.actualMinutes, 40);
+});
+
+test('backend expõe endpoint de conflitos, relatórios e queries econômicas', () => {
+  assert.match(serverCode, /app\.post\('\/api\/calendar\/events\/check-conflicts'/);
+  assert.match(serverCode, /app\.get\('\/api\/reports\/time\/patient'/);
+  assert.match(serverCode, /app\.get\('\/api\/reports\/time\/professional'/);
+  assert.match(serverCode, /\.select\(SCHEDULE_CONFLICT_APPOINTMENT_SELECT\)/);
+  assert.match(serverCode, /\.select\(TIME_REPORT_APPOINTMENT_SELECT\)/);
+  assert.doesNotMatch(serverCode, /check-conflicts[\s\S]{0,2400}\.select\('\*'\)/);
+});
+
+test('migration cria salas, índices e summaries', () => {
+  for (const fragment of [
+    'create table if not exists public.clinic_rooms',
+    'idx_appointments_schedule_window',
+    'idx_appointments_patient_schedule_window',
+    'idx_appointments_room_schedule_window',
+    'appointment_professionals',
+    'patient_monthly_service_summaries',
+    'professional_daily_work_summaries',
+    'professional_monthly_work_summaries',
+  ]) {
+    assert.match(migrationCode, new RegExp(fragment));
+  }
+});
+
+test('modal separa local, sala e duração', () => {
+  for (const fragment of [
+    'Local do atendimento',
+    'Sala <span',
+    'Duração',
+    'Hora de fim',
+    'Horário disponível',
+    'Conflito encontrado',
+  ]) {
+    assert.match(coordinatorCode, new RegExp(fragment));
+  }
+});
+
+let passed = 0;
+for (const item of tests) {
+  try {
+    item.fn();
+    passed += 1;
+    console.log(`ok - ${item.name}`);
+  } catch (error) {
+    console.error(`not ok - ${item.name}`);
+    throw error;
+  }
+}
+
+console.log(`${passed}/${tests.length} scheduling tests passed`);

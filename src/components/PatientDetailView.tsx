@@ -19,6 +19,7 @@ import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 import { isAbaV2Enabled } from '../utils/featureFlags';
 import { filterHumanDisplayEntries, formatSessionLabel, safeDisplayValue } from '../utils/displayLabels';
+import { getAppointmentDurationMinutes } from '../utils/scheduling';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
 import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
 import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
@@ -51,7 +52,7 @@ const isVbMappProtocol = (protocol: any) => {
   return source.includes('vb-mapp') || source.includes('vbmapp') || source.includes('vb mapp');
 };
 
-export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode }: any) => {
+export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession }: any) => {
   const safeSetProtocols =
     typeof setProtocols === 'function' ? setProtocols : null;
   const coalescePatientText = (...values: any[]) => {
@@ -502,6 +503,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     clinicContext?.sessionDurationMinutes,
     clinicContext?.defaultSessionDuration
   ]);
+  const scheduledSessionForPatient = useMemo(() => {
+    if (!scheduledSession) return null;
+    const scheduledPatientId = String(scheduledSession?.patientId || scheduledSession?.patient_id || '').trim();
+    const patientId = String(patient?.id || '').trim();
+    if (scheduledPatientId && patientId && scheduledPatientId !== patientId) return null;
+    return scheduledSession;
+  }, [patient?.id, scheduledSession]);
+  const scheduledSessionDurationMinutes = useMemo(
+    () => getAppointmentDurationMinutes(scheduledSessionForPatient, configuredDefaultSessionMinutes),
+    [configuredDefaultSessionMinutes, scheduledSessionForPatient],
+  );
   const [activeSession, setActiveSession] = useState<any>(null);
   const [sessionDurationInput, setSessionDurationInput] = useState(String(configuredDefaultSessionMinutes));
   const [remainingSessionSeconds, setRemainingSessionSeconds] = useState(0);
@@ -535,8 +547,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [clinicContext]);
 
   useEffect(() => {
-    setSessionDurationInput(String(configuredDefaultSessionMinutes));
-  }, [configuredDefaultSessionMinutes, patient?.id]);
+    setSessionDurationInput(String(scheduledSessionForPatient ? scheduledSessionDurationMinutes : configuredDefaultSessionMinutes));
+  }, [configuredDefaultSessionMinutes, patient?.id, scheduledSessionDurationMinutes, scheduledSessionForPatient]);
 
   useEffect(() => {
     setGeneratedReviewNotes([]);
@@ -679,7 +691,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return;
     }
     setPendingSessionAction(nextAction);
-    setSessionDurationInput(String(configuredDefaultSessionMinutes));
+    setSessionDurationInput(String(scheduledSessionForPatient ? scheduledSessionDurationMinutes : configuredDefaultSessionMinutes));
     setRestoreSessionData(false);
     if (nextAction === 'tab') setActiveTab('session');
     setShowSessionStartConfirm(true);
@@ -721,15 +733,45 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       );
     }
     const endsAt = new Date(startedAt.getTime() + durationMinutes * 60 * 1000);
+    const scheduledStart =
+      scheduledSessionForPatient?.scheduled_start_at ||
+      scheduledSessionForPatient?.scheduledStartAt ||
+      scheduledSessionForPatient?.scheduledAt ||
+      scheduledSessionForPatient?.scheduled_at ||
+      (scheduledSessionForPatient?.date && scheduledSessionForPatient?.time
+        ? new Date(`${scheduledSessionForPatient.date}T${scheduledSessionForPatient.time}:00`).toISOString()
+        : null);
+    const scheduledEnd =
+      scheduledSessionForPatient?.scheduled_end_at ||
+      scheduledSessionForPatient?.scheduledEndAt ||
+      scheduledSessionForPatient?.end_time ||
+      scheduledSessionForPatient?.endTime ||
+      (scheduledStart
+        ? new Date(new Date(scheduledStart).getTime() + scheduledSessionDurationMinutes * 60 * 1000).toISOString()
+        : null);
     const nextSession = {
       id: `session-${String(patient?.id || 'patient')}-${startedAt.getTime()}`,
       patientId: patient?.id,
       patientName: patient?.name || 'Paciente',
+      appointmentId: scheduledSessionForPatient?.id || null,
+      appointment_id: scheduledSessionForPatient?.id || null,
       therapistId: resolvedClinicContext?.userId || clinicContext?.userId || null,
       therapistName: resolvedClinicContext?.professionalName || resolvedClinicContext?.userName || clinicContext?.professionalName || clinicContext?.userName || patient?.therapistName || patient?.therapist_name || null,
       clinicId: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || null,
       status: 'active',
       durationMinutes,
+      scheduledDurationMinutes: scheduledSessionForPatient ? scheduledSessionDurationMinutes : durationMinutes,
+      scheduled_duration_minutes: scheduledSessionForPatient ? scheduledSessionDurationMinutes : durationMinutes,
+      scheduledStart,
+      scheduled_start: scheduledStart,
+      scheduledEnd,
+      scheduled_end: scheduledEnd,
+      roomId: scheduledSessionForPatient?.roomId || scheduledSessionForPatient?.room_id || scheduledSessionForPatient?.room || null,
+      room_id: scheduledSessionForPatient?.roomId || scheduledSessionForPatient?.room_id || scheduledSessionForPatient?.room || null,
+      roomName: scheduledSessionForPatient?.roomName || scheduledSessionForPatient?.room_name || scheduledSessionForPatient?.roomDisplayName || null,
+      room_name: scheduledSessionForPatient?.roomName || scheduledSessionForPatient?.room_name || scheduledSessionForPatient?.roomDisplayName || null,
+      locationType: scheduledSessionForPatient?.locationType || scheduledSessionForPatient?.location_type || scheduledSessionForPatient?.location || null,
+      location_type: scheduledSessionForPatient?.locationType || scheduledSessionForPatient?.location_type || scheduledSessionForPatient?.location || null,
       startedAt: startedAt.toISOString(),
       endsAt: endsAt.toISOString(),
       referenceDate: startedAt.toISOString().slice(0, 10),
@@ -741,6 +783,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         id: nextSession.id,
         patient_id: patient?.id,
         patient_name: patient?.name || 'Paciente',
+        appointment_id: nextSession.appointment_id,
+        scheduled_start: nextSession.scheduledStart,
+        scheduled_end: nextSession.scheduledEnd,
+        scheduled_duration_minutes: nextSession.scheduled_duration_minutes,
+        actual_start: nextSession.startedAt,
+        room_id: nextSession.room_id,
+        room_name: nextSession.room_name,
+        location_type: nextSession.location_type,
         clinic_id: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || undefined,
         clinicId: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || undefined,
         therapist_id: resolvedClinicContext?.userId || clinicContext?.userId || undefined,
@@ -787,6 +837,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           void dataService.updateAbaSession(String(endedSession.id), {
             status: 'completed',
             ended_at: new Date().toISOString(),
+            actual_end: new Date().toISOString(),
+            actual_duration_minutes: Math.max(0, Math.ceil((Date.now() - new Date(endedSession.startedAt || Date.now()).getTime()) / 60000)),
+            appointment_id: endedSession.appointment_id || endedSession.appointmentId || undefined,
             record_count: Number(endedSession.recordCount || 0)
           });
         }

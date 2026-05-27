@@ -1431,6 +1431,83 @@ export const dataService = {
     }
   },
 
+  async checkScheduleConflicts(payload: any) {
+    const endpoint = '/api/calendar/events/check-conflicts';
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'checkScheduleConflicts',
+        operation: 'detail',
+        table: 'appointments',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: 'Não foi possível verificar conflitos agora.' };
+    }
+  },
+
+  async getPatientTimeReport(options: any = {}) {
+    const endpoint = endpointWithQuery('/api/reports/time/patient', {
+      patientId: options.patientId,
+      patientName: options.patientName,
+      from: options.from,
+      to: options.to,
+      serviceType: options.serviceType,
+      professionalId: options.professionalId,
+      status: options.status,
+      limit: normalizeListLimit(options.limit, 300, 1000)
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPatientTimeReport',
+        operation: 'list',
+        table: 'appointments,patient_monthly_service_summaries',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, data: null, error: 'Não foi possível carregar o relatório de tempo do paciente.' };
+    }
+  },
+
+  async getProfessionalTimeReport(options: any = {}) {
+    const endpoint = endpointWithQuery('/api/reports/time/professional', {
+      professionalId: options.professionalId,
+      professionalName: options.professionalName,
+      from: options.from,
+      to: options.to,
+      serviceType: options.serviceType,
+      patientId: options.patientId,
+      status: options.status,
+      limit: normalizeListLimit(options.limit, 300, 1000)
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getProfessionalTimeReport',
+        operation: 'list',
+        table: 'appointments,professional_daily_work_summaries',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, data: null, error: 'Não foi possível carregar o relatório de carga horária.' };
+    }
+  },
+
   async getRecentSessionEvents(sessionId: string, limit = 20) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
     const safeLimit = normalizeListLimit(limit, 20, 20);

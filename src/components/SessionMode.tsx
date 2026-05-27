@@ -3239,6 +3239,18 @@ export const SessionMode = ({
       sourceRecords: records
     });
   }, [patientDisplayName, postClosureSummary, records, sessionNote, therapistDisplayName]);
+  const scheduledSessionDurationLabel = activeSession?.scheduledDurationMinutes || activeSession?.scheduled_duration_minutes
+    ? `${Number(activeSession?.scheduledDurationMinutes || activeSession?.scheduled_duration_minutes)} min`
+    : 'Sessao avulsa';
+  const sessionOriginLabel = activeSession?.appointmentId || activeSession?.appointment_id ? 'Agenda' : 'Sessao avulsa';
+  const scheduledSessionPlaceLabel =
+    activeSession?.roomName ||
+    activeSession?.room_name ||
+    activeSession?.roomId ||
+    activeSession?.room_id ||
+    activeSession?.locationType ||
+    activeSession?.location_type ||
+    'Nao informado';
 
   const parsePersistedSummaryPayload = (value: any) => {
     if (!value) return {};
@@ -3443,14 +3455,17 @@ export const SessionMode = ({
                       {postClosureReport.header.syncStatus === 'synced' ? 'sincronizado' : postClosureReport.header.syncStatus === 'error' ? 'erro de sincronização' : 'pendente de sincronização'}
                     </span>
                   </div>
-                  <div className="mt-4 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
+                  <div className="mt-4 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-3">
                     {[
                       ['Paciente', postClosureReport.header.patient],
                       ['Terapeuta', postClosureReport.header.therapist],
                       ['Data', postClosureReport.header.date],
                       ['Início', postClosureReport.header.startedAt],
                       ['Fim', postClosureReport.header.endedAt],
+                      ['Duração planejada', scheduledSessionDurationLabel],
                       ['Duração total', postClosureReport.header.duration],
+                      ['Sala/local', scheduledSessionPlaceLabel],
+                      ['Origem', sessionOriginLabel],
                       ['Status', 'concluída']
                     ].map(([label, value]) => (
                       <div key={label} className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">

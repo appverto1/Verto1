@@ -31,6 +31,7 @@ import {
   Zap
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
+import { formatMinutesHuman, getActualDurationMinutes, getAppointmentDurationMinutes } from '../utils/scheduling';
 
 const normalizeAgendaStatus = (status: any) => String(status || 'pending').toLowerCase();
 
@@ -642,6 +643,51 @@ export const ClinicalAgendaBoard = ({
     return { total, registered, plan, probes, pending };
   }, [filteredEvents]);
 
+  const timeReports = useMemo(() => {
+    const byPatient = new Map<string, any>();
+    const byProfessional = new Map<string, any>();
+    const byServiceType = new Map<string, number>();
+    const byRoom = new Map<string, number>();
+    let scheduledMinutes = 0;
+    let actualMinutes = 0;
+
+    filteredEvents.forEach((event: any) => {
+      const scheduled = getAppointmentDurationMinutes(event);
+      const actual = event.has_session_record || removeDiacritics(event.status).includes('completed') || removeDiacritics(event.status).includes('conclu')
+        ? getActualDurationMinutes(event)
+        : 0;
+      scheduledMinutes += scheduled;
+      actualMinutes += actual;
+
+      const patientKey = event.patient_id || event.patientName;
+      const patientRow = byPatient.get(patientKey) || { name: event.patientName || 'Paciente', scheduledMinutes: 0, actualMinutes: 0, sessions: 0 };
+      patientRow.scheduledMinutes += scheduled;
+      patientRow.actualMinutes += actual;
+      patientRow.sessions += 1;
+      byPatient.set(patientKey, patientRow);
+
+      const professionalKey = event.therapist_id || event.therapistName;
+      const professionalRow = byProfessional.get(professionalKey) || { name: event.therapistName || 'Profissional', scheduledMinutes: 0, actualMinutes: 0, sessions: 0, days: new Set<string>() };
+      professionalRow.scheduledMinutes += scheduled;
+      professionalRow.actualMinutes += actual;
+      professionalRow.sessions += 1;
+      professionalRow.days.add(event.date);
+      byProfessional.set(professionalKey, professionalRow);
+
+      byServiceType.set(event.type || 'Sessão', (byServiceType.get(event.type || 'Sessão') || 0) + scheduled);
+      byRoom.set(event.room || event.location || 'Sem sala/local', (byRoom.get(event.room || event.location || 'Sem sala/local') || 0) + scheduled);
+    });
+
+    const topPatients = Array.from(byPatient.values()).sort((a: any, b: any) => b.scheduledMinutes - a.scheduledMinutes).slice(0, 4);
+    const topProfessionals = Array.from(byProfessional.values())
+      .map((row: any) => ({ ...row, workedDays: row.days.size }))
+      .sort((a: any, b: any) => b.scheduledMinutes - a.scheduledMinutes)
+      .slice(0, 4);
+    const serviceDistribution = Array.from(byServiceType.entries()).map(([serviceType, minutes]) => ({ serviceType, minutes })).sort((a, b) => b.minutes - a.minutes).slice(0, 5);
+    const roomDistribution = Array.from(byRoom.entries()).map(([room, minutes]) => ({ room, minutes })).sort((a, b) => b.minutes - a.minutes).slice(0, 5);
+    return { scheduledMinutes, actualMinutes, topPatients, topProfessionals, serviceDistribution, roomDistribution };
+  }, [filteredEvents]);
+
   const filteredPatientOptions = useMemo(() => {
     const search = patientSearch.trim().toLowerCase();
     const recentIds = new Set(baseEvents.slice(0, 30).map((event: any) => String(event.patient_id || '')).filter(Boolean));
@@ -1221,6 +1267,37 @@ export const ClinicalAgendaBoard = ({
           <div className="hidden xl:block">
             {view === 'month' ? renderMonthView() : renderTimeline(view === 'day' ? [activeDate] : weekDays)}
           </div>
+          {filteredEvents.length > 0 && (
+            <div className={`rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-[#101827] text-slate-100' : 'border-slate-100 bg-white text-slate-900'}`}>
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">Relatórios de tempo</p>
+                  <h3 className="text-base font-bold">Tempo clínico e carga operacional</h3>
+                </div>
+                <div className="flex flex-wrap gap-2 text-xs font-bold text-slate-500">
+                  <span className="rounded-xl bg-slate-100 px-3 py-2">Previsto: {formatMinutesHuman(timeReports.scheduledMinutes)}</span>
+                  <span className="rounded-xl bg-emerald-100 px-3 py-2 text-emerald-700">Realizado: {formatMinutesHuman(timeReports.actualMinutes)}</span>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 lg:grid-cols-4">
+                {[
+                  { title: 'Pacientes', rows: timeReports.topPatients.map((row: any) => `${row.name}: ${formatMinutesHuman(row.scheduledMinutes)}`) },
+                  { title: 'Profissionais', rows: timeReports.topProfessionals.map((row: any) => `${row.name}: ${formatMinutesHuman(row.scheduledMinutes)} · ${row.workedDays} dias`) },
+                  { title: 'Especialidades', rows: timeReports.serviceDistribution.map((row: any) => `${row.serviceType}: ${formatMinutesHuman(row.minutes)}`) },
+                  { title: 'Salas/locais', rows: timeReports.roomDistribution.map((row: any) => `${row.room}: ${formatMinutesHuman(row.minutes)}`) }
+                ].map((section) => (
+                  <div key={section.title} className={`rounded-2xl border p-3 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/70'}`}>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{section.title}</p>
+                    <div className="mt-2 space-y-1">
+                      {section.rows.length > 0
+                        ? section.rows.map((row: string) => <p key={row} className="truncate text-xs font-semibold text-slate-600">{row}</p>)
+                        : <p className="text-xs font-semibold text-slate-400">Sem dados no período.</p>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {filteredEvents.length === 0 && !remoteState.loading && (
             <div className={`rounded-3xl border border-dashed px-6 py-10 text-center ${isDark ? 'border-slate-700 bg-slate-900 text-slate-400' : 'border-slate-200 bg-white text-slate-400'}`}>
               <Stethoscope className="mx-auto mb-3" size={24} />

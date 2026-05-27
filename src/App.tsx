@@ -8,6 +8,14 @@ import { formatProfessionalRegistry } from './utils/professionalRegistry';
 import { resolveAbaPromptLevel } from './utils/abaPromptLevels';
 import { isAbaV2Enabled } from './utils/featureFlags';
 import { formatPatientLabel, safeDisplayValue, sanitizeTechnicalErrorMessage } from './utils/displayLabels';
+import {
+  addMinutesToTime,
+  appointmentTimesOverlap as scheduleTimesOverlap,
+  buildRecurrenceDateKeys,
+  getAppointmentDurationMinutes,
+  normalizeDurationMinutes,
+  normalizeScheduleLocationType,
+} from './utils/scheduling';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -1155,22 +1163,14 @@ export default function App() {
 
   const [specialtySettings, setSpecialtySettings] = useState<any>({});
 
-  const calculateEndTime = (startTime: string, approach: string) => {
-    const duration = specialtySettings[approach] || 60;
-    const [hours, minutes] = startTime.split(':').map(Number);
-    const date = new Date();
-    date.setHours(hours, minutes + duration);
-    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  const calculateEndTime = (startTime: string, approach: string, durationMinutes?: any) => {
+    const configuredDuration = specialtySettings[approach] || 60;
+    const duration = normalizeDurationMinutes(durationMinutes || configuredDuration, 60);
+    return addMinutesToTime(startTime, duration);
   };
 
   const appointmentTimesOverlap = (startA: string, endA: string, startB: string, endB: string) => {
-    const toMinutes = (value: string) => {
-      const [hours, minutes] = String(value || '00:00')
-        .split(':')
-        .map((part) => Number(part) || 0);
-      return hours * 60 + minutes;
-    };
-    return toMinutes(startA) < toMinutes(endB) && toMinutes(endA) > toMinutes(startB);
+    return scheduleTimesOverlap(startA, endA, startB, endB);
   };
 
   const parseBrazilianDate = (value: string, timeValue = '00:00') => {
@@ -1283,17 +1283,17 @@ export default function App() {
 
   const roomReservations = useMemo(() => {
     return therapistAgenda
-      .filter(item => item.room && item.status !== 'canceled')
+      .filter(item => item.room && item.status !== 'canceled' && normalizeScheduleLocationType(item.location_type || item.locationType || item.location || 'clinica') === 'clinica')
       .map(item => ({
         id: 'res-' + item.id,
         roomId: item.room,
-        roomName: rooms.find(r => r.id === item.room)?.name || item.room,
+        roomName: rooms.find(r => String(r.id) === String(item.room))?.name || item.roomName || item.room_name || item.room,
         professionalId: item.professionalId || 'prof1',
         professionalName: item.professional || 'Terapeuta Teste',
         patientName: item.name,
         date: item.date,
         startTime: item.time,
-        endTime: calculateEndTime(item.time, item.type),
+        endTime: calculateEndTime(item.time, item.type, item.duration_minutes || item.durationMinutes),
         status: item.status
       }));
   }, [therapistAgenda, rooms, specialtySettings]);
@@ -2667,7 +2667,34 @@ export default function App() {
         appointment.type ||
         appointment.approach ||
         'Consulta Padrão';
-      const targetRoom = appointmentUpdates.room ?? appointment.room;
+      const targetDuration = normalizeDurationMinutes(
+        appointmentUpdates.duration_minutes ||
+          appointmentUpdates.durationMinutes ||
+          appointmentUpdates.scheduled_duration_minutes ||
+          appointmentUpdates.scheduledDurationMinutes ||
+          getAppointmentDurationMinutes(appointment, specialtySettings[targetApproach] || 60),
+        specialtySettings[targetApproach] || 60,
+      );
+      const targetLocationType = normalizeScheduleLocationType(
+        appointmentUpdates.location_type ||
+          appointmentUpdates.locationType ||
+          appointmentUpdates.location ||
+          appointment.location_type ||
+          appointment.locationType ||
+          appointment.location ||
+          (appointmentUpdates.room ?? appointment.room ? 'clinica' : 'outro'),
+      );
+      const targetRoom = targetLocationType === 'clinica'
+        ? (appointmentUpdates.room_id ?? appointmentUpdates.roomId ?? appointmentUpdates.room ?? appointment.room_id ?? appointment.roomId ?? appointment.room)
+        : '';
+      const targetRoomName =
+        appointmentUpdates.roomName ||
+        appointmentUpdates.room_name ||
+        rooms.find((room: any) => String(room?.id || '') === String(targetRoom || ''))?.name ||
+        appointment.roomName ||
+        appointment.room_name ||
+        appointment.roomDisplayName ||
+        targetRoom;
       const targetProfessional =
         appointmentUpdates.professional ??
         appointment.professional ??
@@ -2678,14 +2705,24 @@ export default function App() {
       const targetPatientName = String(
         appointment.name || appointment.patientName || currentAppointment.name || currentAppointment.patientName || '',
       ).trim();
-      const targetEndTime = calculateEndTime(targetTime, targetApproach);
+      const targetEndTime = calculateEndTime(targetTime, targetApproach, targetDuration);
+
+      if (targetLocationType === 'clinica' && !String(targetRoom || '').trim()) {
+        addConflict(conflicts, 'Selecione uma sala da clínica para este atendimento.');
+        return;
+      }
 
       therapistAgenda.forEach((item) => {
         if (targetIds.has(String(item.id))) return false;
         if (isCanceledAppointment(item)) return false;
         if (item.date !== targetDate) return false;
-        const itemEndTime = calculateEndTime(item.time, item.type || item.approach || 'Consulta Padrão');
+        const itemEndTime = calculateEndTime(
+          item.time,
+          item.type || item.approach || 'Consulta Padrão',
+          item.duration_minutes || item.durationMinutes,
+        );
         if (!appointmentTimesOverlap(targetTime, targetEndTime, item.time, itemEndTime)) return false;
+        const itemLocationType = normalizeScheduleLocationType(item.location_type || item.locationType || item.location || (item.room ? 'clinica' : 'outro'));
 
         const samePatient =
           targetPatientId &&
@@ -2695,8 +2732,10 @@ export default function App() {
           targetPatientName &&
           String(item.name || item.patientName || '').trim() === targetPatientName;
         const sameRoom =
+          targetLocationType === 'clinica' &&
+          itemLocationType === 'clinica' &&
           targetRoom &&
-          String(item.room || item.roomId || '') === String(targetRoom);
+          String(item.room || item.roomId || item.room_id || '') === String(targetRoom);
         const sameProfessional =
           targetProfessional &&
           String(item.professional || item.therapistName || '').trim() ===
@@ -2711,7 +2750,7 @@ export default function App() {
         if (sameRoom) {
           addConflict(
             conflicts,
-            `Conflito de Sala: a sala ${targetRoom} já está reservada em ${targetDate} às ${item.time}.`,
+            `Conflito de Sala: ${targetRoomName || targetRoom} já está ocupada em ${targetDate} às ${item.time}.`,
           );
         }
         if (sameProfessional) {
@@ -2727,12 +2766,28 @@ export default function App() {
         String(appointment.date || '') !== String(targetDate || '') ||
         String(appointment.time || '') !== String(targetTime || '');
       const targetScheduledAt = new Date(`${targetDate}T${targetTime}:00`).toISOString();
+      const targetScheduledEndAt = new Date(new Date(targetScheduledAt).getTime() + targetDuration * 60 * 1000).toISOString();
       patchesById.set(String(appointment.id), {
         ...appointmentUpdates,
         date: targetDate,
         time: targetTime,
         scheduledAt: targetScheduledAt,
         scheduled_at: targetScheduledAt,
+        scheduledStartAt: targetScheduledAt,
+        scheduled_start_at: targetScheduledAt,
+        scheduledEndAt: targetScheduledEndAt,
+        scheduled_end_at: targetScheduledEndAt,
+        durationMinutes: targetDuration,
+        duration_minutes: targetDuration,
+        scheduledDurationMinutes: targetDuration,
+        scheduled_duration_minutes: targetDuration,
+        locationType: targetLocationType,
+        location_type: targetLocationType,
+        room: targetLocationType === 'clinica' ? targetRoom : '',
+        roomId: targetLocationType === 'clinica' ? targetRoom : '',
+        room_id: targetLocationType === 'clinica' ? targetRoom : '',
+        roomName: targetLocationType === 'clinica' ? targetRoomName : '',
+        room_name: targetLocationType === 'clinica' ? targetRoomName : '',
         ...buildReminderReset(scheduleChanged),
       });
     });
@@ -3213,79 +3268,122 @@ export default function App() {
       }
     }
   };
-  const handleScheduleSession = (sess: any) => { 
+  const handleScheduleSession = (sess: any) => {
     const patientForSession = allPatients.find(p => p.name === sess.patientName);
-    const pid = patientForSession?.id || Date.now(); 
+    const pid = patientForSession?.id || Date.now();
     const numSessions = Math.min(52, Math.max(1, Number(sess.numSessions) || 1));
     const recurrenceGroupId = numSessions > 1 ? createAppointmentId() : null;
+    const recurrenceDates = buildRecurrenceDateKeys({
+      startDate: sess.date,
+      count: numSessions,
+      pattern: sess.recurrencePattern || 'weekly',
+    });
+    const locationType = normalizeScheduleLocationType(sess.locationType || sess.location_type || (sess.room ? 'clinica' : 'outro'));
+    const durationMinutes = normalizeDurationMinutes(sess.durationMinutes || sess.duration_minutes || 50, 50);
+    const roomId = locationType === 'clinica' ? String(sess.roomId || sess.room_id || sess.room || '').trim() : '';
+    const roomName = locationType === 'clinica'
+      ? String(sess.roomName || sess.room_name || rooms.find((room: any) => String(room?.id || '') === roomId)?.name || roomId).trim()
+      : '';
+    const professionalName = String(sess.professionalName || sess.professional || '').trim();
+    const professionalId = String(sess.professionalId || sess.professional_id || sess.therapistId || sess.therapist_id || '').trim();
     const newItems = [];
     const conflicts: string[] = [];
-    
-    for (let i = 0; i < numSessions; i++) {
-      const date = new Date(sess.date + 'T00:00:00');
-      date.setDate(date.getDate() + (i * 7)); // Weekly recurrence
-      const dateStr = date.toISOString().split('T')[0];
+
+    if (locationType === 'clinica' && !roomId) {
+      return { success: false, errors: ['Selecione uma sala da clínica para este atendimento.'] };
+    }
+
+    for (let i = 0; i < recurrenceDates.length; i += 1) {
+      const dateStr = recurrenceDates[i];
       const startTime = sess.time;
-      const endTime = calculateEndTime(sess.time, sess.approach);
+      const endTime = calculateEndTime(sess.time, sess.approach, durationMinutes);
 
-      // 1. Room Conflict Check
-      if (sess.room) {
-        const roomConflict = roomReservations.find(r => 
-          r.date === dateStr && 
-          r.roomId === sess.room && 
-          r.status !== 'canceled' &&
-          ((startTime >= r.startTime && startTime < r.endTime) || 
-           (endTime > r.startTime && endTime <= r.endTime) ||
-           (startTime <= r.startTime && endTime >= r.endTime))
-        );
-        if (roomConflict) {
-          conflicts.push(`Conflito de Sala: ${sess.room} jÃ¡ estÃ¡ reservada em ${dateStr} Ã s ${startTime}`);
-        }
-      }
-
-      // 2. Professional Conflict Check
-      const profConflict = therapistAgenda.find(a => 
-        a.date === dateStr && 
-        a.professional === sess.professional && 
-        a.time === sess.time &&
-        a.status !== 'canceled'
-      );
-      if (profConflict) {
-        conflicts.push(`Conflito de Profissional: ${sess.professional} jÃ¡ tem agenda em ${dateStr} Ã s ${startTime}`);
-      }
-
-      // 3. Patient Conflict Check
-      const patientConflict = therapistAgenda.find((a) => {
-        if (a.date !== dateStr || a.status === 'canceled') return false;
-        if (String(a.patientId || '') !== String(pid || '')) return false;
+      therapistAgenda.forEach((item) => {
+        if (item.date !== dateStr || ['canceled', 'cancelled'].includes(String(item.status || '').toLowerCase())) return;
         const existingEndTime = calculateEndTime(
-          a.time,
-          a.type || a.approach || 'Consulta Padrão',
+          item.time,
+          item.type || item.approach || 'Consulta Padrão',
+          item.duration_minutes || item.durationMinutes,
         );
-        return appointmentTimesOverlap(startTime, endTime, a.time, existingEndTime);
+        if (!appointmentTimesOverlap(startTime, endTime, item.time, existingEndTime)) return;
+
+        const existingLocationType = normalizeScheduleLocationType(item.location_type || item.locationType || item.location || (item.room ? 'clinica' : 'outro'));
+        const sameRoom =
+          locationType === 'clinica' &&
+          existingLocationType === 'clinica' &&
+          roomId &&
+          String(item.room || item.roomId || item.room_id || '') === roomId;
+        const sameProfessional =
+          (professionalId && String(item.professionalId || item.therapistId || item.professional_id || item.therapist_id || '') === professionalId) ||
+          (professionalName && String(item.professional || item.therapistName || '').trim() === professionalName);
+        const samePatient =
+          String(item.patientId || item.patient_id || '') === String(pid || '') ||
+          String(item.name || item.patientName || '').trim() === String(sess.patientName || '').trim();
+
+        if (sameRoom) {
+          const message = `${roomName || roomId} já está ocupada das ${item.time} às ${existingEndTime} em ${dateStr}.`;
+          if (!conflicts.includes(message)) conflicts.push(message);
+        }
+        if (sameProfessional) {
+          const message = `${professionalName || 'Profissional'} já possui atendimento das ${item.time} às ${existingEndTime} em ${dateStr}.`;
+          if (!conflicts.includes(message)) conflicts.push(message);
+        }
+        if (samePatient) {
+          const message = `${sess.patientName || 'Paciente'} já possui outra sessão nesse horário em ${dateStr}.`;
+          if (!conflicts.includes(message)) conflicts.push(message);
+        }
       });
-      if (patientConflict) {
-        conflicts.push(`Conflito de Paciente: ${sess.patientName} já tem sessão em conflito em ${dateStr} às ${patientConflict.time}`);
-      }
 
       if (conflicts.length === 0) {
         const appointmentId = createAppointmentId();
         const scheduledAt = new Date(`${dateStr}T${sess.time}:00`).toISOString();
+        const scheduledEndAt = new Date(new Date(scheduledAt).getTime() + durationMinutes * 60 * 1000).toISOString();
         newItems.push({
           id: appointmentId,
           patientId: pid,
+          patient_id: patientForSession?.id || null,
+          patientName: sess.patientName,
+          patient_name: sess.patientName,
           patientEmail: patientForSession?.email || null,
           patient_email: patientForSession?.email || null,
-          name: sess.patientName, 
-          date: dateStr, 
-          time: sess.time, 
+          name: sess.patientName,
+          date: dateStr,
+          time: sess.time,
           scheduledAt,
           scheduled_at: scheduledAt,
-          status: 'pending', 
-          type: sess.approach, 
+          scheduledStartAt: scheduledAt,
+          scheduled_start_at: scheduledAt,
+          scheduledEndAt,
+          scheduled_end_at: scheduledEndAt,
+          durationMinutes,
+          duration_minutes: durationMinutes,
+          scheduledDurationMinutes: durationMinutes,
+          scheduled_duration_minutes: durationMinutes,
+          status: 'pending',
+          type: sess.approach,
+          approach: sess.approach,
+          serviceType: sess.approach,
+          service_type: sess.approach,
           color: 'bg-blue-100 text-blue-600',
-          professional: sess.professional,
-          room: sess.room,
+          professional: professionalName,
+          professionalId: professionalId || null,
+          professional_id: professionalId || null,
+          therapistId: professionalId || null,
+          therapist_id: professionalId || null,
+          therapistName: professionalName,
+          therapist_name: professionalName,
+          room: roomId,
+          roomId,
+          room_id: roomId,
+          roomName,
+          room_name: roomName,
+          location: locationType,
+          locationType,
+          location_type: locationType,
+          locationNotes: sess.locationNotes || '',
+          location_notes: sess.locationNotes || '',
+          callLink: sess.callLink || '',
+          call_link: sess.callLink || '',
           isRecurring: numSessions > 1,
           is_recurring: numSessions > 1,
           recurrenceGroupId,
@@ -3294,8 +3392,8 @@ export default function App() {
           recurrence_index: i + 1,
           recurrenceTotal: numSessions,
           recurrence_total: numSessions,
-          recurrenceFrequency: numSessions > 1 ? 'weekly' : null,
-          recurrence_frequency: numSessions > 1 ? 'weekly' : null,
+          recurrenceFrequency: numSessions > 1 ? String(sess.recurrencePattern || 'weekly') : null,
+          recurrence_frequency: numSessions > 1 ? String(sess.recurrencePattern || 'weekly') : null,
           patientResponse: null,
           patient_response: null,
           patientRespondedAt: null,
@@ -3323,12 +3421,12 @@ export default function App() {
       return { success: false, errors: conflicts };
     }
 
-    setTherapistAgenda(prev => [...prev, ...newItems].sort((a,b) => {
+    setTherapistAgenda(prev => [...prev, ...newItems].sort((a, b) => {
       if (a.date !== b.date) return a.date.localeCompare(b.date);
       return a.time.localeCompare(b.time);
-    })); 
+    }));
 
-    onAddActivityLog("Agendamento de SessÃ£o", `${numSessions} sessÃµes agendadas para "${sess.patientName}" comeÃ§ando em ${sess.date}.`, 'management');
+    onAddActivityLog("Agendamento de Sessão", `${numSessions} sessões agendadas para "${sess.patientName}" começando em ${sess.date}.`, 'management');
     return { success: true };
   };
 

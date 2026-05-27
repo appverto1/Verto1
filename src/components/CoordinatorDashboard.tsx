@@ -88,6 +88,17 @@ import {
   normalizeAnamnesisTemplate,
 } from "../lib/anamnesisSchema";
 import { formatTherapistLabel } from "../utils/displayLabels";
+import {
+  SESSION_DURATION_QUICK_OPTIONS,
+  SCHEDULE_LOCATION_OPTIONS,
+  addMinutesToTime,
+  buildRecurrenceDateKeys,
+  checkLocalScheduleConflicts,
+  getAppointmentDurationOption,
+  normalizeDurationMinutes,
+  normalizeScheduleLocationType,
+  type ScheduleLocationType,
+} from "../utils/scheduling";
 
 interface CoordinatorDashboardProps {
   user: any;
@@ -489,10 +500,22 @@ export function CoordinatorDashboard({
   const [sessionTime, setSessionTime] = useState("08:00");
   const [sessionPatientName, setSessionPatientName] = useState("");
   const [sessionApproach, setSessionApproach] = useState("");
+  const [sessionDurationOption, setSessionDurationOption] = useState("50");
+  const [sessionCustomDuration, setSessionCustomDuration] = useState("50");
+  const [sessionLocationType, setSessionLocationType] = useState<ScheduleLocationType>("clinica");
   const [sessionRoom, setSessionRoom] = useState("");
+  const [sessionLocationNotes, setSessionLocationNotes] = useState("");
+  const [sessionCallLink, setSessionCallLink] = useState("");
   const [sessionProfessional, setSessionProfessional] = useState("");
   const [sessionNumSessions, setSessionNumSessions] = useState(1);
   const [sessionRecurrencePattern, setSessionRecurrencePattern] = useState("weekly");
+  const [scheduleConflictState, setScheduleConflictState] = useState<{
+    loading: boolean;
+    checked: boolean;
+    blocking: boolean;
+    message: string;
+    conflicts: any[];
+  }>({ loading: false, checked: false, blocking: false, message: "", conflicts: [] });
   const [editingAppointmentId, setEditingAppointmentId] = useState<
     string | number | null
   >(null);
@@ -508,6 +531,8 @@ export function CoordinatorDashboard({
     useState(false);
   const [selectedPatientProfile, setSelectedPatientProfile] = useState<any>(null);
   const [selectedAgendaAppointment, setSelectedAgendaAppointment] =
+    useState<any>(null);
+  const [scheduledSessionContext, setScheduledSessionContext] =
     useState<any>(null);
   const [agendaAppointmentObservation, setAgendaAppointmentObservation] =
     useState("");
@@ -1527,16 +1552,187 @@ export function CoordinatorDashboard({
     setFilteredPatients([]);
   };
 
+  const activeClinicRooms = useMemo(
+    () => (rooms || []).filter((room: any) => room?.is_active !== false && room?.isActive !== false),
+    [rooms],
+  );
+
+  const sessionDurationMinutes = useMemo(
+    () =>
+      normalizeDurationMinutes(
+        sessionDurationOption === "custom"
+          ? sessionCustomDuration
+          : sessionDurationOption,
+        50,
+      ),
+    [sessionDurationOption, sessionCustomDuration],
+  );
+
+  const sessionEndTime = useMemo(
+    () => addMinutesToTime(sessionTime, sessionDurationMinutes),
+    [sessionTime, sessionDurationMinutes],
+  );
+
+  const selectedSessionPatient = useMemo(() => {
+    const normalizedName = normalizeUtf8Text(sessionPatientName).trim().toLowerCase();
+    return (
+      allPatients.find((patient: any) => normalizeUtf8Text(patient?.name).trim().toLowerCase() === normalizedName) ||
+      null
+    );
+  }, [allPatients, sessionPatientName]);
+
+  const selectedSessionProfessional = useMemo(() => {
+    const normalizedName = normalizeUtf8Text(sessionProfessional).trim();
+    return (
+      therapistFilterOptions.find((member) => member.label === normalizedName) ||
+      therapistFilterOptions.find((member) => String(member.id || "") === normalizedName) ||
+      null
+    );
+  }, [sessionProfessional, therapistFilterOptions]);
+
+  const selectedSessionRoom = useMemo(
+    () => activeClinicRooms.find((room: any) => String(room?.id || "") === String(sessionRoom || "")) || null,
+    [activeClinicRooms, sessionRoom],
+  );
+
+  const sessionRecurrenceDates = useMemo(
+    () =>
+      buildRecurrenceDateKeys({
+        startDate: sessionDate,
+        count: editingAppointmentId ? 1 : sessionNumSessions,
+        pattern: sessionRecurrencePattern,
+      }),
+    [editingAppointmentId, sessionDate, sessionNumSessions, sessionRecurrencePattern],
+  );
+
+  const requiredSessionFieldsReady = Boolean(
+    sessionPatientName.trim() &&
+      sessionDate &&
+      sessionTime &&
+      sessionApproach &&
+      sessionProfessional &&
+      sessionDurationMinutes >= 15 &&
+      (sessionLocationType !== "clinica" || sessionRoom),
+  );
+
+  useEffect(() => {
+    if (!isAddSessionModalOpen) return;
+    if (!sessionPatientName || !sessionDate || !sessionTime || !sessionApproach || !sessionProfessional) {
+      setScheduleConflictState({ loading: false, checked: false, blocking: false, message: "", conflicts: [] });
+      return;
+    }
+    if (sessionLocationType === "clinica" && !sessionRoom) {
+      setScheduleConflictState({
+        loading: false,
+        checked: true,
+        blocking: true,
+        message: "Selecione uma sala da clínica para este atendimento.",
+        conflicts: [],
+      });
+      return;
+    }
+
+    const localResult = checkLocalScheduleConflicts({
+      appointments: therapistAgenda,
+      patient_id: selectedSessionPatient?.id,
+      patient_name: sessionPatientName,
+      professional_ids: selectedSessionProfessional?.id ? [selectedSessionProfessional.id] : [],
+      professional_names: sessionProfessional ? [sessionProfessional] : [],
+      room_id: sessionLocationType === "clinica" ? sessionRoom : "",
+      room_name: selectedSessionRoom?.name || sessionRoom,
+      location_type: sessionLocationType,
+      date: sessionDate,
+      start_time: sessionTime,
+      end_time: sessionEndTime,
+      duration_minutes: sessionDurationMinutes,
+      exclude_event_id: editingAppointmentId,
+      recurrence_dates: sessionRecurrenceDates,
+    });
+    setScheduleConflictState({
+      loading: true,
+      checked: true,
+      blocking: localResult.blocking,
+      message: localResult.humanMessage,
+      conflicts: localResult.conflicts,
+    });
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const result = await dataService.checkScheduleConflicts({
+          patient_id: selectedSessionPatient?.id,
+          patient_name: sessionPatientName,
+          professional_ids: selectedSessionProfessional?.id ? [selectedSessionProfessional.id] : [],
+          professional_names: sessionProfessional ? [sessionProfessional] : [],
+          room_id: sessionLocationType === "clinica" ? sessionRoom : null,
+          room_name: selectedSessionRoom?.name || sessionRoom,
+          location_type: sessionLocationType,
+          date: sessionDate,
+          start_time: sessionTime,
+          end_time: sessionEndTime,
+          duration_minutes: sessionDurationMinutes,
+          exclude_event_id: editingAppointmentId,
+          recurrence_dates: sessionRecurrenceDates,
+        });
+        if (cancelled) return;
+        const serverResult = result?.success === false ? null : result?.data || result;
+        if (!serverResult) {
+          setScheduleConflictState((prev) => ({ ...prev, loading: false }));
+          return;
+        }
+        setScheduleConflictState({
+          loading: false,
+          checked: true,
+          blocking: Boolean(serverResult.blocking),
+          message: serverResult.humanMessage || (serverResult.hasConflict ? "Conflito encontrado." : "Horário disponível."),
+          conflicts: Array.isArray(serverResult.conflicts) ? serverResult.conflicts : [],
+        });
+      } catch (error) {
+        if (!cancelled) {
+          setScheduleConflictState((prev) => ({ ...prev, loading: false }));
+        }
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    editingAppointmentId,
+    isAddSessionModalOpen,
+    selectedSessionPatient?.id,
+    selectedSessionProfessional?.id,
+    selectedSessionRoom?.name,
+    sessionApproach,
+    sessionDate,
+    sessionDurationMinutes,
+    sessionEndTime,
+    sessionLocationType,
+    sessionPatientName,
+    sessionProfessional,
+    sessionRecurrenceDates.join("|"),
+    sessionRoom,
+    sessionTime,
+    therapistAgenda,
+  ]);
+
   const resetSessionForm = () => {
     setSessionPatientName("");
     setSessionTime("08:00");
+    setSessionDurationOption("50");
+    setSessionCustomDuration("50");
+    setSessionLocationType("clinica");
     setSessionRoom("");
+    setSessionLocationNotes("");
+    setSessionCallLink("");
     setSessionApproach("");
     setSessionProfessional("");
     setSessionNumSessions(1);
     setSessionRecurrencePattern("weekly");
     setEditingAppointmentId(null);
     setAppointmentEditScope("single");
+    setScheduleConflictState({ loading: false, checked: false, blocking: false, message: "", conflicts: [] });
   };
 
   const editingAppointment = useMemo(
@@ -1566,22 +1762,72 @@ export function CoordinatorDashboard({
   };
 
   const handleSessionSubmit = async () => {
-    if (!sessionPatientName || !sessionTime || !sessionRoom) {
-      showToast("Preencha nome, horário e sala.", "error");
+    if (!requiredSessionFieldsReady) {
+      showToast("Preencha paciente, data, horário, duração, tipo, profissional e sala quando o local for clínica.", "error");
+      return;
+    }
+    if (scheduleConflictState.blocking) {
+      showToast(scheduleConflictState.message || "Existe conflito bloqueante nesse horário.", "error");
       return;
     }
     showProcessing(
       editingAppointmentId ? "Salvando agendamento..." : "Criando agendamento...",
     );
 
+    const serverConflict = await dataService.checkScheduleConflicts({
+      patient_id: selectedSessionPatient?.id,
+      patient_name: sessionPatientName,
+      professional_ids: selectedSessionProfessional?.id ? [selectedSessionProfessional.id] : [],
+      professional_names: sessionProfessional ? [sessionProfessional] : [],
+      room_id: sessionLocationType === "clinica" ? sessionRoom : null,
+      room_name: selectedSessionRoom?.name || sessionRoom,
+      location_type: sessionLocationType,
+      date: sessionDate,
+      start_time: sessionTime,
+      end_time: sessionEndTime,
+      duration_minutes: sessionDurationMinutes,
+      exclude_event_id: editingAppointmentId,
+      recurrence_dates: sessionRecurrenceDates,
+    });
+    const conflictPayload = serverConflict?.data || serverConflict;
+    if (conflictPayload?.blocking) {
+      hideProcessing();
+      showToast(conflictPayload.humanMessage || "Conflito encontrado nesse horário.", "error");
+      return;
+    }
+
     if (editingAppointmentId) {
       const updates = {
         name: sessionPatientName,
+        patientName: sessionPatientName,
+        patientId: selectedSessionPatient?.id,
+        patient_id: selectedSessionPatient?.id,
         date: sessionDate,
         time: sessionTime,
         type: sessionApproach || "Consulta Padrão",
-        room: sessionRoom,
+        approach: sessionApproach || "Consulta Padrão",
+        durationMinutes: sessionDurationMinutes,
+        duration_minutes: sessionDurationMinutes,
+        scheduledDurationMinutes: sessionDurationMinutes,
+        scheduled_duration_minutes: sessionDurationMinutes,
+        locationType: sessionLocationType,
+        location_type: sessionLocationType,
+        room: sessionLocationType === "clinica" ? sessionRoom : "",
+        roomId: sessionLocationType === "clinica" ? sessionRoom : "",
+        room_id: sessionLocationType === "clinica" ? sessionRoom : "",
+        roomName: sessionLocationType === "clinica" ? selectedSessionRoom?.name || sessionRoom : "",
+        room_name: sessionLocationType === "clinica" ? selectedSessionRoom?.name || sessionRoom : "",
+        locationNotes: sessionLocationNotes,
+        location_notes: sessionLocationNotes,
+        callLink: sessionCallLink,
+        call_link: sessionCallLink,
         professional: sessionProfessional,
+        professionalId: selectedSessionProfessional?.id,
+        professional_id: selectedSessionProfessional?.id,
+        therapistId: selectedSessionProfessional?.id,
+        therapist_id: selectedSessionProfessional?.id,
+        therapistName: sessionProfessional,
+        therapist_name: sessionProfessional,
         recurrencePattern: sessionRecurrencePattern,
         recurrenceScope: isEditingRecurringAppointment
           ? appointmentEditScope
@@ -1612,8 +1858,25 @@ export function CoordinatorDashboard({
       date: sessionDate,
       time: sessionTime,
       approach: sessionApproach || "Consulta Padrão",
-      room: sessionRoom,
+      durationMinutes: sessionDurationMinutes,
+      duration_minutes: sessionDurationMinutes,
+      locationType: sessionLocationType,
+      location_type: sessionLocationType,
+      room: sessionLocationType === "clinica" ? sessionRoom : "",
+      roomId: sessionLocationType === "clinica" ? sessionRoom : "",
+      room_id: sessionLocationType === "clinica" ? sessionRoom : "",
+      roomName: sessionLocationType === "clinica" ? selectedSessionRoom?.name || sessionRoom : "",
+      room_name: sessionLocationType === "clinica" ? selectedSessionRoom?.name || sessionRoom : "",
+      locationNotes: sessionLocationNotes,
+      location_notes: sessionLocationNotes,
+      callLink: sessionCallLink,
+      call_link: sessionCallLink,
       professional: sessionProfessional,
+      professionalName: sessionProfessional,
+      professionalId: selectedSessionProfessional?.id,
+      professional_id: selectedSessionProfessional?.id,
+      therapistId: selectedSessionProfessional?.id,
+      therapist_id: selectedSessionProfessional?.id,
       numSessions: Math.min(52, Math.max(1, Number(sessionNumSessions) || 1)),
       recurrencePattern: sessionRecurrencePattern,
     };
@@ -2267,7 +2530,23 @@ export function CoordinatorDashboard({
     setSessionDate(appointment.date);
     setSessionTime(appointment.time);
     setSessionApproach(appointment.type || appointment.approach || "");
-    setSessionRoom(appointment.room || appointment.location || "");
+    const duration = normalizeDurationMinutes(
+      appointment.duration_minutes ||
+        appointment.durationMinutes ||
+        appointment.scheduled_duration_minutes ||
+        appointment.scheduledDurationMinutes ||
+        50,
+      50,
+    );
+    setSessionDurationOption(getAppointmentDurationOption(duration));
+    setSessionCustomDuration(String(duration));
+    const nextLocationType = normalizeScheduleLocationType(
+      appointment.location_type || appointment.locationType || appointment.location || (appointment.room ? "clinica" : "online"),
+    );
+    setSessionLocationType(nextLocationType);
+    setSessionRoom(nextLocationType === "clinica" ? String(appointment.roomId || appointment.room_id || appointment.room || "") : "");
+    setSessionLocationNotes(String(appointment.locationNotes || appointment.location_notes || ""));
+    setSessionCallLink(String(appointment.callLink || appointment.call_link || ""));
     setSessionProfessional(
       appointment.therapistName || appointment.professional || "",
     );
@@ -3294,9 +3573,13 @@ export function CoordinatorDashboard({
       .map((s) => s.trim())
       .filter((s) => s !== "");
     const room = {
-      id: Date.now().toString(),
+      id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
       name: newRoom.name,
       specialties: specialtiesArray,
+      is_active: true,
+      isActive: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     };
     setRooms((prev) => [...prev, room]);
     setNewRoom({ name: "", specialties: "" });
@@ -3305,7 +3588,7 @@ export function CoordinatorDashboard({
   const handleEditRoom = (room: any) => {
     if (!canManageRooms) return;
     setEditingRoom(room);
-    setNewRoom({ name: room.name, specialties: room.specialties.join(", ") });
+    setNewRoom({ name: room.name, specialties: (Array.isArray(room.specialties) ? room.specialties : []).join(", ") });
   };
 
   const handleUpdateRoom = (e: React.FormEvent) => {
@@ -3319,7 +3602,7 @@ export function CoordinatorDashboard({
     setRooms((prev) =>
       prev.map((r) =>
         r.id === editingRoom.id
-          ? { ...r, name: newRoom.name, specialties: specialtiesArray }
+          ? { ...r, name: newRoom.name, specialties: specialtiesArray, updated_at: new Date().toISOString() }
           : r,
       ),
     );
@@ -3329,7 +3612,16 @@ export function CoordinatorDashboard({
 
   const handleDeleteRoom = (id: string) => {
     if (!canManageRooms) return;
-    setRooms((prev) => prev.filter((r) => r.id !== id));
+    setRooms((prev) =>
+      prev.map((room) =>
+        String(room.id) === String(id)
+          ? (() => {
+              const nextActive = !(room.is_active !== false && room.isActive !== false);
+              return { ...room, is_active: nextActive, isActive: nextActive, updated_at: new Date().toISOString() };
+            })()
+          : room,
+      ),
+    );
   };
 
   const handleSaveClinicSettings = () => {
@@ -3832,11 +4124,14 @@ export function CoordinatorDashboard({
       onCancelAppointment={handleCancelAppointmentFromAgenda}
       onOpenPatient={onPatientClick}
       onStartSession={(appointment: any) =>
-        onPatientClick(
-          appointment?.patientId || appointment?.patient_id,
-          { tab: "session" },
-          appointment?.patientName || appointment?.patient_name,
-        )
+        {
+          setScheduledSessionContext(appointment);
+          onPatientClick(
+            appointment?.patientId || appointment?.patient_id,
+            { tab: "session" },
+            appointment?.patientName || appointment?.patient_name,
+          );
+        }
       }
       theme={theme}
     />
@@ -3933,21 +4228,28 @@ export function CoordinatorDashboard({
                 Salas Cadastradas
               </h4>
               <div className="grid gap-4">
-                {rooms.map((room) => (
+                {rooms.map((room) => {
+                  const roomActive = room.is_active !== false && room.isActive !== false;
+                  return (
                   <div
                     key={room.id}
-                    className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100 group hover:bg-white hover:shadow-md transition-all"
+                    className={`flex items-center justify-between p-4 rounded-2xl border group hover:bg-white hover:shadow-md transition-all ${roomActive ? "bg-slate-50 border-slate-100" : "bg-slate-100/70 border-slate-200 opacity-75"}`}
                   >
                     <div className="flex items-center gap-4">
                       <div className="w-12 h-12 bg-white text-slate-400 rounded-xl flex items-center justify-center group-hover:text-[#7a32fc] transition-all">
                         <DoorOpen size={24} />
                       </div>
                       <div>
-                        <h5 className="font-bold text-slate-900">
+                        <h5 className="font-bold text-slate-900 flex items-center gap-2">
                           {room.name}
+                          {!roomActive && (
+                            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-slate-500">
+                              Inativa
+                            </span>
+                          )}
                         </h5>
                         <div className="flex flex-wrap gap-1 mt-1">
-                          {room.specialties.map((s: string) => (
+                          {(Array.isArray(room.specialties) ? room.specialties : []).map((s: string) => (
                             <span
                               key={s}
                               className="px-2 py-0.5 bg-white text-slate-500 rounded-full text-[9px] font-bold uppercase tracking-wider border border-slate-100"
@@ -3967,13 +4269,14 @@ export function CoordinatorDashboard({
                       </button>
                       <button
                         onClick={() => handleDeleteRoom(room.id)}
-                        className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                        className={`p-2 rounded-xl transition-all ${roomActive ? "text-slate-400 hover:text-red-500 hover:bg-red-50" : "text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"}`}
+                        title={roomActive ? "Desativar sala" : "Reativar sala"}
                       >
-                        <Trash2 size={18} />
+                        {roomActive ? <Trash2 size={18} /> : <CheckCircle2 size={18} />}
                       </button>
                     </div>
                   </div>
-                ))}
+                )})}
               </div>
             </div>
           </div>
@@ -4740,6 +5043,11 @@ export function CoordinatorDashboard({
                 signatureUrl: user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null,
                 defaultSessionDuration: user?.clinicSettings?.defaultSessionDuration || defaultSessionDuration || 50,
               }}
+              scheduledSession={
+                String(scheduledSessionContext?.patientId || scheduledSessionContext?.patient_id || "") === String(patient?.id || "")
+                  ? scheduledSessionContext
+                  : null
+              }
               initialTab={patientOpenTab}
               openAnamnesisOnLoad={openAnamnesisOnPatientOpen}
               onAnamnesisOpenConsumed={() => setOpenAnamnesisOnPatientOpen(false)}
@@ -7215,7 +7523,7 @@ export function CoordinatorDashboard({
                   </div>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
                     Data
@@ -7229,7 +7537,7 @@ export function CoordinatorDashboard({
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
-                    Hora
+                    Hora de início
                   </label>
                   <input
                     type="time"
@@ -7238,8 +7546,48 @@ export function CoordinatorDashboard({
                     onChange={(e) => setSessionTime(e.target.value)}
                   />
                 </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                    Duração
+                  </label>
+                  <select
+                    className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                    value={sessionDurationOption}
+                    onChange={(e) => setSessionDurationOption(e.target.value)}
+                  >
+                    {SESSION_DURATION_QUICK_OPTIONS.map((duration) => (
+                      <option key={duration} value={String(duration)}>
+                        {duration} min
+                      </option>
+                    ))}
+                    <option value="custom">Personalizado</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                    Hora de fim
+                  </label>
+                  <div className="w-full bg-slate-100 border border-slate-100 rounded-xl p-3 text-sm font-black text-slate-700">
+                    {sessionEndTime}
+                  </div>
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              {sessionDurationOption === "custom" && (
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                    Duração personalizada em minutos
+                  </label>
+                  <input
+                    type="number"
+                    min={15}
+                    max={720}
+                    className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                    value={sessionCustomDuration}
+                    onChange={(e) => setSessionCustomDuration(e.target.value)}
+                  />
+                </div>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
                     Tipo de sessão
@@ -7264,7 +7612,29 @@ export function CoordinatorDashboard({
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
-                    Sala/local
+                    Local do atendimento
+                  </label>
+                  <select
+                    className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                    value={sessionLocationType}
+                    onChange={(e) => {
+                      const nextLocation = e.target.value as ScheduleLocationType;
+                      setSessionLocationType(nextLocation);
+                      if (nextLocation !== "clinica") setSessionRoom("");
+                    }}
+                  >
+                    {SCHEDULE_LOCATION_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              {sessionLocationType === "clinica" ? (
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                    Sala <span className="text-red-500">*</span>
                   </label>
                   <select
                     className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
@@ -7272,18 +7642,40 @@ export function CoordinatorDashboard({
                     onChange={(e) => setSessionRoom(e.target.value)}
                   >
                     <option value="">Selecione...</option>
-                    <option value="online">Online</option>
-                    <option value="domicilio">Domicílio</option>
-                    <option value="escola">Escola</option>
-                    <option value="outro">Outro</option>
-                    {rooms.map((room: any) => (
+                    {activeClinicRooms.map((room: any) => (
                       <option key={room.id} value={room.id}>
                         {room.name}
                       </option>
                     ))}
                   </select>
                 </div>
-              </div>
+              ) : sessionLocationType === "online" ? (
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                    Link da chamada <span className="text-slate-300 normal-case tracking-normal">(opcional)</span>
+                  </label>
+                  <input
+                    type="url"
+                    className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                    value={sessionCallLink}
+                    onChange={(e) => setSessionCallLink(e.target.value)}
+                    placeholder="https://..."
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                    Endereço/observação <span className="text-slate-300 normal-case tracking-normal">(opcional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                    value={sessionLocationNotes}
+                    onChange={(e) => setSessionLocationNotes(e.target.value)}
+                    placeholder="Endereço, sala externa ou referência"
+                  />
+                </div>
+              )}
               <div>
                 <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
                   Terapeuta Responsável
@@ -7308,6 +7700,35 @@ export function CoordinatorDashboard({
                   )}
                 </select>
               </div>
+              {scheduleConflictState.checked && (
+                <div className={`rounded-2xl border px-4 py-3 text-sm font-semibold ${
+                  scheduleConflictState.blocking
+                    ? "border-red-100 bg-red-50 text-red-700"
+                    : "border-emerald-100 bg-emerald-50 text-emerald-700"
+                }`}>
+                  <div className="flex items-center gap-2">
+                    {scheduleConflictState.loading ? (
+                      <Clock size={16} className="animate-pulse" />
+                    ) : scheduleConflictState.blocking ? (
+                      <AlertCircle size={16} />
+                    ) : (
+                      <CheckCircle2 size={16} />
+                    )}
+                    <span>
+                      {scheduleConflictState.loading
+                        ? "Verificando conflitos..."
+                        : scheduleConflictState.blocking
+                          ? "Conflito encontrado"
+                          : "Horário disponível"}
+                    </span>
+                  </div>
+                  {scheduleConflictState.message && (
+                    <p className="mt-1 text-xs font-medium opacity-90">
+                      {scheduleConflictState.message}
+                    </p>
+                  )}
+                </div>
+              )}
               {editingAppointmentId && isEditingRecurringAppointment && (
                 <div className="rounded-3xl border border-violet-100 bg-violet-50 p-4">
                   <p className="text-sm font-black text-slate-800">
@@ -7399,11 +7820,26 @@ export function CoordinatorDashboard({
                       </span>
                     </div>
                   )}
+                  {Number(sessionNumSessions) > 1 && (
+                    <div className="mt-4 rounded-2xl bg-white p-3">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                        Preview das próximas datas
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {sessionRecurrenceDates.slice(0, 8).map((dateKey) => (
+                          <span key={dateKey} className="rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-600">
+                            {dateKey}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
               <button
                 onClick={handleSessionSubmit}
-                className="w-full bg-[#7a32fc] text-white font-bold py-4 rounded-xl shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all mt-2 active:scale-95 uppercase tracking-widest"
+                disabled={!requiredSessionFieldsReady || scheduleConflictState.blocking || scheduleConflictState.loading}
+                className="w-full bg-[#7a32fc] text-white font-bold py-4 rounded-xl shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all mt-2 active:scale-95 uppercase tracking-widest disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {editingAppointmentId
                   ? "Salvar Alterações"

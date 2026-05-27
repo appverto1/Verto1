@@ -58,6 +58,17 @@ import {
   isAbaSignificantChange
 } from './src/utils/abaClinicalCharts';
 import {
+  BLOCKING_APPOINTMENT_STATUSES,
+  addMinutesToTime,
+  appointmentTimesOverlap,
+  buildPatientTimeReport,
+  buildProfessionalWorkReport,
+  checkLocalScheduleConflicts,
+  getAppointmentDurationMinutes,
+  normalizeDurationMinutes,
+  normalizeScheduleLocationType
+} from './src/utils/scheduling';
+import {
   ASSIGNED_TASK_SELECT,
   FINANCIAL_ENTRY_SELECT,
   HISTORY_SELECT,
@@ -2515,16 +2526,29 @@ const APPOINTMENT_SELECT = [
 
 const CALENDAR_EVENT_SELECT = [
   'id',
+  'organization_id',
   'clinic_id',
   'patient_id',
   'patient_name',
   'therapist_id',
   'therapist_name',
   'scheduled_at',
+  'scheduled_start_at',
+  'scheduled_end_at',
+  'scheduled_duration_minutes',
+  'actual_start_at',
+  'actual_end_at',
+  'actual_duration_minutes',
   'date',
   'time',
   'duration_minutes',
   'approach',
+  'service_type',
+  'room_id',
+  'room_name',
+  'location_type',
+  'location_notes',
+  'call_link',
   'status',
   'notes',
   'source_payload',
@@ -2533,6 +2557,53 @@ const CALENDAR_EVENT_SELECT = [
 ].join(',');
 
 const CALENDAR_EVENT_DETAIL_SELECT = CALENDAR_EVENT_SELECT;
+
+const SCHEDULE_CONFLICT_APPOINTMENT_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'patient_id',
+  'patient_name',
+  'therapist_id',
+  'therapist_name',
+  'scheduled_at',
+  'scheduled_start_at',
+  'scheduled_end_at',
+  'scheduled_duration_minutes',
+  'duration_minutes',
+  'approach',
+  'service_type',
+  'room_id',
+  'room_name',
+  'location_type',
+  'status',
+  'source_payload'
+].join(',');
+
+const TIME_REPORT_APPOINTMENT_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'patient_id',
+  'patient_name',
+  'therapist_id',
+  'therapist_name',
+  'scheduled_at',
+  'scheduled_start_at',
+  'scheduled_end_at',
+  'scheduled_duration_minutes',
+  'actual_start_at',
+  'actual_end_at',
+  'actual_duration_minutes',
+  'duration_minutes',
+  'approach',
+  'service_type',
+  'room_id',
+  'room_name',
+  'location_type',
+  'status',
+  'source_payload'
+].join(',');
 
 const ACTIVITY_LOG_SELECT = [
   'id',
@@ -3527,7 +3598,16 @@ function normalizeAppointmentStatusForTable(status: unknown): string {
   if (normalized === 'pending') return 'scheduled';
   if (normalized === 'canceled') return 'cancelled';
   if (normalized === 'reschedule') return 'rescheduled';
-  if (normalized === 'confirmed' || normalized === 'completed' || normalized === 'cancelled' || normalized === 'rescheduled') {
+  if (normalized === 'missed') return 'no_show';
+  if (
+    normalized === 'confirmed' ||
+    normalized === 'completed' ||
+    normalized === 'cancelled' ||
+    normalized === 'rescheduled' ||
+    normalized === 'in_progress' ||
+    normalized === 'no_show' ||
+    normalized === 'deleted'
+  ) {
     return normalized;
   }
   return 'scheduled';
@@ -3710,6 +3790,160 @@ function resetRescheduledAppointmentsForNewReminderCycle(nextAppointments: any[]
   });
 }
 
+function getClinicStateAppointmentStatusBlocksConflict(appointment: any) {
+  const normalized = sanitizeString(appointment?.status || 'scheduled', 40).toLowerCase();
+  if (['canceled', 'cancelled', 'no_show', 'missed', 'deleted', 'completed'].includes(normalized)) return false;
+  return ['scheduled', 'pending', 'confirmed', 'in_progress'].includes(normalized);
+}
+
+function getClinicStateAppointmentDurationMinutes(appointment: any, specialtySettings: Record<string, any> = {}) {
+  const approach = sanitizeString(appointment?.type || appointment?.approach || appointment?.service_type, 120);
+  return normalizeDurationMinutes(
+    appointment?.duration_minutes ||
+      appointment?.durationMinutes ||
+      appointment?.scheduled_duration_minutes ||
+      appointment?.scheduledDurationMinutes ||
+      specialtySettings?.[approach] ||
+      50,
+    50
+  );
+}
+
+function getClinicStateAppointmentProfessionals(appointment: any) {
+  const ids = Array.from(new Set([
+    appointment?.professionalId,
+    appointment?.professional_id,
+    appointment?.therapistId,
+    appointment?.therapist_id,
+    ...(Array.isArray(appointment?.professionalIds) ? appointment.professionalIds : []),
+    ...(Array.isArray(appointment?.professional_ids) ? appointment.professional_ids : []),
+    ...(Array.isArray(appointment?.teamProfessionalIds) ? appointment.teamProfessionalIds : []),
+    ...(Array.isArray(appointment?.team_professional_ids) ? appointment.team_professional_ids : [])
+  ].map((value) => sanitizeString(value, 120)).filter(Boolean)));
+  const names = Array.from(new Set([
+    appointment?.professional,
+    appointment?.professionalName,
+    appointment?.professional_name,
+    appointment?.therapistName,
+    appointment?.therapist_name,
+    ...(Array.isArray(appointment?.professionalNames) ? appointment.professionalNames : []),
+    ...(Array.isArray(appointment?.professional_names) ? appointment.professional_names : []),
+    ...(Array.isArray(appointment?.teamProfessionalNames) ? appointment.teamProfessionalNames : [])
+  ].map((value) => sanitizeString(value, 180)).filter(Boolean)));
+  return { ids, names };
+}
+
+function validateClinicStateAppointmentsForScheduleConflicts(params: {
+  appointments: any[];
+  rooms?: any[];
+  specialtySettings?: Record<string, any>;
+}) {
+  const appointments = Array.isArray(params.appointments) ? params.appointments : [];
+  const roomsById = new Map(
+    (Array.isArray(params.rooms) ? params.rooms : [])
+      .map((room: any) => [sanitizeString(room?.id, 180), room])
+      .filter(([id]) => Boolean(id))
+  );
+  const active = appointments
+    .map((appointment: any, index: number) => {
+      const date = sanitizeDate(appointment?.date);
+      const startTime = sanitizeString(appointment?.time, 10).slice(0, 5);
+      const durationMinutes = getClinicStateAppointmentDurationMinutes(appointment, params.specialtySettings || {});
+      const endTime = addMinutesToTime(startTime, durationMinutes);
+      const locationType = normalizeScheduleLocationType(
+        appointment?.location_type ||
+          appointment?.locationType ||
+          appointment?.location ||
+          (appointment?.room || appointment?.room_id || appointment?.roomId ? 'clinica' : 'outro')
+      );
+      const roomId = locationType === 'clinica'
+        ? sanitizeString(appointment?.room_id || appointment?.roomId || appointment?.room, 180)
+        : '';
+      const room = roomId ? roomsById.get(roomId) : null;
+      const roomName = sanitizeString(appointment?.room_name || appointment?.roomName || room?.name || roomId, 180);
+      const patientId = sanitizeString(appointment?.patientId || appointment?.patient_id, 120);
+      const patientName = sanitizeString(appointment?.patientName || appointment?.patient_name || appointment?.name, 180);
+      const professionals = getClinicStateAppointmentProfessionals(appointment);
+      return {
+        index,
+        id: sanitizeString(appointment?.id, 180),
+        date,
+        startTime,
+        endTime,
+        durationMinutes,
+        locationType,
+        roomId,
+        roomName,
+        patientId,
+        patientName,
+        professionalIds: professionals.ids,
+        professionalNames: professionals.names,
+        blocks: getClinicStateAppointmentStatusBlocksConflict(appointment)
+      };
+    })
+    .filter((appointment) => appointment.blocks && appointment.date && appointment.startTime);
+
+  for (const appointment of active) {
+    if (appointment.locationType === 'clinica' && !appointment.roomId) {
+      return {
+        ok: false,
+        status: 409,
+        error: 'Selecione uma sala da clínica para este atendimento.'
+      };
+    }
+  }
+
+  for (let index = 0; index < active.length; index += 1) {
+    const current = active[index];
+    for (let otherIndex = index + 1; otherIndex < active.length; otherIndex += 1) {
+      const other = active[otherIndex];
+      if (current.date !== other.date) continue;
+      if (!appointmentTimesOverlap(current.startTime, current.endTime, other.startTime, other.endTime)) continue;
+
+      const samePatient =
+        (current.patientId && other.patientId && current.patientId === other.patientId) ||
+        (!current.patientId && !other.patientId && current.patientName && current.patientName === other.patientName);
+      if (samePatient) {
+        return {
+          ok: false,
+          status: 409,
+          error: `${current.patientName || 'Paciente'} já possui outra sessão nesse horário.`
+        };
+      }
+
+      const sameRoom =
+        current.locationType === 'clinica' &&
+        other.locationType === 'clinica' &&
+        current.roomId &&
+        current.roomId === other.roomId;
+      if (sameRoom) {
+        return {
+          ok: false,
+          status: 409,
+          error: `${current.roomName || 'Sala'} já está ocupada das ${other.startTime} às ${other.endTime} com ${other.patientName || 'outro paciente'}.`
+        };
+      }
+
+      const professionalIdConflict = current.professionalIds.some((id: string) => other.professionalIds.includes(id));
+      const professionalNameConflict = current.professionalNames.some((name: string) => other.professionalNames.includes(name));
+      if (professionalIdConflict || professionalNameConflict) {
+        const professionalName =
+          current.professionalNames.find((name: string) => other.professionalNames.includes(name)) ||
+          current.professionalNames[0] ||
+          other.professionalNames[0] ||
+          'Profissional';
+        return {
+          ok: false,
+          status: 409,
+          error: `${professionalName} já possui atendimento das ${other.startTime} às ${other.endTime}.`
+        };
+      }
+    }
+  }
+
+  return { ok: true, status: 200, error: '' };
+}
+
 async function upsertAppointmentMirrorRow(row: Record<string, any>, logger: Pick<Console, 'warn'> = console) {
   let payload: Record<string, any> = cleanObject(row);
   let triedLegacyPendingStatus = false;
@@ -3741,6 +3975,44 @@ async function upsertAppointmentMirrorRow(row: Record<string, any>, logger: Pick
   }
 
   return false;
+}
+
+async function syncAppointmentProfessionalsMirrorRows(params: {
+  appointmentId: string;
+  organizationId: string;
+  clinicId: string;
+  professionalIds: string[];
+  professionalName?: string | null;
+}) {
+  const appointmentId = sanitizeString(params.appointmentId, 180);
+  if (!isUuid(appointmentId)) return;
+  const professionalIds = Array.from(new Set((params.professionalIds || []).filter((id) => isUuid(id)))).slice(0, 20);
+  if (professionalIds.length === 0) return;
+  const deleteResult = await supabase
+    .from('appointment_professionals')
+    .delete()
+    .eq('appointment_id', appointmentId);
+  if (deleteResult.error) {
+    if (hasMissingFinancialSchema(deleteResult.error)) return;
+    console.warn('[Appointments] Falha ao atualizar equipe do agendamento.', deleteResult.error.message);
+    return;
+  }
+  const now = new Date().toISOString();
+  const rows = professionalIds.map((professionalId, index) => ({
+    organization_id: isUuid(params.organizationId) ? params.organizationId : params.clinicId,
+    clinic_id: isUuid(params.clinicId) ? params.clinicId : null,
+    appointment_id: appointmentId,
+    professional_id: professionalId,
+    professional_name: index === 0 ? sanitizeString(params.professionalName, 180) || null : null,
+    role: index === 0 ? 'responsavel' : 'equipe',
+    created_at: now
+  }));
+  const upsertResult = await supabase
+    .from('appointment_professionals')
+    .upsert(rows, { onConflict: 'appointment_id,professional_id' });
+  if (upsertResult.error && !hasMissingFinancialSchema(upsertResult.error)) {
+    console.warn('[Appointments] Falha ao espelhar equipe do agendamento.', upsertResult.error.message);
+  }
 }
 
 async function syncAppointmentsTableFromClinicState(params: {
@@ -3820,7 +4092,42 @@ async function syncAppointmentsTableFromClinicState(params: {
 
     const approach = sanitizeString(appointment?.type || appointment?.approach, 120);
     const configuredDuration = Number(params.specialtySettings?.[approach]);
-    const duration = Number(appointment?.duration_minutes || appointment?.durationMinutes || configuredDuration || 50);
+    const duration = Number(
+      appointment?.duration_minutes ||
+      appointment?.durationMinutes ||
+      appointment?.scheduled_duration_minutes ||
+      appointment?.scheduledDurationMinutes ||
+      configuredDuration ||
+      50
+    );
+    const safeDuration = Number.isFinite(duration) && duration > 0 ? Math.round(duration) : 50;
+    const scheduledEndAt = new Date(new Date(scheduledAt).getTime() + safeDuration * 60 * 1000).toISOString();
+    const roomId = sanitizeString(
+      appointment?.room_id || appointment?.roomId || appointment?.room,
+      180
+    );
+    const roomName = sanitizeString(
+      appointment?.room_name || appointment?.roomName || appointment?.roomDisplayName,
+      180
+    );
+    const locationType = normalizeScheduleLocationType(
+      appointment?.location_type || appointment?.locationType || appointment?.location || (roomId ? 'clinica' : '')
+    );
+    const professionalIds = Array.from(
+      new Set(
+        [
+          therapistId,
+          appointment?.professionalId,
+          appointment?.professional_id,
+          ...(Array.isArray(appointment?.professionalIds) ? appointment.professionalIds : []),
+          ...(Array.isArray(appointment?.professional_ids) ? appointment.professional_ids : []),
+          ...(Array.isArray(appointment?.teamProfessionalIds) ? appointment.teamProfessionalIds : []),
+          ...(Array.isArray(appointment?.team_professional_ids) ? appointment.team_professional_ids : [])
+        ]
+          .map((value) => sanitizeString(value, 120))
+          .filter((value) => isUuid(value))
+      )
+    );
     const statusForTable = normalizeAppointmentStatusForTable(appointment?.status);
     const patientResponse =
       sanitizeString(appointment?.patient_response || appointment?.patientResponse, 40) ||
@@ -3904,11 +4211,23 @@ async function syncAppointmentsTableFromClinicState(params: {
 
     const row = {
       id: appointmentId,
+      organization_id: isUuid(sanitizeString(appointment?.organization_id || appointment?.organizationId, 120))
+        ? sanitizeString(appointment?.organization_id || appointment?.organizationId, 120)
+        : clinicId,
       clinic_id: clinicId,
       patient_id: patientId,
       therapist_id: therapistId,
       scheduled_at: scheduledAt,
-      duration_minutes: Number.isFinite(duration) && duration > 0 ? Math.round(duration) : 50,
+      scheduled_start_at: appointment?.scheduled_start_at || appointment?.scheduledStartAt || scheduledAt,
+      scheduled_end_at: appointment?.scheduled_end_at || appointment?.scheduledEndAt || scheduledEndAt,
+      scheduled_duration_minutes: safeDuration,
+      actual_start_at: appointment?.actual_start_at || appointment?.actualStartAt || appointment?.actual_start || appointment?.actualStart || null,
+      actual_end_at: appointment?.actual_end_at || appointment?.actualEndAt || appointment?.actual_end || appointment?.actualEnd || null,
+      actual_duration_minutes:
+        Number.isFinite(Number(appointment?.actual_duration_minutes ?? appointment?.actualDurationMinutes))
+          ? Math.max(0, Math.round(Number(appointment?.actual_duration_minutes ?? appointment?.actualDurationMinutes)))
+          : null,
+      duration_minutes: safeDuration,
       status: effectiveStatusForTable,
       notes: sanitizeString(appointment?.notes || appointment?.note, 2000) || null,
       patient_response: resolvedPatientResponse,
@@ -3925,16 +4244,86 @@ async function syncAppointmentsTableFromClinicState(params: {
       patient_email: patientEmail || null,
       patient_name: sanitizeString(appointment?.patientName || appointment?.name || appointment?.patient_name, 180) || null,
       therapist_name: sanitizeString(appointment?.therapistName || appointment?.professional || appointment?.therapist_name, 180) || null,
-      source_payload: appointment,
+      approach,
+      service_type: sanitizeString(appointment?.service_type || appointment?.serviceType || approach, 120) || null,
+      room_id: roomId || null,
+      room_name: roomName || (roomId && !isUuid(roomId) ? roomId : null),
+      location_type: locationType,
+      location_notes: sanitizeString(appointment?.location_notes || appointment?.locationNotes || appointment?.addressNote, 1000) || null,
+      call_link: sanitizeString(appointment?.call_link || appointment?.callLink, 500) || null,
+      recurrence_total: Number.isFinite(Number(appointment?.recurrenceTotal ?? appointment?.recurrence_total))
+        ? Math.max(1, Math.round(Number(appointment?.recurrenceTotal ?? appointment?.recurrence_total)))
+        : null,
+      recurrence_frequency: sanitizeString(appointment?.recurrenceFrequency || appointment?.recurrence_frequency, 60) || null,
+      source_payload: {
+        ...appointment,
+        professionalIds,
+        professional_ids: professionalIds,
+        room_id: roomId || appointment?.room_id || appointment?.roomId || null,
+        roomName: roomName || appointment?.roomName || null,
+        locationType,
+        location_type: locationType,
+        durationMinutes: safeDuration,
+        duration_minutes: safeDuration,
+        scheduled_end_at: appointment?.scheduled_end_at || appointment?.scheduledEndAt || scheduledEndAt
+      },
       is_active: !['cancelled', 'canceled'].includes(effectiveStatusForTable),
       updated_at: new Date().toISOString()
     };
 
     const ok = await upsertAppointmentMirrorRow(row);
-    if (ok) mirrored += 1;
-    else skipped += 1;
+    if (ok) {
+      mirrored += 1;
+      await syncAppointmentProfessionalsMirrorRows({
+        appointmentId,
+        organizationId: row.organization_id,
+        clinicId,
+        professionalIds,
+        professionalName: row.therapist_name
+      });
+    } else skipped += 1;
   }
 
+  return { mirrored, skipped };
+}
+
+async function syncClinicRoomsTableFromClinicState(params: {
+  clinicId: string | null;
+  rooms: any[];
+  organizationId?: string | null;
+}) {
+  const clinicId = sanitizeString(params.clinicId, 120);
+  const organizationId = sanitizeString(params.organizationId || clinicId, 120);
+  if (!isUuid(clinicId) || !Array.isArray(params.rooms)) return { mirrored: 0, skipped: 0 };
+  let mirrored = 0;
+  let skipped = 0;
+  for (const room of params.rooms.slice(0, 400)) {
+    const roomId = sanitizeString(room?.id, 180);
+    const name = sanitizeString(room?.name, 180);
+    if (!isUuid(roomId) || !name) {
+      skipped += 1;
+      continue;
+    }
+    const payload = cleanObject({
+      id: roomId,
+      organization_id: isUuid(organizationId) ? organizationId : clinicId,
+      clinic_id: clinicId,
+      name,
+      description: sanitizeString(room?.description, 1000) || null,
+      capacity: Number.isFinite(Number(room?.capacity)) ? Math.max(0, Math.round(Number(room.capacity))) : null,
+      is_active: room?.is_active !== false && room?.isActive !== false,
+      updated_at: new Date().toISOString()
+    });
+    const { error } = await supabase
+      .from('clinic_rooms')
+      .upsert([payload], { onConflict: 'id' });
+    if (!error) mirrored += 1;
+    else {
+      if (hasMissingFinancialSchema(error)) return { mirrored, skipped: skipped + 1 };
+      skipped += 1;
+      console.warn('[Rooms] Falha ao espelhar sala da clínica.', { roomId, message: error.message });
+    }
+  }
   return { mirrored, skipped };
 }
 
@@ -8945,61 +9334,31 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'Nenhum payload de estado enviado.' });
       }
 
-      if (nextAppointments !== undefined) {
-        const effectiveSpecialtySettings =
-          nextSpecialtySettings && typeof nextSpecialtySettings === 'object'
-            ? nextSpecialtySettings
-            : {};
-        const toMinutes = (time: string) => {
-          const [hours, minutes] = String(time || '00:00')
-            .split(':')
-            .map((value) => Number(value) || 0);
-          return hours * 60 + minutes;
-        };
-        const getEndMinutes = (appointment: any) => {
-          const startMinutes = toMinutes(sanitizeString(appointment?.time, 10));
-          const approach = sanitizeString(appointment?.type || appointment?.approach, 120);
-          const duration = Number((effectiveSpecialtySettings as any)?.[approach] || 60);
-          return startMinutes + (Number.isFinite(duration) ? duration : 60);
-        };
-
-        for (let index = 0; index < nextAppointments.length; index += 1) {
-          const current = nextAppointments[index];
-          const currentStatus = sanitizeString(current?.status, 40)?.toLowerCase();
-          if (currentStatus === 'canceled' || currentStatus === 'cancelled') continue;
-
-          const currentPatientId = sanitizeString(current?.patientId || current?.patient_id, 120);
-          const currentDate = sanitizeDate(current?.date);
-          const currentTime = sanitizeString(current?.time, 10);
-          if (!currentPatientId || !currentDate || !currentTime) continue;
-
-          const currentStart = toMinutes(currentTime);
-          const currentEnd = getEndMinutes(current);
-
-          for (let otherIndex = index + 1; otherIndex < nextAppointments.length; otherIndex += 1) {
-            const other = nextAppointments[otherIndex];
-            const otherStatus = sanitizeString(other?.status, 40)?.toLowerCase();
-            if (otherStatus === 'canceled' || otherStatus === 'cancelled') continue;
-            if (sanitizeString(other?.patientId || other?.patient_id, 120) !== currentPatientId) continue;
-            if (sanitizeDate(other?.date) !== currentDate) continue;
-
-            const otherStart = toMinutes(sanitizeString(other?.time, 10));
-            const otherEnd = getEndMinutes(other);
-            if (currentStart < otherEnd && currentEnd > otherStart) {
-              return res.status(409).json({
-                success: false,
-                error: 'O paciente já possui um agendamento conflitante nesse intervalo.',
-              });
-            }
-          }
-        }
-      }
-
       const previous = await supabase
         .from('clinic_state')
         .select('rooms, appointments, protocols, specialty_settings')
         .eq('clinic_id', clinicId)
         .maybeSingle();
+
+      if (nextAppointments !== undefined) {
+        const effectiveSpecialtySettings =
+          nextSpecialtySettings && typeof nextSpecialtySettings === 'object'
+            ? nextSpecialtySettings
+            : previous.data?.specialty_settings && typeof previous.data.specialty_settings === 'object'
+              ? previous.data.specialty_settings
+              : {};
+        const scheduleValidation = validateClinicStateAppointmentsForScheduleConflicts({
+          appointments: nextAppointments,
+          rooms: nextRooms !== undefined ? nextRooms : Array.isArray(previous.data?.rooms) ? previous.data.rooms : [],
+          specialtySettings: effectiveSpecialtySettings
+        });
+        if (!scheduleValidation.ok) {
+          return res.status(scheduleValidation.status).json({
+            success: false,
+            error: scheduleValidation.error,
+          });
+        }
+      }
 
       if (
         nextProtocols !== undefined &&
@@ -9098,6 +9457,16 @@ async function startServer() {
           .catch((mirrorError: any) => {
             console.warn('[Appointments] Espelhamento da agenda falhou sem bloquear salvamento.', mirrorError?.message || String(mirrorError));
           });
+      }
+
+      if (nextRooms !== undefined) {
+        void syncClinicRoomsTableFromClinicState({
+          clinicId,
+          rooms: Array.isArray(data.rooms) ? data.rooms : nextRooms,
+          organizationId: req.session.user?.organizationId || req.session.user?.organization_id || clinicId
+        }).catch((roomMirrorError: any) => {
+          console.warn('[Rooms] Espelhamento de salas falhou sem bloquear salvamento.', roomMirrorError?.message || String(roomMirrorError));
+        });
       }
 
       const prevData = previous.data || {};
@@ -15383,6 +15752,16 @@ async function startServer() {
     'patient_id',
     'patient_name',
     'therapist_id',
+    'appointment_id',
+    'scheduled_start_at',
+    'scheduled_end_at',
+    'scheduled_duration_minutes',
+    'actual_start_at',
+    'actual_end_at',
+    'actual_duration_minutes',
+    'room_id',
+    'room_name',
+    'location_type',
     'status',
     'started_at',
     'ended_at',
@@ -16213,7 +16592,17 @@ async function startServer() {
 
   const buildCalendarAppointmentStart = (row: any) => {
     const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
-    const scheduledAt = row?.scheduled_at || row?.scheduledAt || source?.scheduled_at || source?.scheduledAt || source?.start_time || source?.startTime;
+    const scheduledAt =
+      row?.scheduled_start_at ||
+      row?.scheduledStartAt ||
+      row?.scheduled_at ||
+      row?.scheduledAt ||
+      source?.scheduled_start_at ||
+      source?.scheduledStartAt ||
+      source?.scheduled_at ||
+      source?.scheduledAt ||
+      source?.start_time ||
+      source?.startTime;
     if (scheduledAt) {
       const date = new Date(scheduledAt);
       if (!Number.isNaN(date.getTime())) return date;
@@ -16228,8 +16617,12 @@ async function startServer() {
   const getCalendarAppointmentDuration = (row: any) => {
     const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
     const duration = Number(
+      row?.scheduled_duration_minutes ||
+      row?.scheduledDurationMinutes ||
       row?.duration_minutes ||
       row?.durationMinutes ||
+      source?.scheduled_duration_minutes ||
+      source?.scheduledDurationMinutes ||
       source?.duration_minutes ||
       source?.durationMinutes ||
       source?.duration ||
@@ -16242,6 +16635,8 @@ async function startServer() {
     const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
     const start = buildCalendarAppointmentStart(row);
     const end = new Date(start.getTime() + getCalendarAppointmentDuration(row) * 60 * 1000);
+    const sourceDate = sanitizeDate(row?.date || source?.date);
+    const sourceTime = sanitizeString(row?.time || source?.time, 10);
     const appointmentId = sanitizeString(row?.id || source?.id, 180);
     const patientId = sanitizeString(row?.patient_id || row?.patientId || source?.patient_id || source?.patientId, 120);
     const status = normalizeAppointmentStatusForUi(row?.status || source?.status || 'pending');
@@ -16254,9 +16649,15 @@ async function startServer() {
     const planCount = Number(counters.planCountByPatient?.get(patientId) || source?.plan_item_count || source?.planItemCount || 0);
     const probeCount = Number(counters.probeCountByAppointment?.get(appointmentId) || source?.maintenance_probe_count || source?.maintenanceProbeCount || 0);
     const room = sanitizeString(
+      row?.room_name ||
+      row?.roomName ||
+      row?.room_id ||
+      row?.roomId ||
       source?.roomDisplayName ||
       source?.roomName ||
       source?.room_name ||
+      source?.room_id ||
+      source?.roomId ||
       source?.room ||
       row?.roomDisplayName ||
       row?.roomName ||
@@ -16264,8 +16665,11 @@ async function startServer() {
       180
     );
     const location = sanitizeString(
+      row?.location_type ||
+      row?.locationType ||
       source?.location ||
       source?.locationType ||
+      source?.location_type ||
       source?.local ||
       source?.place ||
       (String(room || '').toLowerCase().includes('online') ? 'online' : ''),
@@ -16280,10 +16684,23 @@ async function startServer() {
       therapist_name: sanitizeString(row?.therapist_name || row?.therapistName || source?.therapistName || source?.professional || source?.therapist_name, 180) || 'Equipe',
       start_time: start.toISOString(),
       end_time: end.toISOString(),
-      type: sanitizeString(row?.approach || row?.type || source?.approach || source?.type, 120) || 'Sessão',
+      date: sourceDate || start.toISOString().slice(0, 10),
+      time: /^\d{2}:\d{2}$/.test(sourceTime) ? sourceTime : `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`,
+      endTime: `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`,
+      scheduled_start: row?.scheduled_start_at || source?.scheduled_start_at || start.toISOString(),
+      scheduled_end: row?.scheduled_end_at || source?.scheduled_end_at || end.toISOString(),
+      scheduled_duration_minutes: getCalendarAppointmentDuration(row),
+      duration_minutes: getCalendarAppointmentDuration(row),
+      actual_start: row?.actual_start_at || source?.actual_start_at || source?.actualStartAt || null,
+      actual_end: row?.actual_end_at || source?.actual_end_at || source?.actualEndAt || null,
+      actual_duration_minutes: Number(row?.actual_duration_minutes ?? source?.actual_duration_minutes ?? source?.actualDurationMinutes) || null,
+      type: sanitizeString(row?.service_type || row?.approach || row?.type || source?.service_type || source?.serviceType || source?.approach || source?.type, 120) || 'Sessão',
       status,
       location: location || (room ? 'sala' : 'clinica'),
+      location_type: normalizeScheduleLocationType(location || (room ? 'clinica' : 'outro')),
+      room_id: sanitizeString(row?.room_id || row?.roomId || source?.room_id || source?.roomId || source?.room, 180) || null,
       room: room || null,
+      room_name: sanitizeString(row?.room_name || row?.roomName || source?.room_name || source?.roomName || source?.roomDisplayName, 180) || null,
       has_session_record: hasSessionRecord,
       has_report: hasReport,
       has_pending_signature: hasPendingSignature,
@@ -16316,6 +16733,484 @@ async function startServer() {
     }
     return true;
   };
+
+  const normalizeConflictInputDates = (input: any) => {
+    const recurrenceDates = Array.isArray(input?.recurrence_dates)
+      ? input.recurrence_dates
+      : Array.isArray(input?.recurrenceDates)
+        ? input.recurrenceDates
+        : [];
+    const baseDate = sanitizeDate(input?.date || input?.start_date || input?.startDate);
+    const fromStart = input?.start_time || input?.startTime;
+    const startDate = input?.start_time && String(input.start_time).includes('T')
+      ? new Date(input.start_time)
+      : null;
+    const dateFromIso = startDate && !Number.isNaN(startDate.getTime()) ? startDate.toISOString().slice(0, 10) : '';
+    const startTimeFromIso = startDate && !Number.isNaN(startDate.getTime())
+      ? `${String(startDate.getHours()).padStart(2, '0')}:${String(startDate.getMinutes()).padStart(2, '0')}`
+      : '';
+    const date = baseDate || dateFromIso;
+    const startTime = sanitizeString(
+      String(fromStart || '').includes('T')
+        ? startTimeFromIso
+        : fromStart || input?.time || '08:00',
+      10
+    ).slice(0, 5);
+    const duration = Math.max(15, Math.min(720, Math.round(Number(input?.duration_minutes || input?.durationMinutes || 50) || 50)));
+    const endFromIso = input?.end_time || input?.endTime;
+    const endDate = endFromIso && String(endFromIso).includes('T') ? new Date(endFromIso) : null;
+    const endTime = endDate && !Number.isNaN(endDate.getTime())
+      ? `${String(endDate.getHours()).padStart(2, '0')}:${String(endDate.getMinutes()).padStart(2, '0')}`
+      : sanitizeString(endFromIso || addMinutesToTime(startTime, duration), 10).slice(0, 5);
+    const dates = (recurrenceDates.length > 0 ? recurrenceDates : [date])
+      .map((value: any) => sanitizeDate(value))
+      .filter(Boolean)
+      .slice(0, 120);
+    return { date, startTime, endTime, duration, recurrenceDates: dates.length > 0 ? dates : [date].filter(Boolean) };
+  };
+
+  const normalizeConflictAppointment = (row: any) => {
+    const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
+    const event = normalizeCalendarAppointmentRow(row);
+    const durationMinutes = getAppointmentDurationMinutes({ ...source, ...row, ...event });
+    return {
+      ...source,
+      ...row,
+      ...event,
+      patientId: event.patient_id,
+      patientName: event.patient_name,
+      therapistId: event.therapist_id,
+      therapistName: event.therapist_name,
+      professionalId: event.therapist_id,
+      professional: event.therapist_name,
+      professionalIds: Array.from(new Set([
+        event.therapist_id,
+        source?.professionalId,
+        source?.professional_id,
+        ...(Array.isArray(source?.professionalIds) ? source.professionalIds : []),
+        ...(Array.isArray(source?.professional_ids) ? source.professional_ids : []),
+        ...(Array.isArray(source?.teamProfessionalIds) ? source.teamProfessionalIds : []),
+        ...(Array.isArray(source?.team_professional_ids) ? source.team_professional_ids : [])
+      ].map((value) => sanitizeString(value, 120)).filter(Boolean))),
+      professionalNames: Array.from(new Set([
+        event.therapist_name,
+        source?.professionalName,
+        source?.professional,
+        ...(Array.isArray(source?.professionalNames) ? source.professionalNames : []),
+        ...(Array.isArray(source?.professional_names) ? source.professional_names : []),
+        ...(Array.isArray(source?.teamProfessionalNames) ? source.teamProfessionalNames : [])
+      ].map((value) => sanitizeString(value, 180)).filter(Boolean))),
+      roomId: event.room_id || source?.roomId || source?.room_id || source?.room || null,
+      room_id: event.room_id || source?.roomId || source?.room_id || source?.room || null,
+      roomName: event.room_name || event.room || source?.roomName || source?.roomDisplayName || null,
+      room_name: event.room_name || event.room || source?.roomName || source?.roomDisplayName || null,
+      locationType: event.location_type || source?.locationType || source?.location_type || null,
+      durationMinutes,
+      duration_minutes: durationMinutes
+    };
+  };
+
+  const fetchConflictAppointmentsFromState = async (clinicId: string, input: any) => {
+    const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId, logger: console });
+    if (stateResult.error) {
+      if (hasMissingFinancialSchema(stateResult.error)) return [];
+      throw stateResult.error;
+    }
+    const dateSet = new Set((input.recurrenceDates || []).map((date: string) => String(date || '').slice(0, 10)));
+    return (Array.isArray(stateResult.data?.appointments) ? stateResult.data.appointments : [])
+      .filter((appointment: any) => !dateSet.size || dateSet.has(String(appointment?.date || '').slice(0, 10)))
+      .slice(0, 500)
+      .map((appointment: any) => normalizeConflictAppointment({ ...appointment, source_payload: appointment }));
+  };
+
+  const fetchConflictAppointmentsFromTable = async (params: {
+    clinicId: string;
+    organizationId: string;
+    input: any;
+  }) => {
+    const dates = params.input.recurrenceDates || [];
+    const firstDate = dates[0] || params.input.date;
+    const lastDate = dates[dates.length - 1] || firstDate;
+    const windowStart = new Date(`${firstDate}T00:00:00-03:00`);
+    const windowEnd = new Date(`${lastDate}T23:59:59-03:00`);
+    if (Number.isNaN(windowStart.getTime()) || Number.isNaN(windowEnd.getTime())) return [];
+    windowStart.setHours(windowStart.getHours() - 12);
+    windowEnd.setHours(windowEnd.getHours() + 12);
+
+    let query = supabase
+      .from('appointments')
+      .select(SCHEDULE_CONFLICT_APPOINTMENT_SELECT)
+      .eq('clinic_id', params.clinicId)
+      .gte('scheduled_at', windowStart.toISOString())
+      .lte('scheduled_at', windowEnd.toISOString())
+      .in('status', [...BLOCKING_APPOINTMENT_STATUSES, 'pending'])
+      .order('scheduled_at', { ascending: true })
+      .limit(500);
+
+    if (isUuid(params.organizationId)) query = query.eq('organization_id', params.organizationId);
+
+    const orParts: string[] = [];
+    if (isUuid(params.input.patientId)) orParts.push(`patient_id.eq.${params.input.patientId}`);
+    const professionalIds = (params.input.professionalIds || []).filter((id: string) => isUuid(id)).slice(0, 20);
+    if (professionalIds.length > 0) orParts.push(`therapist_id.in.(${professionalIds.join(',')})`);
+    if (params.input.roomId) orParts.push(`room_id.eq.${String(params.input.roomId).replace(/[(),]/g, '')}`);
+    if (orParts.length > 0) query = query.or(orParts.join(','));
+
+    const { data, error } = await query;
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return fetchConflictAppointmentsFromState(params.clinicId, params.input);
+      throw error;
+    }
+    const rows = Array.isArray(data) ? [...data] : [];
+    if (professionalIds.length > 0 && isUuid(params.organizationId)) {
+      const teamResult = await supabase
+        .from('appointment_professionals')
+        .select('appointment_id, professional_id, professional_name')
+        .eq('organization_id', params.organizationId)
+        .in('professional_id', professionalIds)
+        .limit(200);
+      if (!teamResult.error && Array.isArray(teamResult.data) && teamResult.data.length > 0) {
+        const existingIds = new Set(rows.map((row: any) => sanitizeString(row?.id, 180)));
+        const teamAppointmentIds = Array.from(new Set(
+          teamResult.data
+            .map((row: any) => sanitizeString(row?.appointment_id, 180))
+            .filter((id: string) => isUuid(id) && !existingIds.has(id))
+        )).slice(0, 100);
+        if (teamAppointmentIds.length > 0) {
+          let teamAppointmentQuery = supabase
+            .from('appointments')
+            .select(SCHEDULE_CONFLICT_APPOINTMENT_SELECT)
+            .in('id', teamAppointmentIds)
+            .gte('scheduled_at', windowStart.toISOString())
+            .lte('scheduled_at', windowEnd.toISOString())
+            .in('status', [...BLOCKING_APPOINTMENT_STATUSES, 'pending'])
+            .limit(100);
+          if (isUuid(params.organizationId)) teamAppointmentQuery = teamAppointmentQuery.eq('organization_id', params.organizationId);
+          const teamAppointmentResult = await teamAppointmentQuery;
+          if (!teamAppointmentResult.error && Array.isArray(teamAppointmentResult.data)) {
+            rows.push(...teamAppointmentResult.data);
+          }
+        }
+      }
+    }
+    return rows.map((row: any) => normalizeConflictAppointment(row));
+  };
+
+  const checkScheduleConflicts = async (rawInput: any, user: any): Promise<any> => {
+    const clinicId = sanitizeString(rawInput?.clinic_id || rawInput?.clinicId || currentClinicId(user), 120);
+    const organizationId = sanitizeString(rawInput?.organization_id || rawInput?.organizationId || user?.organizationId || user?.organization_id || clinicId, 120);
+    const parsedDates = normalizeConflictInputDates(rawInput);
+    const patientId = sanitizeString(rawInput?.patient_id || rawInput?.patientId, 120);
+    const professionalIds = Array.from(new Set([
+      ...(Array.isArray(rawInput?.professional_ids) ? rawInput.professional_ids : []),
+      ...(Array.isArray(rawInput?.professionalIds) ? rawInput.professionalIds : []),
+      rawInput?.professional_id,
+      rawInput?.professionalId,
+      rawInput?.therapist_id,
+      rawInput?.therapistId
+    ].map((value) => sanitizeString(value, 120)).filter(Boolean)));
+    const professionalNames = Array.from(new Set([
+      ...(Array.isArray(rawInput?.professional_names) ? rawInput.professional_names : []),
+      ...(Array.isArray(rawInput?.professionalNames) ? rawInput.professionalNames : []),
+      rawInput?.professional_name,
+      rawInput?.professionalName,
+      rawInput?.therapist_name,
+      rawInput?.therapistName,
+      rawInput?.professional
+    ].map((value) => sanitizeString(value, 180)).filter(Boolean)));
+    const locationType = normalizeScheduleLocationType(rawInput?.location_type || rawInput?.locationType || rawInput?.location);
+    const roomId = sanitizeString(rawInput?.room_id || rawInput?.roomId || rawInput?.room, 180);
+    const roomName = sanitizeString(rawInput?.room_name || rawInput?.roomName || rawInput?.roomDisplayName || roomId, 180);
+
+    if (locationType === 'clinica' && !roomId) {
+      return {
+        hasConflict: true,
+        blocking: true,
+        conflicts: [{
+          conflictType: 'room',
+          blocking: true,
+          humanMessage: 'Selecione uma sala da clinica para este atendimento.'
+        }],
+        humanMessage: 'Selecione uma sala da clinica para este atendimento.'
+      };
+    }
+
+    const tableAppointments = await fetchConflictAppointmentsFromTable({
+      clinicId,
+      organizationId,
+      input: {
+        ...parsedDates,
+        patientId,
+        professionalIds,
+        roomId
+      }
+    });
+    const stateAppointments = await fetchConflictAppointmentsFromState(clinicId, {
+      ...parsedDates,
+      patientId,
+      professionalIds,
+      roomId
+    }).catch(() => []);
+    const appointmentsById = new Map<string, any>();
+    [...tableAppointments, ...stateAppointments].forEach((appointment: any, index: number) => {
+      appointmentsById.set(sanitizeString(appointment?.id, 180) || `idx-${index}`, appointment);
+    });
+    const appointments = Array.from(appointmentsById.values());
+
+    const result = checkLocalScheduleConflicts({
+      appointments,
+      patient_id: patientId,
+      patient_name: rawInput?.patient_name || rawInput?.patientName,
+      professional_ids: professionalIds,
+      professional_names: professionalNames,
+      room_id: locationType === 'clinica' ? roomId : '',
+      room_name: roomName,
+      location_type: locationType,
+      date: parsedDates.date,
+      start_time: parsedDates.startTime,
+      end_time: parsedDates.endTime,
+      duration_minutes: parsedDates.duration,
+      exclude_event_id: rawInput?.exclude_event_id || rawInput?.excludeEventId,
+      recurrence_dates: parsedDates.recurrenceDates
+    });
+
+    if (parsedDates.recurrenceDates.length > 1 && result.hasConflict) {
+      const conflictDates = new Set(result.conflicts.map((conflict: any) => conflict.date).filter(Boolean));
+      return {
+        ...result,
+        humanMessage: `${conflictDates.size} das ${parsedDates.recurrenceDates.length} sessoes recorrentes possuem conflito. ${result.humanMessage}`
+      };
+    }
+    return result;
+  };
+
+  const fetchTimeReportAppointments = async (params: {
+    clinicId: string;
+    organizationId: string;
+    fromIso: string;
+    toIso: string;
+    limit: number;
+    patientId?: string;
+    professionalId?: string;
+    serviceType?: string;
+    status?: string;
+  }) => {
+    let query = supabase
+      .from('appointments')
+      .select(TIME_REPORT_APPOINTMENT_SELECT)
+      .gte('scheduled_at', params.fromIso)
+      .lte('scheduled_at', params.toIso)
+      .order('scheduled_at', { ascending: true })
+      .limit(params.limit);
+    if (params.clinicId) query = query.eq('clinic_id', params.clinicId);
+    if (isUuid(params.organizationId)) query = query.eq('organization_id', params.organizationId);
+    if (isUuid(params.patientId || '')) query = query.eq('patient_id', params.patientId);
+    if (isUuid(params.professionalId || '')) query = query.eq('therapist_id', params.professionalId);
+    if (params.serviceType) query = query.eq('service_type', params.serviceType);
+    if (params.status) query = query.eq('status', params.status);
+    const { data, error } = await query;
+    if (!error) return Array.isArray(data) ? data.map((row: any) => normalizeConflictAppointment(row)) : [];
+    if (!hasMissingFinancialSchema(error)) throw error;
+
+    const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId: params.clinicId, logger: console });
+    if (stateResult.error) return [];
+    const fromMs = new Date(params.fromIso).getTime();
+    const toMs = new Date(params.toIso).getTime();
+    return (Array.isArray(stateResult.data?.appointments) ? stateResult.data.appointments : [])
+      .map((appointment: any) => normalizeConflictAppointment({ ...appointment, source_payload: appointment }))
+      .filter((appointment: any) => {
+        const start = new Date(appointment.start_time || appointment.scheduled_at || `${appointment.date}T${appointment.time}:00`).getTime();
+        if (!Number.isFinite(start) || start < fromMs || start > toMs) return false;
+        if (params.patientId && String(appointment.patient_id || appointment.patientId || '') !== params.patientId) return false;
+        if (params.professionalId && !getClinicStateAppointmentProfessionals(appointment).ids.includes(params.professionalId)) return false;
+        if (params.serviceType && sanitizeString(appointment.service_type || appointment.type || appointment.approach, 120) !== params.serviceType) return false;
+        if (params.status && sanitizeString(appointment.status, 40) !== params.status) return false;
+        return true;
+      })
+      .slice(0, params.limit);
+  };
+
+  app.post('/api/calendar/events/check-conflicts', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const result = await checkScheduleConflicts(req.body || {}, req.session.user);
+      return res.json({ success: true, data: result, ...result });
+    } catch (error: any) {
+      console.warn('[Calendar] conflict check failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível verificar conflitos agora.' });
+    }
+  });
+
+  app.get('/api/clinic/rooms', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      let query = supabase
+        .from('clinic_rooms')
+        .select('id, organization_id, clinic_id, name, description, capacity, is_active, created_at, updated_at')
+        .order('name', { ascending: true })
+        .limit(400);
+      if (isUuid(organizationId)) query = query.eq('organization_id', organizationId);
+      else if (isUuid(clinicId)) query = query.eq('clinic_id', clinicId);
+      const { data, error } = await query;
+      if (!error) return res.json({ success: true, data: data || [] });
+      if (!hasMissingFinancialSchema(error)) throw error;
+      const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId, logger: console });
+      return res.json({ success: true, data: Array.isArray(stateResult.data?.rooms) ? stateResult.data.rooms : [], source: 'clinic_state_fallback' });
+    } catch (error: any) {
+      console.warn('[Rooms] list failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar as salas agora.' });
+    }
+  });
+
+  app.post('/api/clinic/rooms', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const name = sanitizeString(req.body?.name, 180);
+      if (!name) return res.status(400).json({ success: false, error: 'Informe o nome da sala.' });
+      const id = isUuid(sanitizeString(req.body?.id, 180)) ? sanitizeString(req.body.id, 180) : crypto.randomUUID();
+      const payload = cleanObject({
+        id,
+        organization_id: isUuid(organizationId) ? organizationId : clinicId,
+        clinic_id: isUuid(clinicId) ? clinicId : null,
+        name,
+        description: sanitizeString(req.body?.description, 1000) || null,
+        capacity: Number.isFinite(Number(req.body?.capacity)) ? Math.max(0, Math.round(Number(req.body.capacity))) : null,
+        is_active: req.body?.is_active !== false && req.body?.isActive !== false,
+        updated_at: new Date().toISOString()
+      });
+      const { data, error } = await supabase
+        .from('clinic_rooms')
+        .upsert([payload], { onConflict: 'id' })
+        .select('id, organization_id, clinic_id, name, description, capacity, is_active, created_at, updated_at')
+        .single();
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Cadastro de salas ainda não está disponível no banco.' });
+        throw error;
+      }
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      console.warn('[Rooms] create failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível salvar a sala agora.' });
+    }
+  });
+
+  app.patch('/api/clinic/rooms/:roomId', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const roomId = sanitizeString(req.params.roomId, 180);
+      if (!isUuid(roomId)) return res.status(400).json({ success: false, error: 'Sala inválida.' });
+      const payload = cleanObject({
+        ...(req.body?.name !== undefined ? { name: sanitizeString(req.body.name, 180) } : {}),
+        ...(req.body?.description !== undefined ? { description: sanitizeString(req.body.description, 1000) || null } : {}),
+        ...(req.body?.capacity !== undefined ? { capacity: Number.isFinite(Number(req.body.capacity)) ? Math.max(0, Math.round(Number(req.body.capacity))) : null } : {}),
+        ...(req.body?.is_active !== undefined || req.body?.isActive !== undefined ? { is_active: req.body?.is_active !== false && req.body?.isActive !== false } : {}),
+        updated_at: new Date().toISOString()
+      });
+      const { data, error } = await supabase
+        .from('clinic_rooms')
+        .update(payload)
+        .eq('id', roomId)
+        .select('id, organization_id, clinic_id, name, description, capacity, is_active, created_at, updated_at')
+        .single();
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Cadastro de salas ainda não está disponível no banco.' });
+        throw error;
+      }
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      console.warn('[Rooms] update failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível atualizar a sala agora.' });
+    }
+  });
+
+  app.delete('/api/clinic/rooms/:roomId', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const roomId = sanitizeString(req.params.roomId, 180);
+      if (!isUuid(roomId)) return res.status(400).json({ success: false, error: 'Sala inválida.' });
+      const { data, error } = await supabase
+        .from('clinic_rooms')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('id', roomId)
+        .select('id, organization_id, clinic_id, name, description, capacity, is_active, created_at, updated_at')
+        .single();
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Cadastro de salas ainda não está disponível no banco.' });
+        throw error;
+      }
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      console.warn('[Rooms] deactivate failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível desativar a sala agora.' });
+    }
+  });
+
+  app.get('/api/reports/time/patient', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const fromIso = sanitizeIsoDateTime(req.query?.from || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString());
+      const toIso = sanitizeIsoDateTime(req.query?.to || new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0, 23, 59, 59).toISOString());
+      const limit = Math.min(1000, Math.max(1, Math.round(Number(req.query?.limit || 500) || 500)));
+      const appointments = await fetchTimeReportAppointments({
+        clinicId,
+        organizationId,
+        fromIso,
+        toIso,
+        limit,
+        patientId: sanitizeString(req.query?.patientId || req.query?.patient_id, 120),
+        professionalId: sanitizeString(req.query?.professionalId || req.query?.professional_id, 120),
+        serviceType: sanitizeString(req.query?.serviceType || req.query?.service_type, 120),
+        status: sanitizeString(req.query?.status, 40)
+      });
+      const report = buildPatientTimeReport(appointments, {
+        patient_id: req.query?.patientId || req.query?.patient_id,
+        patient_name: req.query?.patientName || req.query?.patient_name,
+        from: fromIso,
+        to: toIso,
+        service_type: req.query?.serviceType || req.query?.service_type,
+        professional_id: req.query?.professionalId || req.query?.professional_id,
+        status: req.query?.status
+      });
+      return res.json({ success: true, data: report });
+    } catch (error: any) {
+      console.warn('[Reports] patient time failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível gerar o relatório de tempo do paciente.' });
+    }
+  });
+
+  app.get('/api/reports/time/professional', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const fromIso = sanitizeIsoDateTime(req.query?.from || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString());
+      const toIso = sanitizeIsoDateTime(req.query?.to || new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0, 23, 59, 59).toISOString());
+      const limit = Math.min(1000, Math.max(1, Math.round(Number(req.query?.limit || 500) || 500)));
+      const appointments = await fetchTimeReportAppointments({
+        clinicId,
+        organizationId,
+        fromIso,
+        toIso,
+        limit,
+        patientId: sanitizeString(req.query?.patientId || req.query?.patient_id, 120),
+        professionalId: sanitizeString(req.query?.professionalId || req.query?.professional_id, 120),
+        serviceType: sanitizeString(req.query?.serviceType || req.query?.service_type, 120),
+        status: sanitizeString(req.query?.status, 40)
+      });
+      const report = buildProfessionalWorkReport(appointments, {
+        professional_id: req.query?.professionalId || req.query?.professional_id,
+        professional_name: req.query?.professionalName || req.query?.professional_name,
+        from: fromIso,
+        to: toIso,
+        service_type: req.query?.serviceType || req.query?.service_type,
+        patient_id: req.query?.patientId || req.query?.patient_id,
+        status: req.query?.status
+      });
+      return res.json({ success: true, data: report });
+    } catch (error: any) {
+      console.warn('[Reports] professional time failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível gerar o relatório de carga horária.' });
+    }
+  });
 
   const countCalendarPlanItemsByPatient = async (patientIds: string[], clinicId: string, organizationId: string, user: any) => {
     const validPatientIds = Array.from(new Set(patientIds.filter((id) => isUuid(id)))).slice(0, 100);
@@ -18570,6 +19465,30 @@ async function startServer() {
         device_id: sanitizeString(req.body?.device_id || req.body?.deviceId, 180),
         source: resolveAbaRequestSource(req.body),
         status: normalizeAbaSessionStatus(req.body?.status),
+        appointment_id: isUuid(sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180))
+          ? sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180)
+          : null,
+        scheduled_start_at: req.body?.scheduled_start || req.body?.scheduledStart || req.body?.scheduled_start_at || req.body?.scheduledStartAt
+          ? sanitizeIsoDateTime(req.body?.scheduled_start || req.body?.scheduledStart || req.body?.scheduled_start_at || req.body?.scheduledStartAt)
+          : null,
+        scheduled_end_at: req.body?.scheduled_end || req.body?.scheduledEnd || req.body?.scheduled_end_at || req.body?.scheduledEndAt
+          ? sanitizeIsoDateTime(req.body?.scheduled_end || req.body?.scheduledEnd || req.body?.scheduled_end_at || req.body?.scheduledEndAt)
+          : null,
+        scheduled_duration_minutes: req.body?.scheduled_duration_minutes !== undefined || req.body?.scheduledDurationMinutes !== undefined
+          ? asSafeNumber(req.body?.scheduled_duration_minutes ?? req.body?.scheduledDurationMinutes, 0, 1440)
+          : null,
+        actual_start_at: req.body?.actual_start || req.body?.actualStart || req.body?.actual_start_at || req.body?.actualStartAt
+          ? sanitizeIsoDateTime(req.body?.actual_start || req.body?.actualStart || req.body?.actual_start_at || req.body?.actualStartAt)
+          : startedAt,
+        actual_end_at: req.body?.actual_end || req.body?.actualEnd || req.body?.actual_end_at || req.body?.actualEndAt
+          ? sanitizeIsoDateTime(req.body?.actual_end || req.body?.actualEnd || req.body?.actual_end_at || req.body?.actualEndAt)
+          : null,
+        actual_duration_minutes: req.body?.actual_duration_minutes !== undefined || req.body?.actualDurationMinutes !== undefined
+          ? asSafeNumber(req.body?.actual_duration_minutes ?? req.body?.actualDurationMinutes, 0, 1440)
+          : null,
+        room_id: sanitizeString(req.body?.room_id || req.body?.roomId, 180) || null,
+        room_name: sanitizeString(req.body?.room_name || req.body?.roomName, 180) || null,
+        location_type: sanitizeString(req.body?.location_type || req.body?.locationType, 80) || null,
         started_at: startedAt,
         ended_at: req.body?.ended_at || req.body?.endedAt ? sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt, startedAt) : null,
         duration_seconds: req.body?.duration_seconds !== undefined || req.body?.durationSeconds !== undefined
@@ -18608,6 +19527,30 @@ async function startServer() {
 
       const patch = cleanObject({
         status: req.body?.status !== undefined ? normalizeAbaSessionStatus(req.body?.status) : undefined,
+        appointment_id: req.body?.appointment_id !== undefined || req.body?.appointmentId !== undefined
+          ? (isUuid(sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180)) ? sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180) : null)
+          : undefined,
+        scheduled_start_at: req.body?.scheduled_start !== undefined || req.body?.scheduledStart !== undefined || req.body?.scheduled_start_at !== undefined || req.body?.scheduledStartAt !== undefined
+          ? sanitizeIsoDateTime(req.body?.scheduled_start || req.body?.scheduledStart || req.body?.scheduled_start_at || req.body?.scheduledStartAt)
+          : undefined,
+        scheduled_end_at: req.body?.scheduled_end !== undefined || req.body?.scheduledEnd !== undefined || req.body?.scheduled_end_at !== undefined || req.body?.scheduledEndAt !== undefined
+          ? sanitizeIsoDateTime(req.body?.scheduled_end || req.body?.scheduledEnd || req.body?.scheduled_end_at || req.body?.scheduledEndAt)
+          : undefined,
+        scheduled_duration_minutes: req.body?.scheduled_duration_minutes !== undefined || req.body?.scheduledDurationMinutes !== undefined
+          ? asSafeNumber(req.body?.scheduled_duration_minutes ?? req.body?.scheduledDurationMinutes, 0, 1440)
+          : undefined,
+        actual_start_at: req.body?.actual_start !== undefined || req.body?.actualStart !== undefined || req.body?.actual_start_at !== undefined || req.body?.actualStartAt !== undefined
+          ? sanitizeIsoDateTime(req.body?.actual_start || req.body?.actualStart || req.body?.actual_start_at || req.body?.actualStartAt)
+          : undefined,
+        actual_end_at: req.body?.actual_end !== undefined || req.body?.actualEnd !== undefined || req.body?.actual_end_at !== undefined || req.body?.actualEndAt !== undefined
+          ? sanitizeIsoDateTime(req.body?.actual_end || req.body?.actualEnd || req.body?.actual_end_at || req.body?.actualEndAt)
+          : undefined,
+        actual_duration_minutes: req.body?.actual_duration_minutes !== undefined || req.body?.actualDurationMinutes !== undefined
+          ? asSafeNumber(req.body?.actual_duration_minutes ?? req.body?.actualDurationMinutes, 0, 1440)
+          : undefined,
+        room_id: req.body?.room_id !== undefined || req.body?.roomId !== undefined ? sanitizeString(req.body?.room_id || req.body?.roomId, 180) || null : undefined,
+        room_name: req.body?.room_name !== undefined || req.body?.roomName !== undefined ? sanitizeString(req.body?.room_name || req.body?.roomName, 180) || null : undefined,
+        location_type: req.body?.location_type !== undefined || req.body?.locationType !== undefined ? sanitizeString(req.body?.location_type || req.body?.locationType, 80) || null : undefined,
         ended_at: req.body?.ended_at !== undefined || req.body?.endedAt !== undefined
           ? sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt)
           : undefined,
@@ -18631,7 +19574,7 @@ async function startServer() {
         if (sanitizeString(req.session.user?.role, 40).toLowerCase() === 'therapist') {
           query = query.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
         }
-        const result = await query.select('id,status,ended_at,duration_seconds,duration_minutes,record_count,updated_at').maybeSingle();
+        const result = await query.select('id,status,appointment_id,scheduled_start_at,scheduled_end_at,scheduled_duration_minutes,actual_start_at,actual_end_at,actual_duration_minutes,room_id,room_name,location_type,ended_at,duration_seconds,duration_minutes,record_count,updated_at').maybeSingle();
         if (!result.error) return res.json({ success: true, data: result.data || { id: sessionId, ...safePatch } });
         const missingColumn = extractMissingColumnName(result.error);
         if (missingColumn && missingColumn in safePatch) {
