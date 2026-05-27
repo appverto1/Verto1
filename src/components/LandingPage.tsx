@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Rocket, 
   ShieldCheck, 
@@ -37,14 +37,66 @@ import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 
 const heroStories = [
   {
-    src: '/hero-story-progress.webp',
-    alt: 'Tela do paciente na Verto mostrando evolução, registros recentes e gráfico de progresso.'
+    src: '/verto-mobile-session-attempt.webp',
+    alt: 'Tela mobile da Verto mostrando uma sessão ABA em andamento com registro de tentativa, prompt e botões de resposta.'
   },
   {
-    src: '/hero-story-diary.webp',
-    alt: 'Tela do diário da família na Verto para registrar texto e foto no histórico.'
+    src: '/verto-mobile-interval-collection.webp',
+    alt: 'Tela mobile da Verto mostrando coleta por intervalo em tempo real durante uma sessão clínica.'
   }
 ];
+
+const abaScreens = {
+  sessionAttempt: {
+    src: '/verto-mobile-session-attempt.webp',
+    alt: 'Tela mobile da Verto com registro de tentativa durante uma sessão ABA.'
+  },
+  intervalCollection: {
+    src: '/verto-mobile-interval-collection.webp',
+    alt: 'Tela mobile da Verto com coleta por intervalo em andamento.'
+  },
+  intervalSummary: {
+    src: '/verto-mobile-interval-summary.webp',
+    alt: 'Tela mobile da Verto com resumo de coleta por intervalo.'
+  },
+  maintenance: {
+    src: '/verto-mobile-maintenance.webp',
+    alt: 'Tela mobile da Verto com targets em manutenção, probes e risco de regressão.'
+  },
+  clinicalDock: {
+    src: '/verto-mobile-clinical-dock.webp',
+    alt: 'Tela mobile da Verto com dock clínico, modo crise e registro ABC rápido.'
+  }
+};
+
+const MobileScreenMockup = ({
+  src,
+  alt,
+  label,
+  caption,
+  className = ''
+}: {
+  src: string;
+  alt: string;
+  label?: string;
+  caption?: string;
+  className?: string;
+}) => (
+  <div className={`relative mx-auto w-full max-w-[330px] ${className}`}>
+    <div className="absolute -inset-4 rounded-[44px] bg-gradient-to-br from-[#7a32fc]/18 via-sky-400/10 to-emerald-300/18 blur-2xl" />
+    <div className="relative overflow-hidden rounded-[42px] border border-white/80 bg-white p-2 shadow-2xl shadow-purple-500/15 ring-1 ring-slate-900/5">
+      <div className="overflow-hidden rounded-[34px] bg-slate-950">
+        <img src={src} alt={alt} className="h-full w-full object-contain" loading="lazy" />
+      </div>
+    </div>
+    {(label || caption) && (
+      <div className="relative mx-auto -mt-5 max-w-[88%] rounded-3xl bg-white px-5 py-4 text-center shadow-xl shadow-slate-900/10 ring-1 ring-slate-100">
+        {label && <p className="text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">{label}</p>}
+        {caption && <p className="mt-1 text-sm font-normal leading-6 text-slate-600">{caption}</p>}
+      </div>
+    )}
+  </div>
+);
 
 export const LandingPage = ({ onLogin, setUser }: any) => {
   const registerPasswordInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -998,16 +1050,29 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
       <section id="central-aba" className="px-6 py-20">
         <div className="mx-auto max-w-7xl">
-          <div className="max-w-4xl">
-            <span className="inline-flex rounded-full bg-[#f4f0ff] px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">
-              Central ABA
-            </span>
-            <h2 className="mt-5 text-3xl font-semibold tracking-tight text-slate-900 md:text-5xl">
-              Central ABA: coleta, análise e evolução clínica em tempo real.
-            </h2>
-            <p className="mt-6 text-lg font-normal leading-8 text-slate-500">
-              Registre tentativas, comportamentos, prompts, intervalos, duração, frequência e ABC sem perder o ritmo da sessão.
-            </p>
+          <div className="grid gap-12 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
+            <div className="max-w-4xl">
+              <span className="inline-flex rounded-full bg-[#f4f0ff] px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">
+                Central ABA
+              </span>
+              <h2 className="mt-5 text-3xl font-semibold tracking-tight text-slate-900 md:text-5xl">
+                Central ABA: coleta, análise e evolução clínica em tempo real.
+              </h2>
+              <p className="mt-6 text-lg font-normal leading-8 text-slate-500">
+                Registre tentativas, comportamentos, prompts, intervalos, duração, frequência e ABC sem perder o ritmo da sessão.
+              </p>
+              <p className="mt-5 rounded-3xl bg-[#f4f0ff] px-5 py-4 text-sm font-semibold leading-7 text-[#5f2bc4]">
+                A equipe coleta dados no celular enquanto atende, e cada resposta já nasce conectada ao PEI, ao target e ao histórico clínico do paciente.
+              </p>
+            </div>
+
+            <div className="relative rounded-[40px] bg-gradient-to-br from-[#f7f5ff] via-white to-sky-50 px-6 py-8 ring-1 ring-purple-100 md:px-8">
+              <MobileScreenMockup
+                {...abaScreens.intervalCollection}
+                label="Coleta em tempo real"
+                caption="Intervalos, respostas e eventos ficam registrados durante a sessão, sem planilhas paralelas."
+              />
+            </div>
           </div>
 
           <div className="mt-12 grid gap-5 md:grid-cols-2 xl:grid-cols-4">
@@ -1026,7 +1091,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
       <section className="px-6 py-20">
         <div className="mx-auto max-w-7xl rounded-[40px] bg-slate-900 px-8 py-10 text-white shadow-sm md:px-12 md:py-14">
-          <div className="grid gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-start">
+          <div className="grid gap-10 lg:grid-cols-[0.85fr_0.75fr_0.9fr] lg:items-center">
             <div>
               <span className="inline-flex rounded-full bg-white/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-emerald-200">
                 Leitura clínica
@@ -1039,9 +1104,16 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               </p>
             </div>
 
+            <MobileScreenMockup
+              {...abaScreens.intervalSummary}
+              label="Resumo automático"
+              caption="Cada coleta vira leitura para supervisão, histórico e tomada de decisão."
+              className="max-w-[300px]"
+            />
+
             <div>
               <p className="text-sm font-semibold uppercase tracking-widest text-slate-400">Exemplos de leitura clínica</p>
-              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
                 {clinicalReadings.map((item) => (
                   <div key={item} className="rounded-2xl bg-white/10 px-4 py-3 ring-1 ring-white/10">
                     <p className="text-sm font-normal leading-6 text-slate-100">{item}</p>
@@ -1068,6 +1140,12 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           </div>
 
           <div className="rounded-[36px] border border-sky-100 bg-white p-7 shadow-sm md:p-9">
+            <MobileScreenMockup
+              {...abaScreens.maintenance}
+              label="Maestria e manutenção"
+              caption="Targets em manutenção, probes e sinais de regressão aparecem antes que a evolução se perca."
+              className="mb-9 max-w-[300px]"
+            />
             <p className="text-sm font-semibold uppercase tracking-widest text-sky-700">O que fica conectado</p>
             <div className="mt-6 grid gap-3 sm:grid-cols-2">
               {peiConnections.map((item) => (
@@ -1156,16 +1234,27 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
             </p>
           </div>
 
-          <div className="mt-12 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-            {operationCards.map((item) => (
-              <div key={item.title} className="rounded-[32px] border border-gray-100 bg-white p-7 shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg">
-                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
-                  {item.icon}
+          <div className="mt-12 grid gap-8 lg:grid-cols-[0.85fr_1.15fr] lg:items-center">
+            <div className="rounded-[40px] bg-slate-950 px-6 py-8 text-white shadow-sm">
+              <MobileScreenMockup
+                {...abaScreens.clinicalDock}
+                label="Dock clínico"
+                caption="Atalhos para crise, ABC rápido e registros prioritários sem sair da sessão."
+                className="max-w-[300px]"
+              />
+            </div>
+
+            <div className="grid gap-5 md:grid-cols-2">
+              {operationCards.map((item) => (
+                <div key={item.title} className="rounded-[32px] border border-gray-100 bg-white p-7 shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
+                    {item.icon}
+                  </div>
+                  <h3 className="mt-5 text-xl font-semibold tracking-tight text-slate-900">{item.title}</h3>
+                  <p className="mt-3 text-sm font-normal leading-7 text-slate-500">{item.desc}</p>
                 </div>
-                <h3 className="mt-5 text-xl font-semibold tracking-tight text-slate-900">{item.title}</h3>
-                <p className="mt-3 text-sm font-normal leading-7 text-slate-500">{item.desc}</p>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
       </section>
