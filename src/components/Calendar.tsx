@@ -1878,6 +1878,13 @@ export const ClinicalAgendaBoard = ({
                         <div key={probe.id || index} className="rounded-2xl bg-white/70 px-3 py-2 text-sm">
                           <p className="font-semibold text-slate-800">{raw.targetName || raw.target_name || 'Target em manutenção'}</p>
                           <p className="mt-1 text-xs text-slate-500">Marco clínico: {probe.target_due_date ? new Date(probe.target_due_date).toLocaleDateString('pt-BR') : 'a definir'} · Status: {probe.status || 'PENDING'}</p>
+                          <button
+                            type="button"
+                            onClick={() => onStartSession?.({ ...detailEvent, maintenanceProbe: probe, activeCollectionType: 'maintenance_probe' })}
+                            className="mt-2 inline-flex min-h-[32px] items-center justify-center rounded-full bg-amber-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white"
+                          >
+                            Usar na sessão
+                          </button>
                         </div>
                       );
                     })}

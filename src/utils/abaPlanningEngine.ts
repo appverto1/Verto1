@@ -305,7 +305,7 @@ const hasCriticalBlocker = (alerts: any[], schedules: any[], now: Date) => {
   const hasCriticalAlert = alerts.some((alert) => !alert?.resolved_at && !alert?.resolvedAt && ['HIGH', 'CRITICAL'].includes(safeString(alert?.severity).toUpperCase()));
   const hasOverdueMaintenance = schedules.some((schedule) => {
     const status = normalizeMaintenanceScheduleStatus(schedule?.status);
-    if (!['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'MISSED'].includes(status)) return false;
+    if (!['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE', 'MISSED'].includes(status)) return false;
     const due = new Date(schedule?.scheduled_for || schedule?.scheduledFor || schedule?.target_due_date || schedule?.targetDueDate || 0);
     return status === 'MISSED' || status === 'UNSCHEDULED' || (!Number.isNaN(due.getTime()) && due.getTime() < now.getTime());
   });

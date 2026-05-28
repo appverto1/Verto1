@@ -37,12 +37,13 @@ import {
   buildPasswordRecoveryEmailTemplate
 } from './src/services/emailTemplates';
 import { resolveAbaPromptLevel } from './src/utils/abaPromptLevels';
-import { evaluateMaintenanceStatus, evaluateTargetMastery, formatAbaMasteryCriterion } from './src/utils/abaMasteryEngine';
+import { buildTargetStatusAuditLog, evaluateMaintenanceStatus, evaluateTargetMastery, formatAbaMasteryCriterion } from './src/utils/abaMasteryEngine';
 import {
   buildDefaultMaintenanceSchedulePreview,
   getNextMaintenanceProbeForTarget,
   normalizeMaintenanceDayList,
-  normalizeMaintenanceScheduleMode as normalizeMaintenanceScheduleModeValue
+  normalizeMaintenanceScheduleMode as normalizeMaintenanceScheduleModeValue,
+  selectMaintenanceScheduleForProbe
 } from './src/utils/abaMaintenanceScheduling';
 import {
   acceptRecommendationForNextSession,
@@ -15626,7 +15627,8 @@ async function startServer() {
   const ABA_MASTERY_STATUSES = new Set(['not_met', 'met', 'mastered', 'regressed', 'maintenance_due', 'insufficient_data']);
   const ABA_TARGET_PHASES = new Set(['draft', 'baseline', 'teaching', 'mastered', 'maintenance', 'generalization', 'regressed', 'discontinued']);
   const ABA_TARGET_CLINICAL_STATUSES = new Set(['ACQUISITION', 'READY_FOR_REVIEW', 'MASTERED', 'MAINTENANCE', 'REGRESSION_RISK', 'REGRESSION_CONFIRMED']);
-  const ABA_MAINTENANCE_SCHEDULE_STATUSES = new Set(['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'COMPLETED', 'MISSED', 'CANCELLED']);
+  const ABA_MAINTENANCE_SCHEDULE_STATUSES = new Set(['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE', 'COMPLETED', 'MISSED', 'CANCELLED']);
+  const ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES = ['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE', 'MISSED'];
   const ABA_MAINTENANCE_PROBE_STATUSES = new Set(['MAINTAINED', 'WATCH', 'REGRESSION_RISK']);
   const ABA_PLANNING_FOCUS_TYPES = new Set(['MAINTENANCE', 'NEW_SKILLS', 'BEHAVIOR_REDUCTION', 'GENERALIZATION', 'MASTERY_REVIEW', 'BALANCED']);
   const ABA_RECOMMENDATION_TYPES = new Set(['MAINTENANCE_PROBE', 'REGRESSION_ATTENTION', 'MASTERY_REVIEW', 'CONTINUE_TRAINING', 'INTRODUCE_NEW_TARGET', 'BEHAVIOR_MONITORING', 'ABC_COLLECTION', 'PROMPT_FADING', 'GENERALIZATION']);
@@ -15948,7 +15950,9 @@ async function startServer() {
     'patient_id',
     'target_id',
     'mastery_evaluation_id',
+    'source_mastery_evaluation_id',
     'schedule_day',
+    'interval_label',
     'target_due_date',
     'scheduled_for',
     'appointment_id',
@@ -15958,6 +15962,7 @@ async function startServer() {
     'window_end',
     'status',
     'completed_at',
+    'completed_by',
     'created_by',
     'updated_at',
     'raw_payload',
@@ -17500,7 +17505,7 @@ async function startServer() {
       .select('id, appointment_id, status')
       .eq('organization_id', organizationId)
       .in('appointment_id', validAppointmentIds)
-      .in('status', ['PENDING', 'SCHEDULED', 'UNSCHEDULED'])
+      .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
       .limit(Math.min(300, Math.max(40, validAppointmentIds.length * 8)));
     query = applyAbaTenantScope(query, user, clinicId, organizationId);
     const { data, error } = await query;
@@ -17661,7 +17666,7 @@ async function startServer() {
             .eq('organization_id', organizationId)
             .eq('patient_id', patientId)
             .eq('appointment_id', eventId)
-            .in('status', ['PENDING', 'SCHEDULED', 'UNSCHEDULED'])
+            .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
             .order('target_due_date', { ascending: true })
             .limit(20);
           linkedProbeQuery = applyAbaTenantScope(linkedProbeQuery, req.session.user, clinicId, organizationId);
@@ -17676,7 +17681,7 @@ async function startServer() {
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
           .is('appointment_id', null)
-          .in('status', ['PENDING', 'UNSCHEDULED'])
+          .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
           .lte('target_due_date', event.start_time)
           .order('target_due_date', { ascending: true })
           .limit(20);
@@ -17713,7 +17718,9 @@ async function startServer() {
   const fetchFutureAppointmentsForMaintenance = async (params: {
     patientId: string;
     clinicId: string;
+    organizationId?: string;
     fromIso?: string;
+    toIso?: string;
     limit?: number;
   }) => {
     const limit = Math.min(50, Math.max(1, Math.round(Number(params.limit || 20) || 20)));
@@ -17722,10 +17729,14 @@ async function startServer() {
       .select(ABA_APPOINTMENT_MAINTENANCE_SELECT)
       .eq('patient_id', params.patientId)
       .gte('scheduled_at', sanitizeIsoDateTime(params.fromIso || new Date().toISOString()))
+      .eq('is_active', true)
       .is('deleted_at', null)
+      .not('status', 'in', '("cancelled","canceled","deleted")')
       .order('scheduled_at', { ascending: true })
       .limit(limit);
+    if (params.organizationId && isUuid(params.organizationId)) query = query.eq('organization_id', params.organizationId);
     if (params.clinicId) query = query.eq('clinic_id', params.clinicId);
+    if (params.toIso) query = query.lte('scheduled_at', sanitizeIsoDateTime(params.toIso));
     const result = await query;
     if (result.error) {
       if (hasMissingFinancialSchema(result.error)) return [];
@@ -17789,10 +17800,14 @@ async function startServer() {
       const intervals = normalizeMaintenanceDayList(params.intervals);
       const approvedAt = sanitizeIsoDateTime(params.approvedAt || now);
       const maxDay = Math.max(...intervals, 60);
+      const lookupEnd = new Date(approvedAt);
+      lookupEnd.setUTCDate(lookupEnd.getUTCDate() + maxDay + 14);
       const appointments = await fetchFutureAppointmentsForMaintenance({
         patientId,
         clinicId,
+        organizationId,
         fromIso: approvedAt,
+        toIso: lookupEnd.toISOString(),
         limit: Math.min(50, intervals.length * 12)
       });
       const preview = buildDefaultMaintenanceSchedulePreview({
@@ -17809,7 +17824,9 @@ async function startServer() {
           patient_id: patientId,
           target_id: targetId,
           mastery_evaluation_id: masteryEvaluationId,
+          source_mastery_evaluation_id: masteryEvaluationId,
           schedule_day: item.scheduleDay,
+          interval_label: `${item.scheduleDay} dias`,
           target_due_date: item.targetDueDate,
           scheduled_for: item.scheduledFor,
           appointment_id: item.appointmentId,
@@ -17830,7 +17847,7 @@ async function startServer() {
         }));
       }
     } else if (scheduleMode === 'NEXT_PATIENT_SESSION' || scheduleMode === 'NEXT_AVAILABLE_SESSION') {
-      const appointments = await fetchFutureAppointmentsForMaintenance({ patientId, clinicId, fromIso: now, limit: 10 });
+      const appointments = await fetchFutureAppointmentsForMaintenance({ patientId, clinicId, organizationId, fromIso: now, limit: 10 });
       const appointment = appointments[0] || null;
       if (!appointment) {
         return { ok: false, status: 404, error: 'Não há próxima sessão agendada. Escolha uma data manualmente.', data: [] };
@@ -17842,7 +17859,9 @@ async function startServer() {
         patient_id: patientId,
         target_id: targetId,
         mastery_evaluation_id: masteryEvaluationId,
+        source_mastery_evaluation_id: masteryEvaluationId,
         schedule_day: 1,
+        interval_label: 'Proxima sessao',
         target_due_date: appointment.scheduled_at,
         scheduled_for: appointment.scheduled_at,
         appointment_id: String(appointment.id),
@@ -17868,7 +17887,9 @@ async function startServer() {
         patient_id: patientId,
         target_id: targetId,
         mastery_evaluation_id: masteryEvaluationId,
+        source_mastery_evaluation_id: masteryEvaluationId,
         schedule_day: Math.max(1, Math.ceil((new Date(dueDate).getTime() - new Date(now).getTime()) / 86_400_000)),
+        interval_label: 'Data personalizada',
         target_due_date: dueDate,
         scheduled_for: dueDate,
         appointment_id: appointmentId,
@@ -17907,7 +17928,7 @@ async function startServer() {
       .eq('organization_id', params.organizationId)
       .eq('patient_id', params.patientId)
       .eq('target_id', params.targetId)
-      .in('status', ['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'MISSED'])
+      .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
       .order('target_due_date', { ascending: true })
       .limit(10);
     query = applyAbaTenantScope(query, { role: 'owner' }, params.clinicId, params.organizationId);
@@ -17918,6 +17939,108 @@ async function startServer() {
     }
     logAbaPlanningEgress({ helper: 'getNextMaintenanceProbeForTarget', table: 'aba_maintenance_schedules', limit: 10, rows: (result.data || []).length });
     return getNextMaintenanceProbeForTarget(result.data || []);
+  };
+
+  const updateAbaScheduleWithSchemaFallback = async (scheduleId: string, patchBase: Record<string, any>, clinicId: string, organizationId?: string, patientId?: string) => {
+    let patch: Record<string, any> = { ...patchBase };
+    while (Object.keys(patch).length > 0) {
+      let query = supabase
+        .from('aba_maintenance_schedules')
+        .update(patch)
+        .eq('id', scheduleId)
+        .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES);
+      if (clinicId) query = query.eq('clinic_id', clinicId);
+      if (organizationId) query = query.eq('organization_id', organizationId);
+      if (patientId) query = query.eq('patient_id', patientId);
+      const result = await query.select('id').maybeSingle();
+      if (!result.error) return { data: result.data, error: null };
+      const missingColumn = extractMissingColumnName(result.error);
+      if (missingColumn && missingColumn in patch) {
+        delete patch[missingColumn];
+        continue;
+      }
+      return { data: null, error: result.error };
+    }
+    return { data: null, error: { message: 'Patch ABA vazio apos fallback de schema.' } };
+  };
+
+  const completeMaintenanceScheduleAfterProbe = async (params: {
+    scheduleId?: string | null;
+    clinicId: string;
+    organizationId: string;
+    patientId: string;
+    completedAt: string;
+    completedBy?: string | null;
+  }) => {
+    const scheduleId = sanitizeString(params.scheduleId, 180);
+    if (!scheduleId) return;
+    const result = await updateAbaScheduleWithSchemaFallback(scheduleId, cleanObject({
+      status: 'COMPLETED',
+      completed_at: sanitizeIsoDateTime(params.completedAt),
+      completed_by: sanitizeString(params.completedBy, 120) || null,
+      updated_at: new Date().toISOString()
+    }), params.clinicId, params.organizationId, params.patientId);
+    if (result.error && !hasMissingFinancialSchema(result.error)) throw result.error;
+  };
+
+  const persistTargetMaintenanceApproval = async (params: {
+    targetId: string;
+    patientId: string;
+    organizationId: string;
+    clinicId: string;
+    evaluationId: string;
+    changedBy: string;
+  }) => {
+    const targetId = sanitizeString(params.targetId, 180);
+    if (!targetId || !isUuid(params.patientId) || !params.evaluationId) return null;
+    const targetResult = await supabase
+      .from('aba_targets')
+      .select('id,clinical_status')
+      .eq('organization_id', params.organizationId)
+      .eq('clinic_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .eq('id', targetId)
+      .limit(1)
+      .maybeSingle();
+    if (targetResult.error) {
+      if (hasMissingFinancialSchema(targetResult.error)) return null;
+      throw targetResult.error;
+    }
+    const previousStatus = sanitizeString(targetResult.data?.clinical_status, 80) || 'ACQUISITION';
+    if (previousStatus === 'MAINTENANCE') return { previousStatus, newStatus: previousStatus };
+    let updatePatch: Record<string, any> = { clinical_status: 'MAINTENANCE', updated_at: new Date().toISOString() };
+    while (Object.keys(updatePatch).length > 0) {
+      const updateResult = await supabase
+        .from('aba_targets')
+        .update(updatePatch)
+        .eq('organization_id', params.organizationId)
+        .eq('clinic_id', params.clinicId)
+        .eq('patient_id', params.patientId)
+        .eq('id', targetId)
+        .select('id,clinical_status')
+        .maybeSingle();
+      if (!updateResult.error) break;
+      const missingColumn = extractMissingColumnName(updateResult.error);
+      if (missingColumn && missingColumn in updatePatch) {
+        delete updatePatch[missingColumn];
+        continue;
+      }
+      if (!hasMissingFinancialSchema(updateResult.error)) throw updateResult.error;
+      break;
+    }
+    const audit = buildTargetStatusAuditLog({
+      organizationId: params.organizationId,
+      patientId: params.patientId,
+      targetId,
+      previousStatus,
+      newStatus: 'MAINTENANCE',
+      evaluationId: params.evaluationId,
+      changedBy: sanitizeString(params.changedBy, 120) || 'supervisor',
+      reason: 'Maestria aprovada por supervisor; target entrou em manutencao sem regressao automatica.',
+      changedAt: new Date().toISOString()
+    });
+    await writeAbaRowWithSchemaFallback('aba_target_status_audit_logs', { ...audit, clinic_id: params.clinicId }, 'upsert');
+    return { previousStatus, newStatus: 'MAINTENANCE' };
   };
 
   const fetchAbaPlanningContextSummaryDriven = async (params: {
@@ -17931,7 +18054,7 @@ async function startServer() {
     const clinicId = params.clinicId;
     const organizationId = params.organizationId;
     const sourceSessionId = sanitizeString(params.sourceSessionId, 180) || null;
-    const activeScheduleStatuses = ['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'MISSED'];
+    const activeScheduleStatuses = ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES;
     const recommendationStatuses = ['SUGGESTED', 'ACCEPTED', 'EDITED', 'APPLIED_TO_NEXT_SESSION'];
     const limit = 40;
 
@@ -18492,11 +18615,28 @@ async function startServer() {
     clinicId: string;
     therapistId: string;
     evaluatedAt: string;
+    appointmentId?: string | null;
   }) => {
     const sessionId = sanitizeString(params.sessionId, 180);
     const patientId = sanitizeString(params.patientId, 120);
     const clinicId = sanitizeString(params.clinicId, 120);
     if (!sessionId || !isUuid(patientId) || !clinicId) return [];
+    let appointmentId = isUuid(sanitizeString(params.appointmentId, 180)) ? sanitizeString(params.appointmentId, 180) : '';
+    if (!appointmentId) {
+      const sessionScope = await supabase
+        .from('aba_sessions')
+        .select('id,appointment_id')
+        .eq('id', sessionId)
+        .eq('patient_id', patientId)
+        .eq('clinic_id', clinicId)
+        .limit(1)
+        .maybeSingle();
+      if (!sessionScope.error && sessionScope.data?.appointment_id) {
+        appointmentId = sanitizeString(sessionScope.data.appointment_id, 180);
+      } else if (sessionScope.error && !hasMissingFinancialSchema(sessionScope.error)) {
+        throw sessionScope.error;
+      }
+    }
 
     const trialSelect = [
       'id',
@@ -18561,15 +18701,14 @@ async function startServer() {
         .eq('clinic_id', clinicId)
         .eq('patient_id', patientId)
         .eq('target_id', targetId)
-        .in('status', ['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'MISSED'])
+        .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
         .order('target_due_date', { ascending: true })
         .limit(10);
       if (!scheduleRes.error) {
-        const evaluatedMs = new Date(params.evaluatedAt).getTime();
-        schedule = (scheduleRes.data || []).find((item: any) => {
-          const due = new Date(item?.scheduled_for || item?.target_due_date || 0).getTime();
-          return Number.isFinite(due) && due <= evaluatedMs;
-        }) || (scheduleRes.data || [])[0] || null;
+        schedule = selectMaintenanceScheduleForProbe(scheduleRes.data || [], {
+          appointmentId,
+          occurredAt: params.evaluatedAt
+        });
       }
       if (scheduleRes.error && !hasMissingFinancialSchema(scheduleRes.error)) throw scheduleRes.error;
 
@@ -18630,6 +18769,14 @@ async function startServer() {
       });
       const writeResult = await writeAbaRowWithSchemaFallback('aba_maintenance_probe_results', payload, 'upsert');
       if (writeResult.error && !hasMissingFinancialSchema(writeResult.error)) throw writeResult.error;
+      await completeMaintenanceScheduleAfterProbe({
+        scheduleId: schedule?.id || null,
+        clinicId,
+        organizationId,
+        patientId,
+        completedAt: evaluation.occurredAt,
+        completedBy: params.therapistId
+      });
 
       maintenanceSummary.push({
         id: resultId,
@@ -18803,16 +18950,23 @@ async function startServer() {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: { schedules: [], probeResults: [], alerts: [], summary: null } });
+      const appointmentId = isUuid(sanitizeString(req.query?.appointmentId || req.query?.appointment_id, 180))
+        ? sanitizeString(req.query?.appointmentId || req.query?.appointment_id, 180)
+        : '';
       const { page, pageSize, from, to } = parseAbaPageParams(req.query);
-      const applyClinic = (query: any) => (!hasGlobalClinicAccess(req.session.user) && clinicId ? query.eq('clinic_id', clinicId) : query);
+      const applyClinic = (query: any) => {
+        let scoped = organizationId ? query.eq('organization_id', organizationId) : query;
+        return !hasGlobalClinicAccess(req.session.user) && clinicId ? scoped.eq('clinic_id', clinicId) : scoped;
+      };
       const [scheduleResult, probeResult, alertResult, summaryResult] = await Promise.all([
         applyClinic(
           supabase
             .from('aba_maintenance_schedules')
             .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
             .eq('patient_id', patientId)
-            .in('status', ['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'MISSED'])
+            .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
             .order('target_due_date', { ascending: true })
             .range(from, to)
         ),
@@ -18848,10 +19002,33 @@ async function startServer() {
         }
         throw firstError;
       }
+      let schedules = (scheduleResult as any).data || [];
+      if (appointmentId) {
+        let linkedScheduleQuery = supabase
+          .from('aba_maintenance_schedules')
+          .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+          .eq('patient_id', patientId)
+          .eq('appointment_id', appointmentId)
+          .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
+          .order('target_due_date', { ascending: true })
+          .limit(20);
+        linkedScheduleQuery = applyClinic(linkedScheduleQuery);
+        const linkedScheduleResult = await linkedScheduleQuery;
+        if (!linkedScheduleResult.error) {
+          const byId = new Map<string, any>();
+          [...(linkedScheduleResult.data || []), ...schedules].forEach((row: any) => {
+            const id = sanitizeString(row?.id, 180);
+            if (id) byId.set(id, row);
+          });
+          schedules = Array.from(byId.values()).slice(0, pageSize);
+        } else if (!hasMissingFinancialSchema(linkedScheduleResult.error)) {
+          throw linkedScheduleResult.error;
+        }
+      }
       return res.json({
         success: true,
         data: {
-          schedules: (scheduleResult as any).data || [],
+          schedules,
           probeResults: (probeResult as any).data || [],
           alerts: (alertResult as any).data || [],
           summary: (summaryResult as any).data || null
@@ -18992,15 +19169,14 @@ async function startServer() {
         return res.status(404).json({ success: false, error: 'Agendamento não encontrado.' });
       }
       const completedAt = sanitizeIsoDateTime(req.body?.completed_at || req.body?.completedAt || new Date().toISOString());
-      const update = await supabase
-        .from('aba_maintenance_schedules')
-        .update({ status: 'COMPLETED', completed_at: completedAt, updated_at: new Date().toISOString() })
-        .eq('id', scheduleId)
-        .eq('clinic_id', existing.data.clinic_id)
-        .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
-        .maybeSingle();
+      const update = await updateAbaScheduleWithSchemaFallback(scheduleId, cleanObject({
+        status: 'COMPLETED',
+        completed_at: completedAt,
+        completed_by: sanitizeString(req.session.user?.id, 120),
+        updated_at: new Date().toISOString()
+      }), existing.data.clinic_id, existing.data.organization_id, existing.data.patient_id);
       if (update.error) throw update.error;
-      return res.json({ success: true, data: update.data || { ...existing.data, status: 'COMPLETED', completed_at: completedAt } });
+      return res.json({ success: true, data: { ...existing.data, status: 'COMPLETED', completed_at: completedAt, completed_by: sanitizeString(req.session.user?.id, 120) } });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível concluir o agendamento agora.' });
     }
@@ -19859,13 +20035,59 @@ async function startServer() {
         ? asSafeNumber(req.body?.independence_percent ?? req.body?.independencePercent, 0, 100)
         : (totalTrials > 0 ? Math.round((independentTrials / totalTrials) * 10000) / 100 : 0);
       const occurredAt = sanitizeIsoDateTime(req.body?.occurred_at || req.body?.occurredAt);
+      const organizationId = sanitizeString(req.body?.organization_id || req.body?.organizationId || req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const appointmentId = isUuid(sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180))
+        ? sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180)
+        : null;
+      let maintenanceScheduleId = sanitizeString(req.body?.maintenance_schedule_id || req.body?.maintenanceScheduleId, 180) || null;
+      if (!maintenanceScheduleId) {
+        let scheduleQuery = supabase
+          .from('aba_maintenance_schedules')
+          .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .eq('target_id', targetId)
+          .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
+          .order('target_due_date', { ascending: true })
+          .limit(20);
+        const scheduleResult = await scheduleQuery;
+        if (!scheduleResult.error) {
+          const schedule = selectMaintenanceScheduleForProbe(scheduleResult.data || [], { appointmentId, occurredAt });
+          maintenanceScheduleId = sanitizeString(schedule?.id, 180) || null;
+        } else if (!hasMissingFinancialSchema(scheduleResult.error)) {
+          throw scheduleResult.error;
+        }
+      }
+      let probeStatus = normalizeAbaMaintenanceProbeStatus(req.body?.status ?? req.body?.probeStatus);
+      if (req.body?.status === undefined && req.body?.probeStatus === undefined) {
+        const { criterion } = await fetchAbaMasteryCriterion({
+          organizationId,
+          clinicId,
+          patientId,
+          targetId,
+          programId: sanitizeString(req.body?.program_id || req.body?.programId, 180)
+        });
+        const minAccuracy = asSafeNumber(criterion?.minAccuracyPercent ?? criterion?.min_accuracy_percent, 80, 0, 100) || 80;
+        const minIndependence = asSafeNumber(criterion?.minIndependencePercent ?? criterion?.min_independence_percent, 80, 0, 100) || 80;
+        const minTrials = Math.max(1, Math.round(asSafeNumber(criterion?.minTrialsPerSession ?? criterion?.min_trials_per_session, 1, 1, 100000) || 1));
+        const accuracyDrop = minAccuracy - Number(accuracyPercent || 0);
+        const independenceDrop = minIndependence - Number(independencePercent || 0);
+        probeStatus = totalTrials < minTrials
+          ? 'WATCH'
+          : accuracyDrop >= 20 || independenceDrop >= 20
+            ? 'REGRESSION_RISK'
+            : accuracyDrop > 0 || independenceDrop > 0
+              ? 'WATCH'
+              : 'MAINTAINED';
+      }
       const payload = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.result_id || req.body?.resultId || crypto.randomUUID(), 180),
-        organization_id: sanitizeString(req.body?.organization_id || req.body?.organizationId || clinicId, 120),
+        organization_id: organizationId,
         clinic_id: clinicId,
         patient_id: patientId,
         target_id: targetId,
-        maintenance_schedule_id: sanitizeString(req.body?.maintenance_schedule_id || req.body?.maintenanceScheduleId, 180) || null,
+        maintenance_schedule_id: maintenanceScheduleId,
         session_id: sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null,
         occurred_at: occurredAt,
         total_trials: totalTrials,
@@ -19874,7 +20096,7 @@ async function startServer() {
         error_trials: errorTrials,
         accuracy_percent: accuracyPercent,
         independence_percent: independencePercent,
-        status: normalizeAbaMaintenanceProbeStatus(req.body?.status),
+        status: probeStatus,
         raw_payload: sanitizeClinicalPayload({
           ...(req.body?.raw_payload || req.body?.rawPayload || {}),
           targetName: sanitizeTextField(req.body?.target_name || req.body?.targetName, 240),
@@ -19889,6 +20111,14 @@ async function startServer() {
         if (hasMissingFinancialSchema(result.error)) return res.status(503).json({ success: false, error: 'Schema ABA de manutencao ainda não aplicado.' });
         throw result.error;
       }
+      await completeMaintenanceScheduleAfterProbe({
+        scheduleId: maintenanceScheduleId,
+        clinicId,
+        organizationId,
+        patientId,
+        completedAt: occurredAt,
+        completedBy: sanitizeString(req.session.user?.id, 120)
+      });
       return res.json({ success: true, data: result.data || payload });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
@@ -20105,7 +20335,8 @@ async function startServer() {
           patientId,
           clinicId,
           therapistId: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
-          evaluatedAt: endedAt
+          evaluatedAt: endedAt,
+          appointmentId: req.body?.appointment_id || req.body?.appointmentId
         });
         if (evaluatedMaintenance.length > 0) {
           maintenanceSummaryPayload = sanitizeClinicalPayload(evaluatedMaintenance);
@@ -20790,6 +21021,14 @@ async function startServer() {
           approvedAt: payload.evaluated_at
         });
         if ((scheduleResult as any).ok) maintenanceSchedules = (scheduleResult as any).data || [];
+        await persistTargetMaintenanceApproval({
+          targetId: payload.target_id,
+          patientId,
+          organizationId: payload.organization_id,
+          clinicId,
+          evaluationId: payload.id,
+          changedBy: sanitizeString(req.session.user?.id, 120)
+        });
       }
       return res.json({ success: true, data: result.data || payload, maintenanceSchedules });
     } catch (error: any) {

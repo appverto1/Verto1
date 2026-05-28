@@ -10,6 +10,8 @@ export type AbaMaintenanceScheduleStatus =
   | 'PENDING'
   | 'SCHEDULED'
   | 'UNSCHEDULED'
+  | 'DUE_TODAY'
+  | 'OVERDUE'
   | 'COMPLETED'
   | 'MISSED'
   | 'CANCELLED';
@@ -58,8 +60,8 @@ export type NextMaintenanceProbe = {
   label: string;
 };
 
-const ACTIVE_APPOINTMENT_STATUSES = new Set(['scheduled', 'pending', 'confirmed', 'rescheduled', 'reschedule']);
-const ACTIVE_SCHEDULE_STATUSES = new Set(['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'MISSED']);
+const ACTIVE_APPOINTMENT_STATUSES = new Set(['scheduled', 'pending', 'confirmed', 'in_progress', 'rescheduled', 'reschedule']);
+const ACTIVE_SCHEDULE_STATUSES = new Set(['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE', 'MISSED']);
 
 export const isoOrNow = (value: unknown) => {
   const date = new Date(typeof value === 'string' || typeof value === 'number' ? value : Date.now());
@@ -84,6 +86,8 @@ export const normalizeMaintenanceScheduleStatus = (value: unknown): AbaMaintenan
   const normalized = String(value || '').trim().toUpperCase();
   if (normalized === 'SCHEDULED') return 'SCHEDULED';
   if (normalized === 'UNSCHEDULED') return 'UNSCHEDULED';
+  if (normalized === 'DUE_TODAY') return 'DUE_TODAY';
+  if (normalized === 'OVERDUE') return 'OVERDUE';
   if (normalized === 'COMPLETED') return 'COMPLETED';
   if (normalized === 'MISSED') return 'MISSED';
   if (normalized === 'CANCELLED') return 'CANCELLED';
@@ -202,16 +206,44 @@ const dateKey = (value: string | null | undefined) => {
   return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
 };
 
+const scheduleReferenceDate = (schedule: any) =>
+  schedule?.scheduled_for || schedule?.scheduledFor || schedule?.target_due_date || schedule?.targetDueDate || null;
+
+export const deriveMaintenanceScheduleStatus = (schedule: any, now = new Date()): AbaMaintenanceScheduleStatus => {
+  const status = normalizeMaintenanceScheduleStatus(schedule?.status);
+  if (['COMPLETED', 'CANCELLED'].includes(status)) return status;
+  const reference = scheduleReferenceDate(schedule);
+  const referenceMs = reference ? new Date(reference).getTime() : NaN;
+  if (!Number.isFinite(referenceMs)) return status;
+  const todayKey = dateKey(now.toISOString());
+  if (dateKey(reference) === todayKey) return 'DUE_TODAY';
+  const todayStartMs = new Date(`${todayKey}T00:00:00.000Z`).getTime();
+  if (referenceMs < todayStartMs) return 'OVERDUE';
+  return status;
+};
+
 export const formatMaintenanceScheduleDueLabel = (schedule: any, now = new Date()) => {
   const scheduledFor = schedule?.scheduled_for || schedule?.scheduledFor;
   const targetDueDate = schedule?.target_due_date || schedule?.targetDueDate;
   const appointmentId = schedule?.appointment_id || schedule?.appointmentId;
-  const status = normalizeMaintenanceScheduleStatus(schedule?.status);
+  const status = deriveMaintenanceScheduleStatus(schedule, now);
   if (!schedule) return 'Sem sondagem agendada';
   if (status === 'UNSCHEDULED' && !scheduledFor && targetDueDate) return 'Sem sessao agendada proxima da data-alvo.';
+  if (status === 'DUE_TODAY') return 'Proxima sondagem: hoje';
+  if (status === 'OVERDUE') {
+    const reference = scheduledFor || targetDueDate;
+    const due = reference ? new Date(reference) : null;
+    const diffDays = due && !Number.isNaN(due.getTime())
+      ? Math.max(1, Math.ceil((now.getTime() - due.getTime()) / 86_400_000))
+      : 1;
+    return `Sondagem atrasada ha ${diffDays} dia(s)`;
+  }
   if (appointmentId && status === 'SCHEDULED') {
     const reference = scheduledFor || targetDueDate;
     if (reference && dateKey(reference) === dateKey(now.toISOString())) return 'Proxima sondagem: hoje';
+    if (String(schedule?.schedule_mode || schedule?.scheduleMode || '').toUpperCase() === 'NEXT_PATIENT_SESSION') {
+      return reference ? `Agendada para proxima sessao: ${new Date(reference).toLocaleDateString('pt-BR')}` : 'Agendada para proxima sessao';
+    }
   }
   const reference = scheduledFor || targetDueDate;
   if (!reference) return 'Sem sondagem agendada';
@@ -251,7 +283,7 @@ export function getNextMaintenanceProbeForTarget(schedules: any[] = [], now = ne
   const dueKey = dateKey(dueDate);
   const todayKey = dateKey(now.toISOString());
   const dueMs = dueDate ? new Date(dueDate).getTime() : NaN;
-  const status = normalizeMaintenanceScheduleStatus(schedule.status);
+  const status = deriveMaintenanceScheduleStatus(schedule, now);
   return {
     schedule,
     dueDate,
@@ -263,4 +295,39 @@ export function getNextMaintenanceProbeForTarget(schedules: any[] = [], now = ne
     noSchedule: false,
     label: formatMaintenanceScheduleDueLabel(schedule, now)
   };
+}
+
+export function selectMaintenanceScheduleForProbe(
+  schedules: any[] = [],
+  options: { appointmentId?: string | null; occurredAt?: string | Date | null } = {}
+) {
+  const appointmentId = String(options.appointmentId || '').trim();
+  const occurred = new Date(options.occurredAt || Date.now());
+  const occurredAt = Number.isNaN(occurred.getTime()) ? new Date() : occurred;
+  const occurredKey = dateKey(occurredAt.toISOString());
+  const occurredMs = occurredAt.getTime();
+  const active = (Array.isArray(schedules) ? schedules : [])
+    .filter(isActiveMaintenanceSchedule)
+    .map((schedule) => {
+      const reference = scheduleReferenceDate(schedule);
+      const referenceMs = reference ? new Date(reference).getTime() : Number.POSITIVE_INFINITY;
+      const windowStart = schedule?.window_start || schedule?.windowStart;
+      const windowEnd = schedule?.window_end || schedule?.windowEnd;
+      const windowStartMs = windowStart ? new Date(windowStart).getTime() : NaN;
+      const windowEndMs = windowEnd ? new Date(windowEnd).getTime() : NaN;
+      const sameAppointment = Boolean(appointmentId && String(schedule?.appointment_id || schedule?.appointmentId || '') === appointmentId);
+      const dueToday = reference && dateKey(reference) === occurredKey;
+      const overdue = Number.isFinite(referenceMs) && referenceMs < new Date(`${occurredKey}T00:00:00.000Z`).getTime();
+      const inWindow = Number.isFinite(windowStartMs) && Number.isFinite(windowEndMs) && occurredMs >= windowStartMs && occurredMs <= windowEndMs;
+      const rank = sameAppointment ? 0 : dueToday ? 1 : overdue ? 2 : inWindow ? 3 : 4;
+      return { schedule, rank, referenceMs, distance: Number.isFinite(referenceMs) ? Math.abs(referenceMs - occurredMs) : Number.POSITIVE_INFINITY };
+    })
+    .sort((a, b) => {
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      if (a.rank === 2) return a.referenceMs - b.referenceMs;
+      if (a.distance !== b.distance) return a.distance - b.distance;
+      return a.referenceMs - b.referenceMs;
+    });
+
+  return active[0]?.schedule || null;
 }

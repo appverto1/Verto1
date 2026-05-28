@@ -8,7 +8,9 @@ import {
 } from '../src/utils/abaMasteryEngine.ts';
 import {
   buildDefaultMaintenanceSchedulePreview,
-  findBestAppointmentForMaintenanceProbe
+  deriveMaintenanceScheduleStatus,
+  findBestAppointmentForMaintenanceProbe,
+  selectMaintenanceScheduleForProbe
 } from '../src/utils/abaMaintenanceScheduling.ts';
 
 const root = process.cwd();
@@ -19,6 +21,7 @@ const sessionModeCode = readFileSync(join(root, 'src/components/SessionMode.tsx'
 const patientDetailCode = readFileSync(join(root, 'src/components/PatientDetailView.tsx'), 'utf8');
 const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 'utf8');
 const appCode = readFileSync(join(root, 'src/App.tsx'), 'utf8');
+const flowDoc = readFileSync(join(root, 'ABA_MAINTENANCE_PROBE_FLOW.md'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -116,6 +119,31 @@ test('findBestAppointmentForMaintenanceProbe prefere sessao futura mais proxima'
   assert.equal(match.matchType, 'AFTER_TARGET_DUE_DATE');
 });
 
+test('status derivado diferencia due today e overdue sem mutacao automatica', () => {
+  assert.equal(deriveMaintenanceScheduleStatus({
+    status: 'SCHEDULED',
+    scheduled_for: '2026-05-28T12:00:00.000Z'
+  }, new Date('2026-05-28T15:00:00.000Z')), 'DUE_TODAY');
+  assert.equal(deriveMaintenanceScheduleStatus({
+    status: 'PENDING',
+    target_due_date: '2026-05-25T12:00:00.000Z'
+  }, new Date('2026-05-28T15:00:00.000Z')), 'OVERDUE');
+});
+
+test('registro escolhe schedule por appointment, hoje, vencido e janela', () => {
+  const selectedByAppointment = selectMaintenanceScheduleForProbe([
+    { id: 'due-today', target_due_date: '2026-05-28T12:00:00.000Z', status: 'PENDING' },
+    { id: 'linked', appointment_id: 'appointment-1', target_due_date: '2026-05-30T12:00:00.000Z', status: 'SCHEDULED' }
+  ], { appointmentId: 'appointment-1', occurredAt: '2026-05-28T13:00:00.000Z' });
+  assert.equal(selectedByAppointment?.id, 'linked');
+
+  const selectedOverdue = selectMaintenanceScheduleForProbe([
+    { id: 'future-window', target_due_date: '2026-05-30T12:00:00.000Z', window_start: '2026-05-27T00:00:00.000Z', window_end: '2026-06-02T00:00:00.000Z', status: 'PENDING' },
+    { id: 'oldest-overdue', target_due_date: '2026-05-20T12:00:00.000Z', status: 'PENDING' }
+  ], { occurredAt: '2026-05-28T13:00:00.000Z' });
+  assert.equal(selectedOverdue?.id, 'oldest-overdue');
+});
+
 test('maintenance probe adequado retorna MAINTAINED', () => {
   const result = evaluate();
   assert.equal(result.status, 'MAINTAINED');
@@ -194,9 +222,17 @@ test('migration cria tabelas, estados clinicos, schedules e alertas sem mutar ta
   assert.match(migrationSql, /aba_regression_alert_after_probe_result/i);
   assert.match(planningMigrationSql, /target_due_date/i);
   assert.match(planningMigrationSql, /appointment_id/i);
-  assert.match(planningMigrationSql, /alter table public\.appointments[\s\S]*add column if not exists deleted_at[\s\S]*add column if not exists is_active/i);
+  assert.match(planningMigrationSql, /source_mastery_evaluation_id/i);
+  assert.match(planningMigrationSql, /interval_label/i);
+  assert.match(planningMigrationSql, /completed_by/i);
+  assert.match(planningMigrationSql, /DUE_TODAY/i);
+  assert.match(planningMigrationSql, /OVERDUE/i);
+  assert.match(planningMigrationSql, /alter table public\.appointments[\s\S]*add column if not exists organization_id[\s\S]*add column if not exists deleted_at[\s\S]*add column if not exists is_active/i);
+  assert.match(planningMigrationSql, /a\.organization_id::text = p_organization_id/i);
   assert.match(planningMigrationSql, /UNSCHEDULED/i);
   assert.match(planningMigrationSql, /aba_find_best_appointment_for_maintenance_probe/i);
+  assert.match(planningMigrationSql, /idx_aba_maintenance_schedules_org_appointment_status/i);
+  assert.match(planningMigrationSql, /idx_aba_maintenance_probe_results_org_patient_target_created/i);
   assert.doesNotMatch(migrationSql, /update\s+public\.aba_targets[\s\S]{0,220}REGRESSION_CONFIRMED/i);
 });
 
@@ -209,15 +245,27 @@ test('backend e frontend usam summaries e rotas de manutencao paginadas', () => 
   assert.match(serverCode, /app\.get\('\/api\/aba\/targets\/:targetId\/next-maintenance-probe'/m);
   assert.match(serverCode, /app\.post\('\/api\/aba\/maintenance-schedules\/:scheduleId\/complete'/m);
   assert.match(serverCode, /app\.post\('\/api\/aba\/maintenance-probe-results'/m);
+  assert.match(serverCode, /selectMaintenanceScheduleForProbe/);
+  assert.match(serverCode, /completeMaintenanceScheduleAfterProbe/);
+  assert.match(serverCode, /persistTargetMaintenanceApproval/);
   assert.match(dataServiceCode, /async getAbaMaintenanceOverview\(patientId: string/);
+  assert.match(dataServiceCode, /appointmentId\?: string \| null/);
   assert.match(dataServiceCode, /async createMaintenanceScheduleForTarget\(targetId: string/);
   assert.match(dataServiceCode, /async scheduleMaintenanceForNextSession\(targetId: string/);
   assert.match(dataServiceCode, /async saveAbaMaintenanceProbeResult\(result: any\)/);
   assert.match(sessionModeCode, /dataService\.getAbaMaintenanceOverview\(patientId/);
+  assert.match(sessionModeCode, /appointmentId: activeAppointmentId/);
   assert.match(sessionModeCode, /Probes de manutencao pendentes/);
   assert.match(sessionModeCode, /Agendar para proxima sessao/);
   assert.match(sessionModeCode, /Sem sondagem agendada/);
   assert.match(patientDetailCode, /maintenance_targets_count[\s\S]*?pending_maintenance_probes_count[\s\S]*?active_regression_risks_count/m);
+});
+
+test('documentacao curta explica fluxo atual e corrigido', () => {
+  assert.match(flowDoc, /Auditoria do fluxo atual/);
+  assert.match(flowDoc, /Fluxo corrigido/);
+  assert.match(flowDoc, /nao promove target sozinho/);
+  assert.match(flowDoc, /appointment_id/);
 });
 
 test('Maintenance Probe nao regride PEI nem target automaticamente no legado', () => {

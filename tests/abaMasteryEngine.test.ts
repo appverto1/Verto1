@@ -154,7 +154,12 @@ test('READY_FOR_REVIEW nao altera target automaticamente', () => {
     criteria: { ...baseCriteria, min_consecutive_days: 1 }
   });
   assert.equal(result.status, 'READY_FOR_REVIEW');
-  assert.doesNotMatch(serverCode, /from\('aba_targets'\)[\s\S]{0,180}\.update\(/);
+  const sessionSummaryRoute = serverCode.slice(
+    serverCode.indexOf("app.post('/api/aba/session-summaries'"),
+    serverCode.indexOf("app.post('/api/aba/mastery-evaluations'")
+  );
+  assert.doesNotMatch(sessionSummaryRoute, /from\('aba_targets'\)[\s\S]{0,180}\.update\(/);
+  assert.match(serverCode, /persistTargetMaintenanceApproval[\s\S]*?aba_target_status_audit_logs/);
   assert.doesNotMatch(migrationSql, /update\s+public\.aba_targets/i);
 });
 

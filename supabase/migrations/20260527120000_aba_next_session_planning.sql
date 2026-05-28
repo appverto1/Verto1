@@ -4,16 +4,20 @@
 create extension if not exists pgcrypto;
 
 alter table public.appointments
+  add column if not exists organization_id uuid,
   add column if not exists deleted_at timestamptz,
   add column if not exists is_active boolean default true;
 
 alter table public.aba_maintenance_schedules
   add column if not exists target_due_date timestamptz,
   add column if not exists appointment_id text,
+  add column if not exists source_mastery_evaluation_id text,
   add column if not exists schedule_mode text not null default 'DEFAULT_SEQUENCE',
   add column if not exists sequence_index integer,
+  add column if not exists interval_label text,
   add column if not exists window_start timestamptz,
   add column if not exists window_end timestamptz,
+  add column if not exists completed_by text,
   add column if not exists created_by text,
   add column if not exists updated_at timestamptz not null default now(),
   add column if not exists raw_payload jsonb not null default '{}'::jsonb;
@@ -23,15 +27,24 @@ alter table public.aba_maintenance_schedules
 
 update public.aba_maintenance_schedules
 set target_due_date = coalesce(target_due_date, scheduled_for),
+    source_mastery_evaluation_id = coalesce(source_mastery_evaluation_id, mastery_evaluation_id),
+    interval_label = coalesce(interval_label, schedule_day::text || ' dias'),
     updated_at = coalesce(updated_at, created_at, now())
 where target_due_date is null;
+
+update public.aba_maintenance_schedules
+set source_mastery_evaluation_id = coalesce(source_mastery_evaluation_id, mastery_evaluation_id),
+    interval_label = coalesce(interval_label, schedule_day::text || ' dias'),
+    updated_at = coalesce(updated_at, created_at, now())
+where source_mastery_evaluation_id is null
+   or interval_label is null;
 
 alter table public.aba_maintenance_schedules
   drop constraint if exists aba_maintenance_schedules_status_check;
 
 alter table public.aba_maintenance_schedules
   add constraint aba_maintenance_schedules_status_check
-  check (status in ('PENDING', 'SCHEDULED', 'UNSCHEDULED', 'COMPLETED', 'MISSED', 'CANCELLED'));
+  check (status in ('PENDING', 'SCHEDULED', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE', 'COMPLETED', 'MISSED', 'CANCELLED'));
 
 alter table public.aba_maintenance_schedules
   drop constraint if exists aba_maintenance_schedules_schedule_mode_check;
@@ -46,6 +59,12 @@ create index if not exists idx_aba_maintenance_schedules_org_patient_target_stat
 create index if not exists idx_aba_maintenance_schedules_target_due_date
   on public.aba_maintenance_schedules (organization_id, patient_id, target_id, status, target_due_date);
 
+create index if not exists idx_aba_maintenance_schedules_org_appointment_status
+  on public.aba_maintenance_schedules (organization_id, appointment_id, status);
+
+create index if not exists idx_aba_maintenance_probe_results_org_patient_target_created
+  on public.aba_maintenance_probe_results (organization_id, patient_id, target_id, created_at desc);
+
 create unique index if not exists idx_aba_maintenance_schedules_active_unique
   on public.aba_maintenance_schedules (
     organization_id,
@@ -55,7 +74,7 @@ create unique index if not exists idx_aba_maintenance_schedules_active_unique
     coalesce(appointment_id, ''),
     coalesce(scheduled_for, target_due_date)
   )
-  where status in ('PENDING', 'SCHEDULED', 'UNSCHEDULED');
+  where status in ('PENDING', 'SCHEDULED', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE');
 
 create table if not exists public.aba_next_session_focuses (
   id text primary key default gen_random_uuid()::text,
@@ -373,11 +392,15 @@ as $$
       and a.scheduled_at <= bounds.window_end
       and coalesce(a.is_active, true) = true
       and a.deleted_at is null
-      and lower(coalesce(a.status, 'scheduled')) not in ('cancelled', 'canceled')
+      and lower(coalesce(a.status, 'scheduled')) not in ('cancelled', 'canceled', 'deleted')
+      and (
+        nullif(p_organization_id, '') is null
+        or a.organization_id::text = p_organization_id
+        or a.clinic_id::text = p_organization_id
+      )
       and (
         nullif(p_clinic_id, '') is null
         or a.clinic_id::text = p_clinic_id
-        or a.clinic_id::text = p_organization_id
       )
     order by direction_rank asc, distance_seconds asc, scheduled_for asc
     limit greatest(1, least(coalesce(p_limit, 20), 50))
@@ -452,7 +475,9 @@ begin
       patient_id,
       target_id,
       mastery_evaluation_id,
+      source_mastery_evaluation_id,
       schedule_day,
+      interval_label,
       target_due_date,
       scheduled_for,
       appointment_id,
@@ -472,7 +497,9 @@ begin
       p_patient_id,
       p_target_id,
       p_mastery_evaluation_id,
+      p_mastery_evaluation_id,
       v_day,
+      v_day::text || ' dias',
       v_target_due_date,
       v_scheduled_for,
       v_appointment_id,
@@ -489,8 +516,10 @@ begin
       target_due_date = excluded.target_due_date,
       scheduled_for = coalesce(public.aba_maintenance_schedules.scheduled_for, excluded.scheduled_for),
       appointment_id = coalesce(public.aba_maintenance_schedules.appointment_id, excluded.appointment_id),
+      source_mastery_evaluation_id = coalesce(public.aba_maintenance_schedules.source_mastery_evaluation_id, excluded.source_mastery_evaluation_id),
       schedule_mode = excluded.schedule_mode,
       sequence_index = excluded.sequence_index,
+      interval_label = excluded.interval_label,
       window_start = excluded.window_start,
       window_end = excluded.window_end,
       status = case
@@ -541,13 +570,13 @@ begin
   into v_maintenance_targets
   from public.aba_maintenance_schedules
   where patient_id = p_patient_id
-    and status in ('PENDING', 'SCHEDULED', 'UNSCHEDULED', 'COMPLETED', 'MISSED');
+    and status in ('PENDING', 'SCHEDULED', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE', 'COMPLETED', 'MISSED');
 
   select count(*)
   into v_pending_probes
   from public.aba_maintenance_schedules
   where patient_id = p_patient_id
-    and status in ('PENDING', 'SCHEDULED', 'UNSCHEDULED', 'MISSED');
+    and status in ('PENDING', 'SCHEDULED', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE', 'MISSED');
 
   select count(*)
   into v_active_risks
@@ -602,7 +631,7 @@ begin
         completed_at = coalesce(new.occurred_at, now()),
         updated_at = now()
     where id = new.maintenance_schedule_id
-      and status in ('PENDING', 'SCHEDULED', 'UNSCHEDULED', 'MISSED');
+      and status in ('PENDING', 'SCHEDULED', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE', 'MISSED');
   end if;
 
   select count(*)

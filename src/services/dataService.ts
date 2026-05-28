@@ -1545,7 +1545,7 @@ export const dataService = {
     return { success: true, data: null };
   },
 
-  async getAbaMaintenanceOverview(patientId: string, options: { limit?: number; page?: number; pageSize?: number } = {}) {
+  async getAbaMaintenanceOverview(patientId: string, options: { limit?: number; page?: number; pageSize?: number; appointmentId?: string | null } = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse({ schedules: [], probeResults: [], alerts: [], summary: null });
     const limit = normalizeListLimit(options.pageSize ?? options.limit, 20, 50);
     const page = Math.max(1, Math.round(Number(options.page || 1) || 1));

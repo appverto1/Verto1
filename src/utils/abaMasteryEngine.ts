@@ -14,7 +14,7 @@ export type AbaTargetClinicalStatus =
   | 'REGRESSION_RISK'
   | 'REGRESSION_CONFIRMED';
 
-export type AbaMaintenanceScheduleStatus = 'PENDING' | 'SCHEDULED' | 'UNSCHEDULED' | 'COMPLETED' | 'MISSED' | 'CANCELLED';
+export type AbaMaintenanceScheduleStatus = 'PENDING' | 'SCHEDULED' | 'UNSCHEDULED' | 'DUE_TODAY' | 'OVERDUE' | 'COMPLETED' | 'MISSED' | 'CANCELLED';
 
 export type AbaMaintenanceProbeStatus = 'MAINTAINED' | 'WATCH' | 'REGRESSION_RISK';
 

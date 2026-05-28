@@ -485,6 +485,7 @@ export const SessionMode = ({
   const patientId = String(patient?.id || '');
   const resolvedTherapistId = String(therapistId || activeSession?.therapistId || activeSession?.therapist_id || '').trim();
   const resolvedClinicId = String(clinicId || activeSession?.clinicId || activeSession?.clinic_id || patient?.clinicId || patient?.clinic_id || patient?.organizationId || patient?.organization_id || '').trim();
+  const activeAppointmentId = String(activeSession?.appointmentId || activeSession?.appointment_id || '').trim();
   const patientDisplayName = formatPatientLabel(patient);
   const therapistDisplayName = formatTherapistLabel({
     therapistName,
@@ -797,7 +798,7 @@ export const SessionMode = ({
         return;
       }
       try {
-        const result = await dataService.getAbaMaintenanceOverview(patientId, { page: 1, pageSize: 20 });
+        const result = await dataService.getAbaMaintenanceOverview(patientId, { page: 1, pageSize: 20, appointmentId: activeAppointmentId || undefined });
         if (!cancelled) setMaintenanceOverview(result?.data || { schedules: [], probeResults: [], alerts: [], summary: null });
       } catch {
         if (!cancelled) setMaintenanceOverview({ schedules: [], probeResults: [], alerts: [], summary: null });
@@ -807,7 +808,7 @@ export const SessionMode = ({
     return () => {
       cancelled = true;
     };
-  }, [patientId, sessionId, sessionCompleted]);
+  }, [activeAppointmentId, patientId, sessionId, sessionCompleted]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2498,6 +2499,8 @@ export const SessionMode = ({
         patient_id: finalSummary.patientId,
         clinic_id: resolvedClinicId || undefined,
         clinicId: resolvedClinicId || undefined,
+        appointment_id: activeAppointmentId || undefined,
+        appointmentId: activeAppointmentId || undefined,
         therapist_id: finalSummary.therapistId || undefined,
         source: 'verto_web',
         started_at: finalSummary.startedAt,
@@ -2525,6 +2528,7 @@ export const SessionMode = ({
         summary_payload: {
           source: 'verto_web',
           clinicId: resolvedClinicId || undefined,
+          appointmentId: activeAppointmentId || undefined,
           patientName: finalSummary.patientName,
           therapistName: finalSummary.therapistName,
           teachingSummary: finalSummary.teachingSummary,
@@ -2643,7 +2647,7 @@ export const SessionMode = ({
     }
     return {
       isMaintenanceTarget: isMaintenanceLikeGoal(goal) || schedules.length > 0 || probeResults.length > 0 || alerts.length > 0,
-      nextSchedule: schedules.find((schedule: any) => ['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'MISSED'].includes(String(schedule?.status || '').toUpperCase())) || schedules[0] || null,
+      nextSchedule: schedules.find((schedule: any) => ['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE', 'MISSED'].includes(String(schedule?.status || '').toUpperCase())) || schedules[0] || null,
       lastResult: probeResults[0] || null,
       activeAlert: alerts[0] || null,
       probeResults,
@@ -2773,14 +2777,15 @@ export const SessionMode = ({
         const due = new Date(schedule?.scheduled_for || schedule?.scheduledFor || schedule?.target_due_date || schedule?.targetDueDate || 0);
         const sameDay = !Number.isNaN(due.getTime()) && due.toISOString().slice(0, 10) === today.toISOString().slice(0, 10);
         const overdue = !Number.isNaN(due.getTime()) && due.getTime() < today.getTime();
-        return status === 'UNSCHEDULED' || status === 'MISSED' || sameDay || overdue;
+        const linkedToThisAppointment = Boolean(activeAppointmentId && String(schedule?.appointment_id || schedule?.appointmentId || '') === activeAppointmentId);
+        return linkedToThisAppointment || status === 'UNSCHEDULED' || status === 'DUE_TODAY' || status === 'OVERDUE' || status === 'MISSED' || sameDay || overdue;
       })
       .slice(0, 6);
-  }, [maintenanceProbeRows]);
+  }, [activeAppointmentId, maintenanceProbeRows]);
 
   const refreshMaintenanceOverview = async () => {
     try {
-      const result = await dataService.getAbaMaintenanceOverview(patientId, { page: 1, pageSize: 20 });
+      const result = await dataService.getAbaMaintenanceOverview(patientId, { page: 1, pageSize: 20, appointmentId: activeAppointmentId || undefined });
       setMaintenanceOverview(result?.data || { schedules: [], probeResults: [], alerts: [], summary: null });
     } catch {
       setMaintenanceOverview((prev: any) => prev || { schedules: [], probeResults: [], alerts: [], summary: null });
@@ -2790,6 +2795,8 @@ export const SessionMode = ({
   const buildMaintenanceSchedulePayload = (goal: any, extra: any = {}) => ({
     patient_id: patientId,
     patientId,
+    appointment_id: activeAppointmentId || undefined,
+    appointmentId: activeAppointmentId || undefined,
     organization_id: resolvedClinicId,
     organizationId: resolvedClinicId,
     scheduleMode: maintenanceScheduleMode,
