@@ -1817,6 +1817,8 @@ export function CoordinatorDashboard({
         room_id: sessionLocationType === "clinica" ? sessionRoom : "",
         roomName: sessionLocationType === "clinica" ? selectedSessionRoom?.name || sessionRoom : "",
         room_name: sessionLocationType === "clinica" ? selectedSessionRoom?.name || sessionRoom : "",
+        roomSpecialties: sessionLocationType === "clinica" ? selectedSessionRoom?.specialties || [] : [],
+        room_specialties: sessionLocationType === "clinica" ? selectedSessionRoom?.specialties || [] : [],
         locationNotes: sessionLocationNotes,
         location_notes: sessionLocationNotes,
         callLink: sessionCallLink,
@@ -1867,6 +1869,8 @@ export function CoordinatorDashboard({
       room_id: sessionLocationType === "clinica" ? sessionRoom : "",
       roomName: sessionLocationType === "clinica" ? selectedSessionRoom?.name || sessionRoom : "",
       room_name: sessionLocationType === "clinica" ? selectedSessionRoom?.name || sessionRoom : "",
+      roomSpecialties: sessionLocationType === "clinica" ? selectedSessionRoom?.specialties || [] : [],
+      room_specialties: sessionLocationType === "clinica" ? selectedSessionRoom?.specialties || [] : [],
       locationNotes: sessionLocationNotes,
       location_notes: sessionLocationNotes,
       callLink: sessionCallLink,
@@ -4182,6 +4186,9 @@ export function CoordinatorDashboard({
                     placeholder="Ex: Sala 01"
                     required
                   />
+                  <p className="text-[9px] text-slate-400 mt-1 ml-1">
+                    O nome da sala será exibido na agenda e nos relatórios.
+                  </p>
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
@@ -4197,7 +4204,7 @@ export function CoordinatorDashboard({
                     placeholder="Ex: ABA, TCC, Fono"
                   />
                   <p className="text-[9px] text-slate-400 mt-1 ml-1">
-                    Separe por vírgula
+                    Especialidades ajudam a filtrar salas, mas são opcionais. Separe por vírgula.
                   </p>
                 </div>
                 <button
@@ -7642,11 +7649,16 @@ export function CoordinatorDashboard({
                     onChange={(e) => setSessionRoom(e.target.value)}
                   >
                     <option value="">Selecione...</option>
-                    {activeClinicRooms.map((room: any) => (
-                      <option key={room.id} value={room.id}>
-                        {room.name}
-                      </option>
-                    ))}
+                    {activeClinicRooms.map((room: any) => {
+                      const roomSpecialties = Array.isArray(room.specialties)
+                        ? room.specialties.join(", ")
+                        : String(room.specialties || room.specialty || "").trim();
+                      return (
+                        <option key={room.id} value={room.id}>
+                          {roomSpecialties ? `${room.name || "Sala não identificada"} · ${roomSpecialties}` : room.name || "Sala não identificada"}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
               ) : sessionLocationType === "online" ? (

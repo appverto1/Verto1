@@ -18,6 +18,7 @@ import {
   ChevronRight,
   CheckCircle2,
   Filter,
+  LineChart as LineChartIcon,
   ListTree,
   Plus,
   Save,
@@ -32,11 +33,13 @@ import {
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { dataService } from '../services/dataService';
 import {
+  ABA_CLINICAL_LINE_METRICS,
   aggregateClinicalChangesBySession,
   getClinicalChangeDrilldown,
   type AbaAggregatedClinicalChange,
   type AbaAggregatedClinicalChangeGroup,
-  type AbaClinicalChangeCategory
+  type AbaClinicalChangeCategory,
+  type AbaClinicalLineCategory
 } from '../utils/abaClinicalCharts';
 import { formatSessionLabel, safeDisplayValue } from '../utils/displayLabels';
 
@@ -68,11 +71,23 @@ type ChartPoint = {
   masteryStatus?: string;
   mostUsedTrialType?: string;
   trialTypeMostUsed?: string;
+  sessionLabel?: string;
+  itemId?: string | null;
+  itemLabel?: string;
+  metric?: string;
+  secondaryValues?: Record<string, number | null>;
+  attemptsCount?: number | null;
+  prompt?: string | null;
+  trialType?: string | null;
+  date?: string;
+  metadata?: Record<string, any>;
 };
 
 type ChangeCategoryFilter = AbaClinicalChangeCategory | 'all';
 type ChangeDetailMode = 'summary' | 'detail';
 type ChangeTrendFilter = 'all' | 'improved' | 'worsened' | 'alerts';
+type ClinicalChartViewMode = 'stacked' | 'line';
+type LineGroupBy = 'session' | 'day' | 'week';
 
 const chartTabs = [
   { id: 'overview', label: 'Visão geral' },
@@ -83,9 +98,35 @@ const chartTabs = [
   { id: 'session-changes', label: 'Mudanças por sessão' }
 ] as const;
 
+const lineCategoryOptions: Array<{ id: AbaClinicalLineCategory; label: string }> = [
+  { id: 'target', label: 'Habilidade / Target' },
+  { id: 'behavior', label: 'Comportamento' },
+  { id: 'mastery', label: 'Maestria' },
+  { id: 'maintenance', label: 'Manutencao' },
+  { id: 'general', label: 'Geral' }
+];
+
+const lineCategoryForTab = (tab: string): AbaClinicalLineCategory => {
+  if (tab === 'behaviors') return 'behavior';
+  if (tab === 'mastery') return 'mastery';
+  if (tab === 'maintenance') return 'maintenance';
+  if (tab === 'overview' || tab === 'session-changes') return 'general';
+  return 'target';
+};
+
+const changeCategoryToLineCategory = (category?: AbaClinicalChangeCategory): AbaClinicalLineCategory => {
+  if (category === 'behavior') return 'behavior';
+  if (category === 'mastery') return 'mastery';
+  if (category === 'maintenance' || category === 'regression') return 'maintenance';
+  return 'target';
+};
+
 const metricLabels: Record<string, string> = {
+  TARGET_COMPARE_RESPONSES: 'Comparar respostas',
   TARGET_ACCURACY: 'Acurácia',
   TARGET_INDEPENDENCE: 'Independência',
+  TARGET_PROMPTED: 'Com ajuda',
+  TARGET_ERROR: 'Erro',
   TARGET_TRIAL_COUNT: 'Tentativas',
   FUNCTIONAL_COMMUNICATION: 'Comunicação funcional',
   ENGAGEMENT: 'Engajamento',
@@ -95,7 +136,14 @@ const metricLabels: Record<string, string> = {
   BEHAVIOR_DURATION_MAX: 'Duração máxima',
   BEHAVIOR_INTERVAL_OCCURRENCE: 'Ocorrência por intervalo',
   MASTERY_STATUS: 'Status de maestria',
+  MASTERY_CONSECUTIVE_DAYS: 'Dias consecutivos',
+  MASTERY_VALID_ATTEMPTS: 'Tentativas válidas',
+  MASTERY_READY_FOR_REVIEW: 'Pronto para revisão',
   MAINTENANCE_STATUS: 'Status de manutenção',
+  MAINTENANCE_ACCURACY: 'Acurácia de manutenção',
+  MAINTENANCE_INDEPENDENCE: 'Independência de manutenção',
+  MAINTENANCE_FAILURES: 'Falhas consecutivas',
+  MAINTENANCE_DAYS_SINCE_PROBE: 'Dias desde último probe',
   REGRESSION_RISK: 'Risco de regressão'
 };
 
@@ -174,19 +222,42 @@ const aggregateBarColors = {
   regressionCount: '#EF4444'
 };
 
+const clinicalLineColors = {
+  independencePct: '#2563EB',
+  promptedPct: '#F59E0B',
+  errorPct: '#EF4444',
+  accuracyPct: '#10B981',
+  value: '#7a32fc'
+};
+
+const clinicalLineLabels: Record<string, string> = {
+  independencePct: 'Independente',
+  promptedPct: 'Com ajuda',
+  errorPct: 'Erro',
+  accuracyPct: 'Acurácia'
+};
+
 const percentMetrics = new Set([
   'TARGET_ACCURACY',
   'TARGET_INDEPENDENCE',
+  'TARGET_COMPARE_RESPONSES',
+  'TARGET_PROMPTED',
+  'TARGET_ERROR',
   'FUNCTIONAL_COMMUNICATION',
   'ENGAGEMENT',
-  'BEHAVIOR_INTERVAL_OCCURRENCE'
+  'BEHAVIOR_INTERVAL_OCCURRENCE',
+  'MAINTENANCE_ACCURACY',
+  'MAINTENANCE_INDEPENDENCE'
 ]);
 const durationMetrics = new Set(['BEHAVIOR_DURATION_TOTAL', 'BEHAVIOR_DURATION_AVG', 'BEHAVIOR_DURATION_MAX']);
-const statusMetrics = new Set(['MASTERY_STATUS', 'MAINTENANCE_STATUS', 'REGRESSION_RISK']);
+const statusMetrics = new Set(['MASTERY_STATUS', 'MASTERY_READY_FOR_REVIEW', 'MAINTENANCE_STATUS', 'REGRESSION_RISK']);
 
 const metricAxisLabels: Record<string, string> = {
+  TARGET_COMPARE_RESPONSES: 'Percentual (%)',
   TARGET_ACCURACY: 'Acurácia (%)',
   TARGET_INDEPENDENCE: 'Independência (%)',
+  TARGET_PROMPTED: 'Com ajuda (%)',
+  TARGET_ERROR: 'Erro (%)',
   TARGET_TRIAL_COUNT: 'Tentativas',
   BEHAVIOR_FREQUENCY: 'Ocorrências',
   BEHAVIOR_DURATION_TOTAL: 'Duração total',
@@ -194,7 +265,14 @@ const metricAxisLabels: Record<string, string> = {
   BEHAVIOR_DURATION_MAX: 'Duração máxima',
   BEHAVIOR_INTERVAL_OCCURRENCE: '% de ocorrência por intervalo',
   MASTERY_STATUS: 'Status',
-  MAINTENANCE_STATUS: 'Status'
+  MASTERY_CONSECUTIVE_DAYS: 'Dias consecutivos',
+  MASTERY_VALID_ATTEMPTS: 'Tentativas válidas',
+  MASTERY_READY_FOR_REVIEW: 'Pronto para revisão',
+  MAINTENANCE_STATUS: 'Status',
+  MAINTENANCE_ACCURACY: 'Acurácia de manutenção (%)',
+  MAINTENANCE_INDEPENDENCE: 'Independência de manutenção (%)',
+  MAINTENANCE_FAILURES: 'Falhas consecutivas',
+  MAINTENANCE_DAYS_SINCE_PROBE: 'Dias desde último probe'
 };
 
 const statusTone = (status?: string) => {
@@ -407,6 +485,30 @@ const CustomTooltip = ({ active, payload }: any) => {
   );
 };
 
+const ClinicalLineTooltip = ({ active, payload }: any) => {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload || {};
+  const visiblePayload = payload.filter((item: any) => item?.value !== null && item?.value !== undefined);
+  return (
+    <div className="max-w-[340px] rounded-lg border border-slate-100 bg-white p-4 text-xs shadow-xl">
+      <p className="font-black uppercase tracking-widest text-slate-900">{row.sessionLabel || formatDate(row.date || row.changedAt)}</p>
+      <p className="mt-1 text-[11px] font-bold uppercase tracking-widest text-slate-400">{formatDateTime(row.date || row.changedAt)}</p>
+      <p className="mt-3 font-bold text-slate-700">{safeDisplayValue(row.itemLabel || row.metricLabel, 'Item clínico')}</p>
+      <div className="mt-3 space-y-1 text-slate-500">
+        {visiblePayload.map((item: any) => (
+          <p key={item.dataKey}>
+            {item.name || clinicalLineLabels[item.dataKey] || 'Valor'}: <strong className="text-slate-800">{formatValue(item.value, row.metric || row.metricType)}</strong>
+          </p>
+        ))}
+        <p>Tentativas: {row.attemptsCount ?? row.metadata?.attemptsCount ?? '-'}</p>
+        <p>Tipo de sessão: {safeDisplayValue(row.trialType || row.metadata?.trialType, '-')}</p>
+        <p>Prompt mais usado: {safeDisplayValue(row.prompt || row.metadata?.prompt, '-')}</p>
+        <p>Status: {safeDisplayValue(row.status || row.metadata?.status, '-')}</p>
+      </div>
+    </div>
+  );
+};
+
 const AggregatedTooltip = ({ active, payload }: any) => {
   if (!active || !payload?.length) return null;
   const row: AbaAggregatedClinicalChangeGroup = payload[0]?.payload || {};
@@ -490,11 +592,18 @@ const ClinicalChangeCard: React.FC<{ change: AbaAggregatedClinicalChange; index:
 
 export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaClinicalChartsPanelProps) {
   const [activeTab, setActiveTab] = useState<(typeof chartTabs)[number]['id']>('overview');
+  const [viewMode, setViewMode] = useState<ClinicalChartViewMode>('stacked');
   const [periodDays, setPeriodDays] = useState(30);
   const [targetId, setTargetId] = useState('');
   const [behaviorId, setBehaviorId] = useState('');
   const [metricType, setMetricType] = useState('');
   const [groupBy, setGroupBy] = useState<'session' | 'day'>('session');
+  const [lineCategory, setLineCategory] = useState<AbaClinicalLineCategory>('target');
+  const [lineItemId, setLineItemId] = useState('');
+  const [lineMetric, setLineMetric] = useState('TARGET_COMPARE_RESPONSES');
+  const [lineGroupBy, setLineGroupBy] = useState<LineGroupBy>('session');
+  const [lineData, setLineData] = useState<any>({ points: [], phases: [], annotations: [], summary: null, availableMetrics: [], availableItems: [] });
+  const [lineLoading, setLineLoading] = useState(false);
   const [groupByTouched, setGroupByTouched] = useState(false);
   const [selectedChangeGroupKey, setSelectedChangeGroupKey] = useState('');
   const [changeDetailMode, setChangeDetailMode] = useState<ChangeDetailMode>('summary');
@@ -543,6 +652,28 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     }
   };
 
+  const loadLineChart = async () => {
+    if (!patientId) return;
+    setLineLoading(true);
+    setError('');
+    try {
+      const result = await dataService.getAbaClinicalLineChart(patientId, {
+        category: lineCategory,
+        itemId: lineItemId,
+        metric: lineMetric,
+        days: periodDays,
+        groupBy: lineGroupBy,
+        limit: 120
+      });
+      setLineData(result?.data || { points: [], phases: [], annotations: [], summary: null, availableMetrics: [], availableItems: [] });
+    } catch (chartError) {
+      console.error('Erro ao carregar gráfico ABA em linha:', chartError);
+      setError('Não foi possível carregar a evolução em linha agora.');
+    } finally {
+      setLineLoading(false);
+    }
+  };
+
   useEffect(() => {
     void loadChart('overview');
   }, [patientId, periodDays, targetId, behaviorId, metricType, significantOnly]);
@@ -550,6 +681,15 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
   useEffect(() => {
     if (activeTab !== 'overview') void loadChart(activeTab);
   }, [activeTab, patientId, periodDays, targetId, behaviorId, metricType, significantOnly]);
+
+  useEffect(() => {
+    if (viewMode === 'line') void loadLineChart();
+  }, [viewMode, patientId, periodDays, lineCategory, lineItemId, lineMetric, lineGroupBy]);
+
+  useEffect(() => {
+    const options = ABA_CLINICAL_LINE_METRICS[lineCategory] || ABA_CLINICAL_LINE_METRICS.general;
+    if (!options.some((option) => option.id === lineMetric)) setLineMetric(options[0]?.id || 'TARGET_ACCURACY');
+  }, [lineCategory, lineMetric]);
 
   useEffect(() => {
     const validMetrics = activeTab === 'targets'
@@ -591,6 +731,29 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     });
     return Array.from(map.entries());
   }, [allKnownPoints]);
+
+  const lineMetricOptions = useMemo(() => {
+    const fromServer = Array.isArray(lineData.availableMetrics) && lineData.availableMetrics.length > 0
+      ? lineData.availableMetrics
+      : ABA_CLINICAL_LINE_METRICS[lineCategory] || ABA_CLINICAL_LINE_METRICS.general;
+    return fromServer.map((option: any) => ({
+      id: String(option.id),
+      label: safeDisplayValue(option.label || metricLabels[String(option.id)] || option.id, 'Métrica')
+    }));
+  }, [lineCategory, lineData.availableMetrics]);
+
+  const lineItemOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    if (lineCategory === 'target') targetOptions.forEach(([id, label]) => map.set(id, label));
+    if (lineCategory === 'behavior') behaviorOptions.forEach(([id, label]) => map.set(id, label));
+    if (Array.isArray(lineData.availableItems)) {
+      lineData.availableItems.forEach((item: any) => {
+        const id = String(item?.id || item?.itemId || '').trim();
+        if (id) map.set(id, safeDisplayValue(item?.label || item?.itemLabel || id, 'Item clínico'));
+      });
+    }
+    return Array.from(map.entries());
+  }, [behaviorOptions, lineCategory, lineData.availableItems, targetOptions]);
 
   const availableMetrics = useMemo(() => {
     if (activeTab === 'targets') return targetMetricOptions;
@@ -759,16 +922,61 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     });
   }, [activePoints, activeTab, behaviorId, effectiveMetricType, hasSpecificBehavior, hasSpecificTarget, targetId]);
 
+  const lineChartRows = useMemo(() => {
+    const points: ChartPoint[] = Array.isArray(lineData.points) ? lineData.points : [];
+    return points
+      .slice()
+      .sort((a: any, b: any) => new Date(a.date || a.changedAt || 0).getTime() - new Date(b.date || b.changedAt || 0).getTime())
+      .map((point: any, index: number) => ({
+        ...point,
+        x: point.sessionLabel || `${formatDate(point.date || point.changedAt)} #${index + 1}`,
+        chartValue: safeNumber(point.value, 0),
+        accuracyPct: point.secondaryValues?.accuracyPct ?? point.secondary_values?.accuracy_pct ?? null,
+        independencePct: point.secondaryValues?.independencePct ?? point.secondary_values?.independence_pct ?? null,
+        promptedPct: point.secondaryValues?.promptedPct ?? point.secondary_values?.prompted_pct ?? null,
+        errorPct: point.secondaryValues?.errorPct ?? point.secondary_values?.error_pct ?? null
+      }));
+  }, [lineData.points]);
+
+  const lineAnnotations = Array.isArray(lineData.annotations) ? lineData.annotations : [];
+  const linePhases = Array.isArray(lineData.phases) ? lineData.phases : [];
+  const lineGoalLines = lineAnnotations.filter((annotation: any) => annotation.annotation_type === 'GOAL_LINE' && annotation.value !== null && annotation.value !== '');
+  const lineXMarkers = useMemo(() => {
+    return lineAnnotations
+      .filter((annotation: any) => annotation.annotation_type !== 'GOAL_LINE')
+      .map((annotation: any) => {
+        const annotationTime = new Date(annotation.date || 0).getTime();
+        const nearest = lineChartRows.reduce((best: any, row: any) => {
+          const diff = Math.abs(new Date(row.date || row.changedAt || 0).getTime() - annotationTime);
+          if (!best || diff < best.diff) return { row, diff };
+          return best;
+        }, null);
+        return nearest?.row?.x ? { ...annotation, x: nearest.row.x } : null;
+      })
+      .filter(Boolean);
+  }, [lineAnnotations, lineChartRows]);
+
+  const lineSummary = lineData.summary || {};
+  const selectedLineMetricOption = lineMetricOptions.find((option) => option.id === lineMetric);
+  const lineAxisLabel = metricAxisLabels[lineMetric] || selectedLineMetricOption?.label || 'Valor';
+  const isCompareResponses = lineMetric === 'TARGET_COMPARE_RESPONSES';
+  const lineNeedsItem = lineCategory !== 'general' && !lineItemId;
+  const lineEmptyText = lineNeedsItem
+    ? 'Selecione um target ou comportamento para visualizar a evolução em linha.'
+    : 'Este item ainda não possui dados suficientes para gráfico de evolução.';
+  const lineMinWidth = Math.max(720, lineChartRows.length * 72);
+
   const annotations = Array.isArray(activeData.annotations) ? activeData.annotations : [];
   const isLoading = loadingTab === activeTab || (activeTab === 'overview' && loadingTab === 'overview');
-  const showAggregatedChart =
+  const showAggregatedChart = viewMode === 'stacked' && (
     activeTab === 'overview' ||
     activeTab === 'session-changes' ||
     activeTab === 'mastery' ||
     activeTab === 'maintenance' ||
     (activeTab === 'targets' && !hasSpecificTarget) ||
-    (activeTab === 'behaviors' && !hasSpecificBehavior);
-  const shouldRenderChart = showAggregatedChart ? aggregatedChangeRows.length > 0 : chartRows.length > 0;
+    (activeTab === 'behaviors' && !hasSpecificBehavior)
+  );
+  const shouldRenderChart = viewMode === 'stacked' && (showAggregatedChart ? aggregatedChangeRows.length > 0 : chartRows.length > 0);
 
   const yAxisLabel = showAggregatedChart
     ? 'Magnitude agregada'
@@ -787,6 +995,42 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     setBehaviorId('');
     setMetricType('');
     setSignificantOnly(false);
+  };
+
+  const setLineCategoryWithDefaults = (category: AbaClinicalLineCategory, itemId = '', metric = '') => {
+    const options = ABA_CLINICAL_LINE_METRICS[category] || ABA_CLINICAL_LINE_METRICS.general;
+    const nextMetric = metric && options.some((option) => option.id === metric) ? metric : options[0]?.id || 'TARGET_ACCURACY';
+    setLineCategory(category);
+    setLineItemId(itemId);
+    setLineMetric(nextMetric);
+  };
+
+  const showLineFromCurrentContext = () => {
+    const category = lineCategoryForTab(activeTab);
+    const itemId = category === 'behavior' ? (behaviorId || focusedBehaviorId) : category === 'general' ? '' : (targetId || focusedTargetId);
+    const options = ABA_CLINICAL_LINE_METRICS[category] || ABA_CLINICAL_LINE_METRICS.general;
+    const nextMetric = metricType && options.some((option) => option.id === metricType) ? metricType : options[0]?.id || 'TARGET_ACCURACY';
+    setLineCategoryWithDefaults(category, itemId, nextMetric);
+    setLineGroupBy(groupBy === 'day' ? 'day' : 'session');
+    setViewMode('line');
+  };
+
+  const showStackedView = () => setViewMode('stacked');
+
+  const openLineFromChange = (change?: Partial<ChartPoint> & { changeCategory?: AbaClinicalChangeCategory }) => {
+    if (!change) return;
+    const category = changeCategoryToLineCategory(change.changeCategory);
+    const itemId = category === 'behavior'
+      ? String(change.behaviorId || '')
+      : category === 'general'
+        ? ''
+        : String(change.targetId || '');
+    const options = ABA_CLINICAL_LINE_METRICS[category] || ABA_CLINICAL_LINE_METRICS.general;
+    const metric = options.some((option) => option.id === String(change.metricType || '')) ? String(change.metricType) : options[0]?.id || 'TARGET_ACCURACY';
+    setLineCategoryWithDefaults(category, itemId, metric);
+    setLineGroupBy('session');
+    setViewMode('line');
+    setSelectedChangeGroupKey('');
   };
 
   const resetDetailFilters = (category: ChangeCategoryFilter = 'all') => {
@@ -822,18 +1066,19 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
   const saveAnnotation = async () => {
     if (!annotationDraft.label.trim()) return;
     const result = await dataService.saveAbaGraphAnnotation(patientId, {
-      chartType: activeTab,
+      chartType: viewMode === 'line' ? 'clinical-line-chart' : activeTab,
       annotationType: annotationDraft.annotationType,
       label: annotationDraft.label,
       value: annotationDraft.value,
       date: `${annotationDraft.date}T12:00:00.000Z`,
-      targetId: targetId || focusedTargetId || undefined,
-      behaviorId: behaviorId || focusedBehaviorId || undefined
+      targetId: viewMode === 'line' && lineCategory !== 'behavior' ? lineItemId || undefined : targetId || focusedTargetId || undefined,
+      behaviorId: viewMode === 'line' && lineCategory === 'behavior' ? lineItemId || undefined : behaviorId || focusedBehaviorId || undefined
     });
     if (result?.success) {
       setAnnotationDraft({ annotationType: 'NOTE', label: '', value: '', date: new Date().toISOString().slice(0, 10) });
       setAnnotationOpen(false);
-      void loadChart(activeTab);
+      if (viewMode === 'line') void loadLineChart();
+      else void loadChart(activeTab);
     }
   };
 
@@ -1026,6 +1271,81 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     </div>
   );
 
+  const LineFilters = (
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-6">
+      <div>
+        <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Período</label>
+        <div className="grid grid-cols-3 rounded-lg bg-slate-100 p-1">
+          {[7, 30, 90].map((days) => (
+            <button
+              key={days}
+              type="button"
+              onClick={() => setPeriodDays(days)}
+              className={`rounded-md px-3 py-2 text-xs font-bold ${periodDays === days ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-slate-500'}`}
+            >
+              {days}d
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Categoria</label>
+        <select
+          value={lineCategory}
+          onChange={(event) => setLineCategoryWithDefaults(event.target.value as AbaClinicalLineCategory)}
+          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none"
+        >
+          {lineCategoryOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+        </select>
+      </div>
+      <div>
+        <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Item</label>
+        <select
+          value={lineItemId}
+          onChange={(event) => setLineItemId(event.target.value)}
+          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none"
+        >
+          <option value="">{lineCategory === 'general' ? 'Geral' : 'Selecionar'}</option>
+          {lineItemOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        </select>
+      </div>
+      <div>
+        <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Métrica</label>
+        <select
+          value={lineMetric}
+          onChange={(event) => setLineMetric(event.target.value)}
+          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none"
+        >
+          {lineMetricOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+        </select>
+      </div>
+      <div>
+        <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Agrupar</label>
+        <div className="grid grid-cols-3 rounded-lg bg-slate-100 p-1">
+          {[
+            { id: 'session', label: 'Sessão' },
+            { id: 'day', label: 'Dia' },
+            { id: 'week', label: 'Semana' }
+          ].map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => setLineGroupBy(option.id as LineGroupBy)}
+              className={`rounded-md px-2 py-2 text-[11px] font-bold ${lineGroupBy === option.id ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-slate-500'}`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-end">
+        <button type="button" onClick={() => setLineCategoryWithDefaults(lineCategory)} className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-slate-100 px-3 text-xs font-bold text-slate-600">
+          <X size={16} /> Limpar
+        </button>
+      </div>
+    </div>
+  );
+
   const metricPills = activeTab === 'targets' || activeTab === 'behaviors'
     ? (activeTab === 'targets' ? targetMetricOptions : behaviorMetricOptions)
     : [];
@@ -1042,7 +1362,23 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
             <h3 className={`text-xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>Mudanças clínicas por sessão</h3>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <div className="inline-grid grid-cols-2 rounded-lg bg-slate-100 p-1">
+            <button
+              type="button"
+              onClick={showStackedView}
+              className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-xs font-bold ${viewMode === 'stacked' ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-slate-500'}`}
+            >
+              <BarChart3 size={15} /> Empilhado
+            </button>
+            <button
+              type="button"
+              onClick={showLineFromCurrentContext}
+              className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-xs font-bold ${viewMode === 'line' ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-slate-500'}`}
+            >
+              <LineChartIcon size={15} /> Linha
+            </button>
+          </div>
           <button type="button" onClick={() => setFilterOpen(true)} className="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-4 py-3 text-xs font-bold text-slate-600 md:hidden">
             <Filter size={16} /> Filtros
           </button>
@@ -1052,7 +1388,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
         </div>
       </div>
 
-      <div className="hidden md:block">{Filters}</div>
+      <div className="hidden md:block">{viewMode === 'line' ? LineFilters : Filters}</div>
 
       {filterOpen && (
         <div className="fixed inset-0 z-[140] flex items-end bg-black/30 p-3 md:hidden">
@@ -1061,7 +1397,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
               <p className="text-sm font-bold text-slate-900">Filtros</p>
               <button type="button" onClick={() => setFilterOpen(false)} className="rounded-lg bg-slate-100 p-2 text-slate-500"><X size={16} /></button>
             </div>
-            {Filters}
+            {viewMode === 'line' ? LineFilters : Filters}
           </div>
         </div>
       )}
@@ -1087,7 +1423,10 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
           <button
             key={tab.id}
             type="button"
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => {
+              setActiveTab(tab.id);
+              if (viewMode === 'line') setLineCategoryWithDefaults(lineCategoryForTab(tab.id));
+            }}
             className={`shrink-0 rounded-md px-4 py-2 text-xs font-bold transition-all ${activeTab === tab.id ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-slate-500'}`}
           >
             {tab.label}
@@ -1095,7 +1434,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
         ))}
       </div>
 
-      {metricPills.length > 0 && (
+      {viewMode === 'stacked' && metricPills.length > 0 && (
         <div className="flex gap-2 overflow-x-auto">
           {metricPills.map((id) => (
             <button
@@ -1181,7 +1520,101 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
         </div>
       )}
 
-      {isLoading ? (
+      {viewMode === 'line' ? (
+        lineLoading ? (
+          <div className="h-[420px] animate-pulse rounded-lg bg-slate-50" />
+        ) : lineChartRows.length > 0 ? (
+          <div className="rounded-lg border border-slate-100 bg-white p-4">
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-slate-900">
+                  Evolução clínica em linha
+                </p>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                  {selectedLineMetricOption?.label || lineAxisLabel} · {lineChartRows.length} ponto(s) · {lineGroupBy === 'week' ? 'por semana' : lineGroupBy === 'day' ? 'por dia' : 'por sessão'}
+                </p>
+              </div>
+              <LineChartIcon size={18} className="text-slate-300" />
+            </div>
+
+            <div className="mb-4 grid grid-cols-1 gap-2 md:grid-cols-4">
+              {[
+                { label: 'Valor atual', value: formatValue(lineSummary.currentValue, lineMetric) },
+                { label: 'Variação', value: lineSummary.delta === null || lineSummary.delta === undefined ? '-' : `${lineSummary.delta > 0 ? '+' : ''}${formatValue(lineSummary.delta, lineMetric)}` },
+                { label: 'Tendência', value: lineSummary.trend === 'improved' ? 'melhora' : lineSummary.trend === 'worsened' ? 'atenção' : lineSummary.trend === 'stable' ? 'estável' : 'dados insuficientes' },
+                { label: 'Última medição', value: lineSummary.lastMeasuredAt ? `${formatDate(lineSummary.lastMeasuredAt)} · ${lineSummary.lastSessionLabel || 'sessão'}` : '-' }
+              ].map((item) => (
+                <div key={item.label} className="rounded-lg border border-slate-100 bg-slate-50/70 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{item.label}</p>
+                  <p className="mt-1 truncate text-sm font-bold text-slate-900">{item.value}</p>
+                </div>
+              ))}
+            </div>
+
+            {linePhases.length > 0 && (
+              <div className="mb-3 flex flex-wrap gap-2">
+                {linePhases.slice(0, 6).map((phase: any) => (
+                  <span key={phase.id || phase.date || phase.label} className="rounded-full border border-violet-100 bg-violet-50 px-3 py-1 text-[10px] font-bold text-violet-700">
+                    {phase.label || 'Fase clínica'} · {formatDate(phase.date)}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div className="h-[380px] min-w-0 overflow-x-auto">
+              <div className="h-full" style={{ minWidth: lineMinWidth }}>
+                <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={340}>
+                  <LineChart data={lineChartRows} margin={{ top: 20, right: 24, left: 8, bottom: 52 }}>
+                    <CartesianGrid stroke="#EEF2F7" strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="x" tick={{ fill: '#64748B', fontSize: 10, fontWeight: 700 }} angle={-18} textAnchor="end" height={62} interval={0} />
+                    <YAxis
+                      tick={{ fill: '#94A3B8', fontSize: 11, fontWeight: 700 }}
+                      domain={percentMetrics.has(lineMetric) || isCompareResponses ? [0, 100] : ['auto', 'auto']}
+                      label={{ value: lineAxisLabel, angle: -90, position: 'insideLeft', fill: '#94A3B8', fontSize: 11, fontWeight: 700 }}
+                    />
+                    <Tooltip content={<ClinicalLineTooltip />} />
+                    <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />
+                    {lineGoalLines.map((annotation: any) => (
+                      <ReferenceLine key={annotation.id} y={Number(annotation.value)} stroke="#10B981" strokeDasharray="4 4" label={annotation.label} />
+                    ))}
+                    {lineXMarkers.map((annotation: any) => (
+                      <ReferenceLine key={annotation.id || `${annotation.x}-${annotation.label}`} x={annotation.x} stroke={annotation.annotation_type === 'CONDITION_LINE' ? '#7a32fc' : '#64748B'} strokeDasharray="4 4" label={annotation.label} />
+                    ))}
+                    {isCompareResponses ? (
+                      (['independencePct', 'promptedPct', 'errorPct', 'accuracyPct'] as const).map((key) => (
+                        <Line
+                          key={key}
+                          type="monotone"
+                          dataKey={key}
+                          name={clinicalLineLabels[key]}
+                          stroke={clinicalLineColors[key]}
+                          strokeWidth={key === 'accuracyPct' ? 3 : 2.5}
+                          dot={{ r: 4, strokeWidth: 2, stroke: '#fff' }}
+                          activeDot={{ r: 7 }}
+                          connectNulls
+                        />
+                      ))
+                    ) : (
+                      <Line
+                        type="monotone"
+                        dataKey="chartValue"
+                        name={selectedLineMetricOption?.label || clinicalLineLabels.value || 'Valor'}
+                        stroke={clinicalLineColors.value}
+                        strokeWidth={3}
+                        dot={{ r: 4, strokeWidth: 2, stroke: '#fff' }}
+                        activeDot={{ r: 7 }}
+                        connectNulls
+                      />
+                    )}
+                  </LineChart>
+                </SafeResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <EmptyState text={lineEmptyText} />
+        )
+      ) : isLoading ? (
         <div className="h-[360px] animate-pulse rounded-lg bg-slate-50" />
       ) : shouldRenderChart ? (
         <div className="rounded-lg border border-slate-100 bg-white p-4">

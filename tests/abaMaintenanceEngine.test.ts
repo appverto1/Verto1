@@ -194,6 +194,7 @@ test('migration cria tabelas, estados clinicos, schedules e alertas sem mutar ta
   assert.match(migrationSql, /aba_regression_alert_after_probe_result/i);
   assert.match(planningMigrationSql, /target_due_date/i);
   assert.match(planningMigrationSql, /appointment_id/i);
+  assert.match(planningMigrationSql, /alter table public\.appointments[\s\S]*add column if not exists deleted_at[\s\S]*add column if not exists is_active/i);
   assert.match(planningMigrationSql, /UNSCHEDULED/i);
   assert.match(planningMigrationSql, /aba_find_best_appointment_for_maintenance_probe/i);
   assert.doesNotMatch(migrationSql, /update\s+public\.aba_targets[\s\S]{0,220}REGRESSION_CONFIRMED/i);

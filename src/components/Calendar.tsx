@@ -33,30 +33,146 @@ import {
 import { dataService } from '../services/dataService';
 import { formatMinutesHuman, getActualDurationMinutes, getAppointmentDurationMinutes } from '../utils/scheduling';
 
-const normalizeAgendaStatus = (status: any) => String(status || 'pending').toLowerCase();
+const normalizeAppointmentStatusKey = (status: any) =>
+  String(status || 'scheduled')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+const canonicalAppointmentStatus = (status: any) => {
+  const normalized = normalizeAppointmentStatusKey(status);
+  if (normalized.includes('PENDING') || normalized === 'PENDENTE') return 'PENDING_CONFIRMATION';
+  if (normalized.includes('CONFIRM')) return 'CONFIRMED';
+  if (normalized.includes('RESCHEDULE_REQUEST')) return 'RESCHEDULE_REQUESTED';
+  if (normalized === 'RESCHEDULE' || normalized === 'REMARCAR' || normalized.includes('REMARCACAO_SOLICITADA')) return 'RESCHEDULE_REQUESTED';
+  if (normalized.includes('RESCHEDULED') || normalized.includes('REMARCADA')) return 'RESCHEDULED';
+  if (normalized.includes('CANCEL_REQUEST') || normalized.includes('CANCELAMENTO_SOLICITADO')) return 'CANCEL_REQUESTED';
+  if (normalized.includes('CANCEL')) return 'CANCELLED';
+  if (normalized.includes('PROGRESS') || normalized.includes('ANDAMENTO')) return 'IN_PROGRESS';
+  if (normalized.includes('COMPLET') || normalized.includes('CONCLUID')) return 'COMPLETED';
+  if (normalized.includes('NO_SHOW') || normalized.includes('MISSED') || normalized.includes('FALTA') || normalized.includes('FALTOU')) return 'NO_SHOW';
+  return 'SCHEDULED';
+};
+
+export const getAppointmentStatusLabel = (status: any) => {
+  const canonical = canonicalAppointmentStatus(status);
+  const labels: Record<string, string> = {
+    SCHEDULED: 'Agendada',
+    PENDING_CONFIRMATION: 'Pendente',
+    CONFIRMED: 'Confirmada',
+    RESCHEDULE_REQUESTED: 'Remarcação solicitada',
+    RESCHEDULED: 'Remarcada',
+    CANCEL_REQUESTED: 'Cancelamento solicitado',
+    CANCELLED: 'Cancelada',
+    IN_PROGRESS: 'Em andamento',
+    COMPLETED: 'Concluída',
+    NO_SHOW: 'Falta'
+  };
+  return labels[canonical] || labels.SCHEDULED;
+};
+
+export const getAppointmentStatusColor = (status: any) => {
+  const canonical = canonicalAppointmentStatus(status);
+  const colors: Record<string, any> = {
+    SCHEDULED: {
+      canonical,
+      dot: 'bg-slate-400',
+      badge: 'border-slate-200 bg-slate-100 text-slate-600',
+      soft: 'border-slate-200 bg-white text-slate-800',
+      text: 'text-slate-600',
+      icon: Clock
+    },
+    PENDING_CONFIRMATION: {
+      canonical,
+      dot: 'bg-sky-400',
+      badge: 'border-sky-200 bg-sky-50 text-sky-700',
+      soft: 'border-sky-100 bg-sky-50/70 text-sky-950',
+      text: 'text-sky-700',
+      icon: Clock
+    },
+    CONFIRMED: {
+      canonical,
+      dot: 'bg-emerald-500',
+      badge: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+      soft: 'border-emerald-100 bg-emerald-50/70 text-emerald-950',
+      text: 'text-emerald-700',
+      icon: CheckCircle2
+    },
+    RESCHEDULE_REQUESTED: {
+      canonical,
+      dot: 'bg-amber-500',
+      badge: 'border-amber-200 bg-amber-50 text-amber-700',
+      soft: 'border-amber-100 bg-amber-50/70 text-amber-950',
+      text: 'text-amber-700',
+      icon: RefreshCcw
+    },
+    RESCHEDULED: {
+      canonical,
+      dot: 'bg-orange-500',
+      badge: 'border-orange-200 bg-orange-50 text-orange-700',
+      soft: 'border-orange-100 bg-orange-50/70 text-orange-950',
+      text: 'text-orange-700',
+      icon: RefreshCcw
+    },
+    CANCEL_REQUESTED: {
+      canonical,
+      dot: 'bg-rose-500',
+      badge: 'border-rose-200 bg-rose-50 text-rose-700',
+      soft: 'border-rose-100 bg-rose-50/70 text-rose-950',
+      text: 'text-rose-700',
+      icon: Ban
+    },
+    CANCELLED: {
+      canonical,
+      dot: 'bg-red-500',
+      badge: 'border-red-200 bg-red-50 text-red-700',
+      soft: 'border-red-100 bg-red-50/70 text-red-950',
+      text: 'text-red-700',
+      icon: Ban
+    },
+    IN_PROGRESS: {
+      canonical,
+      dot: 'bg-violet-500',
+      badge: 'border-violet-200 bg-violet-50 text-violet-700',
+      soft: 'border-violet-100 bg-violet-50/70 text-violet-950',
+      text: 'text-violet-700',
+      icon: Play
+    },
+    COMPLETED: {
+      canonical,
+      dot: 'bg-emerald-600',
+      badge: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+      soft: 'border-emerald-100 bg-emerald-50/60 text-emerald-950',
+      text: 'text-emerald-700',
+      icon: CheckCircle2
+    },
+    NO_SHOW: {
+      canonical,
+      dot: 'bg-pink-500',
+      badge: 'border-pink-200 bg-pink-50 text-pink-700',
+      soft: 'border-pink-100 bg-pink-50/70 text-pink-950',
+      text: 'text-pink-700',
+      icon: AlertCircle
+    }
+  };
+  return colors[canonical] || colors.SCHEDULED;
+};
+
+const normalizeAgendaStatus = (status: any) => canonicalAppointmentStatus(status).toLowerCase();
 
 const getAgendaStatusDotClass = (status: any) => {
-  const normalized = normalizeAgendaStatus(status);
-  if (normalized === 'confirmed') return 'bg-green-500';
-  if (normalized === 'reschedule') return 'bg-amber-500';
-  if (normalized === 'canceled' || normalized === 'cancelled') return 'bg-red-500';
-  return 'bg-yellow-500';
+  return getAppointmentStatusColor(status).dot;
 };
 
 const getAgendaStatusBadgeClass = (status: any) => {
-  const normalized = normalizeAgendaStatus(status);
-  if (normalized === 'confirmed') return 'bg-green-100 text-green-600';
-  if (normalized === 'reschedule') return 'bg-amber-100 text-amber-700';
-  if (normalized === 'canceled' || normalized === 'cancelled') return 'bg-red-100 text-red-600';
-  return 'bg-yellow-100 text-yellow-600';
+  return getAppointmentStatusColor(status).badge;
 };
 
 const getAgendaStatusLabel = (status: any) => {
-  const normalized = normalizeAgendaStatus(status);
-  if (normalized === 'confirmed') return 'Conf';
-  if (normalized === 'reschedule') return 'Remarcar';
-  if (normalized === 'canceled' || normalized === 'cancelled') return 'Canc';
-  return 'Pend';
+  return getAppointmentStatusLabel(status);
 };
 
 export const CalendarWidget = ({ agenda, currentDate, onDateChange, onDateSelect, theme = 'light' }: any) => {
@@ -204,9 +320,13 @@ const CLINICAL_SESSION_TYPES = [
 
 const CLINICAL_STATUS_OPTIONS = [
   { value: 'scheduled', label: 'Agendada' },
+  { value: 'pending', label: 'Pendente' },
   { value: 'confirmed', label: 'Confirmada' },
+  { value: 'reschedule', label: 'Remarcação solicitada' },
+  { value: 'rescheduled', label: 'Remarcada' },
   { value: 'in_progress', label: 'Em andamento' },
   { value: 'completed', label: 'Concluída' },
+  { value: 'no_show', label: 'Falta' },
   { value: 'missed', label: 'Faltou' },
   { value: 'canceled', label: 'Cancelada' },
   { value: 'session_registered', label: 'Sessão registrada' },
@@ -215,7 +335,7 @@ const CLINICAL_STATUS_OPTIONS = [
 ];
 
 const LOCATION_FILTERS = [
-  { value: 'sala', label: 'Sala', icon: MapPin },
+  { value: 'sala', label: 'Clínica', icon: MapPin },
   { value: 'online', label: 'Online', icon: Monitor },
   { value: 'domicilio', label: 'Domicílio', icon: Home },
   { value: 'escola', label: 'Escola', icon: Users },
@@ -311,23 +431,8 @@ const getSessionTypeStyle = (type: any) => {
 };
 
 const getClinicalStatusStyle = (status: any, event?: any) => {
-  const normalized = removeDiacritics(status || '');
-  if (event?.has_session_record || normalized.includes('completed') || normalized.includes('conclu')) {
-    return { label: 'Registrada', className: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: CheckCircle2 };
-  }
-  if (normalized.includes('confirm')) {
-    return { label: 'Confirmada', className: 'bg-sky-100 text-sky-700 border-sky-200', icon: CheckCircle2 };
-  }
-  if (normalized.includes('progress') || normalized.includes('andamento')) {
-    return { label: 'Em andamento', className: 'bg-indigo-100 text-indigo-700 border-indigo-200', icon: Play };
-  }
-  if (normalized.includes('miss') || normalized.includes('falt')) {
-    return { label: 'Faltou', className: 'bg-orange-100 text-orange-700 border-orange-200', icon: AlertCircle };
-  }
-  if (normalized.includes('cancel')) {
-    return { label: 'Cancelada', className: 'bg-rose-100 text-rose-700 border-rose-200', icon: Ban };
-  }
-  return { label: 'Agendada', className: 'bg-slate-100 text-slate-600 border-slate-200', icon: Clock };
+  const color = getAppointmentStatusColor(status);
+  return { label: getAppointmentStatusLabel(status), className: color.badge, icon: color.icon };
 };
 
 const pad2 = (value: number) => String(value).padStart(2, '0');
@@ -379,16 +484,87 @@ const parseEventEnd = (event: any, start: Date) => {
   return new Date(start.getTime() + (Number.isFinite(duration) && duration > 0 ? duration : 50) * 60 * 1000);
 };
 
+const normalizeRoomSpecialties = (value: any): string[] => {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 6);
+  }
+  return String(value || '')
+    .split(/[,;|]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+};
+
+const looksLikeTechnicalId = (value: any) => {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)) return true;
+  if (/^[0-9a-f]{20,}$/i.test(text)) return true;
+  if (/^(clinic_room|room|sala)_[0-9a-f-]{8,}$/i.test(text)) return true;
+  return false;
+};
+
+const sanitizeHumanRoomName = (value: any) => {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text && !looksLikeTechnicalId(text) ? text : '';
+};
+
+const locationTypeLabel = (value: any) => {
+  const normalized = removeDiacritics(value || '');
+  if (normalized.includes('online') || normalized.includes('remoto')) return 'Online';
+  if (normalized.includes('domic')) return 'Domicílio';
+  if (normalized.includes('escola')) return 'Escola';
+  if (normalized.includes('clinica') || normalized.includes('sala')) return 'Clínica';
+  if (normalized.includes('outro')) return 'Outro';
+  return 'Local não informado';
+};
+
+const resolveRoomInfo = (event: any, roomLookup?: Map<string, any>) => {
+  const roomId = String(event?.room_id || event?.roomId || '').trim();
+  const matchedRoom = roomId ? roomLookup?.get(roomId) : null;
+  const locationType = event?.location_type || event?.locationType || event?.location || (roomId ? 'clinica' : '');
+  const locationLabel = event?.location_label || event?.locationLabel || locationTypeLabel(locationType);
+  const roomName =
+    sanitizeHumanRoomName(event?.room_name) ||
+    sanitizeHumanRoomName(event?.roomName) ||
+    sanitizeHumanRoomName(event?.roomDisplayName) ||
+    sanitizeHumanRoomName(matchedRoom?.name) ||
+    sanitizeHumanRoomName(event?.room);
+  const roomSpecialties = normalizeRoomSpecialties(
+    event?.room_specialties ||
+    event?.roomSpecialties ||
+    matchedRoom?.specialties ||
+    matchedRoom?.specialty ||
+    matchedRoom?.description
+  );
+  const isClinic = removeDiacritics(locationType || locationLabel).includes('clinic') || removeDiacritics(locationType || locationLabel).includes('sala') || Boolean(roomId);
+  const safeRoomName = roomName || (isClinic ? (roomId ? 'Sala não identificada' : 'Sala não informada') : '');
+  return {
+    roomId: roomId || null,
+    roomName: safeRoomName,
+    roomSpecialties,
+    locationType: locationType || (isClinic ? 'clinica' : ''),
+    locationLabel,
+    roomDisplay: safeRoomName || locationLabel || 'Não informado'
+  };
+};
+
+const getRoomDisplayLine = (event: any) => {
+  const specialties = normalizeRoomSpecialties(event?.roomSpecialties || event?.room_specialties);
+  if (event?.roomName) return specialties.length ? `${specialties[0]} · ${event.roomName}` : event.roomName;
+  return event?.locationLabel || event?.location || 'Não informado';
+};
+
 const classifyLocation = (event: any) => {
-  const value = removeDiacritics(`${event?.location || ''} ${event?.room || ''} ${event?.roomDisplayName || ''}`);
+  const value = removeDiacritics(`${event?.location || ''} ${event?.location_type || ''} ${event?.room || ''} ${event?.room_name || ''} ${event?.roomDisplayName || ''}`);
   if (value.includes('online') || value.includes('remoto')) return 'online';
   if (value.includes('domic')) return 'domicilio';
   if (value.includes('escola')) return 'escola';
-  if (value.includes('sala') || event?.room || event?.roomDisplayName) return 'sala';
+  if (value.includes('clinica') || value.includes('sala') || event?.room_id || event?.room || event?.room_name || event?.roomDisplayName) return 'sala';
   return 'outro';
 };
 
-const normalizeClinicalEvent = (event: any) => {
+const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
   const start = parseEventStart(event);
   const end = parseEventEnd(event, start);
   const patientName = event?.patient_name || event?.patientName || event?.name || 'Paciente';
@@ -396,7 +572,7 @@ const normalizeClinicalEvent = (event: any) => {
   const patientId = event?.patient_id || event?.patientId || null;
   const therapistId = event?.therapist_id || event?.therapistId || event?.professionalId || null;
   const type = event?.type || event?.approach || 'Sessão';
-  const room = event?.room || event?.roomDisplayName || event?.roomName || '';
+  const roomInfo = resolveRoomInfo(event, roomLookup);
   const normalized = {
     ...event,
     id: String(event?.id || `${patientName}-${start.toISOString()}`),
@@ -410,8 +586,18 @@ const normalizeClinicalEvent = (event: any) => {
     therapistName,
     type,
     status: event?.status || 'scheduled',
-    room,
+    room: roomInfo.roomName,
+    roomId: roomInfo.roomId,
+    room_id: roomInfo.roomId,
+    roomName: roomInfo.roomName,
+    room_name: roomInfo.roomName,
+    roomSpecialties: roomInfo.roomSpecialties,
+    room_specialties: roomInfo.roomSpecialties,
     location: event?.location || classifyLocation(event),
+    locationType: roomInfo.locationType,
+    location_type: roomInfo.locationType,
+    locationLabel: roomInfo.locationLabel,
+    location_label: roomInfo.locationLabel,
     start,
     end,
     date: toDateKey(start),
@@ -449,7 +635,7 @@ export const ClinicalAgendaBoard = ({
   teamMembers = [],
   currentUser = null,
   currentDate,
-  view = 'week',
+  view = 'month',
   onDateChange,
   onViewChange,
   onCreateAppointment,
@@ -474,13 +660,23 @@ export const ClinicalAgendaBoard = ({
   const [alertsOnly, setAlertsOnly] = useState(false);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
   const [timeReportsOpen, setTimeReportsOpen] = useState(false);
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
-    calendar: true,
-    team: true,
-    patients: true,
-    location: true,
-    type: true,
-    status: false
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => {
+    const defaults = {
+      calendar: true,
+      team: true,
+      patients: true,
+      location: false,
+      type: false,
+      status: false
+    };
+    if (typeof window === 'undefined') return defaults;
+    try {
+      const saved = window.localStorage.getItem('calendar:filterSections');
+      const parsed = saved ? JSON.parse(saved) : null;
+      return parsed && typeof parsed === 'object' ? { ...defaults, ...parsed } : defaults;
+    } catch {
+      return defaults;
+    }
   });
   const [remoteEvents, setRemoteEvents] = useState<any[]>([]);
   const [remoteState, setRemoteState] = useState<{ loading: boolean; error: string; loaded: boolean }>({
@@ -489,9 +685,30 @@ export const ClinicalAgendaBoard = ({
     loaded: false
   });
   const [selectedEvent, setSelectedEvent] = useState<any>(null);
+  const [selectedDayKeyForPanel, setSelectedDayKeyForPanel] = useState('');
+  const [statusActionEvent, setStatusActionEvent] = useState<any>(null);
   const [eventDetail, setEventDetail] = useState<any>(null);
   const [detailState, setDetailState] = useState<{ loading: boolean; error: string }>({ loading: false, error: '' });
   const cacheRef = useRef<Map<string, any[]>>(new Map());
+  const roomLookup = useMemo(() => {
+    const map = new Map<string, any>();
+    (rooms || []).forEach((room: any) => {
+      const id = String(room?.id || '').trim();
+      if (id) map.set(id, room);
+      const name = sanitizeHumanRoomName(room?.name);
+      if (name) map.set(name, room);
+    });
+    return map;
+  }, [rooms]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem('calendar:filterSections', JSON.stringify(expandedSections));
+    } catch {
+      // Local preference only; ignore storage failures.
+    }
+  }, [expandedSections]);
 
   const visibleRange = useMemo(() => {
     if (view === 'month') {
@@ -525,13 +742,18 @@ export const ClinicalAgendaBoard = ({
 
   useEffect(() => {
     let cancelled = false;
+    const selectedRoomIds = selectedLocations.filter((item) => item.startsWith('room:')).map((item) => item.slice(5)).filter(Boolean);
+    const selectedLocationTypes = selectedLocations.filter((item) => !item.startsWith('room:'));
     const params = {
       from: visibleRange.start.toISOString(),
       to: visibleRange.end.toISOString(),
+      view,
       therapistId: selectedTherapistIds.join(','),
       patientId: selectedPatientIds.join(','),
       type: selectedTypes.join(','),
       status: selectedStatuses.join(','),
+      roomId: selectedRoomIds.join(','),
+      locationType: selectedLocationTypes.join(','),
       limit: 180
     };
     const key = JSON.stringify(params);
@@ -564,14 +786,16 @@ export const ClinicalAgendaBoard = ({
   }, [
     visibleRange.start,
     visibleRange.end,
+    view,
     selectedTherapistIds.join(','),
     selectedPatientIds.join(','),
     selectedTypes.join(','),
-    selectedStatuses.join(',')
+    selectedStatuses.join(','),
+    selectedLocations.join(',')
   ]);
 
-  const localEvents = useMemo(() => (agenda || []).map(normalizeClinicalEvent), [agenda]);
-  const serverEvents = useMemo(() => (remoteEvents || []).map(normalizeClinicalEvent), [remoteEvents]);
+  const localEvents = useMemo(() => (agenda || []).map((event: any) => normalizeClinicalEvent(event, roomLookup)), [agenda, roomLookup]);
+  const serverEvents = useMemo(() => (remoteEvents || []).map((event: any) => normalizeClinicalEvent(event, roomLookup)), [remoteEvents, roomLookup]);
   const baseEvents = remoteState.loaded ? serverEvents : localEvents;
 
   const selectedDateKey = toDateKey(activeDate);
@@ -599,7 +823,11 @@ export const ClinicalAgendaBoard = ({
         if (selectedTherapistIds.length > 0 && !selectedTherapistIds.includes(String(event.therapist_id || ''))) return false;
         if (selectedPatientIds.length > 0 && !selectedPatientIds.includes(String(event.patient_id || ''))) return false;
         if (selectedTypes.length > 0 && !selectedTypes.some((type) => removeDiacritics(event.type) === removeDiacritics(type))) return false;
-        if (selectedLocations.length > 0 && !selectedLocations.includes(classifyLocation(event))) return false;
+        if (selectedLocations.length > 0) {
+          const roomFilter = event.roomId ? `room:${event.roomId}` : '';
+          const locationMatches = selectedLocations.includes(classifyLocation(event)) || selectedLocations.includes(event.locationType) || (roomFilter && selectedLocations.includes(roomFilter));
+          if (!locationMatches) return false;
+        }
         if (selectedStatuses.length > 0) {
           const status = removeDiacritics(event.status);
           const matches = selectedStatuses.some((item) => {
@@ -643,6 +871,16 @@ export const ClinicalAgendaBoard = ({
     const pending = filteredEvents.filter((event: any) => event.has_pending_signature || (!event.has_report && removeDiacritics(event.status).includes('conclu'))).length;
     return { total, registered, plan, probes, pending };
   }, [filteredEvents]);
+  const headerKpis = useMemo(() => {
+    const items = [
+      { label: 'Sessões', value: kpis.total, icon: BarChart3, color: 'text-slate-700', bg: 'bg-slate-100' },
+      { label: 'Registradas', value: kpis.registered, icon: CheckCircle2, color: 'text-emerald-700', bg: 'bg-emerald-100' },
+      { label: 'Plano', value: kpis.plan, icon: Zap, color: 'text-violet-700', bg: 'bg-violet-100' },
+      { label: 'Probes', value: kpis.probes, icon: AlertCircle, color: 'text-amber-700', bg: 'bg-amber-100' },
+      { label: 'Pendências', value: kpis.pending, icon: ClipboardCheck, color: 'text-rose-700', bg: 'bg-rose-100' }
+    ];
+    return items.filter((item) => item.label === 'Sessões' || item.value > 0);
+  }, [kpis]);
 
   const timeReports = useMemo(() => {
     const byPatient = new Map<string, any>();
@@ -675,8 +913,9 @@ export const ClinicalAgendaBoard = ({
       professionalRow.days.add(event.date);
       byProfessional.set(professionalKey, professionalRow);
 
+      const roomReportLabel = event.roomName || event.room || event.locationLabel || event.location || 'Sem sala/local';
       byServiceType.set(event.type || 'Sessão', (byServiceType.get(event.type || 'Sessão') || 0) + scheduled);
-      byRoom.set(event.room || event.location || 'Sem sala/local', (byRoom.get(event.room || event.location || 'Sem sala/local') || 0) + scheduled);
+      byRoom.set(roomReportLabel, (byRoom.get(roomReportLabel) || 0) + scheduled);
     });
 
     const topPatients = Array.from(byPatient.values()).sort((a: any, b: any) => b.scheduledMinutes - a.scheduledMinutes).slice(0, 4);
@@ -727,6 +966,20 @@ export const ClinicalAgendaBoard = ({
         setDetailState({ loading: false, error: result?.error || 'Não foi possível carregar os detalhes da sessão agora.' });
       })
       .catch(() => setDetailState({ loading: false, error: 'Não foi possível carregar os detalhes da sessão agora.' }));
+  };
+
+  const openDayPanel = (dateKey: string) => {
+    const date = dateFromKey(dateKey);
+    onDateChange?.(date);
+    setSelectedDayKeyForPanel(dateKey);
+  };
+
+  const handleStatusAction = (event: any, action: 'confirm' | 'reschedule' | 'cancel') => {
+    const normalized = normalizeClinicalEvent(event, roomLookup);
+    if (action === 'confirm') onConfirmAppointment?.(normalized);
+    if (action === 'reschedule') onEditAppointment?.(normalized);
+    if (action === 'cancel') onCancelAppointment?.(normalized);
+    setStatusActionEvent(null);
   };
 
   const renderSection = (id: string, title: string, count: number | null, children: React.ReactNode) => {
@@ -887,21 +1140,45 @@ export const ClinicalAgendaBoard = ({
         </div>
       ))}
       {renderSection('location', 'Local/Sala', selectedLocations.length, (
-        <div className="flex flex-wrap gap-2">
-          {LOCATION_FILTERS.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button key={item.value} type="button" onClick={() => setSelectedLocations((prev) => toggleArrayValue(prev, item.value))} className={chipClass(selectedLocations.includes(item.value))}>
-                <Icon size={13} />
-                {item.label}
-              </button>
-            );
-          })}
-          {(rooms || []).slice(0, 4).map((room: any) => (
-            <span key={room.id || room.name} className={`rounded-xl px-3 py-2 text-xs font-semibold ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-500'}`}>
-              {room.name}
-            </span>
-          ))}
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {LOCATION_FILTERS.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button key={item.value} type="button" onClick={() => setSelectedLocations((prev) => toggleArrayValue(prev, item.value))} className={chipClass(selectedLocations.includes(item.value))}>
+                  <Icon size={13} />
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+          <div>
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Salas da clínica</p>
+            <div className="flex flex-wrap gap-2">
+              {(rooms || [])
+                .filter((room: any) => room?.is_active !== false && room?.isActive !== false)
+                .slice(0, 12)
+                .map((room: any) => {
+                  const roomKey = `room:${room.id}`;
+                  const specialties = normalizeRoomSpecialties(room.specialties || room.specialty);
+                  return (
+                    <button
+                      key={room.id || room.name}
+                      type="button"
+                      onClick={() => setSelectedLocations((prev) => toggleArrayValue(prev, roomKey))}
+                      className={chipClass(selectedLocations.includes(roomKey))}
+                    >
+                      <MapPin size={13} />
+                      <span className="max-w-[150px] truncate">
+                        {sanitizeHumanRoomName(room.name) || 'Sala não identificada'}
+                        {specialties[0] ? ` · ${specialties[0]}` : ''}
+                      </span>
+                    </button>
+                  );
+                })}
+              {(rooms || []).length === 0 && <p className="text-xs font-semibold text-slate-400">Nenhuma sala ativa cadastrada.</p>}
+            </div>
+          </div>
         </div>
       ))}
       {renderSection('type', 'Tipo de sessão', selectedTypes.length, (
@@ -951,6 +1228,10 @@ export const ClinicalAgendaBoard = ({
     });
     return grouped;
   }, [filteredEvents]);
+  const selectedDayPanelEvents = selectedDayKeyForPanel ? eventsByDate[selectedDayKeyForPanel] || [] : [];
+  const selectedDayPanelLabel = selectedDayKeyForPanel
+    ? dateFromKey(selectedDayKeyForPanel).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    : '';
 
   const renderIndicators = (event: any) => {
     const indicators = [
@@ -979,6 +1260,7 @@ export const ClinicalAgendaBoard = ({
   const renderEventCard = (event: any, compact = false) => {
     const style = getSessionTypeStyle(event.type);
     const status = getClinicalStatusStyle(event.status, event);
+    const statusColor = getAppointmentStatusColor(event.status);
     const StatusIcon = status.icon;
     return (
       <button
@@ -988,9 +1270,9 @@ export const ClinicalAgendaBoard = ({
           clickEvent.stopPropagation();
           openEventDetail(event);
         }}
-        className={`group relative w-full overflow-hidden rounded-xl border p-2 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${style.card}`}
+        className={`group relative w-full overflow-hidden rounded-xl border p-2 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${statusColor.soft}`}
       >
-        <span className={`absolute inset-y-0 left-0 w-1 ${style.stripe}`} />
+        <span className={`absolute inset-y-0 left-0 w-1 ${statusColor.dot}`} />
         <div className="pl-1">
           <div className="flex items-start justify-between gap-2">
             <span className="text-[10px] font-semibold leading-tight opacity-75">
@@ -1003,7 +1285,8 @@ export const ClinicalAgendaBoard = ({
           </div>
           <p className={`mt-1 truncate text-sm font-semibold leading-tight ${compact ? 'text-xs' : ''}`}>{event.patientName}</p>
           <p className="mt-1 truncate text-[11px] font-medium opacity-75">
-            {style.label} {event.room ? `· ${event.room}` : event.location ? `· ${event.location}` : ''}
+            <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${style.badge}`}>{style.label}</span>
+            <span className="ml-1">{getRoomDisplayLine(event)}</span>
           </p>
           {!compact && <p className="mt-1 truncate text-[10px] opacity-65">{event.therapistName}</p>}
           {!compact && renderIndicators(event)}
@@ -1123,48 +1406,87 @@ export const ClinicalAgendaBoard = ({
     const dayCells = Array.from({ length: daysInMonth }, (_, index) => index + 1);
     const trailingBlanks = Array.from({ length: Math.max(0, 42 - blanks.length - dayCells.length) }, (_, index) => index);
     return (
-      <div className={`flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border p-3 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-slate-200 bg-white'}`}>
-        <div className="grid shrink-0 grid-cols-7 gap-2 pb-2 text-center text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+      <div className={`flex h-full min-h-0 flex-col overflow-hidden rounded-[22px] border p-2 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-slate-200 bg-white'}`}>
+        <div className="grid shrink-0 grid-cols-7 gap-1.5 pb-2 text-center text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
           {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((day) => <span key={day}>{day}</span>)}
         </div>
-        <div className="grid min-h-0 flex-1 grid-cols-7 grid-rows-6 gap-2">
-          {blanks.map((blank) => <div key={`month-blank-${blank}`} className="min-h-0" />)}
+        <div className="grid min-h-0 flex-1 grid-cols-7 grid-rows-6 gap-1.5">
+          {blanks.map((blank) => <div key={`month-blank-${blank}`} className={`min-h-0 rounded-xl border ${isDark ? 'border-slate-900 bg-slate-900/40' : 'border-slate-50 bg-slate-50/40'}`} />)}
           {dayCells.map((day) => {
             const date = new Date(year, month, day);
             const key = toDateKey(date);
             const items = eventsByDate[key] || [];
+            const isToday = key === toDateKey(new Date());
+            const visibleItems = items.slice(0, 10);
             return (
-              <button
+              <div
                 key={key}
-                type="button"
+                role="button"
+                tabIndex={0}
                 onClick={() => {
                   onDateChange?.(date);
-                  onViewChange?.('day');
+                  if (items.length > 10) openDayPanel(key);
+                  else onCreateAppointment?.(key, '08:00');
                 }}
-                className={`min-h-0 overflow-hidden rounded-2xl border p-2 text-left transition-all ${
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return;
+                  event.preventDefault();
+                  if (items.length > 10) openDayPanel(key);
+                  else onCreateAppointment?.(key, '08:00');
+                }}
+                className={`flex min-h-0 cursor-pointer flex-col overflow-hidden rounded-xl border p-2 text-left transition-all ${
                   key === selectedDateKey
                     ? 'border-[#7a32fc]/40 bg-[#7a32fc]/5'
-                    : isDark ? 'border-slate-800 bg-slate-900 hover:bg-slate-800' : 'border-slate-100 bg-slate-50/60 hover:bg-white'
+                    : isToday
+                      ? isDark ? 'border-sky-500/40 bg-sky-500/10' : 'border-sky-200 bg-sky-50/60'
+                      : isDark ? 'border-slate-800 bg-slate-900 hover:bg-slate-800' : 'border-slate-100 bg-slate-50/60 hover:bg-white'
                 }`}
               >
-                <span className={`text-xs font-bold ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>{day}</span>
-                <div className="mt-1.5 space-y-1">
-                  {items.slice(0, 2).map((event: any) => {
-                    const style = getSessionTypeStyle(event.type);
-                    const status = getClinicalStatusStyle(event.status, event);
+                <div className="mb-1 flex shrink-0 items-center justify-between gap-2">
+                  <span className={`text-xs font-bold ${isToday ? 'text-[#7a32fc]' : isDark ? 'text-slate-200' : 'text-slate-700'}`}>{day}</span>
+                  {items.length > 0 && (
+                    <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-500'}`}>
+                      {items.length}
+                    </span>
+                  )}
+                </div>
+                <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1 custom-scrollbar">
+                  {visibleItems.map((event: any) => {
+                    const statusColor = getAppointmentStatusColor(event.status);
                     return (
-                      <span key={event.id} className={`block truncate rounded-lg border px-2 py-1 text-[10px] font-semibold ${status.className}`}>
-                        <span className={`mr-1 inline-block h-1.5 w-1.5 rounded-full ${style.stripe}`} />
-                        {event.time} {event.patientName}
-                      </span>
+                      <button
+                        key={event.id}
+                        type="button"
+                        title={`${event.time} ${event.patientName}${event.type ? ` · ${event.type}` : ''}${getRoomDisplayLine(event) ? ` · ${getRoomDisplayLine(event)}` : ''}`}
+                        onClick={(clickEvent) => {
+                          clickEvent.stopPropagation();
+                          openEventDetail(event);
+                        }}
+                        className={`flex w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-[10px] font-semibold leading-tight transition-colors ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-white'}`}
+                      >
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusColor.dot}`} />
+                        <span className="shrink-0 tabular-nums">{event.time}</span>
+                        <span className="min-w-0 truncate">{event.patientName}</span>
+                      </button>
                     );
                   })}
-                  {items.length > 2 && <span className="block text-[10px] font-bold text-slate-400">+{items.length - 2} sessões</span>}
                 </div>
-              </button>
+                {items.length > 10 && (
+                  <button
+                    type="button"
+                    onClick={(clickEvent) => {
+                      clickEvent.stopPropagation();
+                      openDayPanel(key);
+                    }}
+                    className={`mt-1 shrink-0 rounded-md px-1 py-0.5 text-left text-[10px] font-bold ${isDark ? 'text-violet-300 hover:bg-slate-800' : 'text-[#7a32fc] hover:bg-violet-50'}`}
+                  >
+                    ver mais
+                  </button>
+                )}
+              </div>
             );
           })}
-          {trailingBlanks.map((blank) => <div key={`month-trailing-${blank}`} className="min-h-0" />)}
+          {trailingBlanks.map((blank) => <div key={`month-trailing-${blank}`} className={`min-h-0 rounded-xl border ${isDark ? 'border-slate-900 bg-slate-900/40' : 'border-slate-50 bg-slate-50/40'}`} />)}
         </div>
       </div>
     );
@@ -1185,7 +1507,7 @@ export const ClinicalAgendaBoard = ({
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-[#7a32fc]">Agenda clínica</p>
-            <h2 className="mt-0.5 text-xl font-bold tracking-tight">Operação da agenda</h2>
+            <h2 className="mt-0.5 text-xl font-bold tracking-tight">Agenda operacional</h2>
             <p className={`mt-0.5 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>Sessões, status e pendências com a agenda sempre à vista.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -1231,13 +1553,7 @@ export const ClinicalAgendaBoard = ({
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {[
-            { label: 'Sessões', value: kpis.total, icon: BarChart3, color: 'text-slate-700', bg: 'bg-slate-100' },
-            { label: 'Registradas', value: kpis.registered, icon: CheckCircle2, color: 'text-emerald-700', bg: 'bg-emerald-100' },
-            { label: 'Plano', value: kpis.plan, icon: Zap, color: 'text-violet-700', bg: 'bg-violet-100' },
-            { label: 'Probes', value: kpis.probes, icon: AlertCircle, color: 'text-amber-700', bg: 'bg-amber-100' },
-            { label: 'Pendências', value: kpis.pending, icon: ClipboardCheck, color: 'text-rose-700', bg: 'bg-rose-100' }
-          ].map((item) => {
+          {headerKpis.map((item) => {
             const Icon = item.icon;
             return (
               <span key={item.label} className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-200' : 'border-slate-100 bg-slate-50/80 text-slate-700'}`}>
@@ -1281,7 +1597,7 @@ export const ClinicalAgendaBoard = ({
           <div className="hidden min-h-0 flex-1 xl:block">
             {view === 'month' ? renderMonthView() : renderTimeline(view === 'day' ? [activeDate] : weekDays)}
           </div>
-          {filteredEvents.length === 0 && !remoteState.loading && (
+          {view !== 'month' && filteredEvents.length === 0 && !remoteState.loading && (
             <div className={`rounded-3xl border border-dashed px-6 py-10 text-center ${isDark ? 'border-slate-700 bg-slate-900 text-slate-400' : 'border-slate-200 bg-white text-slate-400'}`}>
               <Stethoscope className="mx-auto mb-3" size={24} />
               <p className="text-sm font-semibold">
@@ -1327,6 +1643,90 @@ export const ClinicalAgendaBoard = ({
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedDayKeyForPanel && (
+        <div className="fixed inset-0 z-[142] flex items-end justify-center bg-black/35 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => setSelectedDayKeyForPanel('')}>
+          <div className={`max-h-[88vh] w-full max-w-3xl overflow-hidden rounded-t-[28px] shadow-2xl sm:rounded-[28px] ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`} onClick={(event) => event.stopPropagation()}>
+            <div className={`flex items-start justify-between gap-4 border-b p-5 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">Dia selecionado</p>
+                <h3 className="text-lg font-bold">Consultas de {selectedDayPanelLabel}</h3>
+                <p className={`mt-1 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{selectedDayPanelEvents.length} consulta(s) no período visível.</p>
+              </div>
+              <button type="button" onClick={() => setSelectedDayKeyForPanel('')} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Fechar consultas do dia">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="max-h-[62vh] overflow-y-auto p-4 custom-scrollbar">
+              <div className="space-y-2">
+                {selectedDayPanelEvents.map((event: any) => {
+                  const statusColor = getAppointmentStatusColor(event.status);
+                  return (
+                    <div key={event.id} className={`rounded-2xl border p-3 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/70'}`}>
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`h-2.5 w-2.5 rounded-full ${statusColor.dot}`} />
+                            <span className="text-sm font-bold tabular-nums">{event.time} - {event.endTime}</span>
+                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${statusColor.badge}`}>{getAppointmentStatusLabel(event.status)}</span>
+                          </div>
+                          <p className="mt-1 truncate text-sm font-semibold">{event.patientName}</p>
+                          <p className={`mt-1 truncate text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                            {event.type || 'Sessão'} · {event.therapistName || 'Equipe'} · {getRoomDisplayLine(event)}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          <button type="button" onClick={() => setStatusActionEvent(event)} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-bold text-white">
+                            Ações
+                          </button>
+                          <button type="button" onClick={() => onEditAppointment?.(event)} className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 text-slate-600 hover:bg-white'}`}>
+                            Editar
+                          </button>
+                          <button type="button" onClick={() => { setSelectedDayKeyForPanel(''); openEventDetail(event); }} className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 text-slate-600 hover:bg-white'}`}>
+                            Detalhes
+                          </button>
+                          <button type="button" onClick={() => onStartSession?.(event)} className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${isDark ? 'border-violet-500/40 text-violet-200 hover:bg-violet-500/10' : 'border-violet-100 text-[#7a32fc] hover:bg-violet-50'}`}>
+                            Iniciar
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {selectedDayPanelEvents.length === 0 && <p className="py-8 text-center text-sm font-semibold text-slate-400">Nenhuma consulta neste dia.</p>}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {statusActionEvent && (
+        <div className="fixed inset-0 z-[155] flex items-end justify-center bg-black/35 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => setStatusActionEvent(null)}>
+          <div className="w-full max-w-md rounded-t-[28px] bg-white p-5 text-slate-900 shadow-2xl sm:rounded-[28px]" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">Ações da consulta</p>
+                <h3 className="text-lg font-bold">{statusActionEvent.patientName || statusActionEvent.patient_name || 'Consulta'}</h3>
+                <p className="mt-1 text-xs text-slate-500">{statusActionEvent.time} · {getAppointmentStatusLabel(statusActionEvent.status)}</p>
+              </div>
+              <button type="button" onClick={() => setStatusActionEvent(null)} className="rounded-2xl border border-violet-100 p-2 text-violet-700 hover:bg-violet-50" aria-label="Fechar ações da consulta">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="mt-5 grid gap-2">
+              <button type="button" onClick={() => handleStatusAction(statusActionEvent, 'confirm')} className="rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/20">
+                Confirmar
+              </button>
+              <button type="button" onClick={() => handleStatusAction(statusActionEvent, 'reschedule')} className="rounded-2xl border border-violet-200 bg-white px-4 py-3 text-sm font-bold text-[#7a32fc] hover:bg-violet-50">
+                Remarcar
+              </button>
+              <button type="button" onClick={() => handleStatusAction(statusActionEvent, 'cancel')} className="rounded-2xl border border-violet-200 bg-white px-4 py-3 text-sm font-bold text-[#7a32fc] hover:bg-violet-50">
+                Cancelar
+              </button>
             </div>
           </div>
         </div>
@@ -1389,7 +1789,7 @@ export const ClinicalAgendaBoard = ({
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
               {[
                 { label: 'Duração', value: `${Math.max(1, Math.round((detailEvent.end.getTime() - detailEvent.start.getTime()) / 60000))} min`, icon: Clock },
-                { label: 'Sala/local', value: detailEvent.room || detailEvent.location || 'Não informado', icon: MapPin },
+                { label: 'Sala/local', value: getRoomDisplayLine(detailEvent), icon: MapPin },
                 { label: 'Equipe', value: detailEvent.therapistName || 'Equipe', icon: Users },
                 { label: 'Responsável', value: detailEvent.therapistName || 'Não informado', icon: User }
               ].map((item) => {
@@ -1410,6 +1810,10 @@ export const ClinicalAgendaBoard = ({
               <button type="button" onClick={() => onStartSession?.(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/20">
                 <Play size={16} />
                 Iniciar sessão
+              </button>
+              <button type="button" onClick={() => setStatusActionEvent(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-sm font-bold text-[#7a32fc] hover:bg-violet-50">
+                <CheckCircle2 size={16} />
+                Ações de status
               </button>
               <button type="button" onClick={() => onOpenPatient?.(detailEvent.patientId, { tab: 'history' }, detailEvent.patientName)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
                 <FileText size={16} />

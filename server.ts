@@ -53,9 +53,18 @@ import {
   type AbaNextSessionPlanItem
 } from './src/utils/abaPlanningEngine';
 import {
+  aggregateAbaClinicalLinePoints,
+  buildAbaClinicalLinePointsFromSnapshots,
+  buildAbaClinicalLinePointsFromTargetSummaries,
+  buildAbaClinicalLineSummary,
   buildSessionMetricSnapshotsFromSummaries,
+  getAbaClinicalLineMetricOptions,
   isAbaPercentMetric,
-  isAbaSignificantChange
+  isAbaSignificantChange,
+  normalizeAbaClinicalLineCategory,
+  resolveAbaClinicalLineMetric,
+  type AbaClinicalLineCategory,
+  type AbaClinicalLinePoint
 } from './src/utils/abaClinicalCharts';
 import {
   BLOCKING_APPOINTMENT_STATUSES,
@@ -4309,6 +4318,7 @@ async function syncClinicRoomsTableFromClinicState(params: {
       organization_id: isUuid(organizationId) ? organizationId : clinicId,
       clinic_id: clinicId,
       name,
+      specialties: normalizeClinicRoomSpecialties(room?.specialties || room?.specialty),
       description: sanitizeString(room?.description, 1000) || null,
       capacity: Number.isFinite(Number(room?.capacity)) ? Math.max(0, Math.round(Number(room.capacity))) : null,
       is_active: room?.is_active !== false && room?.isActive !== false,
@@ -4325,6 +4335,13 @@ async function syncClinicRoomsTableFromClinicState(params: {
     }
   }
   return { mirrored, skipped };
+}
+
+function normalizeClinicRoomSpecialties(value: any) {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeString(item, 120)).filter(Boolean).slice(0, 12).join(', ') || null;
+  }
+  return sanitizeString(value, 1000) || null;
 }
 
 async function fetchUserWorkspaces(userId: string) {
@@ -16230,6 +16247,31 @@ async function startServer() {
     };
   };
 
+  const parseAbaClinicalLineParams = (query: any) => {
+    const period = query?.period || query?.days || query?.periodDays;
+    const base = parseAbaChartParams({
+      ...query,
+      days: period,
+      dateFrom: query?.from || query?.dateFrom,
+      dateTo: query?.to || query?.dateTo,
+      limit: query?.limit || 120
+    });
+    const category = normalizeAbaClinicalLineCategory(query?.category || query?.chart || 'target');
+    const groupByValue = sanitizeString(query?.groupBy || query?.group_by || 'session', 20).toLowerCase();
+    const groupBy = groupByValue === 'day' || groupByValue === 'week' ? groupByValue : 'session';
+    const rawItemId = query?.itemId || query?.item_id ||
+      (category === 'behavior' ? query?.behaviorId || query?.behavior_id : query?.targetId || query?.target_id);
+    const itemId = sanitizeString(rawItemId, 180);
+    const metric = resolveAbaClinicalLineMetric(category, query?.metric || query?.metricType || query?.metric_type);
+    return {
+      ...base,
+      category,
+      itemId,
+      metric,
+      groupBy: groupBy as 'session' | 'day' | 'week'
+    };
+  };
+
   const applyAbaChartTenantScope = (query: any, user: any, clinicId: string, organizationId: string) => {
     let scoped = query;
     if (organizationId) scoped = scoped.eq('organization_id', organizationId);
@@ -16381,6 +16423,189 @@ async function startServer() {
     return params.significantOnly
       ? rows.filter((row: any) => isAbaSignificantChange(row?.change_status, row?.trend_direction))
       : rows;
+  };
+
+  const fetchAbaTargetSummaryRows = async (params: {
+    patientId: string;
+    clinicId: string;
+    organizationId: string;
+    user: any;
+    targetId?: string;
+    dateFromIso: string;
+    dateToIso: string;
+    limit: number;
+  }) => {
+    let query = supabase
+      .from('aba_target_live_summaries')
+      .select(ABA_TARGET_CHART_SUMMARY_SELECT)
+      .eq('patient_id', params.patientId)
+      .gte('updated_at', params.dateFromIso)
+      .lte('updated_at', params.dateToIso)
+      .order('updated_at', { ascending: true })
+      .limit(params.limit);
+    query = applyAbaChartTenantScope(query, params.user, params.clinicId, params.organizationId);
+    if (params.targetId) query = query.eq('target_id', params.targetId);
+    const { data, error } = await query;
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return [];
+      throw error;
+    }
+    return data || [];
+  };
+
+  const uniqueLineItems = (rows: any[], category: AbaClinicalLineCategory) => {
+    const map = new Map<string, { id: string; label: string; category: AbaClinicalLineCategory }>();
+    for (const row of rows || []) {
+      const isBehavior = category === 'behavior';
+      const id = sanitizeString(
+        isBehavior
+          ? row?.behavior_id || row?.behaviorId || row?.behavior_key || row?.behaviorKey
+          : row?.target_id || row?.targetId || row?.target_key || row?.targetKey,
+        180
+      );
+      if (!id) continue;
+      const label = sanitizeTextField(
+        isBehavior
+          ? row?.behavior_name || row?.behaviorName || row?.behavior_key || row?.metric_label || row?.metricLabel || id
+          : row?.target_name || row?.targetName || row?.name || row?.metric_label || row?.metricLabel || id,
+        240
+      ) || id;
+      if (!map.has(id)) map.set(id, { id, label, category });
+    }
+    return Array.from(map.values()).slice(0, 80);
+  };
+
+  const behaviorDailyLineValue = (row: any, metric: string) => {
+    if (metric === 'BEHAVIOR_DURATION_TOTAL') return Number(row?.duration_total_seconds || 0);
+    if (metric === 'BEHAVIOR_DURATION_AVG') return Number(row?.duration_avg_seconds || 0);
+    if (metric === 'BEHAVIOR_INTERVAL_OCCURRENCE') return Number(row?.interval_occurrence_percent || 0);
+    return Number(row?.frequency_count || 0);
+  };
+
+  const buildBehaviorDailyLinePoints = (rows: any[], metric: string, groupBy: 'session' | 'day' | 'week'): AbaClinicalLinePoint[] => {
+    const points = (rows || []).map((row: any, index: number) => ({
+      id: `${row.id || row.behavior_id || 'behavior'}-${metric}`,
+      sessionId: null,
+      sessionLabel: row.date ? new Date(`${row.date}T12:00:00.000Z`).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : `Dia ${index + 1}`,
+      itemId: sanitizeString(row.behavior_id || row.behavior_key, 180) || null,
+      itemLabel: sanitizeTextField(row.behavior_name || row.behavior_key || 'Comportamento', 240) || 'Comportamento',
+      metric,
+      metricLabel: sanitizeTextField(row.behavior_name || row.behavior_key || 'Comportamento', 240) || 'Comportamento',
+      date: `${row.date}T12:00:00.000Z`,
+      value: behaviorDailyLineValue(row, metric),
+      attemptsCount: Number(row.frequency_count || row.duration_episode_count || row.interval_total_count || 0),
+      metadata: {
+        source: 'aba_behavior_daily_summaries',
+        frequency: Number(row.frequency_count || 0),
+        durationTotal: Number(row.duration_total_seconds || 0),
+        durationAvg: Number(row.duration_avg_seconds || 0),
+        intervalOccurrencePct: Number(row.interval_occurrence_percent || 0)
+      }
+    }));
+    return aggregateAbaClinicalLinePoints(points, groupBy, metric);
+  };
+
+  const masteryLineValue = (row: any, metric: string) => {
+    const status = sanitizeString(row?.status || row?.evaluation_status, 80).toUpperCase();
+    if (metric === 'MASTERY_CONSECUTIVE_DAYS') return Number(row?.consecutive_successful_days ?? row?.consecutive_successes ?? 0);
+    if (metric === 'MASTERY_VALID_ATTEMPTS') return Number(row?.trials_considered ?? row?.total_trials ?? 0);
+    if (metric === 'MASTERY_READY_FOR_REVIEW') return status === 'READY_FOR_REVIEW' || status === 'MASTERED_APPROVED' ? 1 : 0;
+    if (status === 'MASTERED_APPROVED' || status === 'MASTERED') return 4;
+    if (status === 'READY_FOR_REVIEW') return 3;
+    if (status === 'MET_TODAY' || status === 'MET') return 2;
+    if (status === 'REGRESSION_RISK' || status === 'REGRESSED') return -1;
+    return 1;
+  };
+
+  const buildMasteryLinePoints = (rows: any[], metric: string, groupBy: 'session' | 'day' | 'week'): AbaClinicalLinePoint[] => {
+    const points = (rows || []).map((row: any, index: number) => ({
+      id: row.id,
+      sessionId: sanitizeString(row.session_id, 180) || null,
+      sessionLabel: row.session_id ? `Sessao #${String(row.session_id).slice(-4)}` : `Avaliacao ${index + 1}`,
+      itemId: sanitizeString(row.target_id, 180) || null,
+      itemLabel: sanitizeTextField(row.target_name || row.target_id || 'Habilidade', 240) || 'Habilidade',
+      metric,
+      metricLabel: sanitizeTextField(row.target_name || row.target_id || 'Habilidade', 240) || 'Habilidade',
+      date: sanitizeIsoDateTime(row.evaluated_at || row.created_at),
+      value: masteryLineValue(row, metric),
+      attemptsCount: Number(row.trials_considered ?? row.total_trials ?? 0),
+      status: sanitizeString(row.status || row.evaluation_status, 80).toUpperCase(),
+      metadata: {
+        source: 'aba_mastery_evaluations',
+        accuracyPct: row.accuracy_percent,
+        independencePct: row.independence_percent,
+        consecutiveDays: row.consecutive_successful_days ?? row.consecutive_successes,
+        readyForReview: sanitizeString(row.status || row.evaluation_status, 80).toUpperCase() === 'READY_FOR_REVIEW'
+      }
+    }));
+    return aggregateAbaClinicalLinePoints(points, groupBy, metric);
+  };
+
+  const maintenanceLineValue = (row: any, metric: string, failureCountByTarget: Map<string, number>) => {
+    const status = sanitizeString(row?.status, 80).toUpperCase();
+    if (metric === 'MAINTENANCE_ACCURACY') return Number(row?.accuracy_percent || 0);
+    if (metric === 'MAINTENANCE_INDEPENDENCE') return Number(row?.independence_percent || 0);
+    if (metric === 'MAINTENANCE_FAILURES') return Number(failureCountByTarget.get(sanitizeString(row?.target_id, 180)) || 0);
+    if (metric === 'MAINTENANCE_DAYS_SINCE_PROBE') {
+      const occurred = new Date(row?.occurred_at || 0).getTime();
+      return Number.isFinite(occurred) ? Math.max(0, Math.floor((Date.now() - occurred) / 86400000)) : 0;
+    }
+    if (status === 'MAINTAINED' || status === 'COMPLETED') return 3;
+    if (status === 'WATCH' || status === 'PENDING') return 1;
+    if (status === 'REGRESSION_RISK') return -1;
+    return 0;
+  };
+
+  const buildMaintenanceLinePoints = (rows: any[], metric: string, groupBy: 'session' | 'day' | 'week'): AbaClinicalLinePoint[] => {
+    const failureCountByTarget = new Map<string, number>();
+    for (const row of rows || []) {
+      const target = sanitizeString(row?.target_id, 180);
+      const status = sanitizeString(row?.status, 80).toUpperCase();
+      if (target && ['WATCH', 'REGRESSION_RISK', 'MISSED'].includes(status)) {
+        failureCountByTarget.set(target, (failureCountByTarget.get(target) || 0) + 1);
+      }
+      if (target && status === 'MAINTAINED') failureCountByTarget.set(target, 0);
+    }
+    const points = (rows || []).map((row: any, index: number) => ({
+      id: row.id,
+      sessionId: sanitizeString(row.session_id, 180) || null,
+      sessionLabel: row.session_id ? `Sessao #${String(row.session_id).slice(-4)}` : `Probe ${index + 1}`,
+      itemId: sanitizeString(row.target_id, 180) || null,
+      itemLabel: sanitizeTextField(row.raw_payload?.targetName || row.target_name || row.target_id || 'Habilidade', 240) || 'Habilidade',
+      metric,
+      metricLabel: sanitizeTextField(row.raw_payload?.targetName || row.target_name || row.target_id || 'Habilidade', 240) || 'Habilidade',
+      date: sanitizeIsoDateTime(row.occurred_at || row.created_at),
+      value: maintenanceLineValue(row, metric, failureCountByTarget),
+      attemptsCount: Number(row.total_trials || 0),
+      status: sanitizeString(row.status, 80).toUpperCase(),
+      metadata: {
+        source: 'aba_maintenance_probe_results',
+        accuracyPct: row.accuracy_percent,
+        independencePct: row.independence_percent,
+        independentTrials: row.independent_trials,
+        promptedTrials: row.prompted_trials,
+        errorTrials: row.error_trials
+      }
+    }));
+    return aggregateAbaClinicalLinePoints(points, groupBy, metric);
+  };
+
+  const buildClinicalLinePhases = (annotations: any[]) => (annotations || [])
+    .filter((annotation: any) => sanitizeString(annotation.annotation_type || annotation.annotationType, 40).toUpperCase() === 'CONDITION_LINE')
+    .map((annotation: any) => ({
+      id: annotation.id,
+      label: annotation.label,
+      date: annotation.date,
+      sessionId: annotation.session_id || annotation.sessionId || null,
+      type: 'CONDITION_LINE'
+    }));
+
+  const dedupeAnnotations = (annotations: any[]) => {
+    const map = new Map<string, any>();
+    for (const annotation of annotations || []) {
+      if (!annotation?.id || !map.has(String(annotation.id))) map.set(String(annotation?.id || crypto.randomUUID()), annotation);
+    }
+    return Array.from(map.values()).sort((a, b) => new Date(a.date || 0).getTime() - new Date(b.date || 0).getTime());
   };
 
   const buildSessionMetricSnapshots = async (sessionIdValue: string) => {
@@ -16648,22 +16873,13 @@ async function startServer() {
     const hasPendingSignature = readCalendarBooleanFlag(source, ['has_pending_signature', 'hasPendingSignature', 'pendingSignature', 'signaturePending']);
     const planCount = Number(counters.planCountByPatient?.get(patientId) || source?.plan_item_count || source?.planItemCount || 0);
     const probeCount = Number(counters.probeCountByAppointment?.get(appointmentId) || source?.maintenance_probe_count || source?.maintenanceProbeCount || 0);
-    const room = sanitizeString(
-      row?.room_name ||
-      row?.roomName ||
-      row?.room_id ||
-      row?.roomId ||
-      source?.roomDisplayName ||
-      source?.roomName ||
-      source?.room_name ||
-      source?.room_id ||
-      source?.roomId ||
-      source?.room ||
-      row?.roomDisplayName ||
-      row?.roomName ||
-      row?.room,
-      180
-    );
+    const roomId = sanitizeString(row?.room_id || row?.roomId || source?.room_id || source?.roomId || source?.room, 180);
+    const sanitizeHumanRoom = (value: any) => {
+      const text = sanitizeString(value, 180);
+      if (!text) return '';
+      if (isUuid(text) || /^[0-9a-f]{20,}$/i.test(text) || /^(clinic_room|room|sala)_[0-9a-f-]{8,}$/i.test(text)) return '';
+      return text;
+    };
     const location = sanitizeString(
       row?.location_type ||
       row?.locationType ||
@@ -16672,9 +16888,29 @@ async function startServer() {
       source?.location_type ||
       source?.local ||
       source?.place ||
-      (String(room || '').toLowerCase().includes('online') ? 'online' : ''),
+      (String(row?.room_name || row?.roomName || row?.room || source?.roomDisplayName || source?.roomName || source?.room || '').toLowerCase().includes('online') ? 'online' : ''),
       120
     );
+    const isClinicLocation = /clinic|clinica|sala/i.test(location) || Boolean(roomId);
+    const room = sanitizeHumanRoom(
+      row?.room_name ||
+      row?.roomName ||
+      source?.roomDisplayName ||
+      source?.roomName ||
+      source?.room_name ||
+      row?.roomDisplayName ||
+      row?.roomName ||
+      row?.room ||
+      source?.room
+    ) || (isClinicLocation ? (roomId ? 'Sala não identificada' : 'Sala não informada') : '');
+    const roomSpecialties = normalizeClinicRoomSpecialties(source?.room_specialties || source?.roomSpecialties || row?.room_specialties || row?.roomSpecialties);
+    const locationLabel = location ? (
+      /online|remoto/i.test(location) ? 'Online' :
+      /domic/i.test(location) ? 'Domicílio' :
+      /escola/i.test(location) ? 'Escola' :
+      /clinic|clinica|sala/i.test(location) ? 'Clínica' :
+      'Outro'
+    ) : (room ? 'Clínica' : 'Local não informado');
 
     return {
       id: appointmentId,
@@ -16698,9 +16934,11 @@ async function startServer() {
       status,
       location: location || (room ? 'sala' : 'clinica'),
       location_type: normalizeScheduleLocationType(location || (room ? 'clinica' : 'outro')),
-      room_id: sanitizeString(row?.room_id || row?.roomId || source?.room_id || source?.roomId || source?.room, 180) || null,
+      location_label: locationLabel,
+      room_id: roomId || null,
       room: room || null,
-      room_name: sanitizeString(row?.room_name || row?.roomName || source?.room_name || source?.roomName || source?.roomDisplayName, 180) || null,
+      room_name: room || null,
+      room_specialties: roomSpecialties,
       has_session_record: hasSessionRecord,
       has_report: hasReport,
       has_pending_signature: hasPendingSignature,
@@ -16711,9 +16949,24 @@ async function startServer() {
     };
   };
 
+  const classifyCalendarEventLocation = (event: any) => {
+    const value = sanitizeString(`${event?.location || ''} ${event?.location_type || ''} ${event?.location_label || ''} ${event?.room_name || ''} ${event?.room || ''}`, 600).toLowerCase();
+    if (value.includes('online') || value.includes('remoto')) return 'online';
+    if (value.includes('domic')) return 'domicilio';
+    if (value.includes('escola')) return 'escola';
+    if (value.includes('clinic') || value.includes('clínic') || value.includes('sala') || event?.room_id || event?.room_name) return 'sala';
+    return 'outro';
+  };
+
   const calendarEventMatchesFilters = (event: any, filters: any) => {
     if (filters.therapistIds.length > 0 && !filters.therapistIds.includes(String(event.therapist_id || ''))) return false;
     if (filters.patientIds.length > 0 && !filters.patientIds.includes(String(event.patient_id || ''))) return false;
+    if (filters.roomIds?.length > 0 && !filters.roomIds.includes(String(event.room_id || ''))) return false;
+    if (filters.locationTypes?.length > 0) {
+      const locationClass = classifyCalendarEventLocation(event);
+      const locationType = sanitizeString(event.location_type, 80).toLowerCase();
+      if (!filters.locationTypes.some((item: string) => item.toLowerCase() === locationClass || item.toLowerCase() === locationType)) return false;
+    }
     if (filters.types.length > 0) {
       const type = sanitizeString(event.type, 120).toLowerCase();
       if (!filters.types.some((item: string) => type === item.toLowerCase())) return false;
@@ -17046,7 +17299,7 @@ async function startServer() {
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       let query = supabase
         .from('clinic_rooms')
-        .select('id, organization_id, clinic_id, name, description, capacity, is_active, created_at, updated_at')
+        .select('id, organization_id, clinic_id, name, specialties, description, capacity, is_active, created_at, updated_at')
         .order('name', { ascending: true })
         .limit(400);
       if (isUuid(organizationId)) query = query.eq('organization_id', organizationId);
@@ -17074,6 +17327,7 @@ async function startServer() {
         organization_id: isUuid(organizationId) ? organizationId : clinicId,
         clinic_id: isUuid(clinicId) ? clinicId : null,
         name,
+        specialties: normalizeClinicRoomSpecialties(req.body?.specialties || req.body?.specialty),
         description: sanitizeString(req.body?.description, 1000) || null,
         capacity: Number.isFinite(Number(req.body?.capacity)) ? Math.max(0, Math.round(Number(req.body.capacity))) : null,
         is_active: req.body?.is_active !== false && req.body?.isActive !== false,
@@ -17082,7 +17336,7 @@ async function startServer() {
       const { data, error } = await supabase
         .from('clinic_rooms')
         .upsert([payload], { onConflict: 'id' })
-        .select('id, organization_id, clinic_id, name, description, capacity, is_active, created_at, updated_at')
+        .select('id, organization_id, clinic_id, name, specialties, description, capacity, is_active, created_at, updated_at')
         .single();
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Cadastro de salas ainda não está disponível no banco.' });
@@ -17101,6 +17355,7 @@ async function startServer() {
       if (!isUuid(roomId)) return res.status(400).json({ success: false, error: 'Sala inválida.' });
       const payload = cleanObject({
         ...(req.body?.name !== undefined ? { name: sanitizeString(req.body.name, 180) } : {}),
+        ...(req.body?.specialties !== undefined || req.body?.specialty !== undefined ? { specialties: normalizeClinicRoomSpecialties(req.body?.specialties || req.body?.specialty) } : {}),
         ...(req.body?.description !== undefined ? { description: sanitizeString(req.body.description, 1000) || null } : {}),
         ...(req.body?.capacity !== undefined ? { capacity: Number.isFinite(Number(req.body.capacity)) ? Math.max(0, Math.round(Number(req.body.capacity))) : null } : {}),
         ...(req.body?.is_active !== undefined || req.body?.isActive !== undefined ? { is_active: req.body?.is_active !== false && req.body?.isActive !== false } : {}),
@@ -17110,7 +17365,7 @@ async function startServer() {
         .from('clinic_rooms')
         .update(payload)
         .eq('id', roomId)
-        .select('id, organization_id, clinic_id, name, description, capacity, is_active, created_at, updated_at')
+        .select('id, organization_id, clinic_id, name, specialties, description, capacity, is_active, created_at, updated_at')
         .single();
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Cadastro de salas ainda não está disponível no banco.' });
@@ -17131,7 +17386,7 @@ async function startServer() {
         .from('clinic_rooms')
         .update({ is_active: false, updated_at: new Date().toISOString() })
         .eq('id', roomId)
-        .select('id, organization_id, clinic_id, name, description, capacity, is_active, created_at, updated_at')
+        .select('id, organization_id, clinic_id, name, specialties, description, capacity, is_active, created_at, updated_at')
         .single();
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Cadastro de salas ainda não está disponível no banco.' });
@@ -17309,7 +17564,9 @@ async function startServer() {
         therapistIds: parseCalendarFilterList(req.query?.therapistId || req.query?.therapistIds).filter((id) => id !== 'all'),
         patientIds: parseCalendarFilterList(req.query?.patientId || req.query?.patientIds).filter((id) => id !== 'all'),
         types: parseCalendarFilterList(req.query?.type || req.query?.types),
-        statuses: parseCalendarFilterList(req.query?.status || req.query?.statuses)
+        statuses: parseCalendarFilterList(req.query?.status || req.query?.statuses),
+        roomIds: parseCalendarFilterList(req.query?.roomId || req.query?.roomIds).filter((id) => id !== 'all'),
+        locationTypes: parseCalendarFilterList(req.query?.locationType || req.query?.locationTypes).filter((id) => id !== 'all')
       };
 
       let query = supabase
@@ -17320,8 +17577,10 @@ async function startServer() {
         .order('scheduled_at', { ascending: true })
         .limit(range.limit);
       if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
+      if (organizationId && isUuid(organizationId)) query = query.eq('organization_id', organizationId);
       if (filters.therapistIds.length > 0) query = query.in('therapist_id', filters.therapistIds);
       if (filters.patientIds.length > 0) query = query.in('patient_id', filters.patientIds);
+      if (filters.roomIds.length > 0) query = query.in('room_id', filters.roomIds);
       if (filters.statuses.length === 1 && !filters.statuses[0].includes('_')) query = query.eq('status', filters.statuses[0]);
 
       const { data, error } = await query;
@@ -18989,6 +19248,196 @@ async function startServer() {
       return res.json({ success: true, data });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível atualizar o plano sugerido agora.' });
+    }
+  });
+
+  app.get('/api/aba/patients/:patientId/clinical-line-chart', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
+      if (!isUuid(patientId)) {
+        return res.json({
+          success: true,
+          data: { points: [], phases: [], annotations: [], summary: buildAbaClinicalLineSummary([]), availableMetrics: [], availableItems: [] }
+        });
+      }
+      const params = parseAbaClinicalLineParams(req.query);
+      const categoryChartType: Record<AbaClinicalLineCategory, string> = {
+        target: 'targets',
+        behavior: 'behaviors',
+        mastery: 'mastery',
+        maintenance: 'maintenance',
+        general: 'overview'
+      };
+      const metricOptions = getAbaClinicalLineMetricOptions(params.category);
+      const metricOptionIds = metricOptions.map((option) => option.id);
+      const itemTargetId = params.category === 'target' || params.category === 'mastery' || params.category === 'maintenance' ? params.itemId : '';
+      const itemBehaviorId = params.category === 'behavior' ? params.itemId : '';
+      let points: AbaClinicalLinePoint[] = [];
+      let availableItems: Array<{ id: string; label: string; category: AbaClinicalLineCategory }> = [];
+      let source = 'aba_session_metric_snapshots';
+
+      if (params.category === 'target') {
+        const targetRows = await fetchAbaTargetSummaryRows({
+          patientId,
+          clinicId,
+          organizationId,
+          user: req.session.user,
+          targetId: params.itemId || undefined,
+          dateFromIso: params.dateFromIso,
+          dateToIso: params.dateToIso,
+          limit: params.limit
+        });
+        availableItems = uniqueLineItems(targetRows, 'target');
+        if (params.itemId) {
+          points = buildAbaClinicalLinePointsFromTargetSummaries(targetRows, { metric: params.metric, groupBy: params.groupBy });
+          source = 'aba_target_live_summaries';
+          if (points.length === 0 || ['TARGET_ACCURACY', 'TARGET_INDEPENDENCE', 'TARGET_TRIAL_COUNT', 'TARGET_COMPARE_RESPONSES'].includes(params.metric)) {
+            const snapshotRows = await fetchAbaSnapshotRows({
+              patientId,
+              clinicId,
+              organizationId,
+              user: req.session.user,
+              metricTypes: ['TARGET_ACCURACY', 'TARGET_INDEPENDENCE', 'TARGET_TRIAL_COUNT'],
+              targetId: params.itemId,
+              metricType: ['TARGET_ACCURACY', 'TARGET_INDEPENDENCE', 'TARGET_TRIAL_COUNT'].includes(params.metric) ? params.metric : undefined,
+              dateFromIso: params.dateFromIso,
+              dateToIso: params.dateToIso,
+              limit: params.limit,
+              significantOnly: false
+            });
+            if (points.length === 0 && snapshotRows.length > 0) {
+              points = buildAbaClinicalLinePointsFromSnapshots(snapshotRows, { category: 'target', metric: params.metric, groupBy: params.groupBy });
+              source = 'aba_session_metric_snapshots';
+            }
+          }
+        }
+      } else if (params.category === 'behavior') {
+        const behaviorMetrics = ['BEHAVIOR_FREQUENCY', 'BEHAVIOR_DURATION_TOTAL', 'BEHAVIOR_DURATION_AVG', 'BEHAVIOR_INTERVAL_OCCURRENCE'];
+        let dailyQuery = supabase
+          .from('aba_behavior_daily_summaries')
+          .select(ABA_BEHAVIOR_DAILY_CHART_SELECT)
+          .eq('patient_id', patientId)
+          .gte('date', params.dateFrom)
+          .lte('date', params.dateTo)
+          .order('date', { ascending: true })
+          .limit(params.limit);
+        dailyQuery = applyAbaChartTenantScope(dailyQuery, req.session.user, clinicId, organizationId);
+        if (params.itemId) dailyQuery = dailyQuery.eq('behavior_id', params.itemId);
+        const dailyResult = await dailyQuery;
+        if (dailyResult.error && !hasMissingFinancialSchema(dailyResult.error)) throw dailyResult.error;
+        const dailyRows = dailyResult.error ? [] : dailyResult.data || [];
+        availableItems = uniqueLineItems(dailyRows, 'behavior');
+        if (params.itemId) {
+          const snapshotRows = await fetchAbaSnapshotRows({
+            patientId,
+            clinicId,
+            organizationId,
+            user: req.session.user,
+            metricTypes: behaviorMetrics,
+            behaviorId: params.itemId,
+            metricType: behaviorMetrics.includes(params.metric) ? params.metric : undefined,
+            dateFromIso: params.dateFromIso,
+            dateToIso: params.dateToIso,
+            limit: params.limit,
+            significantOnly: false
+          });
+          points = snapshotRows.length > 0
+            ? buildAbaClinicalLinePointsFromSnapshots(snapshotRows, { category: 'behavior', metric: params.metric, groupBy: params.groupBy })
+            : buildBehaviorDailyLinePoints(dailyRows, params.metric, params.groupBy);
+          source = snapshotRows.length > 0 ? 'aba_session_metric_snapshots' : 'aba_behavior_daily_summaries';
+        }
+      } else if (params.category === 'mastery') {
+        let evaluationQuery = supabase
+          .from('aba_mastery_evaluations')
+          .select(ABA_MASTERY_LIST_SELECT)
+          .eq('patient_id', patientId)
+          .gte('evaluated_at', params.dateFromIso)
+          .lte('evaluated_at', params.dateToIso)
+          .order('evaluated_at', { ascending: true })
+          .limit(params.limit);
+        evaluationQuery = applyAbaChartTenantScope(evaluationQuery, req.session.user, clinicId, organizationId);
+        if (params.itemId) evaluationQuery = evaluationQuery.eq('target_id', params.itemId);
+        const evaluationResult = await evaluationQuery;
+        if (evaluationResult.error && !hasMissingFinancialSchema(evaluationResult.error)) throw evaluationResult.error;
+        const evaluationRows = evaluationResult.error ? [] : evaluationResult.data || [];
+        availableItems = uniqueLineItems(evaluationRows, 'target');
+        if (params.itemId) points = buildMasteryLinePoints(evaluationRows, params.metric, params.groupBy);
+        source = 'aba_mastery_evaluations';
+      } else if (params.category === 'maintenance') {
+        let probeQuery = supabase
+          .from('aba_maintenance_probe_results')
+          .select(ABA_MAINTENANCE_PROBE_RESULT_SELECT)
+          .eq('patient_id', patientId)
+          .gte('occurred_at', params.dateFromIso)
+          .lte('occurred_at', params.dateToIso)
+          .order('occurred_at', { ascending: true })
+          .limit(params.limit);
+        probeQuery = applyAbaChartTenantScope(probeQuery, req.session.user, clinicId, organizationId);
+        if (params.itemId) probeQuery = probeQuery.eq('target_id', params.itemId);
+        const probeResult = await probeQuery;
+        if (probeResult.error && !hasMissingFinancialSchema(probeResult.error)) throw probeResult.error;
+        const probeRows = probeResult.error ? [] : probeResult.data || [];
+        availableItems = uniqueLineItems(probeRows, 'target');
+        if (params.itemId) points = buildMaintenanceLinePoints(probeRows, params.metric, params.groupBy);
+        source = 'aba_maintenance_probe_results';
+      } else {
+        const rows = await fetchAbaSnapshotRows({
+          patientId,
+          clinicId,
+          organizationId,
+          user: req.session.user,
+          metricType: metricOptionIds.includes(params.metric) ? params.metric : undefined,
+          dateFromIso: params.dateFromIso,
+          dateToIso: params.dateToIso,
+          limit: params.limit,
+          significantOnly: false
+        });
+        points = buildAbaClinicalLinePointsFromSnapshots(rows, { category: 'general', metric: params.metric, groupBy: params.groupBy });
+        availableItems = uniqueLineItems(rows, 'target');
+      }
+
+      const [lineAnnotations, categoryAnnotations] = await Promise.all([
+        fetchAbaGraphAnnotations({
+          patientId,
+          clinicId,
+          organizationId,
+          user: req.session.user,
+          chartType: 'clinical-line-chart',
+          dateFromIso: params.dateFromIso,
+          dateToIso: params.dateToIso,
+          targetId: itemTargetId,
+          behaviorId: itemBehaviorId
+        }),
+        fetchAbaGraphAnnotations({
+          patientId,
+          clinicId,
+          organizationId,
+          user: req.session.user,
+          chartType: categoryChartType[params.category],
+          dateFromIso: params.dateFromIso,
+          dateToIso: params.dateToIso,
+          targetId: itemTargetId,
+          behaviorId: itemBehaviorId
+        })
+      ]);
+      const annotations = dedupeAnnotations([...lineAnnotations, ...categoryAnnotations]);
+      return res.json({
+        success: true,
+        data: {
+          points,
+          phases: buildClinicalLinePhases(annotations),
+          annotations,
+          summary: buildAbaClinicalLineSummary(points),
+          availableMetrics: metricOptions,
+          availableItems,
+          category: params.category,
+          metric: params.metric,
+          groupBy: params.groupBy
+        },
+        source
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
     }
   });
 

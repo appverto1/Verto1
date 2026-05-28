@@ -3,6 +3,10 @@
 
 create extension if not exists pgcrypto;
 
+alter table public.appointments
+  add column if not exists deleted_at timestamptz,
+  add column if not exists is_active boolean default true;
+
 alter table public.aba_maintenance_schedules
   add column if not exists target_due_date timestamptz,
   add column if not exists appointment_id text,

@@ -10,6 +10,7 @@ import {
 const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 const migrationCode = readFileSync(join(root, 'supabase/migrations/20260527143000_clinic_rooms_schedule_conflicts_time_reports.sql'), 'utf8');
+const roomSpecialtiesMigrationCode = readFileSync(join(root, 'supabase/migrations/20260528120000_clinic_rooms_specialties.sql'), 'utf8');
 const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
@@ -174,6 +175,10 @@ test('backend expõe endpoint de conflitos, relatórios e queries econômicas', 
 test('migration cria salas, índices e summaries', () => {
   for (const fragment of [
     'create table if not exists public.clinic_rooms',
+    'add column if not exists specialties text',
+    'add column if not exists approach text',
+    'add column if not exists deleted_at timestamptz',
+    'add column if not exists is_active boolean default true',
     'idx_appointments_schedule_window',
     'idx_appointments_patient_schedule_window',
     'idx_appointments_room_schedule_window',
@@ -184,6 +189,8 @@ test('migration cria salas, índices e summaries', () => {
   ]) {
     assert.match(migrationCode, new RegExp(fragment));
   }
+  assert.match(roomSpecialtiesMigrationCode, /create table if not exists public\.clinic_rooms/i);
+  assert.match(roomSpecialtiesMigrationCode, /alter table public\.clinic_rooms[\s\S]*add column if not exists specialties text/i);
 });
 
 test('modal separa local, sala e duração', () => {

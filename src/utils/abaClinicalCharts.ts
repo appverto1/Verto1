@@ -68,6 +68,44 @@ export type AbaSessionMetricSnapshot = AbaMetricComparison & {
 
 export type AbaClinicalChangeCategory = 'skill' | 'behavior' | 'mastery' | 'maintenance' | 'regression';
 
+export type AbaClinicalLineCategory = 'target' | 'behavior' | 'mastery' | 'maintenance' | 'general';
+
+export type AbaClinicalLineMetricOption = {
+  id: string;
+  label: string;
+  axis: 'percent' | 'count' | 'duration' | 'status';
+  multiLine?: boolean;
+};
+
+export type AbaClinicalLinePoint = {
+  id?: string | null;
+  sessionId?: string | null;
+  sessionLabel: string;
+  itemId?: string | null;
+  itemLabel: string;
+  metric: string;
+  metricLabel: string;
+  date: string;
+  value: number | null;
+  secondaryValues?: Record<string, number | null>;
+  trialType?: string | null;
+  prompt?: string | null;
+  attemptsCount?: number | null;
+  status?: string | null;
+  metadata?: Record<string, any>;
+};
+
+export type AbaClinicalLineSummary = {
+  currentValue: number | null;
+  previousValue: number | null;
+  delta: number | null;
+  trend: 'improved' | 'worsened' | 'stable' | 'insufficient_data';
+  lastMeasuredAt: string | null;
+  lastSessionLabel: string | null;
+  attemptsCount: number | null;
+  status: string | null;
+};
+
 export type AbaAggregatedClinicalChange = AbaSessionMetricSnapshot & {
   changeCategory: AbaClinicalChangeCategory;
   rawMagnitude: number;
@@ -119,6 +157,41 @@ export const ABA_METRIC_DIRECTION: Record<string, AbaMetricDirection> = {
   MASTERY_STATUS: 'STATUS_BASED',
   MAINTENANCE_STATUS: 'STATUS_BASED',
   REGRESSION_RISK: 'STATUS_BASED'
+};
+
+export const ABA_CLINICAL_LINE_METRICS: Record<AbaClinicalLineCategory, AbaClinicalLineMetricOption[]> = {
+  target: [
+    { id: 'TARGET_COMPARE_RESPONSES', label: 'Comparar respostas', axis: 'percent', multiLine: true },
+    { id: 'TARGET_ACCURACY', label: 'Acuracia %', axis: 'percent' },
+    { id: 'TARGET_INDEPENDENCE', label: 'Independencia %', axis: 'percent' },
+    { id: 'TARGET_PROMPTED', label: 'Com ajuda %', axis: 'percent' },
+    { id: 'TARGET_ERROR', label: 'Erro %', axis: 'percent' },
+    { id: 'TARGET_TRIAL_COUNT', label: 'Numero de tentativas', axis: 'count' }
+  ],
+  behavior: [
+    { id: 'BEHAVIOR_FREQUENCY', label: 'Frequencia', axis: 'count' },
+    { id: 'BEHAVIOR_DURATION_TOTAL', label: 'Duracao total', axis: 'duration' },
+    { id: 'BEHAVIOR_DURATION_AVG', label: 'Duracao media', axis: 'duration' },
+    { id: 'BEHAVIOR_INTERVAL_OCCURRENCE', label: 'Intervalo parcial %', axis: 'percent' }
+  ],
+  mastery: [
+    { id: 'MASTERY_STATUS', label: 'Status de maestria', axis: 'status' },
+    { id: 'MASTERY_CONSECUTIVE_DAYS', label: 'Dias consecutivos', axis: 'count' },
+    { id: 'MASTERY_VALID_ATTEMPTS', label: 'Tentativas validas', axis: 'count' },
+    { id: 'MASTERY_READY_FOR_REVIEW', label: 'Pronto para revisao', axis: 'status' }
+  ],
+  maintenance: [
+    { id: 'MAINTENANCE_STATUS', label: 'Resultado do maintenance probe', axis: 'status' },
+    { id: 'MAINTENANCE_ACCURACY', label: 'Acuracia de manutencao', axis: 'percent' },
+    { id: 'MAINTENANCE_INDEPENDENCE', label: 'Independencia de manutencao', axis: 'percent' },
+    { id: 'MAINTENANCE_FAILURES', label: 'Falhas consecutivas', axis: 'count' },
+    { id: 'MAINTENANCE_DAYS_SINCE_PROBE', label: 'Dias desde ultimo probe', axis: 'count' }
+  ],
+  general: [
+    { id: 'TARGET_ACCURACY', label: 'Acuracia geral', axis: 'percent' },
+    { id: 'TARGET_INDEPENDENCE', label: 'Independencia geral', axis: 'percent' },
+    { id: 'TARGET_TRIAL_COUNT', label: 'Tentativas', axis: 'count' }
+  ]
 };
 
 const MASTERY_STATUS_SCORE: Record<string, number> = {
@@ -497,6 +570,250 @@ const findMatching = (rows: any[], current: any, idKeys: string[], labelKeys: st
     return Boolean((id && rowId === id) || (label && rowLabel === label));
   }) || null;
 };
+
+const percentOf = (part: unknown, total: unknown) => {
+  const denominator = safeNumber(total, 0);
+  if (denominator <= 0) return null;
+  return round2((safeNumber(part, 0) / denominator) * 100);
+};
+
+const linePointDate = (value: any) => {
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return new Date(0).toISOString();
+  return date.toISOString();
+};
+
+const lineWeekKey = (value: any) => {
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return 'semana-sem-data';
+  const day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() - day + 1);
+  return date.toISOString().slice(0, 10);
+};
+
+const statusValueFrom = (status: unknown, metric: string) => {
+  const normalized = normalizeStatus(status);
+  if (metric.startsWith('MAINTENANCE')) return metricStatusScore('MAINTENANCE_STATUS', normalized, normalized === 'WATCH' ? 1 : 0);
+  return metricStatusScore('MASTERY_STATUS', normalized, normalized === 'READY_FOR_REVIEW' ? 3 : 0);
+};
+
+const targetLineValue = (secondaryValues: Record<string, number | null>, attempts: number, metric: string) => {
+  if (metric === 'TARGET_ACCURACY') return secondaryValues.accuracyPct;
+  if (metric === 'TARGET_INDEPENDENCE') return secondaryValues.independencePct;
+  if (metric === 'TARGET_PROMPTED') return secondaryValues.promptedPct;
+  if (metric === 'TARGET_ERROR') return secondaryValues.errorPct;
+  if (metric === 'TARGET_TRIAL_COUNT') return attempts;
+  return secondaryValues.independencePct ?? secondaryValues.accuracyPct;
+};
+
+export const normalizeAbaClinicalLineCategory = (value: unknown): AbaClinicalLineCategory => {
+  const normalized = normalizeStatus(value);
+  if (['TARGET', 'TARGETS', 'SKILL', 'SKILLS', 'HABILIDADE', 'HABILIDADES'].includes(normalized)) return 'target';
+  if (['BEHAVIOR', 'BEHAVIORS', 'COMPORTAMENTO', 'COMPORTAMENTOS'].includes(normalized)) return 'behavior';
+  if (['MASTERY', 'MAESTRIA'].includes(normalized)) return 'mastery';
+  if (['MAINTENANCE', 'MANUTENCAO', 'MANUTENÇÃO'].includes(normalized)) return 'maintenance';
+  return 'general';
+};
+
+export const getAbaClinicalLineMetricOptions = (category: AbaClinicalLineCategory | string) =>
+  ABA_CLINICAL_LINE_METRICS[normalizeAbaClinicalLineCategory(category)] || ABA_CLINICAL_LINE_METRICS.general;
+
+export const resolveAbaClinicalLineMetric = (category: AbaClinicalLineCategory | string, metric?: string | null) => {
+  const options = getAbaClinicalLineMetricOptions(category);
+  const normalizedMetric = normalizeStatus(metric);
+  return options.find((option) => option.id === normalizedMetric)?.id || options[0]?.id || 'TARGET_ACCURACY';
+};
+
+export function buildAbaClinicalLinePointsFromTargetSummaries(
+  rows: any[],
+  options: { metric?: string; groupBy?: 'session' | 'day' | 'week' } = {}
+): AbaClinicalLinePoint[] {
+  const metric = resolveAbaClinicalLineMetric('target', options.metric);
+  const points = arrayOf(rows)
+    .map((row, index) => {
+      const attempts = safeNumber(firstValue(row, ['attempts_today', 'attemptsToday', 'total_trials', 'totalTrials']), 0);
+      const secondaryValues = {
+        independencePct: round2(safeNumber(firstValue(row, ['independence_percent', 'independencePercent']), percentOf(firstValue(row, ['independent_today', 'independentToday']), attempts) || 0)),
+        promptedPct: percentOf(firstValue(row, ['prompted_today', 'promptedToday']), attempts),
+        errorPct: percentOf(firstValue(row, ['errors_today', 'errorsToday']), attempts),
+        accuracyPct: round2(safeNumber(firstValue(row, ['accuracy_percent', 'accuracyPercent']), percentOf(firstValue(row, ['correct_today', 'correctToday']), attempts) || 0))
+      };
+      const targetId = String(firstValue(row, ['target_id', 'targetId', 'target_key', 'targetKey']) || '').trim() || null;
+      const targetLabel = String(firstValue(row, ['target_name', 'targetName', 'name', 'target_key', 'targetKey']) || targetId || 'Habilidade').trim();
+      const changedAt = linePointDate(firstValue(row, ['ended_at', 'endedAt', 'updated_at', 'updatedAt', 'created_at', 'createdAt']));
+      return {
+        id: String(firstValue(row, ['id']) || `${targetId || 'target'}-${index}`),
+        sessionId: String(firstValue(row, ['session_id', 'sessionId']) || '').trim() || null,
+        sessionLabel: String(firstValue(row, ['session_label', 'sessionLabel']) || `Sessao ${index + 1}`),
+        itemId: targetId,
+        itemLabel: targetLabel,
+        metric,
+        metricLabel: targetLabel,
+        date: changedAt,
+        value: targetLineValue(secondaryValues, attempts, metric),
+        secondaryValues,
+        attemptsCount: attempts,
+        trialType: String(firstValue(row, ['trial_type', 'trialType', 'most_used_trial_type', 'mostUsedTrialType']) || '').trim() || null,
+        prompt: String(firstValue(row, ['most_used_prompt', 'mostUsedPrompt', 'prompt']) || '').trim() || null,
+        metadata: {
+          source: 'aba_target_live_summaries',
+          accuracyPct: secondaryValues.accuracyPct,
+          independencePct: secondaryValues.independencePct,
+          promptedPct: secondaryValues.promptedPct,
+          errorPct: secondaryValues.errorPct
+        }
+      } as AbaClinicalLinePoint;
+    })
+    .filter((point) => point.value !== null || metric === 'TARGET_COMPARE_RESPONSES');
+  return aggregateAbaClinicalLinePoints(points, options.groupBy || 'session', metric);
+}
+
+export function buildAbaClinicalLinePointsFromSnapshots(
+  rows: any[],
+  options: { category?: AbaClinicalLineCategory | string; metric?: string; groupBy?: 'session' | 'day' | 'week' } = {}
+): AbaClinicalLinePoint[] {
+  const category = normalizeAbaClinicalLineCategory(options.category || 'general');
+  const metric = resolveAbaClinicalLineMetric(category, options.metric);
+  const mapped = arrayOf(rows)
+    .filter((row) => metric === 'TARGET_COMPARE_RESPONSES' || !metric || normalizeStatus(firstValue(row, ['metric_type', 'metricType'])) === metric)
+    .map((row, index) => {
+      const metricType = normalizeStatus(firstValue(row, ['metric_type', 'metricType'])) || metric;
+      const value = firstValue(row, ['metric_value', 'metricValue', 'value']);
+      const itemId = category === 'behavior'
+        ? String(firstValue(row, ['behavior_id', 'behaviorId']) || '').trim()
+        : String(firstValue(row, ['target_id', 'targetId']) || '').trim();
+      const metricLabel = String(firstValue(row, ['metric_label', 'metricLabel']) || itemId || 'Metrica clinica').trim();
+      const changedAt = linePointDate(firstValue(row, ['changed_at', 'changedAt', 'date']));
+      return {
+        id: String(firstValue(row, ['id']) || `${metricType}-${index}`),
+        sessionId: String(firstValue(row, ['session_id', 'sessionId']) || '').trim() || null,
+        sessionLabel: String(firstValue(row, ['session_label', 'sessionLabel']) || `Sessao ${index + 1}`),
+        itemId: itemId || null,
+        itemLabel: metricLabel,
+        metric: metric === 'TARGET_COMPARE_RESPONSES' ? metric : metricType,
+        metricLabel,
+        date: changedAt,
+        value: round2(safeNumber(value, 0)),
+        secondaryValues: metric === 'TARGET_COMPARE_RESPONSES'
+          ? {
+              accuracyPct: metricType === 'TARGET_ACCURACY' ? round2(safeNumber(value, 0)) : null,
+              independencePct: metricType === 'TARGET_INDEPENDENCE' ? round2(safeNumber(value, 0)) : null,
+              promptedPct: null,
+              errorPct: null
+            }
+          : undefined,
+        attemptsCount: metricType === 'TARGET_TRIAL_COUNT' ? safeNumber(value, 0) : null,
+        status: String(firstValue(row, ['current_status', 'currentStatus', 'status_label', 'statusLabel']) || '').trim() || null,
+        metadata: {
+          source: 'aba_session_metric_snapshots',
+          trendDirection: firstValue(row, ['trend_direction', 'trendDirection']),
+          changeStatus: firstValue(row, ['change_status', 'changeStatus']),
+          previousValue: firstValue(row, ['previous_value', 'previousValue']),
+          deltaValue: firstValue(row, ['delta_value', 'deltaValue']),
+          deltaPercent: firstValue(row, ['delta_percent', 'deltaPercent'])
+        }
+      } as AbaClinicalLinePoint;
+    });
+
+  if (metric !== 'TARGET_COMPARE_RESPONSES') return aggregateAbaClinicalLinePoints(mapped, options.groupBy || 'session', metric);
+
+  const grouped = new Map<string, AbaClinicalLinePoint>();
+  for (const point of mapped) {
+    const key = `${point.sessionId || point.date}|${point.itemId || point.itemLabel}`;
+    const current = grouped.get(key);
+    if (!current) {
+      grouped.set(key, { ...point, value: point.secondaryValues?.independencePct ?? point.value });
+      continue;
+    }
+    current.secondaryValues = {
+      ...(current.secondaryValues || {}),
+      ...(Object.fromEntries(Object.entries(point.secondaryValues || {}).filter(([, value]) => value !== null)) as Record<string, number | null>)
+    };
+    current.value = current.secondaryValues?.independencePct ?? current.secondaryValues?.accuracyPct ?? current.value;
+    current.attemptsCount = current.attemptsCount ?? point.attemptsCount;
+  }
+
+  return aggregateAbaClinicalLinePoints(Array.from(grouped.values()), options.groupBy || 'session', metric);
+}
+
+export function aggregateAbaClinicalLinePoints(
+  points: AbaClinicalLinePoint[],
+  groupBy: 'session' | 'day' | 'week' = 'session',
+  metric = ''
+): AbaClinicalLinePoint[] {
+  const sorted = arrayOf(points)
+    .slice()
+    .sort((a, b) => new Date(a.date || 0).getTime() - new Date(b.date || 0).getTime());
+  if (groupBy === 'session') {
+    return sorted.map((point, index) => ({
+      ...point,
+      sessionLabel: point.sessionLabel || `Sessao ${index + 1}`
+    }));
+  }
+
+  const sumMetric = ['TARGET_TRIAL_COUNT', 'BEHAVIOR_FREQUENCY', 'BEHAVIOR_DURATION_TOTAL', 'MASTERY_VALID_ATTEMPTS', 'MAINTENANCE_FAILURES'].includes(metric);
+  const groups = new Map<string, AbaClinicalLinePoint[]>();
+  for (const point of sorted) {
+    const key = groupBy === 'week' ? lineWeekKey(point.date) : aggregateDateKey(point.date);
+    groups.set(key, [...(groups.get(key) || []), point]);
+  }
+
+  return Array.from(groups.entries()).map(([key, group], index) => {
+    const values = group.map((point) => point.value).filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+    const secondaryKeys = new Set(group.flatMap((point) => Object.keys(point.secondaryValues || {})));
+    const secondaryValues: Record<string, number | null> = {};
+    secondaryKeys.forEach((secondaryKey) => {
+      const secondaryNumbers = group
+        .map((point) => point.secondaryValues?.[secondaryKey])
+        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+      secondaryValues[secondaryKey] = secondaryNumbers.length
+        ? round2(secondaryNumbers.reduce((sum, value) => sum + value, 0) / secondaryNumbers.length)
+        : null;
+    });
+    const value = values.length
+      ? round2(sumMetric ? values.reduce((sum, item) => sum + item, 0) : values.reduce((sum, item) => sum + item, 0) / values.length)
+      : null;
+    const latest = group[group.length - 1];
+    return {
+      ...latest,
+      id: `${groupBy}-${key}`,
+      sessionId: null,
+      sessionLabel: groupBy === 'week' ? `Semana ${index + 1}` : aggregateDateLabel(latest.date),
+      date: latest.date,
+      value,
+      secondaryValues: Object.keys(secondaryValues).length ? secondaryValues : latest.secondaryValues,
+      attemptsCount: group.reduce((sum, point) => sum + safeNumber(point.attemptsCount, 0), 0) || latest.attemptsCount || null,
+      metadata: {
+        ...(latest.metadata || {}),
+        groupBy,
+        groupedPoints: group.length,
+        groupKey: key
+      }
+    };
+  });
+}
+
+export function buildAbaClinicalLineSummary(points: AbaClinicalLinePoint[]): AbaClinicalLineSummary {
+  const rows = arrayOf(points)
+    .filter((point) => point.value !== null && point.value !== undefined)
+    .slice()
+    .sort((a, b) => new Date(a.date || 0).getTime() - new Date(b.date || 0).getTime());
+  const last = rows[rows.length - 1] || null;
+  const previous = rows[rows.length - 2] || null;
+  const currentValue = last ? round2(safeNumber(last.value, 0)) : null;
+  const previousValue = previous ? round2(safeNumber(previous.value, 0)) : null;
+  const delta = currentValue !== null && previousValue !== null ? round2(currentValue - previousValue) : null;
+  return {
+    currentValue,
+    previousValue,
+    delta,
+    trend: delta === null ? 'insufficient_data' : delta > 0 ? 'improved' : delta < 0 ? 'worsened' : 'stable',
+    lastMeasuredAt: last?.date || null,
+    lastSessionLabel: last?.sessionLabel || null,
+    attemptsCount: last?.attemptsCount ?? null,
+    status: last?.status || null
+  };
+}
 
 const buildSnapshot = (base: {
   organizationId?: string | null;

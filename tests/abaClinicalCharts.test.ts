@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   aggregateClinicalChangesBySession,
+  aggregateAbaClinicalLinePoints,
+  buildAbaClinicalLinePointsFromTargetSummaries,
+  buildAbaClinicalLineSummary,
   buildSessionMetricSnapshotsFromSummaries,
   compareAbaMetric,
   compareSessionMetrics,
@@ -331,8 +334,59 @@ test('buildSessionMetricSnapshotsFromSummaries cria snapshot geral quando não h
   assert.ok(snapshots.some((item) => item.metricType === 'TARGET_INDEPENDENCE' && item.previousValue === 60));
 });
 
+test('linha clínica de target retorna pontos por sessão e resumo econômico', () => {
+  const rows = [
+    {
+      id: 'r1',
+      session_id: 's1',
+      session_label: 'Sessão 1',
+      target_id: 'target-1',
+      target_name: 'Contato visual',
+      ended_at: '2026-05-25T10:00:00.000Z',
+      accuracy_percent: 40,
+      independence_percent: 30,
+      prompted_today: 5,
+      errors_today: 2,
+      attempts_today: 10,
+      most_used_prompt: 'Gestual'
+    },
+    {
+      id: 'r2',
+      session_id: 's2',
+      session_label: 'Sessão 2',
+      target_id: 'target-1',
+      target_name: 'Contato visual',
+      ended_at: '2026-05-26T10:00:00.000Z',
+      accuracy_percent: 70,
+      independence_percent: 60,
+      prompted_today: 3,
+      errors_today: 1,
+      attempts_today: 10,
+      most_used_prompt: 'Verbal'
+    }
+  ];
+  const points = buildAbaClinicalLinePointsFromTargetSummaries(rows, { metric: 'TARGET_COMPARE_RESPONSES', groupBy: 'session' });
+  assert.equal(points.length, 2);
+  assert.equal(points[1].secondaryValues?.accuracyPct, 70);
+  assert.equal(points[1].secondaryValues?.independencePct, 60);
+  assert.equal(points[1].secondaryValues?.promptedPct, 30);
+  assert.equal(points[1].secondaryValues?.errorPct, 10);
+  assert.equal(points[1].attemptsCount, 10);
+
+  const weekly = aggregateAbaClinicalLinePoints(points, 'week', 'TARGET_COMPARE_RESPONSES');
+  assert.equal(weekly.length, 1);
+  assert.equal(weekly[0].attemptsCount, 20);
+  assert.equal(weekly[0].secondaryValues?.accuracyPct, 55);
+
+  const summary = buildAbaClinicalLineSummary(points);
+  assert.equal(summary.currentValue, 60);
+  assert.equal(summary.previousValue, 30);
+  assert.equal(summary.delta, 30);
+});
+
 test('backend expõe endpoints ABA summary-driven com selects explícitos', () => {
   for (const route of [
+    '/api/aba/patients/:patientId/clinical-line-chart',
     '/api/aba/patients/:patientId/charts/targets',
     '/api/aba/patients/:patientId/charts/behaviors',
     '/api/aba/patients/:patientId/charts/mastery',
@@ -354,7 +408,12 @@ test('frontend carrega gráficos ABA lazy e usa dataService dedicado', () => {
   assert.match(patientDetailCode, /activeTab === 'aba-charts'[\s\S]*?<AbaClinicalChartsPanel/m);
   assert.match(panelCode, /dataService\.getAbaClinicalChart\(patientId, tab as any/);
   assert.match(panelCode, /chartTabs[\s\S]*?Mudanças por sessão/);
+  assert.match(panelCode, /viewMode[\s\S]*?'line'/);
+  assert.match(panelCode, /LineFilters/);
+  assert.match(panelCode, /ClinicalLineTooltip/);
+  assert.match(panelCode, /dataService\.getAbaClinicalLineChart/);
   assert.match(dataServiceCode, /async getAbaClinicalChart\(patientId: string, chart:/);
+  assert.match(dataServiceCode, /async getAbaClinicalLineChart\(patientId: string/);
   assert.match(dataServiceCode, /async saveAbaGraphAnnotation\(patientId: string/);
 });
 

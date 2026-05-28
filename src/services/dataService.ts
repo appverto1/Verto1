@@ -1379,19 +1379,25 @@ export const dataService = {
   async getCalendarEvents(options: {
     from: string;
     to: string;
+    view?: 'day' | 'week' | 'month' | string;
     therapistId?: string;
     patientId?: string;
     type?: string;
     status?: string;
+    roomId?: string;
+    locationType?: string;
     limit?: number;
   }) {
     const endpoint = endpointWithQuery('/api/calendar/events', {
       from: options.from,
       to: options.to,
+      view: options.view,
       therapistId: options.therapistId,
       patientId: options.patientId,
       type: options.type,
       status: options.status,
+      roomId: options.roomId,
+      locationType: options.locationType,
       limit: normalizeListLimit(options.limit, 120, 200)
     });
     try {
@@ -1809,6 +1815,36 @@ export const dataService = {
       console.log('Fetching ABA clinical chart from local state only...');
     }
     return { success: true, data: { points: [], insights: [], annotations: [] } };
+  },
+
+  async getAbaClinicalLineChart(patientId: string, options: any = {}) {
+    if (!isAbaV2Enabled()) {
+      return abaV2DisabledResponse({ points: [], phases: [], annotations: [], summary: null, availableMetrics: [], availableItems: [] });
+    }
+    const limit = normalizeListLimit(options.limit ?? options.pageSize, 120, 180);
+    const endpoint = endpointWithQuery(`/api/aba/patients/${encodeURIComponent(String(patientId))}/clinical-line-chart`, {
+      category: options.category,
+      itemId: options.itemId,
+      metric: options.metric,
+      period: options.period,
+      days: options.days,
+      groupBy: options.groupBy,
+      from: options.from,
+      to: options.to,
+      dateFrom: options.dateFrom,
+      dateTo: options.dateTo,
+      limit
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: 'getAbaClinicalLineChart', operation: 'list', table: 'aba_session_metric_snapshots,aba_target_live_summaries,aba_behavior_daily_summaries,aba_mastery_evaluations,aba_maintenance_probe_results', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+    } catch (error) {
+      console.log('Fetching ABA clinical line chart from local state only...');
+    }
+    return { success: true, data: { points: [], phases: [], annotations: [], summary: null, availableMetrics: [], availableItems: [] } };
   },
 
   async saveAbaGraphAnnotation(patientId: string, annotation: any) {

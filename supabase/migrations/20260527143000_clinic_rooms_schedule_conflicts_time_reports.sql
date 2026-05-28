@@ -7,12 +7,16 @@ create table if not exists public.clinic_rooms (
   organization_id uuid,
   clinic_id uuid references public.clinics(id) on delete cascade,
   name text not null,
+  specialties text,
   description text,
   capacity integer,
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.clinic_rooms
+  add column if not exists specialties text;
 
 create unique index if not exists idx_clinic_rooms_unique_active_name
   on public.clinic_rooms (coalesce(organization_id, clinic_id), lower(name))
@@ -23,6 +27,7 @@ create index if not exists idx_clinic_rooms_scope_active
 
 alter table public.appointments
   add column if not exists organization_id uuid,
+  add column if not exists approach text,
   add column if not exists room_id text,
   add column if not exists room_name text,
   add column if not exists location_type text not null default 'clinica',
@@ -36,7 +41,9 @@ alter table public.appointments
   add column if not exists actual_end_at timestamptz,
   add column if not exists actual_duration_minutes integer,
   add column if not exists recurrence_total integer,
-  add column if not exists recurrence_frequency text;
+  add column if not exists recurrence_frequency text,
+  add column if not exists deleted_at timestamptz,
+  add column if not exists is_active boolean default true;
 
 update public.appointments
 set
