@@ -125,7 +125,7 @@ type ClinicalQueryAuditOptions = {
 };
 
 function isClinicalEndpoint(endpoint: string) {
-  return /\/api\/(aba|calendar|notes|history|tasks|assigned-tasks|patient-anamnesis|patients|patient-records)/.test(endpoint);
+  return /\/api\/(aba|calendar|closure|notes|history|tasks|assigned-tasks|patient-anamnesis|patients|patient-records)/.test(endpoint);
 }
 
 function isDevQueryAuditEnabled() {
@@ -187,8 +187,9 @@ function auditClinicalQuery(endpoint: string, options: ClinicalQueryAuditOptions
   if (isList && !/[?&](limit|pageSize)=/.test(endpoint)) warnings.push('sem limit/pageSize');
   if (options.hasExplicitColumns === false) warnings.push("select('*')/payload amplo");
   if (options.requiresPatientOrSession !== false) {
-    const hasScopedPath = /\/api\/aba\/(session-live-summaries|session-reports|recent-session-events)\/[^/?]+/.test(endpoint) ||
+      const hasScopedPath = /\/api\/aba\/(session-live-summaries|session-reports|recent-session-events)\/[^/?]+/.test(endpoint) ||
       /\/api\/calendar\/events(?:\/[^/?]+\/detail)?/.test(endpoint) ||
+      /\/api\/closure\/appointments(?:\/[^/?]+)?/.test(endpoint) ||
       /\/api\/aba\/patients\/[^/?]+\/charts\/[^/?]+/.test(endpoint) ||
       /\/api\/aba\/patients\/[^/?]+\/(maintenance-schedules|next-session\/recommendations|next-session\/plan-items)/.test(endpoint) ||
       /\/api\/(notes|history|tasks|assigned-tasks|patient-anamnesis|patient-records)\/[^/?]+/.test(endpoint) ||
@@ -1434,6 +1435,112 @@ export const dataService = {
       return await safeJson(response);
     } catch (error) {
       return { success: false, data: null, error: 'Não foi possível carregar os detalhes da sessão agora.' };
+    }
+  },
+
+  async getClosureAppointments(options: {
+    from: string;
+    to: string;
+    status?: string;
+    patientId?: string;
+    professionalId?: string;
+    serviceType?: string;
+    page?: number;
+    limit?: number;
+    onlyPending?: boolean;
+    onlyReady?: boolean;
+    onlyWarnings?: boolean;
+    missing?: string;
+  }) {
+    const endpoint = endpointWithQuery('/api/closure/appointments', {
+      from: options.from,
+      to: options.to,
+      status: options.status,
+      patientId: options.patientId,
+      professionalId: options.professionalId,
+      serviceType: options.serviceType,
+      page: Math.max(1, Math.round(Number(options.page || 1) || 1)),
+      limit: normalizeListLimit(options.limit, 50, 200),
+      onlyPending: options.onlyPending ? 'true' : undefined,
+      onlyReady: options.onlyReady ? 'true' : undefined,
+      onlyWarnings: options.onlyWarnings ? 'true' : undefined,
+      missing: options.missing
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getClosureAppointments',
+        operation: 'list',
+        table: 'appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: [], totals: null, error: 'Não foi possível carregar o fechamento agora.' };
+    }
+  },
+
+  async getClosureAppointmentDetail(appointmentId: string) {
+    const endpoint = `/api/closure/appointments/${encodeURIComponent(String(appointmentId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getClosureAppointmentDetail',
+        operation: 'detail',
+        table: 'appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível carregar o fechamento agora.' };
+    }
+  },
+
+  async revalidateClosureAppointment(appointmentId: string) {
+    const endpoint = `/api/closure/appointments/${encodeURIComponent(String(appointmentId))}/revalidate`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({})
+      }, {
+        helperName: 'revalidateClosureAppointment',
+        operation: 'write',
+        table: 'appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível revalidar o fechamento agora.' };
+    }
+  },
+
+  async overrideClosureAppointment(appointmentId: string, payload: { readinessStatus?: string; status?: string; reason: string }) {
+    const endpoint = `/api/closure/appointments/${encodeURIComponent(String(appointmentId))}/override`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'overrideClosureAppointment',
+        operation: 'write',
+        table: 'appointment_closure_checks,appointment_closure_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível atualizar o fechamento agora.' };
     }
   },
 

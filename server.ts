@@ -79,6 +79,10 @@ import {
   normalizeScheduleLocationType
 } from './src/utils/scheduling';
 import {
+  evaluateAppointmentClosureReadiness,
+  type ClosureReadinessStatus
+} from './src/services/closureReadinessEngine';
+import {
   ASSIGNED_TASK_SELECT,
   FINANCIAL_ENTRY_SELECT,
   HISTORY_SELECT,
@@ -2613,6 +2617,142 @@ const TIME_REPORT_APPOINTMENT_SELECT = [
   'location_type',
   'status',
   'source_payload'
+].join(',');
+
+const CLOSURE_APPOINTMENT_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'patient_id',
+  'patient_name',
+  'therapist_id',
+  'therapist_name',
+  'scheduled_at',
+  'scheduled_start_at',
+  'scheduled_end_at',
+  'scheduled_duration_minutes',
+  'actual_start_at',
+  'actual_end_at',
+  'actual_duration_minutes',
+  'duration_minutes',
+  'approach',
+  'service_type',
+  'room_id',
+  'room_name',
+  'location_type',
+  'status',
+  'notes',
+  'source_payload',
+  'updated_at'
+].join(',');
+
+const CLOSURE_ABA_SESSION_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'patient_id',
+  'patient_name',
+  'therapist_id',
+  'appointment_id',
+  'scheduled_start_at',
+  'scheduled_end_at',
+  'scheduled_duration_minutes',
+  'actual_start_at',
+  'actual_end_at',
+  'actual_duration_minutes',
+  'room_id',
+  'room_name',
+  'location_type',
+  'status',
+  'started_at',
+  'ended_at',
+  'duration_seconds',
+  'duration_minutes',
+  'notes',
+  'updated_at'
+].join(',');
+
+const CLOSURE_SESSION_SUMMARY_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'session_id',
+  'patient_id',
+  'therapist_id',
+  'started_at',
+  'ended_at',
+  'duration_seconds',
+  'session_note',
+  'summary_payload',
+  'updated_at'
+].join(',');
+
+const CLOSURE_PATIENT_SELECT = [
+  'id',
+  'clinic_id',
+  'name',
+  'email',
+  'therapist_id',
+  'updated_at'
+].join(',');
+
+const CLOSURE_PROFESSIONAL_SELECT = [
+  'id',
+  'name',
+  'email',
+  'role',
+  'clinic_id',
+  'signature_data_url',
+  'updated_at'
+].join(',');
+
+const APPOINTMENT_CLOSURE_CHECK_SELECT = [
+  'id',
+  'organization_id',
+  'appointment_id',
+  'aba_session_id',
+  'patient_id',
+  'professional_id',
+  'service_type',
+  'readiness_status',
+  'checklist',
+  'blocking_issues_count',
+  'warning_issues_count',
+  'missing_required_count',
+  'scheduled_start',
+  'scheduled_end',
+  'actual_start',
+  'actual_end',
+  'scheduled_minutes',
+  'actual_minutes',
+  'main_issues',
+  'generated_at',
+  'generated_by',
+  'updated_at',
+  'context_hash'
+].join(',');
+
+const APPOINTMENT_CLOSURE_LIST_SELECT = [
+  'id',
+  'organization_id',
+  'appointment_id',
+  'aba_session_id',
+  'patient_id',
+  'professional_id',
+  'service_type',
+  'readiness_status',
+  'blocking_issues_count',
+  'warning_issues_count',
+  'missing_required_count',
+  'scheduled_start',
+  'scheduled_end',
+  'actual_start',
+  'actual_end',
+  'scheduled_minutes',
+  'actual_minutes',
+  'main_issues',
+  'generated_at',
+  'updated_at'
 ].join(',');
 
 const ACTIVITY_LOG_SELECT = [
@@ -9457,9 +9597,42 @@ async function startServer() {
       }
 
       if (nextAppointments !== undefined) {
+        const mirroredAppointments = Array.isArray(data.appointments)
+          ? data.appointments
+          : appointmentsForPayload || nextAppointments || [];
+        const previousAppointmentsById = new Map(
+          (Array.isArray(previous.data?.appointments) ? previous.data.appointments : [])
+            .map((appointment: any) => [sanitizeString(appointment?.id, 120), appointment])
+            .filter(([id]: any[]) => isUuid(id))
+        );
+        const closureSnapshot = (appointment: any) => JSON.stringify(cleanObject({
+          patientId: appointment?.patientId || appointment?.patient_id || null,
+          professionalId: appointment?.professionalId || appointment?.professional_id || appointment?.therapistId || appointment?.therapist_id || null,
+          type: appointment?.type || appointment?.approach || appointment?.serviceType || appointment?.service_type || null,
+          date: appointment?.date || null,
+          time: appointment?.time || null,
+          scheduledAt: appointment?.scheduledAt || appointment?.scheduled_at || appointment?.scheduled_start_at || appointment?.scheduledStartAt || null,
+          duration: appointment?.duration_minutes || appointment?.durationMinutes || appointment?.scheduled_duration_minutes || appointment?.scheduledDurationMinutes || null,
+          actualStart: appointment?.actual_start_at || appointment?.actualStartAt || appointment?.actual_start || appointment?.actualStart || null,
+          actualEnd: appointment?.actual_end_at || appointment?.actualEndAt || appointment?.actual_end || appointment?.actualEnd || null,
+          actualDuration: appointment?.actual_duration_minutes || appointment?.actualDurationMinutes || null,
+          status: appointment?.status || null,
+          room: appointment?.room_id || appointment?.roomId || appointment?.room_name || appointment?.roomName || appointment?.roomDisplayName || null,
+          location: appointment?.location_type || appointment?.locationType || appointment?.location || null
+        }));
+        const closureAppointmentIdsToRefresh = Array.from(new Set(
+          mirroredAppointments
+            .map((appointment: any) => {
+              const id = sanitizeString(appointment?.id, 120);
+              if (!isUuid(id)) return '';
+              const previousAppointment = previousAppointmentsById.get(id);
+              return !previousAppointment || closureSnapshot(previousAppointment) !== closureSnapshot(appointment) ? id : '';
+            })
+            .filter(Boolean)
+        )).slice(0, 80);
         void syncAppointmentsTableFromClinicState({
           clinicId,
-          appointments: Array.isArray(data.appointments) ? data.appointments : appointmentsForPayload || nextAppointments,
+          appointments: mirroredAppointments,
           actorId,
           specialtySettings:
             data.specialty_settings && typeof data.specialty_settings === 'object'
@@ -9470,6 +9643,11 @@ async function startServer() {
             if (summary.mirrored > 0) {
               console.log('[Appointments] Agenda espelhada na tabela appointments.', summary);
             }
+            void regenerateClosureForAppointments(
+              closureAppointmentIdsToRefresh,
+              req.session.user,
+              'clinic_state_saved'
+            );
             triggerAppointmentReminderScan('clinic_state_saved');
           })
           .catch((mirrorError: any) => {
@@ -10256,6 +10434,11 @@ async function startServer() {
           note: appointmentNote || null
         })
       });
+      void regenerateClosureForAppointments(
+        affectedAppointmentIds,
+        req.session.user,
+        'appointment_status_changed'
+      );
 
       return res.json({
         success: true,
@@ -16947,6 +17130,14 @@ async function startServer() {
       has_session_record: hasSessionRecord,
       has_report: hasReport,
       has_pending_signature: hasPendingSignature,
+      closure_readiness_status: sanitizeString(row?.closure_readiness_status || source?.closure_readiness_status, 40) || null,
+      closure_blocking_count: Number(row?.closure_blocking_count ?? source?.closure_blocking_count ?? 0) || 0,
+      closure_warning_count: Number(row?.closure_warning_count ?? source?.closure_warning_count ?? 0) || 0,
+      closure_main_issues: Array.isArray(row?.closure_main_issues)
+        ? row.closure_main_issues.slice(0, 3)
+        : Array.isArray(source?.closure_main_issues)
+          ? source.closure_main_issues.slice(0, 3)
+          : [],
       has_next_session_plan: planCount > 0 || readCalendarBooleanFlag(source, ['has_next_session_plan', 'hasNextSessionPlan']),
       has_maintenance_probe: probeCount > 0 || readCalendarBooleanFlag(source, ['has_maintenance_probe', 'hasMaintenanceProbe']),
       maintenance_probe_count: probeCount,
@@ -17520,6 +17711,440 @@ async function startServer() {
     return counts;
   };
 
+  const CLOSURE_READINESS_STATUSES = new Set<ClosureReadinessStatus>([
+    'READY',
+    'PENDING',
+    'WARNING',
+    'NOT_BILLABLE',
+    'DRAFT',
+    'UNKNOWN'
+  ]);
+
+  const parseClosureStatusFilter = (value: unknown): ClosureReadinessStatus | '' => {
+    const safe = sanitizeString(value, 40).toUpperCase();
+    return CLOSURE_READINESS_STATUSES.has(safe as ClosureReadinessStatus) ? safe as ClosureReadinessStatus : '';
+  };
+
+  const parseClosureDateRange = (query: any) => {
+    const nowDate = new Date();
+    const fromFallback = new Date(nowDate.getFullYear(), nowDate.getMonth(), 1);
+    const toFallback = new Date(nowDate.getFullYear(), nowDate.getMonth() + 1, 0, 23, 59, 59, 999);
+    const fromIso = sanitizeIsoDateTime(query?.from || query?.dateFrom, fromFallback.toISOString());
+    const toIso = sanitizeIsoDateTime(query?.to || query?.dateTo, toFallback.toISOString());
+    const fromTime = new Date(fromIso).getTime();
+    const toTime = new Date(toIso).getTime();
+    return {
+      ok: Number.isFinite(fromTime) && Number.isFinite(toTime) && toTime >= fromTime,
+      fromIso,
+      toIso
+    };
+  };
+
+  const parseClosurePageParams = (query: any) => {
+    const limit = parseBoundedListLimit(query?.limit, 50, 200);
+    const page = Math.max(1, Math.round(asSafeNumber(query?.page, 1, 100000) || 1));
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
+    return { page, limit, from, to };
+  };
+
+  const closureSafeError = (status = 500) => ({
+    success: false,
+    error: status === 400 ? 'Filtros inválidos para o fechamento.' : 'Não foi possível carregar o fechamento agora.'
+  });
+
+  const getClosureTherapistPatientIds = async (user: any, clinicId: string) => {
+    const userId = sanitizeString(user?.id, 120);
+    if (!userId || !clinicId) return [];
+    const { data, error } = await supabase
+      .from('patients')
+      .select('id')
+      .eq('clinic_id', clinicId)
+      .eq('therapist_id', userId)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .limit(500);
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return [];
+      throw error;
+    }
+    return (data || []).map((row: any) => sanitizeString(row?.id, 120)).filter((id: string) => isUuid(id));
+  };
+
+  const applyClosureTenantScope = async (query: any, user: any, clinicId: string) => {
+    let scoped = query;
+    if (isUuid(clinicId)) scoped = scoped.eq('organization_id', clinicId);
+    if (sanitizeString(user?.role, 40).toLowerCase() === 'therapist') {
+      const userId = sanitizeString(user?.id, 120);
+      const patientIds = await getClosureTherapistPatientIds(user, clinicId);
+      const orParts = [];
+      if (isUuid(userId)) orParts.push(`professional_id.eq.${userId}`);
+      if (patientIds.length > 0) orParts.push(`patient_id.in.(${patientIds.join(',')})`);
+      scoped = orParts.length > 0 ? scoped.or(orParts.join(',')) : scoped.eq('professional_id', '00000000-0000-0000-0000-000000000000');
+    }
+    return scoped;
+  };
+
+  const writeClosureAuditLog = async (params: {
+    organizationId: string;
+    appointmentId?: string | null;
+    abaSessionId?: string | null;
+    patientId?: string | null;
+    action: string;
+    previousStatus?: string | null;
+    newStatus?: string | null;
+    performedBy?: string | null;
+    metadata?: Record<string, any>;
+  }) => {
+    const action = sanitizeString(params.action, 80);
+    if (!action) return;
+    const payload = cleanObject({
+      id: crypto.randomUUID(),
+      organization_id: isUuid(params.organizationId) ? params.organizationId : null,
+      appointment_id: isUuid(sanitizeString(params.appointmentId, 120)) ? sanitizeString(params.appointmentId, 120) : null,
+      aba_session_id: sanitizeString(params.abaSessionId, 180) || null,
+      patient_id: isUuid(sanitizeString(params.patientId, 120)) ? sanitizeString(params.patientId, 120) : null,
+      action,
+      previous_status: sanitizeString(params.previousStatus, 40) || null,
+      new_status: sanitizeString(params.newStatus, 40) || null,
+      performed_by: isUuid(sanitizeString(params.performedBy, 120)) ? sanitizeString(params.performedBy, 120) : null,
+      performed_at: new Date().toISOString(),
+      metadata: sanitizeClinicalPayload(params.metadata || {})
+    });
+    if (!payload.organization_id) return;
+    const { error } = await supabase.from('appointment_closure_audit_logs').insert([payload]);
+    if (error && !hasMissingFinancialSchema(error)) {
+      console.warn('[Closure] audit log failed:', error?.message || String(error));
+    }
+  };
+
+  const fetchClosureRequirements = async (organizationId: string, serviceType: string | null) => {
+    if (!isUuid(organizationId)) return null;
+    const { data, error } = await supabase
+      .from('clinic_closure_requirements')
+      .select('id, organization_id, service_type, payer_type, require_signature, require_report, require_actual_duration, min_duration_minutes, max_duration_variance_minutes, is_active, updated_at')
+      .eq('organization_id', organizationId)
+      .eq('is_active', true)
+      .order('service_type', { ascending: false })
+      .limit(20);
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return null;
+      throw error;
+    }
+    const safeServiceType = sanitizeString(serviceType, 120);
+    const row =
+      (data || []).find((item: any) => sanitizeString(item?.service_type, 120) === safeServiceType) ||
+      (data || []).find((item: any) => !sanitizeString(item?.service_type, 120)) ||
+      null;
+    if (!row) return null;
+    return {
+      requireSignature: row.require_signature !== false,
+      requireReport: row.require_report !== false,
+      requireActualDuration: row.require_actual_duration !== false,
+      minDurationMinutes: row.min_duration_minutes ?? null,
+      maxDurationVarianceMinutes: row.max_duration_variance_minutes ?? null
+    };
+  };
+
+  const fetchClosureProfessional = async (professionalId: string) => {
+    if (!isUuid(professionalId)) return null;
+    const result = await supabase
+      .from('users')
+      .select(CLOSURE_PROFESSIONAL_SELECT)
+      .eq('id', professionalId)
+      .maybeSingle();
+    if (!result.error) return result.data || null;
+    const missingColumn = extractMissingColumnName(result.error);
+    if (!missingColumn) throw result.error;
+    const fallback = await supabase
+      .from('users')
+      .select('id, name, email, role, clinic_id, updated_at')
+      .eq('id', professionalId)
+      .maybeSingle();
+    if (fallback.error) {
+      if (hasMissingFinancialSchema(fallback.error)) return null;
+      throw fallback.error;
+    }
+    return fallback.data || null;
+  };
+
+  const fetchAppointmentClosureContext = async (appointmentId: string, user: any) => {
+    const safeAppointmentId = sanitizeString(appointmentId, 120);
+    const clinicId = sanitizeString(currentClinicId(user), 120);
+    if (!isUuid(safeAppointmentId) || !isUuid(clinicId)) {
+      return { ok: false, status: 400, error: 'Sessão inválida.' };
+    }
+
+    let appointmentQuery = supabase
+      .from('appointments')
+      .select(CLOSURE_APPOINTMENT_SELECT)
+      .eq('id', safeAppointmentId)
+      .or(`organization_id.eq.${clinicId},clinic_id.eq.${clinicId}`)
+      .limit(1);
+    if (sanitizeString(user?.role, 40).toLowerCase() === 'therapist') {
+      const patientIds = await getClosureTherapistPatientIds(user, clinicId);
+      const userId = sanitizeString(user?.id, 120);
+      const orParts = [`therapist_id.eq.${userId}`];
+      if (patientIds.length > 0) orParts.push(`patient_id.in.(${patientIds.join(',')})`);
+      appointmentQuery = appointmentQuery.or(orParts.join(','));
+    }
+    const appointmentResult = await appointmentQuery.maybeSingle();
+    if (appointmentResult.error) {
+      if (hasMissingFinancialSchema(appointmentResult.error)) {
+        return { ok: false, status: 503, error: 'Fechamento indisponível.' };
+      }
+      throw appointmentResult.error;
+    }
+    const appointment = appointmentResult.data;
+    if (!appointment?.id) return { ok: false, status: 404, error: 'Sessão não encontrada.' };
+    const patientId = sanitizeString(appointment.patient_id, 120);
+    if (!isUuid(patientId) || !(await canAccessPatientInCurrentClinic(patientId, user))) {
+      return { ok: false, status: 404, error: 'Sessão não encontrada.' };
+    }
+
+    let abaSession: any = null;
+    const abaResult = await supabase
+      .from('aba_sessions')
+      .select(CLOSURE_ABA_SESSION_SELECT)
+      .eq('appointment_id', safeAppointmentId)
+      .eq('patient_id', patientId)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!abaResult.error) abaSession = abaResult.data || null;
+    else if (!hasMissingFinancialSchema(abaResult.error)) throw abaResult.error;
+
+    let sessionSummary: any = null;
+    const abaSessionId = sanitizeString(abaSession?.id, 180);
+    if (abaSessionId) {
+      const summaryResult = await supabase
+        .from('aba_session_summaries')
+        .select(CLOSURE_SESSION_SUMMARY_SELECT)
+        .eq('session_id', abaSessionId)
+        .eq('patient_id', patientId)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!summaryResult.error) sessionSummary = summaryResult.data || null;
+      else if (!hasMissingFinancialSchema(summaryResult.error)) throw summaryResult.error;
+    }
+
+    let patient: any = null;
+    const patientResult = await supabase
+      .from('patients')
+      .select(CLOSURE_PATIENT_SELECT)
+      .eq('id', patientId)
+      .eq('clinic_id', clinicId)
+      .maybeSingle();
+    if (!patientResult.error) patient = patientResult.data || null;
+    else if (!hasMissingFinancialSchema(patientResult.error)) throw patientResult.error;
+
+    const professionalId = sanitizeString(
+      appointment.therapist_id || appointment.professional_id || abaSession?.therapist_id,
+      120
+    );
+    const professional = await fetchClosureProfessional(professionalId);
+    const serviceType = sanitizeString(appointment.service_type || appointment.approach || appointment.type, 120) || null;
+    const requirements = await fetchClosureRequirements(clinicId, serviceType);
+    const summaryPayload = parseCalendarSourcePayload(sessionSummary?.summary_payload);
+    const signature =
+      professional?.signature_data_url ||
+      summaryPayload?.signatureUrl ||
+      summaryPayload?.signaturePresent ||
+      appointment?.signature_present ||
+      appointment?.has_signature ||
+      null;
+
+    return {
+      ok: true,
+      organizationId: clinicId,
+      appointment,
+      abaSession,
+      sessionSummary,
+      patient,
+      professional,
+      requirements,
+      signature
+    };
+  };
+
+  const persistAppointmentClosureCheck = async (params: {
+    appointmentId: string;
+    user: any;
+    force?: boolean;
+    manualNotBillable?: boolean;
+  }) => {
+    const context = await fetchAppointmentClosureContext(params.appointmentId, params.user);
+    if (!context.ok) return context;
+    const appointment = (context as any).appointment;
+    const abaSession = (context as any).abaSession;
+    const sessionSummary = (context as any).sessionSummary;
+    const patient = (context as any).patient;
+    const professional = (context as any).professional;
+    const organizationId = (context as any).organizationId;
+    const appointmentId = sanitizeString(appointment?.id, 120);
+    const abaSessionId = sanitizeString(abaSession?.id, 180) || null;
+    const patientId = sanitizeString(appointment?.patient_id || abaSession?.patient_id, 120);
+    const existingResult = await supabase
+      .from('appointment_closure_checks')
+      .select(APPOINTMENT_CLOSURE_CHECK_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('appointment_id', appointmentId)
+      .maybeSingle();
+    if (existingResult.error && !hasMissingFinancialSchema(existingResult.error)) throw existingResult.error;
+
+    const evaluation = evaluateAppointmentClosureReadiness({
+      organizationId,
+      appointmentId,
+      abaSessionId,
+      patientId,
+      triggeredBy: sanitizeString(params.user?.id, 120) || null,
+      appointment,
+      abaSession,
+      sessionSummary,
+      report: sessionSummary,
+      signature: (context as any).signature,
+      patient,
+      professional,
+      requirements: (context as any).requirements,
+      manualNotBillable: params.manualNotBillable
+    });
+
+    const existing = existingResult.data || null;
+    if (!params.force && existing?.context_hash && existing.context_hash === evaluation.contextHash) {
+      return {
+        ok: true,
+        reused: true,
+        data: existing
+      };
+    }
+
+    const professionalId = sanitizeString(evaluation.summary.professionalId, 120);
+    const payload = cleanObject({
+      id: existing?.id || crypto.randomUUID(),
+      organization_id: organizationId,
+      appointment_id: appointmentId,
+      aba_session_id: abaSessionId,
+      patient_id: isUuid(patientId) ? patientId : null,
+      professional_id: isUuid(professionalId) ? professionalId : null,
+      service_type: evaluation.summary.serviceType,
+      readiness_status: evaluation.readinessStatus,
+      checklist: sanitizeClinicalPayload(evaluation.checklist),
+      blocking_issues_count: evaluation.blockingIssuesCount,
+      warning_issues_count: evaluation.warningIssuesCount,
+      missing_required_count: evaluation.missingRequiredCount,
+      scheduled_start: evaluation.summary.scheduledStart,
+      scheduled_end: evaluation.summary.scheduledEnd,
+      actual_start: evaluation.summary.actualStart,
+      actual_end: evaluation.summary.actualEnd,
+      scheduled_minutes: evaluation.summary.scheduledMinutes,
+      actual_minutes: evaluation.summary.actualMinutes,
+      main_issues: sanitizeClinicalPayload(evaluation.summary.mainIssues),
+      generated_at: new Date().toISOString(),
+      generated_by: isUuid(sanitizeString(params.user?.id, 120)) ? sanitizeString(params.user?.id, 120) : null,
+      updated_at: new Date().toISOString(),
+      context_hash: evaluation.contextHash
+    });
+
+    const result = await supabase
+      .from('appointment_closure_checks')
+      .upsert([payload], { onConflict: 'organization_id,appointment_id' })
+      .select(APPOINTMENT_CLOSURE_CHECK_SELECT)
+      .maybeSingle();
+    if (result.error) {
+      if (hasMissingFinancialSchema(result.error)) {
+        return { ok: false, status: 503, error: 'Fechamento indisponível.' };
+      }
+      throw result.error;
+    }
+    await writeClosureAuditLog({
+      organizationId,
+      appointmentId,
+      abaSessionId,
+      patientId,
+      action: existing ? 'CHECK_REGENERATED' : 'CHECK_GENERATED',
+      previousStatus: existing?.readiness_status || null,
+      newStatus: evaluation.readinessStatus,
+      performedBy: sanitizeString(params.user?.id, 120),
+      metadata: {
+        contextHash: evaluation.contextHash,
+        force: Boolean(params.force),
+        manualNotBillable: Boolean(params.manualNotBillable)
+      }
+    });
+    return { ok: true, reused: false, data: result.data || payload };
+  };
+
+  const regenerateClosureForAppointments = async (appointmentIds: any[], user: any, source: string) => {
+    const validAppointmentIds = Array.from(
+      new Set((appointmentIds || []).map((id) => sanitizeString(id, 120)).filter((id) => isUuid(id)))
+    ).slice(0, 80);
+    if (validAppointmentIds.length === 0) return;
+    for (const appointmentId of validAppointmentIds) {
+      try {
+        await persistAppointmentClosureCheck({
+          appointmentId,
+          user,
+          force: false
+        });
+      } catch (error: any) {
+        console.warn('[Closure] revalidação por evento falhou:', {
+          source,
+          appointmentId,
+          message: error?.message || String(error)
+        });
+      }
+    }
+  };
+
+  const fetchClosureSummariesByAppointment = async (appointmentIds: string[], organizationId: string, user: any) => {
+    const validAppointmentIds = Array.from(new Set(appointmentIds.filter((id) => isUuid(id)))).slice(0, 200);
+    const byAppointment = new Map<string, any>();
+    if (validAppointmentIds.length === 0 || !isUuid(organizationId)) return byAppointment;
+    let query = supabase
+      .from('appointment_closure_checks')
+      .select(APPOINTMENT_CLOSURE_LIST_SELECT)
+      .eq('organization_id', organizationId)
+      .in('appointment_id', validAppointmentIds)
+      .limit(validAppointmentIds.length);
+    query = await applyClosureTenantScope(query, user, organizationId);
+    const { data, error } = await query;
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return byAppointment;
+      throw error;
+    }
+    (data || []).forEach((row: any) => {
+      const id = sanitizeString(row?.appointment_id, 120);
+      if (id) byAppointment.set(id, row);
+    });
+    return byAppointment;
+  };
+
+  const mapClosureRowToCalendarFields = (row: any) => ({
+    closure_readiness_status: row?.readiness_status || null,
+    closure_blocking_count: Number(row?.blocking_issues_count || 0),
+    closure_warning_count: Number(row?.warning_issues_count || 0),
+    closure_main_issues: Array.isArray(row?.main_issues) ? row.main_issues.slice(0, 3) : []
+  });
+
+  const normalizeClosureListRow = (row: any, patientNames: Map<string, string>, professionalNames: Map<string, string>) => ({
+    appointment_id: row.appointment_id || null,
+    aba_session_id: row.aba_session_id || null,
+    patient_name: patientNames.get(sanitizeString(row.patient_id, 120)) || 'Paciente',
+    professional_name: professionalNames.get(sanitizeString(row.professional_id, 120)) || 'Equipe',
+    service_type: sanitizeString(row.service_type, 120) || 'Sessão',
+    scheduled_start: row.scheduled_start || null,
+    scheduled_end: row.scheduled_end || null,
+    actual_start: row.actual_start || null,
+    actual_end: row.actual_end || null,
+    scheduled_minutes: row.scheduled_minutes ?? null,
+    actual_minutes: row.actual_minutes ?? null,
+    readiness_status: row.readiness_status || 'UNKNOWN',
+    blocking_issues_count: Number(row.blocking_issues_count || 0),
+    warning_issues_count: Number(row.warning_issues_count || 0),
+    main_issues: Array.isArray(row.main_issues) ? row.main_issues.slice(0, 4) : []
+  });
+
   const fetchCalendarEventsFromClinicState = async (clinicId: string, range: any, filters: any, counters: any = {}) => {
     const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId, logger: console });
     if (stateResult.error) {
@@ -17604,9 +18229,16 @@ async function startServer() {
         countCalendarPlanItemsByPatient(patientIds, clinicId, organizationId, req.session.user),
         countCalendarMaintenanceProbesByAppointment(appointmentIds, clinicId, organizationId, req.session.user)
       ]);
+      const closureByAppointment = await fetchClosureSummariesByAppointment(appointmentIds, organizationId, req.session.user);
       const counters = { planCountByPatient, probeCountByAppointment };
       const events = rows
-        .map((row: any) => normalizeCalendarAppointmentRow(row, counters))
+        .map((row: any) => {
+          const closure = closureByAppointment.get(sanitizeString(row?.id, 120));
+          return normalizeCalendarAppointmentRow(
+            closure ? { ...row, ...mapClosureRowToCalendarFields(closure) } : row,
+            counters
+          );
+        })
         .filter((event: any) => calendarEventMatchesFilters(event, filters))
         .slice(0, range.limit);
       return res.json({ success: true, data: events, source: 'appointments' });
@@ -17624,7 +18256,9 @@ async function startServer() {
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const row = await fetchCalendarAppointmentDetailRow(eventId, clinicId, req.session.user);
       if (!row) return res.status(404).json({ success: false, error: 'Sessão não encontrada.' });
-      const event = normalizeCalendarAppointmentRow(row);
+      const closureByAppointment = await fetchClosureSummariesByAppointment([eventId], organizationId, req.session.user);
+      const closure = closureByAppointment.get(eventId);
+      const event = normalizeCalendarAppointmentRow(closure ? { ...row, ...mapClosureRowToCalendarFields(closure) } : row);
       const patientId = sanitizeString(event.patient_id, 120);
 
       let planItems: any[] = [];
@@ -17706,12 +18340,240 @@ async function startServer() {
           overdueMaintenanceProbes,
           sessionRecord: event.has_session_record ? { label: 'Sessão registrada', status: 'registered' } : null,
           report: event.has_report ? { label: 'Relatório disponível', status: 'ready' } : null,
-          pendingSignature: event.has_pending_signature
+          pendingSignature: event.has_pending_signature,
+          closure: closure ? mapClosureRowToCalendarFields(closure) : null
         }
       });
     } catch (error: any) {
       console.warn('[Calendar] event detail failed:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Não foi possível carregar os detalhes da sessão agora.' });
+    }
+  });
+
+  app.get('/api/closure/appointments', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const range = parseClosureDateRange(req.query);
+      if (!range.ok) return res.status(400).json(closureSafeError(400));
+      const { page, limit, from, to } = parseClosurePageParams(req.query);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(clinicId)) return res.status(400).json(closureSafeError(400));
+      const status = parseClosureStatusFilter(req.query?.status);
+      const patientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120);
+      const professionalId = sanitizeString(req.query?.professionalId || req.query?.professional_id, 120);
+      const serviceType = sanitizeString(req.query?.serviceType || req.query?.service_type, 120);
+      const onlyPending = String(req.query?.onlyPending || req.query?.somentePendencias || '').toLowerCase() === 'true';
+      const onlyReady = String(req.query?.onlyReady || req.query?.somenteProntas || '').toLowerCase() === 'true';
+      const onlyWarnings = String(req.query?.onlyWarnings || req.query?.somenteAlertas || '').toLowerCase() === 'true';
+      const missingKind = sanitizeString(req.query?.missing || req.query?.pendencia, 80).toLowerCase();
+
+      let query = supabase
+        .from('appointment_closure_checks')
+        .select(APPOINTMENT_CLOSURE_LIST_SELECT)
+        .eq('organization_id', clinicId)
+        .gte('scheduled_start', range.fromIso)
+        .lte('scheduled_start', range.toIso)
+        .order('scheduled_start', { ascending: true })
+        .range(from, to);
+      query = await applyClosureTenantScope(query, req.session.user, clinicId);
+      if (status) query = query.eq('readiness_status', status);
+      if (onlyPending) query = query.eq('readiness_status', 'PENDING');
+      if (onlyReady) query = query.eq('readiness_status', 'READY');
+      if (onlyWarnings) query = query.eq('readiness_status', 'WARNING');
+      if (isUuid(patientId)) query = query.eq('patient_id', patientId);
+      if (isUuid(professionalId)) query = query.eq('professional_id', professionalId);
+      if (serviceType) query = query.eq('service_type', serviceType);
+      if (missingKind === 'signature' || missingKind === 'assinatura') query = query.contains('main_issues', ['Assinatura pendente para fechamento da sessão.']);
+      if (missingKind === 'report' || missingKind === 'relatorio') query = query.contains('main_issues', ['Relatório da sessão ainda não foi preenchido.']);
+
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [], page, limit, totals: null });
+        throw error;
+      }
+      const rows = Array.isArray(data) ? data : [];
+      const patientIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.patient_id, 120)).filter((id: string) => isUuid(id))));
+      const professionalIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.professional_id, 120)).filter((id: string) => isUuid(id))));
+      let totalsQuery = supabase
+        .from('appointment_closure_checks')
+        .select('readiness_status, scheduled_minutes, actual_minutes, blocking_issues_count, warning_issues_count', { count: 'exact' })
+        .eq('organization_id', clinicId)
+        .gte('scheduled_start', range.fromIso)
+        .lte('scheduled_start', range.toIso)
+        .limit(1000);
+      totalsQuery = await applyClosureTenantScope(totalsQuery, req.session.user, clinicId);
+      if (status) totalsQuery = totalsQuery.eq('readiness_status', status);
+      if (onlyPending) totalsQuery = totalsQuery.eq('readiness_status', 'PENDING');
+      if (onlyReady) totalsQuery = totalsQuery.eq('readiness_status', 'READY');
+      if (onlyWarnings) totalsQuery = totalsQuery.eq('readiness_status', 'WARNING');
+      if (isUuid(patientId)) totalsQuery = totalsQuery.eq('patient_id', patientId);
+      if (isUuid(professionalId)) totalsQuery = totalsQuery.eq('professional_id', professionalId);
+      if (serviceType) totalsQuery = totalsQuery.eq('service_type', serviceType);
+      if (missingKind === 'signature' || missingKind === 'assinatura') totalsQuery = totalsQuery.contains('main_issues', ['Assinatura pendente para fechamento da sessão.']);
+      if (missingKind === 'report' || missingKind === 'relatorio') totalsQuery = totalsQuery.contains('main_issues', ['Relatório da sessão ainda não foi preenchido.']);
+      const [patientsResult, professionalsResult, totalsResult] = await Promise.all([
+        patientIds.length > 0
+          ? supabase.from('patients').select('id, name').eq('clinic_id', clinicId).in('id', patientIds).limit(patientIds.length)
+          : Promise.resolve({ data: [], error: null } as any),
+        professionalIds.length > 0
+          ? supabase.from('users').select('id, name, email').in('id', professionalIds).limit(professionalIds.length)
+          : Promise.resolve({ data: [], error: null } as any),
+        totalsQuery
+      ]);
+      if (patientsResult.error && !hasMissingFinancialSchema(patientsResult.error)) throw patientsResult.error;
+      if (professionalsResult.error && !hasMissingFinancialSchema(professionalsResult.error)) throw professionalsResult.error;
+      const patientNames = new Map<string, string>((patientsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name, 180) || 'Paciente']));
+      const professionalNames = new Map<string, string>((professionalsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name || row.email, 180) || 'Equipe']));
+      const totalsRows = totalsResult.error ? [] : (totalsResult.data || []);
+      const totals = {
+        ready: totalsRows.filter((row: any) => row.readiness_status === 'READY').length,
+        pending: totalsRows.filter((row: any) => row.readiness_status === 'PENDING').length,
+        warning: totalsRows.filter((row: any) => row.readiness_status === 'WARNING').length,
+        notBillable: totalsRows.filter((row: any) => row.readiness_status === 'NOT_BILLABLE').length,
+        draft: totalsRows.filter((row: any) => row.readiness_status === 'DRAFT').length,
+        total: totalsRows.length,
+        scheduledMinutes: totalsRows.reduce((sum: number, row: any) => sum + (Number(row.scheduled_minutes) || 0), 0),
+        actualMinutes: totalsRows.reduce((sum: number, row: any) => sum + (Number(row.actual_minutes) || 0), 0),
+        blockingIssues: totalsRows.reduce((sum: number, row: any) => sum + (Number(row.blocking_issues_count) || 0), 0),
+        warningIssues: totalsRows.reduce((sum: number, row: any) => sum + (Number(row.warning_issues_count) || 0), 0)
+      };
+      return res.json({
+        success: true,
+        data: rows.map((row: any) => normalizeClosureListRow(row, patientNames, professionalNames)),
+        page,
+        limit,
+        totals
+      });
+    } catch (error: any) {
+      console.warn('[Closure] list failed:', error?.message || String(error));
+      return res.status(500).json(closureSafeError(500));
+    }
+  });
+
+  app.get('/api/closure/appointments/:appointmentId', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const appointmentId = sanitizeString(req.params.appointmentId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(appointmentId) || !isUuid(clinicId)) return res.status(400).json(closureSafeError(400));
+      let query = supabase
+        .from('appointment_closure_checks')
+        .select(APPOINTMENT_CLOSURE_CHECK_SELECT)
+        .eq('organization_id', clinicId)
+        .eq('appointment_id', appointmentId)
+        .limit(1);
+      query = await applyClosureTenantScope(query, req.session.user, clinicId);
+      let { data, error } = await query.maybeSingle();
+      if (error && !hasMissingFinancialSchema(error)) throw error;
+      if (!data) {
+        const generated = await persistAppointmentClosureCheck({ appointmentId, user: req.session.user, force: true });
+        if (!generated.ok) return res.status((generated as any).status || 404).json(closureSafeError((generated as any).status || 404));
+        data = (generated as any).data;
+      }
+      const patientId = sanitizeString(data?.patient_id, 120);
+      const professionalId = sanitizeString(data?.professional_id, 120);
+      if (patientId && !(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        return res.status(404).json(closureSafeError(404));
+      }
+      const [patientResult, professionalResult] = await Promise.all([
+        isUuid(patientId)
+          ? supabase.from('patients').select('id, name').eq('id', patientId).eq('clinic_id', clinicId).maybeSingle()
+          : Promise.resolve({ data: null, error: null } as any),
+        isUuid(professionalId)
+          ? supabase.from('users').select('id, name, email').eq('id', professionalId).maybeSingle()
+          : Promise.resolve({ data: null, error: null } as any)
+      ]);
+      if (patientResult.error && !hasMissingFinancialSchema(patientResult.error)) throw patientResult.error;
+      if (professionalResult.error && !hasMissingFinancialSchema(professionalResult.error)) throw professionalResult.error;
+      await writeClosureAuditLog({
+        organizationId: clinicId,
+        appointmentId,
+        abaSessionId: data?.aba_session_id || null,
+        patientId,
+        action: 'VIEWED_DETAIL',
+        previousStatus: data?.readiness_status || null,
+        newStatus: data?.readiness_status || null,
+        performedBy: sanitizeString(req.session.user?.id, 120),
+        metadata: { source: 'closure_detail' }
+      });
+      return res.json({
+        success: true,
+        data: {
+          ...normalizeClosureListRow(
+            data,
+            new Map([[patientId, sanitizeString(patientResult.data?.name, 180) || 'Paciente']]),
+            new Map([[professionalId, sanitizeString(professionalResult.data?.name || professionalResult.data?.email, 180) || 'Equipe']])
+          ),
+          checklist: Array.isArray(data?.checklist) ? data.checklist : []
+        }
+      });
+    } catch (error: any) {
+      console.warn('[Closure] detail failed:', error?.message || String(error));
+      return res.status(500).json(closureSafeError(500));
+    }
+  });
+
+  app.post('/api/closure/appointments/:appointmentId/revalidate', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de revalidação de fechamento')) return;
+      const appointmentId = sanitizeString(req.params.appointmentId, 120);
+      if (!isUuid(appointmentId)) return res.status(400).json(closureSafeError(400));
+      const generated = await persistAppointmentClosureCheck({ appointmentId, user: req.session.user, force: true });
+      if (!generated.ok) return res.status((generated as any).status || 404).json(closureSafeError((generated as any).status || 404));
+      return res.json({ success: true, data: (generated as any).data, reused: Boolean((generated as any).reused) });
+    } catch (error: any) {
+      console.warn('[Closure] revalidate failed:', error?.message || String(error));
+      return res.status(500).json(closureSafeError(500));
+    }
+  });
+
+  app.patch('/api/closure/appointments/:appointmentId/override', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de override de fechamento')) return;
+      const appointmentId = sanitizeString(req.params.appointmentId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const reason = sanitizeTextField(req.body?.reason || req.body?.justificativa, 600);
+      const requestedStatus = parseClosureStatusFilter(req.body?.readinessStatus || req.body?.readiness_status || req.body?.status);
+      if (!isUuid(appointmentId) || !isUuid(clinicId) || !requestedStatus || reason.length < 8) {
+        return res.status(400).json(closureSafeError(400));
+      }
+      const generated = await persistAppointmentClosureCheck({
+        appointmentId,
+        user: req.session.user,
+        force: false,
+        manualNotBillable: requestedStatus === 'NOT_BILLABLE'
+      });
+      if (!generated.ok) return res.status((generated as any).status || 404).json(closureSafeError((generated as any).status || 404));
+      const existing = (generated as any).data;
+      const previousStatus = sanitizeString(existing?.readiness_status, 40) || null;
+      const { data, error } = await supabase
+        .from('appointment_closure_checks')
+        .update({
+          readiness_status: requestedStatus,
+          updated_at: new Date().toISOString()
+        })
+        .eq('organization_id', clinicId)
+        .eq('appointment_id', appointmentId)
+        .select(APPOINTMENT_CLOSURE_CHECK_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      await writeClosureAuditLog({
+        organizationId: clinicId,
+        appointmentId,
+        abaSessionId: data?.aba_session_id || existing?.aba_session_id || null,
+        patientId: data?.patient_id || existing?.patient_id || null,
+        action: requestedStatus === 'NOT_BILLABLE' ? 'MARKED_NOT_BILLABLE' : 'MANUAL_OVERRIDE',
+        previousStatus,
+        newStatus: requestedStatus,
+        performedBy: sanitizeString(req.session.user?.id, 120),
+        metadata: {
+          reason,
+          originalBlockingIssuesCount: Number(existing?.blocking_issues_count || 0),
+          originalWarningIssuesCount: Number(existing?.warning_issues_count || 0)
+        }
+      });
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      console.warn('[Closure] override failed:', error?.message || String(error));
+      return res.status(500).json(closureSafeError(500));
     }
   });
 
@@ -20191,6 +21053,13 @@ async function startServer() {
         }
         throw result.error;
       }
+      if (payload.appointment_id) {
+        void regenerateClosureForAppointments(
+          [payload.appointment_id],
+          req.session.user,
+          'aba_session_saved'
+        );
+      }
       return res.json({ success: true, data: { ...payload, id: (result.data as any)?.id || payload.id } });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
@@ -20254,7 +21123,17 @@ async function startServer() {
           query = query.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
         }
         const result = await query.select('id,status,appointment_id,scheduled_start_at,scheduled_end_at,scheduled_duration_minutes,actual_start_at,actual_end_at,actual_duration_minutes,room_id,room_name,location_type,ended_at,duration_seconds,duration_minutes,record_count,updated_at').maybeSingle();
-        if (!result.error) return res.json({ success: true, data: result.data || { id: sessionId, ...safePatch } });
+        if (!result.error) {
+          const appointmentIdForClosure = sanitizeString(result.data?.appointment_id || safePatch.appointment_id, 120);
+          if (isUuid(appointmentIdForClosure)) {
+            void regenerateClosureForAppointments(
+              [appointmentIdForClosure],
+              req.session.user,
+              'aba_session_updated'
+            );
+          }
+          return res.json({ success: true, data: result.data || { id: sessionId, ...safePatch } });
+        }
         const missingColumn = extractMissingColumnName(result.error);
         if (missingColumn && missingColumn in safePatch) {
           delete safePatch[missingColumn];
@@ -20407,6 +21286,29 @@ async function startServer() {
         await buildSessionMetricSnapshots(sessionId);
       } catch (snapshotError: any) {
         console.warn('[ABA Charts] Falha ao gerar snapshots da sessão:', snapshotError?.message || String(snapshotError));
+      }
+      let appointmentIdForClosure = isUuid(sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180))
+        ? sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180)
+        : '';
+      if (!appointmentIdForClosure) {
+        const sessionLinkResult = await supabase
+          .from('aba_sessions')
+          .select('id, appointment_id')
+          .eq('id', sessionId)
+          .eq('patient_id', patientId)
+          .maybeSingle();
+        if (!sessionLinkResult.error) {
+          appointmentIdForClosure = sanitizeString(sessionLinkResult.data?.appointment_id, 180);
+        } else if (!hasMissingFinancialSchema(sessionLinkResult.error)) {
+          console.warn('[Closure] vínculo da sessão ABA não encontrado para revalidação:', sessionLinkResult.error.message);
+        }
+      }
+      if (isUuid(appointmentIdForClosure)) {
+        void regenerateClosureForAppointments(
+          [appointmentIdForClosure],
+          req.session.user,
+          'aba_session_summary_saved'
+        );
       }
       return res.json({ success: true, data: { ...payload, id: (result.data as any)?.id || payload.id } });
     } catch (error: any) {

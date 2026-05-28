@@ -87,6 +87,8 @@ test('cards mostram informacoes e indicadores essenciais da sessao', () => {
   assert.match(calendarCode, /has_maintenance_probe/);
   assert.match(calendarCode, /has_session_record/);
   assert.match(calendarCode, /has_pending_signature/);
+  assert.match(calendarCode, /closure_readiness_status/);
+  assert.match(calendarCode, /getClosureStatusStyle/);
 });
 
 test('popover tem acoes clinicas e nao registra sessao automaticamente', () => {
@@ -101,6 +103,9 @@ test('popover tem acoes clinicas e nao registra sessao automaticamente', () => {
   assert.match(calendarCode, /Ver gráficos/);
   assert.match(calendarCode, /Maintenance Probes pendentes/);
   assert.match(calendarCode, /Plano sugerido para esta sessão/);
+  assert.match(calendarCode, /Fechamento/);
+  assert.match(calendarCode, /Ver checklist/);
+  assert.match(calendarCode, /getClosureAppointmentDetail/);
   assert.doesNotMatch(calendarCode, /completeMaintenanceSchedule\(/);
   assert.doesNotMatch(calendarCode, /saveAbaSessionSummary\(/);
 });

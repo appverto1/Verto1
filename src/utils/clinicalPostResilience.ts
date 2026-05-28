@@ -72,8 +72,17 @@ function cleanString(value: unknown, maxLength = 1000): string {
   return String(value ?? '').trim().slice(0, maxLength);
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function cleanText(value: unknown, maxLength: number): string {
-  return cleanString(value, maxLength).replace(/\u0000/g, '');
+  return escapeHtml(cleanString(value, maxLength).replace(/\u0000/g, ''));
 }
 
 function cleanEmail(value: unknown): string {

@@ -58,6 +58,7 @@ import { ProtocolManagementSystem } from "./Protocols";
 import { StackedDomainStatusChart } from "./StackedDomainStatusChart";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { ClinicalAgendaBoard } from "./Calendar";
+import { OperationalClosureCenter } from "./OperationalClosureCenter";
 import { LogoVerto } from "./Common";
 import { SecureImage } from "./SecureMedia";
 import { motion, AnimatePresence } from "framer-motion";
@@ -223,6 +224,7 @@ export function CoordinatorDashboard({
     flow: "engagement-widgets",
     birthdays: "engagement-widgets",
     agenda: "agenda-multi-view",
+    closure: "agenda-multi-view",
     rooms: "rooms",
   };
 
@@ -233,6 +235,7 @@ export function CoordinatorDashboard({
 
   const canAccessTab = (tabId: string) => {
     if (tabId === "financial") return canAccessClinicFinance;
+    if (tabId === "closure") return !isReceptionist;
     const capability = capabilityForTab(tabId);
     if (!capability) return true;
     const status = capabilityStatusForRole(capability);
@@ -251,6 +254,7 @@ export function CoordinatorDashboard({
     | "financial"
     | "patients"
     | "agenda"
+    | "closure"
     | "rooms"
     | "protocols"
     | "settings"
@@ -272,6 +276,7 @@ export function CoordinatorDashboard({
       | "financial"
       | "patients"
       | "agenda"
+      | "closure"
       | "rooms"
       | "protocols"
       | "settings"
@@ -415,6 +420,7 @@ export function CoordinatorDashboard({
     financial: "Financeiro",
     patients: "Pacientes",
     agenda: "Agenda",
+    closure: "Fechamento operacional",
     rooms: "Reservas de Sala",
     protocols: "Protocolos",
     settings: "Configurações da Clínica",
@@ -5142,6 +5148,8 @@ export function CoordinatorDashboard({
     : [
         { id: "dashboard", label: "Painel", icon: LayoutDashboard },
         { id: "patients", label: "Pacientes", icon: ClipboardList },
+        { id: "agenda", label: "Agenda", icon: CalendarDays },
+        { id: "closure", label: "Fechamento", icon: CalendarRange },
         { id: "protocols", label: "Protocolos", icon: ClipboardCheck },
         { id: "logs", label: "Log de Atividades", icon: History },
         { id: "settings", label: "Configurações", icon: Settings },
@@ -5172,6 +5180,8 @@ export function CoordinatorDashboard({
     : [
         { id: "dashboard", label: "Painel", icon: LayoutDashboard },
         { id: "patients", label: "Pacientes", icon: ClipboardList },
+        { id: "agenda", label: "Agenda", icon: CalendarDays },
+        { id: "closure", label: "Fechamento", icon: CalendarRange },
         {
           id: "protocols",
           label: "Protocolos",
@@ -6932,6 +6942,29 @@ export function CoordinatorDashboard({
                 className="space-y-6"
               >
                 {renderAgendaContent()}
+              </motion.div>
+            )}
+            {activeTab === "closure" && (
+              <motion.div
+                key="closure"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="space-y-6"
+              >
+                <OperationalClosureCenter
+                  patients={visiblePatients}
+                  professionals={Object.values(therapistMembersById)}
+                  canOverride={!isTherapist}
+                  onOpenAppointment={() => navigateToTab("agenda")}
+                  onOpenReport={(appointment) =>
+                    onPatientClick(
+                      undefined,
+                      { tab: "report" },
+                      appointment?.patient_name || "Paciente",
+                    )
+                  }
+                />
               </motion.div>
             )}
             {activeTab === "billing" && (

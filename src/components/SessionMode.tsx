@@ -546,6 +546,9 @@ export const SessionMode = ({
   const [sessionCompleted, setSessionCompleted] = useState(false);
   const [postClosureSummary, setPostClosureSummary] = useState<SessionSummary | null>(null);
   const [showPostClosureReport, setShowPostClosureReport] = useState(false);
+  const [operationalClosure, setOperationalClosure] = useState<any>(null);
+  const [operationalClosureLoading, setOperationalClosureLoading] = useState(false);
+  const [operationalClosureError, setOperationalClosureError] = useState('');
   const [showComplementEditor, setShowComplementEditor] = useState(false);
   const [durationBlockModalOpen, setDurationBlockModalOpen] = useState(false);
   const [promptSelectionGoal, setPromptSelectionGoal] = useState<any>(null);
@@ -896,6 +899,40 @@ export const SessionMode = ({
     });
     return () => window.cancelAnimationFrame(animationFrame);
   }, [showSessionSummary]);
+
+  useEffect(() => {
+    if (!activeAppointmentId || !(sessionCompleted && postClosureSummary && !showSessionSummary)) {
+      setOperationalClosure(null);
+      setOperationalClosureError('');
+      return;
+    }
+    let cancelled = false;
+    setOperationalClosureLoading(true);
+    setOperationalClosureError('');
+    dataService.getClosureAppointmentDetail(activeAppointmentId)
+      .then((result: any) => {
+        if (cancelled) return;
+        if (result?.success) {
+          setOperationalClosure(result.data || null);
+          setOperationalClosureError('');
+        } else {
+          setOperationalClosure(null);
+          setOperationalClosureError(result?.error || 'Não foi possível carregar o fechamento agora.');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOperationalClosure(null);
+          setOperationalClosureError('Não foi possível carregar o fechamento agora.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setOperationalClosureLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAppointmentId, sessionCompleted, postClosureSummary?.id, showSessionSummary]);
 
   const triggerIntervalAlert = (alertType: string) => {
     if ((alertType === 'vibration' || alertType === 'both') && typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
@@ -3351,6 +3388,39 @@ export const SessionMode = ({
     }
   };
 
+  const revalidateOperationalClosure = async () => {
+    if (!activeAppointmentId) return;
+    setOperationalClosureLoading(true);
+    setOperationalClosureError('');
+    try {
+      const result = await dataService.revalidateClosureAppointment(activeAppointmentId);
+      if (!result?.success) {
+        setOperationalClosureError(result?.error || 'Não foi possível revalidar o fechamento agora.');
+        return;
+      }
+      const detail = await dataService.getClosureAppointmentDetail(activeAppointmentId);
+      if (detail?.success) setOperationalClosure(detail.data || null);
+      else setOperationalClosureError(detail?.error || 'Não foi possível carregar o fechamento agora.');
+    } catch {
+      setOperationalClosureError('Não foi possível revalidar o fechamento agora.');
+    } finally {
+      setOperationalClosureLoading(false);
+    }
+  };
+
+  const getOperationalClosureStatusMeta = (status: any) => {
+    const normalized = String(status || 'UNKNOWN').toUpperCase();
+    const map: Record<string, any> = {
+      READY: { label: 'Pronta', icon: CheckCircle2, className: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
+      PENDING: { label: 'Com pendências', icon: ShieldAlert, className: 'bg-red-50 text-red-700 border-red-100' },
+      WARNING: { label: 'Atenção', icon: AlertCircle, className: 'bg-amber-50 text-amber-700 border-amber-100' },
+      NOT_BILLABLE: { label: 'Não faturável', icon: ShieldAlert, className: 'bg-gray-100 text-gray-700 border-gray-200' },
+      DRAFT: { label: 'Em aberto', icon: Clock, className: 'bg-sky-50 text-sky-700 border-sky-100' },
+      UNKNOWN: { label: 'Dados insuficientes', icon: AlertCircle, className: 'bg-gray-100 text-gray-700 border-gray-200' }
+    };
+    return map[normalized] || map.UNKNOWN;
+  };
+
   const closureBlockers = sessionClosureSummary.blockingItems;
   const closureWarnings = sessionClosureSummary.warningItems;
   const hasClosureBlockers = closureBlockers.length > 0;
@@ -3482,6 +3552,73 @@ export const SessionMode = ({
                     ))}
                   </div>
                 </section>
+
+                {activeAppointmentId && (
+                  <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <h3 className="text-lg font-bold text-gray-900">Fechamento operacional</h3>
+                        <p className="mt-1 text-sm text-gray-500">Conferência administrativa desta sessão para pré-faturamento.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={revalidateOperationalClosure}
+                        disabled={operationalClosureLoading}
+                        className="inline-flex w-fit items-center gap-2 rounded-2xl border border-blue-100 bg-[#F8FAFF] px-3 py-2 text-xs font-bold text-[#7a32fc] disabled:opacity-60"
+                      >
+                        <RotateCcw size={14} />
+                        {operationalClosureLoading ? 'Revalidando' : 'Revalidar'}
+                      </button>
+                    </div>
+                    {operationalClosureError && (
+                      <p className="mt-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+                        {operationalClosureError}
+                      </p>
+                    )}
+                    {operationalClosure ? (() => {
+                      const meta = getOperationalClosureStatusMeta(operationalClosure.readiness_status);
+                      const Icon = meta.icon;
+                      const checklist = Array.isArray(operationalClosure.checklist) ? operationalClosure.checklist : [];
+                      const issues = checklist.filter((item: any) => item.status === 'FAILED' || item.status === 'WARNING').slice(0, 5);
+                      return (
+                        <div className="mt-4 space-y-3">
+                          <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-bold ${meta.className}`}>
+                            <Icon size={14} />
+                            {meta.label}
+                          </div>
+                          <div className="grid gap-2 md:grid-cols-3">
+                            <div className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-3">
+                              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Pendências</p>
+                              <p className="text-xl font-bold text-gray-900">{operationalClosure.blocking_issues_count || 0}</p>
+                            </div>
+                            <div className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-3">
+                              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Alertas</p>
+                              <p className="text-xl font-bold text-gray-900">{operationalClosure.warning_issues_count || 0}</p>
+                            </div>
+                            <div className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-3">
+                              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Realizado</p>
+                              <p className="text-xl font-bold text-gray-900">{operationalClosure.actual_minutes ? `${operationalClosure.actual_minutes} min` : 'Não informado'}</p>
+                            </div>
+                          </div>
+                          <div className="space-y-2">
+                            {issues.length === 0 ? (
+                              <p className="rounded-2xl bg-emerald-50 border border-emerald-100 px-4 py-3 text-sm font-semibold text-emerald-700">Sem pendências de fechamento.</p>
+                            ) : issues.map((item: any) => (
+                              <div key={item.key || item.label} className="rounded-2xl bg-[#F8FAFF] border border-gray-100 px-4 py-3">
+                                <p className="text-sm font-bold text-gray-900">{item.label}</p>
+                                <p className="mt-1 text-sm text-gray-500">{item.message}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })() : (
+                      <p className="mt-3 rounded-2xl bg-[#F8FAFF] border border-gray-100 px-4 py-3 text-sm font-semibold text-gray-500">
+                        {operationalClosureLoading ? 'Carregando fechamento operacional.' : 'Fechamento ainda não disponível para esta sessão.'}
+                      </p>
+                    )}
+                  </section>
+                )}
 
                 <section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <h3 className="text-lg font-bold text-gray-900">Resumo geral</h3>

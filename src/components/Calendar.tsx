@@ -435,6 +435,24 @@ const getClinicalStatusStyle = (status: any, event?: any) => {
   return { label: getAppointmentStatusLabel(status), className: color.badge, icon: color.icon };
 };
 
+const normalizeClosureStatus = (status: any) => {
+  const value = String(status || '').toUpperCase();
+  return ['READY', 'PENDING', 'WARNING', 'NOT_BILLABLE', 'DRAFT', 'UNKNOWN'].includes(value) ? value : '';
+};
+
+const getClosureStatusStyle = (status: any) => {
+  const normalized = normalizeClosureStatus(status);
+  const styles: Record<string, any> = {
+    READY: { label: 'Pronta', className: 'bg-emerald-100 text-emerald-700', icon: CheckCircle2 },
+    PENDING: { label: 'Pendência', className: 'bg-rose-100 text-rose-700', icon: ClipboardCheck },
+    WARNING: { label: 'Atenção', className: 'bg-amber-100 text-amber-700', icon: AlertCircle },
+    NOT_BILLABLE: { label: 'Não faturável', className: 'bg-slate-200 text-slate-700', icon: Ban },
+    DRAFT: { label: 'Em aberto', className: 'bg-sky-100 text-sky-700', icon: Clock },
+    UNKNOWN: { label: 'Dados insuficientes', className: 'bg-zinc-100 text-zinc-700', icon: AlertCircle }
+  };
+  return styles[normalized] || null;
+};
+
 const pad2 = (value: number) => String(value).padStart(2, '0');
 
 const toDateKey = (date: Date) =>
@@ -573,6 +591,13 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
   const therapistId = event?.therapist_id || event?.therapistId || event?.professionalId || null;
   const type = event?.type || event?.approach || 'Sessão';
   const roomInfo = resolveRoomInfo(event, roomLookup);
+  const closureSource = event?.closure && typeof event.closure === 'object' ? event.closure : {};
+  const closureReadinessStatus = normalizeClosureStatus(
+    event?.closure_readiness_status ||
+    event?.closureReadinessStatus ||
+    closureSource?.closure_readiness_status ||
+    closureSource?.readiness_status
+  );
   const normalized = {
     ...event,
     id: String(event?.id || `${patientName}-${start.toISOString()}`),
@@ -609,7 +634,20 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
     has_next_session_plan: Boolean(event?.has_next_session_plan ?? event?.hasNextSessionPlan),
     has_maintenance_probe: Boolean(event?.has_maintenance_probe ?? event?.hasMaintenanceProbe),
     maintenance_probe_count: Number(event?.maintenance_probe_count ?? event?.maintenanceProbeCount ?? 0),
-    plan_item_count: Number(event?.plan_item_count ?? event?.planItemCount ?? 0)
+    plan_item_count: Number(event?.plan_item_count ?? event?.planItemCount ?? 0),
+    closure_readiness_status: closureReadinessStatus || null,
+    closureReadinessStatus: closureReadinessStatus || null,
+    closure_blocking_count: Number(event?.closure_blocking_count ?? event?.closureBlockingCount ?? closureSource?.closure_blocking_count ?? closureSource?.blocking_issues_count ?? 0),
+    closure_warning_count: Number(event?.closure_warning_count ?? event?.closureWarningCount ?? closureSource?.closure_warning_count ?? closureSource?.warning_issues_count ?? 0),
+    closure_main_issues: Array.isArray(event?.closure_main_issues)
+      ? event.closure_main_issues.slice(0, 3)
+      : Array.isArray(event?.closureMainIssues)
+        ? event.closureMainIssues.slice(0, 3)
+        : Array.isArray(closureSource?.closure_main_issues)
+          ? closureSource.closure_main_issues.slice(0, 3)
+          : Array.isArray(closureSource?.main_issues)
+            ? closureSource.main_issues.slice(0, 3)
+            : []
   };
   return normalized;
 };
@@ -689,6 +727,7 @@ export const ClinicalAgendaBoard = ({
   const [statusActionEvent, setStatusActionEvent] = useState<any>(null);
   const [eventDetail, setEventDetail] = useState<any>(null);
   const [detailState, setDetailState] = useState<{ loading: boolean; error: string }>({ loading: false, error: '' });
+  const [closureDetailState, setClosureDetailState] = useState<{ loading: boolean; error: string; data: any | null }>({ loading: false, error: '', data: null });
   const cacheRef = useRef<Map<string, any[]>>(new Map());
   const roomLookup = useMemo(() => {
     const map = new Map<string, any>();
@@ -956,6 +995,7 @@ export const ClinicalAgendaBoard = ({
     setSelectedEvent(normalized);
     setEventDetail(null);
     setDetailState({ loading: true, error: '' });
+    setClosureDetailState({ loading: false, error: '', data: null });
     dataService.getCalendarEventDetail(normalized.id)
       .then((result: any) => {
         if (result?.success) {
@@ -966,6 +1006,21 @@ export const ClinicalAgendaBoard = ({
         setDetailState({ loading: false, error: result?.error || 'Não foi possível carregar os detalhes da sessão agora.' });
       })
       .catch(() => setDetailState({ loading: false, error: 'Não foi possível carregar os detalhes da sessão agora.' }));
+  };
+
+  const openClosureChecklist = (event: any) => {
+    const appointmentId = String(event?.id || '').trim();
+    if (!appointmentId) return;
+    setClosureDetailState({ loading: true, error: '', data: null });
+    dataService.getClosureAppointmentDetail(appointmentId)
+      .then((result: any) => {
+        if (result?.success) {
+          setClosureDetailState({ loading: false, error: '', data: result.data || null });
+          return;
+        }
+        setClosureDetailState({ loading: false, error: result?.error || 'Não foi possível carregar o fechamento agora.', data: null });
+      })
+      .catch(() => setClosureDetailState({ loading: false, error: 'Não foi possível carregar o fechamento agora.', data: null }));
   };
 
   const openDayPanel = (dateKey: string) => {
@@ -1234,7 +1289,9 @@ export const ClinicalAgendaBoard = ({
     : '';
 
   const renderIndicators = (event: any) => {
+    const closureStyle = getClosureStatusStyle(event.closure_readiness_status);
     const indicators = [
+      closureStyle ? { label: closureStyle.label, icon: closureStyle.icon, className: closureStyle.className } : null,
       event.has_next_session_plan ? { label: 'Plano', icon: Zap, className: 'bg-violet-100 text-violet-700' } : null,
       event.has_maintenance_probe ? { label: `Probe${event.maintenance_probe_count > 1 ? ` ${event.maintenance_probe_count}` : ''}`, icon: AlertCircle, className: 'bg-amber-100 text-amber-700' } : null,
       event.has_session_record ? { label: 'Registrada', icon: CheckCircle2, className: 'bg-emerald-100 text-emerald-700' } : null,
@@ -1493,7 +1550,11 @@ export const ClinicalAgendaBoard = ({
   };
 
   const detail = eventDetail || {};
-  const detailEvent = normalizeClinicalEvent(detail.event || selectedEvent || {});
+  const detailEvent = normalizeClinicalEvent({
+    ...(selectedEvent || {}),
+    ...(detail.event || {}),
+    ...(detail.closure || {})
+  });
   const planItems = Array.isArray(detail.nextSessionPlanItems) ? detail.nextSessionPlanItems : [];
   const maintenanceProbes = [
     ...(Array.isArray(detail.maintenanceProbes) ? detail.maintenanceProbes : []),
@@ -1805,6 +1866,78 @@ export const ClinicalAgendaBoard = ({
                 );
               })}
             </div>
+
+            {detailEvent.closure_readiness_status && (
+              <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/70'}`}>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">Fechamento</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {(() => {
+                        const closureStyle = getClosureStatusStyle(detailEvent.closure_readiness_status);
+                        const ClosureIcon = closureStyle?.icon || AlertCircle;
+                        return (
+                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-bold ${closureStyle?.className || 'bg-slate-100 text-slate-600'}`}>
+                            <ClosureIcon size={13} />
+                            {closureStyle?.label || 'Dados insuficientes'}
+                          </span>
+                        );
+                      })()}
+                      {Number(detailEvent.closure_blocking_count || 0) > 0 && (
+                        <span className="rounded-full bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700">
+                          {detailEvent.closure_blocking_count} pendência(s)
+                        </span>
+                      )}
+                      {Number(detailEvent.closure_warning_count || 0) > 0 && (
+                        <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
+                          {detailEvent.closure_warning_count} alerta(s)
+                        </span>
+                      )}
+                    </div>
+                    {Array.isArray(detailEvent.closure_main_issues) && detailEvent.closure_main_issues.length > 0 && (
+                      <p className={`mt-2 text-sm ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                        {detailEvent.closure_main_issues.slice(0, 2).join(' e ')}.
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openClosureChecklist(detailEvent)}
+                    className={`inline-flex items-center justify-center gap-2 rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
+                  >
+                    {closureDetailState.loading ? <Loader2 size={14} className="animate-spin" /> : <ClipboardCheck size={14} />}
+                    Ver checklist
+                  </button>
+                </div>
+                {closureDetailState.error && (
+                  <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                    {closureDetailState.error}
+                  </div>
+                )}
+                {Array.isArray(closureDetailState.data?.checklist) && closureDetailState.data.checklist.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    {closureDetailState.data.checklist.map((item: any) => {
+                      const failed = item.status === 'FAILED';
+                      const warning = item.status === 'WARNING';
+                      const passed = item.status === 'PASSED';
+                      const Icon = passed ? CheckCircle2 : warning ? AlertCircle : failed ? X : Clock;
+                      const color = passed ? 'text-emerald-600' : warning ? 'text-amber-600' : failed ? 'text-rose-600' : 'text-slate-400';
+                      return (
+                        <div key={item.key || item.label} className={`rounded-2xl border px-3 py-2 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-slate-100 bg-white'}`}>
+                          <div className="flex items-start gap-2">
+                            <Icon size={16} className={`${color} mt-0.5`} />
+                            <div>
+                              <p className="text-sm font-semibold">{item.label || 'Item de fechamento'}</p>
+                              {item.message && <p className={`mt-0.5 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{item.message}</p>}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
               <button type="button" onClick={() => onStartSession?.(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/20">

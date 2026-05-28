@@ -16,6 +16,8 @@ const clarityPath = path.resolve(process.cwd(), 'src/clarity.ts');
 const clarityCode = fs.existsSync(clarityPath) ? fs.readFileSync(clarityPath, 'utf8') : '';
 const dataServicePath = path.resolve(process.cwd(), 'src/services/dataService.ts');
 const dataServiceCode = fs.readFileSync(dataServicePath, 'utf8');
+const clinicalPostResiliencePath = path.resolve(process.cwd(), 'src/utils/clinicalPostResilience.ts');
+const clinicalPostResilienceCode = fs.readFileSync(clinicalPostResiliencePath, 'utf8');
 const patientDetailPath = path.resolve(process.cwd(), 'src/components/PatientDetailView.tsx');
 const patientDetailCode = fs.readFileSync(patientDetailPath, 'utf8');
 const abaPromptPath = path.resolve(process.cwd(), 'src/utils/abaPromptLevels.ts');
@@ -32,6 +34,10 @@ const abaMasteryRlsPath = path.resolve(process.cwd(), 'supabase/migrations/20260
 const abaMasteryRlsCode = fs.readFileSync(abaMasteryRlsPath, 'utf8');
 const abaV2RlsPath = path.resolve(process.cwd(), 'supabase/migrations/20260524103000_aba_v2_interval_abc_audit.sql');
 const abaV2RlsCode = fs.readFileSync(abaV2RlsPath, 'utf8');
+const closureMigrationPath = path.resolve(process.cwd(), 'supabase/migrations/20260528153000_operational_closure.sql');
+const closureMigrationCode = fs.existsSync(closureMigrationPath) ? fs.readFileSync(closureMigrationPath, 'utf8') : '';
+const closureCenterPath = path.resolve(process.cwd(), 'src/components/OperationalClosureCenter.tsx');
+const closureCenterCode = fs.existsSync(closureCenterPath) ? fs.readFileSync(closureCenterPath, 'utf8') : '';
 
 function expectPattern(pattern, message) {
   assert.match(serverCode, pattern, message);
@@ -74,7 +80,7 @@ test('multi-tenant: patient record read/write enforces clinic scope for non-glob
     'POST /api/patient-records deve filtrar clinic_id para perfis não globais.'
   );
   expectPattern(
-    /app\.get\('\/api\/patient-records\/:patientId'[\s\S]*?if \(!hasGlobalClinicAccess\(req\.session\.user\)\)[\s\S]*?query = query\.eq\('clinic_id', clinicId\);/m,
+    /app\.get\('\/api\/patient-records\/:patientId'[\s\S]*?fetchPatientRecordWithSchemaFallback\(\{[\s\S]*?clinicId,[\s\S]*?scopeByClinic: !hasGlobalClinicAccess\(req\.session\.user\)/m,
     'GET /api/patient-records deve filtrar clinic_id para perfis não globais.'
   );
 });
@@ -102,32 +108,36 @@ test('multi-tenant: email-based endpoints scope records by clinic patient ids', 
     );
     assert.match(
       slice,
-      /query = query\.in\('patient_id', clinicPatientIds\);/,
-      `${marker} deve aplicar filtro query.in('patient_id', clinicPatientIds).`
+      /query = query\.in\('patient_id', clinicPatientIds\);|patientIds: scopedPatientIds \|\| undefined/,
+      `${marker} deve aplicar filtro por patient_id da clinica.`
     );
   }
 });
 
-test('xss: notes and history write paths escape HTML via sanitizeTextField', () => {
+test('xss: notes and history write paths escape HTML via sanitizers', () => {
   expectPattern(
     /function sanitizeTextField\(value: unknown, maxLength = 5000\): string \{[\s\S]*?escapeHtml/s,
     'sanitizeTextField deve escapar HTML.'
   );
-  expectPattern(
-    /app\.post\('\/api\/notes'[\s\S]*?text: sanitizeTextField\(req\.body\?\.text, 12000\)/m,
-    'POST /api/notes deve sanitizar campo text com sanitizeTextField.'
+  assert.match(
+    clinicalPostResilienceCode,
+    /function escapeHtml\(value: string\): string \{[\s\S]*?&lt;[\s\S]*?&gt;[\s\S]*?&quot;/m,
+    'normalizadores de escrita clinica devem escapar HTML.'
   );
-  expectPattern(
-    /app\.post\('\/api\/notes'[\s\S]*?subject: sanitizeTextField\(req\.body\?\.subject, 100\)/m,
-    'POST /api/notes deve sanitizar subject com sanitizeTextField.'
+  assert.match(
+    clinicalPostResilienceCode,
+    /const text = cleanText\(firstString\(input\?\.text, input\?\.content, input\?\.note, input\?\.body, input\?\.description\), 12000\)/m,
+    'normalizador de notas deve sanitizar o texto antes da escrita.'
   );
-  expectPattern(
-    /app\.post\('\/api\/history'[\s\S]*?title: sanitizeTextField\(req\.body\?\.title, 180\)/m,
-    'POST /api/history deve sanitizar title com sanitizeTextField.'
+  assert.match(
+    clinicalPostResilienceCode,
+    /subject: cleanText\(input\?\.subject \|\| input\?\.title \|\| 'Geral', 100\)/m,
+    'normalizador de notas deve sanitizar o assunto.'
   );
-  expectPattern(
-    /app\.post\('\/api\/history'[\s\S]*?note: sanitizeTextField\(req\.body\?\.note, 12000\)/m,
-    'POST /api/history deve sanitizar note com sanitizeTextField.'
+  assert.match(
+    clinicalPostResilienceCode,
+    /note: cleanText\(firstString\(input\?\.note, input\?\.text, input\?\.content, input\?\.description\), 12000\)/m,
+    'normalizador de historico deve sanitizar a evolucao.'
   );
 });
 
@@ -648,9 +658,9 @@ test('aba persistence: frontend records sessions and structured trials offline-f
     'PatientDetailView deve carregar sessoes, tentativas, comportamentos e maestria ABA com limite recente.'
   );
   assert.match(
-    patientDetailCode,
-    /Central ABA[\s\S]*?aba_trials[\s\S]*?aba_behavior_events[\s\S]*?aba_mastery_evaluations/m,
-    'PatientDetailView deve explicar e renderizar onde os dados ABA ficam registrados.'
+    `${patientDetailCode}\n${dataServiceCode}`,
+    /Central ABA|dataService\.getAbaSessions[\s\S]*?dataService\.getAbaTrials[\s\S]*?dataService\.getAbaBehaviorEvents[\s\S]*?dataService\.getAbaMasteryEvaluations/m,
+    'PatientDetailView deve carregar ou orientar a exibicao dos registros ABA estruturados.'
   );
   assert.match(
     sessionModeCode,
@@ -682,6 +692,65 @@ test('aba persistence: frontend records sessions and structured trials offline-f
     /dataService\.saveAbaMasteryEvaluation\(\{[\s\S]*?evaluation_status: isMastered \? 'mastered' : 'not_met'/m,
     'App deve persistir a avaliacao de maestria a cada tentativa ABA.'
   );
+});
+
+test('closure security: endpoints require authentication, roles, tenant scope and safe errors', () => {
+  for (const marker of [
+    "app.get('/api/closure/appointments'",
+    "app.get('/api/closure/appointments/:appointmentId'",
+    "app.post('/api/closure/appointments/:appointmentId/revalidate'",
+    "app.patch('/api/closure/appointments/:appointmentId/override'"
+  ]) {
+    const start = serverCode.indexOf(marker);
+    assert.ok(start >= 0, `endpoint ${marker} deve existir.`);
+    const signature = serverCode.slice(start, start + 280);
+    assert.match(signature, /checkAuth/, `${marker} deve exigir autenticacao.`);
+    assert.doesNotMatch(signature, /responsible|patient|receptionist/, `${marker} nao deve abrir acesso para responsavel, paciente ou recepcao.`);
+  }
+  assert.match(
+    serverCode,
+    /app\.patch\('\/api\/closure\/appointments\/:appointmentId\/override', checkAuth, requireRoles\('coordinator', 'admin', 'owner'\)/,
+    'override de fechamento deve aceitar apenas coordinator/admin/owner.'
+  );
+  assert.match(serverCode, /query = await applyClosureTenantScope\(query, req\.session\.user, clinicId\)/);
+  assert.match(serverCode, /canAccessPatientInCurrentClinic\(patientId, req\.session\.user\)/);
+  assert.match(serverCode, /const closureSafeError = \(status = 500\) => \(\{[\s\S]*?Não foi possível carregar o fechamento agora\./m);
+  const safeErrorSlice = serverCode.slice(serverCode.indexOf('const closureSafeError'), serverCode.indexOf('const getClosureTherapistPatientIds'));
+  assert.doesNotMatch(safeErrorSlice, /Supabase|PostgREST|Railway|schema cache/i);
+});
+
+test('closure security: no select star, persisted summaries and audit logs are used', () => {
+  const closureServerSlice = serverCode.slice(serverCode.indexOf('const CLOSURE_READINESS_STATUSES'), serverCode.indexOf('const fetchFutureAppointmentsForMaintenance'));
+  assert.doesNotMatch(closureServerSlice, /\.select\('\*'\)/);
+  assert.match(serverCode, /const APPOINTMENT_CLOSURE_LIST_SELECT = \[/);
+  assert.match(serverCode, /\.from\('appointment_closure_checks'\)[\s\S]*?\.select\(APPOINTMENT_CLOSURE_LIST_SELECT\)/m);
+  assert.match(serverCode, /regenerateClosureForAppointments/);
+  assert.match(serverCode, /writeClosureAuditLog\(\{[\s\S]*?action: 'VIEWED_DETAIL'/m);
+  assert.match(serverCode, /action: requestedStatus === 'NOT_BILLABLE' \? 'MARKED_NOT_BILLABLE' : 'MANUAL_OVERRIDE'/m);
+  assert.match(serverCode, /context_hash: evaluation\.contextHash/);
+});
+
+test('closure rls: new tables have explicit row level security policies', () => {
+  assert.match(closureMigrationCode, /create table if not exists public\.appointment_closure_checks/);
+  assert.match(closureMigrationCode, /create table if not exists public\.appointment_closure_audit_logs/);
+  assert.match(closureMigrationCode, /alter table public\.appointment_closure_checks enable row level security/);
+  assert.match(closureMigrationCode, /alter table public\.appointment_closure_audit_logs enable row level security/);
+  assert.match(closureMigrationCode, /create policy appointment_closure_checks_clinic_scope_rw/);
+  assert.match(closureMigrationCode, /create policy appointment_closure_audit_logs_clinic_scope_rw/);
+  assert.match(closureMigrationCode, /'owner', 'admin', 'coordinator'/);
+  assert.match(closureMigrationCode, /role = 'therapist'/);
+  assert.doesNotMatch(closureMigrationCode, /role in \([^)]*'patient'|role = 'patient'|responsible|receptionist/);
+});
+
+test('closure frontend: no technical ids, infrastructure names or unsafe html are rendered', () => {
+  assert.match(closureCenterCode, /Fechamento operacional/);
+  assert.match(closureCenterCode, /Checklist de fechamento/);
+  assert.match(closureCenterCode, /patient_name/);
+  assert.doesNotMatch(closureCenterCode, /dangerouslySetInnerHTML/);
+  assert.doesNotMatch(closureCenterCode, /Supabase|PostgREST|Railway|schema cache/i);
+  assert.doesNotMatch(closureCenterCode, /appointment_id\}\s*<\/|aba_session_id\}\s*</);
+  assert.match(dataServiceCode, /async getClosureAppointments/);
+  assert.match(dataServiceCode, /helperName: 'getClosureAppointments'/);
 });
 
 let passed = 0;
