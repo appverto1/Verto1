@@ -59,6 +59,7 @@ import { StackedDomainStatusChart } from "./StackedDomainStatusChart";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { ClinicalAgendaBoard } from "./Calendar";
 import { OperationalClosureCenter } from "./OperationalClosureCenter";
+import { MonthlyConferenceCenter } from "./MonthlyConferenceCenter";
 import { PayerRequirementsPanel } from "./PayerRequirementsPanel";
 import { LogoVerto } from "./Common";
 import { SecureImage } from "./SecureMedia";
@@ -226,6 +227,7 @@ export function CoordinatorDashboard({
     birthdays: "engagement-widgets",
     agenda: "agenda-multi-view",
     closure: "agenda-multi-view",
+    conference: "agenda-multi-view",
     rooms: "rooms",
   };
 
@@ -237,6 +239,7 @@ export function CoordinatorDashboard({
   const canAccessTab = (tabId: string) => {
     if (tabId === "financial") return canAccessClinicFinance;
     if (tabId === "closure") return !isReceptionist;
+    if (tabId === "conference") return !isReceptionist && !isTherapist;
     const capability = capabilityForTab(tabId);
     if (!capability) return true;
     const status = capabilityStatusForRole(capability);
@@ -256,6 +259,7 @@ export function CoordinatorDashboard({
     | "patients"
     | "agenda"
     | "closure"
+    | "conference"
     | "rooms"
     | "protocols"
     | "settings"
@@ -278,6 +282,7 @@ export function CoordinatorDashboard({
       | "patients"
       | "agenda"
       | "closure"
+      | "conference"
       | "rooms"
       | "protocols"
       | "settings"
@@ -422,6 +427,7 @@ export function CoordinatorDashboard({
     patients: "Pacientes",
     agenda: "Agenda",
     closure: "Fechamento operacional",
+    conference: "Conferência mensal",
     rooms: "Reservas de Sala",
     protocols: "Protocolos",
     settings: "Configurações da Clínica",
@@ -5210,6 +5216,7 @@ export function CoordinatorDashboard({
         { id: "patients", label: "Pacientes", icon: ClipboardList },
         { id: "agenda", label: "Agenda", icon: CalendarDays },
         { id: "closure", label: "Fechamento", icon: CalendarRange },
+        { id: "conference", label: "Conferência", icon: ClipboardCheck },
         { id: "protocols", label: "Protocolos", icon: ClipboardCheck },
         { id: "logs", label: "Log de Atividades", icon: History },
         { id: "settings", label: "Configurações", icon: Settings },
@@ -5242,6 +5249,7 @@ export function CoordinatorDashboard({
         { id: "patients", label: "Pacientes", icon: ClipboardList },
         { id: "agenda", label: "Agenda", icon: CalendarDays },
         { id: "closure", label: "Fechamento", icon: CalendarRange },
+        { id: "conference", label: "Conferência", icon: ClipboardCheck },
         {
           id: "protocols",
           label: "Protocolos",
@@ -7016,6 +7024,30 @@ export function CoordinatorDashboard({
                   patients={visiblePatients}
                   professionals={Object.values(therapistMembersById)}
                   canOverride={!isTherapist}
+                  onOpenAppointment={() => navigateToTab("agenda")}
+                  onOpenReport={(appointment) =>
+                    onPatientClick(
+                      undefined,
+                      { tab: "report" },
+                      appointment?.patient_name || "Paciente",
+                    )
+                  }
+                />
+              </motion.div>
+            )}
+            {activeTab === "conference" && (
+              <motion.div
+                key="conference"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="space-y-6"
+              >
+                <MonthlyConferenceCenter
+                  patients={visiblePatients}
+                  professionals={Object.values(therapistMembersById)}
+                  payers={clinicPayers}
+                  canExport={!isTherapist}
                   onOpenAppointment={() => navigateToTab("agenda")}
                   onOpenReport={(appointment) =>
                     onPatientClick(

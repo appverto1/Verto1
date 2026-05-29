@@ -125,7 +125,7 @@ type ClinicalQueryAuditOptions = {
 };
 
 function isClinicalEndpoint(endpoint: string) {
-  return /\/api\/(aba|calendar|closure|portal|appointments|admin\/payers|admin\/payer-requirements|notes|history|tasks|assigned-tasks|patient-anamnesis|patients|patient-records)/.test(endpoint);
+  return /\/api\/(aba|calendar|closure|conference|portal|appointments|admin\/payers|admin\/payer-requirements|notes|history|tasks|assigned-tasks|patient-anamnesis|patients|patient-records)/.test(endpoint);
 }
 
 function isDevQueryAuditEnabled() {
@@ -190,6 +190,7 @@ function auditClinicalQuery(endpoint: string, options: ClinicalQueryAuditOptions
       const hasScopedPath = /\/api\/aba\/(session-live-summaries|session-reports|recent-session-events)\/[^/?]+/.test(endpoint) ||
       /\/api\/calendar\/events(?:\/[^/?]+\/detail)?/.test(endpoint) ||
       /\/api\/closure\/appointments(?:\/[^/?]+)?/.test(endpoint) ||
+      /\/api\/conference\/monthly(?:\/[^/?]+)?/.test(endpoint) ||
       /\/api\/portal\/appointments(?:\/[^/?]+)?/.test(endpoint) ||
       /\/api\/portal\/sessions\/[^/?]+\/sign/.test(endpoint) ||
       /\/api\/appointments\/(?:[^/?]+\/action-requests|action-requests\/[^/?]+\/(?:approve|reject))/.test(endpoint) ||
@@ -1923,6 +1924,134 @@ export const dataService = {
       return await safeJson(response);
     } catch {
       return { success: false, error: 'Não foi possível atualizar o fechamento agora.' };
+    }
+  },
+
+  async getMonthlyConference(options: any = {}) {
+    const endpoint = endpointWithQuery('/api/conference/monthly', {
+      from: options.from,
+      to: options.to,
+      patientId: options.patientId,
+      professionalId: options.professionalId,
+      payerId: options.payerId,
+      serviceType: options.serviceType,
+      readinessStatus: options.readinessStatus,
+      appointmentStatus: options.appointmentStatus,
+      onlyPending: options.onlyPending ? 'true' : undefined,
+      onlyReady: options.onlyReady ? 'true' : undefined,
+      onlyNotBillable: options.onlyNotBillable ? 'true' : undefined,
+      missing: options.missing,
+      page: Math.max(1, Math.round(Number(options.page || 1) || 1)),
+      limit: normalizeListLimit(options.limit, 50, 200)
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getMonthlyConference',
+        operation: 'list',
+        table: 'appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: [], kpis: null, error: 'Não foi possível carregar a conferência agora.' };
+    }
+  },
+
+  async getMonthlyConferenceSummary(kind: 'patient' | 'professional' | 'payer' | 'service-type', options: any = {}) {
+    const endpoint = endpointWithQuery(`/api/conference/monthly/summary-by-${kind}`, {
+      from: options.from,
+      to: options.to,
+      patientId: options.patientId,
+      professionalId: options.professionalId,
+      payerId: options.payerId,
+      serviceType: options.serviceType,
+      readinessStatus: options.readinessStatus,
+      appointmentStatus: options.appointmentStatus,
+      onlyPending: options.onlyPending ? 'true' : undefined,
+      onlyReady: options.onlyReady ? 'true' : undefined,
+      onlyNotBillable: options.onlyNotBillable ? 'true' : undefined,
+      missing: options.missing,
+      limit: normalizeListLimit(options.limit, 200, 200)
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: `getMonthlyConferenceSummary:${kind}`,
+        operation: 'list',
+        table: 'appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar os resumos da conferência.' };
+    }
+  },
+
+  async getMonthlyConferenceSession(appointmentId: string) {
+    const endpoint = `/api/conference/monthly/session/${encodeURIComponent(String(appointmentId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getMonthlyConferenceSession',
+        operation: 'detail',
+        table: 'appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível carregar a sessão da conferência.' };
+    }
+  },
+
+  async revalidateMonthlyConferenceSession(appointmentId: string) {
+    const endpoint = `/api/conference/monthly/session/${encodeURIComponent(String(appointmentId))}/revalidate`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({})
+      }, {
+        helperName: 'revalidateMonthlyConferenceSession',
+        operation: 'write',
+        table: 'appointment_closure_checks,appointment_closure_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível revalidar a sessão da conferência.' };
+    }
+  },
+
+  async exportMonthlyConference(payload: any = {}) {
+    const endpoint = '/api/conference/monthly/export';
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'exportMonthlyConference',
+        operation: 'write',
+        table: 'appointment_closure_checks,operational_closure_exports,appointment_closure_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível exportar a conferência agora.' };
     }
   },
 

@@ -83,6 +83,12 @@ import {
   type ClosureReadinessStatus
 } from './src/services/closureReadinessEngine';
 import {
+  MONTHLY_CONFERENCE_EXPORT_FIELDS,
+  buildMonthlyConferenceExportRows,
+  buildMonthlyConferenceSummary,
+  rowsToCsv
+} from './src/services/monthlyConferenceEngine';
+import {
   resolvePayerRequirements,
   type PayerRequirementRule
 } from './src/services/payerRequirementEngine';
@@ -19412,6 +19418,9 @@ async function startServer() {
   const normalizeClosureListRow = (row: any, patientNames: Map<string, string>, professionalNames: Map<string, string>) => ({
     appointment_id: row.appointment_id || null,
     aba_session_id: row.aba_session_id || null,
+    patient_id: row.patient_id || null,
+    professional_id: row.professional_id || null,
+    payer_id: row.payer_id || null,
     patient_name: patientNames.get(sanitizeString(row.patient_id, 120)) || 'Paciente',
     professional_name: professionalNames.get(sanitizeString(row.professional_id, 120)) || 'Equipe',
     service_type: sanitizeString(row.service_type, 120) || 'Sessão',
@@ -20465,6 +20474,378 @@ async function startServer() {
     } catch (error: any) {
       console.warn('[Closure] override failed:', error?.message || String(error));
       return res.status(500).json(closureSafeError(500));
+    }
+  });
+
+  const conferenceSafeError = (status = 500) => ({
+    success: false,
+    error: status === 400 ? 'Filtros inválidos para a conferência.' : 'Não foi possível carregar a conferência agora.'
+  });
+
+  const parseConferenceFilters = (source: any = {}) => {
+    const range = parseClosureDateRange(source);
+    const pageParams = parseClosurePageParams(source);
+    const patientId = sanitizeString(source?.patientId || source?.patient_id, 120);
+    const professionalId = sanitizeString(source?.professionalId || source?.professional_id, 120);
+    const payerId = sanitizeString(source?.payerId || source?.payer_id, 120);
+    const serviceType = sanitizeString(source?.serviceType || source?.service_type, 120);
+    const readinessStatus = parseClosureStatusFilter(source?.readinessStatus || source?.readiness_status || source?.status);
+    const appointmentStatus = sanitizeString(source?.appointmentStatus || source?.appointment_status, 40).toLowerCase();
+    const onlyPending = String(source?.onlyPending || source?.only_pending || '').toLowerCase() === 'true';
+    const onlyReady = String(source?.onlyReady || source?.only_ready || '').toLowerCase() === 'true';
+    const onlyNotBillable = String(source?.onlyNotBillable || source?.only_not_billable || '').toLowerCase() === 'true';
+    const missingKind = sanitizeString(source?.missing || source?.pendingKind || source?.pendencia, 80).toLowerCase();
+    const invalidUuid =
+      (patientId && !isUuid(patientId)) ||
+      (professionalId && !isUuid(professionalId)) ||
+      (payerId && !isUuid(payerId));
+    const validAppointmentStatuses = ['', 'scheduled', 'pending', 'confirmed', 'completed', 'cancelled', 'canceled', 'no_show', 'missed'];
+    return {
+      ok: range.ok && !invalidUuid && validAppointmentStatuses.includes(appointmentStatus),
+      ...range,
+      ...pageParams,
+      patientId,
+      professionalId,
+      payerId,
+      serviceType,
+      readinessStatus,
+      appointmentStatus,
+      onlyPending,
+      onlyReady,
+      onlyNotBillable,
+      missingKind
+    };
+  };
+
+  const applyConferenceFilters = (query: any, filters: any) => {
+    let scoped = query;
+    if (filters.readinessStatus) scoped = scoped.eq('readiness_status', filters.readinessStatus);
+    if (filters.onlyPending) scoped = scoped.eq('readiness_status', 'PENDING');
+    if (filters.onlyReady) scoped = scoped.eq('readiness_status', 'READY');
+    if (filters.onlyNotBillable) scoped = scoped.eq('readiness_status', 'NOT_BILLABLE');
+    if (filters.patientId) scoped = scoped.eq('patient_id', filters.patientId);
+    if (filters.professionalId) scoped = scoped.eq('professional_id', filters.professionalId);
+    if (filters.payerId) scoped = scoped.eq('payer_id', filters.payerId);
+    if (filters.serviceType) scoped = scoped.eq('service_type', filters.serviceType);
+    if (filters.appointmentStatus === 'completed') scoped = scoped.gt('actual_minutes', 0);
+    if (filters.appointmentStatus === 'scheduled' || filters.appointmentStatus === 'pending') scoped = scoped.is('actual_start', null);
+    if (filters.appointmentStatus === 'cancelled' || filters.appointmentStatus === 'canceled') scoped = scoped.eq('readiness_status', 'NOT_BILLABLE');
+    if (filters.missingKind === 'signature' || filters.missingKind === 'assinatura') scoped = scoped.contains('main_issues', ['Assinatura pendente para fechamento da sessão.']);
+    if (filters.missingKind === 'report' || filters.missingKind === 'relatorio') scoped = scoped.contains('main_issues', ['Relatório da sessão ainda não foi preenchido.']);
+    if (filters.missingKind === 'guide' || filters.missingKind === 'guia') scoped = scoped.is('guide_number', null);
+    if (filters.missingKind === 'authorization' || filters.missingKind === 'autorizacao') scoped = scoped.is('authorization_code', null);
+    if (filters.missingKind === 'documents' || filters.missingKind === 'documentos') scoped = scoped.gt('required_document_pending_count', 0);
+    return scoped;
+  };
+
+  const hydrateConferenceRows = async (rows: any[], clinicId: string) => {
+    const patientIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.patient_id, 120)).filter((id: string) => isUuid(id))));
+    const professionalIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.professional_id, 120)).filter((id: string) => isUuid(id))));
+    const [patientsResult, professionalsResult] = await Promise.all([
+      patientIds.length > 0
+        ? supabase.from('patients').select('id, name').eq('clinic_id', clinicId).in('id', patientIds).limit(patientIds.length)
+        : Promise.resolve({ data: [], error: null } as any),
+      professionalIds.length > 0
+        ? supabase.from('users').select('id, name, email').in('id', professionalIds).limit(professionalIds.length)
+        : Promise.resolve({ data: [], error: null } as any)
+    ]);
+    if (patientsResult.error && !hasMissingFinancialSchema(patientsResult.error)) throw patientsResult.error;
+    if (professionalsResult.error && !hasMissingFinancialSchema(professionalsResult.error)) throw professionalsResult.error;
+    const patientNames = new Map<string, string>((patientsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name, 180) || 'Paciente']));
+    const professionalNames = new Map<string, string>((professionalsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name || row.email, 180) || 'Equipe']));
+    return rows.map((row: any) => normalizeClosureListRow(row, patientNames, professionalNames));
+  };
+
+  const loadConferenceClosureRows = async (params: {
+    clinicId: string;
+    user: any;
+    filters: any;
+    paginated?: boolean;
+    hardLimit?: number;
+  }) => {
+    const limit = Math.min(Math.max(Number(params.hardLimit || params.filters.limit || 50), 1), 2000);
+    let query = supabase
+      .from('appointment_closure_checks')
+      .select(APPOINTMENT_CLOSURE_LIST_SELECT)
+      .eq('organization_id', params.clinicId)
+      .gte('scheduled_start', params.filters.fromIso)
+      .lte('scheduled_start', params.filters.toIso)
+      .order('scheduled_start', { ascending: true });
+    query = applyConferenceFilters(query, params.filters);
+    query = params.paginated ? query.range(params.filters.from, params.filters.to) : query.limit(limit);
+    query = await applyClosureTenantScope(query, params.user, params.clinicId);
+    const { data, error } = await query;
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return [];
+      throw error;
+    }
+    return Array.isArray(data) ? data : [];
+  };
+
+  const writeConferenceExportAudit = async (params: {
+    organizationId: string;
+    exportType: string;
+    filters: any;
+    generatedBy?: string | null;
+    rowCount: number;
+    status: 'GENERATED' | 'FAILED';
+    metadata?: Record<string, any>;
+  }) => {
+    if (!isUuid(params.organizationId)) return;
+    const payload = cleanObject({
+      id: crypto.randomUUID(),
+      organization_id: params.organizationId,
+      export_type: sanitizeString(params.exportType, 80) || 'sessions',
+      filters: sanitizeClinicalPayload(params.filters || {}),
+      generated_by: isUuid(sanitizeString(params.generatedBy, 120)) ? sanitizeString(params.generatedBy, 120) : null,
+      generated_at: new Date().toISOString(),
+      row_count: Math.max(0, Math.round(Number(params.rowCount || 0))),
+      status: params.status,
+      metadata: sanitizeClinicalPayload(params.metadata || {})
+    });
+    const { error } = await supabase.from('operational_closure_exports').insert([payload]);
+    if (error && !hasMissingFinancialSchema(error)) {
+      console.warn('[MonthlyConference] export audit failed:', error?.message || String(error));
+    }
+    await writeClosureAuditLog({
+      organizationId: params.organizationId,
+      action: params.status === 'GENERATED' ? 'EXPORT_GENERATED' : 'EXPORT_FAILED',
+      performedBy: params.generatedBy || null,
+      metadata: {
+        exportType: payload.export_type,
+        rowCount: payload.row_count,
+        filters: payload.filters
+      }
+    });
+  };
+
+  const assertConferenceFilterOwnership = async (filters: any, clinicId: string) => {
+    if (filters.patientId) {
+      const { data, error } = await supabase
+        .from('patients')
+        .select('id')
+        .eq('id', filters.patientId)
+        .eq('clinic_id', clinicId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .limit(1)
+        .maybeSingle();
+      if (error && !hasMissingFinancialSchema(error)) throw error;
+      if (!data?.id) return false;
+    }
+    if (filters.payerId) {
+      const payer = await fetchPayerForAdmin(filters.payerId, clinicId);
+      if (!payer) return false;
+    }
+    if (filters.professionalId) {
+      const { data, error } = await supabase
+        .from('users')
+        .select('id, clinic_id')
+        .eq('id', filters.professionalId)
+        .limit(1)
+        .maybeSingle();
+      if (error && !hasMissingFinancialSchema(error)) throw error;
+      if (!data?.id || sanitizeString(data?.clinic_id, 120) !== clinicId) return false;
+    }
+    return true;
+  };
+
+  app.get('/api/conference/monthly', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const filters = parseConferenceFilters(req.query);
+      if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
+      if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
+      const [pageRows, aggregateRows] = await Promise.all([
+        loadConferenceClosureRows({ clinicId, user: req.session.user, filters, paginated: true }),
+        loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 })
+      ]);
+      const hydratedPageRows = await hydrateConferenceRows(pageRows, clinicId);
+      const hydratedAggregateRows = await hydrateConferenceRows(aggregateRows, clinicId);
+      const summary = buildMonthlyConferenceSummary(hydratedAggregateRows);
+      await writeClosureAuditLog({
+        organizationId: clinicId,
+        action: 'CONFERENCE_VIEWED',
+        performedBy: sanitizeString(req.session.user?.id, 120),
+        metadata: { from: filters.fromIso, to: filters.toIso, page: filters.page, limit: filters.limit }
+      });
+      return res.json({
+        success: true,
+        data: hydratedPageRows,
+        rows: hydratedPageRows,
+        kpis: summary.kpis,
+        pendingByType: summary.pendingByType,
+        page: filters.page,
+        limit: filters.limit,
+        filters: {
+          from: filters.fromIso,
+          to: filters.toIso,
+          patientId: filters.patientId || null,
+          professionalId: filters.professionalId || null,
+          payerId: filters.payerId || null,
+          serviceType: filters.serviceType || null,
+          readinessStatus: filters.readinessStatus || null
+        }
+      });
+    } catch (error: any) {
+      console.warn('[MonthlyConference] list failed:', error?.message || String(error));
+      return res.status(500).json(conferenceSafeError(500));
+    }
+  });
+
+  const handleConferenceSummary = (summaryKey: 'byPatient' | 'byProfessional' | 'byPayer' | 'byServiceType') => async (req: any, res: any) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const filters = parseConferenceFilters(req.query);
+      if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
+      if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
+      const rows = await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
+      const hydratedRows = await hydrateConferenceRows(rows, clinicId);
+      const summary = buildMonthlyConferenceSummary(hydratedRows);
+      return res.json({ success: true, data: (summary as any)[summaryKey] || [], kpis: summary.kpis });
+    } catch (error: any) {
+      console.warn('[MonthlyConference] summary failed:', error?.message || String(error));
+      return res.status(500).json(conferenceSafeError(500));
+    }
+  };
+
+  app.get('/api/conference/monthly/summary-by-patient', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byPatient'));
+  app.get('/api/conference/monthly/summary-by-professional', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byProfessional'));
+  app.get('/api/conference/monthly/summary-by-payer', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byPayer'));
+  app.get('/api/conference/monthly/summary-by-service-type', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byServiceType'));
+
+  app.get('/api/conference/monthly/session/:appointmentId', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const appointmentId = sanitizeString(req.params.appointmentId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(appointmentId) || !isUuid(clinicId)) return res.status(400).json(conferenceSafeError(400));
+      let query = supabase
+        .from('appointment_closure_checks')
+        .select(APPOINTMENT_CLOSURE_CHECK_SELECT)
+        .eq('organization_id', clinicId)
+        .eq('appointment_id', appointmentId)
+        .limit(1);
+      query = await applyClosureTenantScope(query, req.session.user, clinicId);
+      const { data, error } = await query.maybeSingle();
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.status(404).json(conferenceSafeError(404));
+        throw error;
+      }
+      if (!data?.appointment_id) return res.status(404).json(conferenceSafeError(404));
+      const hydrated = await hydrateConferenceRows([data], clinicId);
+      await writeClosureAuditLog({
+        organizationId: clinicId,
+        appointmentId,
+        abaSessionId: data?.aba_session_id || null,
+        patientId: data?.patient_id || null,
+        action: 'SESSION_DETAIL_VIEWED',
+        previousStatus: data?.readiness_status || null,
+        newStatus: data?.readiness_status || null,
+        performedBy: sanitizeString(req.session.user?.id, 120),
+        metadata: { source: 'monthly_conference' }
+      });
+      return res.json({
+        success: true,
+        data: {
+          ...(hydrated[0] || {}),
+          checklist: Array.isArray(data?.checklist) ? data.checklist : [],
+          payerRules: {
+            payerName: sanitizeString(data?.payer_name_snapshot, 180) || null,
+            source: sanitizeString(data?.payer_requirement_source, 40) || null,
+            guideNumber: sanitizeString(data?.guide_number, 120) || null,
+            authorizationCode: sanitizeString(data?.authorization_code, 120) || null,
+            pendingDocuments: Number(data?.required_document_pending_count || 0)
+          },
+          audit: {
+            generatedAt: data?.generated_at || null,
+            updatedAt: data?.updated_at || null
+          }
+        }
+      });
+    } catch (error: any) {
+      console.warn('[MonthlyConference] detail failed:', error?.message || String(error));
+      return res.status(500).json(conferenceSafeError(500));
+    }
+  });
+
+  app.post('/api/conference/monthly/session/:appointmentId/revalidate', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de revalidação da conferência')) return;
+      const appointmentId = sanitizeString(req.params.appointmentId, 120);
+      if (!isUuid(appointmentId)) return res.status(400).json(conferenceSafeError(400));
+      const generated = await persistAppointmentClosureCheck({ appointmentId, user: req.session.user, force: true });
+      if (!generated.ok) return res.status((generated as any).status || 404).json(conferenceSafeError((generated as any).status || 404));
+      await writeClosureAuditLog({
+        organizationId: sanitizeString(currentClinicId(req.session.user), 120),
+        appointmentId,
+        action: 'REVALIDATED_FROM_CONFERENCE',
+        performedBy: sanitizeString(req.session.user?.id, 120),
+        metadata: { source: 'monthly_conference' }
+      });
+      return res.json({ success: true, data: (generated as any).data });
+    } catch (error: any) {
+      console.warn('[MonthlyConference] revalidate failed:', error?.message || String(error));
+      return res.status(500).json(conferenceSafeError(500));
+    }
+  });
+
+  app.post('/api/conference/monthly/export', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+    try {
+      if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de exportação da conferência')) return;
+      const exportType = sanitizeString(req.body?.exportType || req.body?.export_type || 'sessions', 80);
+      const filters = parseConferenceFilters(req.body?.filters || req.body || {});
+      if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
+      if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
+      const requestedFields = Array.isArray(req.body?.fields) ? req.body.fields.map((field: any) => sanitizeString(field, 80)) : [];
+      const rows = await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
+      const hydratedRows = await hydrateConferenceRows(rows, clinicId);
+      const summary = buildMonthlyConferenceSummary(hydratedRows);
+      const sessionRows = buildMonthlyConferenceExportRows(hydratedRows);
+      let exportRows: any[] = sessionRows;
+      let defaultFields: string[] = ['scheduledDate', 'patientName', 'professionalName', 'serviceType', 'payerName', 'scheduledMinutes', 'actualMinutes', 'readinessStatus', 'pendingKinds'];
+      if (exportType === 'pending') {
+        exportRows = sessionRows.filter((row: any) => String(row.pendingKinds || '').trim());
+      } else if (exportType === 'time_by_patient') {
+        exportRows = summary.byPatient.map((row: any) => ({ name: row.name, totalSessions: row.totalSessions, realizedSessions: row.realizedSessions, scheduledMinutes: row.scheduledMinutes, actualMinutes: row.actualMinutes, pendingSignatures: row.pendingSignatures, pendingReports: row.pendingReports }));
+        defaultFields = ['name', 'totalSessions', 'realizedSessions', 'scheduledMinutes', 'actualMinutes', 'pendingSignatures', 'pendingReports'];
+      } else if (exportType === 'time_by_professional') {
+        exportRows = summary.byProfessional.map((row: any) => ({ name: row.name, workedDaysCount: row.workedDaysCount, totalSessions: row.totalSessions, realizedSessions: row.realizedSessions, scheduledMinutes: row.scheduledMinutes, actualMinutes: row.actualMinutes, pendingReports: row.pendingReports }));
+        defaultFields = ['name', 'workedDaysCount', 'totalSessions', 'realizedSessions', 'scheduledMinutes', 'actualMinutes', 'pendingReports'];
+      } else if (exportType === 'time_by_payer') {
+        exportRows = summary.byPayer.map((row: any) => ({ payerName: row.payerName, totalSessions: row.totalSessions, ready: row.ready, pending: row.pending, pendingGuides: row.pendingGuides, pendingAuthorizations: row.pendingAuthorizations, pendingSignatures: row.pendingSignatures, pendingReports: row.pendingReports }));
+        defaultFields = ['payerName', 'totalSessions', 'ready', 'pending', 'pendingGuides', 'pendingAuthorizations', 'pendingSignatures', 'pendingReports'];
+      }
+      const fields = (requestedFields.length > 0 ? requestedFields : defaultFields)
+        .filter((field: string) => (MONTHLY_CONFERENCE_EXPORT_FIELDS as readonly string[]).includes(field));
+      const csv = rowsToCsv(exportRows, fields.length > 0 ? fields : defaultFields);
+      await writeConferenceExportAudit({
+        organizationId: clinicId,
+        exportType,
+        filters,
+        generatedBy: sanitizeString(req.session.user?.id, 120),
+        rowCount: exportRows.length,
+        status: 'GENERATED',
+        metadata: { fieldCount: fields.length }
+      });
+      return res.json({
+        success: true,
+        fileName: `conferencia-mensal-${new Date().toISOString().slice(0, 10)}.csv`,
+        contentType: 'text/csv; charset=utf-8',
+        rowCount: exportRows.length,
+        csv
+      });
+    } catch (error: any) {
+      console.warn('[MonthlyConference] export failed:', error?.message || String(error));
+      await writeConferenceExportAudit({
+        organizationId: clinicId,
+        exportType: sanitizeString(req.body?.exportType || req.body?.export_type || 'sessions', 80),
+        filters: req.body?.filters || {},
+        generatedBy: sanitizeString(req.session?.user?.id, 120),
+        rowCount: 0,
+        status: 'FAILED'
+      });
+      return res.status(500).json(conferenceSafeError(500));
     }
   });
 

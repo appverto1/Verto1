@@ -38,6 +38,7 @@
     "test:payer-requirements": "tsx tests/payerRequirements.test.ts",
     "test:calendar-events": "tsx tests/calendarEvents.test.ts",
     "test:scheduling": "tsx tests/scheduling.test.ts",
+    "test:monthly-conference": "tsx tests/monthlyConference.test.ts",
     "stripe:create-active-patient-price": "node scripts/create-stripe-active-patient-price.mjs",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"
