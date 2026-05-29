@@ -2959,6 +2959,51 @@ const APPOINTMENT_CLOSURE_LIST_SELECT = [
   'updated_at'
 ].join(',');
 
+const APPOINTMENT_CLOSURE_LEGACY_LIST_SELECT = [
+  'id',
+  'organization_id',
+  'appointment_id',
+  'aba_session_id',
+  'patient_id',
+  'professional_id',
+  'service_type',
+  'readiness_status',
+  'blocking_issues_count',
+  'warning_issues_count',
+  'missing_required_count',
+  'scheduled_start',
+  'scheduled_end',
+  'actual_start',
+  'actual_end',
+  'scheduled_minutes',
+  'actual_minutes',
+  'main_issues',
+  'generated_at',
+  'updated_at'
+].join(',');
+
+const APPOINTMENT_CLOSURE_MINIMAL_LIST_SELECT = [
+  'id',
+  'organization_id',
+  'appointment_id',
+  'aba_session_id',
+  'patient_id',
+  'professional_id',
+  'service_type',
+  'readiness_status',
+  'blocking_issues_count',
+  'warning_issues_count',
+  'missing_required_count',
+  'scheduled_start',
+  'scheduled_end',
+  'actual_start',
+  'actual_end',
+  'scheduled_minutes',
+  'actual_minutes',
+  'generated_at',
+  'updated_at'
+].join(',');
+
 const ACTIVITY_LOG_SELECT = [
   'id',
   'user_id',
@@ -20258,72 +20303,148 @@ async function startServer() {
       const onlyWarnings = String(req.query?.onlyWarnings || req.query?.somenteAlertas || '').toLowerCase() === 'true';
       const missingKind = sanitizeString(req.query?.missing || req.query?.pendencia, 80).toLowerCase();
 
-      let query = supabase
-        .from('appointment_closure_checks')
-        .select(APPOINTMENT_CLOSURE_LIST_SELECT)
-        .eq('organization_id', clinicId)
-        .gte('scheduled_start', range.fromIso)
-        .lte('scheduled_start', range.toIso)
-        .order('scheduled_start', { ascending: true })
-        .range(from, to);
-      query = await applyClosureTenantScope(query, req.session.user, clinicId);
-      if (status) query = query.eq('readiness_status', status);
-      if (onlyPending) query = query.eq('readiness_status', 'PENDING');
-      if (onlyReady) query = query.eq('readiness_status', 'READY');
-      if (onlyWarnings) query = query.eq('readiness_status', 'WARNING');
-      if (isUuid(patientId)) query = query.eq('patient_id', patientId);
-      if (isUuid(professionalId)) query = query.eq('professional_id', professionalId);
-      if (serviceType) query = query.eq('service_type', serviceType);
-      if (isUuid(payerId)) query = query.eq('payer_id', payerId);
-      if (missingKind === 'signature' || missingKind === 'assinatura') query = query.contains('main_issues', ['Assinatura pendente para fechamento da sessão.']);
-      if (missingKind === 'report' || missingKind === 'relatorio') query = query.contains('main_issues', ['Relatório da sessão ainda não foi preenchido.']);
-      if (missingKind === 'guide' || missingKind === 'guia') query = query.is('guide_number', null);
-      if (missingKind === 'authorization' || missingKind === 'autorizacao') query = query.is('authorization_code', null);
-      if (missingKind === 'documents' || missingKind === 'documentos') query = query.gt('required_document_pending_count', 0);
+      const isSignatureMissingFilter = missingKind === 'signature' || missingKind === 'assinatura';
+      const isReportMissingFilter = missingKind === 'report' || missingKind === 'relatorio';
+      const isGuideMissingFilter = missingKind === 'guide' || missingKind === 'guia';
+      const isAuthorizationMissingFilter = missingKind === 'authorization' || missingKind === 'autorizacao';
+      const isDocumentsMissingFilter = missingKind === 'documents' || missingKind === 'documentos';
 
-      const { data, error } = await query;
-      if (error) {
-        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [], page, limit, totals: null });
-        throw error;
+      const variants = [
+        {
+          label: 'current',
+          select: APPOINTMENT_CLOSURE_LIST_SELECT,
+          hasPayerFields: true,
+          hasDocumentCount: true,
+          hasMainIssues: true
+        },
+        {
+          label: 'legacy',
+          select: APPOINTMENT_CLOSURE_LEGACY_LIST_SELECT,
+          hasPayerFields: false,
+          hasDocumentCount: false,
+          hasMainIssues: true
+        },
+        {
+          label: 'minimal',
+          select: APPOINTMENT_CLOSURE_MINIMAL_LIST_SELECT,
+          hasPayerFields: false,
+          hasDocumentCount: false,
+          hasMainIssues: false
+        }
+      ];
+
+      const canApplyRequestedFilters = (variant: any) => {
+        if (isUuid(payerId) && !variant.hasPayerFields) return false;
+        if ((isGuideMissingFilter || isAuthorizationMissingFilter) && !variant.hasPayerFields) return false;
+        if (isDocumentsMissingFilter && !variant.hasDocumentCount) return false;
+        if ((isSignatureMissingFilter || isReportMissingFilter) && !variant.hasMainIssues) return false;
+        return true;
+      };
+
+      const applySharedClosureFilters = async (baseQuery: any, variant: any, useRange = true) => {
+        let scopedQuery = baseQuery
+          .eq('organization_id', clinicId)
+          .gte('scheduled_start', range.fromIso)
+          .lte('scheduled_start', range.toIso);
+        if (useRange) scopedQuery = scopedQuery.order('scheduled_start', { ascending: true }).range(from, to);
+        scopedQuery = await applyClosureTenantScope(scopedQuery, req.session.user, clinicId);
+        if (status) scopedQuery = scopedQuery.eq('readiness_status', status);
+        if (onlyPending) scopedQuery = scopedQuery.eq('readiness_status', 'PENDING');
+        if (onlyReady) scopedQuery = scopedQuery.eq('readiness_status', 'READY');
+        if (onlyWarnings) scopedQuery = scopedQuery.eq('readiness_status', 'WARNING');
+        if (isUuid(patientId)) scopedQuery = scopedQuery.eq('patient_id', patientId);
+        if (isUuid(professionalId)) scopedQuery = scopedQuery.eq('professional_id', professionalId);
+        if (serviceType) scopedQuery = scopedQuery.eq('service_type', serviceType);
+        if (isUuid(payerId) && variant.hasPayerFields) scopedQuery = scopedQuery.eq('payer_id', payerId);
+        if (isSignatureMissingFilter && variant.hasMainIssues) scopedQuery = scopedQuery.contains('main_issues', ['Assinatura pendente para fechamento da sessão.']);
+        if (isReportMissingFilter && variant.hasMainIssues) scopedQuery = scopedQuery.contains('main_issues', ['Relatório da sessão ainda não foi preenchido.']);
+        if (isGuideMissingFilter && variant.hasPayerFields) scopedQuery = scopedQuery.is('guide_number', null);
+        if (isAuthorizationMissingFilter && variant.hasPayerFields) scopedQuery = scopedQuery.is('authorization_code', null);
+        if (isDocumentsMissingFilter && variant.hasDocumentCount) scopedQuery = scopedQuery.gt('required_document_pending_count', 0);
+        return scopedQuery;
+      };
+
+      const emptyPayload = () => ({ success: true, data: [], page, limit, totals: {
+        ready: 0,
+        pending: 0,
+        warning: 0,
+        notBillable: 0,
+        draft: 0,
+        total: 0,
+        scheduledMinutes: 0,
+        actualMinutes: 0,
+        blockingIssues: 0,
+        warningIssues: 0
+      }});
+
+      let rows: any[] = [];
+      let activeVariant: any = null;
+      let lastSchemaError: any = null;
+
+      for (const variant of variants) {
+        if (!canApplyRequestedFilters(variant)) continue;
+        let query = supabase
+          .from('appointment_closure_checks')
+          .select(variant.select);
+        query = await applySharedClosureFilters(query, variant, true);
+        const { data, error } = await query;
+        if (error) {
+          if (hasMissingFinancialSchema(error)) {
+            lastSchemaError = error;
+            console.warn(`[Closure] list schema fallback from ${variant.label}:`, error?.message || String(error));
+            continue;
+          }
+          throw error;
+        }
+        rows = Array.isArray(data) ? data : [];
+        activeVariant = variant;
+        break;
       }
-      const rows = Array.isArray(data) ? data : [];
+
+      if (!activeVariant) {
+        if (lastSchemaError) {
+          console.warn('[Closure] list returned empty after schema fallback:', lastSchemaError?.message || String(lastSchemaError));
+        }
+        return res.json(emptyPayload());
+      }
+
       const patientIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.patient_id, 120)).filter((id: string) => isUuid(id))));
       const professionalIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.professional_id, 120)).filter((id: string) => isUuid(id))));
-      let totalsQuery = supabase
-        .from('appointment_closure_checks')
-        .select('readiness_status, scheduled_minutes, actual_minutes, blocking_issues_count, warning_issues_count', { count: 'exact' })
-        .eq('organization_id', clinicId)
-        .gte('scheduled_start', range.fromIso)
-        .lte('scheduled_start', range.toIso)
-        .limit(1000);
-      totalsQuery = await applyClosureTenantScope(totalsQuery, req.session.user, clinicId);
-      if (status) totalsQuery = totalsQuery.eq('readiness_status', status);
-      if (onlyPending) totalsQuery = totalsQuery.eq('readiness_status', 'PENDING');
-      if (onlyReady) totalsQuery = totalsQuery.eq('readiness_status', 'READY');
-      if (onlyWarnings) totalsQuery = totalsQuery.eq('readiness_status', 'WARNING');
-      if (isUuid(patientId)) totalsQuery = totalsQuery.eq('patient_id', patientId);
-      if (isUuid(professionalId)) totalsQuery = totalsQuery.eq('professional_id', professionalId);
-      if (serviceType) totalsQuery = totalsQuery.eq('service_type', serviceType);
-      if (isUuid(payerId)) totalsQuery = totalsQuery.eq('payer_id', payerId);
-      if (missingKind === 'signature' || missingKind === 'assinatura') totalsQuery = totalsQuery.contains('main_issues', ['Assinatura pendente para fechamento da sessão.']);
-      if (missingKind === 'report' || missingKind === 'relatorio') totalsQuery = totalsQuery.contains('main_issues', ['Relatório da sessão ainda não foi preenchido.']);
-      if (missingKind === 'guide' || missingKind === 'guia') totalsQuery = totalsQuery.is('guide_number', null);
-      if (missingKind === 'authorization' || missingKind === 'autorizacao') totalsQuery = totalsQuery.is('authorization_code', null);
-      if (missingKind === 'documents' || missingKind === 'documentos') totalsQuery = totalsQuery.gt('required_document_pending_count', 0);
-      const [patientsResult, professionalsResult, totalsResult] = await Promise.all([
+
+      let totalsRows: any[] = [];
+      try {
+        if (canApplyRequestedFilters(activeVariant)) {
+          let totalsQuery = supabase
+            .from('appointment_closure_checks')
+            .select('readiness_status, scheduled_minutes, actual_minutes, blocking_issues_count, warning_issues_count', { count: 'exact' })
+            .limit(1000);
+          totalsQuery = await applySharedClosureFilters(totalsQuery, activeVariant, false);
+          const totalsResult = await totalsQuery;
+          if (totalsResult.error) {
+            if (!hasMissingFinancialSchema(totalsResult.error)) throw totalsResult.error;
+            console.warn('[Closure] totals skipped after schema fallback:', totalsResult.error?.message || String(totalsResult.error));
+          } else {
+            totalsRows = Array.isArray(totalsResult.data) ? totalsResult.data : [];
+          }
+        }
+      } catch (totalsError: any) {
+        if (!hasMissingFinancialSchema(totalsError)) throw totalsError;
+        console.warn('[Closure] totals unavailable:', totalsError?.message || String(totalsError));
+      }
+
+      const [patientsResult, professionalsResult] = await Promise.all([
         patientIds.length > 0
           ? supabase.from('patients').select('id, name').eq('clinic_id', clinicId).in('id', patientIds).limit(patientIds.length)
           : Promise.resolve({ data: [], error: null } as any),
         professionalIds.length > 0
           ? supabase.from('users').select('id, name, email').in('id', professionalIds).limit(professionalIds.length)
-          : Promise.resolve({ data: [], error: null } as any),
-        totalsQuery
+          : Promise.resolve({ data: [], error: null } as any)
       ]);
       if (patientsResult.error && !hasMissingFinancialSchema(patientsResult.error)) throw patientsResult.error;
       if (professionalsResult.error && !hasMissingFinancialSchema(professionalsResult.error)) throw professionalsResult.error;
+
       const patientNames = new Map<string, string>((patientsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name, 180) || 'Paciente']));
       const professionalNames = new Map<string, string>((professionalsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name || row.email, 180) || 'Equipe']));
-      const totalsRows = totalsResult.error ? [] : (totalsResult.data || []);
       const totals = {
         ready: totalsRows.filter((row: any) => row.readiness_status === 'READY').length,
         pending: totalsRows.filter((row: any) => row.readiness_status === 'PENDING').length,
