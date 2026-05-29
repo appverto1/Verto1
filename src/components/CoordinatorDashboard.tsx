@@ -2408,7 +2408,11 @@ export function CoordinatorDashboard({
         );
         const activationEmailSent = addPatientResult?.data?.activationEmailSent;
         const patientEmail = String(addPatientResult?.data?.patientEmail || newPatient?.email || "").trim();
+        const activationMessage = String(addPatientResult?.data?.activationMessage || "").trim();
         const emailMessage =
+          activationMessage
+            ? ` ${activationMessage}`
+            :
           patientEmail && activationEmailSent === true
             ? ` E-mail de ativação enviado para ${patientEmail}.`
             : patientEmail && activationEmailSent === false

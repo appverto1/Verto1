@@ -2826,6 +2826,8 @@ export default function App() {
     const newId = data.id || Date.now(); 
     let activationEmailSent: boolean | null = null;
     let activationEmailWarning: string | null = null;
+    let activationMessage: string | null = null;
+    let portabilityAvailable = false;
     
     // Identity Data (Pseudonymized)
     const resolvedPortalType =
@@ -2904,50 +2906,22 @@ export default function App() {
         data.name,
         resolvedPortalType,
         data.cpf || data.anamnesisData?.cpf || null,
+        { phone: data.phone, clientRecordId: String(newId) },
       );
       if (userResult.success) {
-        console.log(`User account created for patient: ${data.email}`);
-        const normalizedMessage = String(userResult?.message || '').toLowerCase();
-        const alreadyExists = normalizedMessage.includes('already exists');
-        if (!alreadyExists) {
-          activationEmailSent = userResult.activationEmailSent === false ? false : true;
-          activationEmailWarning = String(userResult.warning || userResult.error || '').trim() || null;
-        }
-        if (alreadyExists) {
-          // If user already exists, we should inform that history will be linked
-          alert(`O paciente com o email ${data.email} jÃ¡ possui uma conta no sistema. Todo o histÃ³rico clÃ­nico anterior serÃ¡ vinculado a este novo prontuÃ¡rio.`);
-          
-          // Fetch existing history and notes by email
-          const historyRes = await dataService.getHistoryByEmail(data.email);
-          if (historyRes.success && historyRes.data) {
-            const existingHistory = historyRes.data.map((h: any) => ({
-              ...h,
-              patientId: newId, // Link to the temporary ID, will be updated to realId later
-              time: new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              dateGroup: h?.date_group || h?.dateGroup || (new Date(h.created_at).toDateString() === new Date().toDateString() ? "Hoje" : new Date(h.created_at).toLocaleDateString())
-            }));
-            setHistory(prev => [...prev, ...existingHistory]);
-          }
-
-          const notesRes = await dataService.getNotesByEmail(data.email);
-          if (notesRes.success && notesRes.data) {
-            const existingNotes = notesRes.data.map((n: any) => ({
-              ...n,
-              patientId: newId,
-              date: new Date(n.created_at).toLocaleString()
-            }));
-            setTherapistNotes(prev => normalizeAndDecorateNotes([...prev, ...existingNotes]));
-          }
+        activationEmailSent = userResult.activationEmailSent === false ? false : userResult.activationEmailSent === null ? null : true;
+        activationEmailWarning = String(userResult.warning || userResult.error || '').trim() || null;
+        portabilityAvailable = Boolean(userResult.portabilityAvailable);
+        if (userResult.idempotent) {
+          activationMessage = userResult.message || 'Cadastro confirmado.';
+        } else if (userResult.userAlreadyExisted || userResult.code === 'RESPONSIBLE_LINKED_TO_NEW_PATIENT' || userResult.code === 'EXISTING_EMAIL_LINKED') {
+          activationMessage = portabilityAvailable
+            ? 'Responsável vinculado com sucesso. O compartilhamento de histórico pode ser solicitado com autorização.'
+            : (userResult.message || 'Responsável vinculado com sucesso.');
+        } else if (userResult.activationEmailSent === false) {
+          activationMessage = 'Cadastro confirmado. O e-mail de ativação não foi enviado agora; use reenviar ativação depois.';
         } else {
-          if (userResult.activationEmailSent === false) {
-            alert(
-              `Paciente cadastrado e vinculado, mas o e-mail de ativaÃ§Ã£o nÃ£o foi enviado agora.\n` +
-              `Motivo: ${toReadableError(userResult.warning || userResult.error || 'falha no provedor de e-mail')}\n` +
-              `VocÃª pode usar o recurso de reenviar ativaÃ§Ã£o depois.`
-            );
-          } else {
-            alert(`Paciente cadastrado com sucesso. Enviamos o e-mail de ativaÃ§Ã£o para ${data.email}.`);
-          }
+          activationMessage = userResult.message || 'Ativação enviada com sucesso.';
         }
       } else if (userResult?.error) {
         alert(`NÃ£o foi possÃ­vel enviar o convite do paciente: ${toReadableError(userResult.error)}`);
@@ -3124,7 +3098,9 @@ export default function App() {
         patientId: persistedPatientId,
         patientEmail: data.email || null,
         activationEmailSent,
-        activationEmailWarning
+        activationEmailWarning,
+        activationMessage,
+        portabilityAvailable
       }
     };
     } catch (error: any) {

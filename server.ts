@@ -93,6 +93,10 @@ import {
   type PayerRequirementRule
 } from './src/services/payerRequirementEngine';
 import {
+  buildPatientPortabilitySnapshot,
+  normalizePatientPortabilityScope
+} from './src/utils/patientPortability';
+import {
   ASSIGNED_TASK_SELECT,
   FINANCIAL_ENTRY_SELECT,
   HISTORY_SELECT,
@@ -3709,38 +3713,56 @@ async function getClinicTeamAccessUsage(clinicId: string) {
 
 async function findDuplicatePatientInClinic(params: {
   clinicId?: unknown;
+  name?: unknown;
   email?: unknown;
   cpf?: unknown;
   excludePatientId?: unknown;
-}): Promise<{ field: 'email' | 'cpf'; patientId: string; patientName: string; value: string } | null> {
+  clientRecordId?: unknown;
+}): Promise<{ field: 'email' | 'cpf' | 'client_record_id'; patientId: string; patientName: string; value: string; row?: any } | null> {
   const safeClinicId = sanitizeString(params.clinicId, 120);
   if (!safeClinicId || !isUuid(safeClinicId)) return null;
 
+  const normalizePatientMatchName = (value: unknown) =>
+    sanitizeString(value, 180)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+
+  const safeName = normalizePatientMatchName(params.name);
   const safeEmail = sanitizeEmail(params.email);
   const safeCpf = normalizeCpf(params.cpf);
+  const safeClientRecordId = sanitizeString(params.clientRecordId, 120);
   const excludedId = sanitizeString(params.excludePatientId, 120);
   const isExcluded = (candidateId: unknown) =>
     Boolean(excludedId && sanitizeString(candidateId, 120) === excludedId);
 
-  if (safeEmail) {
-    const { data: emailRows, error: emailError } = await supabase
-      .from('patients')
-      .select('id, name, email, status')
-      .eq('clinic_id', safeClinicId)
-      .eq('email', safeEmail)
-      .eq('is_active', true)
-      .is('deleted_at', null)
-      .limit(10);
-    if (emailError) throw emailError;
+  if (safeClientRecordId) {
+    try {
+      const { data: clientRows, error: clientError } = await supabase
+        .from('patients')
+        .select('id, name, email, cpf, client_record_id, status')
+        .eq('clinic_id', safeClinicId)
+        .eq('client_record_id', safeClientRecordId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .limit(10);
+      if (clientError) throw clientError;
 
-    const hit = (emailRows || []).find((row: any) => !isExcluded(row?.id));
-    if (hit?.id) {
-      return {
-        field: 'email',
-        patientId: sanitizeString(hit.id, 120),
-        patientName: sanitizeString(hit.name, 180) || 'Paciente',
-        value: safeEmail
-      };
+      const hit = (clientRows || []).find((row: any) => !isExcluded(row?.id));
+      if (hit?.id) {
+        return {
+          field: 'client_record_id',
+          patientId: sanitizeString(hit.id, 120),
+          patientName: sanitizeString(hit.name, 180) || 'Paciente',
+          value: safeClientRecordId,
+          row: hit
+        };
+      }
+    } catch (rawError: any) {
+      const missingColumn = extractMissingColumnName(rawError);
+      if (missingColumn !== 'client_record_id') throw rawError;
     }
   }
 
@@ -3762,7 +3784,8 @@ async function findDuplicatePatientInClinic(params: {
           field: 'cpf',
           patientId: sanitizeString(hit.id, 120),
           patientName: sanitizeString(hit.name, 180) || 'Paciente',
-          value: safeCpf
+          value: safeCpf,
+          row: hit
         };
       }
     } catch (rawError: any) {
@@ -3800,10 +3823,37 @@ async function findDuplicatePatientInClinic(params: {
             field: 'cpf',
             patientId: sanitizeString(patientRow?.id || candidatePatientId, 120),
             patientName: sanitizeString(patientRow?.name, 180) || 'Paciente',
-            value: safeCpf
+            value: safeCpf,
+            row: patientRow
           };
         }
       }
+    }
+  }
+
+  if (safeEmail && safeName) {
+    const { data: emailRows, error: emailError } = await supabase
+      .from('patients')
+      .select('id, name, email, cpf, status')
+      .eq('clinic_id', safeClinicId)
+      .eq('email', safeEmail)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .limit(20);
+    if (emailError) throw emailError;
+
+    const hit = (emailRows || []).find((row: any) => (
+      !isExcluded(row?.id) &&
+      normalizePatientMatchName(row?.name) === safeName
+    ));
+    if (hit?.id) {
+      return {
+        field: 'email',
+        patientId: sanitizeString(hit.id, 120),
+        patientName: sanitizeString(hit.name, 180) || 'Paciente',
+        value: safeEmail,
+        row: hit
+      };
     }
   }
 
@@ -10913,6 +10963,7 @@ async function startServer() {
       const normalizedCpf = normalizeCpf(cpf);
       const rawPhone = req.body?.phone ?? req.body?.telefone;
       const normalizedPhone = normalizeBrazilMobilePhone(rawPhone);
+      const requestClientRecordId = sanitizeString(req.body?.clientRecordId || req.body?.client_record_id || req.body?.localId, 120);
       if (!normalizedEmail) {
         return res.status(400).json({ success: false, error: 'Email inválido.' });
       }
@@ -10931,19 +10982,36 @@ async function startServer() {
 
       const duplicatePatient = await findDuplicatePatientInClinic({
         clinicId: safeClinicId,
+        name: safeName,
         email: normalizedEmail,
-        cpf: normalizedCpf
+        cpf: normalizedCpf,
+        clientRecordId: requestClientRecordId
       });
       if (duplicatePatient) {
-        const conflictFieldLabel = duplicatePatient.field === 'cpf' ? 'CPF' : 'e-mail';
-        return res.status(409).json({
-          success: false,
-          code: 'PATIENT_DUPLICATE_IN_CLINIC',
-          error: `Já existe um paciente nesta clínica com o mesmo ${conflictFieldLabel}.`,
-          details: {
+        void persistActivityLog({
+          userId: sanitizeString(req.session.user?.id, 120),
+          clinicId: safeClinicId,
+          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
+          title: 'Paciente já cadastrado na clínica',
+          content: 'Cadastro confirmado sem duplicar paciente.',
+          type: 'management',
+          actionType: 'PATIENT_ALREADY_EXISTS_SAME_CLINIC',
+          payload: {
             field: duplicatePatient.field,
-            patientId: duplicatePatient.patientId,
-            patientName: duplicatePatient.patientName
+            email: maskEmail(normalizedEmail),
+            hasCpf: Boolean(normalizedCpf)
+          }
+        });
+        return res.json({
+          success: true,
+          idempotent: true,
+          code: 'PATIENT_ALREADY_EXISTS_SAME_CLINIC',
+          message: 'Paciente já cadastrado nesta clínica.',
+          activationEmailSent: null,
+          portabilityAvailable: true,
+          patient: {
+            name: duplicatePatient.patientName,
+            status: sanitizeString(duplicatePatient.row?.status, 40) || 'active'
           }
         });
       }
@@ -11001,18 +11069,19 @@ async function startServer() {
             type: normalizedPortalType,
             clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
             therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined,
+            responsible_user_id: isUuid(authUserId) ? authUserId : undefined,
+            client_record_id: requestClientRecordId || undefined,
             created_at: new Date().toISOString()
         });
         if (!patientPayloadBase.email) return;
 
-        let existingPatientQuery = supabase
-          .from('patients')
-          .select('id')
-          .eq('email', patientPayloadBase.email);
-        if (patientPayloadBase.clinic_id) {
-          existingPatientQuery = existingPatientQuery.eq('clinic_id', patientPayloadBase.clinic_id);
-        }
-        const { data: existingPatient } = await existingPatientQuery.limit(1).maybeSingle();
+        const existingPatient = await findDuplicatePatientInClinic({
+          clinicId: patientPayloadBase.clinic_id,
+          name: safeName,
+          email: patientPayloadBase.email,
+          cpf: normalizedCpf,
+          clientRecordId: requestClientRecordId
+        });
 
           const upsertPatientData = cleanObject({
             name: safeName,
@@ -11021,7 +11090,9 @@ async function startServer() {
             status: 'active',
             type: normalizedPortalType,
             clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
-            therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined
+            therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined,
+            responsible_user_id: isUuid(authUserId) ? authUserId : undefined,
+            client_record_id: requestClientRecordId || undefined
           });
           const fallbackPatientData = cleanObject({
             name: safeName,
@@ -11032,18 +11103,18 @@ async function startServer() {
             therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined
           });
 
-        if (existingPatient?.id) {
+        if (existingPatient?.patientId) {
           const { error: updatePatientError } = await supabase
             .from('patients')
             .update(upsertPatientData)
-            .eq('id', existingPatient.id);
+            .eq('id', existingPatient.patientId);
           if (updatePatientError) {
             const schemaMismatch = String(updatePatientError?.message || '').toLowerCase().includes('column');
             if (!schemaMismatch) throw updatePatientError;
             const { error: updateFallbackError } = await supabase
               .from('patients')
               .update(fallbackPatientData)
-              .eq('id', existingPatient.id);
+              .eq('id', existingPatient.patientId);
             if (updateFallbackError) throw updateFallbackError;
           }
         } else {
@@ -11062,10 +11133,18 @@ async function startServer() {
           }
         }
 
+        const { data: existingProfileForClinic } = await supabase
+          .from('users')
+          .select('clinic_id')
+          .eq('id', authUserId)
+          .maybeSingle();
+        const existingClinicId = sanitizeString(existingProfileForClinic?.clinic_id, 120);
+        const shouldAttachClinicToProfile = !existingClinicId || existingClinicId === safeClinicId;
+
         let safeUserUpdatePayload: Record<string, any> = cleanObject({
           role: 'patient',
           type: normalizedPortalType,
-          clinic_id: isUuid(safeClinicId) ? safeClinicId : null,
+          clinic_id: shouldAttachClinicToProfile && isUuid(safeClinicId) ? safeClinicId : undefined,
           status: 'pending_activation',
           first_login_completed: false
         });
@@ -11175,14 +11254,31 @@ async function startServer() {
         if (isUuid(safeClinicId)) {
           queueActivePatientSync(safeClinicId, 'patient_create_user_existing');
         }
+        void persistActivityLog({
+          userId: sanitizeString(req.session.user?.id, 120),
+          clinicId: safeClinicId,
+          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
+          title: 'Responsável existente vinculado',
+          content: 'Responsável existente foi vinculado a paciente da clínica atual.',
+          type: 'management',
+          actionType: 'RESPONSIBLE_LINKED_TO_NEW_PATIENT',
+          payload: {
+            email: maskEmail(normalizedEmail),
+            userAlreadyExisted: true,
+            portabilityAvailable: true
+          }
+        });
         const emailResult = await sendPatientActivationEmail();
         return res.json({
           success: true,
+          code: 'RESPONSIBLE_LINKED_TO_NEW_PATIENT',
           message: emailResult.sent
-            ? 'Paciente vinculado e e-mail de ativação enviado.'
-            : 'Paciente vinculado, mas não foi possível enviar o e-mail de ativação agora.',
+            ? 'Responsável vinculado com sucesso. Ativação enviada com sucesso.'
+            : 'Responsável vinculado com sucesso.',
           warning: emailResult.sent ? null : (emailResult.reason || 'Falha no envio de e-mail transacional'),
           activationEmailSent: emailResult.sent,
+          portabilityAvailable: true,
+          userAlreadyExisted: true,
           userId: existingUser.id,
         });
       }
@@ -11221,15 +11317,32 @@ async function startServer() {
             if (isUuid(safeClinicId)) {
               queueActivePatientSync(safeClinicId, 'patient_create_user_auth_exists');
             }
+            void persistActivityLog({
+              userId: sanitizeString(req.session.user?.id, 120),
+              clinicId: safeClinicId,
+              actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
+              title: 'Acesso existente vinculado',
+              content: 'Acesso existente foi vinculado sem criar uma nova identidade global.',
+              type: 'management',
+              actionType: 'EXISTING_EMAIL_LINKED',
+              payload: {
+                email: maskEmail(normalizedEmail),
+                source: 'auth_user_exists',
+                portabilityAvailable: true
+              }
+            });
             const emailResult = await sendPatientActivationEmail();
             return res.json({
               success: true,
               userId: foundUser.id,
+              code: 'EXISTING_EMAIL_LINKED',
               message: emailResult.sent
-                ? 'Paciente vinculado e e-mail de ativação enviado.'
-                : 'Paciente vinculado, mas não foi possível enviar o e-mail de ativação agora.',
+                ? 'Responsável vinculado com sucesso. Ativação enviada com sucesso.'
+                : 'Responsável vinculado com sucesso.',
               warning: emailResult.sent ? null : (emailResult.reason || 'Falha no envio de e-mail transacional'),
-              activationEmailSent: emailResult.sent
+              activationEmailSent: emailResult.sent,
+              portabilityAvailable: true,
+              userAlreadyExisted: true
             });
           }
         }
@@ -11248,10 +11361,11 @@ async function startServer() {
           success: true,
           userId: authUser.user.id,
           message: emailResult.sent
-            ? 'Paciente criado e e-mail de ativação enviado.'
+            ? 'Ativação enviada com sucesso.'
             : 'Paciente criado, mas não foi possível enviar o e-mail de ativação agora.',
           warning: emailResult.sent ? null : (emailResult.reason || 'Falha no envio de e-mail transacional'),
-          activationEmailSent: emailResult.sent
+          activationEmailSent: emailResult.sent,
+          portabilityAvailable: false
         });
       }
 
@@ -11672,6 +11786,10 @@ async function startServer() {
       const safeCpf = normalizeCpf(rawCpf);
       const rawPhone = req.body?.phone || req.body?.telefone;
       const safePhone = normalizeBrazilMobilePhone(rawPhone);
+      const safeClientRecordId = sanitizeString(
+        req.body?.clientRecordId || req.body?.client_record_id || req.body?.localId || req.body?.idempotencyKey,
+        120
+      );
       const safeBody = cleanObject({
         id: isUuid(sanitizeString(req.body?.id, 120)) ? sanitizeString(req.body?.id, 120) : undefined,
         name: safeName,
@@ -11683,6 +11801,7 @@ async function startServer() {
         status: sanitizeString(req.body?.status, 40) || 'active',
         clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
         therapist_id: isUuid(safeTherapistId) ? safeTherapistId : undefined,
+        client_record_id: safeClientRecordId || undefined,
         created_at: sanitizeString(req.body?.created_at, 40) || new Date().toISOString()
       });
 
@@ -11701,21 +11820,43 @@ async function startServer() {
 
       const duplicatePatient = await findDuplicatePatientInClinic({
         clinicId: safeBody.clinic_id || safeClinicId,
+        name: safeBody.name,
         email: safeBody.email,
         cpf: safeBody.cpf,
-        excludePatientId: safeBody.id
+        excludePatientId: safeBody.id,
+        clientRecordId: safeClientRecordId
       });
       if (duplicatePatient) {
-        const fieldLabel = duplicatePatient.field === 'cpf' ? 'CPF' : 'e-mail';
-        return res.status(409).json({
-          success: false,
-          code: 'PATIENT_DUPLICATE_IN_CLINIC',
-          error: `Cadastro bloqueado: já existe um paciente nesta clínica com o mesmo ${fieldLabel}.`,
-          details: {
+        const existingPatientData = cleanObject({
+          id: duplicatePatient.patientId,
+          name: duplicatePatient.patientName,
+          email: sanitizeEmail(duplicatePatient.row?.email) || safeBody.email,
+          cpf: normalizeCpf(duplicatePatient.row?.cpf) || safeBody.cpf,
+          phone: sanitizePhone(duplicatePatient.row?.phone) || safeBody.phone,
+          status: sanitizeString(duplicatePatient.row?.status, 40) || 'active',
+          clinic_id: safeBody.clinic_id,
+          therapist_id: safeBody.therapist_id
+        });
+        void persistActivityLog({
+          userId: sanitizeString(req.session.user?.id, 120),
+          clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
+          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
+          title: 'Cadastro de paciente confirmado',
+          content: 'Operação idempotente confirmada sem duplicar paciente.',
+          type: 'management',
+          actionType: 'PATIENT_ALREADY_EXISTS_SAME_CLINIC',
+          payload: {
             field: duplicatePatient.field,
-            patientId: duplicatePatient.patientId,
-            patientName: duplicatePatient.patientName
+            hasEmail: Boolean(safeBody.email),
+            hasCpf: Boolean(safeBody.cpf)
           }
+        });
+        return res.json({
+          success: true,
+          idempotent: true,
+          code: 'PATIENT_ALREADY_EXISTS_SAME_CLINIC',
+          message: 'Cadastro confirmado.',
+          data: existingPatientData
         });
       }
 
@@ -11775,6 +11916,405 @@ async function startServer() {
       res.json({ success: true, data });
     } catch (error) {
       res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+  });
+
+  app.post('/api/patients/:patientId/portability/request', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.params.patientId, 120);
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(patientId) || !isUuid(organizationId)) {
+        return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      }
+      if (!(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+      }
+
+      const { data: patient, error: patientError } = await supabase
+        .from('patients')
+        .select('id, name, email, clinic_id, responsible_user_id, status')
+        .eq('id', patientId)
+        .eq('clinic_id', organizationId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .maybeSingle();
+      if (patientError) throw patientError;
+      if (!patient?.id) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+
+      let responsibleUserId = sanitizeString(patient?.responsible_user_id, 120);
+      const patientEmail = sanitizeEmail(patient?.email);
+      if (!isUuid(responsibleUserId) && patientEmail) {
+        const { data: responsibleProfile } = await supabase
+          .from('users')
+          .select('id')
+          .eq('email', patientEmail)
+          .eq('role', 'patient')
+          .limit(1)
+          .maybeSingle();
+        responsibleUserId = sanitizeString(responsibleProfile?.id, 120);
+      }
+
+      const scope = normalizePatientPortabilityScope(req.body?.scope);
+      const reason = sanitizeTextField(req.body?.reason, 800) || null;
+      const { data: existingRequest, error: existingError } = await supabase
+        .from('patient_portability_requests')
+        .select('id, status, scope, requested_at, resolved_at, expires_at')
+        .eq('organization_id_requesting', organizationId)
+        .eq('patient_id_requesting', patientId)
+        .in('status', ['DRAFT', 'PENDING_RESPONSIBLE_APPROVAL', 'APPROVED'])
+        .order('requested_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (existingError && !isMissingRelationError(existingError)) throw existingError;
+      if (existingError && isMissingRelationError(existingError)) {
+        return res.status(503).json({ success: false, error: 'Portabilidade ainda não está configurada neste ambiente.' });
+      }
+      if (existingRequest?.id) {
+        return res.json({
+          success: true,
+          idempotent: true,
+          code: 'PORTABILITY_REQUEST_ALREADY_EXISTS',
+          message: 'Solicitação de portabilidade já registrada.',
+          data: {
+            requestId: sanitizeString(existingRequest.id, 120),
+            status: sanitizeString(existingRequest.status, 60),
+            scope: normalizePatientPortabilityScope(existingRequest.scope),
+            requestedAt: sanitizeString(existingRequest.requested_at, 80) || null
+          }
+        });
+      }
+
+      const insertPayload = cleanObject({
+        organization_id_requesting: organizationId,
+        organization_id_source: null,
+        patient_id_requesting: patientId,
+        patient_identity_id: null,
+        responsible_user_id: isUuid(responsibleUserId) ? responsibleUserId : null,
+        requested_by: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+        status: 'PENDING_RESPONSIBLE_APPROVAL',
+        scope,
+        reason,
+        expires_at: null,
+        metadata: {
+          createdByRoute: '/api/patients/:patientId/portability/request',
+          responsibleLinked: isUuid(responsibleUserId),
+          patientEmailHash: patientEmail
+            ? crypto.createHash('sha256').update(`patient-portability:${patientEmail}`).digest('hex')
+            : null
+        }
+      });
+
+      const { data: createdRequest, error: createError } = await supabase
+        .from('patient_portability_requests')
+        .insert([insertPayload])
+        .select('id, status, scope, requested_at')
+        .single();
+      if (createError) throw createError;
+
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: organizationId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
+        title: 'Solicitação de portabilidade criada',
+        content: 'Solicitação de compartilhamento autorizado foi criada sem expor histórico de outra clínica.',
+        type: 'management',
+        actionType: 'PORTABILITY_REQUEST_CREATED',
+        payload: {
+          patientId,
+          requestId: sanitizeString(createdRequest?.id, 120),
+          scope
+        }
+      });
+
+      return res.json({
+        success: true,
+        message: 'Solicitação de portabilidade criada.',
+        data: {
+          requestId: sanitizeString(createdRequest?.id, 120),
+          status: sanitizeString(createdRequest?.status, 60),
+          scope: normalizePatientPortabilityScope(createdRequest?.scope),
+          requestedAt: sanitizeString(createdRequest?.requested_at, 80) || null
+        }
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/portability/request [POST]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.get('/api/patients/:patientId/portability/status', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.params.patientId, 120);
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(patientId) || !isUuid(organizationId)) {
+        return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      }
+      if (!(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+      }
+      const { data, error } = await supabase
+        .from('patient_portability_requests')
+        .select('id, status, scope, requested_at, resolved_at, expires_at')
+        .eq('organization_id_requesting', organizationId)
+        .eq('patient_id_requesting', patientId)
+        .order('requested_at', { ascending: false })
+        .limit(20);
+      if (error) {
+        if (isMissingRelationError(error)) return res.json({ success: true, data: [], warning: 'Portabilidade ainda não configurada.' });
+        throw error;
+      }
+      return res.json({
+        success: true,
+        data: (data || []).map((row: any) => ({
+          requestId: sanitizeString(row?.id, 120),
+          status: sanitizeString(row?.status, 60),
+          scope: normalizePatientPortabilityScope(row?.scope),
+          requestedAt: sanitizeString(row?.requested_at, 80) || null,
+          resolvedAt: sanitizeString(row?.resolved_at, 80) || null,
+          expiresAt: sanitizeString(row?.expires_at, 80) || null
+        }))
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/portability/status [GET]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.post('/api/portal/portability/:requestId/approve', portalActionLimiter, checkAuth, async (req: any, res) => {
+    try {
+      const requestId = sanitizeString(req.params.requestId, 120);
+      if (!isUuid(requestId)) return res.status(400).json({ success: false, error: 'Solicitação inválida.' });
+      const { data: requestRow, error: requestError } = await supabase
+        .from('patient_portability_requests')
+        .select('id, organization_id_requesting, organization_id_source, patient_id_requesting, responsible_user_id, status, scope')
+        .eq('id', requestId)
+        .limit(1)
+        .maybeSingle();
+      if (requestError) throw requestError;
+      if (!requestRow?.id) return res.status(404).json({ success: false, error: 'Solicitação não encontrada.' });
+
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const userEmail = sanitizeEmail(req.session.user?.email);
+      const { data: patientRow, error: patientError } = await supabase
+        .from('patients')
+        .select('id, name, email, age, status, clinic_id')
+        .eq('id', requestRow.patient_id_requesting)
+        .limit(1)
+        .maybeSingle();
+      if (patientError) throw patientError;
+      const responsibleMatches =
+        (isUuid(userId) && sanitizeString(requestRow.responsible_user_id, 120) === userId) ||
+        (userEmail && sanitizeEmail(patientRow?.email) === userEmail);
+      if (!responsibleMatches) return res.status(404).json({ success: false, error: 'Solicitação não encontrada.' });
+
+      if (sanitizeString(requestRow.status, 80) === 'APPROVED') {
+        return res.json({ success: true, idempotent: true, message: 'Portabilidade já aprovada.' });
+      }
+      if (sanitizeString(requestRow.status, 80) !== 'PENDING_RESPONSIBLE_APPROVAL') {
+        return res.status(409).json({ success: false, error: 'Solicitação não está pendente de aprovação.' });
+      }
+
+      const nowIso = new Date().toISOString();
+      const { error: updateError } = await supabase
+        .from('patient_portability_requests')
+        .update({
+          status: 'APPROVED',
+          resolved_by: isUuid(userId) ? userId : null,
+          resolved_at: nowIso,
+          updated_at: nowIso
+        })
+        .eq('id', requestId)
+        .eq('status', 'PENDING_RESPONSIBLE_APPROVAL');
+      if (updateError) throw updateError;
+
+      const snapshot = buildPatientPortabilitySnapshot({
+        patient: patientRow,
+        notes: [],
+        scope: requestRow.scope
+      });
+      const organizationId = sanitizeString(requestRow.organization_id_requesting, 120);
+      const { error: snapshotError } = await supabase
+        .from('patient_portability_snapshots')
+        .insert([{
+          organization_id_source: sanitizeString(requestRow.organization_id_source, 120) || organizationId,
+          organization_id_target: organizationId,
+          portability_request_id: requestId,
+          patient_id_source: null,
+          patient_id_target: sanitizeString(requestRow.patient_id_requesting, 120),
+          snapshot_type: 'DEMOGRAPHICS',
+          snapshot_data: snapshot,
+          generated_by: isUuid(userId) ? userId : null,
+          generated_at: nowIso,
+          status: 'GENERATED',
+          metadata: { generatedFromApproval: true }
+        }]);
+      if (snapshotError && !isMissingRelationError(snapshotError)) throw snapshotError;
+
+      void persistActivityLog({
+        userId,
+        clinicId: organizationId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Responsavel', 180),
+        title: 'Portabilidade aprovada',
+        content: 'Responsável aprovou uma solicitação de compartilhamento autorizado.',
+        type: 'management',
+        actionType: 'PORTABILITY_APPROVED',
+        payload: { requestId, snapshotGenerated: !snapshotError }
+      });
+
+      return res.json({ success: true, message: 'Portabilidade aprovada.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/portability/:requestId/approve [POST]', error, {
+        requestId: sanitizeString(req.params.requestId, 120),
+        logRequestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.post('/api/portal/portability/:requestId/reject', portalActionLimiter, checkAuth, async (req: any, res) => {
+    try {
+      const requestId = sanitizeString(req.params.requestId, 120);
+      if (!isUuid(requestId)) return res.status(400).json({ success: false, error: 'Solicitação inválida.' });
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const userEmail = sanitizeEmail(req.session.user?.email);
+      const { data: requestRow, error: requestError } = await supabase
+        .from('patient_portability_requests')
+        .select('id, organization_id_requesting, patient_id_requesting, responsible_user_id, status')
+        .eq('id', requestId)
+        .limit(1)
+        .maybeSingle();
+      if (requestError) throw requestError;
+      if (!requestRow?.id) return res.status(404).json({ success: false, error: 'Solicitação não encontrada.' });
+      const { data: patientRow } = await supabase
+        .from('patients')
+        .select('id, email')
+        .eq('id', requestRow.patient_id_requesting)
+        .limit(1)
+        .maybeSingle();
+      const responsibleMatches =
+        (isUuid(userId) && sanitizeString(requestRow.responsible_user_id, 120) === userId) ||
+        (userEmail && sanitizeEmail(patientRow?.email) === userEmail);
+      if (!responsibleMatches) return res.status(404).json({ success: false, error: 'Solicitação não encontrada.' });
+      if (sanitizeString(requestRow.status, 80) !== 'PENDING_RESPONSIBLE_APPROVAL') {
+        return res.status(409).json({ success: false, error: 'Solicitação não está pendente de aprovação.' });
+      }
+      const nowIso = new Date().toISOString();
+      const { error: updateError } = await supabase
+        .from('patient_portability_requests')
+        .update({
+          status: 'REJECTED',
+          resolved_by: isUuid(userId) ? userId : null,
+          resolved_at: nowIso,
+          updated_at: nowIso
+        })
+        .eq('id', requestId)
+        .eq('status', 'PENDING_RESPONSIBLE_APPROVAL');
+      if (updateError) throw updateError;
+
+      void persistActivityLog({
+        userId,
+        clinicId: sanitizeString(requestRow.organization_id_requesting, 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Responsavel', 180),
+        title: 'Portabilidade recusada',
+        content: 'Responsável recusou uma solicitação de compartilhamento autorizado.',
+        type: 'management',
+        actionType: 'PORTABILITY_REJECTED',
+        payload: { requestId }
+      });
+
+      return res.json({ success: true, message: 'Portabilidade recusada.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/portability/:requestId/reject [POST]', error, {
+        requestId: sanitizeString(req.params.requestId, 120),
+        logRequestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.post('/api/patients/:patientId/portability/import', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.params.patientId, 120);
+      const requestId = sanitizeString(req.body?.requestId || req.body?.request_id, 120);
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(patientId) || !isUuid(requestId) || !isUuid(organizationId)) {
+        return res.status(400).json({ success: false, error: 'Solicitação inválida.' });
+      }
+      if (!(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+      }
+      const { data: requestRow, error: requestError } = await supabase
+        .from('patient_portability_requests')
+        .select('id, organization_id_requesting, patient_id_requesting, status, scope')
+        .eq('id', requestId)
+        .eq('organization_id_requesting', organizationId)
+        .eq('patient_id_requesting', patientId)
+        .limit(1)
+        .maybeSingle();
+      if (requestError) throw requestError;
+      if (!requestRow?.id) return res.status(404).json({ success: false, error: 'Solicitação não encontrada.' });
+      if (sanitizeString(requestRow.status, 80) !== 'APPROVED') {
+        return res.status(409).json({ success: false, error: 'Portabilidade ainda não foi aprovada.' });
+      }
+
+      const nowIso = new Date().toISOString();
+      const { error: snapshotUpdateError } = await supabase
+        .from('patient_portability_snapshots')
+        .update({ status: 'IMPORTED', metadata: { importedAt: nowIso }, })
+        .eq('portability_request_id', requestId)
+        .eq('organization_id_target', organizationId)
+        .eq('status', 'GENERATED');
+      if (snapshotUpdateError && !isMissingRelationError(snapshotUpdateError)) throw snapshotUpdateError;
+
+      const { error: grantError } = await supabase
+        .from('patient_access_grants')
+        .insert([{
+          organization_id: organizationId,
+          patient_id: patientId,
+          granted_to_organization_id: organizationId,
+          granted_by_user_id: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+          scope: normalizePatientPortabilityScope(requestRow.scope),
+          starts_at: nowIso,
+          reason: 'PORTABILITY_SNAPSHOT_IMPORTED'
+        }]);
+      if (grantError && !isMissingRelationError(grantError)) throw grantError;
+
+      const { error: requestUpdateError } = await supabase
+        .from('patient_portability_requests')
+        .update({ status: 'COMPLETED', updated_at: nowIso })
+        .eq('id', requestId);
+      if (requestUpdateError) throw requestUpdateError;
+
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: organizationId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
+        title: 'Snapshot de portabilidade importado',
+        content: 'Snapshot autorizado foi importado para o contexto da clínica atual.',
+        type: 'management',
+        actionType: 'PORTABILITY_SNAPSHOT_IMPORTED',
+        payload: { requestId, patientId }
+      });
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: organizationId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
+        title: 'Concessão de acesso criada',
+        content: 'Concessão operacional foi criada para o pacote autorizado.',
+        type: 'management',
+        actionType: 'ACCESS_GRANT_CREATED',
+        payload: { requestId, patientId, grantCreated: !grantError }
+      });
+
+      return res.json({ success: true, message: 'Snapshot autorizado importado.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/portability/import [POST]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: sanitizeString(req.body?.requestId || req.body?.request_id, 120),
+        logRequestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -12870,15 +13410,6 @@ async function startServer() {
       const role = sanitizeString((req as any).session?.user?.role, 40).toLowerCase();
       const limit = parseBoundedListLimit((req as any).query?.limit, 20, 50);
       const requestId = requestIdForLogs(req);
-      const patientEmailResult = await fetchPatientEmailForNotesWithSchemaFallback({
-        supabase,
-        patientId,
-        requestId,
-        logger: console
-      });
-      if (patientEmailResult.error) throw patientEmailResult.error;
-      const patientRow = patientEmailResult.data;
-      const patientEmail = sanitizeEmail(patientRow?.email);
 
       const notesByIdResult = await fetchNotesWithRoleFilter({
         patientId,
@@ -12890,22 +13421,7 @@ async function startServer() {
       const notesByIdError = notesByIdResult.error;
       if (notesByIdError) throw notesByIdError;
 
-      let notesByEmail: any[] = [];
-      if (patientEmail) {
-        const notesByEmailResult = await fetchNotesWithRoleFilter({
-          patientEmail,
-          excludePatientId: patientId,
-          role: 'patient',
-          limit,
-          requestId
-        });
-        const notesByEmailData = notesByEmailResult.data;
-        const notesByEmailError = notesByEmailResult.error;
-        if (notesByEmailError) throw notesByEmailError;
-        notesByEmail = Array.isArray(notesByEmailData) ? notesByEmailData : [];
-      }
-
-      const merged = [...(Array.isArray(notesById) ? notesById : []), ...notesByEmail];
+      const merged = Array.isArray(notesById) ? notesById : [];
       const deduped = Array.from(new Map(merged.map((item: any) => [String(item?.id || crypto.randomUUID()), item])).values())
         .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
         .slice(0, limit);
@@ -13206,14 +13722,6 @@ async function startServer() {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const limit = parseBoundedListLimit((req as any).query?.limit, 20, 50);
-      const patientEmailResult = await fetchPatientEmailForNotesWithSchemaFallback({
-        supabase,
-        patientId,
-        route: '/api/history/:patientId',
-        logger: console
-      });
-      if (patientEmailResult.error) throw patientEmailResult.error;
-      const patientEmail = sanitizeEmail(patientEmailResult.data?.email);
 
       const historyByIdResult = await fetchHistoryWithSchemaFallback({
         supabase,
@@ -13226,23 +13734,7 @@ async function startServer() {
       const historyByIdError = historyByIdResult.error;
       if (historyByIdError) throw historyByIdError;
 
-      let historyByEmail: any[] = [];
-      if (patientEmail) {
-        const historyByEmailResult = await fetchHistoryWithSchemaFallback({
-          supabase,
-          patientEmail,
-          excludePatientId: patientId,
-          limit,
-          route: '/api/history/:patientId',
-          logger: console
-        });
-        const historyByEmailData = historyByEmailResult.data;
-        const historyByEmailError = historyByEmailResult.error;
-        if (historyByEmailError) throw historyByEmailError;
-        historyByEmail = Array.isArray(historyByEmailData) ? historyByEmailData : [];
-      }
-
-      const merged = [...(Array.isArray(historyById) ? historyById : []), ...historyByEmail];
+      const merged = Array.isArray(historyById) ? historyById : [];
       const deduped = Array.from(new Map(merged.map((item: any) => [String(item?.id || crypto.randomUUID()), item])).values())
         .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
         .slice(0, limit);

@@ -32,6 +32,17 @@ export function isPermanentOfflineSyncStatus(status: number): boolean {
   return status === 400 || status === 401 || status === 403 || status === 404 || status === 409 || status === 422;
 }
 
+export function isIdempotentConflictPayload(payload: any): boolean {
+  if (!payload || typeof payload !== 'object') return false;
+  const code = String(payload.code || payload.error_code || '').trim().toUpperCase();
+  return (
+    payload.idempotent === true ||
+    (payload.success === true && code.includes('IDEMPOTENT')) ||
+    code === 'PATIENT_ALREADY_EXISTS_SAME_CLINIC' ||
+    code === 'PORTABILITY_REQUEST_ALREADY_EXISTS'
+  );
+}
+
 export function shouldAttemptOfflineRecord(record: OfflineSyncLikeRecord, now = Date.now()): boolean {
   if (record.sync_status !== 'pending') return false;
   const nextRetryAt = Number(record.next_retry_at || 0);

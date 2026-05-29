@@ -13,6 +13,7 @@ import {
 import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 import { isAbaV2Enabled } from '../utils/featureFlags';
 import { sanitizeTechnicalErrorMessage } from '../utils/displayLabels';
+import { isIdempotentConflictPayload } from '../utils/offlineSyncResilience';
 
 enum OperationType {
   CREATE = 'create',
@@ -776,6 +777,16 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
       return result;
     }
     const errorPayload = await safeJson(response);
+    if (response.status === 409 && isIdempotentConflictPayload(errorPayload)) {
+      await markRecordSyncStatus(id, 'synced');
+      return {
+        ...errorPayload,
+        success: true,
+        idempotent: true,
+        status: response.status,
+        data: errorPayload?.data || payloadWithIdempotency
+      };
+    }
     const isRetryable = response.status >= 500 || response.status === 429 || response.status === 408;
 
     if (!isRetryable) {
@@ -1022,13 +1033,13 @@ export const dataService = {
     }
   },
 
-  async createPatientUser(email: string, name: string, type?: string, cpf?: string | null) {
+  async createPatientUser(email: string, name: string, type?: string, cpf?: string | null, extra: Record<string, any> = {}) {
     try {
       const response = await fetch('/api/patients/create-user', {
         method: 'POST',
         headers: await getAuthHeaders(),
         credentials: 'include',
-        body: JSON.stringify({ email, name, type, cpf: cpf || undefined })
+        body: JSON.stringify({ email, name, type, cpf: cpf || undefined, ...extra })
       });
       const result = await safeJson(response);
       if (response.ok) return result;

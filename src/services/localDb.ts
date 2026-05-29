@@ -2,6 +2,7 @@
 import { ensureFreshSession, getSupabase } from '../lib/supabase';
 import {
   OFFLINE_SYNC_MAX_RETRIES,
+  isIdempotentConflictPayload,
   type OfflineSyncStatus,
   resolveOfflineSyncFailure,
   shouldAttemptOfflineRecord
@@ -438,7 +439,7 @@ export const syncOfflineData = async () => {
 
         const responsePayload = await response.json().catch(() => ({ error: 'Unknown error' }));
 
-        if (response.ok && responsePayload?.queued !== true) {
+        if ((response.ok && responsePayload?.queued !== true) || (response.status === 409 && isIdempotentConflictPayload(responsePayload))) {
           await markRecordSyncStatus(record.id, 'synced');
           console.log(`Synced ${record.type}: ${record.id}`);
         } else if (response.ok && responsePayload?.queued === true) {

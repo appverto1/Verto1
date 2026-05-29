@@ -30,6 +30,12 @@ const NOTE_WRITE_OPTIONAL_COLUMNS = new Set([
   'original_id',
   'assigned_task_id',
   'source',
+  'portability_scope',
+  'is_portable',
+  'shared_with_patient',
+  'shared_with_professionals',
+  'original_organization_id',
+  'original_author_id',
   'created_by',
   'therapist_id',
   'user_id',
@@ -112,6 +118,14 @@ function firstString(...values: unknown[]): string {
   return '';
 }
 
+function boolLike(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value;
+  const normalized = cleanString(value, 20).toLowerCase();
+  if (['true', '1', 'yes', 'sim'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'nao', 'não'].includes(normalized)) return false;
+  return fallback;
+}
+
 function cleanObject<T extends Record<string, any>>(input: T): Partial<T> {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined && value !== '')) as Partial<T>;
 }
@@ -149,6 +163,13 @@ export function normalizeNoteMutationPayload(input: any, context: {
       : visibility === 'shared_patient'
         ? 'shared'
         : 'private';
+  const portabilityScope =
+    visibility === 'shared_patient'
+      ? 'PATIENT'
+      : visibility === 'shared_clinic'
+        ? 'PROFESSIONALS'
+        : 'PRIVATE';
+  const markedPortable = boolLike(input?.is_portable ?? input?.isPortable, false);
 
   const payload = cleanObject({
     id: cleanString(input?.id || input?.clientRecordId || input?.localId, 120) || undefined,
@@ -166,6 +187,12 @@ export function normalizeNoteMutationPayload(input: any, context: {
     original_id: cleanString(input?.original_id || input?.originalId, 120) || undefined,
     assigned_task_id: cleanString(input?.assigned_task_id || input?.assignedTaskId, 120) || undefined,
     source: cleanString(input?.source || 'offline_sync', 80),
+    portability_scope: portabilityScope,
+    is_portable: portabilityScope === 'PROFESSIONALS' ? markedPortable : portabilityScope === 'PATIENT',
+    shared_with_patient: portabilityScope === 'PATIENT',
+    shared_with_professionals: portabilityScope === 'PROFESSIONALS' && markedPortable,
+    original_organization_id: cleanString(input?.original_organization_id || input?.originalOrganizationId, 120) || undefined,
+    original_author_id: cleanString(input?.original_author_id || input?.originalAuthorId || context.userId, 120) || undefined,
     created_by: cleanString(input?.created_by || input?.createdBy || context.userId, 120),
     therapist_id: cleanString(input?.therapist_id || input?.therapistId || context.userId, 120),
     user_id: cleanString(input?.user_id || input?.userId || context.userId, 120),
