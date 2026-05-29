@@ -125,7 +125,7 @@ type ClinicalQueryAuditOptions = {
 };
 
 function isClinicalEndpoint(endpoint: string) {
-  return /\/api\/(aba|calendar|closure|portal|appointments|notes|history|tasks|assigned-tasks|patient-anamnesis|patients|patient-records)/.test(endpoint);
+  return /\/api\/(aba|calendar|closure|portal|appointments|admin\/payers|admin\/payer-requirements|notes|history|tasks|assigned-tasks|patient-anamnesis|patients|patient-records)/.test(endpoint);
 }
 
 function isDevQueryAuditEnabled() {
@@ -193,6 +193,10 @@ function auditClinicalQuery(endpoint: string, options: ClinicalQueryAuditOptions
       /\/api\/portal\/appointments(?:\/[^/?]+)?/.test(endpoint) ||
       /\/api\/portal\/sessions\/[^/?]+\/sign/.test(endpoint) ||
       /\/api\/appointments\/(?:[^/?]+\/action-requests|action-requests\/[^/?]+\/(?:approve|reject))/.test(endpoint) ||
+      /\/api\/appointments\/[^/?]+\/billing-context/.test(endpoint) ||
+      /\/api\/appointments\/[^/?]+\/required-documents\/[^/?]+\/waive/.test(endpoint) ||
+      /\/api\/admin\/payers(?:\/[^/?]+\/requirements)?/.test(endpoint) ||
+      /\/api\/admin\/payer-requirements\/[^/?]+/.test(endpoint) ||
       /\/api\/aba\/patients\/[^/?]+\/charts\/[^/?]+/.test(endpoint) ||
       /\/api\/aba\/patients\/[^/?]+\/(maintenance-schedules|next-session\/recommendations|next-session\/plan-items)/.test(endpoint) ||
       /\/api\/(notes|history|tasks|assigned-tasks|patient-anamnesis|patient-records)\/[^/?]+/.test(endpoint) ||
@@ -1628,6 +1632,192 @@ export const dataService = {
     }
   },
 
+  async getPayers(options: { status?: string; limit?: number } = {}) {
+    const endpoint = endpointWithQuery('/api/admin/payers', {
+      status: options.status,
+      limit: normalizeListLimit(options.limit, 50, 100)
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPayers',
+        operation: 'list',
+        table: 'clinic_payers',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar pagadores agora.' };
+    }
+  },
+
+  async createPayer(payload: any = {}) {
+    const endpoint = '/api/admin/payers';
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'createPayer',
+        operation: 'write',
+        table: 'clinic_payers,payer_requirement_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível criar o pagador agora.' };
+    }
+  },
+
+  async updatePayer(payerId: string, payload: any = {}) {
+    const endpoint = `/api/admin/payers/${encodeURIComponent(String(payerId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updatePayer',
+        operation: 'write',
+        table: 'clinic_payers,payer_requirement_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível atualizar o pagador agora.' };
+    }
+  },
+
+  async getPayerRequirements(payerId: string) {
+    const endpoint = `/api/admin/payers/${encodeURIComponent(String(payerId))}/requirements`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPayerRequirements',
+        operation: 'list',
+        table: 'clinic_payer_requirements',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar regras do pagador agora.' };
+    }
+  },
+
+  async createPayerRequirement(payerId: string, payload: any = {}) {
+    const endpoint = `/api/admin/payers/${encodeURIComponent(String(payerId))}/requirements`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'createPayerRequirement',
+        operation: 'write',
+        table: 'clinic_payer_requirements,payer_requirement_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível criar a regra agora.' };
+    }
+  },
+
+  async updatePayerRequirement(requirementId: string, payload: any = {}) {
+    const endpoint = `/api/admin/payer-requirements/${encodeURIComponent(String(requirementId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updatePayerRequirement',
+        operation: 'write',
+        table: 'clinic_payer_requirements,payer_requirement_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível atualizar a regra agora.' };
+    }
+  },
+
+  async getAppointmentBillingContext(appointmentId: string) {
+    const endpoint = `/api/appointments/${encodeURIComponent(String(appointmentId))}/billing-context`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getAppointmentBillingContext',
+        operation: 'detail',
+        table: 'appointment_billing_contexts,appointment_required_documents',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível carregar pagador da consulta agora.' };
+    }
+  },
+
+  async updateAppointmentBillingContext(appointmentId: string, payload: any = {}) {
+    const endpoint = `/api/appointments/${encodeURIComponent(String(appointmentId))}/billing-context`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updateAppointmentBillingContext',
+        operation: 'write',
+        table: 'appointment_billing_contexts,payer_requirement_audit_logs,appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível atualizar pagador da consulta agora.' };
+    }
+  },
+
+  async waiveAppointmentRequiredDocument(appointmentId: string, documentId: string, payload: { reason: string }) {
+    const endpoint = `/api/appointments/${encodeURIComponent(String(appointmentId))}/required-documents/${encodeURIComponent(String(documentId))}/waive`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'waiveAppointmentRequiredDocument',
+        operation: 'write',
+        table: 'appointment_required_documents,payer_requirement_audit_logs,appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível dispensar o documento agora.' };
+    }
+  },
+
   async getClosureAppointments(options: {
     from: string;
     to: string;
@@ -1635,6 +1825,7 @@ export const dataService = {
     patientId?: string;
     professionalId?: string;
     serviceType?: string;
+    payerId?: string;
     page?: number;
     limit?: number;
     onlyPending?: boolean;
@@ -1649,6 +1840,7 @@ export const dataService = {
       patientId: options.patientId,
       professionalId: options.professionalId,
       serviceType: options.serviceType,
+      payerId: options.payerId,
       page: Math.max(1, Math.round(Number(options.page || 1) || 1)),
       limit: normalizeListLimit(options.limit, 50, 200),
       onlyPending: options.onlyPending ? 'true' : undefined,

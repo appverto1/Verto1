@@ -1,3 +1,5 @@
+import { evaluatePayerRequirementsForClosure, type ResolvedPayerRequirements } from './payerRequirementEngine';
+
 export type ClosureReadinessStatus =
   | 'READY'
   | 'PENDING'
@@ -24,8 +26,17 @@ export type ClosureRequirements = {
   requireReport?: boolean;
   requireActualDuration?: boolean;
   requireRoomWhenClinic?: boolean;
+  requireAuthorization?: boolean;
+  requireGuide?: boolean;
+  requireProfessionalRegistry?: boolean;
+  requirePatientDocument?: boolean;
+  allowManualOverride?: boolean;
   minDurationMinutes?: number | null;
   maxDurationVarianceMinutes?: number | null;
+  payerName?: string | null;
+  payerId?: string | null;
+  appliedPayerRequirementId?: string | null;
+  payerRequirementSource?: 'SPECIFIC' | 'GENERAL' | 'DEFAULT' | string | null;
 };
 
 export type AppointmentClosureInput = {
@@ -72,8 +83,17 @@ const DEFAULT_REQUIREMENTS: Required<ClosureRequirements> = {
   requireReport: true,
   requireActualDuration: true,
   requireRoomWhenClinic: true,
+  requireAuthorization: false,
+  requireGuide: false,
+  requireProfessionalRegistry: false,
+  requirePatientDocument: false,
+  allowManualOverride: true,
   minDurationMinutes: null,
-  maxDurationVarianceMinutes: 10
+  maxDurationVarianceMinutes: 10,
+  payerName: null,
+  payerId: null,
+  appliedPayerRequirementId: null,
+  payerRequirementSource: 'DEFAULT'
 };
 
 const NOT_BILLABLE_STATUSES = new Set([
@@ -186,6 +206,22 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
   const abaSession = input.abaSession || {};
   const summary = input.sessionSummary || {};
   const requirements = { ...DEFAULT_REQUIREMENTS, ...(input.requirements || {}) };
+  const payerRequirements: ResolvedPayerRequirements = {
+    requireSignature: requirements.requireSignature,
+    requireReport: requirements.requireReport,
+    requireActualDuration: requirements.requireActualDuration,
+    requireAuthorization: requirements.requireAuthorization,
+    requireGuide: requirements.requireGuide,
+    requireProfessionalRegistry: requirements.requireProfessionalRegistry,
+    requirePatientDocument: requirements.requirePatientDocument,
+    minDurationMinutes: requirements.minDurationMinutes,
+    maxDurationVarianceMinutes: requirements.maxDurationVarianceMinutes,
+    allowManualOverride: requirements.allowManualOverride,
+    appliedRuleId: requirements.appliedPayerRequirementId || null,
+    source: requirements.payerRequirementSource === 'SPECIFIC' || requirements.payerRequirementSource === 'GENERAL' || requirements.payerRequirementSource === 'DEFAULT'
+      ? requirements.payerRequirementSource
+      : 'DEFAULT'
+  };
   const now = input.now ? new Date(input.now) : new Date();
   const patientId = asString(firstValue(input.patientId, appointment.patient_id, appointment.patientId, abaSession.patient_id, abaSession.patientId, input.patient?.id)) || null;
   const professionalId = asString(firstValue(appointment.therapist_id, appointment.professional_id, appointment.professionalId, abaSession.therapist_id, abaSession.therapistId, input.professional?.id)) || null;
@@ -203,6 +239,12 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
   );
   const locationType = asString(firstValue(appointment.location_type, appointment.locationType, abaSession.location_type)).toLowerCase();
   const room = asString(firstValue(appointment.room_name, appointment.roomName, appointment.room_id, appointment.roomId, abaSession.room_name, abaSession.room_id));
+  const authorizationCode = asString(firstValue(appointment.authorization_code, appointment.authorizationCode, appointment.authorization_id, appointment.authorizationId));
+  const guideNumber = asString(firstValue(appointment.guide_number, appointment.guideNumber));
+  const professionalRegistryPresent = hasText(firstValue(input.professional?.registry, input.professional?.professional_registry, input.professional?.crp, input.professional?.councilNumber));
+  const patientDocumentPresent = hasText(firstValue(input.patient?.document, input.patient?.cpf, input.patient?.responsavelCpf, appointment.patient_document_present));
+  const requiredDocuments = Array.isArray(appointment.required_documents) ? appointment.required_documents : [];
+  const pendingRequiredDocuments = requiredDocuments.filter((doc: any) => ['REQUIRED', 'PENDING', 'EXPIRED'].includes(asString(doc?.status).toUpperCase()));
   const hasReport = hasText(input.report) ||
     hasText(summary.session_note) ||
     hasText(summary.sessionNote) ||
@@ -338,24 +380,61 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
   checklist.push(buildCheck(
     'payer_linked',
     'Convênio/pagador vinculado',
-    firstValue(input.patient?.insuranceType, input.patient?.payerType, input.patient?.financialPlans, appointment.payer_type, appointment.payerType) ? 'PASSED' : 'NOT_APPLICABLE',
+    firstValue(requirements.payerName, requirements.payerId, input.patient?.insuranceType, input.patient?.payerType, input.patient?.financialPlans, appointment.payer_name_snapshot, appointment.payerNameSnapshot, appointment.payer_type, appointment.payerType) ? 'PASSED' : 'NOT_APPLICABLE',
     false,
     'LOW',
-    firstValue(input.patient?.insuranceType, input.patient?.payerType, input.patient?.financialPlans, appointment.payer_type, appointment.payerType)
-      ? 'Pagador informado no cadastro.'
+    firstValue(requirements.payerName, requirements.payerId, input.patient?.insuranceType, input.patient?.payerType, input.patient?.financialPlans, appointment.payer_name_snapshot, appointment.payerNameSnapshot, appointment.payer_type, appointment.payerType)
+      ? 'Pagador informado para esta conferÃªncia.'
       : 'Pagador não configurado para esta conferência.',
-    { present: Boolean(firstValue(input.patient?.insuranceType, input.patient?.payerType, input.patient?.financialPlans, appointment.payer_type, appointment.payerType)) }
+    {
+      present: Boolean(firstValue(requirements.payerName, requirements.payerId, input.patient?.insuranceType, input.patient?.payerType, input.patient?.financialPlans, appointment.payer_name_snapshot, appointment.payerNameSnapshot, appointment.payer_type, appointment.payerType)),
+      source: requirements.payerRequirementSource || 'DEFAULT'
+    }
   ));
   checklist.push(buildCheck(
     'authorization_linked',
     'Guia/autorização vinculada',
-    firstValue(appointment.authorization_id, appointment.authorizationCode, appointment.guide_number, appointment.guideNumber) ? 'PASSED' : 'NOT_APPLICABLE',
-    false,
+    firstValue(authorizationCode, guideNumber) ? 'PASSED' : (requirements.requireAuthorization || requirements.requireGuide) ? 'FAILED' : 'NOT_APPLICABLE',
+    Boolean(requirements.requireAuthorization || requirements.requireGuide),
     'MEDIUM',
-    firstValue(appointment.authorization_id, appointment.authorizationCode, appointment.guide_number, appointment.guideNumber)
+    firstValue(authorizationCode, guideNumber)
       ? 'Guia ou autorização vinculada.'
       : 'Guia ou autorização não configurada para esta conferência.',
-    { present: Boolean(firstValue(appointment.authorization_id, appointment.authorizationCode, appointment.guide_number, appointment.guideNumber)) }
+    {
+      present: Boolean(firstValue(authorizationCode, guideNumber)),
+      requireAuthorization: requirements.requireAuthorization,
+      requireGuide: requirements.requireGuide
+    }
+  ));
+  const payerEvaluation = evaluatePayerRequirementsForClosure({
+    requirements: payerRequirements,
+    context: {
+      hasSignature,
+      hasReport,
+      actualMinutes,
+      authorizationCode,
+      guideNumber,
+      professionalRegistryPresent,
+      patientDocumentPresent
+    }
+  });
+  payerEvaluation.checklistItems.forEach((payerItem) => {
+    if (!checklist.some((existing) => existing.key === payerItem.key)) {
+      checklist.push(payerItem);
+    }
+  });
+  checklist.push(buildCheck(
+    'required_documents_status',
+    'Documentos obrigatórios',
+    pendingRequiredDocuments.length > 0 ? 'FAILED' : requiredDocuments.length > 0 ? 'PASSED' : 'NOT_APPLICABLE',
+    pendingRequiredDocuments.length > 0,
+    'HIGH',
+    pendingRequiredDocuments.length > 0
+      ? `${pendingRequiredDocuments.length} documento(s) obrigatório(s) pendente(s).`
+      : requiredDocuments.length > 0
+        ? 'Documentos obrigatórios conferidos.'
+        : 'Sem documentos obrigatórios adicionais.',
+    { pendingCount: pendingRequiredDocuments.length }
   ));
   checklist.push(buildCheck(
     'status_billable',
@@ -403,12 +482,18 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     actualEnd,
     scheduledMinutes,
     actualMinutes,
+    authorizationCode,
+    guideNumber,
+    payerId: requirements.payerId || appointment.payer_id || appointment.payerId || null,
+    payerRequirementSource: requirements.payerRequirementSource || null,
+    appliedPayerRequirementId: requirements.appliedPayerRequirementId || null,
     professionalId,
     serviceType,
     room,
     locationType,
     hasReport,
     hasSignature,
+    pendingRequiredDocumentsCount: pendingRequiredDocuments.length,
     appointmentUpdatedAt: appointment.updated_at || appointment.updatedAt || null,
     sessionUpdatedAt: abaSession.updated_at || abaSession.updatedAt || null,
     summaryUpdatedAt: summary.updated_at || summary.updatedAt || null

@@ -59,6 +59,7 @@ import { StackedDomainStatusChart } from "./StackedDomainStatusChart";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { ClinicalAgendaBoard } from "./Calendar";
 import { OperationalClosureCenter } from "./OperationalClosureCenter";
+import { PayerRequirementsPanel } from "./PayerRequirementsPanel";
 import { LogoVerto } from "./Common";
 import { SecureImage } from "./SecureMedia";
 import { motion, AnimatePresence } from "framer-motion";
@@ -513,6 +514,10 @@ export function CoordinatorDashboard({
   const [sessionLocationNotes, setSessionLocationNotes] = useState("");
   const [sessionCallLink, setSessionCallLink] = useState("");
   const [sessionProfessional, setSessionProfessional] = useState("");
+  const [sessionPayerId, setSessionPayerId] = useState("");
+  const [sessionGuideNumber, setSessionGuideNumber] = useState("");
+  const [sessionAuthorizationCode, setSessionAuthorizationCode] = useState("");
+  const [clinicPayers, setClinicPayers] = useState<any[]>([]);
   const [sessionNumSessions, setSessionNumSessions] = useState(1);
   const [sessionRecurrencePattern, setSessionRecurrencePattern] = useState("weekly");
   const [scheduleConflictState, setScheduleConflictState] = useState<{
@@ -1553,6 +1558,18 @@ export function CoordinatorDashboard({
     }
   }, [sessionPatientName, allPatients]);
 
+  useEffect(() => {
+    if (!isAddSessionModalOpen || isTherapist) return;
+    let cancelled = false;
+    dataService.getPayers({ status: "ACTIVE", limit: 80 }).then((result: any) => {
+      if (cancelled) return;
+      setClinicPayers(result?.success && Array.isArray(result.data) ? result.data : []);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAddSessionModalOpen, isTherapist]);
+
   const selectPatientForSession = (name: string) => {
     setSessionPatientName(name);
     setFilteredPatients([]);
@@ -1599,6 +1616,11 @@ export function CoordinatorDashboard({
   const selectedSessionRoom = useMemo(
     () => activeClinicRooms.find((room: any) => String(room?.id || "") === String(sessionRoom || "")) || null,
     [activeClinicRooms, sessionRoom],
+  );
+
+  const selectedSessionPayer = useMemo(
+    () => clinicPayers.find((payer: any) => String(payer?.id || "") === String(sessionPayerId || "")) || null,
+    [clinicPayers, sessionPayerId],
   );
 
   const sessionRecurrenceDates = useMemo(
@@ -1734,6 +1756,9 @@ export function CoordinatorDashboard({
     setSessionCallLink("");
     setSessionApproach("");
     setSessionProfessional("");
+    setSessionPayerId("");
+    setSessionGuideNumber("");
+    setSessionAuthorizationCode("");
     setSessionNumSessions(1);
     setSessionRecurrencePattern("weekly");
     setEditingAppointmentId(null);
@@ -1829,6 +1854,14 @@ export function CoordinatorDashboard({
         location_notes: sessionLocationNotes,
         callLink: sessionCallLink,
         call_link: sessionCallLink,
+        payerId: sessionPayerId || null,
+        payer_id: sessionPayerId || null,
+        payerName: selectedSessionPayer?.name || "",
+        payer_name_snapshot: selectedSessionPayer?.name || "",
+        guideNumber: sessionGuideNumber,
+        guide_number: sessionGuideNumber,
+        authorizationCode: sessionAuthorizationCode,
+        authorization_code: sessionAuthorizationCode,
         professional: sessionProfessional,
         professionalId: selectedSessionProfessional?.id,
         professional_id: selectedSessionProfessional?.id,
@@ -1854,6 +1887,14 @@ export function CoordinatorDashboard({
           : `Sessão de ${sessionPatientName} atualizada para ${sessionDate} às ${sessionTime}.`,
         "management",
       );
+      if (sessionPayerId || sessionGuideNumber || sessionAuthorizationCode) {
+        void dataService.updateAppointmentBillingContext(String(editingAppointmentId), {
+          payerId: sessionPayerId || null,
+          serviceType: sessionApproach || "Consulta Padrão",
+          guideNumber: sessionGuideNumber,
+          authorizationCode: sessionAuthorizationCode,
+        });
+      }
       setIsAddSessionModalOpen(false);
       resetSessionForm();
       hideProcessing();
@@ -1881,6 +1922,14 @@ export function CoordinatorDashboard({
       location_notes: sessionLocationNotes,
       callLink: sessionCallLink,
       call_link: sessionCallLink,
+      payerId: sessionPayerId || null,
+      payer_id: sessionPayerId || null,
+      payerName: selectedSessionPayer?.name || "",
+      payer_name_snapshot: selectedSessionPayer?.name || "",
+      guideNumber: sessionGuideNumber,
+      guide_number: sessionGuideNumber,
+      authorizationCode: sessionAuthorizationCode,
+      authorization_code: sessionAuthorizationCode,
       professional: sessionProfessional,
       professionalName: sessionProfessional,
       professionalId: selectedSessionProfessional?.id,
@@ -2560,6 +2609,17 @@ export function CoordinatorDashboard({
     setSessionProfessional(
       appointment.therapistName || appointment.professional || "",
     );
+    setSessionPayerId(String(appointment.payerId || appointment.payer_id || ""));
+    setSessionGuideNumber(String(appointment.guideNumber || appointment.guide_number || ""));
+    setSessionAuthorizationCode(String(appointment.authorizationCode || appointment.authorization_code || ""));
+    if (appointment.id && !isTherapist) {
+      dataService.getAppointmentBillingContext(String(appointment.id)).then((result: any) => {
+        if (!result?.success || !result.data) return;
+        setSessionPayerId(String(result.data.payerId || ""));
+        setSessionGuideNumber(String(result.data.guideNumber || ""));
+        setSessionAuthorizationCode(String(result.data.authorizationCode || ""));
+      });
+    }
     setIsAddSessionModalOpen(true);
   };
 
@@ -7441,6 +7501,7 @@ export function CoordinatorDashboard({
                             />
                           </div>
                         </div>
+                        <PayerRequirementsPanel />
                       </div>
                     ) : (
                       <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100 text-sm font-semibold text-slate-500">
@@ -7745,6 +7806,48 @@ export function CoordinatorDashboard({
                   )}
                 </select>
               </div>
+              {!isTherapist && (
+                <div className="rounded-3xl border border-violet-100 bg-violet-50/70 p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-[#7a32fc]">
+                    Pagador e conferência
+                  </p>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      Pagador/convênio
+                      <select
+                        className="mt-1 w-full rounded-xl border border-violet-100 bg-white p-3 text-sm font-semibold normal-case tracking-normal text-slate-700 outline-none"
+                        value={sessionPayerId}
+                        onChange={(e) => setSessionPayerId(e.target.value)}
+                      >
+                        <option value="">Sem pagador</option>
+                        {clinicPayers.map((payer: any) => (
+                          <option key={payer.id} value={payer.id}>
+                            {payer.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      Guia
+                      <input
+                        className="mt-1 w-full rounded-xl border border-violet-100 bg-white p-3 text-sm font-semibold normal-case tracking-normal text-slate-700 outline-none"
+                        value={sessionGuideNumber}
+                        onChange={(e) => setSessionGuideNumber(e.target.value)}
+                        placeholder="Número da guia"
+                      />
+                    </label>
+                    <label className="sm:col-span-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      Autorização/senha
+                      <input
+                        className="mt-1 w-full rounded-xl border border-violet-100 bg-white p-3 text-sm font-semibold normal-case tracking-normal text-slate-700 outline-none"
+                        value={sessionAuthorizationCode}
+                        onChange={(e) => setSessionAuthorizationCode(e.target.value)}
+                        placeholder="Código informado pelo pagador"
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
               {scheduleConflictState.checked && (
                 <div className={`rounded-2xl border px-4 py-3 text-sm font-semibold ${
                   scheduleConflictState.blocking

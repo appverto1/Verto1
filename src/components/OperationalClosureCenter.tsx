@@ -30,6 +30,11 @@ type ClosureRow = {
   patient_name?: string | null;
   professional_name?: string | null;
   service_type?: string | null;
+  payer_name?: string | null;
+  guide_number?: string | null;
+  authorization_code?: string | null;
+  payer_requirement_source?: string | null;
+  required_document_pending_count?: number;
   scheduled_start?: string | null;
   scheduled_end?: string | null;
   actual_start?: string | null;
@@ -221,7 +226,7 @@ export function OperationalClosureCenter({
         onlyPending: quickFilter === "pending",
         onlyReady: quickFilter === "ready",
         onlyWarnings: quickFilter === "warning",
-        missing: quickFilter === "signature" || quickFilter === "report" ? quickFilter : "",
+        missing: ["signature", "report", "guide", "authorization", "documents"].includes(quickFilter) ? quickFilter : "",
       });
       if (!result?.success) {
         setRows([]);
@@ -460,6 +465,9 @@ export function OperationalClosureCenter({
             ["warning", "Somente alertas"],
             ["signature", "Sem assinatura"],
             ["report", "Sem relatório"],
+            ["guide", "Sem guia"],
+            ["authorization", "Sem autorização"],
+            ["documents", "Documentos pendentes"],
           ].map(([key, label]) => (
             <button
               key={key}
@@ -526,6 +534,8 @@ export function OperationalClosureCenter({
                 <th className="px-4 py-3">Paciente</th>
                 <th className="px-4 py-3">Profissional</th>
                 <th className="px-4 py-3">Tipo</th>
+                <th className="px-4 py-3">Pagador</th>
+                <th className="px-4 py-3">Guia/autorização</th>
                 <th className="px-4 py-3">Planejado</th>
                 <th className="px-4 py-3">Realizado</th>
                 <th className="px-4 py-3">Status</th>
@@ -536,14 +546,14 @@ export function OperationalClosureCenter({
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={11} className="px-4 py-10 text-center text-slate-500">
                     <Loader2 size={20} className="mx-auto mb-2 animate-spin" />
                     Carregando fechamento
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={11} className="px-4 py-10 text-center text-slate-500">
                     Nenhuma sessão encontrada no período.
                   </td>
                 </tr>
@@ -557,6 +567,12 @@ export function OperationalClosureCenter({
                     <td className="px-4 py-3 font-medium text-slate-800">{row.patient_name || "Paciente"}</td>
                     <td className="px-4 py-3 text-slate-600">{row.professional_name || "Equipe"}</td>
                     <td className="px-4 py-3 text-slate-600">{row.service_type || "Sessão"}</td>
+                    <td className="px-4 py-3 text-slate-600">{row.payer_name || "Sem pagador"}</td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {row.guide_number || row.authorization_code || Number(row.required_document_pending_count || 0) > 0
+                        ? [row.guide_number ? `Guia ${row.guide_number}` : "", row.authorization_code ? "Autorização informada" : "", Number(row.required_document_pending_count || 0) > 0 ? `${row.required_document_pending_count} doc.` : ""].filter(Boolean).join(" · ")
+                        : "Pendente/não exigida"}
+                    </td>
                     <td className="px-4 py-3 text-slate-600">{formatMinutes(row.scheduled_minutes)}</td>
                     <td className="px-4 py-3 text-slate-600">{formatMinutes(row.actual_minutes)}</td>
                     <td className="px-4 py-3">
@@ -638,6 +654,16 @@ export function OperationalClosureCenter({
                 <div className="rounded-md border border-slate-200 px-3 py-2 text-sm sm:col-span-2">
                   <div className="text-xs text-slate-500">Status</div>
                   <div className="font-semibold text-slate-800">{statusMeta[normalizeStatus(detail.readiness_status)].label}</div>
+                </div>
+              </div>
+
+              <div className="mb-4 rounded-md border border-violet-100 bg-violet-50 px-3 py-3 text-sm">
+                <div className="font-semibold text-slate-800">Regras do pagador</div>
+                <div className="mt-2 grid gap-2 text-slate-600 sm:grid-cols-2">
+                  <span>Pagador: {detail.payer_name || "Sem pagador"}</span>
+                  <span>Regra aplicada: {detail.payer_requirement_source || "Default"}</span>
+                  <span>Guia: {detail.guide_number || "Pendente/não exigida"}</span>
+                  <span>Autorização: {detail.authorization_code || "Pendente/não exigida"}</span>
                 </div>
               </div>
 

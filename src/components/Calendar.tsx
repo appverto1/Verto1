@@ -1596,6 +1596,9 @@ export const ClinicalAgendaBoard = ({
   const actionRequests = Array.isArray(detail.actionRequests) ? detail.actionRequests : [];
   const statusHistory = Array.isArray(detail.statusHistory) ? detail.statusHistory : [];
   const signatures = Array.isArray(detail.signatures) ? detail.signatures : [];
+  const billingContext = detail.billingContext || {};
+  const billingDocuments = Array.isArray(billingContext.documents) ? billingContext.documents : [];
+  const pendingBillingDocuments = billingDocuments.filter((doc: any) => ['REQUIRED', 'PENDING', 'EXPIRED'].includes(String(doc.status || '').toUpperCase()));
 
   return (
     <div className="flex flex-col gap-3 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:h-[calc(100vh-2rem)] xl:min-h-[680px] xl:overflow-hidden xl:pb-0">
@@ -1900,6 +1903,28 @@ export const ClinicalAgendaBoard = ({
                   </div>
                 );
               })}
+            </div>
+
+            <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-violet-100 bg-violet-50/70'}`}>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#7a32fc]">Pagador e conferência</p>
+                  <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
+                    <p><span className="font-semibold">Pagador:</span> {billingContext.payerName || detailEvent.payer_name_snapshot || 'Sem pagador'}</p>
+                    <p><span className="font-semibold">Guia:</span> {billingContext.guideNumber || detailEvent.guide_number || 'Pendente/não informada'}</p>
+                    <p><span className="font-semibold">Autorização:</span> {billingContext.authorizationCode || detailEvent.authorization_code || 'Pendente/não informada'}</p>
+                    <p><span className="font-semibold">Documentos:</span> {pendingBillingDocuments.length > 0 ? `${pendingBillingDocuments.length} pendente(s)` : 'Sem pendência extra'}</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => onEditAppointment?.(detailEvent)} className="rounded-2xl bg-[#7a32fc] px-3 py-2 text-xs font-bold text-white">
+                    Editar pagador
+                  </button>
+                  <button type="button" onClick={() => openClosureChecklist(detailEvent)} className={`rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 text-slate-200' : 'border-violet-200 bg-white text-[#7a32fc]'}`}>
+                    Ver checklist
+                  </button>
+                </div>
+              </div>
             </div>
 
             {actionRequests.filter((request: any) => request.status === 'PENDING').length > 0 && (

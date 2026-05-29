@@ -83,6 +83,10 @@ import {
   type ClosureReadinessStatus
 } from './src/services/closureReadinessEngine';
 import {
+  resolvePayerRequirements,
+  type PayerRequirementRule
+} from './src/services/payerRequirementEngine';
+import {
   ASSIGNED_TASK_SELECT,
   FINANCIAL_ENTRY_SELECT,
   HISTORY_SELECT,
@@ -2642,6 +2646,72 @@ const APPOINTMENT_STATUS_AUDIT_SELECT = [
   'metadata'
 ].join(',');
 
+const CLINIC_PAYER_SELECT = [
+  'id',
+  'organization_id',
+  'name',
+  'payer_type',
+  'status',
+  'notes',
+  'created_by',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const CLINIC_PAYER_REQUIREMENT_SELECT = [
+  'id',
+  'organization_id',
+  'payer_id',
+  'service_type',
+  'require_signature',
+  'require_report',
+  'require_actual_duration',
+  'require_authorization',
+  'require_guide',
+  'require_professional_registry',
+  'require_patient_document',
+  'min_duration_minutes',
+  'max_duration_variance_minutes',
+  'allow_manual_override',
+  'is_active',
+  'created_by',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const APPOINTMENT_BILLING_CONTEXT_SELECT = [
+  'id',
+  'organization_id',
+  'appointment_id',
+  'patient_id',
+  'payer_id',
+  'payer_name_snapshot',
+  'service_type',
+  'authorization_code',
+  'guide_number',
+  'procedure_code',
+  'notes',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const APPOINTMENT_REQUIRED_DOCUMENT_SELECT = [
+  'id',
+  'organization_id',
+  'appointment_id',
+  'patient_id',
+  'document_type',
+  'status',
+  'file_id',
+  'required_by_payer_id',
+  'required_for_service_type',
+  'due_date',
+  'uploaded_at',
+  'uploaded_by',
+  'created_at',
+  'updated_at'
+].join(',');
+
 const CALENDAR_EVENT_SELECT = [
   'id',
   'organization_id',
@@ -2828,6 +2898,13 @@ const APPOINTMENT_CLOSURE_CHECK_SELECT = [
   'patient_id',
   'professional_id',
   'service_type',
+  'payer_id',
+  'payer_name_snapshot',
+  'authorization_code',
+  'guide_number',
+  'applied_payer_requirement_id',
+  'payer_requirement_source',
+  'required_document_pending_count',
   'readiness_status',
   'checklist',
   'blocking_issues_count',
@@ -2854,6 +2931,13 @@ const APPOINTMENT_CLOSURE_LIST_SELECT = [
   'patient_id',
   'professional_id',
   'service_type',
+  'payer_id',
+  'payer_name_snapshot',
+  'authorization_code',
+  'guide_number',
+  'applied_payer_requirement_id',
+  'payer_requirement_source',
+  'required_document_pending_count',
   'readiness_status',
   'blocking_issues_count',
   'warning_issues_count',
@@ -18828,7 +18912,98 @@ async function startServer() {
     }
   };
 
-  const fetchClosureRequirements = async (organizationId: string, serviceType: string | null) => {
+  const fetchAppointmentBillingContextRow = async (organizationId: string, appointmentId: string) => {
+    if (!isUuid(organizationId) || !isUuid(appointmentId)) return null;
+    const { data, error } = await supabase
+      .from('appointment_billing_contexts')
+      .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('appointment_id', appointmentId)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return null;
+      throw error;
+    }
+    return data || null;
+  };
+
+  const fetchRequiredDocumentsForAppointment = async (organizationId: string, appointmentId: string) => {
+    if (!isUuid(organizationId) || !isUuid(appointmentId)) return [];
+    const { data, error } = await supabase
+      .from('appointment_required_documents')
+      .select(APPOINTMENT_REQUIRED_DOCUMENT_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('appointment_id', appointmentId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return [];
+      throw error;
+    }
+    return Array.isArray(data) ? data : [];
+  };
+
+  const upsertRequiredDocumentStatus = async (params: {
+    organizationId: string;
+    appointmentId: string;
+    patientId: string;
+    payerId?: string | null;
+    serviceType?: string | null;
+    documentType: string;
+    status: string;
+    performedBy?: string | null;
+  }) => {
+    if (!isUuid(params.organizationId) || !isUuid(params.appointmentId) || !isUuid(params.patientId)) return null;
+    const documentType = normalizeDocumentType(params.documentType);
+    const existingResult = await supabase
+      .from('appointment_required_documents')
+      .select(APPOINTMENT_REQUIRED_DOCUMENT_SELECT)
+      .eq('organization_id', params.organizationId)
+      .eq('appointment_id', params.appointmentId)
+      .eq('document_type', documentType)
+      .limit(1)
+      .maybeSingle();
+    if (existingResult.error && !hasMissingFinancialSchema(existingResult.error)) throw existingResult.error;
+    const existing = existingResult.data || null;
+    if (existing && ['WAIVED', 'PROVIDED'].includes(sanitizeString(existing.status, 40).toUpperCase())) return existing;
+    const now = new Date().toISOString();
+    const payload = cleanObject({
+      id: existing?.id || crypto.randomUUID(),
+      organization_id: params.organizationId,
+      appointment_id: params.appointmentId,
+      patient_id: params.patientId,
+      document_type: documentType,
+      status: normalizeDocumentStatus(params.status),
+      required_by_payer_id: isUuid(sanitizeString(params.payerId, 120)) ? sanitizeString(params.payerId, 120) : null,
+      required_for_service_type: sanitizeString(params.serviceType, 120) || null,
+      uploaded_at: normalizeDocumentStatus(params.status) === 'PROVIDED' ? now : existing?.uploaded_at || null,
+      uploaded_by: normalizeDocumentStatus(params.status) === 'PROVIDED' && isUuid(sanitizeString(params.performedBy, 120)) ? sanitizeString(params.performedBy, 120) : existing?.uploaded_by || null,
+      created_at: existing?.created_at || now,
+      updated_at: now
+    });
+    const { data, error } = await supabase
+      .from('appointment_required_documents')
+      .upsert([payload], { onConflict: 'id' })
+      .select(APPOINTMENT_REQUIRED_DOCUMENT_SELECT)
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return null;
+      throw error;
+    }
+    await writePayerRequirementAuditLog({
+      organizationId: params.organizationId,
+      payerId: params.payerId || null,
+      appointmentId: params.appointmentId,
+      action: normalizeDocumentStatus(params.status) === 'PROVIDED' ? 'DOCUMENT_PROVIDED' : 'DOCUMENT_REQUIRED',
+      previousValue: existing,
+      newValue: data,
+      performedBy: params.performedBy || null
+    });
+    return data;
+  };
+
+  const fetchClosureRequirements = async (organizationId: string, serviceType: string | null, appointmentId?: string | null) => {
     if (!isUuid(organizationId)) return null;
     const { data, error } = await supabase
       .from('clinic_closure_requirements')
@@ -18846,13 +19021,66 @@ async function startServer() {
       (data || []).find((item: any) => sanitizeString(item?.service_type, 120) === safeServiceType) ||
       (data || []).find((item: any) => !sanitizeString(item?.service_type, 120)) ||
       null;
-    if (!row) return null;
-    return {
+    const legacyFallback = row ? {
       requireSignature: row.require_signature !== false,
       requireReport: row.require_report !== false,
       requireActualDuration: row.require_actual_duration !== false,
       minDurationMinutes: row.min_duration_minutes ?? null,
       maxDurationVarianceMinutes: row.max_duration_variance_minutes ?? null
+    } : {};
+
+    const billingContext = isUuid(sanitizeString(appointmentId, 120))
+      ? await fetchAppointmentBillingContextRow(organizationId, sanitizeString(appointmentId, 120))
+      : null;
+    const payerId = sanitizeString(billingContext?.payer_id, 120);
+    let payer: any = null;
+    let payerRules: PayerRequirementRule[] = [];
+    if (isUuid(payerId)) {
+      const [payerResult, rulesResult] = await Promise.all([
+        supabase
+          .from('clinic_payers')
+          .select(CLINIC_PAYER_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('id', payerId)
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from('clinic_payer_requirements')
+          .select(CLINIC_PAYER_REQUIREMENT_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('payer_id', payerId)
+          .eq('is_active', true)
+          .order('service_type', { ascending: false })
+          .limit(20)
+      ]);
+      if (payerResult.error && !hasMissingFinancialSchema(payerResult.error)) throw payerResult.error;
+      if (rulesResult.error && !hasMissingFinancialSchema(rulesResult.error)) throw rulesResult.error;
+      payer = payerResult.error ? null : payerResult.data || null;
+      payerRules = rulesResult.error ? [] : rulesResult.data || [];
+    }
+
+    const resolved = resolvePayerRequirements({
+      payerId,
+      serviceType: billingContext?.service_type || safeServiceType,
+      rules: payerRules,
+      fallback: legacyFallback
+    });
+    return {
+      requireSignature: resolved.requireSignature,
+      requireReport: resolved.requireReport,
+      requireActualDuration: resolved.requireActualDuration,
+      requireAuthorization: resolved.requireAuthorization,
+      requireGuide: resolved.requireGuide,
+      requireProfessionalRegistry: resolved.requireProfessionalRegistry,
+      requirePatientDocument: resolved.requirePatientDocument,
+      allowManualOverride: resolved.allowManualOverride,
+      minDurationMinutes: resolved.minDurationMinutes,
+      maxDurationVarianceMinutes: resolved.maxDurationVarianceMinutes,
+      payerName: sanitizeString(payer?.name || billingContext?.payer_name_snapshot, 180) || null,
+      payerId: isUuid(payerId) ? payerId : null,
+      appliedPayerRequirementId: resolved.appliedRuleId,
+      payerRequirementSource: resolved.source,
+      billingContext
     };
   };
 
@@ -18955,7 +19183,9 @@ async function startServer() {
     );
     const professional = await fetchClosureProfessional(professionalId);
     const serviceType = sanitizeString(appointment.service_type || appointment.approach || appointment.type, 120) || null;
-    const requirements = await fetchClosureRequirements(clinicId, serviceType);
+    const requirements = await fetchClosureRequirements(clinicId, serviceType, safeAppointmentId);
+    const billingContext = (requirements as any)?.billingContext || null;
+    const requiredDocuments = await fetchRequiredDocumentsForAppointment(clinicId, safeAppointmentId);
     const summaryPayload = parseCalendarSourcePayload(sessionSummary?.summary_payload);
     let responsibleSignature: any = null;
     const signatureQuery = supabase
@@ -18989,6 +19219,8 @@ async function startServer() {
       patient,
       professional,
       requirements,
+      billingContext,
+      requiredDocuments,
       signature
     };
   };
@@ -19018,13 +19250,27 @@ async function startServer() {
       .maybeSingle();
     if (existingResult.error && !hasMissingFinancialSchema(existingResult.error)) throw existingResult.error;
 
+    const billingContext = (context as any).billingContext || {};
+    const requiredDocuments = Array.isArray((context as any).requiredDocuments) ? (context as any).requiredDocuments : [];
+    const pendingRequiredDocuments = requiredDocuments.filter((doc: any) => ['REQUIRED', 'PENDING', 'EXPIRED'].includes(sanitizeString(doc?.status, 40).toUpperCase()));
+    const appointmentForEvaluation = {
+      ...appointment,
+      payer_id: billingContext?.payer_id || (context as any).requirements?.payerId || null,
+      payer_name_snapshot: billingContext?.payer_name_snapshot || (context as any).requirements?.payerName || null,
+      authorization_code: billingContext?.authorization_code || null,
+      guide_number: billingContext?.guide_number || null,
+      procedure_code: billingContext?.procedure_code || null,
+      required_documents: requiredDocuments,
+      required_documents_pending_count: pendingRequiredDocuments.length
+    };
+
     const evaluation = evaluateAppointmentClosureReadiness({
       organizationId,
       appointmentId,
       abaSessionId,
       patientId,
       triggeredBy: sanitizeString(params.user?.id, 120) || null,
-      appointment,
+      appointment: appointmentForEvaluation,
       abaSession,
       sessionSummary,
       report: sessionSummary,
@@ -19053,6 +19299,13 @@ async function startServer() {
       patient_id: isUuid(patientId) ? patientId : null,
       professional_id: isUuid(professionalId) ? professionalId : null,
       service_type: evaluation.summary.serviceType,
+      payer_id: isUuid(sanitizeString(billingContext?.payer_id || (context as any).requirements?.payerId, 120)) ? sanitizeString(billingContext?.payer_id || (context as any).requirements?.payerId, 120) : null,
+      payer_name_snapshot: sanitizeString(billingContext?.payer_name_snapshot || (context as any).requirements?.payerName, 180) || null,
+      authorization_code: sanitizeString(billingContext?.authorization_code, 120) || null,
+      guide_number: sanitizeString(billingContext?.guide_number, 120) || null,
+      applied_payer_requirement_id: isUuid(sanitizeString((context as any).requirements?.appliedPayerRequirementId, 120)) ? sanitizeString((context as any).requirements?.appliedPayerRequirementId, 120) : null,
+      payer_requirement_source: sanitizeString((context as any).requirements?.payerRequirementSource, 40) || null,
+      required_document_pending_count: pendingRequiredDocuments.length,
       readiness_status: evaluation.readinessStatus,
       checklist: sanitizeClinicalPayload(evaluation.checklist),
       blocking_issues_count: evaluation.blockingIssuesCount,
@@ -19149,7 +19402,11 @@ async function startServer() {
     closure_readiness_status: row?.readiness_status || null,
     closure_blocking_count: Number(row?.blocking_issues_count || 0),
     closure_warning_count: Number(row?.warning_issues_count || 0),
-    closure_main_issues: Array.isArray(row?.main_issues) ? row.main_issues.slice(0, 3) : []
+    closure_main_issues: Array.isArray(row?.main_issues) ? row.main_issues.slice(0, 3) : [],
+    payer_name_snapshot: sanitizeString(row?.payer_name_snapshot, 180) || null,
+    authorization_code: sanitizeString(row?.authorization_code, 120) || null,
+    guide_number: sanitizeString(row?.guide_number, 120) || null,
+    required_document_pending_count: Number(row?.required_document_pending_count || 0)
   });
 
   const normalizeClosureListRow = (row: any, patientNames: Map<string, string>, professionalNames: Map<string, string>) => ({
@@ -19158,6 +19415,11 @@ async function startServer() {
     patient_name: patientNames.get(sanitizeString(row.patient_id, 120)) || 'Paciente',
     professional_name: professionalNames.get(sanitizeString(row.professional_id, 120)) || 'Equipe',
     service_type: sanitizeString(row.service_type, 120) || 'Sessão',
+    payer_name: sanitizeString(row.payer_name_snapshot, 180) || 'Sem pagador',
+    guide_number: sanitizeString(row.guide_number, 120) || null,
+    authorization_code: sanitizeString(row.authorization_code, 120) || null,
+    payer_requirement_source: sanitizeString(row.payer_requirement_source, 40) || null,
+    required_document_pending_count: Number(row.required_document_pending_count || 0),
     scheduled_start: row.scheduled_start || null,
     scheduled_end: row.scheduled_end || null,
     actual_start: row.actual_start || null,
@@ -19293,9 +19555,11 @@ async function startServer() {
       let actionRequests: any[] = [];
       let statusHistory: any[] = [];
       let signatures: any[] = [];
+      let billingContext: any = null;
+      let billingDocuments: any[] = [];
 
       if (isUuid(eventId) && isUuid(organizationId)) {
-        const [requestsResult, auditResult, signaturesResult] = await Promise.all([
+        const [requestsResult, auditResult, signaturesResult, billingResult, documentsResult] = await Promise.all([
           supabase
             .from('appointment_action_requests')
             .select(APPOINTMENT_ACTION_REQUEST_SELECT)
@@ -19317,7 +19581,21 @@ async function startServer() {
             .eq('appointment_id', eventId)
             .eq('status', 'SIGNED')
             .order('signed_at', { ascending: false })
-            .limit(5)
+            .limit(5),
+          supabase
+            .from('appointment_billing_contexts')
+            .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
+            .eq('organization_id', organizationId)
+            .eq('appointment_id', eventId)
+            .limit(1)
+            .maybeSingle(),
+          supabase
+            .from('appointment_required_documents')
+            .select(APPOINTMENT_REQUIRED_DOCUMENT_SELECT)
+            .eq('organization_id', organizationId)
+            .eq('appointment_id', eventId)
+            .order('created_at', { ascending: false })
+            .limit(20)
         ]);
         if (!requestsResult.error) actionRequests = requestsResult.data || [];
         else if (!hasMissingFinancialSchema(requestsResult.error)) throw requestsResult.error;
@@ -19331,6 +19609,10 @@ async function startServer() {
           status: signature?.status || 'SIGNED'
         }));
         else if (!hasMissingFinancialSchema(signaturesResult.error)) throw signaturesResult.error;
+        if (!billingResult.error) billingContext = billingResult.data || null;
+        else if (!hasMissingFinancialSchema(billingResult.error)) throw billingResult.error;
+        if (!documentsResult.error) billingDocuments = documentsResult.data || [];
+        else if (!hasMissingFinancialSchema(documentsResult.error)) throw documentsResult.error;
       }
 
       if (isUuid(patientId)) {
@@ -19409,6 +19691,11 @@ async function startServer() {
           report: event.has_report ? { label: 'Relatório disponível', status: 'ready' } : null,
           pendingSignature: event.has_pending_signature,
           closure: closure ? mapClosureRowToCalendarFields(closure) : null,
+          billingContext: serializeBillingContext(billingContext || {
+            appointment_id: eventId,
+            patient_id: event.patient_id,
+            service_type: event.type || event.service_type || null
+          }, null, billingDocuments),
           actionRequests,
           statusHistory,
           signatures
@@ -19417,6 +19704,531 @@ async function startServer() {
     } catch (error: any) {
       console.warn('[Calendar] event detail failed:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Não foi possível carregar os detalhes da sessão agora.' });
+    }
+  });
+
+  const payerSafeError = (status = 500) => ({
+    success: false,
+    error: status === 400
+      ? 'Dados inválidos para pagadores e conferência.'
+      : status === 403
+        ? 'Você não tem permissão para esta ação.'
+        : status === 404
+          ? 'Registro não encontrado.'
+          : 'Não foi possível concluir a ação agora.'
+  });
+
+  const normalizePayerType = (value: unknown) => {
+    const safe = sanitizeString(value, 40).toUpperCase();
+    return ['INSURANCE', 'PRIVATE', 'PUBLIC', 'COURTESY', 'OTHER'].includes(safe) ? safe : 'PRIVATE';
+  };
+
+  const normalizePayerStatus = (value: unknown) => {
+    const safe = sanitizeString(value, 40).toUpperCase();
+    return safe === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE';
+  };
+
+  const normalizeDocumentStatus = (value: unknown) => {
+    const safe = sanitizeString(value, 40).toUpperCase();
+    return ['REQUIRED', 'PENDING', 'PROVIDED', 'WAIVED', 'EXPIRED', 'NOT_APPLICABLE'].includes(safe) ? safe : 'PENDING';
+  };
+
+  const normalizeDocumentType = (value: unknown) => {
+    const safe = sanitizeString(value, 60).toUpperCase();
+    return ['SIGNATURE', 'SESSION_REPORT', 'AUTHORIZATION', 'GUIDE', 'PATIENT_DOCUMENT', 'PROFESSIONAL_DOCUMENT', 'OTHER'].includes(safe) ? safe : 'OTHER';
+  };
+
+  const serializePayer = (row: any) => ({
+    id: sanitizeString(row?.id, 120),
+    name: sanitizeString(row?.name, 180) || 'Pagador',
+    payerType: normalizePayerType(row?.payer_type),
+    status: normalizePayerStatus(row?.status),
+    notes: sanitizeTextField(row?.notes, 1200) || null,
+    updatedAt: row?.updated_at || null,
+    createdAt: row?.created_at || null
+  });
+
+  const serializePayerRequirement = (row: any) => ({
+    id: sanitizeString(row?.id, 120),
+    payerId: sanitizeString(row?.payer_id, 120),
+    serviceType: sanitizeString(row?.service_type, 120) || null,
+    requireSignature: row?.require_signature !== false,
+    requireReport: row?.require_report !== false,
+    requireActualDuration: row?.require_actual_duration !== false,
+    requireAuthorization: Boolean(row?.require_authorization),
+    requireGuide: Boolean(row?.require_guide),
+    requireProfessionalRegistry: Boolean(row?.require_professional_registry),
+    requirePatientDocument: Boolean(row?.require_patient_document),
+    minDurationMinutes: row?.min_duration_minutes ?? null,
+    maxDurationVarianceMinutes: row?.max_duration_variance_minutes ?? null,
+    allowManualOverride: row?.allow_manual_override !== false,
+    isActive: row?.is_active !== false,
+    updatedAt: row?.updated_at || null
+  });
+
+  const serializeBillingContext = (row: any, payer: any = null, documents: any[] = []) => ({
+    id: sanitizeString(row?.id, 120) || null,
+    payerId: sanitizeString(row?.payer_id, 120) || null,
+    payerName: sanitizeString(payer?.name || row?.payer_name_snapshot, 180) || null,
+    payerType: payer ? normalizePayerType(payer?.payer_type) : null,
+    serviceType: sanitizeString(row?.service_type, 120) || null,
+    authorizationCode: sanitizeString(row?.authorization_code, 120) || null,
+    guideNumber: sanitizeString(row?.guide_number, 120) || null,
+    procedureCode: sanitizeString(row?.procedure_code, 80) || null,
+    notes: sanitizeTextField(row?.notes, 1200) || null,
+    documents: documents.map((doc: any) => ({
+      id: sanitizeString(doc?.id, 120),
+      documentType: normalizeDocumentType(doc?.document_type),
+      status: normalizeDocumentStatus(doc?.status),
+      requiredForServiceType: sanitizeString(doc?.required_for_service_type, 120) || null,
+      dueDate: doc?.due_date || null,
+      uploadedAt: doc?.uploaded_at || null
+    }))
+  });
+
+  const writePayerRequirementAuditLog = async (params: {
+    organizationId: string;
+    payerId?: string | null;
+    appointmentId?: string | null;
+    action: string;
+    previousValue?: any;
+    newValue?: any;
+    performedBy?: string | null;
+    metadata?: Record<string, any>;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    if (!isUuid(organizationId)) return;
+    const payload = cleanObject({
+      id: crypto.randomUUID(),
+      organization_id: organizationId,
+      payer_id: isUuid(sanitizeString(params.payerId, 120)) ? sanitizeString(params.payerId, 120) : null,
+      appointment_id: isUuid(sanitizeString(params.appointmentId, 120)) ? sanitizeString(params.appointmentId, 120) : null,
+      action: sanitizeString(params.action, 80),
+      previous_value: sanitizeClinicalPayload(params.previousValue || null),
+      new_value: sanitizeClinicalPayload(params.newValue || null),
+      performed_by: isUuid(sanitizeString(params.performedBy, 120)) ? sanitizeString(params.performedBy, 120) : null,
+      performed_at: new Date().toISOString(),
+      metadata: sanitizeClinicalPayload(params.metadata || {})
+    });
+    const { error } = await supabase.from('payer_requirement_audit_logs').insert([payload]);
+    if (error && !hasMissingFinancialSchema(error)) {
+      console.warn('[PayerRequirements] audit log failed:', error?.message || String(error));
+    }
+  };
+
+  const fetchPayerForAdmin = async (payerId: string, organizationId: string) => {
+    if (!isUuid(payerId) || !isUuid(organizationId)) return null;
+    const { data, error } = await supabase
+      .from('clinic_payers')
+      .select(CLINIC_PAYER_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('id', payerId)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return null;
+      throw error;
+    }
+    return data || null;
+  };
+
+  const fetchAppointmentForBillingContext = async (appointmentId: string, user: any) => {
+    const safeAppointmentId = sanitizeString(appointmentId, 120);
+    const organizationId = sanitizeString(currentClinicId(user), 120);
+    if (!isUuid(safeAppointmentId) || !isUuid(organizationId)) return { ok: false, status: 400, error: 'Consulta inválida.' };
+    const { data, error } = await supabase
+      .from('appointments')
+      .select(CLOSURE_APPOINTMENT_SELECT)
+      .eq('id', safeAppointmentId)
+      .or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return { ok: false, status: 503, error: 'Agenda indisponível.' };
+      throw error;
+    }
+    if (!data?.id) return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+    if (!(await canAccessPatientInCurrentClinic(sanitizeString(data.patient_id, 120), user))) {
+      return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+    }
+    return { ok: true, organizationId, appointment: data };
+  };
+
+  app.get('/api/admin/payers', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const limit = parseBoundedListLimit(req.query?.limit, 50, 100);
+      let query = supabase
+        .from('clinic_payers')
+        .select(CLINIC_PAYER_SELECT)
+        .eq('organization_id', organizationId)
+        .order('name', { ascending: true })
+        .limit(limit);
+      const status = sanitizeString(req.query?.status, 40).toUpperCase();
+      if (status === 'ACTIVE' || status === 'INACTIVE') query = query.eq('status', status);
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      return res.json({ success: true, data: (data || []).map(serializePayer) });
+    } catch (error: any) {
+      console.warn('[PayerRequirements] payer list failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.post('/api/admin/payers', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de pagador')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const name = sanitizeString(req.body?.name, 180);
+      if (!isUuid(organizationId) || name.length < 2) return res.status(400).json(payerSafeError(400));
+      const now = new Date().toISOString();
+      const payload = cleanObject({
+        id: crypto.randomUUID(),
+        organization_id: organizationId,
+        name,
+        payer_type: normalizePayerType(req.body?.payerType || req.body?.payer_type),
+        status: normalizePayerStatus(req.body?.status),
+        notes: sanitizeTextField(req.body?.notes, 1200) || null,
+        created_by: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+        created_at: now,
+        updated_at: now
+      });
+      const { data, error } = await supabase
+        .from('clinic_payers')
+        .insert([payload])
+        .select(CLINIC_PAYER_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      await writePayerRequirementAuditLog({
+        organizationId,
+        payerId: data?.id,
+        action: 'PAYER_CREATED',
+        newValue: data,
+        performedBy: sanitizeString(req.session.user?.id, 120)
+      });
+      return res.status(201).json({ success: true, data: serializePayer(data) });
+    } catch (error: any) {
+      console.warn('[PayerRequirements] payer create failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.patch('/api/admin/payers/:payerId', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de pagador')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const payerId = sanitizeString(req.params.payerId, 120);
+      const existing = await fetchPayerForAdmin(payerId, organizationId);
+      if (!existing) return res.status(404).json(payerSafeError(404));
+      const patch = cleanObject({
+        name: sanitizeString(req.body?.name ?? existing.name, 180) || existing.name,
+        payer_type: normalizePayerType(req.body?.payerType ?? req.body?.payer_type ?? existing.payer_type),
+        status: normalizePayerStatus(req.body?.status ?? existing.status),
+        notes: sanitizeTextField(req.body?.notes ?? existing.notes, 1200) || null,
+        updated_at: new Date().toISOString()
+      });
+      const { data, error } = await supabase
+        .from('clinic_payers')
+        .update(patch)
+        .eq('organization_id', organizationId)
+        .eq('id', payerId)
+        .select(CLINIC_PAYER_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      await writePayerRequirementAuditLog({
+        organizationId,
+        payerId,
+        action: 'PAYER_UPDATED',
+        previousValue: existing,
+        newValue: data,
+        performedBy: sanitizeString(req.session.user?.id, 120)
+      });
+      return res.json({ success: true, data: serializePayer(data) });
+    } catch (error: any) {
+      console.warn('[PayerRequirements] payer update failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.get('/api/admin/payers/:payerId/requirements', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const payerId = sanitizeString(req.params.payerId, 120);
+      const payer = await fetchPayerForAdmin(payerId, organizationId);
+      if (!payer) return res.status(404).json(payerSafeError(404));
+      const { data, error } = await supabase
+        .from('clinic_payer_requirements')
+        .select(CLINIC_PAYER_REQUIREMENT_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('payer_id', payerId)
+        .order('service_type', { ascending: true })
+        .limit(50);
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      return res.json({ success: true, data: (data || []).map(serializePayerRequirement), payer: serializePayer(payer) });
+    } catch (error: any) {
+      console.warn('[PayerRequirements] requirement list failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  const buildPayerRequirementPayload = (body: any, organizationId: string, payerId: string, existing: any = {}) => cleanObject({
+    organization_id: organizationId,
+    payer_id: payerId,
+    service_type: sanitizeString(body?.serviceType ?? body?.service_type ?? existing.service_type, 120) || null,
+    require_signature: body?.requireSignature ?? body?.require_signature ?? existing.require_signature ?? true,
+    require_report: body?.requireReport ?? body?.require_report ?? existing.require_report ?? true,
+    require_actual_duration: body?.requireActualDuration ?? body?.require_actual_duration ?? existing.require_actual_duration ?? true,
+    require_authorization: Boolean(body?.requireAuthorization ?? body?.require_authorization ?? existing.require_authorization ?? false),
+    require_guide: Boolean(body?.requireGuide ?? body?.require_guide ?? existing.require_guide ?? false),
+    require_professional_registry: Boolean(body?.requireProfessionalRegistry ?? body?.require_professional_registry ?? existing.require_professional_registry ?? false),
+    require_patient_document: Boolean(body?.requirePatientDocument ?? body?.require_patient_document ?? existing.require_patient_document ?? false),
+    min_duration_minutes: Number.isFinite(Number(body?.minDurationMinutes ?? body?.min_duration_minutes ?? existing.min_duration_minutes))
+      ? Math.max(1, Math.round(Number(body?.minDurationMinutes ?? body?.min_duration_minutes ?? existing.min_duration_minutes)))
+      : null,
+    max_duration_variance_minutes: Number.isFinite(Number(body?.maxDurationVarianceMinutes ?? body?.max_duration_variance_minutes ?? existing.max_duration_variance_minutes))
+      ? Math.max(0, Math.round(Number(body?.maxDurationVarianceMinutes ?? body?.max_duration_variance_minutes ?? existing.max_duration_variance_minutes)))
+      : null,
+    allow_manual_override: body?.allowManualOverride ?? body?.allow_manual_override ?? existing.allow_manual_override ?? true,
+    is_active: body?.isActive ?? body?.is_active ?? existing.is_active ?? true,
+    updated_at: new Date().toISOString()
+  });
+
+  app.post('/api/admin/payers/:payerId/requirements', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de regra do pagador')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const payerId = sanitizeString(req.params.payerId, 120);
+      const payer = await fetchPayerForAdmin(payerId, organizationId);
+      if (!payer) return res.status(404).json(payerSafeError(404));
+      const payload = {
+        id: crypto.randomUUID(),
+        ...buildPayerRequirementPayload(req.body || {}, organizationId, payerId),
+        created_by: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+        created_at: new Date().toISOString()
+      };
+      const { data, error } = await supabase
+        .from('clinic_payer_requirements')
+        .insert([payload])
+        .select(CLINIC_PAYER_REQUIREMENT_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      await writePayerRequirementAuditLog({
+        organizationId,
+        payerId,
+        action: 'REQUIREMENT_CREATED',
+        newValue: data,
+        performedBy: sanitizeString(req.session.user?.id, 120)
+      });
+      return res.status(201).json({ success: true, data: serializePayerRequirement(data) });
+    } catch (error: any) {
+      console.warn('[PayerRequirements] requirement create failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.patch('/api/admin/payer-requirements/:requirementId', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de regra do pagador')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const requirementId = sanitizeString(req.params.requirementId, 120);
+      if (!isUuid(organizationId) || !isUuid(requirementId)) return res.status(400).json(payerSafeError(400));
+      const existingResult = await supabase
+        .from('clinic_payer_requirements')
+        .select(CLINIC_PAYER_REQUIREMENT_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('id', requirementId)
+        .limit(1)
+        .maybeSingle();
+      if (existingResult.error) {
+        if (hasMissingFinancialSchema(existingResult.error)) return res.status(404).json(payerSafeError(404));
+        throw existingResult.error;
+      }
+      if (!existingResult.data?.id) return res.status(404).json(payerSafeError(404));
+      const patch = buildPayerRequirementPayload(req.body || {}, organizationId, existingResult.data.payer_id, existingResult.data);
+      const { data, error } = await supabase
+        .from('clinic_payer_requirements')
+        .update(patch)
+        .eq('organization_id', organizationId)
+        .eq('id', requirementId)
+        .select(CLINIC_PAYER_REQUIREMENT_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      await writePayerRequirementAuditLog({
+        organizationId,
+        payerId: data?.payer_id,
+        action: data?.is_active === false ? 'REQUIREMENT_DISABLED' : 'REQUIREMENT_UPDATED',
+        previousValue: existingResult.data,
+        newValue: data,
+        performedBy: sanitizeString(req.session.user?.id, 120)
+      });
+      return res.json({ success: true, data: serializePayerRequirement(data) });
+    } catch (error: any) {
+      console.warn('[PayerRequirements] requirement update failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.get('/api/appointments/:appointmentId/billing-context', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const context = await fetchAppointmentForBillingContext(req.params.appointmentId, req.session.user);
+      if (!context.ok) return res.status((context as any).status || 404).json(payerSafeError((context as any).status || 404));
+      const organizationId = (context as any).organizationId;
+      const appointment = (context as any).appointment;
+      const billingContext = await fetchAppointmentBillingContextRow(organizationId, appointment.id);
+      const payer = billingContext?.payer_id ? await fetchPayerForAdmin(billingContext.payer_id, organizationId) : null;
+      const documents = await fetchRequiredDocumentsForAppointment(organizationId, appointment.id);
+      return res.json({
+        success: true,
+        data: serializeBillingContext(billingContext || {
+          appointment_id: appointment.id,
+          patient_id: appointment.patient_id,
+          service_type: appointment.service_type || appointment.approach || null
+        }, payer, documents)
+      });
+    } catch (error: any) {
+      console.warn('[PayerRequirements] billing context get failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.patch('/api/appointments/:appointmentId/billing-context', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de contexto de pagador')) return;
+      const context = await fetchAppointmentForBillingContext(req.params.appointmentId, req.session.user);
+      if (!context.ok) return res.status((context as any).status || 404).json(payerSafeError((context as any).status || 404));
+      const organizationId = (context as any).organizationId;
+      const appointment = (context as any).appointment;
+      const payerId = sanitizeString(req.body?.payerId || req.body?.payer_id, 120);
+      const payer = isUuid(payerId) ? await fetchPayerForAdmin(payerId, organizationId) : null;
+      if (payerId && !payer) return res.status(404).json(payerSafeError(404));
+      const existing = await fetchAppointmentBillingContextRow(organizationId, appointment.id);
+      const now = new Date().toISOString();
+      const payload = cleanObject({
+        id: existing?.id || crypto.randomUUID(),
+        organization_id: organizationId,
+        appointment_id: appointment.id,
+        patient_id: appointment.patient_id,
+        payer_id: payer?.id || null,
+        payer_name_snapshot: sanitizeString(payer?.name || req.body?.payerName || req.body?.payer_name_snapshot, 180) || null,
+        service_type: sanitizeString(req.body?.serviceType || req.body?.service_type || appointment.service_type || appointment.approach, 120) || null,
+        authorization_code: sanitizeString(req.body?.authorizationCode || req.body?.authorization_code, 120) || null,
+        guide_number: sanitizeString(req.body?.guideNumber || req.body?.guide_number, 120) || null,
+        procedure_code: sanitizeString(req.body?.procedureCode || req.body?.procedure_code, 80) || null,
+        notes: sanitizeTextField(req.body?.notes, 1200) || null,
+        created_at: existing?.created_at || now,
+        updated_at: now
+      });
+      const { data, error } = await supabase
+        .from('appointment_billing_contexts')
+        .upsert([payload], { onConflict: 'organization_id,appointment_id' })
+        .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      await writePayerRequirementAuditLog({
+        organizationId,
+        payerId: data?.payer_id || null,
+        appointmentId: appointment.id,
+        action: 'BILLING_CONTEXT_UPDATED',
+        previousValue: existing,
+        newValue: data,
+        performedBy: sanitizeString(req.session.user?.id, 120)
+      });
+      const resolvedRequirements = await fetchClosureRequirements(
+        organizationId,
+        data?.service_type || appointment.service_type || appointment.approach || null,
+        appointment.id
+      );
+      if ((resolvedRequirements as any)?.requireGuide) {
+        await upsertRequiredDocumentStatus({
+          organizationId,
+          appointmentId: appointment.id,
+          patientId: appointment.patient_id,
+          payerId: data?.payer_id || null,
+          serviceType: data?.service_type || appointment.service_type || appointment.approach || null,
+          documentType: 'GUIDE',
+          status: data?.guide_number ? 'PROVIDED' : 'PENDING',
+          performedBy: sanitizeString(req.session.user?.id, 120)
+        });
+      }
+      if ((resolvedRequirements as any)?.requireAuthorization) {
+        await upsertRequiredDocumentStatus({
+          organizationId,
+          appointmentId: appointment.id,
+          patientId: appointment.patient_id,
+          payerId: data?.payer_id || null,
+          serviceType: data?.service_type || appointment.service_type || appointment.approach || null,
+          documentType: 'AUTHORIZATION',
+          status: data?.authorization_code ? 'PROVIDED' : 'PENDING',
+          performedBy: sanitizeString(req.session.user?.id, 120)
+        });
+      }
+      void regenerateClosureForAppointments([appointment.id], req.session.user, 'billing_context_updated');
+      const documents = await fetchRequiredDocumentsForAppointment(organizationId, appointment.id);
+      return res.json({ success: true, data: serializeBillingContext(data, payer, documents) });
+    } catch (error: any) {
+      console.warn('[PayerRequirements] billing context update failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.post('/api/appointments/:appointmentId/required-documents/:documentId/waive', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Payload de dispensa de documento')) return;
+      const reason = sanitizeTextField(req.body?.reason || req.body?.justification || req.body?.justificativa, 800);
+      if (reason.length < 8) return res.status(400).json(payerSafeError(400));
+      const context = await fetchAppointmentForBillingContext(req.params.appointmentId, req.session.user);
+      if (!context.ok) return res.status((context as any).status || 404).json(payerSafeError((context as any).status || 404));
+      const organizationId = (context as any).organizationId;
+      const appointment = (context as any).appointment;
+      const documentId = sanitizeString(req.params.documentId, 120);
+      if (!isUuid(documentId)) return res.status(400).json(payerSafeError(400));
+      const existingResult = await supabase
+        .from('appointment_required_documents')
+        .select(APPOINTMENT_REQUIRED_DOCUMENT_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointment.id)
+        .eq('id', documentId)
+        .limit(1)
+        .maybeSingle();
+      if (existingResult.error) {
+        if (hasMissingFinancialSchema(existingResult.error)) return res.status(404).json(payerSafeError(404));
+        throw existingResult.error;
+      }
+      if (!existingResult.data?.id) return res.status(404).json(payerSafeError(404));
+      const { data, error } = await supabase
+        .from('appointment_required_documents')
+        .update({
+          status: 'WAIVED',
+          updated_at: new Date().toISOString()
+        })
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointment.id)
+        .eq('id', documentId)
+        .select(APPOINTMENT_REQUIRED_DOCUMENT_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      await writePayerRequirementAuditLog({
+        organizationId,
+        payerId: data?.required_by_payer_id || null,
+        appointmentId: appointment.id,
+        action: 'DOCUMENT_WAIVED',
+        previousValue: existingResult.data,
+        newValue: data,
+        performedBy: sanitizeString(req.session.user?.id, 120),
+        metadata: { reason }
+      });
+      void regenerateClosureForAppointments([appointment.id], req.session.user, 'required_document_waived');
+      return res.json({ success: true, data: serializeBillingContext(null, null, [data]).documents[0] });
+    } catch (error: any) {
+      console.warn('[PayerRequirements] document waive failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
     }
   });
 
@@ -19431,6 +20243,7 @@ async function startServer() {
       const patientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120);
       const professionalId = sanitizeString(req.query?.professionalId || req.query?.professional_id, 120);
       const serviceType = sanitizeString(req.query?.serviceType || req.query?.service_type, 120);
+      const payerId = sanitizeString(req.query?.payerId || req.query?.payer_id, 120);
       const onlyPending = String(req.query?.onlyPending || req.query?.somentePendencias || '').toLowerCase() === 'true';
       const onlyReady = String(req.query?.onlyReady || req.query?.somenteProntas || '').toLowerCase() === 'true';
       const onlyWarnings = String(req.query?.onlyWarnings || req.query?.somenteAlertas || '').toLowerCase() === 'true';
@@ -19452,8 +20265,12 @@ async function startServer() {
       if (isUuid(patientId)) query = query.eq('patient_id', patientId);
       if (isUuid(professionalId)) query = query.eq('professional_id', professionalId);
       if (serviceType) query = query.eq('service_type', serviceType);
+      if (isUuid(payerId)) query = query.eq('payer_id', payerId);
       if (missingKind === 'signature' || missingKind === 'assinatura') query = query.contains('main_issues', ['Assinatura pendente para fechamento da sessão.']);
       if (missingKind === 'report' || missingKind === 'relatorio') query = query.contains('main_issues', ['Relatório da sessão ainda não foi preenchido.']);
+      if (missingKind === 'guide' || missingKind === 'guia') query = query.is('guide_number', null);
+      if (missingKind === 'authorization' || missingKind === 'autorizacao') query = query.is('authorization_code', null);
+      if (missingKind === 'documents' || missingKind === 'documentos') query = query.gt('required_document_pending_count', 0);
 
       const { data, error } = await query;
       if (error) {
@@ -19478,8 +20295,12 @@ async function startServer() {
       if (isUuid(patientId)) totalsQuery = totalsQuery.eq('patient_id', patientId);
       if (isUuid(professionalId)) totalsQuery = totalsQuery.eq('professional_id', professionalId);
       if (serviceType) totalsQuery = totalsQuery.eq('service_type', serviceType);
+      if (isUuid(payerId)) totalsQuery = totalsQuery.eq('payer_id', payerId);
       if (missingKind === 'signature' || missingKind === 'assinatura') totalsQuery = totalsQuery.contains('main_issues', ['Assinatura pendente para fechamento da sessão.']);
       if (missingKind === 'report' || missingKind === 'relatorio') totalsQuery = totalsQuery.contains('main_issues', ['Relatório da sessão ainda não foi preenchido.']);
+      if (missingKind === 'guide' || missingKind === 'guia') totalsQuery = totalsQuery.is('guide_number', null);
+      if (missingKind === 'authorization' || missingKind === 'autorizacao') totalsQuery = totalsQuery.is('authorization_code', null);
+      if (missingKind === 'documents' || missingKind === 'documentos') totalsQuery = totalsQuery.gt('required_document_pending_count', 0);
       const [patientsResult, professionalsResult, totalsResult] = await Promise.all([
         patientIds.length > 0
           ? supabase.from('patients').select('id, name').eq('clinic_id', clinicId).in('id', patientIds).limit(patientIds.length)
