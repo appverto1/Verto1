@@ -4232,29 +4232,22 @@ export default function App() {
 
   const handleAppointmentConfirmationChoice = async (status: 'confirmed' | 'reschedule' | 'canceled') => {
     if (!appointmentConfirmation?.appointmentId) return;
-    const action =
-      status === 'confirmed'
-        ? 'confirm'
-        : status === 'reschedule'
-          ? 'reschedule'
-          : 'cancel';
     const feedback =
       status === 'reschedule'
         ? 'Solicitação de remarcação registrada. A recepção entrará em contato.'
         : status === 'confirmed'
           ? 'Presença confirmada com sucesso.'
-          : 'Agendamento cancelado. O horário foi liberado para a equipe.';
+          : 'Solicitação de cancelamento registrada. A recepção entrará em contato.';
 
     setAppointmentConfirmation((prev) => prev ? { ...prev, isUpdating: true, message: '' } : prev);
     try {
-      const response = await fetch(`/api/notifications/appointments/${encodeURIComponent(appointmentConfirmation.appointmentId)}/respond`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ action, source: 'appointment_reminder_popup' })
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok || !result?.success) {
+      const result =
+        status === 'confirmed'
+          ? await dataService.confirmPortalAppointment(appointmentConfirmation.appointmentId)
+          : status === 'reschedule'
+            ? await dataService.requestPortalAppointmentReschedule(appointmentConfirmation.appointmentId, { note: 'Solicitado pelo lembrete dentro do app.' })
+            : await dataService.requestPortalAppointmentCancel(appointmentConfirmation.appointmentId, { note: 'Solicitado pelo lembrete dentro do app.' });
+      if (!result?.success) {
         throw new Error(result?.error || 'Não foi possível atualizar a consulta.');
       }
       const serverStatus = String(result?.appointment?.status || status).toLowerCase();

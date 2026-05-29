@@ -37,7 +37,7 @@ const BRAZIL_TIMEZONE = 'America/Sao_Paulo';
 const CRON_LOOKBACK_MINUTES = 180;
 const QUERY_AHEAD_HOURS = 28;
 const REMINDER_DEDUPE_TTL_MS = 30 * 60 * 60 * 1000;
-const APPOINTMENT_NOTIFICATION_CTA = 'Clique nesta notificacao para confirmar, remarcar ou cancelar.';
+const APPOINTMENT_NOTIFICATION_CTA = 'Toque para abrir a Verto e confirmar, remarcar ou cancelar.';
 
 const REMINDER_STEPS = [
   {
@@ -170,7 +170,7 @@ async function fetchAppointmentsTable(
   const appointments = new Map<string, ReminderAppointment>();
   const { data, error } = await options.supabase
     .from('appointments')
-    .select('*')
+    .select('id, clinic_id, patient_id, patient_email, scheduled_at, status, patient_response, patient_confirmation_status, notification_24h_sent_at, notification_sent_at, notification_12h_sent_at, notification_sent, notification_12h_sent, is_active, deleted_at')
     .gte('scheduled_at', queryScheduledStartUtc.toISOString())
     .lt('scheduled_at', queryScheduledEndUtc.toISOString())
     .order('scheduled_at', { ascending: true })

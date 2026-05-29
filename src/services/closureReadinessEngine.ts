@@ -91,9 +91,12 @@ const NOT_BILLABLE_STATUSES = new Set([
 const DRAFT_STATUSES = new Set([
   'scheduled',
   'pending',
+  'pending_confirmation',
   'confirmed',
   'reschedule',
+  'reschedule_requested',
   'rescheduled',
+  'cancel_requested',
   'in_progress',
   'active'
 ]);
@@ -209,7 +212,7 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     boolLike(summary.signature_present || summary.signaturePresent) ||
     boolLike(appointment.signature_present || appointment.signaturePresent) ||
     boolLike(appointment.has_signature || appointment.hasSignature);
-  const hasPendingRescheduleOrCancellation = ['reschedule', 'rescheduled'].includes(status) ||
+  const hasPendingRescheduleOrCancellation = ['reschedule', 'reschedule_requested', 'cancel_requested'].includes(status) ||
     boolLike(appointment.pending_reschedule || appointment.pendingReschedule || appointment.pending_cancellation || appointment.pendingCancellation);
   const concluded = ['completed', 'concluida', 'concluída', 'concluido', 'concluído'].includes(status) ||
     boolLike(appointment.has_session_record || appointment.hasSessionRecord) ||

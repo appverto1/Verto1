@@ -1,6 +1,6 @@
 ﻿import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle, Settings, User, MapPin, Bell } from 'lucide-react';
+import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle, Settings, User, MapPin, Bell, CalendarDays, Clock, Ban, FileSignature } from 'lucide-react';
 import { EvolutionBarChart } from './Charts';
 import { CumulativeGrowthChart } from './CumulativeGrowthChart';
 import { LogoVerto, SuccessOverlay, BigEnergySlider, ENERGY_TAGS } from './Common';
@@ -64,6 +64,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return Notification.permission;
   });
   const [notificationSubscriptionReady, setNotificationSubscriptionReady] = useState(false);
+  const [portalAppointments, setPortalAppointments] = useState<any[]>([]);
+  const [portalAppointmentsState, setPortalAppointmentsState] = useState({ loading: false, error: '', message: '' });
+  const [selectedPortalAppointment, setSelectedPortalAppointment] = useState<any | null>(null);
+  const [portalAppointmentDetail, setPortalAppointmentDetail] = useState<any | null>(null);
+  const [portalModal, setPortalModal] = useState<'reschedule' | 'cancel' | 'sign' | ''>('');
+  const [portalActionForm, setPortalActionForm] = useState({ reason: '', note: '', requestedStart: '', accepted: false });
+  const [portalActionSaving, setPortalActionSaving] = useState(false);
 
   const [isUploading, setIsUploading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -205,6 +212,115 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       cancelled = true;
     };
   }, [notificationStatus, isSettingsOpen]);
+
+  const formatPortalDateTime = (value: any) => {
+    const date = new Date(value || '');
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const getPortalStatusLabel = (status: any) => {
+    const normalized = String(status || '').toUpperCase();
+    if (normalized.includes('CONFIRM')) return 'Confirmada';
+    if (normalized.includes('RESCHEDULE_REQUEST')) return 'Remarcação solicitada';
+    if (normalized.includes('RESCHEDULED')) return 'Remarcada';
+    if (normalized.includes('CANCEL_REQUEST')) return 'Cancelamento solicitado';
+    if (normalized.includes('CANCEL')) return 'Cancelada';
+    if (normalized.includes('COMPLET')) return 'Concluída';
+    if (normalized.includes('NO_SHOW')) return 'Falta';
+    return 'Agendada';
+  };
+
+  const loadPortalAppointments = async () => {
+    setPortalAppointmentsState((prev) => ({ ...prev, loading: true, error: '' }));
+    const now = new Date();
+    const from = new Date(now.getTime() - 7 * 86400000).toISOString();
+    const to = new Date(now.getTime() + 90 * 86400000).toISOString();
+    const result = await dataService.getPortalAppointments({ from, to, limit: 30 });
+    if (result?.success) {
+      setPortalAppointments(Array.isArray(result.data) ? result.data : []);
+      setPortalAppointmentsState({ loading: false, error: '', message: '' });
+      return;
+    }
+    setPortalAppointmentsState({ loading: false, error: result?.error || 'Não foi possível carregar suas consultas agora.', message: '' });
+  };
+
+  useEffect(() => {
+    void loadPortalAppointments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, user?.email]);
+
+  const openPortalAppointmentDetail = async (appointment: any) => {
+    setSelectedPortalAppointment(appointment);
+    setPortalAppointmentDetail(null);
+    setPortalAppointmentsState((prev) => ({ ...prev, error: '', message: '' }));
+    const result = await dataService.getPortalAppointmentDetail(String(appointment?.id || ''));
+    if (result?.success) {
+      setPortalAppointmentDetail(result.data || null);
+      return;
+    }
+    setPortalAppointmentsState((prev) => ({ ...prev, error: result?.error || 'Não foi possível carregar a consulta agora.' }));
+  };
+
+  const updatePortalAppointmentInList = (appointment: any) => {
+    if (!appointment?.id) return;
+    setPortalAppointments((prev) => prev.map((item) => String(item.id) === String(appointment.id) ? { ...item, ...appointment } : item));
+    setSelectedPortalAppointment((prev: any) => prev && String(prev.id) === String(appointment.id) ? { ...prev, ...appointment } : prev);
+    setPortalAppointmentDetail((prev: any) => prev ? { ...prev, appointment: { ...(prev.appointment || {}), ...appointment } } : prev);
+  };
+
+  const confirmPortalAppointment = async (appointment: any) => {
+    setPortalActionSaving(true);
+    const result = await dataService.confirmPortalAppointment(String(appointment?.id || ''));
+    setPortalActionSaving(false);
+    if (!result?.success) {
+      setPortalAppointmentsState((prev) => ({ ...prev, error: result?.error || 'Não foi possível confirmar a consulta agora.' }));
+      return;
+    }
+    updatePortalAppointmentInList(result.appointment);
+    setPortalAppointmentsState((prev) => ({ ...prev, error: '', message: 'Consulta confirmada.' }));
+  };
+
+  const submitPortalAction = async () => {
+    const appointmentId = String((portalAppointmentDetail?.appointment || selectedPortalAppointment)?.id || '').trim();
+    if (!appointmentId || !portalModal) return;
+    setPortalActionSaving(true);
+    const payload = {
+      reason: portalActionForm.reason,
+      note: portalActionForm.note,
+      requestedStart: portalActionForm.requestedStart ? new Date(portalActionForm.requestedStart).toISOString() : undefined,
+      accepted: portalActionForm.accepted,
+      signedByName: displayName
+    };
+    const result =
+      portalModal === 'reschedule'
+        ? await dataService.requestPortalAppointmentReschedule(appointmentId, payload)
+        : portalModal === 'cancel'
+          ? await dataService.requestPortalAppointmentCancel(appointmentId, payload)
+          : await dataService.signPortalSession(String(portalAppointmentDetail?.session?.id || ''), payload);
+    setPortalActionSaving(false);
+    if (!result?.success) {
+      setPortalAppointmentsState((prev) => ({ ...prev, error: result?.error || 'Não foi possível concluir a ação agora.' }));
+      return;
+    }
+    if (result.appointment) updatePortalAppointmentInList(result.appointment);
+    setPortalModal('');
+    setPortalActionForm({ reason: '', note: '', requestedStart: '', accepted: false });
+    setPortalAppointmentsState((prev) => ({
+      ...prev,
+      error: '',
+      message: portalModal === 'sign' ? 'Assinatura registrada.' : result.message || 'Solicitação registrada.'
+    }));
+    if (portalModal === 'sign') {
+      await openPortalAppointmentDetail(portalAppointmentDetail?.appointment || selectedPortalAppointment);
+    }
+  };
 
   const enablePatientNotifications = async () => {
     if (typeof window === 'undefined' || !('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
@@ -1287,6 +1403,180 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     </div>
   ) : null;
 
+  const activePortalAppointment = portalAppointmentDetail?.appointment || selectedPortalAppointment;
+  const activePortalStatus = String(activePortalAppointment?.status || '').toUpperCase();
+  const portalActionBlocked = activePortalStatus.includes('CANCEL') || activePortalStatus.includes('COMPLET') || activePortalStatus.includes('NO_SHOW');
+  const portalAppointmentsPanel = (
+    <div className="mb-6 rounded-[28px] border border-purple-100 bg-white p-4 shadow-sm sm:p-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Agenda</p>
+          <h2 className="text-lg font-black text-slate-900">Minhas consultas</h2>
+        </div>
+        <button type="button" onClick={() => void loadPortalAppointments()} className="rounded-2xl border border-purple-100 px-3 py-2 text-xs font-bold text-[#7a32fc]">
+          Atualizar
+        </button>
+      </div>
+      {portalAppointmentsState.error && (
+        <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+          {portalAppointmentsState.error}
+        </div>
+      )}
+      {portalAppointmentsState.message && (
+        <div className="mb-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">
+          {portalAppointmentsState.message}
+        </div>
+      )}
+      {portalAppointmentsState.loading ? (
+        <div className="rounded-2xl bg-purple-50 px-4 py-3 text-sm font-semibold text-purple-700">Carregando consultas...</div>
+      ) : portalAppointments.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-5 text-center text-sm font-semibold text-purple-700">
+          Nenhuma consulta próxima encontrada.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {portalAppointments.slice(0, 5).map((appointment) => (
+            <button
+              type="button"
+              key={appointment.id}
+              onClick={() => void openPortalAppointmentDetail(appointment)}
+              className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50/70 px-3 py-3 text-left transition hover:border-purple-100 hover:bg-purple-50"
+            >
+              <div className="min-w-0">
+                <p className="flex items-center gap-2 text-sm font-black text-slate-900">
+                  <CalendarDays size={15} className="text-[#7a32fc]" />
+                  {formatPortalDateTime(appointment.scheduledAt)}
+                </p>
+                <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+                  {appointment.patientName || 'Paciente'} · {appointment.serviceType || 'Sessão'}
+                </p>
+              </div>
+              <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600">
+                {getPortalStatusLabel(appointment.status)}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const portalAppointmentDetailModal = selectedPortalAppointment ? (
+    <div className="fixed inset-0 z-[95] flex items-end justify-center bg-slate-950/45 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => { setSelectedPortalAppointment(null); setPortalAppointmentDetail(null); }}>
+      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-t-[28px] bg-white p-5 shadow-2xl sm:rounded-[28px]" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Detalhes da consulta</p>
+            <h3 className="mt-1 text-xl font-black text-slate-900">{activePortalAppointment?.patientName || 'Paciente'}</h3>
+            <p className="mt-1 text-sm font-semibold text-slate-500">{formatPortalDateTime(activePortalAppointment?.scheduledAt)}</p>
+          </div>
+          <button type="button" onClick={() => { setSelectedPortalAppointment(null); setPortalAppointmentDetail(null); }} className="rounded-2xl border border-slate-100 p-2 text-slate-500">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="mt-4 grid gap-2">
+          <div className="rounded-2xl bg-slate-50 px-4 py-3">
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Status</p>
+            <p className="mt-1 text-sm font-bold text-slate-800">{getPortalStatusLabel(activePortalAppointment?.status)}</p>
+          </div>
+          <div className="rounded-2xl bg-slate-50 px-4 py-3">
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Local</p>
+            <p className="mt-1 text-sm font-bold text-slate-800">{activePortalAppointment?.locationLabel || 'Local informado pela clínica'}</p>
+          </div>
+          <div className="rounded-2xl bg-slate-50 px-4 py-3">
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Profissional</p>
+            <p className="mt-1 text-sm font-bold text-slate-800">{activePortalAppointment?.professionalName || 'Equipe'}</p>
+          </div>
+        </div>
+        {portalAppointmentDetail?.closure?.signaturePending && (
+          <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+            <p className="text-sm font-black text-amber-800">Assinatura pendente</p>
+            <p className="mt-1 text-xs font-medium text-amber-700">Confirme a realização da sessão dentro do app.</p>
+          </div>
+        )}
+        <div className="mt-4 grid gap-2">
+          <button type="button" disabled={portalActionSaving || portalActionBlocked} onClick={() => void confirmPortalAppointment(activePortalAppointment)} className="flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-black text-white disabled:opacity-50">
+            <CheckCircle size={17} /> Confirmar presença
+          </button>
+          <button type="button" disabled={portalActionBlocked} onClick={() => setPortalModal('reschedule')} className="flex items-center justify-center gap-2 rounded-2xl border border-purple-100 bg-white px-4 py-3 text-sm font-black text-[#7a32fc] disabled:opacity-50">
+            <RefreshCcw size={17} /> Solicitar remarcação
+          </button>
+          <button type="button" disabled={portalActionBlocked} onClick={() => setPortalModal('cancel')} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-100 bg-white px-4 py-3 text-sm font-black text-rose-600 disabled:opacity-50">
+            <Ban size={17} /> Solicitar cancelamento
+          </button>
+          {portalAppointmentDetail?.session?.id && portalAppointmentDetail?.closure?.signaturePending && (
+            <button type="button" onClick={() => setPortalModal('sign')} className="flex items-center justify-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700">
+              <FileSignature size={17} /> Assinar sessão
+            </button>
+          )}
+        </div>
+        {Array.isArray(portalAppointmentDetail?.history) && portalAppointmentDetail.history.length > 0 && (
+          <div className="mt-5">
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Histórico</p>
+            <div className="space-y-2">
+              {portalAppointmentDetail.history.slice(0, 4).map((entry: any, index: number) => (
+                <div key={index} className="rounded-2xl bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
+                  {entry.label || 'Ação registrada'} {entry.performedAt ? `em ${formatPortalDateTime(entry.performedAt)}` : ''}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  ) : null;
+
+  const portalActionModal = portalModal ? (
+    <div className="fixed inset-0 z-[100] flex items-end justify-center bg-slate-950/45 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => setPortalModal('')}>
+      <div className="w-full max-w-md rounded-t-[28px] bg-white p-5 shadow-2xl sm:rounded-[28px]" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">
+              {portalModal === 'sign' ? 'Assinatura' : portalModal === 'cancel' ? 'Cancelamento' : 'Remarcação'}
+            </p>
+            <h3 className="mt-1 text-xl font-black text-slate-900">
+              {portalModal === 'sign' ? 'Confirmar sessão' : portalModal === 'cancel' ? 'Solicitar cancelamento' : 'Solicitar remarcação'}
+            </h3>
+          </div>
+          <button type="button" onClick={() => setPortalModal('')} className="rounded-2xl border border-slate-100 p-2 text-slate-500">
+            <X size={18} />
+          </button>
+        </div>
+        {portalModal === 'sign' ? (
+          <div className="mt-4 space-y-3">
+            <div className="rounded-2xl bg-purple-50 px-4 py-3 text-sm font-semibold text-purple-800">
+              {portalAppointmentDetail?.consentText || 'Confirmo que a sessão descrita foi realizada.'}
+            </div>
+            <label className="flex items-start gap-3 rounded-2xl border border-slate-100 p-3 text-sm font-semibold text-slate-700">
+              <input type="checkbox" className="mt-1 accent-[#7a32fc]" checked={portalActionForm.accepted} onChange={(e) => setPortalActionForm((prev) => ({ ...prev, accepted: e.target.checked }))} />
+              Confirmo que li e aceito registrar esta confirmação operacional.
+            </label>
+          </div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {portalModal === 'reschedule' && (
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-slate-500">Sugestão de novo horário</span>
+                <input type="datetime-local" value={portalActionForm.requestedStart} onChange={(e) => setPortalActionForm((prev) => ({ ...prev, requestedStart: e.target.value }))} className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-[#7a32fc]" />
+              </label>
+            )}
+            <label className="block">
+              <span className="mb-1 block text-xs font-bold text-slate-500">Motivo</span>
+              <input value={portalActionForm.reason} onChange={(e) => setPortalActionForm((prev) => ({ ...prev, reason: e.target.value }))} className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-[#7a32fc]" placeholder="Opcional" />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-bold text-slate-500">Observação</span>
+              <textarea value={portalActionForm.note} onChange={(e) => setPortalActionForm((prev) => ({ ...prev, note: e.target.value }))} rows={3} className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-[#7a32fc]" placeholder="Opcional" />
+            </label>
+          </div>
+        )}
+        <button type="button" disabled={portalActionSaving || (portalModal === 'sign' && !portalActionForm.accepted)} onClick={() => void submitPortalAction()} className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-black text-white shadow-lg shadow-purple-500/20 disabled:opacity-50">
+          {portalActionSaving ? 'Salvando...' : portalModal === 'sign' ? 'Confirmar assinatura' : 'Enviar solicitação'}
+        </button>
+      </div>
+    </div>
+  ) : null;
+
   const closeMoodModal = () => {
     setIsMoodModalOpen(false);
     setSelectedMood(null);
@@ -1307,6 +1597,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         <div className="min-h-screen bg-gradient-to-b from-[#F2FAFF] via-[#F6F2FF] to-[#FFF8EF] p-4 sm:p-6 flex flex-col items-center relative overflow-y-auto">
             {(showFamilySuccess) && <SuccessOverlay />} 
             <AnimatePresence>{patientSettingsModal}</AnimatePresence>
+            {portalAppointmentDetailModal}
+            {portalActionModal}
             <div className="absolute top-0 left-0 w-full h-64 bg-gradient-to-b from-blue-100 to-transparent -z-0"></div>
             <div className="w-full max-w-md relative z-10 flex flex-col h-full">
                 <div className="flex justify-between items-center mb-6 sm:mb-8">
@@ -1366,6 +1658,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     {readOnlyNotice}
                   </div>
                 )}
+                {portalAppointmentsPanel}
 
                 <div className="bg-white p-4 sm:p-6 rounded-[32px] sm:rounded-[40px] shadow-xl border border-blue-50 flex flex-col justify-center mb-6 relative overflow-hidden">
                     <div className="absolute top-0 right-0 w-24 sm:w-32 h-24 sm:h-32 bg-yellow-100 rounded-bl-full opacity-50 -z-0"></div>
@@ -1629,6 +1922,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     <div className={`min-h-screen p-6 flex flex-col overflow-x-hidden ${isConventionalAdult ? 'bg-gradient-to-b from-[#FFF9F3] to-[#F8F5FF]' : 'bg-[#F4F7FE]'}`}> 
       {(showTaskSuccess || showMoodSuccess) && <SuccessOverlay />} 
       <AnimatePresence>{patientSettingsModal}</AnimatePresence>
+      {portalAppointmentDetailModal}
+      {portalActionModal}
       {isMessagesOpen && ( 
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in" onClick={() => setIsMessagesOpen(false)}> 
           <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl animate-pop relative" onClick={e => e.stopPropagation()}> 
@@ -1715,6 +2010,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           {readOnlyNotice}
         </div>
       )}
+      {portalAppointmentsPanel}
       {!dailyCheckinDone ? ( 
         <div className="mb-8 animate-slide-up"> 
           <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2 px-1"> {isConventionalAdult ? <Smile size={16} /> : <BatteryCharging size={16} />} {isConventionalAdult ? 'Como está se sentindo?' : 'Como se sente agora?'} </h2> 

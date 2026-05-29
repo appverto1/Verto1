@@ -2508,6 +2508,7 @@ const OTP_CHALLENGE_SELECT = [
 
 const APPOINTMENT_SELECT = [
   'id',
+  'organization_id',
   'clinic_id',
   'patient_id',
   'patient_email',
@@ -2526,6 +2527,13 @@ const APPOINTMENT_SELECT = [
   'patient_confirmation_at',
   'patient_confirmation_by',
   'patient_confirmation_source',
+  'confirmed_at',
+  'confirmed_by',
+  'confirmed_by_role',
+  'reschedule_requested_at',
+  'reschedule_requested_by',
+  'cancel_requested_at',
+  'cancel_requested_by',
   'notification_sent',
   'notification_sent_at',
   'notification_12h_sent',
@@ -2536,6 +2544,102 @@ const APPOINTMENT_SELECT = [
   'source_payload',
   'created_at',
   'updated_at'
+].join(',');
+
+const PORTAL_APPOINTMENT_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'patient_id',
+  'patient_email',
+  'patient_name',
+  'therapist_id',
+  'therapist_name',
+  'scheduled_at',
+  'scheduled_start_at',
+  'scheduled_end_at',
+  'scheduled_duration_minutes',
+  'duration_minutes',
+  'actual_start_at',
+  'actual_end_at',
+  'actual_duration_minutes',
+  'date',
+  'time',
+  'approach',
+  'service_type',
+  'room_id',
+  'room_name',
+  'location_type',
+  'location_notes',
+  'call_link',
+  'status',
+  'notes',
+  'patient_response',
+  'patient_responded_at',
+  'patient_confirmation_status',
+  'patient_confirmation_at',
+  'patient_confirmation_by',
+  'patient_confirmation_source',
+  'confirmed_at',
+  'confirmed_by',
+  'confirmed_by_role',
+  'reschedule_requested_at',
+  'reschedule_requested_by',
+  'cancel_requested_at',
+  'cancel_requested_by',
+  'source_payload',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const APPOINTMENT_ACTION_REQUEST_SELECT = [
+  'id',
+  'organization_id',
+  'appointment_id',
+  'patient_id',
+  'requested_by',
+  'request_type',
+  'status',
+  'requested_start',
+  'requested_end',
+  'reason',
+  'note',
+  'resolved_by',
+  'resolved_at',
+  'resolution_note',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const SESSION_SIGNATURE_SELECT = [
+  'id',
+  'organization_id',
+  'patient_id',
+  'appointment_id',
+  'aba_session_id',
+  'signed_by_user_id',
+  'signed_by_name',
+  'signed_by_role',
+  'signature_type',
+  'consent_text_version',
+  'signed_at',
+  'status',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const APPOINTMENT_STATUS_AUDIT_SELECT = [
+  'id',
+  'organization_id',
+  'appointment_id',
+  'patient_id',
+  'action',
+  'previous_status',
+  'new_status',
+  'performed_by',
+  'performed_by_role',
+  'performed_at',
+  'metadata'
 ].join(',');
 
 const CALENDAR_EVENT_SELECT = [
@@ -2564,6 +2668,13 @@ const CALENDAR_EVENT_SELECT = [
   'location_notes',
   'call_link',
   'status',
+  'confirmed_at',
+  'confirmed_by',
+  'confirmed_by_role',
+  'reschedule_requested_at',
+  'reschedule_requested_by',
+  'cancel_requested_at',
+  'cancel_requested_by',
   'notes',
   'source_payload',
   'created_at',
@@ -2641,6 +2752,9 @@ const CLOSURE_APPOINTMENT_SELECT = [
   'room_name',
   'location_type',
   'status',
+  'confirmed_at',
+  'reschedule_requested_at',
+  'cancel_requested_at',
   'notes',
   'source_payload',
   'updated_at'
@@ -3777,6 +3891,30 @@ function normalizeAppointmentResponseAction(action: unknown): 'confirmed' | 'res
   if (['verto_reschedule_appointment', 'reschedule', 'rescheduled', 'remarcar', 'remarcado'].includes(normalized)) return 'reschedule';
   if (['cancel', 'canceled', 'cancelled', 'cancelar', 'cancelado'].includes(normalized)) return 'canceled';
   return '';
+}
+
+function normalizeOperationalAppointmentStatus(status: unknown): string {
+  const normalized = sanitizeString(status || 'SCHEDULED', 80)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  if (['PENDING', 'PENDENTE', 'SCHEDULED', 'AGENDADA', 'AGENDADO'].includes(normalized)) return 'SCHEDULED';
+  if (['PENDING_CONFIRMATION', 'PENDENTE_DE_CONFIRMACAO'].includes(normalized)) return 'PENDING_CONFIRMATION';
+  if (['CONFIRMED', 'CONFIRMADA', 'CONFIRMADO'].includes(normalized)) return 'CONFIRMED';
+  if (['RESCHEDULE', 'RESCHEDULE_REQUESTED', 'REMARCAR', 'REMARCACAO_SOLICITADA'].includes(normalized)) return 'RESCHEDULE_REQUESTED';
+  if (['RESCHEDULED', 'REMARCADA', 'REMARCADO'].includes(normalized)) return 'RESCHEDULED';
+  if (['CANCEL_REQUESTED', 'CANCELAMENTO_SOLICITADO'].includes(normalized)) return 'CANCEL_REQUESTED';
+  if (['CANCEL', 'CANCELLED', 'CANCELED', 'CANCELADA', 'CANCELADO'].includes(normalized)) return 'CANCELLED';
+  if (['IN_PROGRESS', 'ANDAMENTO', 'EM_ANDAMENTO'].includes(normalized)) return 'IN_PROGRESS';
+  if (['COMPLETED', 'CONCLUIDA', 'CONCLUIDO'].includes(normalized)) return 'COMPLETED';
+  if (['NO_SHOW', 'MISSED', 'FALTA', 'FALTOU'].includes(normalized)) return 'NO_SHOW';
+  return normalized || 'SCHEDULED';
+}
+
+function isAppointmentTerminalForPortalAction(status: unknown): boolean {
+  return ['CANCELLED', 'COMPLETED', 'NO_SHOW'].includes(normalizeOperationalAppointmentStatus(status));
 }
 
 function isTrustedPushNotificationAction(action: unknown): boolean {
@@ -5177,6 +5315,15 @@ async function startServer() {
     legacyHeaders: false,
     validate: false,
     message: { error: 'Muitos uploads em pouco tempo. Aguarde alguns minutos.' }
+  });
+
+  const portalActionLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 40,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    message: { success: false, error: 'Muitas ações em sequência. Aguarde alguns instantes e tente novamente.' }
   });
 
   const resendActivationLimiter = rateLimit({
@@ -10105,13 +10252,8 @@ async function startServer() {
         });
       }
 
-      if (
-        isPatientActor &&
-        isPushNotificationAction &&
-        normalizedStatus === 'reschedule' &&
-        !isTrustedPushNotificationAction(notificationAction)
-      ) {
-        console.warn('[Appointments] Ignorando action push legada de remarcacao.', {
+      if (isPatientActor && isPushNotificationAction) {
+        console.warn('[Appointments] Ignorando action push legada. A resposta deve ocorrer dentro do app.', {
           appointmentId,
           notificationAction: notificationAction || null,
           requestedStatus,
@@ -10459,12 +10601,8 @@ async function startServer() {
     if (!normalizedStatus) {
       return res.status(400).json({ success: false, error: 'Ação inválida.' });
     }
-    if (
-      source === 'push_notification_action' &&
-      normalizedStatus === 'reschedule' &&
-      !isTrustedPushNotificationAction(action)
-    ) {
-      console.warn('[Appointments] Bloqueando resposta push legada de remarcacao.', {
+    if (source === 'push_notification_action') {
+      console.warn('[Appointments] Bloqueando resposta push legada. A resposta deve ocorrer dentro do app.', {
         appointmentId: sanitizeString(req.params.appointmentId, 120),
         action,
         status: sanitizeString(req.body?.status, 40) || null
@@ -10508,7 +10646,7 @@ async function startServer() {
           reminderKind: 'manual'
         },
         title: 'Lembrete de Consulta - Verto',
-        body: 'Voce tem uma consulta agendada. Clique nesta notificacao para confirmar, remarcar ou cancelar.',
+        body: 'Voce tem uma consulta agendada. Toque para abrir a Verto e confirmar, remarcar ou cancelar.',
         reminderKind: 'manual',
         logger: console
       });
@@ -17433,6 +17571,878 @@ async function startServer() {
     return result;
   };
 
+  const PORTAL_SESSION_CONSENT_TEXT_VERSION = 'responsible-session-acceptance-v1';
+  const PORTAL_SESSION_CONSENT_TEXT = 'Confirmo que a sessão descrita foi realizada e que estou ciente das informações registradas pela clínica.';
+
+  const portalSafeError = (status = 500) => ({
+    success: false,
+    error:
+      status === 400
+        ? 'Dados inválidos para esta ação.'
+        : status === 403 || status === 404
+          ? 'Consulta não encontrada para este acesso.'
+          : status === 409
+            ? 'Esta ação não está disponível para a consulta atual.'
+            : 'Não foi possível concluir a ação agora.'
+  });
+
+  const hashOperationalValue = (value: unknown) => {
+    const safe = sanitizeString(value, 1200);
+    if (!safe) return null;
+    const pepper = sanitizeString(process.env.SESSION_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || 'verto-local', 500);
+    return crypto.createHash('sha256').update(`${pepper}:${safe}`).digest('hex');
+  };
+
+  const isResponsiblePortalRole = (role: unknown) =>
+    ['patient', 'responsible', 'responsavel', 'guardian'].includes(sanitizeString(role, 40).toLowerCase());
+
+  const sanitizePortalRoomName = (value: unknown) => {
+    const room = sanitizeString(value, 180);
+    if (!room) return '';
+    if (isUuid(room) || /^clinic_room[_-]/i.test(room)) return '';
+    return room;
+  };
+
+  const getPortalPatientIdsForUser = async (user: any) => {
+    const userId = sanitizeString(user?.id, 120);
+    const userEmail = sanitizeEmail(user?.email);
+    const clinicId = sanitizeString(currentClinicId(user), 120);
+    const ids = await resolvePatientIdsForPush({
+      supabase,
+      patientEmail: userEmail,
+      userId,
+      clinicId
+    });
+    if (isUuid(userId)) {
+      const direct = await supabase
+        .from('patients')
+        .select('id')
+        .eq('id', userId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .limit(1)
+        .maybeSingle();
+      if (!direct.error && direct.data?.id) ids.push(sanitizeString(direct.data.id, 120));
+    }
+    return Array.from(new Set(ids.filter((id) => isUuid(id)))).slice(0, 50);
+  };
+
+  const canPortalUserAccessPatient = async (patientId: string, appointment: any, user: any) => {
+    if (!isUuid(patientId)) return false;
+    const role = sanitizeString(user?.role, 40).toLowerCase();
+    if (!isResponsiblePortalRole(role)) {
+      return canAccessPatientInCurrentClinic(patientId, user);
+    }
+    const userId = sanitizeString(user?.id, 120);
+    const userEmail = sanitizeEmail(user?.email);
+    const appointmentPatientEmail = sanitizeEmail(appointment?.patient_email || appointment?.patientEmail);
+    if (patientId === userId) return true;
+    if (userEmail && appointmentPatientEmail && userEmail === appointmentPatientEmail) return true;
+    const patientIds = await getPortalPatientIdsForUser(user);
+    return patientIds.includes(patientId);
+  };
+
+  const fetchPortalAppointmentForUser = async (appointmentId: string, user: any) => {
+    const safeAppointmentId = sanitizeString(appointmentId, 120);
+    if (!isUuid(safeAppointmentId)) return { ok: false, status: 400, error: 'Consulta inválida.' };
+    const { data, error } = await supabase
+      .from('appointments')
+      .select(PORTAL_APPOINTMENT_SELECT)
+      .eq('id', safeAppointmentId)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return { ok: false, status: 503, error: 'Agenda indisponível.' };
+      throw error;
+    }
+    if (!data?.id) return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+    const patientId = sanitizeString(data.patient_id, 120);
+    if (!(await canPortalUserAccessPatient(patientId, data, user))) {
+      return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+    }
+    return { ok: true, appointment: data };
+  };
+
+  const serializePortalAppointment = (row: any, extras: Record<string, any> = {}) => {
+    const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
+    const start = buildCalendarAppointmentStart(row);
+    const end = new Date(start.getTime() + getCalendarAppointmentDuration(row) * 60 * 1000);
+    const roomName = sanitizePortalRoomName(row?.room_name || source?.room_name || source?.roomName);
+    const locationType = normalizeScheduleLocationType(row?.location_type || source?.location_type || source?.locationType || (roomName ? 'clinica' : 'outro'));
+    const serviceType = sanitizeString(row?.service_type || row?.approach || source?.service_type || source?.type, 120) || 'Sessão';
+    return {
+      id: sanitizeString(row?.id, 120),
+      patientName: sanitizeString(row?.patient_name || source?.patientName || source?.name, 180) || 'Paciente',
+      date: start.toISOString().slice(0, 10),
+      scheduledAt: start.toISOString(),
+      scheduledEnd: end.toISOString(),
+      time: `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`,
+      endTime: `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`,
+      serviceType,
+      professionalName: sanitizeString(row?.therapist_name || source?.therapistName || source?.professional, 180) || 'Equipe',
+      locationType,
+      locationLabel: locationType === 'online'
+        ? 'Online'
+        : locationType === 'clinica'
+          ? roomName || 'Sala não informada'
+          : sanitizeString(row?.location_notes || source?.locationLabel || source?.location_label, 180) || 'Local informado pela clínica',
+      roomName: locationType === 'clinica' ? roomName || 'Sala não informada' : null,
+      status: normalizeOperationalAppointmentStatus(row?.status || source?.status),
+      confirmedAt: row?.confirmed_at || row?.patient_confirmation_at || null,
+      rescheduleRequestedAt: row?.reschedule_requested_at || null,
+      cancelRequestedAt: row?.cancel_requested_at || null,
+      notes: sanitizeTextField(row?.notes || source?.notes || source?.orientation || '', 800) || null,
+      ...extras
+    };
+  };
+
+  const writeAppointmentStatusAuditLog = async (params: {
+    organizationId: string;
+    appointmentId: string;
+    patientId?: string | null;
+    action: string;
+    previousStatus?: string | null;
+    newStatus?: string | null;
+    performedBy?: string | null;
+    performedByRole?: string | null;
+    metadata?: Record<string, any>;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const appointmentId = sanitizeString(params.appointmentId, 120);
+    if (!isUuid(organizationId) || !isUuid(appointmentId)) return;
+    const payload = cleanObject({
+      id: crypto.randomUUID(),
+      organization_id: organizationId,
+      appointment_id: appointmentId,
+      patient_id: isUuid(sanitizeString(params.patientId, 120)) ? sanitizeString(params.patientId, 120) : null,
+      action: sanitizeString(params.action, 80),
+      previous_status: sanitizeString(params.previousStatus, 80) || null,
+      new_status: sanitizeString(params.newStatus, 80) || null,
+      performed_by: sanitizeString(params.performedBy, 120) || null,
+      performed_by_role: sanitizeString(params.performedByRole, 40) || null,
+      performed_at: new Date().toISOString(),
+      metadata: sanitizeClinicalPayload(params.metadata || {})
+    });
+    const { error } = await supabase
+      .from('appointment_status_audit_logs')
+      .insert([payload]);
+    if (error && !hasMissingFinancialSchema(error)) {
+      console.warn('[AppointmentActions] audit log failed:', error?.message || String(error));
+    }
+  };
+
+  const updateAppointmentOperationalPatch = async (appointmentId: string, patch: Record<string, any>) => {
+    let safePatch: Record<string, any> = cleanObject(patch);
+    while (Object.keys(safePatch).length > 0) {
+      const { data, error } = await supabase
+        .from('appointments')
+        .update(safePatch)
+        .eq('id', appointmentId)
+        .select(PORTAL_APPOINTMENT_SELECT)
+        .maybeSingle();
+      if (!error) return { data, error: null };
+      const missingColumn = extractMissingColumnName(error);
+      if (missingColumn && missingColumn in safePatch) {
+        delete safePatch[missingColumn];
+        continue;
+      }
+      return { data: null, error };
+    }
+    return { data: null, error: { message: 'Payload vazio.' } };
+  };
+
+  const createOrUpdateAppointmentActionRequest = async (params: {
+    appointment: any;
+    user: any;
+    requestType: 'RESCHEDULE' | 'CANCEL';
+    reason?: unknown;
+    note?: unknown;
+    requestedStart?: unknown;
+    requestedEnd?: unknown;
+  }) => {
+    const appointmentId = sanitizeString(params.appointment?.id, 120);
+    const organizationId = sanitizeString(params.appointment?.organization_id || params.appointment?.clinic_id, 120);
+    const patientId = sanitizeString(params.appointment?.patient_id, 120);
+    const now = new Date().toISOString();
+    const requestedStart = sanitizeIsoDateTime(params.requestedStart);
+    const requestedEnd = sanitizeIsoDateTime(params.requestedEnd);
+    const reason = sanitizeTextField(params.reason, 600) || null;
+    const note = sanitizeTextField(params.note, 1000) || null;
+
+    const existing = await supabase
+      .from('appointment_action_requests')
+      .select(APPOINTMENT_ACTION_REQUEST_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('appointment_id', appointmentId)
+      .eq('request_type', params.requestType)
+      .eq('status', 'PENDING')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (existing.error && !hasMissingFinancialSchema(existing.error)) throw existing.error;
+    if (existing.data?.id) {
+      const { data, error } = await supabase
+        .from('appointment_action_requests')
+        .update(cleanObject({
+          requested_start: requestedStart || existing.data.requested_start || null,
+          requested_end: requestedEnd || existing.data.requested_end || null,
+          reason: reason || existing.data.reason || null,
+          note: note || existing.data.note || null,
+          updated_at: now
+        }))
+        .eq('id', existing.data.id)
+        .select(APPOINTMENT_ACTION_REQUEST_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    }
+
+    const payload = cleanObject({
+      id: crypto.randomUUID(),
+      organization_id: organizationId,
+      appointment_id: appointmentId,
+      patient_id: patientId,
+      requested_by: sanitizeString(params.user?.id, 120) || null,
+      request_type: params.requestType,
+      status: 'PENDING',
+      requested_start: requestedStart || null,
+      requested_end: requestedEnd || null,
+      reason,
+      note,
+      created_at: now,
+      updated_at: now
+    });
+    const { data, error } = await supabase
+      .from('appointment_action_requests')
+      .insert([payload])
+      .select(APPOINTMENT_ACTION_REQUEST_SELECT)
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  };
+
+  const fetchAppointmentActionRequestForAdmin = async (requestId: string, user: any) => {
+    const safeRequestId = sanitizeString(requestId, 120);
+    if (!isUuid(safeRequestId)) return { ok: false, status: 400, error: 'Solicitação inválida.' };
+    const { data, error } = await supabase
+      .from('appointment_action_requests')
+      .select(APPOINTMENT_ACTION_REQUEST_SELECT)
+      .eq('id', safeRequestId)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return { ok: false, status: 503, error: 'Solicitações indisponíveis.' };
+      throw error;
+    }
+    if (!data?.id) return { ok: false, status: 404, error: 'Solicitação não encontrada.' };
+    const appointmentContext = await fetchPortalAppointmentForUser(data.appointment_id, user);
+    if (!appointmentContext.ok) return appointmentContext;
+    return { ok: true, request: data, appointment: (appointmentContext as any).appointment };
+  };
+
+  const mapAuditLogToHumanHistory = (row: any) => ({
+    action: sanitizeString(row?.action, 80),
+    label: (() => {
+      const action = sanitizeString(row?.action, 80);
+      const labels: Record<string, string> = {
+        CONFIRMED_BY_RESPONSIBLE: 'Responsável confirmou a consulta',
+        RESCHEDULE_REQUESTED: 'Responsável solicitou remarcação',
+        RESCHEDULE_APPROVED: 'Remarcação aprovada pela clínica',
+        RESCHEDULE_REJECTED: 'Remarcação recusada pela clínica',
+        CANCEL_REQUESTED: 'Responsável solicitou cancelamento',
+        CANCEL_APPROVED: 'Cancelamento aprovado pela clínica',
+        CANCEL_REJECTED: 'Cancelamento recusado pela clínica',
+        CANCELLED: 'Consulta cancelada',
+        SIGNATURE_CREATED: 'Sessão assinada',
+        SIGNATURE_REVOKED: 'Assinatura revogada'
+      };
+      return labels[action] || 'Ação registrada';
+    })(),
+    performedAt: row?.performed_at || null,
+    role: sanitizeString(row?.performed_by_role, 40) || null,
+    metadata: sanitizeClinicalPayload(row?.metadata || {})
+  });
+
+  app.get('/api/portal/appointments', checkAuth, async (req: any, res) => {
+    try {
+      const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const patientIds = await getPortalPatientIdsForUser(req.session.user);
+      if (isResponsiblePortalRole(role) && patientIds.length === 0) {
+        return res.json({ success: true, data: [] });
+      }
+      const fromIso = sanitizeIsoDateTime(req.query?.from || new Date(Date.now() - 7 * 86400000).toISOString());
+      const toIso = sanitizeIsoDateTime(req.query?.to || new Date(Date.now() + 90 * 86400000).toISOString());
+      const limit = parseBoundedListLimit(req.query?.limit, 40, 100);
+
+      let query = supabase
+        .from('appointments')
+        .select(PORTAL_APPOINTMENT_SELECT)
+        .gte('scheduled_at', fromIso)
+        .lte('scheduled_at', toIso)
+        .order('scheduled_at', { ascending: true })
+        .limit(limit);
+      if (patientIds.length > 0) query = query.in('patient_id', patientIds);
+      else if (!isResponsiblePortalRole(role)) {
+        const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+        if (clinicId) query = query.eq('clinic_id', clinicId);
+      }
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      const rows = Array.isArray(data) ? data : [];
+      const visibleRows = [];
+      for (const row of rows) {
+        if (await canPortalUserAccessPatient(sanitizeString(row?.patient_id, 120), row, req.session.user)) {
+          visibleRows.push(row);
+        }
+      }
+      return res.json({
+        success: true,
+        data: visibleRows.map((row) => serializePortalAppointment(row))
+      });
+    } catch (error: any) {
+      console.warn('[PortalAppointments] list failed:', error?.message || String(error));
+      return res.status(500).json(portalSafeError(500));
+    }
+  });
+
+  app.get('/api/portal/appointments/:appointmentId', checkAuth, async (req: any, res) => {
+    try {
+      const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
+      if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
+      const appointment = (context as any).appointment;
+      const appointmentId = sanitizeString(appointment.id, 120);
+      const organizationId = sanitizeString(appointment.organization_id || appointment.clinic_id, 120);
+      const patientId = sanitizeString(appointment.patient_id, 120);
+
+      const [requestsResult, signaturesResult, auditResult, closureResult, sessionResult] = await Promise.all([
+        supabase
+          .from('appointment_action_requests')
+          .select(APPOINTMENT_ACTION_REQUEST_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('appointment_id', appointmentId)
+          .order('created_at', { ascending: false })
+          .limit(20),
+        supabase
+          .from('session_signatures')
+          .select(SESSION_SIGNATURE_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('appointment_id', appointmentId)
+          .eq('status', 'SIGNED')
+          .order('signed_at', { ascending: false })
+          .limit(5),
+        supabase
+          .from('appointment_status_audit_logs')
+          .select(APPOINTMENT_STATUS_AUDIT_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('appointment_id', appointmentId)
+          .order('performed_at', { ascending: false })
+          .limit(20),
+        supabase
+          .from('appointment_closure_checks')
+          .select(APPOINTMENT_CLOSURE_CHECK_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('appointment_id', appointmentId)
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from('aba_sessions')
+          .select(CLOSURE_ABA_SESSION_SELECT)
+          .eq('appointment_id', appointmentId)
+          .eq('patient_id', patientId)
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      ]);
+      for (const result of [requestsResult, signaturesResult, auditResult, closureResult, sessionResult]) {
+        if ((result as any).error && !hasMissingFinancialSchema((result as any).error)) throw (result as any).error;
+      }
+
+      const signatures = signaturesResult.error ? [] : signaturesResult.data || [];
+      const closure = closureResult.error ? null : closureResult.data || null;
+      const checklist = Array.isArray(closure?.checklist) ? closure.checklist : [];
+      const signaturePending = checklist.some((item: any) => item?.key === 'signature_present' && item?.status === 'FAILED');
+      const session = sessionResult.error ? null : sessionResult.data || null;
+
+      return res.json({
+        success: true,
+        data: {
+          appointment: serializePortalAppointment(appointment, {
+            signatureStatus: signatures.length > 0 ? 'SIGNED' : signaturePending ? 'PENDING' : 'NOT_REQUIRED',
+            signedAt: signatures[0]?.signed_at || null
+          }),
+          actionRequests: requestsResult.error ? [] : requestsResult.data || [],
+          signatures: signatures.map((signature: any) => ({
+            signedByName: sanitizeString(signature?.signed_by_name, 180) || 'Responsável',
+            signedByRole: sanitizeString(signature?.signed_by_role, 40) || 'responsible',
+            signatureType: signature?.signature_type || 'DIGITAL_ACCEPTANCE',
+            signedAt: signature?.signed_at || null,
+            status: signature?.status || 'SIGNED'
+          })),
+          history: (auditResult.error ? [] : auditResult.data || []).map(mapAuditLogToHumanHistory),
+          closure: closure ? {
+            readinessStatus: closure.readiness_status || 'UNKNOWN',
+            blockingIssuesCount: Number(closure.blocking_issues_count || 0),
+            warningIssuesCount: Number(closure.warning_issues_count || 0),
+            mainIssues: Array.isArray(closure.main_issues) ? closure.main_issues.slice(0, 4) : [],
+            signaturePending
+          } : null,
+          session: session?.id ? {
+            id: sanitizeString(session.id, 180),
+            status: session.status || null,
+            startedAt: session.started_at || session.actual_start_at || null,
+            endedAt: session.ended_at || session.actual_end_at || null,
+            durationMinutes: session.duration_minutes || session.actual_duration_minutes || null
+          } : null,
+          consentText: PORTAL_SESSION_CONSENT_TEXT,
+          consentTextVersion: PORTAL_SESSION_CONSENT_TEXT_VERSION
+        }
+      });
+    } catch (error: any) {
+      console.warn('[PortalAppointments] detail failed:', error?.message || String(error));
+      return res.status(500).json(portalSafeError(500));
+    }
+  });
+
+  app.post('/api/portal/appointments/:appointmentId/confirm', portalActionLimiter, checkAuth, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Payload de confirmação de consulta')) return;
+      const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
+      if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
+      const appointment = (context as any).appointment;
+      const previousStatus = normalizeOperationalAppointmentStatus(appointment.status);
+      if (previousStatus === 'CONFIRMED') {
+        return res.json({ success: true, alreadyAnswered: true, appointment: serializePortalAppointment(appointment) });
+      }
+      if (isAppointmentTerminalForPortalAction(previousStatus) || previousStatus === 'CANCEL_REQUESTED') {
+        return res.status(409).json(portalSafeError(409));
+      }
+
+      const now = new Date().toISOString();
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const actorRole = sanitizeString(req.session.user?.role, 40) || 'responsible';
+      const update = await updateAppointmentOperationalPatch(appointment.id, {
+        status: 'CONFIRMED',
+        confirmed_at: now,
+        confirmed_by: actorId || null,
+        confirmed_by_role: actorRole,
+        patient_response: 'confirmed',
+        patient_responded_at: now,
+        patient_confirmation_status: 'CONFIRMED',
+        patient_confirmation_at: now,
+        patient_confirmation_by: actorId || null,
+        patient_confirmation_source: 'portal',
+        updated_at: now
+      });
+      if (update.error) throw update.error;
+      await writeAppointmentStatusAuditLog({
+        organizationId: appointment.organization_id || appointment.clinic_id,
+        appointmentId: appointment.id,
+        patientId: appointment.patient_id,
+        action: 'CONFIRMED_BY_RESPONSIBLE',
+        previousStatus,
+        newStatus: 'CONFIRMED',
+        performedBy: actorId,
+        performedByRole: actorRole,
+        metadata: { source: 'portal' }
+      });
+      void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_confirmed_by_responsible');
+      return res.json({ success: true, message: 'Consulta confirmada.', appointment: serializePortalAppointment(update.data || { ...appointment, status: 'CONFIRMED' }) });
+    } catch (error: any) {
+      console.warn('[PortalAppointments] confirm failed:', error?.message || String(error));
+      return res.status(500).json(portalSafeError(500));
+    }
+  });
+
+  app.post('/api/portal/appointments/:appointmentId/request-reschedule', portalActionLimiter, checkAuth, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de solicitação de remarcação')) return;
+      const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
+      if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
+      const appointment = (context as any).appointment;
+      const previousStatus = normalizeOperationalAppointmentStatus(appointment.status);
+      if (isAppointmentTerminalForPortalAction(previousStatus)) return res.status(409).json(portalSafeError(409));
+      const requestRow = await createOrUpdateAppointmentActionRequest({
+        appointment,
+        user: req.session.user,
+        requestType: 'RESCHEDULE',
+        reason: req.body?.reason,
+        note: req.body?.note || req.body?.observation,
+        requestedStart: req.body?.requestedStart || req.body?.requested_start,
+        requestedEnd: req.body?.requestedEnd || req.body?.requested_end
+      });
+      const now = new Date().toISOString();
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const actorRole = sanitizeString(req.session.user?.role, 40) || 'responsible';
+      const update = await updateAppointmentOperationalPatch(appointment.id, {
+        status: 'RESCHEDULE_REQUESTED',
+        reschedule_requested_at: now,
+        reschedule_requested_by: actorId || null,
+        patient_response: 'reschedule',
+        patient_responded_at: now,
+        patient_confirmation_status: 'RESCHEDULE_REQUESTED',
+        patient_confirmation_at: now,
+        patient_confirmation_by: actorId || null,
+        patient_confirmation_source: 'portal',
+        updated_at: now
+      });
+      if (update.error) throw update.error;
+      await writeAppointmentStatusAuditLog({
+        organizationId: appointment.organization_id || appointment.clinic_id,
+        appointmentId: appointment.id,
+        patientId: appointment.patient_id,
+        action: 'RESCHEDULE_REQUESTED',
+        previousStatus,
+        newStatus: 'RESCHEDULE_REQUESTED',
+        performedBy: actorId,
+        performedByRole: actorRole,
+        metadata: { actionRequestId: requestRow?.id || null, source: 'portal' }
+      });
+      void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_reschedule_requested');
+      return res.json({ success: true, message: 'Solicitação de remarcação registrada.', data: requestRow, appointment: serializePortalAppointment(update.data || { ...appointment, status: 'RESCHEDULE_REQUESTED' }) });
+    } catch (error: any) {
+      console.warn('[PortalAppointments] reschedule request failed:', error?.message || String(error));
+      return res.status(500).json(portalSafeError(500));
+    }
+  });
+
+  app.post('/api/portal/appointments/:appointmentId/request-cancel', portalActionLimiter, checkAuth, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de solicitação de cancelamento')) return;
+      const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
+      if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
+      const appointment = (context as any).appointment;
+      const previousStatus = normalizeOperationalAppointmentStatus(appointment.status);
+      if (isAppointmentTerminalForPortalAction(previousStatus)) return res.status(409).json(portalSafeError(409));
+      const requestRow = await createOrUpdateAppointmentActionRequest({
+        appointment,
+        user: req.session.user,
+        requestType: 'CANCEL',
+        reason: req.body?.reason,
+        note: req.body?.note || req.body?.observation
+      });
+      const now = new Date().toISOString();
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const actorRole = sanitizeString(req.session.user?.role, 40) || 'responsible';
+      const update = await updateAppointmentOperationalPatch(appointment.id, {
+        status: 'CANCEL_REQUESTED',
+        cancel_requested_at: now,
+        cancel_requested_by: actorId || null,
+        patient_response: 'cancel_requested',
+        patient_responded_at: now,
+        patient_confirmation_status: 'CANCEL_REQUESTED',
+        patient_confirmation_at: now,
+        patient_confirmation_by: actorId || null,
+        patient_confirmation_source: 'portal',
+        updated_at: now
+      });
+      if (update.error) throw update.error;
+      await writeAppointmentStatusAuditLog({
+        organizationId: appointment.organization_id || appointment.clinic_id,
+        appointmentId: appointment.id,
+        patientId: appointment.patient_id,
+        action: 'CANCEL_REQUESTED',
+        previousStatus,
+        newStatus: 'CANCEL_REQUESTED',
+        performedBy: actorId,
+        performedByRole: actorRole,
+        metadata: { actionRequestId: requestRow?.id || null, source: 'portal' }
+      });
+      void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_cancel_requested');
+      return res.json({ success: true, message: 'Solicitação de cancelamento registrada.', data: requestRow, appointment: serializePortalAppointment(update.data || { ...appointment, status: 'CANCEL_REQUESTED' }) });
+    } catch (error: any) {
+      console.warn('[PortalAppointments] cancel request failed:', error?.message || String(error));
+      return res.status(500).json(portalSafeError(500));
+    }
+  });
+
+  app.post('/api/portal/sessions/:sessionId/sign', portalActionLimiter, checkAuth, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de assinatura de sessão')) return;
+      const accepted = req.body?.accepted === true || req.body?.consentAccepted === true;
+      if (!accepted) return res.status(400).json(portalSafeError(400));
+      const sessionId = sanitizeString(req.params.sessionId, 180);
+      if (!sessionId) return res.status(400).json(portalSafeError(400));
+      const { data: abaSession, error: sessionError } = await supabase
+        .from('aba_sessions')
+        .select(CLOSURE_ABA_SESSION_SELECT)
+        .eq('id', sessionId)
+        .limit(1)
+        .maybeSingle();
+      if (sessionError) {
+        if (hasMissingFinancialSchema(sessionError)) return res.status(503).json(portalSafeError(503));
+        throw sessionError;
+      }
+      if (!abaSession?.id) return res.status(404).json(portalSafeError(404));
+      const patientId = sanitizeString(abaSession.patient_id, 120);
+      const appointmentId = sanitizeString(abaSession.appointment_id, 120) || null;
+      let appointment: any = null;
+      if (appointmentId && isUuid(appointmentId)) {
+        const appointmentContext = await fetchPortalAppointmentForUser(appointmentId, req.session.user);
+        if (!appointmentContext.ok) return res.status((appointmentContext as any).status || 404).json(portalSafeError((appointmentContext as any).status || 404));
+        appointment = (appointmentContext as any).appointment;
+      } else if (!(await canPortalUserAccessPatient(patientId, abaSession, req.session.user))) {
+        return res.status(404).json(portalSafeError(404));
+      }
+      const sessionStatus = sanitizeString(abaSession.status, 80).toLowerCase();
+      const concluded =
+        ['completed', 'concluida', 'concluido'].includes(sessionStatus) ||
+        Boolean(abaSession.ended_at || abaSession.actual_end_at || appointment?.actual_end_at) ||
+        normalizeOperationalAppointmentStatus(appointment?.status) === 'COMPLETED';
+      if (!concluded) return res.status(409).json(portalSafeError(409));
+
+      const organizationId = sanitizeString(abaSession.organization_id || appointment?.organization_id || abaSession.clinic_id || appointment?.clinic_id, 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const actorRole = sanitizeString(req.session.user?.role, 40) || 'responsible';
+      const signerName = sanitizeString(req.body?.signedByName || req.session.user?.name || req.session.user?.email, 180) || 'Responsável';
+      const existing = await supabase
+        .from('session_signatures')
+        .select(SESSION_SIGNATURE_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('aba_session_id', sessionId)
+        .eq('signed_by_user_id', actorId)
+        .eq('status', 'SIGNED')
+        .order('signed_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (existing.error && !hasMissingFinancialSchema(existing.error)) throw existing.error;
+      if (existing.data?.id) {
+        return res.json({ success: true, alreadySigned: true, message: 'Assinatura registrada.', data: existing.data });
+      }
+
+      const now = new Date().toISOString();
+      const payload = cleanObject({
+        id: crypto.randomUUID(),
+        organization_id: organizationId,
+        patient_id: patientId,
+        appointment_id: appointmentId && isUuid(appointmentId) ? appointmentId : null,
+        aba_session_id: sessionId,
+        signed_by_user_id: actorId || null,
+        signed_by_name: signerName,
+        signed_by_role: actorRole,
+        signature_type: 'DIGITAL_ACCEPTANCE',
+        signature_hash: crypto.createHash('sha256').update(`${organizationId}:${patientId}:${sessionId}:${actorId}:${now}`).digest('hex'),
+        ip_hash: hashOperationalValue(req.ip || req.headers['x-forwarded-for']),
+        user_agent_hash: hashOperationalValue(req.headers['user-agent']),
+        consent_text_version: PORTAL_SESSION_CONSENT_TEXT_VERSION,
+        consent_text: PORTAL_SESSION_CONSENT_TEXT,
+        signed_at: now,
+        status: 'SIGNED',
+        metadata: sanitizeClinicalPayload({ source: 'portal', acceptanceOnly: true }),
+        created_at: now,
+        updated_at: now
+      });
+      const { data, error } = await supabase
+        .from('session_signatures')
+        .insert([payload])
+        .select(SESSION_SIGNATURE_SELECT)
+        .maybeSingle();
+      if (error) {
+        if (String(error.code || '') === '23505') {
+          const retry = await supabase
+            .from('session_signatures')
+            .select(SESSION_SIGNATURE_SELECT)
+            .eq('organization_id', organizationId)
+            .eq('aba_session_id', sessionId)
+            .eq('signed_by_user_id', actorId)
+            .eq('status', 'SIGNED')
+            .order('signed_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (!retry.error && retry.data) return res.json({ success: true, alreadySigned: true, message: 'Assinatura registrada.', data: retry.data });
+        }
+        throw error;
+      }
+      if (appointmentId) {
+        await writeAppointmentStatusAuditLog({
+          organizationId,
+          appointmentId,
+          patientId,
+          action: 'SIGNATURE_CREATED',
+          previousStatus: appointment?.status || null,
+          newStatus: appointment?.status || null,
+          performedBy: actorId,
+          performedByRole: actorRole,
+          metadata: { abaSessionId: sessionId, signatureType: 'DIGITAL_ACCEPTANCE' }
+        });
+        void regenerateClosureForAppointments([appointmentId], req.session.user, 'session_signature_created');
+      }
+      return res.json({ success: true, message: 'Assinatura registrada.', data });
+    } catch (error: any) {
+      console.warn('[PortalSignatures] sign failed:', error?.message || String(error));
+      return res.status(500).json(portalSafeError(500));
+    }
+  });
+
+  app.get('/api/appointments/:appointmentId/action-requests', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
+      if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
+      const appointment = (context as any).appointment;
+      const organizationId = sanitizeString(appointment.organization_id || appointment.clinic_id, 120);
+      const { data, error } = await supabase
+        .from('appointment_action_requests')
+        .select(APPOINTMENT_ACTION_REQUEST_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointment.id)
+        .order('created_at', { ascending: false })
+        .limit(30);
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      console.warn('[AppointmentActions] list failed:', error?.message || String(error));
+      return res.status(500).json(portalSafeError(500));
+    }
+  });
+
+  app.post('/api/appointments/action-requests/:requestId/approve', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de aprovação de solicitação')) return;
+      const context = await fetchAppointmentActionRequestForAdmin(req.params.requestId, req.session.user);
+      if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
+      const requestRow = (context as any).request;
+      const appointment = (context as any).appointment;
+      if (requestRow.status !== 'PENDING') return res.status(409).json(portalSafeError(409));
+      const organizationId = sanitizeString(appointment.organization_id || appointment.clinic_id, 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const actorRole = sanitizeString(req.session.user?.role, 40);
+      const now = new Date().toISOString();
+      let nextAppointment: any = appointment;
+      let auditAction = 'RESCHEDULE_APPROVED';
+      let newStatus = 'RESCHEDULED';
+      if (requestRow.request_type === 'RESCHEDULE') {
+        const requestedStart = sanitizeIsoDateTime(req.body?.scheduledStart || req.body?.scheduled_start || req.body?.requestedStart || requestRow.requested_start);
+        const requestedEnd = sanitizeIsoDateTime(req.body?.scheduledEnd || req.body?.scheduled_end || req.body?.requestedEnd || requestRow.requested_end);
+        if (!requestedStart) return res.status(400).json(portalSafeError(400));
+        const durationMinutes = requestedEnd
+          ? Math.max(15, Math.round((new Date(requestedEnd).getTime() - new Date(requestedStart).getTime()) / 60000))
+          : getCalendarAppointmentDuration(appointment);
+        const startDate = new Date(requestedStart);
+        const conflict = await checkScheduleConflicts({
+          clinic_id: appointment.clinic_id,
+          organization_id: organizationId,
+          patient_id: appointment.patient_id,
+          professional_id: appointment.therapist_id,
+          room_id: appointment.room_id,
+          room_name: appointment.room_name,
+          location_type: appointment.location_type,
+          date: requestedStart.slice(0, 10),
+          start_time: `${String(startDate.getHours()).padStart(2, '0')}:${String(startDate.getMinutes()).padStart(2, '0')}`,
+          duration_minutes: durationMinutes,
+          exclude_event_id: appointment.id
+        }, req.session.user);
+        if (conflict?.blocking || conflict?.hasConflict) {
+          return res.status(409).json({ success: false, error: conflict.humanMessage || 'Há conflito de agenda para o novo horário.' });
+        }
+        const update = await updateAppointmentOperationalPatch(appointment.id, {
+          status: 'RESCHEDULED',
+          scheduled_at: requestedStart,
+          scheduled_start_at: requestedStart,
+          scheduled_end_at: requestedEnd || new Date(new Date(requestedStart).getTime() + durationMinutes * 60000).toISOString(),
+          scheduled_duration_minutes: durationMinutes,
+          duration_minutes: durationMinutes,
+          notification_24h_sent_at: null,
+          notification_12h_sent_at: null,
+          notification_sent: false,
+          notification_12h_sent: false,
+          updated_at: now
+        });
+        if (update.error) throw update.error;
+        nextAppointment = update.data || { ...appointment, status: 'RESCHEDULED', scheduled_at: requestedStart };
+      } else {
+        auditAction = 'CANCEL_APPROVED';
+        newStatus = 'CANCELLED';
+        const update = await updateAppointmentOperationalPatch(appointment.id, {
+          status: 'CANCELLED',
+          updated_at: now
+        });
+        if (update.error) throw update.error;
+        nextAppointment = update.data || { ...appointment, status: 'CANCELLED' };
+      }
+      const resolutionNote = sanitizeTextField(req.body?.resolutionNote || req.body?.resolution_note || req.body?.note, 800) || null;
+      await supabase
+        .from('appointment_action_requests')
+        .update({
+          status: 'APPROVED',
+          resolved_by: actorId || null,
+          resolved_at: now,
+          resolution_note: resolutionNote,
+          updated_at: now
+        })
+        .eq('id', requestRow.id);
+      await writeAppointmentStatusAuditLog({
+        organizationId,
+        appointmentId: appointment.id,
+        patientId: appointment.patient_id,
+        action: auditAction,
+        previousStatus: appointment.status,
+        newStatus,
+        performedBy: actorId,
+        performedByRole: actorRole,
+        metadata: { actionRequestId: requestRow.id, resolutionNote }
+      });
+      void regenerateClosureForAppointments([appointment.id], req.session.user, requestRow.request_type === 'CANCEL' ? 'appointment_cancel_approved' : 'appointment_reschedule_approved');
+      return res.json({ success: true, appointment: serializePortalAppointment(nextAppointment) });
+    } catch (error: any) {
+      console.warn('[AppointmentActions] approve failed:', error?.message || String(error));
+      return res.status(500).json(portalSafeError(500));
+    }
+  });
+
+  app.post('/api/appointments/action-requests/:requestId/reject', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de recusa de solicitação')) return;
+      const context = await fetchAppointmentActionRequestForAdmin(req.params.requestId, req.session.user);
+      if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
+      const requestRow = (context as any).request;
+      const appointment = (context as any).appointment;
+      if (requestRow.status !== 'PENDING') return res.status(409).json(portalSafeError(409));
+      const organizationId = sanitizeString(appointment.organization_id || appointment.clinic_id, 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const actorRole = sanitizeString(req.session.user?.role, 40);
+      const now = new Date().toISOString();
+      const fallbackStatus = normalizeOperationalAppointmentStatus(appointment.status) === 'CONFIRMED' ? 'CONFIRMED' : 'SCHEDULED';
+      const update = await updateAppointmentOperationalPatch(appointment.id, {
+        status: fallbackStatus,
+        updated_at: now
+      });
+      if (update.error) throw update.error;
+      const resolutionNote = sanitizeTextField(req.body?.resolutionNote || req.body?.resolution_note || req.body?.note, 800) || null;
+      await supabase
+        .from('appointment_action_requests')
+        .update({
+          status: 'REJECTED',
+          resolved_by: actorId || null,
+          resolved_at: now,
+          resolution_note: resolutionNote,
+          updated_at: now
+        })
+        .eq('id', requestRow.id);
+      const auditAction = requestRow.request_type === 'CANCEL' ? 'CANCEL_REJECTED' : 'RESCHEDULE_REJECTED';
+      await writeAppointmentStatusAuditLog({
+        organizationId,
+        appointmentId: appointment.id,
+        patientId: appointment.patient_id,
+        action: auditAction,
+        previousStatus: appointment.status,
+        newStatus: fallbackStatus,
+        performedBy: actorId,
+        performedByRole: actorRole,
+        metadata: { actionRequestId: requestRow.id, resolutionNote }
+      });
+      void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_action_request_rejected');
+      return res.json({ success: true, appointment: serializePortalAppointment(update.data || { ...appointment, status: fallbackStatus }) });
+    } catch (error: any) {
+      console.warn('[AppointmentActions] reject failed:', error?.message || String(error));
+      return res.status(500).json(portalSafeError(500));
+    }
+  });
+
   const fetchTimeReportAppointments = async (params: {
     clinicId: string;
     organizationId: string;
@@ -17947,7 +18957,22 @@ async function startServer() {
     const serviceType = sanitizeString(appointment.service_type || appointment.approach || appointment.type, 120) || null;
     const requirements = await fetchClosureRequirements(clinicId, serviceType);
     const summaryPayload = parseCalendarSourcePayload(sessionSummary?.summary_payload);
+    let responsibleSignature: any = null;
+    const signatureQuery = supabase
+      .from('session_signatures')
+      .select(SESSION_SIGNATURE_SELECT)
+      .eq('organization_id', clinicId)
+      .eq('status', 'SIGNED')
+      .order('signed_at', { ascending: false })
+      .limit(1);
+    const abaSessionIdForSignature = sanitizeString(abaSession?.id, 180);
+    const signatureResult = abaSessionIdForSignature
+      ? await signatureQuery.eq('aba_session_id', abaSessionIdForSignature).maybeSingle()
+      : await signatureQuery.eq('appointment_id', safeAppointmentId).maybeSingle();
+    if (!signatureResult.error) responsibleSignature = signatureResult.data || null;
+    else if (!hasMissingFinancialSchema(signatureResult.error)) throw signatureResult.error;
     const signature =
+      responsibleSignature ||
       professional?.signature_data_url ||
       summaryPayload?.signatureUrl ||
       summaryPayload?.signaturePresent ||
@@ -18265,6 +19290,48 @@ async function startServer() {
       let maintenanceProbes: any[] = [];
       let overdueMaintenanceProbes: any[] = [];
       let acceptedRecommendations: any[] = [];
+      let actionRequests: any[] = [];
+      let statusHistory: any[] = [];
+      let signatures: any[] = [];
+
+      if (isUuid(eventId) && isUuid(organizationId)) {
+        const [requestsResult, auditResult, signaturesResult] = await Promise.all([
+          supabase
+            .from('appointment_action_requests')
+            .select(APPOINTMENT_ACTION_REQUEST_SELECT)
+            .eq('organization_id', organizationId)
+            .eq('appointment_id', eventId)
+            .order('created_at', { ascending: false })
+            .limit(20),
+          supabase
+            .from('appointment_status_audit_logs')
+            .select(APPOINTMENT_STATUS_AUDIT_SELECT)
+            .eq('organization_id', organizationId)
+            .eq('appointment_id', eventId)
+            .order('performed_at', { ascending: false })
+            .limit(20),
+          supabase
+            .from('session_signatures')
+            .select(SESSION_SIGNATURE_SELECT)
+            .eq('organization_id', organizationId)
+            .eq('appointment_id', eventId)
+            .eq('status', 'SIGNED')
+            .order('signed_at', { ascending: false })
+            .limit(5)
+        ]);
+        if (!requestsResult.error) actionRequests = requestsResult.data || [];
+        else if (!hasMissingFinancialSchema(requestsResult.error)) throw requestsResult.error;
+        if (!auditResult.error) statusHistory = (auditResult.data || []).map(mapAuditLogToHumanHistory);
+        else if (!hasMissingFinancialSchema(auditResult.error)) throw auditResult.error;
+        if (!signaturesResult.error) signatures = (signaturesResult.data || []).map((signature: any) => ({
+          signedByName: sanitizeString(signature?.signed_by_name, 180) || 'Responsável',
+          signedByRole: sanitizeString(signature?.signed_by_role, 40) || 'responsible',
+          signedAt: signature?.signed_at || null,
+          signatureType: signature?.signature_type || 'DIGITAL_ACCEPTANCE',
+          status: signature?.status || 'SIGNED'
+        }));
+        else if (!hasMissingFinancialSchema(signaturesResult.error)) throw signaturesResult.error;
+      }
 
       if (isUuid(patientId)) {
         let planQuery = supabase
@@ -18341,7 +19408,10 @@ async function startServer() {
           sessionRecord: event.has_session_record ? { label: 'Sessão registrada', status: 'registered' } : null,
           report: event.has_report ? { label: 'Relatório disponível', status: 'ready' } : null,
           pendingSignature: event.has_pending_signature,
-          closure: closure ? mapClosureRowToCalendarFields(closure) : null
+          closure: closure ? mapClosureRowToCalendarFields(closure) : null,
+          actionRequests,
+          statusHistory,
+          signatures
         }
       });
     } catch (error: any) {

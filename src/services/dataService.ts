@@ -125,7 +125,7 @@ type ClinicalQueryAuditOptions = {
 };
 
 function isClinicalEndpoint(endpoint: string) {
-  return /\/api\/(aba|calendar|closure|notes|history|tasks|assigned-tasks|patient-anamnesis|patients|patient-records)/.test(endpoint);
+  return /\/api\/(aba|calendar|closure|portal|appointments|notes|history|tasks|assigned-tasks|patient-anamnesis|patients|patient-records)/.test(endpoint);
 }
 
 function isDevQueryAuditEnabled() {
@@ -190,6 +190,9 @@ function auditClinicalQuery(endpoint: string, options: ClinicalQueryAuditOptions
       const hasScopedPath = /\/api\/aba\/(session-live-summaries|session-reports|recent-session-events)\/[^/?]+/.test(endpoint) ||
       /\/api\/calendar\/events(?:\/[^/?]+\/detail)?/.test(endpoint) ||
       /\/api\/closure\/appointments(?:\/[^/?]+)?/.test(endpoint) ||
+      /\/api\/portal\/appointments(?:\/[^/?]+)?/.test(endpoint) ||
+      /\/api\/portal\/sessions\/[^/?]+\/sign/.test(endpoint) ||
+      /\/api\/appointments\/(?:[^/?]+\/action-requests|action-requests\/[^/?]+\/(?:approve|reject))/.test(endpoint) ||
       /\/api\/aba\/patients\/[^/?]+\/charts\/[^/?]+/.test(endpoint) ||
       /\/api\/aba\/patients\/[^/?]+\/(maintenance-schedules|next-session\/recommendations|next-session\/plan-items)/.test(endpoint) ||
       /\/api\/(notes|history|tasks|assigned-tasks|patient-anamnesis|patient-records)\/[^/?]+/.test(endpoint) ||
@@ -1435,6 +1438,193 @@ export const dataService = {
       return await safeJson(response);
     } catch (error) {
       return { success: false, data: null, error: 'Não foi possível carregar os detalhes da sessão agora.' };
+    }
+  },
+
+  async getPortalAppointments(options: { from?: string; to?: string; limit?: number } = {}) {
+    const endpoint = endpointWithQuery('/api/portal/appointments', {
+      from: options.from,
+      to: options.to,
+      limit: normalizeListLimit(options.limit, 40, 100)
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPortalAppointments',
+        operation: 'list',
+        table: 'appointments',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar suas consultas agora.' };
+    }
+  },
+
+  async getPortalAppointmentDetail(appointmentId: string) {
+    const endpoint = `/api/portal/appointments/${encodeURIComponent(String(appointmentId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPortalAppointmentDetail',
+        operation: 'detail',
+        table: 'appointments,appointment_action_requests,session_signatures,appointment_status_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível carregar a consulta agora.' };
+    }
+  },
+
+  async confirmPortalAppointment(appointmentId: string) {
+    const endpoint = `/api/portal/appointments/${encodeURIComponent(String(appointmentId))}/confirm`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({})
+      }, {
+        helperName: 'confirmPortalAppointment',
+        operation: 'write',
+        table: 'appointments,appointment_status_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível confirmar a consulta agora.' };
+    }
+  },
+
+  async requestPortalAppointmentReschedule(appointmentId: string, payload: any = {}) {
+    const endpoint = `/api/portal/appointments/${encodeURIComponent(String(appointmentId))}/request-reschedule`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'requestPortalAppointmentReschedule',
+        operation: 'write',
+        table: 'appointments,appointment_action_requests,appointment_status_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível solicitar remarcação agora.' };
+    }
+  },
+
+  async requestPortalAppointmentCancel(appointmentId: string, payload: any = {}) {
+    const endpoint = `/api/portal/appointments/${encodeURIComponent(String(appointmentId))}/request-cancel`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'requestPortalAppointmentCancel',
+        operation: 'write',
+        table: 'appointments,appointment_action_requests,appointment_status_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível solicitar cancelamento agora.' };
+    }
+  },
+
+  async signPortalSession(sessionId: string, payload: any = {}) {
+    const endpoint = `/api/portal/sessions/${encodeURIComponent(String(sessionId))}/sign`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'signPortalSession',
+        operation: 'write',
+        table: 'session_signatures,appointment_status_audit_logs,appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível registrar a assinatura agora.' };
+    }
+  },
+
+  async getAppointmentActionRequests(appointmentId: string) {
+    const endpoint = `/api/appointments/${encodeURIComponent(String(appointmentId))}/action-requests`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getAppointmentActionRequests',
+        operation: 'list',
+        table: 'appointment_action_requests',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar solicitações agora.' };
+    }
+  },
+
+  async approveAppointmentActionRequest(requestId: string, payload: any = {}) {
+    const endpoint = `/api/appointments/action-requests/${encodeURIComponent(String(requestId))}/approve`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'approveAppointmentActionRequest',
+        operation: 'write',
+        table: 'appointments,appointment_action_requests,appointment_status_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível aprovar a solicitação agora.' };
+    }
+  },
+
+  async rejectAppointmentActionRequest(requestId: string, payload: any = {}) {
+    const endpoint = `/api/appointments/action-requests/${encodeURIComponent(String(requestId))}/reject`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'rejectAppointmentActionRequest',
+        operation: 'write',
+        table: 'appointments,appointment_action_requests,appointment_status_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível recusar a solicitação agora.' };
     }
   },
 

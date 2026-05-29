@@ -109,7 +109,7 @@ const isRemovablePushColumn = (column: string | null) =>
       ].includes(column)
   );
 
-const APPOINTMENT_NOTIFICATION_CTA = 'Clique nesta notificacao para confirmar, remarcar ou cancelar.';
+const APPOINTMENT_NOTIFICATION_CTA = 'Toque para abrir a Verto e confirmar, remarcar ou cancelar.';
 
 const safeJsonSubscription = (value: any): PushSubscriptionInput | null => {
   if (!value) return null;
@@ -511,7 +511,7 @@ export async function findPushSubscriptionsForPatient(params: {
 
   const { data, error } = await params.supabase
     .from('push_subscriptions')
-    .select('*')
+    .select('endpoint, p256dh, auth, subscription, patient_id, user_id, user_email')
     .limit(5000);
 
   if (error) {

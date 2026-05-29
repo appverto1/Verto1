@@ -728,6 +728,7 @@ export const ClinicalAgendaBoard = ({
   const [eventDetail, setEventDetail] = useState<any>(null);
   const [detailState, setDetailState] = useState<{ loading: boolean; error: string }>({ loading: false, error: '' });
   const [closureDetailState, setClosureDetailState] = useState<{ loading: boolean; error: string; data: any | null }>({ loading: false, error: '', data: null });
+  const [actionRequestState, setActionRequestState] = useState<{ loadingId: string; error: string }>({ loadingId: '', error: '' });
   const cacheRef = useRef<Map<string, any[]>>(new Map());
   const roomLookup = useMemo(() => {
     const map = new Map<string, any>();
@@ -1035,6 +1036,37 @@ export const ClinicalAgendaBoard = ({
     if (action === 'reschedule') onEditAppointment?.(normalized);
     if (action === 'cancel') onCancelAppointment?.(normalized);
     setStatusActionEvent(null);
+  };
+
+  const applyUpdatedAppointmentToAgenda = (appointment: any) => {
+    if (!appointment?.id) return;
+    const normalized = normalizeClinicalEvent(appointment, roomLookup);
+    cacheRef.current.clear();
+    setRemoteEvents((prev) => prev.map((event: any) => String(event?.id) === String(normalized.id) ? { ...event, ...appointment, status: appointment.status || event.status } : event));
+    setSelectedEvent((prev: any) => prev && String(prev?.id) === String(normalized.id) ? { ...prev, ...normalized } : prev);
+    setEventDetail((prev: any) => prev ? { ...prev, event: { ...(prev.event || {}), ...appointment } } : prev);
+  };
+
+  const handleActionRequestDecision = async (request: any, decision: 'approve' | 'reject') => {
+    const requestId = String(request?.id || '').trim();
+    if (!requestId) return;
+    setActionRequestState({ loadingId: requestId, error: '' });
+    const isApprove = decision === 'approve';
+    const result = isApprove
+      ? await dataService.approveAppointmentActionRequest(requestId, {})
+      : await dataService.rejectAppointmentActionRequest(requestId, {});
+    if (!result?.success) {
+      setActionRequestState({ loadingId: '', error: result?.error || 'Não foi possível atualizar a solicitação.' });
+      return;
+    }
+    applyUpdatedAppointmentToAgenda(result.appointment);
+    const currentId = String(selectedEvent?.id || '').trim();
+    if (currentId) {
+      dataService.getCalendarEventDetail(currentId).then((detailResult: any) => {
+        if (detailResult?.success) setEventDetail(detailResult.data || null);
+      });
+    }
+    setActionRequestState({ loadingId: '', error: '' });
   };
 
   const renderSection = (id: string, title: string, count: number | null, children: React.ReactNode) => {
@@ -1561,6 +1593,9 @@ export const ClinicalAgendaBoard = ({
     ...(Array.isArray(detail.overdueMaintenanceProbes) ? detail.overdueMaintenanceProbes : [])
   ];
   const recommendations = Array.isArray(detail.acceptedRecommendations) ? detail.acceptedRecommendations : [];
+  const actionRequests = Array.isArray(detail.actionRequests) ? detail.actionRequests : [];
+  const statusHistory = Array.isArray(detail.statusHistory) ? detail.statusHistory : [];
+  const signatures = Array.isArray(detail.signatures) ? detail.signatures : [];
 
   return (
     <div className="flex flex-col gap-3 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:h-[calc(100vh-2rem)] xl:min-h-[680px] xl:overflow-hidden xl:pb-0">
@@ -1866,6 +1901,82 @@ export const ClinicalAgendaBoard = ({
                 );
               })}
             </div>
+
+            {actionRequests.filter((request: any) => request.status === 'PENDING').length > 0 && (
+              <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-violet-500/30 bg-violet-500/10' : 'border-violet-100 bg-violet-50/70'}`}>
+                <h4 className="flex items-center gap-2 text-sm font-bold text-[#7a32fc]">
+                  <RefreshCcw size={16} />
+                  SolicitaÃ§Ãµes do responsÃ¡vel
+                </h4>
+                {actionRequestState.error && (
+                  <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                    {actionRequestState.error}
+                  </div>
+                )}
+                <div className="mt-3 space-y-2">
+                  {actionRequests.filter((request: any) => request.status === 'PENDING').slice(0, 4).map((request: any) => {
+                    const isCancel = request.request_type === 'CANCEL';
+                    const requestedStart = request.requested_start ? new Date(request.requested_start) : null;
+                    const canApprove = isCancel || (requestedStart && !Number.isNaN(requestedStart.getTime()));
+                    const loading = actionRequestState.loadingId === String(request.id || '');
+                    return (
+                      <div key={request.id} className={`rounded-2xl border px-3 py-3 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-white bg-white'}`}>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className="text-sm font-bold">{isCancel ? 'Cancelamento solicitado' : 'RemarcaÃ§Ã£o solicitada'}</p>
+                            {request.reason && <p className={`mt-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>Motivo: {request.reason}</p>}
+                            {request.note && <p className={`mt-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>{request.note}</p>}
+                            {!isCancel && requestedStart && !Number.isNaN(requestedStart.getTime()) && (
+                              <p className={`mt-1 text-xs font-semibold ${isDark ? 'text-slate-200' : 'text-slate-600'}`}>
+                                SugestÃ£o: {requestedStart.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {!canApprove && (
+                              <button type="button" onClick={() => onEditAppointment?.(detailEvent)} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-bold text-white">
+                                Escolher horÃ¡rio
+                              </button>
+                            )}
+                            {canApprove && (
+                              <button type="button" disabled={loading} onClick={() => void handleActionRequestDecision(request, 'approve')} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-60">
+                                {loading ? 'Atualizando...' : isCancel ? 'Aprovar cancelamento' : 'Aprovar'}
+                              </button>
+                            )}
+                            <button type="button" disabled={loading} onClick={() => void handleActionRequestDecision(request, 'reject')} className="rounded-xl border border-violet-200 bg-white px-3 py-2 text-[11px] font-bold text-[#7a32fc] hover:bg-violet-50 disabled:opacity-60">
+                              Recusar
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {(signatures.length > 0 || statusHistory.length > 0) && (
+              <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/70'}`}>
+                <h4 className="flex items-center gap-2 text-sm font-bold">
+                  <ClipboardCheck size={16} className="text-slate-600" />
+                  HistÃ³rico operacional
+                </h4>
+                <div className="mt-3 space-y-2">
+                  {signatures.slice(0, 2).map((signature: any, index: number) => (
+                    <div key={`signature-${index}`} className="rounded-2xl bg-white/80 px-3 py-2 text-sm">
+                      <p className="font-semibold text-slate-800">SessÃ£o assinada por {signature.signedByName || 'responsÃ¡vel'}</p>
+                      {signature.signedAt && <p className="mt-0.5 text-xs text-slate-500">{new Date(signature.signedAt).toLocaleString('pt-BR')}</p>}
+                    </div>
+                  ))}
+                  {statusHistory.slice(0, 4).map((entry: any, index: number) => (
+                    <div key={`history-${index}`} className="rounded-2xl bg-white/80 px-3 py-2 text-sm">
+                      <p className="font-semibold text-slate-800">{entry.label || 'AÃ§Ã£o registrada'}</p>
+                      {entry.performedAt && <p className="mt-0.5 text-xs text-slate-500">{new Date(entry.performedAt).toLocaleString('pt-BR')}</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {detailEvent.closure_readiness_status && (
               <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/70'}`}>
