@@ -563,7 +563,7 @@ export default function App() {
       const session = await ensureFreshSession();
       Object.assign(headers, buildAuthHeader(session?.access_token || null));
     } catch (error) {
-      console.warn('[push] Não foi possível anexar bearer token; tentando sessão por cookie.');
+      console.warn('[push] Não foi possível anexar cabeçalho de sessão; tentando sessão HTTP existente.');
     }
     return headers;
   };

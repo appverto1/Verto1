@@ -6106,7 +6106,7 @@ async function startServer() {
       const token = authHeader.split(' ')[1];
       const tokenMatch = tokenMatchesCurrentProject(token);
       if (!tokenMatch.ok) {
-        console.error('[Auth] Project mismatch during checkAuth:', tokenMatch.reason);
+        console.error('[Auth] Credential issuer mismatch during checkAuth:', sanitizeString(tokenMatch.reason, 160));
         return res.status(401).json({
           error: 'AUTH_PROJECT_MISMATCH',
           message: 'Token emitido por outro projeto Supabase.'
@@ -6180,7 +6180,7 @@ async function startServer() {
           }
         }
       } catch (err) {
-        console.error('[Auth] Token verification error:', err);
+        console.error('[Auth] Session verification failed:', sanitizeString((err as any)?.message || String(err), 200));
       }
     }
 
@@ -8237,7 +8237,7 @@ async function startServer() {
     const credentialEmail = sanitizeEmail(req.body?.email);
     const credentialPassword = typeof req.body?.password === 'string' ? req.body.password : '';
     const hasCredentials = Boolean(credentialEmail && credentialPassword);
-    console.log('Login attempt with token:', !!accessToken, 'intendedRole:', intendedRole, 'hasCredentials:', hasCredentials);
+    console.log('Login attempt auth header present:', !!accessToken, 'intendedRole:', intendedRole, 'hasCredentials:', hasCredentials);
 
     try {
       if ((!accessToken || !tokenMatchesCurrentProject(accessToken).ok) && hasCredentials) {
@@ -8267,7 +8267,7 @@ async function startServer() {
 
       const tokenMatch = tokenMatchesCurrentProject(accessToken);
       if (!tokenMatch.ok) {
-        console.error('[Auth] Project mismatch in /api/auth/login:', tokenMatch.reason);
+        console.error('[Auth] Credential issuer mismatch in /api/auth/login:', sanitizeString(tokenMatch.reason, 160));
         return res.status(401).json({
           error: "AUTH_PROJECT_MISMATCH",
           message: "Token de autenticação não pertence a este ambiente."
@@ -8293,7 +8293,7 @@ async function startServer() {
 
       // 3) Final fallback: if credentials exist, sign in server-side and use returned user/session.
       if ((error || !user) && hasCredentials) {
-        console.warn('[Auth] Token verification failed. Retrying with server-side credentials sign-in...');
+        console.warn('[Auth] Session verification failed. Retrying with server-side credentials sign-in...');
 
         if (!supabaseAuthClient) {
           return res.status(500).json({
@@ -8315,7 +8315,7 @@ async function startServer() {
       }
 
       if (error || !user) {
-        console.error('[Auth] Supabase auth error during token verification:', error || 'No user found');
+        console.error('[Auth] Session verification failed:', sanitizeString((error as any)?.message || 'No user found', 200));
         return res.status(401).json({ error: "Sessão expirada ou inválida. Por favor, faça login novamente." });
       }
 
@@ -20411,7 +20411,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/closure/appointments/:appointmentId/revalidate', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/closure/appointments/:appointmentId/revalidate', portalActionLimiter, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de revalidação de fechamento')) return;
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
@@ -20425,7 +20425,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/closure/appointments/:appointmentId/override', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/closure/appointments/:appointmentId/override', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de override de fechamento')) return;
       const appointmentId = sanitizeString(req.params.appointmentId, 120);

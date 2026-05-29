@@ -709,8 +709,8 @@ test('closure security: endpoints require authentication, roles, tenant scope an
   }
   assert.match(
     serverCode,
-    /app\.patch\('\/api\/closure\/appointments\/:appointmentId\/override', checkAuth, requireRoles\('coordinator', 'admin', 'owner'\)/,
-    'override de fechamento deve aceitar apenas coordinator/admin/owner.'
+    /app\.patch\('\/api\/closure\/appointments\/:appointmentId\/override', portalActionLimiter, checkAuth, requireRoles\('coordinator', 'admin', 'owner'\)/,
+    'override de fechamento deve aceitar apenas coordinator/admin/owner e usar rate limit.'
   );
   assert.match(serverCode, /query = await applyClosureTenantScope\(query, req\.session\.user, clinicId\)/);
   assert.match(serverCode, /canAccessPatientInCurrentClinic\(patientId, req\.session\.user\)/);

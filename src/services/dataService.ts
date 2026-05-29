@@ -347,9 +347,9 @@ async function getAuthHeaders(includeBearer = true) {
       headers['Authorization'] = `Bearer ${token}`;
     }
   } catch (error) {
-    // Não bloquear chamadas autenticadas por cookie de sessão quando o refresh de token falhar.
+    // Não bloquear chamadas autenticadas pela sessão HTTP quando o refresh falhar.
     // O backend já valida a sessão server-side via `credentials: include`.
-    console.warn('[auth-headers] ensureFreshSession falhou; seguindo com sessão por cookie.');
+    console.warn('[auth-headers] ensureFreshSession falhou; seguindo com sessão HTTP existente.');
   }
   return headers;
 }

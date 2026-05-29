@@ -11,6 +11,9 @@ type ActivationAccessProps = {
 };
 
 export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
+  const safeAuthErrorMessage = (error: unknown) =>
+    error instanceof Error ? error.message : 'Falha na operação de autenticação.';
+
   const isRecoveryRoute =
     typeof window !== 'undefined' && /^\/reset-password\/?$/.test(window.location.pathname);
   const [email, setEmail] = useState('');
@@ -71,7 +74,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
         if (exchangeError) throw exchangeError;
       } catch (exchangeErr) {
-        console.error('Activation code exchange error:', exchangeErr);
+        console.error('Activation code exchange failed:', safeAuthErrorMessage(exchangeErr));
       }
     } else if (tokenHash) {
       try {
@@ -82,7 +85,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         });
         if (verifyError) throw verifyError;
       } catch (verifyErr) {
-        console.error('Activation token verification error:', verifyErr);
+        console.error('Activation verification failed:', safeAuthErrorMessage(verifyErr));
       }
     } else if (accessToken && refreshToken) {
       try {
@@ -92,7 +95,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         });
         if (setSessionError) throw setSessionError;
       } catch (setSessionErr) {
-        console.error('Activation setSession error:', setSessionErr);
+        console.error('Activation session setup failed:', safeAuthErrorMessage(setSessionErr));
       }
     }
 
