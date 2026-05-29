@@ -20287,10 +20287,22 @@ async function startServer() {
   });
 
   app.get('/api/closure/appointments', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    const { page, limit, from, to } = parseClosurePageParams(req.query);
+    const emptyClosurePayload = (reason = '') => ({ success: true, data: [], page, limit, totals: {
+      ready: 0,
+      pending: 0,
+      warning: 0,
+      notBillable: 0,
+      draft: 0,
+      total: 0,
+      scheduledMinutes: 0,
+      actualMinutes: 0,
+      blockingIssues: 0,
+      warningIssues: 0
+    }, warning: process.env.NODE_ENV === 'production' ? undefined : reason || undefined });
     try {
       const range = parseClosureDateRange(req.query);
       if (!range.ok) return res.status(400).json(closureSafeError(400));
-      const { page, limit, from, to } = parseClosurePageParams(req.query);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(clinicId)) return res.status(400).json(closureSafeError(400));
       const status = parseClosureStatusFilter(req.query?.status);
@@ -20364,19 +20376,6 @@ async function startServer() {
         return scopedQuery;
       };
 
-      const emptyPayload = () => ({ success: true, data: [], page, limit, totals: {
-        ready: 0,
-        pending: 0,
-        warning: 0,
-        notBillable: 0,
-        draft: 0,
-        total: 0,
-        scheduledMinutes: 0,
-        actualMinutes: 0,
-        blockingIssues: 0,
-        warningIssues: 0
-      }});
-
       let rows: any[] = [];
       let activeVariant: any = null;
       let lastSchemaError: any = null;
@@ -20389,12 +20388,9 @@ async function startServer() {
         query = await applySharedClosureFilters(query, variant, true);
         const { data, error } = await query;
         if (error) {
-          if (hasMissingFinancialSchema(error)) {
-            lastSchemaError = error;
-            console.warn(`[Closure] list schema fallback from ${variant.label}:`, error?.message || String(error));
-            continue;
-          }
-          throw error;
+          lastSchemaError = error;
+          console.warn(`[Closure] list fallback from ${variant.label}:`, error?.message || String(error));
+          continue;
         }
         rows = Array.isArray(data) ? data : [];
         activeVariant = variant;
@@ -20405,7 +20401,7 @@ async function startServer() {
         if (lastSchemaError) {
           console.warn('[Closure] list returned empty after schema fallback:', lastSchemaError?.message || String(lastSchemaError));
         }
-        return res.json(emptyPayload());
+        return res.json(emptyClosurePayload('closure_schema_unavailable'));
       }
 
       const patientIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.patient_id, 120)).filter((id: string) => isUuid(id))));
@@ -20421,14 +20417,12 @@ async function startServer() {
           totalsQuery = await applySharedClosureFilters(totalsQuery, activeVariant, false);
           const totalsResult = await totalsQuery;
           if (totalsResult.error) {
-            if (!hasMissingFinancialSchema(totalsResult.error)) throw totalsResult.error;
-            console.warn('[Closure] totals skipped after schema fallback:', totalsResult.error?.message || String(totalsResult.error));
+            console.warn('[Closure] totals skipped:', totalsResult.error?.message || String(totalsResult.error));
           } else {
             totalsRows = Array.isArray(totalsResult.data) ? totalsResult.data : [];
           }
         }
       } catch (totalsError: any) {
-        if (!hasMissingFinancialSchema(totalsError)) throw totalsError;
         console.warn('[Closure] totals unavailable:', totalsError?.message || String(totalsError));
       }
 
@@ -20440,11 +20434,11 @@ async function startServer() {
           ? supabase.from('users').select('id, name, email').in('id', professionalIds).limit(professionalIds.length)
           : Promise.resolve({ data: [], error: null } as any)
       ]);
-      if (patientsResult.error && !hasMissingFinancialSchema(patientsResult.error)) throw patientsResult.error;
-      if (professionalsResult.error && !hasMissingFinancialSchema(professionalsResult.error)) throw professionalsResult.error;
+      if (patientsResult.error) console.warn('[Closure] patient labels unavailable:', patientsResult.error?.message || String(patientsResult.error));
+      if (professionalsResult.error) console.warn('[Closure] professional labels unavailable:', professionalsResult.error?.message || String(professionalsResult.error));
 
-      const patientNames = new Map<string, string>((patientsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name, 180) || 'Paciente']));
-      const professionalNames = new Map<string, string>((professionalsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name || row.email, 180) || 'Equipe']));
+      const patientNames = new Map<string, string>((patientsResult.error ? [] : patientsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name, 180) || 'Paciente']));
+      const professionalNames = new Map<string, string>((professionalsResult.error ? [] : professionalsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name || row.email, 180) || 'Equipe']));
       const totals = {
         ready: totalsRows.filter((row: any) => row.readiness_status === 'READY').length,
         pending: totalsRows.filter((row: any) => row.readiness_status === 'PENDING').length,
@@ -20465,8 +20459,8 @@ async function startServer() {
         totals
       });
     } catch (error: any) {
-      console.warn('[Closure] list failed:', error?.message || String(error));
-      return res.status(500).json(closureSafeError(500));
+      console.warn('[Closure] list degraded to empty payload:', error?.message || String(error));
+      return res.json(emptyClosurePayload('closure_list_degraded'));
     }
   });
 
