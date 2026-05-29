@@ -97,6 +97,15 @@ import {
   normalizePatientPortabilityScope
 } from './src/utils/patientPortability';
 import {
+  isPatientFinancialPlanComplete,
+  normalizePatientFinancialPlans,
+  serializePatientFinancialPlanForPayload
+} from './src/utils/patientFinancialPlan';
+import {
+  mapPatientProfileTypeToLegacyPortalType,
+  normalizePatientProfileType
+} from './src/utils/patientProfileType';
+import {
   ASSIGNED_TASK_SELECT,
   FINANCIAL_ENTRY_SELECT,
   HISTORY_SELECT,
@@ -1806,6 +1815,18 @@ const PATIENT_FINANCIAL_PAYLOAD_KEYS = new Set([
   'billingMethod',
   'paymentMethod',
   'payerType',
+  'billingMode',
+  'payerId',
+  'payerNameSnapshot',
+  'insurancePlanName',
+  'authorizationCode',
+  'authorizationValidUntil',
+  'sessionsQuantity',
+  'quantityPeriod',
+  'amountCents',
+  'copaymentAmount',
+  'copaymentAmountCents',
+  'packageValidUntil',
   'baseAmount',
   'additionalAmount',
   'specialtyAmount',
@@ -2664,6 +2685,46 @@ const CLINIC_PAYER_SELECT = [
   'status',
   'notes',
   'created_by',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const PATIENT_FINANCIAL_PLAN_SELECT = [
+  'id',
+  'organization_id',
+  'patient_id',
+  'service_type',
+  'custom_service_name',
+  'service_name_snapshot',
+  'billing_mode',
+  'payer_id',
+  'payer_name_snapshot',
+  'insurance_plan_name',
+  'authorization_code',
+  'authorization_valid_until',
+  'sessions_quantity',
+  'quantity_period',
+  'amount_cents',
+  'copayment_amount_cents',
+  'payment_method',
+  'due_day',
+  'package_valid_until',
+  'status',
+  'notes',
+  'created_by',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const PATIENT_MUTATION_SELECT = [
+  'id',
+  'name',
+  'email',
+  'age',
+  'diagnosis',
+  'status',
+  'clinic_id',
+  'therapist_id',
   'created_at',
   'updated_at'
 ].join(',');
@@ -5141,6 +5202,155 @@ async function canAccessPatientInCurrentClinic(patientId: string, user: any): Pr
   }
 
   return false;
+}
+
+function sanitizeIsoDateOnly(value: unknown): string | null {
+  const raw = sanitizeString(value, 40);
+  if (!raw) return null;
+  const normalized = raw.length >= 10 ? raw.slice(0, 10) : raw;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return null;
+  const parsed = new Date(`${normalized}T00:00:00.000Z`);
+  return Number.isNaN(parsed.getTime()) ? null : normalized;
+}
+
+function buildPatientProfileTypeFields(body: any) {
+  const canonicalProfileType = normalizePatientProfileType(
+    body?.patientProfileType ||
+      body?.patient_profile_type ||
+      body?.panelType ||
+      body?.panel_type ||
+      body?.profileType ||
+      body?.profile_type ||
+      body?.type,
+  );
+  return {
+    patient_profile_type: canonicalProfileType,
+    panel_type: canonicalProfileType,
+    profile_type: canonicalProfileType,
+    type: mapPatientProfileTypeToLegacyPortalType(canonicalProfileType)
+  };
+}
+
+function buildPatientIdentityPersistenceFields(body: any) {
+  const address = body?.address && typeof body.address === 'object' ? body.address : {};
+  const guardian = body?.guardian && typeof body.guardian === 'object' ? body.guardian : {};
+  const profileFields = buildPatientProfileTypeFields(body);
+  const safeMetadata = cleanObject({
+    address: cleanObject({
+      cep: sanitizeString(body?.cep || address?.cep, 20),
+      logradouro: sanitizeString(body?.logradouro || address?.logradouro, 180),
+      numero: sanitizeString(body?.numero || address?.numero, 40),
+      complemento: sanitizeString(body?.complemento || address?.complemento, 120),
+      bairro: sanitizeString(body?.bairro || address?.bairro, 120),
+      cidade: sanitizeString(body?.cidade || address?.cidade, 120),
+    }),
+    isMinor: Boolean(body?.isMinor || body?.is_minor || body?.menorDeIdade),
+  });
+  return cleanObject({
+    ...profileFields,
+    social_name: sanitizeString(body?.socialName || body?.social_name || body?.nomeSocial, 160),
+    birth_date: sanitizeIsoDateOnly(body?.birthDate || body?.birth_date || body?.dataNascimento),
+    gender: sanitizeString(body?.gender || body?.genero, 60),
+    insurance_type: sanitizeString(body?.insuranceType || body?.insurance_type || body?.convenioTipo, 60),
+    insurance_name: sanitizeString(body?.insuranceName || body?.insurance_name || body?.convenioNome, 160),
+    insurance_card_number: sanitizeString(body?.insuranceCardNumber || body?.insurance_card_number || body?.cardNumber || body?.convenioCarteirinha, 120),
+    patient_group: sanitizeString(body?.group || body?.patient_group || body?.grupo, 80),
+    lead_source: sanitizeString(body?.source || body?.lead_source || body?.comoConheceu, 120),
+    rg: sanitizeString(body?.rg, 40),
+    cep: sanitizeString(body?.cep || address?.cep, 20),
+    responsible_name: sanitizeString(body?.responsibleName || body?.responsible_name || body?.responsavelNome || guardian?.nome, 160),
+    responsible_birth_date: sanitizeIsoDateOnly(body?.responsibleBirthDate || body?.responsible_birth_date || body?.responsavelDataNascimento || guardian?.dataNascimento),
+    responsible_cpf: normalizeCpf(body?.responsibleCpf || body?.responsible_cpf || body?.responsavelCpf || guardian?.cpf) || undefined,
+    responsible_phone: normalizeBrazilMobilePhone(body?.responsiblePhone || body?.responsible_phone || body?.responsavelTelefone || guardian?.telefone) || sanitizePhone(body?.responsiblePhone || guardian?.telefone),
+    responsible_email: sanitizeEmail(body?.responsibleEmail || body?.responsible_email || body?.responsavelEmail || guardian?.email) || undefined,
+    metadata: Object.keys(safeMetadata).length ? safeMetadata : undefined,
+  });
+}
+
+function buildPatientFinancialPlanRows(params: {
+  financialPlans: any[];
+  patientId: string;
+  clinicId: string;
+  actorId?: string | null;
+}) {
+  return normalizePatientFinancialPlans(params.financialPlans)
+    .filter(isPatientFinancialPlanComplete)
+    .map(serializePatientFinancialPlanForPayload)
+    .map((plan: any) => cleanObject({
+      id: isUuid(sanitizeString(plan.id, 120)) ? sanitizeString(plan.id, 120) : undefined,
+      organization_id: params.clinicId,
+      patient_id: params.patientId,
+      service_type: sanitizeString(plan.serviceType, 60) || 'CUSTOM',
+      custom_service_name: sanitizeString(plan.customServiceName, 120) || null,
+      service_name_snapshot: sanitizeString(plan.serviceNameSnapshot || plan.specialty, 120) || null,
+      billing_mode: sanitizeString(plan.billingMode, 40) || 'PRIVATE',
+      payer_id: isUuid(sanitizeString(plan.payerId, 120)) ? sanitizeString(plan.payerId, 120) : null,
+      payer_name_snapshot: sanitizeString(plan.payerNameSnapshot || plan.insuranceName, 160) || null,
+      insurance_plan_name: sanitizeString(plan.insurancePlanName, 160) || null,
+      authorization_code: sanitizeString(plan.authorizationCode, 120) || null,
+      authorization_valid_until: sanitizeIsoDateOnly(plan.authorizationValidUntil),
+      sessions_quantity: asSafeNumber(plan.sessionsQuantity, 1, 10000),
+      quantity_period: sanitizeString(plan.quantityPeriod, 40) || null,
+      amount_cents: Math.max(0, Math.round(Number(plan.amountCents || 0) || 0)),
+      copayment_amount_cents: Math.max(0, Math.round(Number(plan.copaymentAmountCents || 0) || 0)),
+      payment_method: sanitizeString(plan.paymentMethod || plan.billingMethod, 40) || null,
+      due_day: asSafeNumber(plan.dueDay, 1, 31),
+      package_valid_until: sanitizeIsoDateOnly(plan.packageValidUntil),
+      status: sanitizeString(plan.status, 40) || 'ACTIVE',
+      notes: sanitizeTextField(plan.notes, 1000) || null,
+      created_by: isUuid(sanitizeString(params.actorId, 120)) ? sanitizeString(params.actorId, 120) : null,
+      updated_at: new Date().toISOString()
+    }));
+}
+
+async function persistPatientFinancialPlans(params: {
+  patientId: string;
+  clinicId: string;
+  actorId?: string | null;
+  financialPlans: any[];
+}) {
+  if (!isUuid(params.patientId) || !isUuid(params.clinicId)) {
+    return { success: false, error: 'Paciente ou clínica inválidos.' };
+  }
+  const rows = buildPatientFinancialPlanRows(params);
+  const payerIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.payer_id, 120)).filter((id: string) => isUuid(id))));
+  if (payerIds.length > 0) {
+    const { data: payers, error: payerError } = await supabase
+      .from('clinic_payers')
+      .select('id')
+      .eq('organization_id', params.clinicId)
+      .in('id', payerIds);
+    if (payerError && !isMissingRelationError(payerError)) throw payerError;
+    const validPayers = new Set((Array.isArray(payers) ? payers : []).map((payer: any) => sanitizeString(payer?.id, 120)));
+    if (!payerIds.every((payerId) => validPayers.has(payerId))) {
+      return { success: false, error: 'Pagador fora do escopo da clínica.' };
+    }
+  }
+
+  const deleteResult = await supabase
+    .from('patient_financial_plans')
+    .delete()
+    .eq('organization_id', params.clinicId)
+    .eq('patient_id', params.patientId);
+  if (deleteResult.error) {
+    if (isMissingRelationError(deleteResult.error)) {
+      return { success: false, warning: 'Tabela patient_financial_plans ainda não configurada.' };
+    }
+    throw deleteResult.error;
+  }
+  if (!rows.length) return { success: true, data: [] };
+
+  const insertResult = await supabase
+    .from('patient_financial_plans')
+    .insert(rows)
+    .select(PATIENT_FINANCIAL_PLAN_SELECT);
+  if (insertResult.error) {
+    if (isMissingRelationError(insertResult.error)) {
+      return { success: false, warning: 'Tabela patient_financial_plans ainda não configurada.' };
+    }
+    throw insertResult.error;
+  }
+  return { success: true, data: insertResult.data || [] };
 }
 
 async function updatePatientStatusIfNeeded(user: any): Promise<'active' | 'inactive' | 'waiting_treatment'> {
@@ -10954,9 +11164,10 @@ async function startServer() {
     try {
       const safeEmail = sanitizeEmail(email);
       const safeName = sanitizeString(name, 160) || String(safeEmail || email).split('@')[0];
-      const safePortalType = sanitizeString(type, 80) || 'adult_conventional';
-      const allowedPortalTypes = new Set(['kids_tea', 'adult_tea', 'adult_conventional', 'conventional']);
-      const normalizedPortalType = allowedPortalTypes.has(safePortalType) ? safePortalType : 'adult_conventional';
+      const canonicalProfileType = normalizePatientProfileType(
+        req.body?.patientProfileType || req.body?.patient_profile_type || req.body?.panelType || req.body?.panel_type || type,
+      );
+      const normalizedPortalType = mapPatientProfileTypeToLegacyPortalType(canonicalProfileType);
       const safeClinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120);
       const safeProfessionalId = sanitizeString(req.session.user?.id, 120);
       const normalizedEmail = String(safeEmail || email || '').trim().toLowerCase();
@@ -11023,6 +11234,8 @@ async function startServer() {
           name: safeName,
           role: 'patient',
           type: normalizedPortalType,
+          patient_profile_type: canonicalProfileType,
+          panel_type: canonicalProfileType,
           subscription_status: 'pending',
           plan_price: 4.90,
           clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
@@ -11043,6 +11256,8 @@ async function startServer() {
                 full_name: safeName,
                 role: 'patient',
                 type: normalizedPortalType,
+                patient_profile_type: canonicalProfileType,
+                panel_type: canonicalProfileType,
                 clinic_id: isUuid(safeClinicId) ? safeClinicId : null,
                 invited_email: normalizedEmail,
                 patient_activation_required: true,
@@ -11067,6 +11282,9 @@ async function startServer() {
             phone: normalizedPhone || undefined,
             status: 'active',
             type: normalizedPortalType,
+            patient_profile_type: canonicalProfileType,
+            panel_type: canonicalProfileType,
+            profile_type: canonicalProfileType,
             clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
             therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined,
             responsible_user_id: isUuid(authUserId) ? authUserId : undefined,
@@ -11089,6 +11307,9 @@ async function startServer() {
             phone: normalizedPhone || undefined,
             status: 'active',
             type: normalizedPortalType,
+            patient_profile_type: canonicalProfileType,
+            panel_type: canonicalProfileType,
+            profile_type: canonicalProfileType,
             clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
             therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined,
             responsible_user_id: isUuid(authUserId) ? authUserId : undefined,
@@ -11798,6 +12019,7 @@ async function startServer() {
         phone: safePhone || sanitizePhone(rawPhone),
         age: asSafeNumber(req.body?.age, 0, 130),
         diagnosis: sanitizeString(req.body?.diagnosis, 2000),
+        ...buildPatientIdentityPersistenceFields(req.body),
         status: sanitizeString(req.body?.status, 40) || 'active',
         clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
         therapist_id: isUuid(safeTherapistId) ? safeTherapistId : undefined,
@@ -11863,7 +12085,7 @@ async function startServer() {
       let { data, error } = await supabase
         .from('patients')
         .upsert([safeBody], { onConflict: 'id' })
-        .select(PATIENT_LIST_SELECT)
+        .select(PATIENT_MUTATION_SELECT)
         .single();
 
       // Fallback defensivo para bases legadas com colunas divergentes (evita 500 no cadastro).
@@ -11876,6 +12098,26 @@ async function startServer() {
           phone: safeBody.phone,
           age: safeBody.age,
           diagnosis: safeBody.diagnosis,
+          type: safeBody.type,
+          social_name: safeBody.social_name,
+          birth_date: safeBody.birth_date,
+          gender: safeBody.gender,
+          patient_profile_type: safeBody.patient_profile_type,
+          panel_type: safeBody.panel_type,
+          profile_type: safeBody.profile_type,
+          insurance_type: safeBody.insurance_type,
+          insurance_name: safeBody.insurance_name,
+          insurance_card_number: safeBody.insurance_card_number,
+          patient_group: safeBody.patient_group,
+          lead_source: safeBody.lead_source,
+          rg: safeBody.rg,
+          cep: safeBody.cep,
+          responsible_name: safeBody.responsible_name,
+          responsible_birth_date: safeBody.responsible_birth_date,
+          responsible_cpf: safeBody.responsible_cpf,
+          responsible_phone: safeBody.responsible_phone,
+          responsible_email: safeBody.responsible_email,
+          metadata: safeBody.metadata,
           status: safeBody.status || 'active',
           clinic_id: safeBody.clinic_id,
           therapist_id: safeBody.therapist_id,
@@ -11886,7 +12128,7 @@ async function startServer() {
           const fallbackResult = await supabase
             .from('patients')
             .upsert([safeFallbackPayload], { onConflict: 'id' })
-            .select(PATIENT_LIST_SELECT)
+            .select(PATIENT_MUTATION_SELECT)
             .single();
           data = fallbackResult.data;
           error = fallbackResult.error;
@@ -12352,6 +12594,49 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'CPF inválido. Informe 11 dígitos.' });
       }
 
+      const hasIdentityPersistencePatch = [
+        'type',
+        'patientProfileType',
+        'patient_profile_type',
+        'panelType',
+        'panel_type',
+        'profileType',
+        'profile_type',
+        'socialName',
+        'social_name',
+        'birthDate',
+        'birth_date',
+        'dataNascimento',
+        'gender',
+        'genero',
+        'insuranceType',
+        'insurance_type',
+        'insuranceName',
+        'insurance_name',
+        'insuranceCardNumber',
+        'insurance_card_number',
+        'group',
+        'patient_group',
+        'source',
+        'lead_source',
+        'rg',
+        'cep',
+        'responsibleName',
+        'responsible_name',
+        'responsibleBirthDate',
+        'responsible_birth_date',
+        'responsibleCpf',
+        'responsible_cpf',
+        'responsiblePhone',
+        'responsible_phone',
+        'responsibleEmail',
+        'responsible_email',
+        'guardian',
+        'address',
+        'isMinor',
+        'is_minor',
+        'menorDeIdade'
+      ].some((key) => req.body?.[key] !== undefined);
       const updates = cleanObject({
         name: req.body?.name !== undefined ? sanitizeString(req.body?.name, 160) : undefined,
         email: safeEmail,
@@ -12359,6 +12644,7 @@ async function startServer() {
         cpf: safeCpf !== undefined ? safeCpf : undefined,
         age: req.body?.age !== undefined ? asSafeNumber(req.body?.age, 0, 130) : undefined,
         diagnosis: req.body?.diagnosis !== undefined ? sanitizeString(req.body?.diagnosis, 2000) : undefined,
+        ...(hasIdentityPersistencePatch ? buildPatientIdentityPersistenceFields(req.body) : {}),
         therapist_id:
           canAssignTherapist && rawTherapistId !== undefined
             ? (isUuid(safeTherapistId) ? safeTherapistId : null)
@@ -12367,21 +12653,44 @@ async function startServer() {
         status: req.body?.status !== undefined ? sanitizeString(req.body?.status, 40) : undefined
       });
 
-      let patientUpdateQuery = supabase
-        .from('patients')
-        .update(updates)
-        .eq('id', req.params.id)
-        .eq('is_active', true)
-        .is('deleted_at', null);
-      if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
-        patientUpdateQuery = patientUpdateQuery.eq('clinic_id', scopedClinicId);
+      let updatedPatient: any = null;
+      let error: any = null;
+      let safePatientUpdates: Record<string, any> = { ...updates };
+      while (Object.keys(safePatientUpdates).length > 0) {
+        let patientUpdateQuery = supabase
+          .from('patients')
+          .update(safePatientUpdates)
+          .eq('id', req.params.id)
+          .eq('is_active', true)
+          .is('deleted_at', null);
+        if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
+          patientUpdateQuery = patientUpdateQuery.eq('clinic_id', scopedClinicId);
+        }
+        if (role === 'therapist') {
+          patientUpdateQuery = patientUpdateQuery.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
+        }
+        const result = await patientUpdateQuery
+          .select('id, clinic_id, status, email, therapist_id')
+          .maybeSingle();
+        updatedPatient = result.data;
+        error = result.error;
+        if (!error) break;
+        const missingColumn = extractMissingColumnName(error);
+        if (!missingColumn || !(missingColumn in safePatientUpdates)) break;
+        delete safePatientUpdates[missingColumn];
       }
-      if (role === 'therapist') {
-        patientUpdateQuery = patientUpdateQuery.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
+      if (Object.keys(safePatientUpdates).length === 0 && error) {
+        let patientSelectQuery = supabase
+          .from('patients')
+          .select('id, clinic_id, status, email, therapist_id')
+          .eq('id', req.params.id);
+        if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
+          patientSelectQuery = patientSelectQuery.eq('clinic_id', scopedClinicId);
+        }
+        const selectResult = await patientSelectQuery.maybeSingle();
+        updatedPatient = selectResult.data;
+        error = selectResult.error;
       }
-      const { data: updatedPatient, error } = await patientUpdateQuery
-        .select('id, clinic_id, status, email, therapist_id')
-        .maybeSingle();
       
       if (error) throw error;
       const clinicForSync = sanitizeString(
@@ -12439,6 +12748,89 @@ async function startServer() {
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/patients/:patientId/financial-plans', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(patientId) || !isUuid(clinicId)) {
+        return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      }
+      if (!(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+      }
+
+      const { data, error } = await supabase
+        .from('patient_financial_plans')
+        .select(PATIENT_FINANCIAL_PLAN_SELECT)
+        .eq('organization_id', clinicId)
+        .eq('patient_id', patientId)
+        .order('created_at', { ascending: true });
+      if (error) {
+        if (isMissingRelationError(error)) {
+          return res.status(200).json({ success: true, data: [], warning: 'Tabela patient_financial_plans ainda não configurada.' });
+        }
+        throw error;
+      }
+
+      return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/financial-plans [GET]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.put('/api/patients/:patientId/financial-plans', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload do plano financeiro')) return;
+      const patientId = sanitizeString(req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(patientId) || !isUuid(clinicId)) {
+        return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      }
+      if (!(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+      }
+
+      const financialPlans = Array.isArray(req.body?.financialPlans)
+        ? req.body.financialPlans
+        : Array.isArray(req.body?.plans)
+          ? req.body.plans
+          : [];
+      const result = await persistPatientFinancialPlans({
+        patientId,
+        clinicId,
+        actorId: sanitizeString(req.session.user?.id, 120),
+        financialPlans
+      });
+      if (!result.success && result.warning) {
+        return res.status(200).json(result);
+      }
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+        title: 'Plano financeiro do paciente atualizado',
+        content: 'Linhas financeiras do tratamento foram atualizadas.',
+        type: 'management',
+        actionType: 'PATIENT_FINANCIAL_PLANS_UPDATED',
+        payload: { patientId, planCount: Array.isArray(result.data) ? result.data.length : 0 }
+      });
+
+      return res.json(result);
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/financial-plans [PUT]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -12529,6 +12921,27 @@ async function startServer() {
         throw error;
       }
 
+      let financialPlanSyncWarning: string | null = null;
+      if (
+        canAccessClinicFinance(req.session.user) &&
+        Object.prototype.hasOwnProperty.call(payloadRawBase, 'financialPlans')
+      ) {
+        const financialPlanSync = await persistPatientFinancialPlans({
+          patientId,
+          clinicId,
+          actorId: sanitizeString(req.session.user?.id, 120),
+          financialPlans: Array.isArray(payloadRawBase.financialPlans) ? payloadRawBase.financialPlans : []
+        });
+        if (!financialPlanSync.success && financialPlanSync.warning) {
+          financialPlanSyncWarning = sanitizeString(financialPlanSync.warning, 300);
+        } else if (!financialPlanSync.success) {
+          return res.status(400).json({
+            success: false,
+            error: sanitizeString(financialPlanSync.error || 'Plano financeiro inválido.', 500)
+          });
+        }
+      }
+
       const actorId = sanitizeString(req.session.user?.id, 120);
       const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
       const clinicAuditId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -12558,7 +12971,7 @@ async function startServer() {
         }
       }
 
-      res.json({ success: true, encrypted: !!encrypted });
+      res.json({ success: true, encrypted: !!encrypted, financialPlanSyncWarning });
     } catch (error) {
       res.status(500).json({ error: 'Erro interno do servidor.' });
     }

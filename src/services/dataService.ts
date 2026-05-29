@@ -14,6 +14,7 @@ import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 import { isAbaV2Enabled } from '../utils/featureFlags';
 import { sanitizeTechnicalErrorMessage } from '../utils/displayLabels';
 import { isIdempotentConflictPayload } from '../utils/offlineSyncResilience';
+import { normalizePatientProfileType } from '../utils/patientProfileType';
 
 enum OperationType {
   CREATE = 'create',
@@ -936,6 +937,34 @@ export const dataService = {
       };
     } catch (error) {
       console.error('Error fetching patient record:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async getPatientFinancialPlans(patientId: string) {
+    try {
+      const response = await fetch(`/api/patients/${encodeURIComponent(String(patientId))}/financial-plans`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient financial plans:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async savePatientFinancialPlans(patientId: string, financialPlans: any[]) {
+    try {
+      const response = await fetch(`/api/patients/${encodeURIComponent(String(patientId))}/financial-plans`, {
+        method: 'PUT',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ financialPlans: Array.isArray(financialPlans) ? financialPlans : [] })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error saving patient financial plans:', error);
       return { success: false, error: String(error) };
     }
   },
@@ -4021,6 +4050,57 @@ export const dataService = {
 
       hydratedPatients.push({
         ...patient,
+        socialName: recordPayload?.nomeSocial || patient?.social_name || patient?.socialName || null,
+        birthDate: recordPayload?.dataNascimento || patient?.birth_date || patient?.birthDate || null,
+        gender: recordPayload?.genero || patient?.gender || null,
+        insuranceType: recordPayload?.convenioTipo || patient?.insurance_type || patient?.insuranceType || 'particular',
+        insuranceName: recordPayload?.convenioNome || patient?.insurance_name || patient?.insuranceName || null,
+        cardNumber: recordPayload?.convenioCarteirinha || patient?.insurance_card_number || patient?.cardNumber || null,
+        group: recordPayload?.grupo || patient?.patient_group || patient?.group || null,
+        source: recordPayload?.comoConheceu || patient?.lead_source || patient?.source || null,
+        rg: recordPayload?.rg || patient?.rg || null,
+        cep: recordPayload?.cep || patient?.cep || null,
+        address: recordPayload
+          ? {
+              cep: recordPayload?.cep || patient?.cep || null,
+              logradouro: recordPayload?.logradouro || patient?.address?.logradouro || null,
+              numero: recordPayload?.numero || patient?.address?.numero || null,
+              complemento: recordPayload?.complemento || patient?.address?.complemento || null,
+              bairro: recordPayload?.bairro || patient?.address?.bairro || null,
+              cidade: recordPayload?.cidade || patient?.address?.cidade || null,
+            }
+          : patient?.address || null,
+        notes: recordPayload?.outrasInformacoes || patient?.notes || null,
+        isMinor:
+          typeof recordPayload?.menorDeIdade === 'boolean'
+            ? recordPayload.menorDeIdade
+            : Boolean(patient?.is_minor || patient?.isMinor),
+        guardian: {
+          nome: recordPayload?.responsavelNome || patient?.responsible_name || patient?.guardian?.nome || null,
+          dataNascimento:
+            recordPayload?.responsavelDataNascimento ||
+            patient?.responsible_birth_date ||
+            patient?.guardian?.dataNascimento ||
+            null,
+          cpf: recordPayload?.responsavelCpf || patient?.responsible_cpf || patient?.guardian?.cpf || null,
+          telefone: recordPayload?.responsavelTelefone || patient?.responsible_phone || patient?.guardian?.telefone || null,
+        },
+        patientProfileType: normalizePatientProfileType(
+          recordPayload?.patientProfileType ||
+            recordPayload?.panelType ||
+            patient?.patient_profile_type ||
+            patient?.panel_type ||
+            patient?.profile_type ||
+            patient?.type,
+        ),
+        panelType: normalizePatientProfileType(
+          recordPayload?.panelType ||
+            recordPayload?.patientProfileType ||
+            patient?.panel_type ||
+            patient?.patient_profile_type ||
+            patient?.profile_type ||
+            patient?.type,
+        ),
         anamnesisData,
         pei: peiGoals,
         evaluationLinks:
@@ -4037,9 +4117,6 @@ export const dataService = {
               : {},
         anamnesisSubmissions: submissions,
         anamnesisTemplate: clinicTemplateRes?.data || {},
-        anamnesisRenewalMonths: [2, 3, 6, 12].includes(Number(recordPayload?.anamnesisRenewalMonths))
-          ? Number(recordPayload.anamnesisRenewalMonths)
-          : Number(patient?.anamnesisRenewalMonths || 6),
         lastAnamnesisAt: recordPayload?.lastAnamnesisAt || patient?.lastAnamnesisAt || null,
         financialPlans: Array.isArray(recordPayload?.financialPlans)
           ? recordPayload.financialPlans

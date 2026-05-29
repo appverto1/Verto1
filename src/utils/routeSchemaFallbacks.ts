@@ -82,6 +82,26 @@ export const PATIENT_LIST_SELECT_COLUMNS = [
   'phone',
   'age',
   'diagnosis',
+  'type',
+  'social_name',
+  'birth_date',
+  'gender',
+  'patient_profile_type',
+  'panel_type',
+  'profile_type',
+  'insurance_type',
+  'insurance_name',
+  'insurance_card_number',
+  'patient_group',
+  'lead_source',
+  'rg',
+  'cep',
+  'responsible_name',
+  'responsible_birth_date',
+  'responsible_cpf',
+  'responsible_phone',
+  'responsible_email',
+  'metadata',
   'status',
   'clinic_id',
   'therapist_id',
@@ -583,6 +603,26 @@ const INVITATION_OPTIONAL_COLUMNS = new Set([
 const PATIENT_LIST_OPTIONAL_COLUMNS = new Set([
   'cpf',
   'phone',
+  'type',
+  'social_name',
+  'birth_date',
+  'gender',
+  'patient_profile_type',
+  'panel_type',
+  'profile_type',
+  'insurance_type',
+  'insurance_name',
+  'insurance_card_number',
+  'patient_group',
+  'lead_source',
+  'rg',
+  'cep',
+  'responsible_name',
+  'responsible_birth_date',
+  'responsible_cpf',
+  'responsible_phone',
+  'responsible_email',
+  'metadata',
   'professional_id',
   'is_active',
   'deleted_at'
@@ -1781,7 +1821,7 @@ export async function fetchPatientsWithSchemaFallback(params: {
   let includeProfessionalScope = cleanString(params.role, 40).toLowerCase() === 'therapist';
   let lastError: any = null;
 
-  for (let attempt = 0; attempt < 8; attempt += 1) {
+  for (let attempt = 0; attempt < PATIENT_LIST_OPTIONAL_COLUMNS.size + 4; attempt += 1) {
     let query = params.supabase
       .from('patients')
       .select(joinColumns(columns));

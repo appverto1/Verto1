@@ -16,6 +16,10 @@ import {
   normalizeDurationMinutes,
   normalizeScheduleLocationType,
 } from './utils/scheduling';
+import {
+  mapPatientProfileTypeToLegacyPortalType,
+  normalizePatientProfileType,
+} from './utils/patientProfileType';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -448,6 +452,12 @@ export default function App() {
       ),
       responsavelCpf: coalescePatientText(guardian?.cpf, existing?.responsavelCpf),
       responsavelTelefone: coalescePatientText(guardian?.telefone, existing?.responsavelTelefone),
+      patientProfileType: normalizePatientProfileType(
+        source?.patientProfileType || source?.panelType || source?.profileType || source?.profile_type || source?.type || existing?.patientProfileType,
+      ),
+      panelType: normalizePatientProfileType(
+        source?.panelType || source?.patientProfileType || source?.profileType || source?.profile_type || source?.type || existing?.panelType,
+      ),
       idade:
         typeof derivedAgeFromBirthDate === 'number'
           ? derivedAgeFromBirthDate
@@ -2830,27 +2840,56 @@ export default function App() {
     let portabilityAvailable = false;
     
     // Identity Data (Pseudonymized)
-    const resolvedPortalType =
-      data.type ||
-      data.patientProfileType ||
-      (data.approach === 'ABA'
-        ? 'kids_tea'
+    const fallbackProfileType =
+      data.approach === 'ABA'
+        ? 'ABA'
         : data.approach === 'TO'
-          ? 'adult_tea'
-          : 'adult_conventional');
+          ? 'ADULT'
+          : 'ADULT';
+    const resolvedProfileType = normalizePatientProfileType(
+      data.patientProfileType || data.panelType || data.profileType || data.profile_type || data.type,
+      fallbackProfileType as any,
+    );
+    const resolvedPortalType = mapPatientProfileTypeToLegacyPortalType(resolvedProfileType);
+    const resolvedBirthDate = data.birthDate || data.dataNascimento || data.anamnesisData?.dataNascimento || null;
+    const resolvedGuardian =
+      data.guardian && typeof data.guardian === 'object'
+        ? data.guardian
+        : data.responsavelNome || data.responsavelTelefone || data.responsavelCpf
+          ? {
+              nome: data.responsavelNome || null,
+              dataNascimento: data.responsavelDataNascimento || null,
+              cpf: data.responsavelCpf || null,
+              telefone: data.responsavelTelefone || null,
+            }
+          : null;
 
     const newPatient = { 
       id: newId, 
       name: data.name, 
+      socialName: data.socialName || data.nomeSocial || null,
       email: data.email,
       phone: data.phone, 
-      age: data.anamnesisData?.idade || data.age || 0, 
+      birthDate: resolvedBirthDate,
+      age: data.anamnesisData?.idade || data.age || calculateAgeFromBirthDate(resolvedBirthDate) || 0,
+      gender: data.gender || data.genero || null,
+      insuranceType: data.insuranceType || data.convenioTipo || 'particular',
+      insuranceName: data.insuranceName || data.convenioNome || null,
+      cardNumber: data.cardNumber || data.convenioCarteirinha || null,
+      group: data.group || data.grupo || null,
+      source: data.source || data.comoConheceu || null,
+      rg: data.rg || null,
+      cpf: data.cpf || data.anamnesisData?.cpf || null,
+      cep: data.cep || data.address?.cep || null,
+      address: data.address || null,
+      notes: data.notes || data.outrasInformacoes || null,
+      isMinor: Boolean(data.isMinor || data.menorDeIdade),
+      guardian: resolvedGuardian,
       approach: data.approach, 
       type: resolvedPortalType,
+      patientProfileType: resolvedProfileType,
+      panelType: resolvedProfileType,
       anamnesisData: buildPatientAnamnesisSnapshot(data, data.anamnesisData),
-      anamnesisRenewalMonths: [2, 3, 6, 12].includes(Number(data.anamnesisRenewalMonths))
-        ? Number(data.anamnesisRenewalMonths)
-        : 6,
       financialPlans: Array.isArray(data.financialPlans) ? data.financialPlans : [],
       monthlyTreatmentValue: Number(data.monthlyTreatmentValue || 0) || 0,
       billingDueDay: data.billingDueDay || null,
@@ -2933,12 +2972,35 @@ export default function App() {
     // 2. Save patient record
     const fbResult = await dataService.savePatient({
       name: data.name,
+      socialName: data.socialName || data.nomeSocial || '',
       email: data.email || '',
       cpf: data.cpf || data.anamnesisData?.cpf || '',
       phone: data.phone,
-      age: data.anamnesisData?.idade || data.age || 0,
+      birthDate: resolvedBirthDate,
+      birth_date: resolvedBirthDate,
+      age: data.anamnesisData?.idade || data.age || calculateAgeFromBirthDate(resolvedBirthDate) || 0,
+      gender: data.gender || data.genero || '',
       diagnosis: data.diagnosis,
-      type: resolvedPortalType
+      type: resolvedPortalType,
+      patientProfileType: resolvedProfileType,
+      panelType: resolvedProfileType,
+      profileType: resolvedProfileType,
+      insuranceType: data.insuranceType || data.convenioTipo || 'particular',
+      insuranceName: data.insuranceName || data.convenioNome || '',
+      insuranceCardNumber: data.cardNumber || data.convenioCarteirinha || '',
+      group: data.group || data.grupo || '',
+      source: data.source || data.comoConheceu || '',
+      rg: data.rg || '',
+      cep: data.cep || data.address?.cep || '',
+      address: data.address || {},
+      notes: data.notes || data.outrasInformacoes || '',
+      isMinor: Boolean(data.isMinor || data.menorDeIdade),
+      guardian: resolvedGuardian,
+      responsibleName: resolvedGuardian?.nome || '',
+      responsibleBirthDate: resolvedGuardian?.dataNascimento || '',
+      responsibleCpf: resolvedGuardian?.cpf || '',
+      responsiblePhone: resolvedGuardian?.telefone || '',
+      clientRecordId: String(newId)
     });
 
     let persistedPatientId: string | number = newId;
@@ -3069,15 +3131,14 @@ export default function App() {
       const patientRecordResult = await dataService.savePatientRecord(String(persistedPatientId), {
         workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
         ...buildPatientAnamnesisSnapshot(data, data.anamnesisData),
-        anamnesisRenewalMonths: [2, 3, 6, 12].includes(Number(data.anamnesisRenewalMonths))
-          ? Number(data.anamnesisRenewalMonths)
-          : 6,
         lastAnamnesisAt: data.lastAnamnesisAt || null,
         financialPlans: Array.isArray(data.financialPlans) ? data.financialPlans : [],
         monthlyTreatmentValue: Number(data.monthlyTreatmentValue || 0) || 0,
         billingDueDay: data.billingDueDay || null,
         billingMethod: data.billingMethod || null,
-        patientProfileType: resolvedPortalType,
+        patientProfileType: resolvedProfileType,
+        panelType: resolvedProfileType,
+        portalType: resolvedPortalType,
         diagnosis: data.diagnosis || "",
         pei: Array.isArray(data.pei) ? data.pei : [],
         evaluationLinks:
@@ -3116,6 +3177,17 @@ export default function App() {
     const { diagnosis, anamnesisData, pei, evaluationLinks, interventionTaskLinks, ...identityData } = updatedData;
     const currentPatient = allPatients.find((p) => String(p?.id) === String(updatedData?.id));
     const mergedIdentityPatient = { ...(currentPatient || {}), ...updatedData };
+    const updatedProfileType = normalizePatientProfileType(
+      updatedData?.patientProfileType ||
+        updatedData?.panelType ||
+        updatedData?.profileType ||
+        updatedData?.profile_type ||
+        updatedData?.type ||
+        currentPatient?.patientProfileType ||
+        currentPatient?.panelType ||
+        currentPatient?.type,
+    );
+    const updatedPortalType = mapPatientProfileTypeToLegacyPortalType(updatedProfileType);
     const syncedAnamnesisData =
       anamnesisData !== undefined
         ? buildPatientAnamnesisSnapshot(mergedIdentityPatient, anamnesisData)
@@ -3175,11 +3247,34 @@ export default function App() {
       } else {
         await dataService.updatePatient(String(updatedData.id), {
           name: updatedData.name,
+          socialName: updatedData.socialName || updatedData.nomeSocial,
           email: updatedData.email,
           phone: updatedData.phone,
+          birthDate: updatedData.birthDate || updatedData.dataNascimento,
+          birth_date: updatedData.birthDate || updatedData.dataNascimento,
           age: updatedData.age,
+          gender: updatedData.gender || updatedData.genero,
           diagnosis: updatedData.diagnosis,
-          type: updatedData.type,
+          type: updatedPortalType,
+          patientProfileType: updatedProfileType,
+          panelType: updatedProfileType,
+          profileType: updatedProfileType,
+          insuranceType: updatedData.insuranceType || updatedData.convenioTipo,
+          insuranceName: updatedData.insuranceName || updatedData.convenioNome,
+          insuranceCardNumber: updatedData.cardNumber || updatedData.convenioCarteirinha,
+          group: updatedData.group || updatedData.grupo,
+          source: updatedData.source || updatedData.comoConheceu,
+          rg: updatedData.rg,
+          cpf: updatedData.cpf,
+          cep: updatedData.cep || updatedData.address?.cep,
+          address: updatedData.address,
+          notes: updatedData.notes || updatedData.outrasInformacoes,
+          isMinor: updatedData.isMinor || updatedData.menorDeIdade,
+          guardian: updatedData.guardian,
+          responsibleName: updatedData.guardian?.nome || updatedData.responsavelNome,
+          responsibleBirthDate: updatedData.guardian?.dataNascimento || updatedData.responsavelDataNascimento,
+          responsibleCpf: updatedData.guardian?.cpf || updatedData.responsavelCpf,
+          responsiblePhone: updatedData.guardian?.telefone || updatedData.responsavelTelefone,
           therapist_id:
             typeof updatedData?.therapist_id !== 'undefined'
               ? updatedData.therapist_id
@@ -3196,10 +3291,11 @@ export default function App() {
           anamnesisData !== undefined ||
           diagnosis !== undefined ||
           updatedData?.type !== undefined ||
+          updatedData?.patientProfileType !== undefined ||
+          updatedData?.panelType !== undefined ||
           pei !== undefined ||
           evaluationLinks !== undefined ||
           interventionTaskLinks !== undefined ||
-          updatedData?.anamnesisRenewalMonths !== undefined ||
           updatedData?.lastAnamnesisAt !== undefined
           || updatedData?.financialPlans !== undefined
           || updatedData?.monthlyTreatmentValue !== undefined
@@ -3209,14 +3305,11 @@ export default function App() {
       ) {
         const recordPayload: any = {
           workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
-          anamnesisRenewalMonths: [2, 3, 6, 12].includes(
-            Number(updatedData?.anamnesisRenewalMonths),
-          )
-            ? Number(updatedData?.anamnesisRenewalMonths)
-            : 6,
           lastAnamnesisAt: updatedData?.lastAnamnesisAt || null,
           ...(diagnosis !== undefined && { diagnosis: diagnosis || "" }),
-          ...(updatedData?.type !== undefined && { patientProfileType: updatedData.type }),
+          ...(updatedData?.type !== undefined || updatedData?.patientProfileType !== undefined || updatedData?.panelType !== undefined
+            ? { patientProfileType: updatedProfileType, panelType: updatedProfileType, portalType: updatedPortalType }
+            : {}),
           ...(updatedData?.financialPlans !== undefined && {
             financialPlans: Array.isArray(updatedData.financialPlans) ? updatedData.financialPlans : [],
           }),

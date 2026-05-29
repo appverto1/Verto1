@@ -102,6 +102,25 @@ import {
   normalizeScheduleLocationType,
   type ScheduleLocationType,
 } from "../utils/scheduling";
+import {
+  PATIENT_FINANCIAL_BILLING_MODE_OPTIONS,
+  PATIENT_FINANCIAL_PAYMENT_METHOD_OPTIONS,
+  PATIENT_FINANCIAL_QUANTITY_PERIOD_OPTIONS,
+  PATIENT_FINANCIAL_SERVICE_OPTIONS,
+  createPatientFinancialPlan,
+  financialPlanRequiresPaymentMethod,
+  getFinancialPlanMonthlyProjectionValue,
+  getFinancialPlanPrimaryBillingMethod,
+  isPatientFinancialPlanComplete,
+  normalizePatientFinancialPlans,
+  serializePatientFinancialPlanForPayload,
+} from "../utils/patientFinancialPlan";
+import {
+  PATIENT_PROFILE_TYPE_OPTIONS,
+  getPatientProfileTypeLabel,
+  mapPatientProfileTypeToLegacyPortalType,
+  normalizePatientProfileType,
+} from "../utils/patientProfileType";
 
 interface CoordinatorDashboardProps {
   user: any;
@@ -904,33 +923,6 @@ export function CoordinatorDashboard({
     return () => clearTimeout(timeout);
   }, [toast]);
 
-  const createPatientFinancialPlan = (overrides: any = {}) => ({
-    id:
-      overrides.id ||
-      `plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    specialty: overrides.specialty || "Terapia",
-    amount: overrides.amount ?? overrides.monthlyFee ?? "",
-    dueDay: String(overrides.dueDay || overrides.due_day || "10"),
-    billingMethod: overrides.billingMethod || overrides.billing_method || "pix",
-    payerType: overrides.payerType || overrides.payer_type || "particular",
-    insuranceName: overrides.insuranceName || overrides.insurance_name || "",
-  });
-
-  const normalizePatientFinancialPlans = (plans: any, fallback: any = {}) => {
-    const list = Array.isArray(plans) ? plans : [];
-    if (list.length) return list.map((plan) => createPatientFinancialPlan(plan));
-    const legacyAmount = fallback.monthlyTreatmentValue ?? fallback.monthlyFee ?? "";
-    return [
-      createPatientFinancialPlan({
-        amount: legacyAmount,
-        dueDay: fallback.billingDueDay || "10",
-        billingMethod: fallback.billingMethod || "pix",
-        payerType: fallback.convenioTipo || fallback.insuranceType || "particular",
-        insuranceName: fallback.convenioNome || fallback.insuranceName || "",
-      }),
-    ];
-  };
-
   const [newPatientForm, setNewPatientForm] = useState<any>({
     nome: "",
     nomeSocial: "",
@@ -957,9 +949,8 @@ export function CoordinatorDashboard({
     responsavelDataNascimento: "",
     responsavelCpf: "",
     responsavelTelefone: "",
-    patientProfileType: "adult_conventional",
-    anamnesisRenewalMonths: "6",
-    financialPlans: normalizePatientFinancialPlans([]),
+    patientProfileType: "ADULT",
+    financialPlans: [],
   });
   const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
 
@@ -1987,8 +1978,10 @@ export function CoordinatorDashboard({
       phone: quickPatientPhone,
       age: quickPatientAge ? parseInt(quickPatientAge) : undefined,
       anamnesisPending: true,
-      anamnesisRenewalMonths: 6,
       lastAnamnesisAt: null,
+      patientProfileType: "ADULT",
+      panelType: "ADULT",
+      type: "adult_conventional",
       createdAt: new Date().toISOString(),
     };
 
@@ -2125,8 +2118,9 @@ export function CoordinatorDashboard({
         convenioTipo: value,
         financialPlans: normalizePatientFinancialPlans(prev.financialPlans, prev).map((plan: any) => ({
           ...plan,
-          payerType: value,
-          insuranceName: value === "convenio" ? plan.insuranceName || prev.convenioNome || "" : "",
+          ...(value === "convenio" && plan.billingMode === "INSURANCE"
+            ? { payerNameSnapshot: plan.payerNameSnapshot || prev.convenioNome || "" }
+            : {}),
         })),
       }));
       return;
@@ -2137,7 +2131,8 @@ export function CoordinatorDashboard({
         convenioNome: value,
         financialPlans: normalizePatientFinancialPlans(prev.financialPlans, prev).map((plan: any) => ({
           ...plan,
-          insuranceName: plan.payerType === "convenio" ? value : plan.insuranceName,
+          payerNameSnapshot: plan.billingMode === "INSURANCE" ? value : plan.payerNameSnapshot,
+          insuranceName: plan.billingMode === "INSURANCE" ? value : plan.insuranceName,
         })),
       }));
       return;
@@ -2150,14 +2145,18 @@ export function CoordinatorDashboard({
       ...prev,
       financialPlans: normalizePatientFinancialPlans(prev.financialPlans, prev).map((plan: any) =>
         plan.id === planId
-          ? {
+          ? createPatientFinancialPlan({
               ...plan,
               [field]: value,
-              ...(field === "payerType" && value !== "convenio" ? { insuranceName: "" } : {}),
-              ...(field === "payerType" && value === "convenio" && !plan.insuranceName
-                ? { insuranceName: prev.convenioNome || "" }
+              ...(field === "billingMode" && value === "INSURANCE"
+                ? { payerNameSnapshot: plan.payerNameSnapshot || prev.convenioNome || "" }
                 : {}),
-            }
+              ...(field === "billingMode" && value !== "INSURANCE"
+                ? { payerNameSnapshot: "", insuranceName: "", authorizationCode: "", authorizationValidUntil: "", copaymentAmount: "" }
+                : {}),
+              ...(field === "serviceType" && value !== "CUSTOM" ? { customServiceName: "" } : {}),
+              ...(field === "payerNameSnapshot" ? { insuranceName: value } : {}),
+            })
           : plan,
       ),
     }));
@@ -2169,8 +2168,8 @@ export function CoordinatorDashboard({
       financialPlans: [
         ...normalizePatientFinancialPlans(prev.financialPlans, prev),
         createPatientFinancialPlan({
-          payerType: prev.convenioTipo || "particular",
-          insuranceName: prev.convenioTipo === "convenio" ? prev.convenioNome || "" : "",
+          billingMode: prev.convenioTipo === "convenio" ? "INSURANCE" : "PRIVATE",
+          payerNameSnapshot: prev.convenioTipo === "convenio" ? prev.convenioNome || "" : "",
         }),
       ],
     }));
@@ -2183,7 +2182,7 @@ export function CoordinatorDashboard({
       );
       return {
         ...prev,
-        financialPlans: remaining.length ? remaining : normalizePatientFinancialPlans([]),
+        financialPlans: remaining,
       };
     });
   };
@@ -2216,27 +2215,9 @@ export function CoordinatorDashboard({
       responsavelDataNascimento: "",
       responsavelCpf: "",
       responsavelTelefone: "",
-      patientProfileType: "adult_conventional",
-      anamnesisRenewalMonths: "6",
-      financialPlans: normalizePatientFinancialPlans([]),
+      patientProfileType: "ADULT",
+      financialPlans: [],
     });
-  };
-
-  const normalizeAnamnesisRenewalMonths = (value: any) => {
-    const months = Number(value);
-    if ([2, 3, 6, 12].includes(months)) return months;
-    return 6;
-  };
-
-  const resolveLastAnamnesisDate = (patient: any) => {
-    const candidate =
-      patient?.lastAnamnesisAt ||
-      patient?.anamnesisLastFilledAt ||
-      patient?.anamnesisUpdatedAt ||
-      null;
-    if (!candidate) return null;
-    const parsed = new Date(candidate);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
   };
 
   const calculateAgeFromBirthDate = (birthDate: string) => {
@@ -2298,29 +2279,18 @@ export function CoordinatorDashboard({
     const existingPatient = editingPatientId
       ? allPatients.find((p: any) => String(p.id) === String(editingPatientId))
       : null;
-    const renewalMonths = normalizeAnamnesisRenewalMonths(
-      newPatientForm.anamnesisRenewalMonths,
-    );
     const financialPlans = canAccessClinicFinance
       ? normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm)
-          .map((plan: any) => ({
-            ...plan,
-            specialty: String(plan.specialty || "Terapia").trim(),
-            amount: Number(String(plan.amount || "").replace(",", ".")) || 0,
-            dueDay: String(Math.min(31, Math.max(1, Number(plan.dueDay) || 10))),
-            billingMethod: plan.billingMethod || "pix",
-            payerType: plan.payerType || newPatientForm.convenioTipo || "particular",
-            insuranceName:
-              (plan.payerType || newPatientForm.convenioTipo) === "convenio"
-                ? plan.insuranceName || newPatientForm.convenioNome || ""
-                : "",
-          }))
-          .filter((plan: any) => plan.specialty || plan.amount > 0)
+          .filter(isPatientFinancialPlanComplete)
+          .map(serializePatientFinancialPlanForPayload)
       : [];
     const monthlyTreatmentValue = financialPlans.reduce(
-      (sum: number, plan: any) => sum + (Number(plan.amount) || 0),
+      (sum: number, plan: any) => sum + getFinancialPlanMonthlyProjectionValue(plan),
       0,
     );
+    const primaryBillingPlan = financialPlans.find((plan: any) => getFinancialPlanPrimaryBillingMethod(plan));
+    const canonicalProfileType = normalizePatientProfileType(newPatientForm.patientProfileType);
+    const legacyPortalType = mapPatientProfileTypeToLegacyPortalType(canonicalProfileType);
 
     const newPatient = {
       id: editingPatientId || crypto.randomUUID(),
@@ -2361,22 +2331,20 @@ export function CoordinatorDashboard({
             telefone: normalizedGuardianPhone || null,
           }
         : null,
-      type: newPatientForm.patientProfileType || "adult_conventional",
-      anamnesisRenewalMonths: renewalMonths,
+      type: legacyPortalType,
+      patientProfileType: canonicalProfileType,
+      panelType: canonicalProfileType,
       ...(canAccessClinicFinance
         ? {
             financialPlans,
             monthlyTreatmentValue,
-            billingDueDay: financialPlans[0]?.dueDay || "10",
-            billingMethod: financialPlans[0]?.billingMethod || "pix",
+            billingDueDay: primaryBillingPlan?.dueDay || null,
+            billingMethod: getFinancialPlanPrimaryBillingMethod(primaryBillingPlan) || null,
           }
         : {}),
       lastAnamnesisAt: existingPatient?.lastAnamnesisAt || null,
       anamnesisPending: existingPatient
-        ? isPatientPendingAnamnesis({
-            ...existingPatient,
-            anamnesisRenewalMonths: renewalMonths,
-          })
+        ? isPatientPendingAnamnesis(existingPatient)
         : true,
       createdAt: new Date().toISOString(),
     };
@@ -2441,17 +2409,7 @@ export function CoordinatorDashboard({
     const data = patient.anamnesisData;
     const hasAnamnesis =
       !!(data && typeof data === "object" && Object.keys(data).length > 0);
-    if (!hasAnamnesis) return true;
-
-    const lastFilledAt = resolveLastAnamnesisDate(patient);
-    if (!lastFilledAt) return true;
-
-    const renewalMonths = normalizeAnamnesisRenewalMonths(
-      patient?.anamnesisRenewalMonths,
-    );
-    const dueDate = new Date(lastFilledAt);
-    dueDate.setMonth(dueDate.getMonth() + renewalMonths);
-    return dueDate.getTime() <= Date.now();
+    return !hasAnamnesis;
   };
 
   const handleEditPatient = (patient: any) => {
@@ -2482,9 +2440,8 @@ export function CoordinatorDashboard({
       responsavelDataNascimento: patient.guardian?.dataNascimento || "",
       responsavelCpf: patient.guardian?.cpf || "",
       responsavelTelefone: patient.guardian?.telefone || "",
-      patientProfileType: patient.type || "adult_conventional",
-      anamnesisRenewalMonths: String(
-        normalizeAnamnesisRenewalMonths(patient.anamnesisRenewalMonths),
+      patientProfileType: normalizePatientProfileType(
+        patient.patientProfileType || patient.panelType || patient.profile_type || patient.type,
       ),
       financialPlans: normalizePatientFinancialPlans(patient.financialPlans, {
         ...patient,
@@ -2743,8 +2700,10 @@ export function CoordinatorDashboard({
       cardNumber: readFirstText(profile?.cardNumber, anamnesisData?.convenioCarteirinha),
       rg: readFirstText(profile?.rg, anamnesisData?.rg),
       cpf: readFirstText(profile?.cpf, anamnesisData?.cpf),
-      anamnesisRenewalMonths:
-        profile?.anamnesisRenewalMonths ?? anamnesisData?.anamnesisRenewalMonths ?? "6",
+      patientProfileType: normalizePatientProfileType(
+        profile?.patientProfileType || profile?.panelType || profile?.profile_type || profile?.type,
+      ),
+      lastAnamnesisAt: profile?.lastAnamnesisAt || profile?.anamnesisLastFilledAt || profile?.anamnesisUpdatedAt || null,
       address: {
         cep: readFirstText(address?.cep, profile?.cep, anamnesisData?.cep),
         logradouro: readFirstText(address?.logradouro, profile?.logradouro, anamnesisData?.logradouro),
@@ -3864,14 +3823,19 @@ export function CoordinatorDashboard({
       insuranceType: patient?.insuranceType,
       insuranceName: patient?.insuranceName,
     })
+      .filter(isPatientFinancialPlanComplete)
+      .map(serializePatientFinancialPlanForPayload)
       .map((plan: any) => ({
         ...plan,
-        amount: parseCurrencyValue(plan.amount),
-        specialty: String(plan.specialty || "Terapia").trim() || "Terapia",
-        dueDay: Math.min(31, Math.max(1, Number(plan.dueDay) || 10)),
-        billingMethod: String(plan.billingMethod || "pix").toLowerCase(),
-        payerType: String(plan.payerType || patient?.insuranceType || "particular").toLowerCase(),
-        insuranceName: String(plan.insuranceName || patient?.insuranceName || "").trim(),
+        amount: Number(plan.amountCents || 0) / 100,
+        specialty: String(plan.serviceNameSnapshot || plan.specialty || "Não informado").trim() || "Não informado",
+        dueDay: plan.dueDay ? Math.min(31, Math.max(1, Number(plan.dueDay))) : null,
+        billingMethod: String(plan.billingMethod || plan.paymentMethod || "").toLowerCase(),
+        payerType: plan.billingMode === "INSURANCE" ? "convenio" : String(plan.billingMode || "PRIVATE").toLowerCase(),
+        payerLabel:
+          PATIENT_FINANCIAL_BILLING_MODE_OPTIONS.find((option) => option.value === plan.billingMode)?.label ||
+          "Particular",
+        insuranceName: String(plan.payerNameSnapshot || plan.insuranceName || patient?.insuranceName || "").trim(),
       }))
       .filter((plan: any) => plan.amount > 0);
 
@@ -3998,24 +3962,26 @@ export function CoordinatorDashboard({
       plans.forEach((plan: any) => {
         projection += plan.amount;
         addSpecialtyMetric(plan.specialty, plan.amount, "projected", patient.id);
-        addToMap(payerMap, plan.payerType === "convenio" ? "Convênio" : "Particular", plan.amount, { patientId: patient.id });
+        addToMap(payerMap, plan.payerLabel, plan.amount, { patientId: patient.id });
         if (plan.payerType === "convenio") {
           addToMap(insuranceMap, plan.insuranceName || "Convênio não informado", plan.amount, { patientId: patient.id });
         }
-        addToMap(billingMethodMap, plan.billingMethod.toUpperCase(), plan.amount, { patientId: patient.id });
-        const dueDate = new Date(`${financialMonth || new Date().toISOString().slice(0, 7)}-01T00:00:00`);
-        dueDate.setDate(Math.min(plan.dueDay, new Date(dueDate.getFullYear(), dueDate.getMonth() + 1, 0).getDate()));
-        dueRows.push({
-          patientId: patient.id,
-          patientName: patient.name || "Paciente",
-          specialty: plan.specialty,
-          amount: plan.amount,
-          dueDay: plan.dueDay,
-          dueDate: dueDate.toISOString().slice(0, 10),
-          billingMethod: plan.billingMethod.toUpperCase(),
-          payerType: plan.payerType === "convenio" ? "Convênio" : "Particular",
-          insuranceName: plan.insuranceName,
-        });
+        addToMap(billingMethodMap, plan.billingMethod ? plan.billingMethod.toUpperCase() : plan.payerLabel, plan.amount, { patientId: patient.id });
+        if (plan.dueDay) {
+          const dueDate = new Date(`${financialMonth || new Date().toISOString().slice(0, 7)}-01T00:00:00`);
+          dueDate.setDate(Math.min(plan.dueDay, new Date(dueDate.getFullYear(), dueDate.getMonth() + 1, 0).getDate()));
+          dueRows.push({
+            patientId: patient.id,
+            patientName: patient.name || "Paciente",
+            specialty: plan.specialty,
+            amount: plan.amount,
+            dueDay: plan.dueDay,
+            dueDate: dueDate.toISOString().slice(0, 10),
+            billingMethod: plan.billingMethod ? plan.billingMethod.toUpperCase() : plan.payerLabel,
+            payerType: plan.payerLabel,
+            insuranceName: plan.insuranceName,
+          });
+        }
       });
     });
 
@@ -5581,14 +5547,17 @@ export function CoordinatorDashboard({
                           const total = plans.reduce((sum: number, plan: any) => sum + plan.amount, 0);
                           const primaryPlan = plans[0];
                           if (total > 0) setPaymentAmount(formatMoneyInput(total));
-                          setPaymentType(primaryPlan?.payerType === "convenio" ? "convênio" : "particular");
+                          setPaymentType(primaryPlan?.payerLabel || (primaryPlan?.payerType === "convenio" ? "convênio" : "particular"));
                           setPaymentInsurance(primaryPlan?.insuranceName || p.insuranceName || "");
                           if (primaryPlan?.billingMethod) setPaymentMethod(primaryPlan.billingMethod);
                           setPaymentSpecialty(primaryPlan?.specialty || "");
-                          const dueDay = Math.min(31, Math.max(1, Number(primaryPlan?.dueDay || p.billingDueDay || 10)));
-                          const dueDate = new Date(`${financialMonth || new Date().toISOString().slice(0, 7)}-01T00:00:00`);
-                          dueDate.setDate(Math.min(dueDay, new Date(dueDate.getFullYear(), dueDate.getMonth() + 1, 0).getDate()));
-                          setPaymentDueDate(dueDate.toISOString().slice(0, 10));
+                          const dueDay = primaryPlan?.dueDay || p.billingDueDay;
+                          if (dueDay) {
+                            const safeDueDay = Math.min(31, Math.max(1, Number(dueDay)));
+                            const dueDate = new Date(`${financialMonth || new Date().toISOString().slice(0, 7)}-01T00:00:00`);
+                            dueDate.setDate(Math.min(safeDueDay, new Date(dueDate.getFullYear(), dueDate.getMonth() + 1, 0).getDate()));
+                            setPaymentDueDate(dueDate.toISOString().slice(0, 10));
+                          }
                         }
                       }}
                     >
@@ -5770,7 +5739,7 @@ export function CoordinatorDashboard({
                       value={paymentSpecialty}
                       onChange={(e) => setPaymentSpecialty(e.target.value)}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
-                      placeholder="Ex.: Terapia, Fono, Nutrição..."
+                      placeholder="Ex.: Fono, Psicologia, Nutrição..."
                     />
                   </div>
                   <div>
@@ -6941,11 +6910,7 @@ export function CoordinatorDashboard({
                             compact
                           />
                           <div className="px-2 py-1 bg-slate-100 text-slate-500 rounded-lg text-[8px] font-bold uppercase">
-                            {patient.type === "kids_tea"
-                              ? "Kids TEA"
-                              : patient.type === "adult_tea"
-                                ? "Adulto TEA"
-                                : "Adulto Convencional"}
+                            {getPatientProfileTypeLabel(patient.patientProfileType || patient.panelType || patient.type)}
                           </div>
                         </div>
                       </div>
@@ -8146,7 +8111,7 @@ export function CoordinatorDashboard({
               <div><span className="text-slate-400">Carteirinha:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.cardNumber || "-"}</p></div>
               <div><span className="text-slate-400">RG:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.rg || "-"}</p></div>
               <div><span className="text-slate-400">CPF:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.cpf || "-"}</p></div>
-              <div><span className="text-slate-400">Renovação da anamnese:</span> <p className="font-semibold text-slate-800">{normalizeAnamnesisRenewalMonths(selectedPatientProfile.anamnesisRenewalMonths)} meses</p></div>
+              <div><span className="text-slate-400">Perfil:</span> <p className="font-semibold text-slate-800">{getPatientProfileTypeLabel(selectedPatientProfile.patientProfileType)}</p></div>
               <div className="md:col-span-2"><span className="text-slate-400">Endereço:</span> <p className="font-semibold text-slate-800">{[selectedPatientProfile.address?.logradouro, selectedPatientProfile.address?.numero, selectedPatientProfile.address?.complemento, selectedPatientProfile.address?.bairro, selectedPatientProfile.address?.cidade].filter(Boolean).join(" - ") || "-"}</p></div>
               <div className="md:col-span-2"><span className="text-slate-400">Observações:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.notes || "-"}</p></div>
             </div>
@@ -8410,7 +8375,7 @@ export function CoordinatorDashboard({
                         Plano financeiro do tratamento
                       </p>
                       <p className="text-[11px] font-medium text-slate-400">
-                        Cadastre mensalidades por especialidade para alimentar a projeção do DRE.
+                        Modalidade, pagador, autorizações e valores por linha de cuidado.
                       </p>
                     </div>
                     <button
@@ -8418,77 +8383,178 @@ export function CoordinatorDashboard({
                       onClick={addFinancialPlanRow}
                       className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white px-4 py-2 text-xs font-bold text-[#7a32fc] shadow-sm transition-all hover:bg-violet-50"
                     >
-                      <Plus size={14} /> Especialidade
+                      <Plus size={14} /> Plano
                     </button>
                   </div>
                   <div className="space-y-3">
-                    {normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm).map((plan: any) => (
-                      <div key={plan.id} className="grid grid-cols-1 gap-3 rounded-2xl bg-white p-3 shadow-sm md:grid-cols-6">
-                        <input
-                          className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-2"
-                          placeholder="Especialidade"
-                          value={plan.specialty}
-                          onChange={(e) => handleFinancialPlanChange(plan.id, "specialty", e.target.value)}
-                        />
-                        <input
-                          className="rounded-xl bg-slate-50 p-3 text-sm"
-                          placeholder="Mensalidade R$"
-                          inputMode="decimal"
-                          value={plan.amount}
-                          onChange={(e) => handleFinancialPlanChange(plan.id, "amount", e.target.value)}
-                        />
-                        <input
-                          className="rounded-xl bg-slate-50 p-3 text-sm"
-                          placeholder="Venc. dia"
-                          type="number"
-                          min={1}
-                          max={31}
-                          value={plan.dueDay}
-                          onChange={(e) => handleFinancialPlanChange(plan.id, "dueDay", e.target.value)}
-                        />
-                        <select
-                          className="rounded-xl bg-slate-50 p-3 text-sm"
-                          value={plan.billingMethod}
-                          onChange={(e) => handleFinancialPlanChange(plan.id, "billingMethod", e.target.value)}
-                        >
-                          <option value="pix">PIX</option>
-                          <option value="card">Cartão</option>
-                          <option value="cash">Dinheiro</option>
-                          <option value="boleto">Boleto</option>
-                          <option value="transfer">Transferência</option>
-                        </select>
-                        <div className="flex items-center gap-2">
-                          <select
-                            className="min-w-0 flex-1 rounded-xl bg-slate-50 p-3 text-sm"
-                            value={plan.payerType}
-                            onChange={(e) => handleFinancialPlanChange(plan.id, "payerType", e.target.value)}
-                          >
-                            <option value="particular">Particular</option>
-                            <option value="convenio">Convênio</option>
-                          </select>
-                          <button
-                            type="button"
-                            onClick={() => removeFinancialPlanRow(plan.id)}
-                            className="rounded-xl p-3 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500"
-                            title="Remover especialidade"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                        {plan.payerType === "convenio" && (
-                          <select
-                            className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-6"
-                            value={plan.insuranceName}
-                            onChange={(e) => handleFinancialPlanChange(plan.id, "insuranceName", e.target.value)}
-                          >
-                            <option value="">Convênio desta especialidade</option>
-                            {insuranceOptions.map((ins) => (
-                              <option key={`plan-${plan.id}-${ins}`} value={ins}>{ins}</option>
-                            ))}
-                          </select>
-                        )}
-                      </div>
-                    ))}
+                    {(() => {
+                      const plans = normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm);
+                      if (!plans.length) {
+                        return (
+                          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-xs font-semibold text-slate-400">
+                            Nenhum plano financeiro cadastrado.
+                          </div>
+                        );
+                      }
+                      return plans.map((plan: any) => {
+                        const showPaymentMethod = financialPlanRequiresPaymentMethod(plan);
+                        const isInsurancePlan = plan.billingMode === "INSURANCE";
+                        const isPackagePlan = plan.billingMode === "PACKAGE";
+                        const isCourtesyPlan = plan.billingMode === "COURTESY";
+                        const isMonthlyPlan = plan.billingMode === "MONTHLY";
+                        return (
+                          <div key={plan.id} className="grid grid-cols-1 gap-3 rounded-2xl bg-white p-3 shadow-sm md:grid-cols-6">
+                            <select
+                              className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-2"
+                              value={plan.serviceType}
+                              onChange={(e) => handleFinancialPlanChange(plan.id, "serviceType", e.target.value)}
+                            >
+                              <option value="">Especialidade/serviço</option>
+                              {PATIENT_FINANCIAL_SERVICE_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </select>
+                            {plan.serviceType === "CUSTOM" && (
+                              <input
+                                className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-2"
+                                placeholder="Nome do serviço"
+                                value={plan.customServiceName}
+                                onChange={(e) => handleFinancialPlanChange(plan.id, "customServiceName", e.target.value)}
+                              />
+                            )}
+                            <select
+                              className="rounded-xl bg-slate-50 p-3 text-sm"
+                              value={plan.billingMode}
+                              onChange={(e) => handleFinancialPlanChange(plan.id, "billingMode", e.target.value)}
+                            >
+                              {PATIENT_FINANCIAL_BILLING_MODE_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </select>
+                            {!isCourtesyPlan && (
+                              <input
+                                className="rounded-xl bg-slate-50 p-3 text-sm"
+                                placeholder={isInsurancePlan ? "Valor autorizado R$" : isPackagePlan ? "Valor pacote R$" : isMonthlyPlan ? "Mensalidade R$" : "Valor R$"}
+                                inputMode="decimal"
+                                value={plan.amount}
+                                onChange={(e) => handleFinancialPlanChange(plan.id, "amount", e.target.value)}
+                              />
+                            )}
+                            <div className="flex items-center gap-2">
+                              <input
+                                className="min-w-0 flex-1 rounded-xl bg-slate-50 p-3 text-sm"
+                                placeholder={isInsurancePlan ? "Qtde. autorizada" : "Sessões"}
+                                type="number"
+                                min={1}
+                                value={plan.sessionsQuantity}
+                                onChange={(e) => handleFinancialPlanChange(plan.id, "sessionsQuantity", e.target.value)}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => removeFinancialPlanRow(plan.id)}
+                                className="rounded-xl p-3 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                                title="Remover plano financeiro"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                            <select
+                              className="rounded-xl bg-slate-50 p-3 text-sm"
+                              value={plan.quantityPeriod}
+                              onChange={(e) => handleFinancialPlanChange(plan.id, "quantityPeriod", e.target.value)}
+                            >
+                              {PATIENT_FINANCIAL_QUANTITY_PERIOD_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </select>
+                            {isMonthlyPlan && (
+                              <input
+                                className="rounded-xl bg-slate-50 p-3 text-sm"
+                                placeholder="Venc. dia"
+                                type="number"
+                                min={1}
+                                max={31}
+                                value={plan.dueDay}
+                                onChange={(e) => handleFinancialPlanChange(plan.id, "dueDay", e.target.value)}
+                              />
+                            )}
+                            {isPackagePlan && (
+                              <input
+                                type="date"
+                                className="rounded-xl bg-slate-50 p-3 text-sm"
+                                value={plan.packageValidUntil}
+                                onChange={(e) => handleFinancialPlanChange(plan.id, "packageValidUntil", e.target.value)}
+                              />
+                            )}
+                            {isInsurancePlan && (
+                              <>
+                                <select
+                                  className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-2"
+                                  value={plan.payerId || ""}
+                                  onChange={(e) => {
+                                    const payer = clinicPayers.find((item: any) => String(item?.id) === e.target.value);
+                                    handleFinancialPlanChange(plan.id, "payerId", e.target.value);
+                                    handleFinancialPlanChange(plan.id, "payerNameSnapshot", payer?.name || plan.payerNameSnapshot || "");
+                                  }}
+                                >
+                                  <option value="">Pagador/convênio</option>
+                                  {clinicPayers.map((payer: any) => (
+                                    <option key={`financial-payer-${plan.id}-${payer.id}`} value={payer.id}>
+                                      {payer.name}
+                                    </option>
+                                  ))}
+                                </select>
+                                <input
+                                  className="rounded-xl bg-slate-50 p-3 text-sm"
+                                  placeholder="Nome do convênio"
+                                  value={plan.payerNameSnapshot}
+                                  onChange={(e) => handleFinancialPlanChange(plan.id, "payerNameSnapshot", e.target.value)}
+                                />
+                                <input
+                                  className="rounded-xl bg-slate-50 p-3 text-sm"
+                                  placeholder="Autorização"
+                                  value={plan.authorizationCode}
+                                  onChange={(e) => handleFinancialPlanChange(plan.id, "authorizationCode", e.target.value)}
+                                />
+                                <input
+                                  type="date"
+                                  className="rounded-xl bg-slate-50 p-3 text-sm"
+                                  value={plan.authorizationValidUntil}
+                                  onChange={(e) => handleFinancialPlanChange(plan.id, "authorizationValidUntil", e.target.value)}
+                                />
+                                <input
+                                  className="rounded-xl bg-slate-50 p-3 text-sm"
+                                  placeholder="Coparticipação R$"
+                                  inputMode="decimal"
+                                  value={plan.copaymentAmount}
+                                  onChange={(e) => handleFinancialPlanChange(plan.id, "copaymentAmount", e.target.value)}
+                                />
+                              </>
+                            )}
+                            {showPaymentMethod && (
+                              <select
+                                className="rounded-xl bg-slate-50 p-3 text-sm"
+                                value={plan.paymentMethod}
+                                onChange={(e) => handleFinancialPlanChange(plan.id, "paymentMethod", e.target.value)}
+                              >
+                                <option value="">Forma de pagamento</option>
+                                {PATIENT_FINANCIAL_PAYMENT_METHOD_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                              </select>
+                            )}
+                            {(isCourtesyPlan || plan.billingMode === "OTHER") && (
+                              <input
+                                className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-3"
+                                placeholder="Observação"
+                                value={plan.notes}
+                                onChange={(e) => handleFinancialPlanChange(plan.id, "notes", e.target.value)}
+                              />
+                            )}
+                          </div>
+                        );
+                      });
+                    })()}
                   </div>
                 </div>
               )}
@@ -8522,30 +8588,10 @@ export function CoordinatorDashboard({
                 </p>
               </div>
               <select className="bg-slate-50 rounded-xl p-3 text-sm md:col-span-2 xl:col-span-3" value={newPatientForm.patientProfileType} onChange={(e) => handlePatientFormChange("patientProfileType", e.target.value)}>
-                <option value="kids_tea">Paciente Kids TEA</option>
-                <option value="adult_tea">Paciente Adulto TEA</option>
-                <option value="adult_conventional">Paciente Adulto Convencional</option>
+                {PATIENT_PROFILE_TYPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select>
-              <div className="md:col-span-2 xl:col-span-3">
-                <label className="block text-xs font-bold text-slate-600 mb-2">
-                  Lembrete de renovação da ficha anamnese
-                </label>
-                <select
-                  className="bg-slate-50 rounded-xl p-3 text-sm w-full"
-                  value={String(newPatientForm.anamnesisRenewalMonths || "6")}
-                  onChange={(e) =>
-                    handlePatientFormChange("anamnesisRenewalMonths", e.target.value)
-                  }
-                >
-                  <option value="2">A cada 2 meses</option>
-                  <option value="3">A cada 3 meses</option>
-                  <option value="6">A cada 6 meses</option>
-                  <option value="12">A cada 12 meses</option>
-                </select>
-                <p className="text-[11px] text-slate-400 mt-1">
-                  O alerta de pendência só voltará quando esse prazo vencer após a última ficha preenchida.
-                </p>
-              </div>
 
               <label className="flex items-center gap-2 text-sm text-slate-700">
                 <input type="checkbox" checked={newPatientForm.menorDeIdade} onChange={(e) => handlePatientFormChange("menorDeIdade", e.target.checked)} />

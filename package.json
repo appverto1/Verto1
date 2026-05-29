@@ -19,6 +19,7 @@
     "test:aba-session-feedback": "tsx tests/abaSessionFeedback.test.ts",
     "test:aba-interval-lifecycle": "tsx tests/abaIntervalLifecycle.test.ts",
     "test:patient-invitation-fallback": "tsx tests/patientInvitationFallback.test.ts",
+    "test:patient-financial-plan": "tsx tests/patientFinancialPlan.test.ts",
     "test:profile-notes-fallback": "tsx tests/profileNotesFallback.test.ts",
     "test:route-schema-fallbacks": "tsx tests/routeSchemaFallbacks.test.ts",
     "test:pei-plan-protocols": "tsx tests/peiPlanProtocols.test.ts",
