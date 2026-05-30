@@ -2963,7 +2963,7 @@ export default function App() {
           activationMessage = userResult.message || 'Ativação enviada com sucesso.';
         }
       } else if (userResult?.error) {
-        alert(`NÃ£o foi possÃ­vel enviar o convite do paciente: ${toReadableError(userResult.error)}`);
+        alert(`Não foi possível enviar o convite do paciente: ${toReadableError(userResult.error)}`);
         rollbackOptimisticPatient();
         return { success: false, error: userResult.error };
       }
@@ -3101,7 +3101,7 @@ export default function App() {
 
     if (!fbResult?.success) {
       if (!duplicateConflict) {
-        alert(`NÃ£o foi possÃ­vel cadastrar paciente: ${toReadableError(fbResult?.error || 'Erro desconhecido')}`);
+        alert(`Não foi possível cadastrar paciente: ${toReadableError(fbResult?.error || 'Erro desconhecido')}`);
         rollbackOptimisticPatient();
         return { success: false, error: fbResult?.error || 'Erro ao cadastrar paciente' };
       }
@@ -3242,7 +3242,7 @@ export default function App() {
       if (isDeleteOrUnlink) {
         const deleteResult = await dataService.deletePatient(String(updatedData.id));
         if (!deleteResult?.success) {
-          alert(`NÃ£o foi possÃ­vel excluir/desvincular paciente: ${toReadableError(deleteResult?.error || 'Erro desconhecido')}`);
+          alert(`Não foi possível excluir/desvincular paciente: ${toReadableError(deleteResult?.error || 'Erro desconhecido')}`);
         }
       } else {
         await dataService.updatePatient(String(updatedData.id), {
@@ -4145,7 +4145,7 @@ export default function App() {
               .map((n: any) => (n.id === id ? { ...n, [copyKey]: false } : n)),
           ),
         );
-        alert(String(result?.error || 'NÃ£o foi possÃ­vel persistir o compartilhamento da anotaÃ§Ã£o.'));
+        alert(String(result?.error || 'Não foi possível persistir o compartilhamento da anotação.'));
         return;
       }
 

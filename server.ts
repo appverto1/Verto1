@@ -11191,6 +11191,42 @@ async function startServer() {
         });
       }
 
+      const isAuthEmailAlreadyRegisteredError = (rawError: any) => {
+        const message = String(rawError?.message || rawError?.error_description || rawError || '').toLowerCase();
+        const code = String(rawError?.code || rawError?.status || '').toLowerCase();
+        return (
+          code === 'email_exists' ||
+          code === 'user_already_exists' ||
+          /already\s+(registered|exists)/i.test(message) ||
+          /user\s+already\s+registered/i.test(message) ||
+          /email.*already.*(registered|exists|taken|in use)/i.test(message) ||
+          /duplicate.*email/i.test(message)
+        );
+      };
+
+      const isDuplicateConstraintError = (rawError: any) => {
+        const message = String(rawError?.message || rawError?.details || rawError || '').toLowerCase();
+        const code = String(rawError?.code || '').trim();
+        return code === '23505' || /duplicate key|unique constraint|already exists|duplicado|já existe/i.test(message);
+      };
+
+      const findAuthUserByEmail = async (targetEmail: string): Promise<any | null> => {
+        const admin = (supabase as any)?.auth?.admin;
+        if (!admin?.listUsers) return null;
+        const wanted = String(targetEmail || '').trim().toLowerCase();
+        if (!wanted) return null;
+
+        for (let page = 1; page <= 5; page += 1) {
+          const { data: listUsers, error: listError } = await admin.listUsers({ page, perPage: 1000 });
+          if (listError) throw listError;
+          const users = Array.isArray(listUsers?.users) ? listUsers.users : [];
+          const found = users.find((u: any) => String(u?.email || '').trim().toLowerCase() === wanted);
+          if (found) return found;
+          if (users.length < 1000) break;
+        }
+        return null;
+      };
+
       const duplicatePatient = await findDuplicatePatientInClinic({
         clinicId: safeClinicId,
         name: safeName,
@@ -11217,6 +11253,7 @@ async function startServer() {
           success: true,
           idempotent: true,
           code: 'PATIENT_ALREADY_EXISTS_SAME_CLINIC',
+          status: 'ALREADY_LINKED',
           message: 'Paciente já cadastrado nesta clínica.',
           activationEmailSent: null,
           portabilityAvailable: true,
@@ -11345,12 +11382,18 @@ async function startServer() {
           }]);
           if (insertPatientError) {
             const schemaMismatch = String(insertPatientError?.message || '').toLowerCase().includes('column');
-            if (!schemaMismatch) throw insertPatientError;
+            if (!schemaMismatch) {
+              if (isDuplicateConstraintError(insertPatientError)) return;
+              throw insertPatientError;
+            }
             const { error: insertFallbackError } = await supabase.from('patients').insert([{
               ...fallbackPatientData,
               created_at: new Date().toISOString()
             }]);
-            if (insertFallbackError) throw insertFallbackError;
+            if (insertFallbackError) {
+              if (isDuplicateConstraintError(insertFallbackError)) return;
+              throw insertFallbackError;
+            }
           }
         }
 
@@ -11492,6 +11535,8 @@ async function startServer() {
         const emailResult = await sendPatientActivationEmail();
         return res.json({
           success: true,
+          idempotent: true,
+          status: 'LINKED_EXISTING_USER',
           code: 'RESPONSIBLE_LINKED_TO_NEW_PATIENT',
           message: emailResult.sent
             ? 'Responsável vinculado com sucesso. Ativação enviada com sucesso.'
@@ -11524,15 +11569,20 @@ async function startServer() {
       });
 
       if (authError) {
-        // If user already exists in Auth but not in our 'users' table (rare but possible)
-        if (authError.message.includes('already registered')) {
-          // Try to find the user by email in auth to get their ID
-          const { data: listUsers, error: listError } = await supabase.auth.admin.listUsers();
-          if (listError) throw listError;
-          const foundUser = listUsers?.users.find(
-            (u) => String(u.email || '').trim().toLowerCase() === normalizedEmail
-          );
-          if (foundUser) {
+        // If user already exists in Auth but not in our public users table, resolve as a safe link instead of returning 500.
+        if (isAuthEmailAlreadyRegisteredError(authError)) {
+          let foundUser: any | null = null;
+          try {
+            foundUser = await findAuthUserByEmail(normalizedEmail);
+          } catch (lookupError: any) {
+            console.warn('[PatientCreateUser] auth duplicate lookup warning:', {
+              email: maskEmail(normalizedEmail),
+              code: sanitizeString(lookupError?.code, 40) || null,
+              message: sanitizeString(lookupError?.message || String(lookupError), 180)
+            });
+          }
+
+          if (foundUser?.id) {
             await upsertPatientProfile(foundUser.id);
             await ensurePatientLink(foundUser.id);
             if (isUuid(safeClinicId)) {
@@ -11555,17 +11605,26 @@ async function startServer() {
             const emailResult = await sendPatientActivationEmail();
             return res.json({
               success: true,
+              idempotent: true,
+              status: 'LINKED_EXISTING_USER',
               userId: foundUser.id,
               code: 'EXISTING_EMAIL_LINKED',
               message: emailResult.sent
-                ? 'Responsável vinculado com sucesso. Ativação enviada com sucesso.'
-                : 'Responsável vinculado com sucesso.',
+                ? 'Responsável existente vinculado ao paciente. Ativação enviada com sucesso.'
+                : 'Responsável existente vinculado ao paciente.',
               warning: emailResult.sent ? null : (emailResult.reason || 'Falha no envio de e-mail transacional'),
               activationEmailSent: emailResult.sent,
               portabilityAvailable: true,
               userAlreadyExisted: true
             });
           }
+
+          return res.status(409).json({
+            success: false,
+            status: 'CONFLICT_REQUIRES_REVIEW',
+            code: 'CONFLICT_REQUIRES_REVIEW',
+            error: 'Não foi possível confirmar este vínculo automaticamente.'
+          });
         }
         throw authError;
       }
@@ -11580,6 +11639,7 @@ async function startServer() {
 
         return res.json({
           success: true,
+          status: 'INVITE_SENT',
           userId: authUser.user.id,
           message: emailResult.sent
             ? 'Ativação enviada com sucesso.'
@@ -11590,16 +11650,37 @@ async function startServer() {
         });
       }
 
-      res.status(500).json({ error: 'Failed to create user' });
-    } catch (error) {
-      console.error('Error creating patient user:', error);
+      res.status(500).json({ success: false, error: 'Não foi possível enviar o convite agora.' });
+    } catch (error: any) {
+      const normalizedEmailForLog = sanitizeEmail(req.body?.email) || '';
+      console.error('Error creating patient user:', {
+        email: maskEmail(normalizedEmailForLog),
+        code: sanitizeString(error?.code, 40) || null,
+        message: sanitizeString(error?.message || String(error), 220)
+      });
+
+      const errorMessage = String(error?.message || error || '');
+      const errorCode = sanitizeString(error?.code, 40);
+      const looksLikeExpectedDuplicate =
+        isDuplicateConstraintError(error) ||
+        isAuthEmailAlreadyRegisteredError(error) ||
+        /already\s+(registered|exists)|duplicate.*email|email.*already/i.test(errorMessage);
+
+      if (looksLikeExpectedDuplicate) {
+        return res.status(409).json({
+          success: false,
+          status: 'CONFLICT_REQUIRES_REVIEW',
+          code: 'CONFLICT_REQUIRES_REVIEW',
+          error: 'Não foi possível confirmar este vínculo automaticamente.'
+        });
+      }
+
       res.status(500).json({
         success: false,
-        error: 'Falha na operação de dados.',
+        error: 'Não foi possível enviar o convite agora.',
         details: {
           context: 'patients_create_user',
-          email: maskEmail(sanitizeEmail(req.body?.email) || ''),
-          code: sanitizeString((error as any)?.code, 40) || null
+          code: errorCode || null
         }
       });
     }

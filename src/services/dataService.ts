@@ -377,18 +377,30 @@ async function safeJson(response: Response) {
   }
 }
 
+function repairMojibakeMessage(value: string): string {
+  return String(value || '')
+    .replace(/NÃ£o/g, 'Não')
+    .replace(/nÃ£o/g, 'não')
+    .replace(/possÃ­vel/g, 'possível')
+    .replace(/serializÃ¡vel/g, 'serializável')
+    .replace(/comunicaÃ§Ã£o/g, 'comunicação')
+    .replace(/conexÃ£o/g, 'conexão')
+    .replace(/invÃ¡lida/g, 'inválida')
+    .replace(/sessÃ£o/g, 'sessão');
+}
+
 function normalizeApiErrorMessage(value: any): string {
-  if (typeof value === 'string') return sanitizeTechnicalErrorMessage(value);
+  if (typeof value === 'string') return sanitizeTechnicalErrorMessage(repairMojibakeMessage(value));
   if (value && typeof value === 'object') {
     const message = value.message || value.error || value.details;
-    if (typeof message === 'string') return sanitizeTechnicalErrorMessage(message);
+    if (typeof message === 'string') return sanitizeTechnicalErrorMessage(repairMojibakeMessage(message));
     try {
-      return sanitizeTechnicalErrorMessage(JSON.stringify(value));
+      return sanitizeTechnicalErrorMessage(repairMojibakeMessage(JSON.stringify(value)));
     } catch {
-      return '[erro nÃ£o serializÃ¡vel]';
+      return '[erro não serializável]';
     }
   }
-  return sanitizeTechnicalErrorMessage(String(value || 'Erro desconhecido'));
+  return sanitizeTechnicalErrorMessage(repairMojibakeMessage(String(value || 'Erro desconhecido')));
 }
 
 function extractLatestProtocolReference(row: any) {
@@ -1072,9 +1084,19 @@ export const dataService = {
       });
       const result = await safeJson(response);
       if (response.ok) return result;
+      if (response.status === 409 && isIdempotentConflictPayload(result)) {
+        return {
+          ...result,
+          success: true,
+          idempotent: true,
+          status: result?.status || 'RESOLVED_IDEMPOTENT'
+        };
+      }
       return {
         success: false,
-        error: normalizeApiErrorMessage(result?.error || result?.message || 'Failed to create patient user'),
+        status: response.status,
+        code: result?.code || result?.error_code || undefined,
+        error: normalizeApiErrorMessage(result?.error || result?.message || 'Não foi possível criar o acesso do paciente'),
         details: result
       };
     } catch (error) {

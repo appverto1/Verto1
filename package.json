@@ -45,7 +45,8 @@
     "test:patient-portability": "tsx tests/patientPortability.test.ts",
     "stripe:create-active-patient-price": "node scripts/create-stripe-active-patient-price.mjs",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:patient-create-user-idempotency": "tsx tests/patientCreateUserIdempotency.test.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
