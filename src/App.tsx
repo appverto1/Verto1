@@ -2963,9 +2963,22 @@ export default function App() {
           activationMessage = userResult.message || 'Ativação enviada com sucesso.';
         }
       } else if (userResult?.error) {
-        alert(`Não foi possível enviar o convite do paciente: ${toReadableError(userResult.error)}`);
-        rollbackOptimisticPatient();
-        return { success: false, error: userResult.error };
+        const inviteErrorMessage = toReadableError(userResult.error);
+        const invitePrepareUnavailable =
+          userResult?.code === 'INVITE_PREPARE_UNAVAILABLE' ||
+          Number(userResult?.status) === 502 ||
+          Number(userResult?.status) === 504 ||
+          /preparar o convite agora/i.test(inviteErrorMessage);
+
+        if (!invitePrepareUnavailable) {
+          alert(`Não foi possível enviar o convite do paciente: ${inviteErrorMessage}`);
+          rollbackOptimisticPatient();
+          return { success: false, error: userResult.error };
+        }
+
+        activationEmailSent = false;
+        activationEmailWarning = inviteErrorMessage;
+        activationMessage = 'Paciente cadastrado. O convite não foi preparado agora; use reenviar ativação depois.';
       }
     }
 

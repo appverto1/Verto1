@@ -9,7 +9,8 @@ import {
 } from '../src/utils/patientFinancialPlan';
 import {
   mapPatientProfileTypeToLegacyPortalType,
-  normalizePatientProfileType
+  normalizePatientProfileType,
+  PATIENT_PROFILE_TYPE_OPTIONS
 } from '../src/utils/patientProfileType';
 import { PATIENT_LIST_SELECT } from '../src/utils/routeSchemaFallbacks';
 
@@ -53,9 +54,21 @@ test('convênio nao força PIX sem coparticipacao', () => {
 
 test('perfil canonical persiste sem quebrar portal legado', () => {
   assert.equal(normalizePatientProfileType('kids_tea'), 'KIDS');
+  assert.equal(normalizePatientProfileType('adult_tea'), 'ABA');
   assert.equal(normalizePatientProfileType('ABA'), 'ABA');
-  assert.equal(mapPatientProfileTypeToLegacyPortalType('ABA'), 'kids_tea');
+  assert.equal(mapPatientProfileTypeToLegacyPortalType('ABA'), 'adult_tea');
   assert.equal(mapPatientProfileTypeToLegacyPortalType('ADULT'), 'adult_conventional');
+});
+
+test('cadastro expõe somente os três portais configurados', () => {
+  assert.deepEqual(
+    PATIENT_PROFILE_TYPE_OPTIONS.map((option) => option.label),
+    [
+      'Kids ABA (portal infantil)',
+      'Adulto ABA (adulto TEA)',
+      'Adulto convencional (adulto neurotípico)'
+    ]
+  );
 });
 
 test('UI remove lembrete automatico e expõe plano financeiro por modalidade', () => {

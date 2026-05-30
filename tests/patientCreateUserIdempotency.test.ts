@@ -56,6 +56,22 @@ test('frontend trata resposta idempotente e nao mostra mojibake no convite do pa
   assert.match(appCode, /N.o foi poss.vel enviar o convite do paciente/);
 });
 
+test('frontend nao bloqueia cadastro quando preparacao do convite fica indisponivel', () => {
+  const start = appCode.indexOf('const handleAddPatient = async');
+  const end = appCode.indexOf('const handleUpdatePatient = async', start);
+  assert.ok(start >= 0 && end > start, 'handleAddPatient nao encontrado.');
+  const addPatientSlice = appCode.slice(start, end);
+  assert.match(addPatientSlice, /INVITE_PREPARE_UNAVAILABLE/);
+  assert.match(addPatientSlice, /Number\(userResult\?\.status\) === 502/);
+  assert.match(addPatientSlice, /Paciente cadastrado\. O convite n.o foi preparado agora/);
+  assert.match(addPatientSlice, /const fbResult = await dataService\.savePatient/);
+});
+
+test('frontend limita busca de logs de atividade sem solicitar lote gigante', () => {
+  assert.match(dataServiceCode, /const endpoint = '\/api\/logs\?limit=200'/);
+  assert.doesNotMatch(dataServiceCode, /\/api\/logs\?limit=2000/);
+});
+
 test('normalizacao de erro repara mojibake comum antes de exibir ao usuario', () => {
   assert.match(dataServiceCode, /function repairMojibakeMessage/);
   assert.match(dataServiceCode, /replace\([^)]*'N.o'\)/);

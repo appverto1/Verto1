@@ -1198,7 +1198,7 @@ export const dataService = {
   },
 
   async getActivityLogs() {
-    const endpoint = '/api/logs?limit=2000';
+    const endpoint = '/api/logs?limit=200';
     try {
       const localLogs = filterActivityLogsForClinicView(await getLocalRecordsData('log'));
       const response = await fetch(endpoint, {
