@@ -11210,21 +11210,26 @@ async function startServer() {
         return code === '23505' || /duplicate key|unique constraint|already exists|duplicado|já existe/i.test(message);
       };
 
-      const findAuthUserByEmail = async (targetEmail: string): Promise<any | null> => {
-        const admin = (supabase as any)?.auth?.admin;
-        if (!admin?.listUsers) return null;
-        const wanted = String(targetEmail || '').trim().toLowerCase();
-        if (!wanted) return null;
-
-        for (let page = 1; page <= 5; page += 1) {
-          const { data: listUsers, error: listError } = await admin.listUsers({ page, perPage: 1000 });
-          if (listError) throw listError;
-          const users = Array.isArray(listUsers?.users) ? listUsers.users : [];
-          const found = users.find((u: any) => String(u?.email || '').trim().toLowerCase() === wanted);
-          if (found) return found;
-          if (users.length < 1000) break;
-        }
+      const findAuthUserByEmailForPatientCreate = async (targetEmail: string): Promise<any | null> => {
+        // Não enumerar Auth users neste fluxo: em produção isso pode travar/estourar timeout
+        // quando a base cresce. A rota só faz vínculo automático se já houver perfil público
+        // compatível em users; se o e-mail existir apenas no Auth, retornamos conflito revisável
+        // seguro, sem 500/502 e sem vazar dados entre clínicas.
+        void targetEmail;
         return null;
+      };
+
+      const runActivationEmailInBackground = (context: string) => {
+        setTimeout(() => {
+          sendPatientActivationEmail().catch((emailError: any) => {
+            console.warn('[PatientCreateUser] envio assíncrono de ativação falhou:', {
+              context,
+              email: maskEmail(normalizedEmail),
+              code: sanitizeString(emailError?.code, 40) || null,
+              message: sanitizeString(emailError?.message || String(emailError), 180)
+            });
+          });
+        }, 0);
       };
 
       const duplicatePatient = await findDuplicatePatientInClinic({
@@ -11532,20 +11537,17 @@ async function startServer() {
             portabilityAvailable: true
           }
         });
-        const emailResult = await sendPatientActivationEmail();
+        runActivationEmailInBackground('existing_public_user');
         return res.json({
           success: true,
           idempotent: true,
           status: 'LINKED_EXISTING_USER',
           code: 'RESPONSIBLE_LINKED_TO_NEW_PATIENT',
-          message: emailResult.sent
-            ? 'Responsável vinculado com sucesso. Ativação enviada com sucesso.'
-            : 'Responsável vinculado com sucesso.',
-          warning: emailResult.sent ? null : (emailResult.reason || 'Falha no envio de e-mail transacional'),
-          activationEmailSent: emailResult.sent,
+          message: 'Responsável vinculado com sucesso. O envio de ativação será processado em instantes.',
+          warning: null,
+          activationEmailSent: null,
           portabilityAvailable: true,
-          userAlreadyExisted: true,
-          userId: existingUser.id,
+          userAlreadyExisted: true
         });
       }
 
@@ -11573,7 +11575,7 @@ async function startServer() {
         if (isAuthEmailAlreadyRegisteredError(authError)) {
           let foundUser: any | null = null;
           try {
-            foundUser = await findAuthUserByEmail(normalizedEmail);
+            foundUser = await findAuthUserByEmailForPatientCreate(normalizedEmail);
           } catch (lookupError: any) {
             console.warn('[PatientCreateUser] auth duplicate lookup warning:', {
               email: maskEmail(normalizedEmail),
@@ -11602,18 +11604,15 @@ async function startServer() {
                 portabilityAvailable: true
               }
             });
-            const emailResult = await sendPatientActivationEmail();
+            runActivationEmailInBackground('auth_duplicate_resolved');
             return res.json({
               success: true,
               idempotent: true,
               status: 'LINKED_EXISTING_USER',
-              userId: foundUser.id,
               code: 'EXISTING_EMAIL_LINKED',
-              message: emailResult.sent
-                ? 'Responsável existente vinculado ao paciente. Ativação enviada com sucesso.'
-                : 'Responsável existente vinculado ao paciente.',
-              warning: emailResult.sent ? null : (emailResult.reason || 'Falha no envio de e-mail transacional'),
-              activationEmailSent: emailResult.sent,
+              message: 'Responsável existente vinculado ao paciente. O envio de ativação será processado em instantes.',
+              warning: null,
+              activationEmailSent: null,
               portabilityAvailable: true,
               userAlreadyExisted: true
             });
