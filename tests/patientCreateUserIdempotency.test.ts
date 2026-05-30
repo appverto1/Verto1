@@ -24,26 +24,42 @@ test('create-user diferencia duplicidade segura de conflito real sem 500 esperad
   const route = routeSlice();
   assert.match(route, /isAuthEmailAlreadyRegisteredError/);
   assert.match(route, /findAuthUserByEmail/);
+  assert.match(route, /clinic_id/);
   assert.match(route, /LINKED_EXISTING_USER/);
   assert.match(route, /ALREADY_LINKED/);
   assert.match(route, /CONFLICT_REQUIRES_REVIEW/);
   assert.match(route, /idempotent:\s*true/);
-  assert.match(route, /Responsável existente vinculado ao paciente/);
-  assert.match(route, /Não foi possível confirmar este vínculo automaticamente/);
+  assert.match(route, /Respons.vel existente vinculado ao paciente/);
+  assert.match(route, /N.o foi poss.vel confirmar este v.nculo automaticamente/);
   assert.doesNotMatch(route, /authError\.message\.includes\('already registered'\)/);
+});
+
+test('create-user enfileira convite e nao aguarda envio de e-mail no fluxo principal', () => {
+  const route = routeSlice();
+  assert.match(route, /sendPatientInviteInBackground/);
+  assert.match(route, /Promise\.race/);
+  assert.match(route, /PATIENT_INVITE_BACKGROUND_TIMEOUT_MS\s*=\s*7_000/);
+  assert.match(route, /INVITE_QUEUED/);
+  assert.match(route, /INVITE_FAILED_RETRYABLE/);
+  assert.match(route, /Convite preparado com sucesso/);
+  assert.doesNotMatch(route, /const emailResult = await sendPatientActivationEmail\(\)/);
+  assert.doesNotMatch(route, /status:\s*'INVITE_SENT'[\s\S]{0,180}userId:/);
 });
 
 test('frontend trata resposta idempotente e nao mostra mojibake no convite do paciente', () => {
   assert.match(dataServiceCode, /response\.status === 409 && isIdempotentConflictPayload\(result\)/);
   assert.match(dataServiceCode, /RESOLVED_IDEMPOTENT/);
-  assert.doesNotMatch(appCode, /NÃ£o foi possÃ­vel enviar o convite do paciente/);
-  assert.match(appCode, /Não foi possível enviar o convite do paciente/);
+  assert.match(dataServiceCode, /normalizePatientInviteSuccess/);
+  assert.match(dataServiceCode, /INVITE_QUEUED/);
+  assert.match(dataServiceCode, /INVITE_FAILED_RETRYABLE/);
+  assert.doesNotMatch(appCode, /NÃƒÂ£o foi possÃƒÂ­vel enviar o convite do paciente/);
+  assert.match(appCode, /N.o foi poss.vel enviar o convite do paciente/);
 });
 
 test('normalizacao de erro repara mojibake comum antes de exibir ao usuario', () => {
   assert.match(dataServiceCode, /function repairMojibakeMessage/);
-  assert.match(dataServiceCode, /replace\(\/NÃ£o\/g, 'Não'\)/);
-  assert.match(dataServiceCode, /\[erro não serializável\]/);
+  assert.match(dataServiceCode, /replace\([^)]*'N.o'\)/);
+  assert.match(dataServiceCode, /\[erro n.o serializ.vel\]/);
 });
 
 let passed = 0;

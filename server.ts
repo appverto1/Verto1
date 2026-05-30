@@ -11175,6 +11175,7 @@ async function startServer() {
       const rawPhone = req.body?.phone ?? req.body?.telefone;
       const normalizedPhone = normalizeBrazilMobilePhone(rawPhone);
       const requestClientRecordId = sanitizeString(req.body?.clientRecordId || req.body?.client_record_id || req.body?.localId, 120);
+      const routeRequestId = requestIdForLogs(req);
       if (!normalizedEmail) {
         return res.status(400).json({ success: false, error: 'Email inválido.' });
       }
@@ -11219,16 +11220,106 @@ async function startServer() {
         return null;
       };
 
-      const runActivationEmailInBackground = (context: string) => {
-        setTimeout(() => {
-          sendPatientActivationEmail().catch((emailError: any) => {
-            console.warn('[PatientCreateUser] envio assíncrono de ativação falhou:', {
-              context,
-              email: maskEmail(normalizedEmail),
-              code: sanitizeString(emailError?.code, 40) || null,
-              message: sanitizeString(emailError?.message || String(emailError), 180)
+      const PATIENT_INVITE_BACKGROUND_TIMEOUT_MS = 7_000;
+
+      const updatePatientInviteStatus = async (
+        authUserId: string | null,
+        status: 'INVITE_QUEUED' | 'INVITE_SENT' | 'INVITE_FAILED_RETRYABLE',
+        reason?: string
+      ) => {
+        if (!authUserId || !isUuid(authUserId)) return;
+        let inviteStatusPayload: Record<string, any> = cleanObject({
+          invite_status: status,
+          activation_invite_status: status,
+          activation_email_status: status === 'INVITE_SENT'
+            ? 'sent'
+            : status === 'INVITE_FAILED_RETRYABLE'
+              ? 'failed_retryable'
+              : 'queued',
+          invite_status_reason: reason ? sanitizeString(reason, 180) : undefined,
+          updated_at: new Date().toISOString()
+        });
+
+        while (Object.keys(inviteStatusPayload).length > 0) {
+          const { error: inviteStatusError } = await supabase
+            .from('users')
+            .update(inviteStatusPayload)
+            .eq('id', authUserId);
+
+          if (!inviteStatusError) return;
+
+          const missingColumn = extractMissingColumnName(inviteStatusError);
+          if (!missingColumn || !(missingColumn in inviteStatusPayload)) {
+            console.warn('[PatientCreateUser] falha ao atualizar status do convite:', {
+              requestId: routeRequestId,
+              organization_id: isUuid(safeClinicId) ? safeClinicId : null,
+              route: '/api/patients/create-user',
+              action: 'update_invite_status',
+              status,
+              message: sanitizeString(inviteStatusError?.message || String(inviteStatusError), 180)
             });
-          });
+            return;
+          }
+          delete inviteStatusPayload[missingColumn];
+        }
+      };
+
+      const sendPatientInviteInBackground = (
+        input: { context: string; authUserId?: string | null }
+      ) => {
+        setTimeout(() => {
+          void (async () => {
+            try {
+              const emailResult = await Promise.race([
+                sendPatientActivationEmail(),
+                new Promise<{ sent: false; reason: string }>((resolve) => {
+                  setTimeout(() => {
+                    resolve({ sent: false, reason: 'Timeout no envio do e-mail de ativação.' });
+                  }, PATIENT_INVITE_BACKGROUND_TIMEOUT_MS);
+                })
+              ]);
+
+              if (emailResult.sent) {
+                await updatePatientInviteStatus(input.authUserId || null, 'INVITE_SENT');
+                return;
+              }
+
+              await updatePatientInviteStatus(
+                input.authUserId || null,
+                'INVITE_FAILED_RETRYABLE',
+                emailResult.reason || 'Falha no envio do e-mail de ativação.'
+              );
+              console.warn('[PatientCreateUser] envio assíncrono de ativação não concluído:', {
+                requestId: routeRequestId,
+                organization_id: isUuid(safeClinicId) ? safeClinicId : null,
+                patient_id: requestClientRecordId || null,
+                route: '/api/patients/create-user',
+                action: 'send_patient_invite_background',
+                context: input.context,
+                status: 'INVITE_FAILED_RETRYABLE',
+                email: maskEmail(normalizedEmail),
+                message: sanitizeString(emailResult.reason || 'Falha no envio do e-mail de ativação.', 180)
+              });
+            } catch (emailError: any) {
+              await updatePatientInviteStatus(
+                input.authUserId || null,
+                'INVITE_FAILED_RETRYABLE',
+                sanitizeString(emailError?.message || String(emailError), 180)
+              );
+              console.warn('[PatientCreateUser] envio assíncrono de ativação falhou:', {
+                requestId: routeRequestId,
+                organization_id: isUuid(safeClinicId) ? safeClinicId : null,
+                patient_id: requestClientRecordId || null,
+                route: '/api/patients/create-user',
+                action: 'send_patient_invite_background',
+                context: input.context,
+                status: 'INVITE_FAILED_RETRYABLE',
+                email: maskEmail(normalizedEmail),
+                code: sanitizeString(emailError?.code, 40) || null,
+                message: sanitizeString(emailError?.message || String(emailError), 180)
+              });
+            }
+          })();
         }, 0);
       };
 
@@ -11504,7 +11595,7 @@ async function startServer() {
       // 1. Check if user already exists in 'users' table
       const { data: existingUser, error: checkError } = await supabase
         .from('users')
-        .select('id, role')
+        .select('id, role, clinic_id')
         .eq('email', normalizedEmail)
         .limit(1)
         .maybeSingle();
@@ -11516,10 +11607,22 @@ async function startServer() {
         if (existingRole && existingRole !== 'patient') {
           return res.status(409).json({
             success: false,
-            error: 'Este e-mail já está associado a um usuário profissional.'
+            status: 'CONFLICT_REQUIRES_REVIEW',
+            code: 'CONFLICT_REQUIRES_REVIEW',
+            error: 'Não foi possível confirmar este vínculo automaticamente.'
+          });
+        }
+        const existingClinicId = sanitizeString(existingUser.clinic_id, 120);
+        if (existingClinicId && existingClinicId !== safeClinicId) {
+          return res.status(409).json({
+            success: false,
+            status: 'CONFLICT_REQUIRES_REVIEW',
+            code: 'CONFLICT_REQUIRES_REVIEW',
+            error: 'Não foi possível confirmar este vínculo automaticamente.'
           });
         }
         await ensurePatientLink(existingUser.id);
+        await updatePatientInviteStatus(existingUser.id, 'INVITE_QUEUED');
         if (isUuid(safeClinicId)) {
           queueActivePatientSync(safeClinicId, 'patient_create_user_existing');
         }
@@ -11537,13 +11640,13 @@ async function startServer() {
             portabilityAvailable: true
           }
         });
-        runActivationEmailInBackground('existing_public_user');
+        sendPatientInviteInBackground({ context: 'existing_public_user', authUserId: existingUser.id });
         return res.json({
           success: true,
           idempotent: true,
           status: 'LINKED_EXISTING_USER',
           code: 'RESPONSIBLE_LINKED_TO_NEW_PATIENT',
-          message: 'Responsável vinculado com sucesso. O envio de ativação será processado em instantes.',
+          message: 'Responsável existente vinculado ao paciente.',
           warning: null,
           activationEmailSent: null,
           portabilityAvailable: true,
@@ -11587,6 +11690,7 @@ async function startServer() {
           if (foundUser?.id) {
             await upsertPatientProfile(foundUser.id);
             await ensurePatientLink(foundUser.id);
+            await updatePatientInviteStatus(foundUser.id, 'INVITE_QUEUED');
             if (isUuid(safeClinicId)) {
               queueActivePatientSync(safeClinicId, 'patient_create_user_auth_exists');
             }
@@ -11604,13 +11708,13 @@ async function startServer() {
                 portabilityAvailable: true
               }
             });
-            runActivationEmailInBackground('auth_duplicate_resolved');
+            sendPatientInviteInBackground({ context: 'auth_duplicate_resolved', authUserId: foundUser.id });
             return res.json({
               success: true,
               idempotent: true,
               status: 'LINKED_EXISTING_USER',
               code: 'EXISTING_EMAIL_LINKED',
-              message: 'Responsável existente vinculado ao paciente. O envio de ativação será processado em instantes.',
+              message: 'Responsável existente vinculado ao paciente.',
               warning: null,
               activationEmailSent: null,
               portabilityAvailable: true,
@@ -11631,25 +11735,23 @@ async function startServer() {
       if (authUser?.user) {
         await upsertPatientProfile(authUser.user.id);
         await ensurePatientLink(authUser.user.id);
+        await updatePatientInviteStatus(authUser.user.id, 'INVITE_QUEUED');
         if (isUuid(safeClinicId)) {
           queueActivePatientSync(safeClinicId, 'patient_create_user_new');
         }
-        const emailResult = await sendPatientActivationEmail();
+        sendPatientInviteInBackground({ context: 'new_patient_user', authUserId: authUser.user.id });
 
         return res.json({
           success: true,
-          status: 'INVITE_SENT',
-          userId: authUser.user.id,
-          message: emailResult.sent
-            ? 'Ativação enviada com sucesso.'
-            : 'Paciente criado, mas não foi possível enviar o e-mail de ativação agora.',
-          warning: emailResult.sent ? null : (emailResult.reason || 'Falha no envio de e-mail transacional'),
-          activationEmailSent: emailResult.sent,
+          status: 'INVITE_QUEUED',
+          message: 'Convite preparado com sucesso.',
+          warning: null,
+          activationEmailSent: null,
           portabilityAvailable: false
         });
       }
 
-      res.status(500).json({ success: false, error: 'Não foi possível enviar o convite agora.' });
+      res.status(500).json({ success: false, message: 'Não foi possível preparar o convite agora.' });
     } catch (error: any) {
       const normalizedEmailForLog = sanitizeEmail(req.body?.email) || '';
       console.error('Error creating patient user:', {
@@ -11676,11 +11778,7 @@ async function startServer() {
 
       res.status(500).json({
         success: false,
-        error: 'Não foi possível enviar o convite agora.',
-        details: {
-          context: 'patients_create_user',
-          code: errorCode || null
-        }
+        message: 'Não foi possível preparar o convite agora.'
       });
     }
   });

@@ -35,9 +35,11 @@ export function isPermanentOfflineSyncStatus(status: number): boolean {
 export function isIdempotentConflictPayload(payload: any): boolean {
   if (!payload || typeof payload !== 'object') return false;
   const code = String(payload.code || payload.error_code || '').trim().toUpperCase();
+  const status = String(payload.status || '').trim().toUpperCase();
   return (
     payload.idempotent === true ||
     (payload.success === true && code.includes('IDEMPOTENT')) ||
+    (payload.success === true && ['ALREADY_LINKED', 'LINKED_EXISTING_USER', 'INVITE_QUEUED', 'INVITE_PENDING'].includes(status)) ||
     code === 'PATIENT_ALREADY_EXISTS_SAME_CLINIC' ||
     code === 'PORTABILITY_REQUEST_ALREADY_EXISTS'
   );

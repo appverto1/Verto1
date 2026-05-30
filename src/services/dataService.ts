@@ -403,6 +403,34 @@ function normalizeApiErrorMessage(value: any): string {
   return sanitizeTechnicalErrorMessage(repairMojibakeMessage(String(value || 'Erro desconhecido')));
 }
 
+function normalizePatientInviteSuccess(result: any) {
+  const status = String(result?.status || '').trim().toUpperCase();
+  if (!result?.success) return result;
+  if (status === 'ALREADY_LINKED') {
+    return { ...result, message: result.message || 'Responsável já estava vinculado.' };
+  }
+  if (status === 'LINKED_EXISTING_USER') {
+    return { ...result, message: result.message || 'Responsável existente vinculado ao paciente.' };
+  }
+  if (status === 'INVITE_QUEUED' || status === 'INVITE_PENDING') {
+    return {
+      ...result,
+      status,
+      message: result.message || 'Convite preparado com sucesso.',
+      activationEmailSent: result.activationEmailSent ?? null
+    };
+  }
+  if (status === 'INVITE_FAILED_RETRYABLE') {
+    return {
+      ...result,
+      status,
+      warning: result.warning || result.message || 'Paciente cadastrado, mas o convite precisará ser reenviado.',
+      activationEmailSent: false
+    };
+  }
+  return result;
+}
+
 function extractLatestProtocolReference(row: any) {
   if (!row || typeof row !== 'object') {
     return {
@@ -1083,13 +1111,22 @@ export const dataService = {
         body: JSON.stringify({ email, name, type, cpf: cpf || undefined, ...extra })
       });
       const result = await safeJson(response);
-      if (response.ok) return result;
+      if (response.ok) return normalizePatientInviteSuccess(result);
       if (response.status === 409 && isIdempotentConflictPayload(result)) {
-        return {
+        return normalizePatientInviteSuccess({
           ...result,
           success: true,
           idempotent: true,
           status: result?.status || 'RESOLVED_IDEMPOTENT'
+        });
+      }
+      if (response.status === 502 || response.status === 504) {
+        return {
+          success: false,
+          status: response.status,
+          code: 'INVITE_PREPARE_UNAVAILABLE',
+          error: 'Não foi possível preparar o convite agora.',
+          details: null
         };
       }
       return {
