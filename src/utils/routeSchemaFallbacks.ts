@@ -31,12 +31,16 @@ export const PROFILE_SELECT_COLUMNS = [
   'signature_url',
   'signature_data_url',
   'two_factor_enabled',
-  'two_factor_secret',
   'email_verified_at',
   'phone_verified_at',
   'first_login_completed',
   'created_at',
   'updated_at'
+];
+
+export const PROFILE_AUTH_SELECT_COLUMNS = [
+  ...PROFILE_SELECT_COLUMNS,
+  'two_factor_secret'
 ];
 
 export const PROFILE_LEGACY_SELECT_COLUMNS = [
@@ -1116,8 +1120,9 @@ export async function fetchProfileWithSchemaFallback(params: {
   supabase: SupabaseLike;
   userId: string | null;
   logger?: LoggerLike;
+  includeTwoFactorSecret?: boolean;
 }) {
-  let columns = [...PROFILE_SELECT_COLUMNS];
+  let columns = params.includeTwoFactorSecret ? [...PROFILE_AUTH_SELECT_COLUMNS] : [...PROFILE_SELECT_COLUMNS];
   let lastError: any = null;
 
   for (let attempt = 0; attempt < PROFILE_SCHEMA_FALLBACK_MAX_ATTEMPTS; attempt += 1) {

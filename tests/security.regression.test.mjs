@@ -38,6 +38,8 @@ const closureMigrationPath = path.resolve(process.cwd(), 'supabase/migrations/20
 const closureMigrationCode = fs.existsSync(closureMigrationPath) ? fs.readFileSync(closureMigrationPath, 'utf8') : '';
 const closureCenterPath = path.resolve(process.cwd(), 'src/components/OperationalClosureCenter.tsx');
 const closureCenterCode = fs.existsSync(closureCenterPath) ? fs.readFileSync(closureCenterPath, 'utf8') : '';
+const landingPagePath = path.resolve(process.cwd(), 'src/components/LandingPage.tsx');
+const landingPageCode = fs.readFileSync(landingPagePath, 'utf8');
 
 function expectPattern(pattern, message) {
   assert.match(serverCode, pattern, message);
@@ -156,6 +158,11 @@ test('csp: Clarity tracking is loaded from bundled code, not inline HTML', () =>
   );
 });
 
+test('auth storage: login remember-me never persists passwords in localStorage', () => {
+  assert.doesNotMatch(landingPageCode, /localStorage\.setItem\(['"]verto_password['"]/);
+  assert.match(landingPageCode, /localStorage\.removeItem\(['"]verto_password['"]\)/);
+});
+
 test('xss: media and receipt data URLs reject SVG/scriptable payloads', () => {
   expectPattern(
     /const SAFE_IMAGE_DATA_URL_PATTERN = \/\^data:image\\\/\(png\|jpeg\|jpg\|webp\);base64,\[a-z0-9\+\/=\\s\]\+\$\/i/m,
@@ -173,6 +180,8 @@ test('xss: media and receipt data URLs reject SVG/scriptable payloads', () => {
     /function sanitizeReceiptUrl\(value: unknown\): string \| null \{[\s\S]*?SAFE_PDF_DATA_URL_PATTERN\.test\(url\) \? url : null;/m,
     'sanitizeReceiptUrl deve validar recibos PDF data: em base64.'
   );
+  assert.match(patientDetailCode, /const sanitizeDocumentImageUrl = \(value: any\) => \{/);
+  assert.match(patientDetailCode, /\^data:image\\\/\(png\|jpeg\|jpg\|webp\);base64/);
 });
 
 test('dos/input-size: critical endpoints enforce body size limits', () => {

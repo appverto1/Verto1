@@ -152,7 +152,6 @@ test('/api/auth/login profile lookup keeps removing many optional legacy-missing
     'signature_url',
     'signature_data_url',
     'two_factor_enabled',
-    'two_factor_secret',
     'email_verified_at',
     'phone_verified_at',
     'first_login_completed',
@@ -184,6 +183,20 @@ test('/api/auth/login profile lookup keeps removing many optional legacy-missing
   for (const column of missingColumns) {
     assert.ok(!finalSelect.split(',').includes(column));
   }
+});
+
+test('profile selects do not expose 2FA secret outside explicit auth verification', () => {
+  assert.ok(!PROFILE_SELECT.split(',').includes('two_factor_secret'));
+
+  const serverSource = fs.readFileSync(path.resolve('server.ts'), 'utf8');
+  const adminClientsBlock = serverSource.match(/app\.get\('\/api\/admin\/clients'[\s\S]*?app\.post\('\/api\/admin\/grant-complimentary-plan'/)?.[0] || '';
+  assert.ok(adminClientsBlock.includes('select(USER_PROFILE_SELECT)'));
+  assert.ok(!adminClientsBlock.includes('two_factor_secret'));
+
+  const twoFactorLoginBlock = serverSource.match(/app\.post\('\/api\/auth\/2fa\/login'[\s\S]*?app\.post\('\/api\/auth\/logout'/)?.[0] || '';
+  assert.ok(twoFactorLoginBlock.includes('includeTwoFactorSecret: true'));
+  assert.ok(twoFactorLoginBlock.includes('findAuthUserByEmail(email)'));
+  assert.ok(!twoFactorLoginBlock.includes('supabase.auth.admin.listUsers()'));
 });
 
 test('/api/auth/login profile lookup by email removes missing created_at order', async () => {

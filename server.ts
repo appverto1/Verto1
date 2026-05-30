@@ -99,6 +99,7 @@ import {
 import {
   isPatientFinancialPlanComplete,
   normalizePatientFinancialPlans,
+  normalizePatientFinancialServiceType,
   serializePatientFinancialPlanForPayload
 } from './src/utils/patientFinancialPlan';
 import {
@@ -3779,6 +3780,7 @@ async function findDuplicatePatientInClinic(params: {
   cpf?: unknown;
   excludePatientId?: unknown;
   clientRecordId?: unknown;
+  includeLegacyRecordScan?: boolean;
 }): Promise<{ field: 'email' | 'cpf' | 'client_record_id'; patientId: string; patientName: string; value: string; row?: any } | null> {
   const safeClinicId = sanitizeString(params.clinicId, 120);
   if (!safeClinicId || !isUuid(safeClinicId)) return null;
@@ -3854,39 +3856,42 @@ async function findDuplicatePatientInClinic(params: {
       if (missingColumn !== 'cpf') throw rawError;
     }
 
-    // Fallback de CPF para ambientes legados: busca no payload criptografado.
-    const { data: recordRows, error: recordError } = await supabase
-      .from('patient_records')
-      .select('patient_id, payload_encrypted')
-      .eq('clinic_id', safeClinicId)
-      .limit(3000);
+    if (params.includeLegacyRecordScan === true) {
+      // Fallback de CPF para ambientes legados: busca no payload criptografado.
+      // Mantido opt-in porque o scan pode ser caro em produção durante cadastro.
+      const { data: recordRows, error: recordError } = await supabase
+        .from('patient_records')
+        .select('patient_id, payload_encrypted')
+        .eq('clinic_id', safeClinicId)
+        .limit(300);
 
-    if (recordError) {
-      const missingTable = String(recordError?.message || '')
-        .toLowerCase()
-        .includes('patient_records');
-      if (!missingTable) throw recordError;
-    } else {
-      for (const row of recordRows || []) {
-        const candidatePatientId = sanitizeString((row as any)?.patient_id, 120);
-        if (!candidatePatientId || isExcluded(candidatePatientId)) continue;
-        const decryptedPayload = decryptJsonPayload(
-          sanitizeString((row as any)?.payload_encrypted, 2_000_000),
-        );
-        const payloadCpf = normalizeCpf((decryptedPayload as any)?.cpf);
-        if (payloadCpf && payloadCpf === safeCpf) {
-          const { data: patientRow } = await supabase
-            .from('patients')
-            .select('id, name')
-            .eq('id', candidatePatientId)
-            .maybeSingle();
-          return {
-            field: 'cpf',
-            patientId: sanitizeString(patientRow?.id || candidatePatientId, 120),
-            patientName: sanitizeString(patientRow?.name, 180) || 'Paciente',
-            value: safeCpf,
-            row: patientRow
-          };
+      if (recordError) {
+        const missingTable = String(recordError?.message || '')
+          .toLowerCase()
+          .includes('patient_records');
+        if (!missingTable) throw recordError;
+      } else {
+        for (const row of recordRows || []) {
+          const candidatePatientId = sanitizeString((row as any)?.patient_id, 120);
+          if (!candidatePatientId || isExcluded(candidatePatientId)) continue;
+          const decryptedPayload = decryptJsonPayload(
+            sanitizeString((row as any)?.payload_encrypted, 2_000_000),
+          );
+          const payloadCpf = normalizeCpf((decryptedPayload as any)?.cpf);
+          if (payloadCpf && payloadCpf === safeCpf) {
+            const { data: patientRow } = await supabase
+              .from('patients')
+              .select('id, name')
+              .eq('id', candidatePatientId)
+              .maybeSingle();
+            return {
+              field: 'cpf',
+              patientId: sanitizeString(patientRow?.id || candidatePatientId, 120),
+              patientName: sanitizeString(patientRow?.name, 180) || 'Paciente',
+              value: safeCpf,
+              row: patientRow
+            };
+          }
         }
       }
     }
@@ -3915,6 +3920,208 @@ async function findDuplicatePatientInClinic(params: {
         value: safeEmail,
         row: hit
       };
+    }
+  }
+
+  return null;
+}
+
+function normalizePatientSpecialtyKey(value: unknown, fallback?: unknown): string {
+  const direct = normalizePatientFinancialServiceType(value, fallback);
+  if (direct && direct !== 'CUSTOM') return direct;
+  const fallbackNormalized = normalizePatientFinancialServiceType('', fallback ?? value);
+  if (fallbackNormalized && fallbackNormalized !== 'CUSTOM') return fallbackNormalized;
+  const custom = sanitizeString(fallback ?? value, 120)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/gi, '_')
+    .replace(/^_+|_+$/g, '')
+    .toUpperCase();
+  return custom ? `CUSTOM:${custom}` : '';
+}
+
+function derivePatientSpecialtyKeysFromPayload(input: any): string[] {
+  const keys = new Set<string>();
+  const add = (value: unknown, fallback?: unknown) => {
+    const key = normalizePatientSpecialtyKey(value, fallback);
+    if (key) keys.add(key);
+  };
+
+  const plans = Array.isArray(input?.financialPlans)
+    ? input.financialPlans
+    : Array.isArray(input?.financial_plans)
+      ? input.financial_plans
+      : [];
+  plans.forEach((plan: any) => {
+    add(
+      plan?.serviceType || plan?.service_type,
+      plan?.customServiceName ||
+        plan?.custom_service_name ||
+        plan?.serviceNameSnapshot ||
+        plan?.service_name_snapshot ||
+        plan?.specialty
+    );
+  });
+
+  add(input?.serviceType || input?.service_type, input?.specialty || input?.specialtyName);
+  add(input?.approach);
+  const rawType = sanitizeString(input?.type, 120).toLowerCase();
+  if (rawType && !['kids_tea', 'adult_tea', 'adult_conventional', 'conventional'].includes(rawType)) {
+    add(input?.type);
+  }
+
+  const profileType = normalizePatientProfileType(
+    input?.patientProfileType ||
+      input?.patient_profile_type ||
+      input?.panelType ||
+      input?.panel_type ||
+      input?.profileType ||
+      input?.profile_type ||
+      input?.type,
+    'ADULT' as any
+  );
+  if (profileType === 'KIDS' || profileType === 'ABA') keys.add('ABA');
+
+  return Array.from(keys);
+}
+
+async function fetchSpecialtyKeysForPatientRows(patientRows: any[]): Promise<Map<string, Set<string>>> {
+  const result = new Map<string, Set<string>>();
+  const patientIds = Array.from(
+    new Set(
+      (patientRows || [])
+        .map((row: any) => sanitizeString(row?.id, 120))
+        .filter((id: string) => isUuid(id))
+    )
+  );
+  const ensureSet = (patientId: string) => {
+    const existing = result.get(patientId) || new Set<string>();
+    result.set(patientId, existing);
+    return existing;
+  };
+
+  patientRows.forEach((row: any) => {
+    const patientId = sanitizeString(row?.id, 120);
+    if (!patientId) return;
+    derivePatientSpecialtyKeysFromPayload(row).forEach((key) => ensureSet(patientId).add(key));
+  });
+
+  if (patientIds.length) {
+    try {
+      const { data: plans, error } = await supabase
+        .from('patient_financial_plans')
+        .select('patient_id, service_type, service_name_snapshot')
+        .in('patient_id', patientIds)
+        .limit(Math.min(500, patientIds.length * 20));
+      if (!error) {
+        (plans || []).forEach((plan: any) => {
+          const patientId = sanitizeString(plan?.patient_id, 120);
+          if (!patientId) return;
+          derivePatientSpecialtyKeysFromPayload({
+            financialPlans: [{
+              serviceType: plan?.service_type,
+              serviceNameSnapshot: plan?.service_name_snapshot
+            }]
+          }).forEach((key) => ensureSet(patientId).add(key));
+        });
+      } else if (!isMissingRelationError(error)) {
+        console.warn('[PatientSpecialty] patient_financial_plans indisponivel:', sanitizeString(error?.message || String(error), 180));
+      }
+    } catch (error: any) {
+      console.warn('[PatientSpecialty] falha ao buscar planos financeiros:', sanitizeString(error?.message || String(error), 180));
+    }
+
+    try {
+      const { data: records, error } = await supabase
+        .from('patient_records')
+        .select('patient_id, payload_encrypted')
+        .in('patient_id', patientIds)
+        .limit(patientIds.length);
+      if (!error) {
+        (records || []).forEach((record: any) => {
+          const patientId = sanitizeString(record?.patient_id, 120);
+          if (!patientId) return;
+          const payload = decryptJsonPayload(sanitizeString(record?.payload_encrypted, 2_000_000));
+          derivePatientSpecialtyKeysFromPayload(payload).forEach((key) => ensureSet(patientId).add(key));
+        });
+      } else if (!isMissingRelationError(error)) {
+        console.warn('[PatientSpecialty] patient_records indisponivel:', sanitizeString(error?.message || String(error), 180));
+      }
+    } catch (error: any) {
+      console.warn('[PatientSpecialty] falha ao buscar prontuarios:', sanitizeString(error?.message || String(error), 180));
+    }
+  }
+
+  return result;
+}
+
+async function findPatientSpecialtyConflictAcrossClinics(params: {
+  clinicId?: unknown;
+  email?: unknown;
+  cpf?: unknown;
+  requestedSpecialtyKeys?: string[];
+  excludePatientId?: unknown;
+}): Promise<{ patientId: string; patientName: string; clinicId: string; specialtyKey: string; row?: any } | null> {
+  const safeClinicId = sanitizeString(params.clinicId, 120);
+  const safeEmail = sanitizeEmail(params.email);
+  const safeCpf = normalizeCpf(params.cpf);
+  const excludedId = sanitizeString(params.excludePatientId, 120);
+  const requested = new Set((params.requestedSpecialtyKeys || []).filter(Boolean));
+  if (!safeClinicId || requested.size === 0 || (!safeEmail && !safeCpf)) return null;
+
+  const rowsById = new Map<string, any>();
+  const collect = (rows: any[] = []) => {
+    rows.forEach((row: any) => {
+      const id = sanitizeString(row?.id, 120);
+      if (!id || id === excludedId) return;
+      const rowClinicId = sanitizeString(row?.clinic_id, 120);
+      if (!rowClinicId || rowClinicId === safeClinicId) return;
+      rowsById.set(id, row);
+    });
+  };
+
+  const select = 'id, name, email, cpf, clinic_id, status, patient_profile_type, panel_type, profile_type, type';
+  if (safeEmail) {
+    const { data, error } = await supabase
+      .from('patients')
+      .select(select)
+      .ilike('email', safeEmail)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .limit(50);
+    if (!error) collect(data || []);
+    else console.warn('[PatientSpecialty] falha ao buscar paciente por e-mail:', sanitizeString(error?.message || String(error), 180));
+  }
+
+  if (safeCpf) {
+    const { data, error } = await supabase
+      .from('patients')
+      .select(select)
+      .eq('cpf', safeCpf)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .limit(50);
+    if (!error) collect(data || []);
+    else console.warn('[PatientSpecialty] falha ao buscar paciente por CPF:', sanitizeString(error?.message || String(error), 180));
+  }
+
+  const rows = Array.from(rowsById.values());
+  if (!rows.length) return null;
+  const specialtiesByPatient = await fetchSpecialtyKeysForPatientRows(rows);
+
+  for (const row of rows) {
+    const patientId = sanitizeString(row?.id, 120);
+    const rowKeys = specialtiesByPatient.get(patientId) || new Set<string>();
+    for (const key of rowKeys) {
+      if (requested.has(key)) {
+        return {
+          patientId,
+          patientName: sanitizeString(row?.name, 180) || 'Paciente',
+          clinicId: sanitizeString(row?.clinic_id, 120),
+          specialtyKey: key,
+          row
+        };
+      }
     }
   }
 
@@ -7676,8 +7883,7 @@ async function startServer() {
     if (!email || !token) return res.status(400).json({ error: "E-mail e código são obrigatórios" });
     
     try {
-      const { data: { users } } = await supabase.auth.admin.listUsers();
-      const user = users.find(u => sanitizeEmail(u.email) === sanitizeEmail(email));
+      const user = await findAuthUserByEmail(email);
       if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
       const isEmailVerified = Boolean((user as any)?.email_confirmed_at || (user as any)?.confirmed_at);
       if (!isEmailVerified) {
@@ -7690,7 +7896,8 @@ async function startServer() {
       const profileResult = await fetchProfileWithSchemaFallback({
         supabase,
         userId: user.id,
-        logger: console
+        logger: console,
+        includeTwoFactorSecret: true
       });
       if (profileResult.error) {
         return sendAuthRouteError(res, '/api/auth/2fa/login', 'profile_select', profileResult.error, {
@@ -11176,6 +11383,12 @@ async function startServer() {
       const normalizedPhone = normalizeBrazilMobilePhone(rawPhone);
       const requestClientRecordId = sanitizeString(req.body?.clientRecordId || req.body?.client_record_id || req.body?.localId, 120);
       const routeRequestId = requestIdForLogs(req);
+      const requestedSpecialtyKeys = derivePatientSpecialtyKeysFromPayload({
+        ...(req.body || {}),
+        patientProfileType: canonicalProfileType,
+        patient_profile_type: canonicalProfileType,
+        type: normalizedPortalType
+      });
       if (!normalizedEmail) {
         return res.status(400).json({ success: false, error: 'Email inválido.' });
       }
@@ -11357,6 +11570,23 @@ async function startServer() {
             name: duplicatePatient.patientName,
             status: sanitizeString(duplicatePatient.row?.status, 40) || 'active'
           }
+        });
+      }
+
+      const crossClinicSpecialtyConflict = await findPatientSpecialtyConflictAcrossClinics({
+        clinicId: safeClinicId,
+        email: normalizedEmail,
+        cpf: normalizedCpf,
+        requestedSpecialtyKeys,
+        excludePatientId: requestClientRecordId
+      });
+      if (crossClinicSpecialtyConflict) {
+        return res.status(409).json({
+          success: false,
+          status: 'SPECIALTY_CONFLICT_REQUIRES_REVIEW',
+          code: 'PATIENT_SPECIALTY_CONFLICT_OTHER_CLINIC',
+          error: 'Este paciente já está vinculado a outra clínica nesta mesma especialidade.',
+          specialty: crossClinicSpecialtyConflict.specialtyKey
         });
       }
 
@@ -11612,15 +11842,9 @@ async function startServer() {
             error: 'Não foi possível confirmar este vínculo automaticamente.'
           });
         }
-        const existingClinicId = sanitizeString(existingUser.clinic_id, 120);
-        if (existingClinicId && existingClinicId !== safeClinicId) {
-          return res.status(409).json({
-            success: false,
-            status: 'CONFLICT_REQUIRES_REVIEW',
-            code: 'CONFLICT_REQUIRES_REVIEW',
-            error: 'Não foi possível confirmar este vínculo automaticamente.'
-          });
-        }
+        // E-mail de paciente pode existir em outra clínica para outra especialidade
+        // (ex.: ABA em uma clínica e Fono em outra). O bloqueio já foi feito acima
+        // apenas quando há conflito de mesma especialidade.
         await ensurePatientLink(existingUser.id);
         await updatePatientInviteStatus(existingUser.id, 'INVITE_QUEUED');
         if (isUuid(safeClinicId)) {
@@ -12189,6 +12413,7 @@ async function startServer() {
         req.body?.clientRecordId || req.body?.client_record_id || req.body?.localId || req.body?.idempotencyKey,
         120
       );
+      const requestedSpecialtyKeys = derivePatientSpecialtyKeysFromPayload(req.body || {});
       const safeBody = cleanObject({
         id: isUuid(sanitizeString(req.body?.id, 120)) ? sanitizeString(req.body?.id, 120) : undefined,
         name: safeName,
@@ -12257,6 +12482,26 @@ async function startServer() {
           code: 'PATIENT_ALREADY_EXISTS_SAME_CLINIC',
           message: 'Cadastro confirmado.',
           data: existingPatientData
+        });
+      }
+
+      const crossClinicSpecialtyConflict = await findPatientSpecialtyConflictAcrossClinics({
+        clinicId: safeBody.clinic_id || safeClinicId,
+        email: safeBody.email,
+        cpf: safeBody.cpf,
+        requestedSpecialtyKeys,
+        excludePatientId: safeBody.id
+      });
+      if (crossClinicSpecialtyConflict) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_SPECIALTY_CONFLICT_OTHER_CLINIC',
+          status: 'SPECIALTY_CONFLICT_REQUIRES_REVIEW',
+          error: 'Este paciente já está vinculado a outra clínica nesta mesma especialidade.',
+          details: {
+            patientId: crossClinicSpecialtyConflict.patientId,
+            specialty: crossClinicSpecialtyConflict.specialtyKey
+          }
         });
       }
 

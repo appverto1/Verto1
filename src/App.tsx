@@ -2945,7 +2945,13 @@ export default function App() {
         data.name,
         resolvedPortalType,
         data.cpf || data.anamnesisData?.cpf || null,
-        { phone: data.phone, clientRecordId: String(newId) },
+        {
+          phone: data.phone,
+          clientRecordId: String(newId),
+          patientProfileType: resolvedProfileType,
+          panelType: resolvedProfileType,
+          financialPlans: Array.isArray(data.financialPlans) ? data.financialPlans : [],
+        },
       );
       if (userResult.success) {
         activationEmailSent = userResult.activationEmailSent === false ? false : userResult.activationEmailSent === null ? null : true;
@@ -3113,6 +3119,28 @@ export default function App() {
     }
 
     if (!fbResult?.success) {
+      const deferredPatientSync =
+        Boolean(fbResult?.offline || fbResult?.pending) &&
+        (Number(fbResult?.status) >= 500 || Number(fbResult?.status) === 408 || Number(fbResult?.status) === 429);
+      if (deferredPatientSync) {
+        activationEmailSent = activationEmailSent === null ? false : activationEmailSent;
+        activationMessage = [
+          activationMessage,
+          "Cadastro salvo localmente. A sincronização com o servidor será retomada automaticamente."
+        ].filter(Boolean).join(" ");
+        return {
+          success: true,
+          data: {
+            patientId: persistedPatientId,
+            patientEmail: data.email || null,
+            activationEmailSent,
+            activationEmailWarning: activationEmailWarning || toReadableError(fbResult?.error || fbResult?.warning || 'Sincronização pendente.'),
+            activationMessage,
+            portabilityAvailable,
+            patientSyncPending: true
+          }
+        };
+      }
       if (!duplicateConflict) {
         alert(`Não foi possível cadastrar paciente: ${toReadableError(fbResult?.error || 'Erro desconhecido')}`);
         rollbackOptimisticPatient();

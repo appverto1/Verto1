@@ -162,12 +162,11 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
   React.useEffect(() => {
     const savedEmail = localStorage.getItem('verto_email');
-    const savedPassword = localStorage.getItem('verto_password');
     const savedRemember = localStorage.getItem('verto_remember') === 'true';
+    localStorage.removeItem('verto_password');
     
     if (savedRemember && savedEmail) {
       setEmail(savedEmail);
-      if (savedPassword) setPassword(savedPassword);
       setRememberMe(true);
     }
   }, []);
@@ -199,7 +198,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       if (data.session) {
         if (rememberMe) {
           localStorage.setItem('verto_email', email);
-          localStorage.setItem('verto_password', password);
+          localStorage.removeItem('verto_password');
           localStorage.setItem('verto_remember', 'true');
         } else {
           localStorage.removeItem('verto_email');
@@ -2053,5 +2052,4 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     </div>
   );
 };
-
 

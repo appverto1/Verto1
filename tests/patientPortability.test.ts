@@ -30,11 +30,25 @@ function routeSlice(marker: string, chars = 900) {
 
 test('cadastro trata duplicidade segura como idempotente sem transformar 409 real em sucesso generico', () => {
   assert.match(serverCode, /PATIENT_ALREADY_EXISTS_SAME_CLINIC/);
+  assert.match(serverCode, /PATIENT_SPECIALTY_CONFLICT_OTHER_CLINIC/);
+  assert.match(serverCode, /findPatientSpecialtyConflictAcrossClinics\(\{[\s\S]*?requestedSpecialtyKeys/);
   assert.match(serverCode, /idempotent:\s*true/);
   assert.match(serverCode, /RESPONSIBLE_LINKED_TO_NEW_PATIENT/);
   assert.match(serverCode, /EXISTING_EMAIL_LINKED/);
   assert.match(serverCode, /findDuplicatePatientInClinic\(\{[\s\S]*?name:/);
   assert.doesNotMatch(serverCode, /Todo o hist.rico cl.nico anterior ser. vinculado/i);
+});
+
+test('duplicidade entre clinicas bloqueia apenas quando especialidade coincide', () => {
+  assert.match(serverCode, /function normalizePatientSpecialtyKey/);
+  assert.match(serverCode, /function derivePatientSpecialtyKeysFromPayload/);
+  assert.match(serverCode, /async function fetchSpecialtyKeysForPatientRows/);
+  assert.match(serverCode, /async function findPatientSpecialtyConflictAcrossClinics/);
+  assert.match(serverCode, /requested\.size === 0/);
+  assert.match(serverCode, /if \(requested\.has\(key\)\)/);
+  const patientPost = routeSlice("app.post('/api/patients',", 6500);
+  assert.match(patientPost, /requestedSpecialtyKeys = derivePatientSpecialtyKeysFromPayload/);
+  assert.match(patientPost, /PATIENT_SPECIALTY_CONFLICT_OTHER_CLINIC/);
 });
 
 test('frontend nao vincula historico automaticamente por e-mail existente nem duplica popup de ativacao', () => {

@@ -1094,6 +1094,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
 
+  const sanitizeDocumentImageUrl = (value: any) => {
+    const raw = String(value ?? "").trim();
+    if (!raw) return "";
+    if (/^https?:\/\//i.test(raw) || /^blob:/i.test(raw)) return raw;
+    if (/^data:image\/(png|jpeg|jpg|webp);base64,[a-z0-9+/=\s]+$/i.test(raw)) return raw;
+    return "";
+  };
+
   const refreshClinicDocumentMedia = async () => {
     const baseContext = clinicContext || {};
     const currentUserId = String(baseContext?.userId || "").trim();
@@ -1339,8 +1347,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       String(c.address || c.clinicAddress || '').trim() ||
       [c.street, c.number, c.complement, c.neighborhood, c.city].filter(Boolean).join(', ') ||
       '-';
-    const clinicLogoUrl = String(c.logoUrl || c.clinicLogoUrl || c.profilePictureUrl || "").trim();
-    const signatureUrl = String(c.signatureUrl || c.signatureDataUrl || c.professionalSignatureUrl || "").trim();
+    const clinicLogoUrl = sanitizeDocumentImageUrl(c.logoUrl || c.clinicLogoUrl || c.profilePictureUrl);
+    const signatureUrl = sanitizeDocumentImageUrl(c.signatureUrl || c.signatureDataUrl || c.professionalSignatureUrl);
     const fichaType = normalizeValue('formType', anamnesis?.formType || patient?.anamnesisData?.formType || '');
     const headerSummaryHtml = `
       <p class="meta"><strong>Clínica:</strong> ${escapeHtml(clinicName)}</p>

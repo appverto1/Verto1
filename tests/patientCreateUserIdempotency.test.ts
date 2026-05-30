@@ -46,6 +46,16 @@ test('create-user enfileira convite e nao aguarda envio de e-mail no fluxo princ
   assert.doesNotMatch(route, /status:\s*'INVITE_SENT'[\s\S]{0,180}userId:/);
 });
 
+test('create-user permite mesmo e-mail em outra clinica quando especialidade e diferente', () => {
+  const route = routeSlice();
+  assert.match(serverCode, /function derivePatientSpecialtyKeysFromPayload/);
+  assert.match(serverCode, /async function findPatientSpecialtyConflictAcrossClinics/);
+  assert.match(route, /requestedSpecialtyKeys = derivePatientSpecialtyKeysFromPayload/);
+  assert.match(route, /PATIENT_SPECIALTY_CONFLICT_OTHER_CLINIC/);
+  assert.doesNotMatch(route, /existingClinicId && existingClinicId !== safeClinicId/);
+  assert.match(route, /E-mail de paciente pode existir em outra cl.nica para outra especialidade/);
+});
+
 test('frontend trata resposta idempotente e nao mostra mojibake no convite do paciente', () => {
   assert.match(dataServiceCode, /response\.status === 409 && isIdempotentConflictPayload\(result\)/);
   assert.match(dataServiceCode, /RESOLVED_IDEMPOTENT/);
@@ -65,6 +75,17 @@ test('frontend nao bloqueia cadastro quando preparacao do convite fica indisponi
   assert.match(addPatientSlice, /Number\(userResult\?\.status\) === 502/);
   assert.match(addPatientSlice, /Paciente cadastrado\. O convite n.o foi preparado agora/);
   assert.match(addPatientSlice, /const fbResult = await dataService\.savePatient/);
+});
+
+test('frontend envia especialidades no create-user e trata savePatient 5xx como sync pendente', () => {
+  const start = appCode.indexOf('const handleAddPatient = async');
+  const end = appCode.indexOf('const handleUpdatePatient = async', start);
+  const addPatientSlice = appCode.slice(start, end);
+  assert.match(addPatientSlice, /financialPlans: Array\.isArray\(data\.financialPlans\)/);
+  assert.match(addPatientSlice, /patientProfileType: resolvedProfileType/);
+  assert.match(addPatientSlice, /deferredPatientSync/);
+  assert.match(addPatientSlice, /Cadastro salvo localmente\. A sincroniza..o com o servidor ser. retomada automaticamente/);
+  assert.doesNotMatch(addPatientSlice, /rollbackOptimisticPatient\(\);[\s\S]{0,140}deferredPatientSync/);
 });
 
 test('frontend limita busca de logs de atividade sem solicitar lote gigante', () => {
