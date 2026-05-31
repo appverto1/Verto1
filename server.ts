@@ -6348,10 +6348,31 @@ async function upsertAnamnesisResponse(params: {
 function sanitizeIsoDateOnly(value: unknown): string | null {
   const raw = sanitizeString(value, 40);
   if (!raw) return null;
-  const normalized = raw.length >= 10 ? raw.slice(0, 10) : raw;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return null;
-  const parsed = new Date(`${normalized}T00:00:00.000Z`);
-  return Number.isNaN(parsed.getTime()) ? null : normalized;
+  const isValidDateOnlyParts = (year: number, month: number, day: number) => {
+    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return false;
+    if (year < 1900 || year > 2200 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+    const localDate = new Date(year, month - 1, day);
+    return (
+      localDate.getFullYear() === year &&
+      localDate.getMonth() === month - 1 &&
+      localDate.getDate() === day
+    );
+  };
+  const isoDate = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoDate) {
+    const year = Number(isoDate[1]);
+    const month = Number(isoDate[2]);
+    const day = Number(isoDate[3]);
+    return isValidDateOnlyParts(year, month, day) ? `${isoDate[1]}-${isoDate[2]}-${isoDate[3]}` : null;
+  }
+  const brazilianDate = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (brazilianDate) {
+    const day = Number(brazilianDate[1]);
+    const month = Number(brazilianDate[2]);
+    const year = Number(brazilianDate[3]);
+    return isValidDateOnlyParts(year, month, day) ? `${brazilianDate[3]}-${brazilianDate[2]}-${brazilianDate[1]}` : null;
+  }
+  return null;
 }
 
 function buildPatientProfileTypeFields(body: any) {

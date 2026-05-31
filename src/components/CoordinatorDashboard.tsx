@@ -149,7 +149,7 @@ interface CoordinatorDashboardProps {
     subject?: string,
   ) => void;
   onUpdateProfile: (updates: any) => void;
-  onUpdatePatient?: (patient: any) => void;
+  onUpdatePatient?: (patient: any) => Promise<any> | any;
   onRecordTrial?: (
     pid: any,
     title: string,
@@ -284,6 +284,8 @@ export function CoordinatorDashboard({
     | "settings"
     | "logs"
     | "billing"
+    | "flow"
+    | "birthdays"
   >("dashboard");
   const [tabHistory, setTabHistory] = useState<string[]>(["dashboard"]);
   const [showInvitationModal, setShowInvitationModal] = useState(false);
@@ -292,6 +294,7 @@ export function CoordinatorDashboard({
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [therapistMembersById, setTherapistMembersById] = useState<Record<string, any>>({});
   const [patientTherapistFilter, setPatientTherapistFilter] = useState<string>("all");
+  const [patientQuickFilter, setPatientQuickFilter] = useState<"all" | "birthdaysToday">("all");
 
   const navigateToTab = (
     tab:
@@ -306,7 +309,9 @@ export function CoordinatorDashboard({
       | "protocols"
       | "settings"
       | "logs"
-      | "billing",
+      | "billing"
+      | "flow"
+      | "birthdays",
   ) => {
     if (!canAccessTab(tab)) {
       setActiveTab("dashboard");
@@ -384,28 +389,55 @@ export function CoordinatorDashboard({
     return entries;
   }, [therapistMembersById]);
 
-  const parsePatientBirthDateParts = (value: any) => {
+  const isValidDateOnlyParts = (year: number, month: number, day: number) => {
+    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return false;
+    if (year < 1900 || year > 2200 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+    const localDate = new Date(year, month - 1, day);
+    return (
+      localDate.getFullYear() === year &&
+      localDate.getMonth() === month - 1 &&
+      localDate.getDate() === day
+    );
+  };
+
+  const normalizeBirthDateForStorage = (value: any) => {
     const raw = String(value || "").trim();
-    if (!raw) return null;
-    const isoDateOnly = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!raw) return "";
+    const isoDateOnly = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (isoDateOnly) {
-      return {
-        day: Number(isoDateOnly[3]),
-        month: Number(isoDateOnly[2]),
-      };
+      const year = Number(isoDateOnly[1]);
+      const month = Number(isoDateOnly[2]);
+      const day = Number(isoDateOnly[3]);
+      return isValidDateOnlyParts(year, month, day) ? `${isoDateOnly[1]}-${isoDateOnly[2]}-${isoDateOnly[3]}` : "";
     }
     const brazilianDate = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
     if (brazilianDate) {
-      return {
-        day: Number(brazilianDate[1]),
-        month: Number(brazilianDate[2]),
-      };
+      const day = Number(brazilianDate[1]);
+      const month = Number(brazilianDate[2]);
+      const year = Number(brazilianDate[3]);
+      if (!isValidDateOnlyParts(year, month, day)) return "";
+      return `${brazilianDate[3]}-${brazilianDate[2]}-${brazilianDate[1]}`;
     }
-    const date = new Date(raw);
-    if (Number.isNaN(date.getTime())) return null;
+    return "";
+  };
+
+  const formatBirthDateForInput = (value: any) => normalizeBirthDateForStorage(value);
+
+  const formatBirthDateForDisplay = (value: any) => {
+    const normalized = normalizeBirthDateForStorage(value);
+    if (!normalized) return "";
+    const [year, month, day] = normalized.split("-");
+    return `${day}/${month}/${year}`;
+  };
+
+  const parsePatientBirthDateParts = (value: any) => {
+    const normalized = normalizeBirthDateForStorage(value);
+    if (!normalized) return null;
+    const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
     return {
-      day: date.getDate(),
-      month: date.getMonth() + 1,
+      day: Number(match[3]),
+      month: Number(match[2]),
     };
   };
 
@@ -452,16 +484,43 @@ export function CoordinatorDashboard({
   const visiblePatients = useMemo(() => {
     const patientsAllowedForRole = roleScopedPatients;
 
-    if (patientTherapistFilter === "all" || isTherapist) return patientsAllowedForRole;
+    let filteredPatients = patientsAllowedForRole;
+    if (patientTherapistFilter !== "all" && !isTherapist) {
+      if (patientTherapistFilter === "unassigned") {
+        filteredPatients = patientsAllowedForRole.filter((patient: any) => {
+          const therapistId = String(
+            patient?.therapist_id || patient?.professional_id || "",
+          ).trim();
+          return !therapistId;
+        });
+      } else {
+        filteredPatients = patientsAllowedForRole.filter((patient: any) => {
+          const therapistId = String(
+            patient?.therapist_id || patient?.professional_id || "",
+          ).trim();
+          return therapistId === patientTherapistFilter;
+        });
+      }
+    }
+
+    if (patientQuickFilter === "birthdaysToday") {
+      return filteredPatients.filter((patient: any) => isBirthdayTodayPatient(patient));
+    }
+
+    return filteredPatients;
+  }, [isTherapist, patientQuickFilter, patientTherapistFilter, roleScopedPatients]);
+
+  const visiblePatientsWithoutQuickFilter = useMemo(() => {
+    if (patientTherapistFilter === "all" || isTherapist) return roleScopedPatients;
     if (patientTherapistFilter === "unassigned") {
-      return patientsAllowedForRole.filter((patient: any) => {
+      return roleScopedPatients.filter((patient: any) => {
         const therapistId = String(
           patient?.therapist_id || patient?.professional_id || "",
         ).trim();
         return !therapistId;
       });
     }
-    return patientsAllowedForRole.filter((patient: any) => {
+    return roleScopedPatients.filter((patient: any) => {
       const therapistId = String(
         patient?.therapist_id || patient?.professional_id || "",
       ).trim();
@@ -2044,26 +2103,36 @@ export function CoordinatorDashboard({
       createdAt: new Date().toISOString(),
     };
 
-    onAddPatient(newPatient);
-    setIsQuickRegisterModalOpen(false);
-    setQuickPatientName("");
-    setQuickPatientEmail("");
-    setQuickPatientPhone("");
-    setQuickPatientAge("");
+    try {
+      const addResult = await onAddPatient(newPatient);
+      if (addResult?.success === false) {
+        showToast(String(addResult?.error || "Não foi possível cadastrar paciente."), "error");
+        return;
+      }
 
-    onAddActivityLog(
-      "Novo Paciente",
-      `Paciente ${quickPatientName} cadastrado via registro rápido.`,
-    );
-    setActionPopup({
-      title: "Paciente adicionado",
-      message: `O paciente ${quickPatientName} foi cadastrado com sucesso.`,
-    });
-    hideProcessing();
-    showToast(
-      "Dados salvos com sucesso! Custo de R$ 4,90 será cobrado da clínica.",
-      "info",
-    );
+      setIsQuickRegisterModalOpen(false);
+      setQuickPatientName("");
+      setQuickPatientEmail("");
+      setQuickPatientPhone("");
+      setQuickPatientAge("");
+
+      onAddActivityLog(
+        "Novo Paciente",
+        `Paciente ${quickPatientName} cadastrado via registro rápido.`,
+      );
+      setActionPopup({
+        title: "Paciente adicionado",
+        message: `O paciente ${quickPatientName} foi cadastrado com sucesso.`,
+      });
+      showToast(
+        addResult?.data?.patientSyncPending
+          ? "Cadastro salvo localmente. Sincronização pendente."
+          : "Dados salvos com sucesso! Custo de R$ 4,90 será cobrado da clínica.",
+        addResult?.data?.patientSyncPending ? "info" : "info",
+      );
+    } finally {
+      hideProcessing();
+    }
   };
 
   const handleStatusUpdate = (id: number, status: string, details: any = {}) => {
@@ -2360,6 +2429,7 @@ export function CoordinatorDashboard({
     const primaryBillingPlan = financialPlans.find((plan: any) => getFinancialPlanPrimaryBillingMethod(plan));
     const canonicalProfileType = normalizePatientProfileType(newPatientForm.patientProfileType);
     const legacyPortalType = mapPatientProfileTypeToLegacyPortalType(canonicalProfileType);
+    const normalizedBirthDate = normalizeBirthDateForStorage(newPatientForm.dataNascimento);
 
     const newPatient = {
       id: editingPatientId || crypto.randomUUID(),
@@ -2367,7 +2437,10 @@ export function CoordinatorDashboard({
       socialName: newPatientForm.nomeSocial?.trim() || null,
       phone: normalizedPhone || null,
       email: normalizedEmail || null,
-      age: calculateAgeFromBirthDate(newPatientForm.dataNascimento),
+      age: calculateAgeFromBirthDate(normalizedBirthDate),
+      birthDate: normalizedBirthDate || null,
+      birth_date: normalizedBirthDate || null,
+      dataNascimento: normalizedBirthDate || null,
       gender: newPatientForm.genero || null,
       insuranceType: newPatientForm.convenioTipo || "particular",
       insuranceName:
@@ -2426,7 +2499,11 @@ export function CoordinatorDashboard({
 
     try {
       if (editingPatientId && onUpdatePatient) {
-        onUpdatePatient(newPatient);
+        const updateResult = await onUpdatePatient(newPatient);
+        if (updateResult?.success === false) {
+          showToast(String(updateResult?.error || "Não foi possível salvar alterações do paciente."), "error");
+          return;
+        }
         onAddActivityLog(
           "Paciente atualizado",
           `Cadastro de ${newPatient.name} atualizado pela coordenação.`,
@@ -2532,7 +2609,13 @@ export function CoordinatorDashboard({
       nome: patient.name || "",
       nomeSocial: patient.socialName || "",
       telefone: patient.phone || "",
-      dataNascimento: patient.birthDate || "",
+      dataNascimento: formatBirthDateForInput(
+        patient.birthDate ||
+          patient.birth_date ||
+          patient.dataNascimento ||
+          patient.anamnesisData?.dataNascimento ||
+          "",
+      ),
       genero: patient.gender || "",
       convenioTipo: patient.insuranceType === "convenio" ? "convenio" : "particular",
       convenioNome: patient.insuranceName || "",
@@ -2540,7 +2623,7 @@ export function CoordinatorDashboard({
       grupo: patient.group || "adulto",
       comoConheceu: patient.source || "",
       rg: patient.rg || "",
-      cpf: patient.cpf || "",
+      cpf: formatCpf(patient.cpf || patient.anamnesisData?.cpf || ""),
       cep: patient.cep || patient.address?.cep || "",
       email: patient.email || "",
       logradouro: patient.address?.logradouro || "",
@@ -2551,8 +2634,8 @@ export function CoordinatorDashboard({
       outrasInformacoes: patient.notes || "",
       menorDeIdade: Boolean(patient.isMinor),
       responsavelNome: patient.guardian?.nome || "",
-      responsavelDataNascimento: patient.guardian?.dataNascimento || "",
-      responsavelCpf: patient.guardian?.cpf || "",
+      responsavelDataNascimento: formatBirthDateForInput(patient.guardian?.dataNascimento || ""),
+      responsavelCpf: formatCpf(patient.guardian?.cpf || ""),
       responsavelTelefone: patient.guardian?.telefone || "",
       responsavelEmail: patient.guardian?.email || patient.responsible_email || "",
       responsavelRelacao:
@@ -2572,7 +2655,7 @@ export function CoordinatorDashboard({
     setIsPatientRegistrationModalOpen(true);
   };
 
-  const handleDeletePatient = (patient: any) => {
+  const handleDeletePatient = async (patient: any) => {
     if (!patient?.id) return;
     const patientName = normalizeUtf8Text(patient?.name || "Paciente");
     const isUnlinkOnly = isTherapist;
@@ -2584,31 +2667,38 @@ export function CoordinatorDashboard({
     if (!shouldDelete) return;
     showProcessing(isUnlinkOnly ? "Desvinculando paciente..." : "Excluindo paciente...");
 
-    if (onUpdatePatient) {
-      onUpdatePatient({
-        id: patient.id,
-        clinic_id: null,
-        status: "deleted",
-        [isUnlinkOnly ? "unlinkedAt" : "deletedAt"]: new Date().toISOString(),
-      });
-    }
+    try {
+      if (onUpdatePatient) {
+        const updateResult = await onUpdatePatient({
+          id: patient.id,
+          clinic_id: null,
+          status: "deleted",
+          [isUnlinkOnly ? "unlinkedAt" : "deletedAt"]: new Date().toISOString(),
+        });
+        if (updateResult?.success === false) {
+          showToast(String(updateResult?.error || "Não foi possível atualizar o paciente."), "error");
+          return;
+        }
+      }
 
-    onAddActivityLog(
-      isUnlinkOnly ? "Paciente desvinculado" : "Paciente excluído",
-      isUnlinkOnly
-        ? `Paciente ${patientName} foi desvinculado da clínica.`
-        : `Paciente ${patientName} foi excluído da clínica.`,
-      "management",
-    );
-    setActionPopup({
-      title: isUnlinkOnly ? "Paciente desvinculado" : "Paciente excluído",
-      message: isUnlinkOnly
-        ? `O paciente ${patientName} foi desvinculado da clínica.`
-        : `O paciente ${patientName} foi excluído com sucesso.`,
-    });
-    hideProcessing();
-    showToast(isUnlinkOnly ? "Paciente desvinculado da clínica." : "Paciente excluído com sucesso!");
-    setOpenMenuId(null);
+      onAddActivityLog(
+        isUnlinkOnly ? "Paciente desvinculado" : "Paciente excluído",
+        isUnlinkOnly
+          ? `Paciente ${patientName} foi desvinculado da clínica.`
+          : `Paciente ${patientName} foi excluído da clínica.`,
+        "management",
+      );
+      setActionPopup({
+        title: isUnlinkOnly ? "Paciente desvinculado" : "Paciente excluído",
+        message: isUnlinkOnly
+          ? `O paciente ${patientName} foi desvinculado da clínica.`
+          : `O paciente ${patientName} foi excluído com sucesso.`,
+      });
+      showToast(isUnlinkOnly ? "Paciente desvinculado da clínica." : "Paciente excluído com sucesso!");
+      setOpenMenuId(null);
+    } finally {
+      hideProcessing();
+    }
   };
 
   const handleResendPatientActivationEmail = async (patient: any) => {
@@ -4491,7 +4581,14 @@ export function CoordinatorDashboard({
             <button
               key={stat.label}
               type="button"
-              onClick={() => navigateToTab(stat.id as any)}
+              onClick={() => {
+                if (stat.id === "birthdays") {
+                  setPatientQuickFilter("birthdaysToday");
+                  navigateToTab("patients");
+                  return;
+                }
+                navigateToTab(stat.id as any);
+              }}
               className={`group relative overflow-hidden rounded-[26px] border p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-xl ${
                 theme === "dark"
                   ? "border-white/10 bg-white/[0.04] hover:border-violet-300/30"
@@ -5118,7 +5215,6 @@ export function CoordinatorDashboard({
                         id: "birthdays",
                         label: "Aniversariantes",
                         icon: Heart,
-                        badge: "EM BREVE",
                       },
                     ]).map((item) => (
                       <button
@@ -6764,7 +6860,10 @@ export function CoordinatorDashboard({
                   </div>
                   <button
                     type="button"
-                    onClick={() => navigateToTab("patients")}
+                    onClick={() => {
+                      setPatientQuickFilter("all");
+                      navigateToTab("patients");
+                    }}
                     className="inline-flex items-center justify-center rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700 transition-all hover:border-[#7a32fc] hover:text-[#7a32fc]"
                   >
                     Limpar filtro
@@ -6787,7 +6886,9 @@ export function CoordinatorDashboard({
                               {normalizeUtf8Text(patient?.name || "Paciente")}
                             </h4>
                             <p className="mt-0.5 text-xs font-semibold text-slate-500">
-                              {patient?.birthDate || patient?.birth_date || patient?.dataNascimento || "Nascimento cadastrado"}
+                              {formatBirthDateForDisplay(
+                                patient?.birthDate || patient?.birth_date || patient?.dataNascimento,
+                              ) || "Nascimento cadastrado"}
                             </p>
                           </div>
                         </div>
@@ -6869,6 +6970,24 @@ export function CoordinatorDashboard({
                       </select>
                     </div>
                   )}
+                  {patientQuickFilter === "birthdaysToday" && (
+                    <div className="flex flex-col gap-3 rounded-2xl border border-pink-100 bg-pink-50/70 p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex items-center gap-2 text-sm font-bold text-pink-700">
+                        <Cake size={18} />
+                        <span>Filtro ativo: Aniversariantes de hoje</span>
+                        <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-pink-600">
+                          {visiblePatients.length}/{visiblePatientsWithoutQuickFilter.length}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setPatientQuickFilter("all")}
+                        className="inline-flex items-center justify-center rounded-xl bg-white px-3 py-2 text-xs font-black uppercase tracking-wider text-slate-600 shadow-sm transition-all hover:text-[#7a32fc]"
+                      >
+                        Limpar filtro
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                   {visiblePatients.map((patient, i) => (
@@ -6893,7 +7012,11 @@ export function CoordinatorDashboard({
                           onPatientClick(patient.id, { tab: "history" });
                         }
                       }}
-                      className="p-4 sm:p-6 bg-slate-50 rounded-3xl border border-slate-100 hover:border-blue-500/30 transition-all group relative cursor-pointer focus:outline-none focus:ring-4 focus:ring-[#7a32fc]/15"
+                      className={`p-4 sm:p-6 rounded-3xl border transition-all group relative cursor-pointer focus:outline-none focus:ring-4 focus:ring-[#7a32fc]/15 ${
+                        patientQuickFilter === "birthdaysToday"
+                          ? "border-pink-200 bg-pink-50/70 hover:border-pink-300"
+                          : "border-slate-100 bg-slate-50 hover:border-blue-500/30"
+                      }`}
                     >
                       <div className="flex items-center gap-4 mb-4">
                         <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white rounded-2xl flex items-center justify-center font-bold text-slate-900 shadow-sm group-hover:scale-110 transition-transform">
@@ -6908,6 +7031,11 @@ export function CoordinatorDashboard({
                                 className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-100 text-amber-700 text-xs font-black shrink-0"
                               >
                                 !
+                              </span>
+                            )}
+                            {patientQuickFilter === "birthdaysToday" && (
+                              <span className="rounded-full bg-pink-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-pink-700">
+                                Hoje
                               </span>
                             )}
                           </h4>
@@ -8259,12 +8387,13 @@ export function CoordinatorDashboard({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
               <div><span className="text-slate-400">Nome:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.name || "-"}</p></div>
               <div><span className="text-slate-400">Nome social:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.socialName || "-"}</p></div>
+              <div><span className="text-slate-400">Nascimento:</span> <p className="font-semibold text-slate-800">{formatBirthDateForDisplay(selectedPatientProfile.birthDate || selectedPatientProfile.birth_date || selectedPatientProfile.dataNascimento) || "-"}</p></div>
               <div><span className="text-slate-400">Telefone:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.phone || "-"}</p></div>
               <div><span className="text-slate-400">Email:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.email || "-"}</p></div>
               <div><span className="text-slate-400">Convênio:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.insuranceName || selectedPatientProfile.insuranceType || "-"}</p></div>
               <div><span className="text-slate-400">Carteirinha:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.cardNumber || "-"}</p></div>
               <div><span className="text-slate-400">RG:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.rg || "-"}</p></div>
-              <div><span className="text-slate-400">CPF:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.cpf || "-"}</p></div>
+              <div><span className="text-slate-400">CPF:</span> <p className="font-semibold text-slate-800">{formatCpf(selectedPatientProfile.cpf || "") || "-"}</p></div>
               <div><span className="text-slate-400">Perfil:</span> <p className="font-semibold text-slate-800">{getPatientProfileTypeLabel(selectedPatientProfile.patientProfileType)}</p></div>
               <div className="md:col-span-2"><span className="text-slate-400">Endereço:</span> <p className="font-semibold text-slate-800">{[selectedPatientProfile.address?.logradouro, selectedPatientProfile.address?.numero, selectedPatientProfile.address?.complemento, selectedPatientProfile.address?.bairro, selectedPatientProfile.address?.cidade].filter(Boolean).join(" - ") || "-"}</p></div>
               <div className="md:col-span-2"><span className="text-slate-400">Observações:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.notes || "-"}</p></div>

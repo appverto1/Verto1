@@ -93,7 +93,8 @@ test('aniversariantes usam data local, contam dia e mes e filtram a lista', () =
   assert.match(coordinatorCode, /birthDate\?\.day === today\.getDate\(\)/);
   assert.match(coordinatorCode, /birthdayPatients = useMemo/);
   assert.match(coordinatorCode, /birthdayTodayCount/);
-  assert.match(coordinatorCode, /onClick=\{\(\) => navigateToTab\(stat\.id as any\)\}/);
+  assert.match(coordinatorCode, /setPatientQuickFilter\("birthdaysToday"\)/);
+  assert.match(coordinatorCode, /navigateToTab\("patients"\)/);
   assert.match(coordinatorCode, /activeTab === "birthdays"/);
   assert.match(coordinatorCode, /Aniversariantes de hoje/);
   assert.match(coordinatorCode, /birthdayPatients\.map/);

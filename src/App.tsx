@@ -3369,10 +3369,12 @@ export default function App() {
       if (isDeleteOrUnlink) {
         const deleteResult = await dataService.deletePatient(String(updatedData.id));
         if (!deleteResult?.success) {
-          alert(`Não foi possível excluir/desvincular paciente: ${toReadableError(deleteResult?.error || 'Erro desconhecido')}`);
+          const errorMessage = toReadableError(deleteResult?.error || 'Erro desconhecido');
+          alert(`Não foi possível excluir/desvincular paciente: ${errorMessage}`);
+          return { success: false, error: errorMessage };
         }
       } else {
-        await dataService.updatePatient(String(updatedData.id), {
+        const updateResult = await dataService.updatePatient(String(updatedData.id), {
           name: updatedData.name,
           socialName: updatedData.socialName || updatedData.nomeSocial,
           email: updatedData.email,
@@ -3411,6 +3413,11 @@ export default function App() {
           clinic_id: updatedData.clinic_id,
           status: updatedData.status
         });
+        if (!updateResult?.success) {
+          const errorMessage = toReadableError(updateResult?.error || updateResult?.warning || 'Erro desconhecido');
+          alert(`Não foi possível confirmar a persistência do cadastro: ${errorMessage}`);
+          return { success: false, error: errorMessage };
+        }
       }
 
       if (
@@ -3461,10 +3468,13 @@ export default function App() {
 
         const patientRecordResult = await dataService.savePatientRecord(String(updatedData.id), recordPayload);
         if (!patientRecordResult?.success) {
-          alert(`Não foi possível confirmar a persistência do prontuário financeiro: ${toReadableError(patientRecordResult?.error || patientRecordResult?.warning || 'Erro desconhecido')}`);
+          const errorMessage = toReadableError(patientRecordResult?.error || patientRecordResult?.warning || 'Erro desconhecido');
+          alert(`Não foi possível confirmar a persistência do prontuário financeiro: ${errorMessage}`);
+          return { success: false, error: errorMessage };
         }
       }
     }
+    return { success: true };
   };
   const handleScheduleSession = (sess: any) => {
     const patientForSession = allPatients.find(p => p.name === sess.patientName);
