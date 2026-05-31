@@ -129,17 +129,18 @@ test('anamnese obrigatoria impede ativacao clinica antes de revisao', () => {
 test('frontend expõe anamnese apenas como ficha solicitada e organizada em menu do portal', () => {
   for (const label of [
     /label: 'In.cio'/,
-    /label: 'Consultas'/,
-    /label: 'Ficha de anamnese'/,
+    /label: isKidsProfile \? 'Calend.rio' : 'Consultas'/,
+    /label: 'Anamnese'/,
+    /label: 'Anota..es'/,
     /label: 'Tarefas'/,
-    /label: 'Relat.rios'/,
+    /label: 'Relat.rio'/,
     /label: 'Documentos'/,
     /label: 'Perfil'/
   ]) {
     assert.match(patientDashboardCode, label);
   }
 
-  assert.match(patientDashboardCode, /hasPortalAnamnesis \? \[\{ id: 'anamnesis'/);
+  assert.match(patientDashboardCode, /shouldOfferPortalAnamnesis \? \[\{ id: 'anamnesis'/);
   assert.match(patientDashboardCode, /portalSection === 'appointments' && portalAppointmentsPanel/);
   assert.match(patientDashboardCode, /portalSection === 'anamnesis' && portalAnamnesisPanel/);
   assert.match(patientDashboardCode, /getPortalPatientAnamnesis/);

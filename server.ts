@@ -21259,7 +21259,26 @@ async function startServer() {
   const serializePortalAppointment = (row: any, extras: Record<string, any> = {}) => {
     const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
     const start = buildCalendarAppointmentStart(row);
-    const end = new Date(start.getTime() + getCalendarAppointmentDuration(row) * 60 * 1000);
+    const scheduledDurationMinutes = getCalendarAppointmentDuration(row);
+    const end = new Date(start.getTime() + scheduledDurationMinutes * 60 * 1000);
+    const rawActualMinutes = Number(
+      row?.actual_duration_minutes ||
+      row?.actualDurationMinutes ||
+      source?.actual_duration_minutes ||
+      source?.actualDurationMinutes ||
+      0
+    );
+    const actualStart = new Date(row?.actual_start_at || row?.actualStart || source?.actual_start_at || source?.actualStart || '');
+    const actualEnd = new Date(row?.actual_end_at || row?.actualEnd || source?.actual_end_at || source?.actualEnd || '');
+    const derivedActualMinutes =
+      !Number.isNaN(actualStart.getTime()) && !Number.isNaN(actualEnd.getTime()) && actualEnd.getTime() > actualStart.getTime()
+        ? Math.round((actualEnd.getTime() - actualStart.getTime()) / 60000)
+        : 0;
+    const actualDurationMinutes = Number.isFinite(rawActualMinutes) && rawActualMinutes > 0
+      ? Math.min(360, Math.round(rawActualMinutes))
+      : derivedActualMinutes > 0
+        ? Math.min(360, derivedActualMinutes)
+        : null;
     const roomName = sanitizePortalRoomName(row?.room_name || source?.room_name || source?.roomName);
     const locationType = normalizeScheduleLocationType(row?.location_type || source?.location_type || source?.locationType || (roomName ? 'clinica' : 'outro'));
     const serviceType = sanitizeString(row?.service_type || row?.approach || source?.service_type || source?.type, 120) || 'Sessão';
@@ -21269,6 +21288,8 @@ async function startServer() {
       date: start.toISOString().slice(0, 10),
       scheduledAt: start.toISOString(),
       scheduledEnd: end.toISOString(),
+      scheduledDurationMinutes,
+      actualDurationMinutes,
       time: `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`,
       endTime: `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`,
       serviceType,

@@ -12,7 +12,7 @@ import { calculateDomainMastery } from '../utils/clinicalMath';
 import { ensureFreshSession } from '../lib/supabase';
 import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemplate } from '../lib/anamnesisSchema';
 
-type PortalSection = 'home' | 'appointments' | 'anamnesis' | 'tasks' | 'reports' | 'documents' | 'profile';
+type PortalSection = 'home' | 'appointments' | 'anamnesis' | 'notes' | 'tasks' | 'reports' | 'documents' | 'profile';
 
 export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false, patientPortalId = '' }: any) => { 
   const chartFiltersStorageKey = `verto.patient-dashboard-chart-filters:${String(user?.id || patientPortalId || 'unknown')}`;
@@ -68,6 +68,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   });
   const [notificationSubscriptionReady, setNotificationSubscriptionReady] = useState(false);
   const [portalAppointments, setPortalAppointments] = useState<any[]>([]);
+  const [portalAppointmentsLoaded, setPortalAppointmentsLoaded] = useState(false);
   const [portalAppointmentsState, setPortalAppointmentsState] = useState({ loading: false, error: '', message: '' });
   const [selectedPortalAppointment, setSelectedPortalAppointment] = useState<any | null>(null);
   const [portalAppointmentDetail, setPortalAppointmentDetail] = useState<any | null>(null);
@@ -76,6 +77,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalActionSaving, setPortalActionSaving] = useState(false);
   const [portalSection, setPortalSection] = useState<PortalSection>('home');
   const [portalAnamnesis, setPortalAnamnesis] = useState<any>(null);
+  const [portalAnamnesisChecked, setPortalAnamnesisChecked] = useState(false);
   const [portalAnamnesisDraft, setPortalAnamnesisDraft] = useState<Record<string, any>>({});
   const [portalAnamnesisState, setPortalAnamnesisState] = useState({ loading: false, saving: false, message: '', error: '' });
   const [expandedAnamnesisSections, setExpandedAnamnesisSections] = useState<Record<string, boolean>>({});
@@ -108,8 +110,22 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     : 'Quanto mais energia, mais fácil foi fazer essa tarefa';
   const readOnlyNotice = "Você não possui um tratamento ativo no momento. Entre em contato com sua clínica para retomar o acompanhamento.";
   const portalPatientId = String(patientPortalId || user?.patientId || user?.patient_id || user?.id || '').trim();
+  const portalAnamnesisStatusHint = String(user?.onboardingStatus || user?.onboarding_status || user?.status || '').toUpperCase();
+  const hasPortalAnamnesisHint = Boolean(
+    user?.anamnesisRequired ||
+    user?.anamnesis_required ||
+    user?.anamnesisRequestedAt ||
+    user?.anamnesis_requested_at ||
+    user?.anamnesisSubmittedAt ||
+    user?.anamnesis_submitted_at ||
+    user?.anamnesisReviewedAt ||
+    user?.anamnesis_reviewed_at ||
+    /ANAMNESIS|ANAMNESE|PENDING_ANAMNESIS/.test(portalAnamnesisStatusHint)
+  );
   const hasPortalAnamnesis =
     Boolean(portalAnamnesis?.available && (portalAnamnesis?.request?.id || portalAnamnesis?.response?.id));
+  const shouldOfferPortalAnamnesis =
+    hasPortalAnamnesis || portalAnamnesisState.loading || (!portalAnamnesisChecked && hasPortalAnamnesisHint);
   const portalAnamnesisRequestStatus = String(portalAnamnesis?.request?.status || '').toUpperCase();
   const portalAnamnesisResponseStatus = String(portalAnamnesis?.response?.status || '').toUpperCase();
   const portalAnamnesisLocked =
@@ -251,6 +267,25 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     });
   };
 
+  const formatPortalDate = (value: any) => {
+    const date = new Date(value || '');
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleDateString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+  };
+
+  const formatPortalTime = (value: any) => {
+    const date = new Date(value || '');
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleTimeString('pt-BR', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
   const getPortalStatusLabel = (status: any) => {
     const normalized = String(status || '').toUpperCase();
     if (normalized.includes('CONFIRM')) return 'Confirmada';
@@ -258,9 +293,46 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (normalized.includes('RESCHEDULED')) return 'Remarcada';
     if (normalized.includes('CANCEL_REQUEST')) return 'Cancelamento solicitado';
     if (normalized.includes('CANCEL')) return 'Cancelada';
+    if (normalized.includes('REALIZ')) return 'Realizada';
     if (normalized.includes('COMPLET')) return 'Concluída';
     if (normalized.includes('NO_SHOW')) return 'Falta';
+    if (normalized.includes('PEND')) return 'Pendente';
     return 'Agendada';
+  };
+
+  const toPortalMinutes = (value: any) => {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0 ? Math.round(number) : null;
+  };
+
+  const getPortalAppointmentDurationMinutes = (appointment: any) => {
+    const direct =
+      toPortalMinutes(appointment?.actualDurationMinutes) ??
+      toPortalMinutes(appointment?.actual_duration_minutes) ??
+      toPortalMinutes(appointment?.durationMinutes) ??
+      toPortalMinutes(appointment?.duration_minutes) ??
+      toPortalMinutes(appointment?.scheduledDurationMinutes) ??
+      toPortalMinutes(appointment?.scheduled_duration_minutes);
+    if (direct) return direct;
+    const start = new Date(appointment?.scheduledAt || appointment?.scheduled_at || appointment?.scheduledStart || '');
+    const end = new Date(appointment?.scheduledEnd || appointment?.scheduled_end || '');
+    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && end.getTime() > start.getTime()) {
+      return Math.round((end.getTime() - start.getTime()) / 60000);
+    }
+    return null;
+  };
+
+  const formatPortalDuration = (minutes: any) => {
+    const total = Number(minutes);
+    if (!Number.isFinite(total) || total <= 0) return '0 min';
+    const days = Math.floor(total / 1440);
+    const hours = Math.floor((total % 1440) / 60);
+    const mins = Math.round(total % 60);
+    const parts = [];
+    if (days) parts.push(`${days}d`);
+    if (hours) parts.push(`${hours}h`);
+    if (mins || parts.length === 0) parts.push(`${mins}min`);
+    return parts.join(' ');
   };
 
   const loadPortalAppointments = async () => {
@@ -271,16 +343,26 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const result = await dataService.getPortalAppointments({ from, to, limit: 30 });
     if (result?.success) {
       setPortalAppointments(Array.isArray(result.data) ? result.data : []);
+      setPortalAppointmentsLoaded(true);
       setPortalAppointmentsState({ loading: false, error: '', message: '' });
       return;
     }
+    setPortalAppointmentsLoaded(true);
     setPortalAppointmentsState({ loading: false, error: result?.error || 'Não foi possível carregar suas consultas agora.', message: '' });
   };
 
   useEffect(() => {
+    setPortalAppointments([]);
+    setPortalAppointmentsLoaded(false);
+    setPortalAppointmentsState({ loading: false, error: '', message: '' });
+  }, [user?.id, user?.email]);
+
+  useEffect(() => {
+    if (!['appointments', 'reports'].includes(portalSection)) return;
+    if (portalAppointmentsLoaded || portalAppointmentsState.loading) return;
     void loadPortalAppointments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, user?.email]);
+  }, [portalSection, portalAppointmentsLoaded, portalAppointmentsState.loading, user?.id, user?.email]);
 
   const loadPortalAnamnesis = async () => {
     if (!portalPatientId) return;
@@ -298,16 +380,26 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       setExpandedAnamnesisSections(
         Object.fromEntries(profileTemplate.sections.filter((section: any) => section.active !== false).slice(0, 2).map((section: any) => [section.id, true]))
       );
+      setPortalAnamnesisChecked(true);
       setPortalAnamnesisState({ loading: false, saving: false, message: '', error: '' });
       return;
     }
+    setPortalAnamnesisChecked(true);
     setPortalAnamnesisState({ loading: false, saving: false, message: '', error: result?.error || 'Não foi possível carregar a ficha agora.' });
   };
 
   useEffect(() => {
+    setPortalAnamnesis(null);
+    setPortalAnamnesisDraft({});
+    setPortalAnamnesisChecked(false);
+  }, [portalPatientId, user?.email]);
+
+  useEffect(() => {
+    if (!portalPatientId || portalAnamnesisChecked || portalAnamnesisState.loading) return;
+    if (portalSection !== 'anamnesis' && !isMenuOpen) return;
     void loadPortalAnamnesis();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [portalPatientId, user?.email]);
+  }, [portalSection, isMenuOpen, portalPatientId, portalAnamnesisChecked, portalAnamnesisState.loading]);
 
   const openPortalAppointmentDetail = async (appointment: any) => {
     setSelectedPortalAppointment(appointment);
@@ -1137,6 +1229,128 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   }, [familyDiaryHistory, history, sharedNotes]);
   const kidsCheckpointLevel = useMemo(() => Math.floor((kidsGamification.stars || 0) / 5), [kidsGamification.stars]);
 
+  const normalizePortalText = (value: any) => String(value || '').trim();
+  const normalizePortalLower = (value: any) => normalizePortalText(value).toLowerCase();
+  const portalPatientKeys = useMemo(() => {
+    return new Set(
+      [portalPatientId, user?.id, user?.patientId, user?.patient_id]
+        .map((value) => normalizePortalText(value))
+        .filter(Boolean)
+    );
+  }, [portalPatientId, user?.id, user?.patientId, user?.patient_id]);
+  const portalPatientEmail = normalizePortalLower(user?.email);
+  const isTechnicalOrInfrastructureValue = (value: any) => {
+    const text = normalizePortalText(value);
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text) ||
+      /(supabase|railway|postgrest)/i.test(text);
+  };
+  const firstPortalText = (...values: any[]) => values.map(normalizePortalText).find(Boolean) || '';
+  const hasPortalTrueFlag = (value: any) => value === true || ['true', '1', 'yes', 'sim', 'shared', 'released', 'liberado', 'patient', 'family', 'public'].includes(normalizePortalLower(value));
+  const hasPortalPrivateFlag = (item: any) => {
+    const visibility = normalizePortalLower(item?.visibility || item?.audience || item?.scope || item?.access);
+    return item?.private === true ||
+      item?.isPrivate === true ||
+      item?.is_private === true ||
+      item?.internal === true ||
+      item?.isInternal === true ||
+      item?.is_internal === true ||
+      ['private', 'privado', 'internal', 'interno', 'team', 'staff', 'clinic', 'clinica', 'clínica'].includes(visibility);
+  };
+  const noteBelongsToPortalPatient = (note: any) => {
+    const notePatientId = normalizePortalText(note?.patientId || note?.patient_id);
+    const noteEmail = normalizePortalLower(note?.patientEmail || note?.patient_email || note?.email);
+    if (notePatientId && portalPatientKeys.size > 0 && !portalPatientKeys.has(notePatientId)) return false;
+    if (!notePatientId && noteEmail && portalPatientEmail && noteEmail !== portalPatientEmail) return false;
+    return true;
+  };
+  const isPortalSharedNote = (note: any) => {
+    if (!note || hasPortalPrivateFlag(note) || !noteBelongsToPortalPatient(note)) return false;
+    const visibility = normalizePortalLower(note?.visibility || note?.audience || note?.scope || note?.access);
+    const type = normalizePortalLower(note?.type || note?.kind);
+    return hasPortalTrueFlag(note?.sharedWithPatient) ||
+      hasPortalTrueFlag(note?.shared_with_patient) ||
+      hasPortalTrueFlag(note?.visibleToPatient) ||
+      hasPortalTrueFlag(note?.visible_to_patient) ||
+      ['shared', 'patient', 'family', 'shared_patient', 'portal'].includes(visibility) ||
+      ['shared_note', 'patient_note', 'family_note', 'photo'].includes(type);
+  };
+  const portalSharedNotes = useMemo(() => {
+    return (Array.isArray(sharedNotes) ? sharedNotes : [])
+      .filter(isPortalSharedNote)
+      .sort((a: any, b: any) => new Date(b?.created_at || b?.date || 0).getTime() - new Date(a?.created_at || a?.date || 0).getTime())
+      .slice(0, 30);
+  }, [sharedNotes, portalPatientKeys, portalPatientEmail]);
+  const isPortalReleasedDocument = (document: any) => {
+    if (!document || hasPortalPrivateFlag(document) || !noteBelongsToPortalPatient(document)) return false;
+    const metadata = document?.metadata && typeof document.metadata === 'object' ? document.metadata : {};
+    const visibility = normalizePortalLower(document?.visibility || document?.audience || document?.scope || metadata?.visibility);
+    const status = normalizePortalLower(document?.status || metadata?.status);
+    return hasPortalTrueFlag(document?.releasedToPatient) ||
+      hasPortalTrueFlag(document?.released_to_patient) ||
+      hasPortalTrueFlag(document?.visibleToPatient) ||
+      hasPortalTrueFlag(document?.visible_to_patient) ||
+      hasPortalTrueFlag(document?.sharedWithPatient) ||
+      hasPortalTrueFlag(document?.shared_with_patient) ||
+      hasPortalTrueFlag(metadata?.releasedToPatient) ||
+      hasPortalTrueFlag(metadata?.visibleToPatient) ||
+      ['released', 'liberado', 'shared', 'patient', 'family', 'portal', 'public'].includes(visibility) ||
+      ['released', 'liberado', 'available_to_patient'].includes(status);
+  };
+  const portalReleasedDocuments = useMemo(() => {
+    const userDocuments = [
+      ...(Array.isArray(user?.portalDocuments) ? user.portalDocuments : []),
+      ...(Array.isArray(user?.releasedDocuments) ? user.releasedDocuments : []),
+      ...(Array.isArray(user?.sharedDocuments) ? user.sharedDocuments : []),
+      ...(Array.isArray(user?.documents) ? user.documents : []),
+      ...(Array.isArray(user?.files) ? user.files : [])
+    ];
+    const noteDocuments = (Array.isArray(sharedNotes) ? sharedNotes : [])
+      .filter(isPortalSharedNote)
+      .flatMap((note: any) => [
+        ...(Array.isArray(note?.documents) ? note.documents : []),
+        ...(Array.isArray(note?.files) ? note.files : []),
+        ...(Array.isArray(note?.attachments) ? note.attachments : []),
+        normalizePortalLower(note?.type) === 'document' ? note : null
+      ].filter(Boolean));
+    const seen = new Set<string>();
+    return [...userDocuments, ...noteDocuments]
+      .filter(isPortalReleasedDocument)
+      .map((document: any) => {
+        const rawHref = firstPortalText(document?.downloadUrl, document?.download_url, document?.portalUrl, document?.portal_url, document?.url, document?.signedUrl, document?.signed_url);
+        const href = rawHref && !isTechnicalOrInfrastructureValue(rawHref) ? rawHref : '';
+        return {
+          key: firstPortalText(document?.id, document?.path, document?.fileName, document?.name, document?.title, document?.createdAt, document?.created_at),
+          name: firstPortalText(document?.title, document?.name, document?.fileName, document?.file_name, document?.label) || 'Documento liberado',
+          category: firstPortalText(document?.category, document?.source, document?.type) || 'Documento',
+          createdAt: firstPortalText(document?.createdAt, document?.created_at, document?.date),
+          href
+        };
+      })
+      .filter((document: any) => {
+        const key = normalizePortalLower(`${document.name}|${document.createdAt}|${document.href || ''}`);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 30);
+  }, [user, sharedNotes, portalPatientKeys, portalPatientEmail]);
+  const portalReportRows = useMemo(() => {
+    return portalAppointments
+      .map((appointment: any) => {
+        const status = normalizePortalLower(appointment?.status);
+        const minutes = getPortalAppointmentDurationMinutes(appointment);
+        const isCompleted = /complet|realiz|done|finished|conclu/.test(status) || Boolean(appointment?.actualDurationMinutes || appointment?.actual_duration_minutes);
+        return {
+          appointment,
+          minutes: isCompleted ? minutes : null,
+          statusLabel: getPortalStatusLabel(appointment?.status)
+        };
+      })
+      .filter((row: any) => Number(row.minutes) > 0)
+      .slice(0, 30);
+  }, [portalAppointments]);
+  const portalReportTotalMinutes = portalReportRows.reduce((sum: number, row: any) => sum + Number(row.minutes || 0), 0);
+
   useEffect(() => {
     if (!isKidsProfile) return;
     const patientKey = String(user?.id || user?.email || 'unknown');
@@ -1474,22 +1688,23 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   ) : null;
 
   const portalMenuItems = [
-    { id: 'home', label: 'Início', icon: User },
-    { id: 'appointments', label: 'Consultas', icon: CalendarDays },
-    ...(hasPortalAnamnesis ? [{ id: 'anamnesis', label: 'Ficha de anamnese', icon: FileText }] : []),
-    { id: 'tasks', label: 'Tarefas', icon: Zap },
-    { id: 'reports', label: 'Relatórios', icon: Trophy },
+    { id: 'home', label: 'Início', icon: Smile },
+    { id: 'appointments', label: isKidsProfile ? 'Calendário' : 'Consultas', icon: CalendarDays },
+    ...(shouldOfferPortalAnamnesis ? [{ id: 'anamnesis', label: 'Anamnese', icon: FileSignature }] : []),
+    { id: 'notes', label: 'Anotações', icon: MessageCircle },
     { id: 'documents', label: 'Documentos', icon: BookOpen },
+    { id: 'reports', label: 'Relatório', icon: FileText },
+    ...(!isKidsProfile ? [{ id: 'tasks', label: 'Tarefas', icon: Zap }] : []),
     { id: 'profile', label: 'Perfil', icon: Settings }
   ] as Array<{ id: PortalSection; label: string; icon: any }>;
 
   useEffect(() => {
-    if (portalSection === 'anamnesis' && !hasPortalAnamnesis) {
+    if (portalSection === 'anamnesis' && portalAnamnesisChecked && !hasPortalAnamnesis) {
       setPortalSection('home');
     }
-  }, [portalSection, hasPortalAnamnesis]);
+  }, [portalSection, hasPortalAnamnesis, portalAnamnesisChecked]);
 
-  const portalMenu = (
+  const portalMenu = isKidsProfile ? null : (
     <div className={`${isKidsProfile ? 'mb-4' : 'mb-6'} overflow-x-auto no-scrollbar`}>
       <div className="flex min-w-max gap-2 rounded-[24px] border border-white/70 bg-white/80 p-2 shadow-sm backdrop-blur">
         {portalMenuItems.map((item) => {
@@ -1499,7 +1714,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             <button
               key={item.id}
               type="button"
-              onClick={() => setPortalSection(item.id)}
+              onClick={() => {
+                setPortalSection(item.id);
+                setIsMenuOpen(false);
+              }}
               className={`flex items-center gap-2 rounded-2xl px-3 py-2 text-xs font-black transition ${active ? 'bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20' : 'text-slate-500 hover:bg-purple-50 hover:text-[#7a32fc]'}`}
             >
               <Icon size={15} />
@@ -1511,12 +1729,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     </div>
   );
 
-  const nextPortalAppointment = portalAppointments[0] || null;
+  const nextPortalAppointment = portalAppointments.find((appointment: any) => {
+    const when = new Date(appointment?.scheduledAt || appointment?.scheduled_at || '');
+    return !Number.isNaN(when.getTime()) && when.getTime() >= Date.now();
+  }) || portalAppointments[0] || null;
   const portalHomeSummary = (
     <div className="mb-6 grid gap-3 sm:grid-cols-3">
       <button type="button" onClick={() => setPortalSection('appointments')} className="rounded-[24px] border border-purple-100 bg-white p-4 text-left shadow-sm transition hover:bg-purple-50">
-        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">Próxima consulta</p>
-        <p className="mt-2 text-sm font-black text-slate-900">{nextPortalAppointment ? formatPortalDateTime(nextPortalAppointment.scheduledAt) : 'Sem consulta próxima'}</p>
+        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">{isKidsProfile ? 'Calendário' : 'Próxima consulta'}</p>
+        <p className="mt-2 text-sm font-black text-slate-900">{nextPortalAppointment ? formatPortalDateTime(nextPortalAppointment.scheduledAt) : 'Abrir agenda'}</p>
       </button>
       {hasPortalAnamnesis && (
         <button type="button" onClick={() => setPortalSection('anamnesis')} className="rounded-[24px] border border-amber-100 bg-white p-4 text-left shadow-sm transition hover:bg-amber-50">
@@ -1524,10 +1745,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           <p className="mt-2 text-sm font-black text-slate-900">{portalAnamnesisStatusLabel}</p>
         </button>
       )}
-      <button type="button" onClick={() => setPortalSection('tasks')} className="rounded-[24px] border border-emerald-100 bg-white p-4 text-left shadow-sm transition hover:bg-emerald-50">
-        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-600">Tarefas</p>
-        <p className="mt-2 text-sm font-black text-slate-900">{visiblePatientTasks?.length || 0} pendente(s)</p>
-      </button>
+      {!isKidsProfile && (
+        <button type="button" onClick={() => setPortalSection('tasks')} className="rounded-[24px] border border-emerald-100 bg-white p-4 text-left shadow-sm transition hover:bg-emerald-50">
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-600">Tarefas</p>
+          <p className="mt-2 text-sm font-black text-slate-900">{visiblePatientTasks?.length || 0} pendente(s)</p>
+        </button>
+      )}
     </div>
   );
 
@@ -1597,7 +1820,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     await loadPortalAnamnesis();
   };
 
-  const portalAnamnesisPanel = hasPortalAnamnesis ? (() => {
+  const portalPlaceholderPanel = (label: string) => (
+    <div className="mb-6 rounded-[28px] border border-dashed border-purple-100 bg-white/70 p-6 text-center text-sm font-semibold text-slate-500">
+      {label}
+    </div>
+  );
+
+  const portalAnamnesisPanel = portalAnamnesisState.loading
+    ? portalPlaceholderPanel('Carregando ficha de anamnese...')
+    : hasPortalAnamnesis ? (() => {
     const template = normalizeAnamnesisTemplate(portalAnamnesis?.template || getDefaultAnamnesisTemplate());
     const profile = getProfileTemplate(template, portalAnamnesis?.profileType === 'child' ? 'child' : isKidsProfile ? 'child' : 'adult');
     return (
@@ -1646,11 +1877,113 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         )}
       </div>
     );
-  })() : null;
+  })() : portalPlaceholderPanel('Nenhuma ficha de anamnese liberada para preenchimento agora.');
 
-  const portalPlaceholderPanel = (label: string) => (
-    <div className="mb-6 rounded-[28px] border border-dashed border-purple-100 bg-white/70 p-6 text-center text-sm font-semibold text-slate-500">
-      {label}
+  const portalNotesPanel = (
+    <div className="mb-6 rounded-[28px] border border-purple-100 bg-white p-4 shadow-sm sm:p-5">
+      <div className="mb-4">
+        <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Anotações</p>
+        <h2 className="text-lg font-black text-slate-900">Compartilhadas com a família</h2>
+      </div>
+      {portalSharedNotes.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-5 text-center text-sm font-semibold text-purple-700">
+          Nenhuma anotação compartilhada pela clínica até agora.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {portalSharedNotes.map((note: any, index: number) => (
+            <article key={note?.id || `${note?.date || note?.created_at || 'note'}-${index}`} className="rounded-2xl border border-slate-100 bg-slate-50/70 px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+                {formatDiaryTimestamp(note?.date || note?.created_at)}
+              </p>
+              <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-relaxed text-slate-700">
+                {firstPortalText(note?.text, note?.note, note?.content, note?.message) || 'Anotação compartilhada.'}
+              </p>
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const portalDocumentsPanel = (
+    <div className="mb-6 rounded-[28px] border border-purple-100 bg-white p-4 shadow-sm sm:p-5">
+      <div className="mb-4">
+        <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Documentos</p>
+        <h2 className="text-lg font-black text-slate-900">Liberados pela clínica</h2>
+      </div>
+      {portalReleasedDocuments.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-5 text-center text-sm font-semibold text-purple-700">
+          Nenhum documento liberado para o portal neste momento.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {portalReleasedDocuments.map((document: any, index: number) => (
+            <div key={document.key || `${document.name}-${index}`} className="rounded-2xl border border-slate-100 bg-slate-50/70 px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-black text-slate-900">{document.name}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    {document.category}{document.createdAt ? ` · ${formatPortalDate(document.createdAt)}` : ''}
+                  </p>
+                </div>
+                {document.href ? (
+                  <a href={document.href} target="_blank" rel="noreferrer" className="shrink-0 rounded-full bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-[#7a32fc]">
+                    Abrir
+                  </a>
+                ) : (
+                  <span className="shrink-0 rounded-full bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                    Liberado
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const portalReportPanel = (
+    <div className="mb-6 rounded-[28px] border border-purple-100 bg-white p-4 shadow-sm sm:p-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Relatório</p>
+          <h2 className="text-lg font-black text-slate-900">Tempo em consulta</h2>
+        </div>
+        <span className="rounded-full bg-purple-50 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-[#7a32fc]">
+          Total {formatPortalDuration(portalReportTotalMinutes)}
+        </span>
+      </div>
+      {portalAppointmentsState.loading || !portalAppointmentsLoaded ? (
+        <div className="rounded-2xl bg-purple-50 px-4 py-3 text-sm font-semibold text-purple-700">Carregando relatório...</div>
+      ) : portalReportRows.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-5 text-center text-sm font-semibold text-purple-700">
+          Nenhuma consulta realizada com duração registrada no período.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {portalReportRows.map((row: any, index: number) => {
+            const appointment = row.appointment;
+            return (
+              <div key={appointment?.id || `${appointment?.scheduledAt || 'report'}-${index}`} className="rounded-2xl border border-slate-100 bg-slate-50/70 px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-black text-slate-900">{formatPortalDate(appointment?.scheduledAt)} · {formatPortalTime(appointment?.scheduledAt)}</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                      {appointment?.serviceType || 'Consulta'} · {appointment?.professionalName || 'Equipe'}
+                    </p>
+                    <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">{row.statusLabel}</p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-white px-3 py-1.5 text-xs font-black text-slate-700">
+                    {formatPortalDuration(row.minutes)}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 
@@ -1661,8 +1994,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     <div className="mb-6 rounded-[28px] border border-purple-100 bg-white p-4 shadow-sm sm:p-5">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Agenda</p>
-          <h2 className="text-lg font-black text-slate-900">Minhas consultas</h2>
+          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Calendário</p>
+          <h2 className="text-lg font-black text-slate-900">Consultas e status</h2>
         </div>
         <button type="button" onClick={() => void loadPortalAppointments()} className="rounded-2xl border border-purple-100 px-3 py-2 text-xs font-bold text-[#7a32fc]">
           Atualizar
@@ -1678,28 +2011,31 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           {portalAppointmentsState.message}
         </div>
       )}
-      {portalAppointmentsState.loading ? (
+      {portalAppointmentsState.loading || !portalAppointmentsLoaded ? (
         <div className="rounded-2xl bg-purple-50 px-4 py-3 text-sm font-semibold text-purple-700">Carregando consultas...</div>
       ) : portalAppointments.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-5 text-center text-sm font-semibold text-purple-700">
-          Nenhuma consulta próxima encontrada.
+          Nenhuma consulta encontrada no período.
         </div>
       ) : (
         <div className="space-y-2">
-          {portalAppointments.slice(0, 5).map((appointment) => (
+          {portalAppointments.slice(0, 30).map((appointment) => (
             <button
               type="button"
               key={appointment.id}
               onClick={() => void openPortalAppointmentDetail(appointment)}
-              className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50/70 px-3 py-3 text-left transition hover:border-purple-100 hover:bg-purple-50"
+              className="flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50/70 px-3 py-3 text-left transition hover:border-purple-100 hover:bg-purple-50"
             >
               <div className="min-w-0">
                 <p className="flex items-center gap-2 text-sm font-black text-slate-900">
                   <CalendarDays size={15} className="text-[#7a32fc]" />
                   {formatPortalDateTime(appointment.scheduledAt)}
                 </p>
-                <p className="mt-1 truncate text-xs font-semibold text-slate-500">
-                  {appointment.patientName || 'Paciente'} · {appointment.serviceType || 'Sessão'}
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {appointment.serviceType || 'Consulta'} · {appointment.professionalName || 'Equipe'}
+                </p>
+                <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  {appointment.locationLabel || appointment.roomName || 'Local informado pela clínica'}
                 </p>
               </div>
               <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600">
@@ -1877,8 +2213,24 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             initial={{ opacity: 0, scale: 0.95, y: -10 }}
                             animate={{ opacity: 1, scale: 1, y: 0 }}
                             exit={{ opacity: 0, scale: 0.95, y: -10 }}
-                            className="absolute right-0 mt-2 w-48 bg-white rounded-[24px] shadow-xl border border-blue-50 z-[60] overflow-hidden p-2"
+                            className="absolute right-0 mt-2 w-60 bg-white rounded-[24px] shadow-xl border border-blue-50 z-[60] overflow-hidden p-2"
                           >
+                            <div className="mb-2 border-b border-blue-50 pb-2">
+                              {portalMenuItems.map((item) => {
+                                const Icon = item.icon;
+                                const active = portalSection === item.id;
+                                return (
+                                  <button
+                                    key={item.id}
+                                    type="button"
+                                    onClick={() => { setPortalSection(item.id); setIsMenuOpen(false); }}
+                                    className={`w-full flex items-center gap-3 p-3 text-sm font-medium rounded-xl transition-colors ${active ? 'bg-purple-50 text-[#7a32fc]' : 'text-slate-600 hover:bg-slate-50'}`}
+                                  >
+                                    <Icon size={18} /> {item.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
                             {!isReadOnlyMode && (
                               <button 
                                 onClick={() => { setIsFamilyLogOpen(true); setIsMenuOpen(false); }}
@@ -1913,9 +2265,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 {portalSection === 'home' && portalHomeSummary}
                 {portalSection === 'appointments' && portalAppointmentsPanel}
                 {portalSection === 'anamnesis' && portalAnamnesisPanel}
+                {portalSection === 'notes' && portalNotesPanel}
                 {portalSection === 'tasks' && portalPlaceholderPanel('Tarefas enviadas pela clínica aparecerão aqui.')}
-                {portalSection === 'reports' && portalPlaceholderPanel('Relatórios liberados pela clínica aparecerão aqui.')}
-                {portalSection === 'documents' && portalPlaceholderPanel('Documentos compartilhados pela clínica aparecerão aqui.')}
+                {portalSection === 'reports' && portalReportPanel}
+                {portalSection === 'documents' && portalDocumentsPanel}
                 {portalSection === 'profile' && portalPlaceholderPanel('Use Configurações para atualizar os dados do perfil.')}
 
                 {portalSection === 'home' && (
@@ -2192,10 +2545,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             <button onClick={() => setIsMessagesOpen(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><X size={20}/></button> 
             <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 tracking-tight"><BookOpen className="text-[#7a32fc]"/> Mensagens do Terapeuta</h2> 
             <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar"> 
-              {sharedNotes.length > 0 ? sharedNotes.map((note: any) => ( 
+              {portalSharedNotes.length > 0 ? portalSharedNotes.map((note: any) => ( 
                 <div key={note.id} className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl"> 
                   <span className="text-[10px] font-bold text-blue-400 uppercase block mb-1">{note.date}</span> 
-                  <p className="text-sm text-gray-700">{note.text}</p> 
+                  <p className="text-sm text-gray-700">{firstPortalText(note.text, note.note, note.content, note.message)}</p> 
                 </div> 
               )) : ( <p className="text-center text-gray-400 text-sm py-8 italic">Nenhuma mensagem por enquanto.</p> )} 
             </div> 
@@ -2224,7 +2577,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             className="p-3 bg-white rounded-2xl shadow-sm text-gray-500 hover:bg-white transition-all border border-white/50 relative"
           >
             <Menu size={20} />
-            {sharedNotes.length > 0 && <div className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-white"></div>}
+            {portalSharedNotes.length > 0 && <div className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-white"></div>}
           </button>
 
           <AnimatePresence>
@@ -2235,6 +2588,22 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 exit={{ opacity: 0, scale: 0.95, y: -10 }}
                 className="absolute right-0 mt-2 w-56 bg-white rounded-[24px] shadow-xl border border-blue-50 z-[60] overflow-hidden p-2"
               >
+                <div className="mb-2 border-b border-blue-50 pb-2">
+                  {portalMenuItems.map((item) => {
+                    const Icon = item.icon;
+                    const active = portalSection === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => { setPortalSection(item.id); setIsMenuOpen(false); }}
+                        className={`w-full flex items-center gap-3 p-3 text-sm font-medium rounded-xl transition-colors ${active ? 'bg-purple-50 text-[#7a32fc]' : 'text-slate-600 hover:bg-slate-50'}`}
+                      >
+                        <Icon size={18} /> {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
                 {!isReadOnlyMode && (
                   <button 
                     onClick={() => { setIsMessagesOpen(true); setIsMenuOpen(false); }}
@@ -2243,9 +2612,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     <div className="flex items-center gap-3">
                       <MessageCircle size={18} /> Mensagens
                     </div>
-                    {sharedNotes.length > 0 && (
+                    {portalSharedNotes.length > 0 && (
                       <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">
-                        {sharedNotes.length}
+                        {portalSharedNotes.length}
                       </span>
                     )}
                   </button>
@@ -2276,9 +2645,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       {portalSection === 'home' && portalHomeSummary}
       {portalSection === 'appointments' && portalAppointmentsPanel}
       {portalSection === 'anamnesis' && portalAnamnesisPanel}
+      {portalSection === 'notes' && portalNotesPanel}
       {portalSection === 'tasks' && portalPlaceholderPanel('Tarefas enviadas pela clínica aparecerão aqui.')}
-      {portalSection === 'reports' && portalPlaceholderPanel('Relatórios liberados pela clínica aparecerão aqui.')}
-      {portalSection === 'documents' && portalPlaceholderPanel('Documentos compartilhados pela clínica aparecerão aqui.')}
+      {portalSection === 'reports' && portalReportPanel}
+      {portalSection === 'documents' && portalDocumentsPanel}
       {portalSection === 'profile' && portalPlaceholderPanel('Use Configurações para atualizar os dados do perfil.')}
       {portalSection === 'home' && (
         <React.Fragment>

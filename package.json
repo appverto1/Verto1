@@ -48,6 +48,8 @@
     "test:pilot-security": "tsx tests/pilotSecurity.test.ts",
     "test:patient-portability": "tsx tests/patientPortability.test.ts",
     "test:anamnesis-portal-flow": "tsx tests/anamnesisPortalFlow.test.ts",
+    "test:patient-portal": "tsx tests/patientPortal.test.ts",
+    "test:patient-dashboard": "tsx tests/patientDashboard.test.ts",
     "test:patient-registration-anamnesis": "tsx tests/patientRegistrationAnamnesis.test.ts",
     "test:patient-demographics-persistence": "tsx tests/patientDemographicsPersistence.test.ts",
     "test:patient-birthday-card": "tsx tests/patientBirthdayCard.test.ts",
