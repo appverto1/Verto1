@@ -43,6 +43,7 @@
     "test:simplisaude-pilot-smoke": "tsx tests/simplisaudePilotSmoke.test.ts",
     "test:pilot-security": "tsx tests/pilotSecurity.test.ts",
     "test:patient-portability": "tsx tests/patientPortability.test.ts",
+    "test:anamnesis-portal-flow": "tsx tests/anamnesisPortalFlow.test.ts",
     "stripe:create-active-patient-price": "node scripts/create-stripe-active-patient-price.mjs",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",

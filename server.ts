@@ -2726,8 +2726,90 @@ const PATIENT_MUTATION_SELECT = [
   'status',
   'clinic_id',
   'therapist_id',
+  'onboarding_status',
+  'anamnesis_required',
+  'anamnesis_requested_at',
+  'anamnesis_submitted_at',
+  'anamnesis_reviewed_at',
+  'relationship_status',
   'created_at',
   'updated_at'
+].join(',');
+
+const PATIENT_STATUS_PENDING_ANAMNESIS = 'PENDING_ANAMNESIS';
+const PATIENT_STATUS_PENDING_CONFIRMATION = 'PENDING_CONFIRMATION';
+const PATIENT_STATUS_ACTIVE = 'ACTIVE';
+const ONBOARDING_NOT_STARTED = 'NOT_STARTED';
+const ONBOARDING_ANAMNESIS_SENT = 'ANAMNESIS_SENT';
+const ONBOARDING_ANAMNESIS_IN_PROGRESS = 'ANAMNESIS_IN_PROGRESS';
+const ONBOARDING_ANAMNESIS_SUBMITTED = 'ANAMNESIS_SUBMITTED';
+const ONBOARDING_ANAMNESIS_REVIEWED = 'ANAMNESIS_REVIEWED';
+const ONBOARDING_READY_FOR_CARE = 'READY_FOR_CARE';
+const RELATIONSHIP_PENDING = 'PENDING';
+const RELATIONSHIP_CONFIRMED = 'CONFIRMED';
+const RELATIONSHIP_REJECTED = 'REJECTED';
+
+const PATIENT_ANAMNESIS_REQUEST_SELECT = [
+  'id',
+  'organization_id',
+  'patient_id',
+  'requested_by',
+  'assigned_to_user_id',
+  'status',
+  'sent_at',
+  'submitted_at',
+  'reviewed_at',
+  'reviewed_by',
+  'expires_at',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const PATIENT_ANAMNESIS_RESPONSE_SELECT = [
+  'id',
+  'organization_id',
+  'patient_id',
+  'request_id',
+  'respondent_user_id',
+  'respondent_role',
+  'answers',
+  'status',
+  'submitted_at',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const PATIENT_RELATIONSHIP_CONFIRMATION_SELECT = [
+  'id',
+  'organization_id_requesting',
+  'patient_id_requesting',
+  'responsible_user_id',
+  'email_normalized',
+  'status',
+  'sent_at',
+  'confirmed_at',
+  'expires_at',
+  'created_by',
+  'created_at',
+  'updated_at',
+  'metadata'
+].join(',');
+
+const PATIENT_SHARED_HISTORY_SNAPSHOT_SELECT = [
+  'id',
+  'organization_id_source',
+  'organization_id_target',
+  'patient_id_source',
+  'patient_id_target',
+  'generated_by',
+  'authorized_by_user_id',
+  'scope',
+  'snapshot_data',
+  'status',
+  'generated_at',
+  'expires_at',
+  'revoked_at',
+  'metadata'
 ].join(',');
 
 const CLINIC_PAYER_REQUIREMENT_SELECT = [
@@ -3860,6 +3942,7 @@ async function upsertPatientWithSchemaFallback(payload: Record<string, any>) {
     .map((column) => sanitizeString(column, 120))
     .filter(Boolean);
   let lastResult: { data: any; error: any } = { data: null, error: null };
+  let triedLegacyPendingStatus = false;
 
   for (let attempt = 0; attempt < 30; attempt += 1) {
     const result = await supabase
@@ -3871,7 +3954,20 @@ async function upsertPatientWithSchemaFallback(payload: Record<string, any>) {
     if (!result.error) return result;
 
     const missingColumn = extractMissingColumnName(result.error);
-    if (!missingColumn) return result;
+    if (!missingColumn) {
+      const message = extractSupabaseErrorMessage(result.error).toLowerCase();
+      if (
+        !triedLegacyPendingStatus &&
+        Object.prototype.hasOwnProperty.call(safePayload, 'status') &&
+        (sanitizeString(result.error?.code, 20) === '23514' || message.includes('check constraint'))
+      ) {
+        triedLegacyPendingStatus = true;
+        safePayload.status = 'pending';
+        console.warn('[Patients] status clinico pendente adaptado para schema legado.');
+        continue;
+      }
+      return result;
+    }
 
     if (Object.prototype.hasOwnProperty.call(safePayload, missingColumn)) {
       delete safePayload[missingColumn];
@@ -3889,6 +3985,113 @@ async function upsertPatientWithSchemaFallback(payload: Record<string, any>) {
   }
 
   return lastResult;
+}
+
+async function insertRowWithSchemaFallback(tableName: string, payload: Record<string, any>, context = tableName) {
+  let safePayload: Record<string, any> = cleanObject({ ...payload });
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const { error } = await supabase.from(tableName).insert([safePayload]);
+    if (!error) return { success: true, data: safePayload, error: null };
+    lastError = error;
+
+    const missingColumn = extractMissingColumnName(error);
+    if (missingColumn && Object.prototype.hasOwnProperty.call(safePayload, missingColumn)) {
+      delete safePayload[missingColumn];
+      console.warn('[SchemaFallback] coluna opcional removida do insert:', {
+        table: tableName,
+        context: sanitizeString(context, 160),
+        missingColumn
+      });
+      continue;
+    }
+
+    return { success: false, data: null, error };
+  }
+
+  return { success: false, data: null, error: lastError || new Error('Falha ao inserir registro.') };
+}
+
+async function updateRowsWithSchemaFallback(params: {
+  tableName: string;
+  payload: Record<string, any>;
+  filters: Array<{ column: string; value: any }>;
+  context?: string;
+}) {
+  let safePayload: Record<string, any> = cleanObject({ ...params.payload });
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    let query = supabase.from(params.tableName).update(safePayload);
+    for (const filter of params.filters || []) {
+      const column = sanitizeString(filter.column, 120);
+      if (column) query = query.eq(column, filter.value);
+    }
+
+    const { error } = await query;
+    if (!error) return { success: true, error: null };
+    lastError = error;
+
+    const missingColumn = extractMissingColumnName(error);
+    if (missingColumn && Object.prototype.hasOwnProperty.call(safePayload, missingColumn)) {
+      delete safePayload[missingColumn];
+      console.warn('[SchemaFallback] coluna opcional removida do update:', {
+        table: params.tableName,
+        context: sanitizeString(params.context || params.tableName, 160),
+        missingColumn
+      });
+      continue;
+    }
+
+    return { success: false, error };
+  }
+
+  return { success: false, error: lastError || new Error('Falha ao atualizar registro.') };
+}
+
+async function updatePatientOnboardingWithSchemaFallback(params: {
+  patientId: string;
+  clinicId?: string | null;
+  patch: Record<string, any>;
+  context?: string;
+}) {
+  const patientId = sanitizeString(params.patientId, 120);
+  if (!isUuid(patientId)) return { success: false, error: new Error('Paciente inválido.') };
+  const filters = [{ column: 'id', value: patientId }];
+  const clinicId = sanitizeString(params.clinicId, 120);
+  if (isUuid(clinicId)) filters.push({ column: 'clinic_id', value: clinicId });
+
+  let triedLegacyPendingStatus = false;
+  let payload = cleanObject({
+    ...params.patch,
+    updated_at: new Date().toISOString()
+  });
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const result = await updateRowsWithSchemaFallback({
+      tableName: 'patients',
+      payload,
+      filters,
+      context: params.context || 'patient-onboarding'
+    });
+    if (result.success) return result;
+
+    const errorMessage = extractSupabaseErrorMessage(result.error).toLowerCase();
+    if (
+      !triedLegacyPendingStatus &&
+      Object.prototype.hasOwnProperty.call(payload, 'status') &&
+      (sanitizeString(result.error?.code, 20) === '23514' || errorMessage.includes('check constraint'))
+    ) {
+      triedLegacyPendingStatus = true;
+      payload = { ...payload, status: 'pending' };
+      continue;
+    }
+
+    return result;
+  }
+
+  return { success: false, error: new Error('Falha ao atualizar status do paciente.') };
 }
 
 async function findDuplicatePatientInClinic(params: {
@@ -5537,6 +5740,332 @@ async function canAccessPatientInCurrentClinic(patientId: string, user: any): Pr
   return false;
 }
 
+async function canPortalSessionAccessPatient(patientId: string, user: any): Promise<boolean> {
+  if (!isUuid(patientId)) return false;
+  const role = sanitizeString(user?.role, 40).toLowerCase();
+  if (!['patient', 'responsible', 'responsavel', 'guardian'].includes(role)) {
+    return canAccessPatientInCurrentClinic(patientId, user);
+  }
+
+  const userId = sanitizeString(user?.id, 120);
+  const userEmail = sanitizeEmail(user?.email);
+  if (isUuid(userId) && userId === patientId) return true;
+
+  let query = supabase
+    .from('patients')
+    .select('id, email, responsible_user_id')
+    .eq('id', patientId)
+    .eq('is_active', true)
+    .is('deleted_at', null)
+    .limit(1);
+  const { data, error } = await query.maybeSingle();
+  if (error || !data?.id) return false;
+
+  const responsibleUserId = sanitizeString(data?.responsible_user_id, 120);
+  const patientEmail = sanitizeEmail(data?.email);
+  return Boolean(
+    (isUuid(userId) && responsibleUserId === userId) ||
+    (userEmail && patientEmail && userEmail === patientEmail)
+  );
+}
+
+function normalizeAnamnesisAnswers(input: any, depth = 0): any {
+  if (depth > 4) return null;
+  if (input === null || input === undefined) return null;
+  if (typeof input === 'string') return sanitizeString(input, 5000);
+  if (typeof input === 'number') return Number.isFinite(input) ? input : null;
+  if (typeof input === 'boolean') return input;
+  if (Array.isArray(input)) {
+    return input.slice(0, 200).map((item) => normalizeAnamnesisAnswers(item, depth + 1));
+  }
+  if (typeof input === 'object') {
+    const entries = Object.entries(input).slice(0, 1000);
+    return Object.fromEntries(entries.map(([key, value]) => [
+      sanitizeString(key, 120),
+      normalizeAnamnesisAnswers(value, depth + 1)
+    ]).filter(([key]) => Boolean(key)));
+  }
+  return sanitizeString(String(input), 500);
+}
+
+function hasAnamnesisAnswers(input: any): boolean {
+  if (!input || typeof input !== 'object') return false;
+  return Object.values(input).some((value) => {
+    if (Array.isArray(value)) return value.length > 0;
+    if (value && typeof value === 'object') return hasAnamnesisAnswers(value);
+    return String(value ?? '').trim().length > 0;
+  });
+}
+
+function resolvePatientAnamnesisProfile(patient: any): 'adult' | 'child' {
+  const source = sanitizeString(
+    patient?.patient_profile_type ||
+      patient?.panel_type ||
+      patient?.profile_type ||
+      patient?.type ||
+      patient?.anamnesisData?.formType,
+    80
+  ).toLowerCase();
+  if (['kids_tea', 'kids', 'child', 'infantil', 'crianca', 'criança', 'aba'].includes(source)) return 'child';
+  const age = Number(patient?.age);
+  if (Number.isFinite(age) && age >= 0 && age <= 12) return 'child';
+  return 'adult';
+}
+
+async function fetchAnamnesisTemplateForClinic(clinicId: string) {
+  const templateResult = await fetchClinicAnamnesisTemplateWithSchemaFallback({
+    supabase,
+    clinicId,
+    logger: console
+  });
+  if (templateResult.error) {
+    if (isMissingRelationError(templateResult.error)) return getDefaultAnamnesisTemplate();
+    throw templateResult.error;
+  }
+  return sanitizeAnamnesisTemplate(templateResult.data?.template_json || getDefaultAnamnesisTemplate());
+}
+
+const PATIENT_ANAMNESIS_PATIENT_SELECT_COLUMNS = [
+  'id',
+  'name',
+  'email',
+  'age',
+  'clinic_id',
+  'therapist_id',
+  'responsible_user_id',
+  'status',
+  'type',
+  'patient_profile_type',
+  'panel_type',
+  'profile_type',
+  'onboarding_status',
+  'anamnesis_required',
+  'anamnesis_requested_at',
+  'anamnesis_submitted_at',
+  'anamnesis_reviewed_at',
+  'relationship_status'
+];
+
+async function fetchPatientForAnamnesis(patientId: string, clinicId?: string | null) {
+  let columns = [...PATIENT_ANAMNESIS_PATIENT_SELECT_COLUMNS];
+  while (columns.length > 0) {
+    let query = supabase
+      .from('patients')
+      .select(columns.join(', '))
+      .eq('id', patientId)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .limit(1);
+    if (clinicId && isUuid(clinicId)) query = query.eq('clinic_id', clinicId);
+    const { data, error } = await query.maybeSingle();
+    if (!error) return data || null;
+
+    const missingColumn = extractMissingColumnName(error);
+    if (missingColumn && columns.includes(missingColumn)) {
+      columns = columns.filter((column) => column !== missingColumn);
+      continue;
+    }
+    throw error;
+  }
+  return null;
+}
+
+function buildRelationshipConfirmationEmail(params: { patientName: string; confirmationUrl: string }) {
+  const patientName = escapeHtml(params.patientName || 'paciente');
+  const confirmationUrl = escapeHtml(params.confirmationUrl);
+  return {
+    subject: 'Confirme o novo vínculo na Verto',
+    html: `
+      <div style="font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a;background:#f8fafc;padding:28px;">
+        <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:22px;padding:28px;">
+          <p style="margin:0 0 8px;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#7a32fc;font-weight:800;">Verto</p>
+          <h1 style="font-size:22px;margin:0 0 14px;">Confirme o novo vínculo</h1>
+          <p style="font-size:15px;line-height:1.6;color:#334155;margin:0 0 18px;">
+            Uma clínica/profissional solicitou vínculo com o perfil de ${patientName} na Verto. Confirme para permitir o atendimento e escolher quais dados compartilháveis deseja disponibilizar.
+          </p>
+          <a href="${confirmationUrl}" style="display:inline-block;background:#7a32fc;color:#fff;text-decoration:none;border-radius:14px;padding:13px 18px;font-weight:800;">Confirmar vínculo</a>
+          <p style="font-size:12px;line-height:1.5;color:#64748b;margin:20px 0 0;">Se o botão não funcionar, acesse: <a href="${confirmationUrl}" style="color:#7a32fc;word-break:break-all;">${confirmationUrl}</a></p>
+        </div>
+      </div>
+    `
+  };
+}
+
+function buildAnamnesisRequestEmail(params: { patientName: string; portalUrl: string }) {
+  const patientName = escapeHtml(params.patientName || 'paciente');
+  const portalUrl = escapeHtml(params.portalUrl);
+  return {
+    subject: 'Preencha a ficha de anamnese',
+    html: `
+      <div style="font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a;background:#f8fafc;padding:28px;">
+        <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:22px;padding:28px;">
+          <p style="margin:0 0 8px;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#7a32fc;font-weight:800;">Verto</p>
+          <h1 style="font-size:22px;margin:0 0 14px;">Ficha de anamnese</h1>
+          <p style="font-size:15px;line-height:1.6;color:#334155;margin:0 0 18px;">
+            A clínica solicitou o preenchimento da ficha de anamnese de ${patientName}. Acesse a Verto para preencher com segurança.
+          </p>
+          <a href="${portalUrl}" style="display:inline-block;background:#7a32fc;color:#fff;text-decoration:none;border-radius:14px;padding:13px 18px;font-weight:800;">Abrir portal</a>
+        </div>
+      </div>
+    `
+  };
+}
+
+function getAppPortalUrl(params: Record<string, string> = {}) {
+  const baseUrl = sanitizeString(process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || 'https://www.appverto.com.br', 500)
+    .replace(/\/+$/, '');
+  const url = new URL(baseUrl || 'https://www.appverto.com.br');
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) url.searchParams.set(key, value);
+  });
+  return url.toString();
+}
+
+async function createRelationshipConfirmationRequest(params: {
+  patientId: string;
+  clinicId: string;
+  email: string;
+  patientName: string;
+  responsibleUserId?: string | null;
+  createdBy?: string | null;
+  metadata?: Record<string, any>;
+}) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  const tokenHash = hashIdentifier(`relationship-confirmation:${token}`);
+  const nowIso = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+  const id = crypto.randomUUID();
+  const payload = cleanObject({
+    id,
+    organization_id_requesting: params.clinicId,
+    patient_id_requesting: params.patientId,
+    responsible_user_id: isUuid(params.responsibleUserId || '') ? params.responsibleUserId : null,
+    email_normalized: sanitizeEmail(params.email),
+    status: 'PENDING',
+    confirmation_token_hash: tokenHash,
+    sent_at: nowIso,
+    expires_at: expiresAt,
+    created_by: isUuid(params.createdBy || '') ? params.createdBy : null,
+    created_at: nowIso,
+    updated_at: nowIso,
+    metadata: sanitizeClinicalPayload(params.metadata || {})
+  });
+  const insert = await insertRowWithSchemaFallback('patient_relationship_confirmations', payload, 'relationship-confirmation');
+  if (!insert.success) return { success: false, error: insert.error, sent: false, token: null, confirmationId: null };
+
+  const confirmationUrl = getAppPortalUrl({ relationship_token: token });
+  const emailTemplate = buildRelationshipConfirmationEmail({
+    patientName: params.patientName,
+    confirmationUrl
+  });
+  const sent = await sendTransactionalEmailSafe({
+    to: sanitizeEmail(params.email),
+    subject: emailTemplate.subject,
+    html: emailTemplate.html,
+    context: 'patient_relationship_confirmation',
+    from: OFFICIAL_FROM_NOREPLY,
+    replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+    metadata: {
+      patientId: params.patientId,
+      email: maskEmail(sanitizeEmail(params.email))
+    }
+  });
+  return { success: true, error: null, sent, token, confirmationId: id };
+}
+
+async function fetchPatientAnamnesisFlow(patientId: string, clinicId: string) {
+  const patient = await fetchPatientForAnamnesis(patientId, clinicId);
+  if (!patient?.id) return { patient: null, request: null, response: null, template: getDefaultAnamnesisTemplate() };
+
+  const [requestResult, responseResult, template] = await Promise.all([
+    supabase
+      .from('patient_anamnesis_requests')
+      .select(PATIENT_ANAMNESIS_REQUEST_SELECT)
+      .eq('organization_id', clinicId)
+      .eq('patient_id', patientId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from('patient_anamnesis_responses')
+      .select(PATIENT_ANAMNESIS_RESPONSE_SELECT)
+      .eq('organization_id', clinicId)
+      .eq('patient_id', patientId)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    fetchAnamnesisTemplateForClinic(clinicId)
+  ]);
+
+  if (requestResult.error && !isMissingRelationError(requestResult.error)) throw requestResult.error;
+  if (responseResult.error && !isMissingRelationError(responseResult.error)) throw responseResult.error;
+
+  return {
+    patient,
+    request: requestResult.error ? null : requestResult.data || null,
+    response: responseResult.error ? null : responseResult.data || null,
+    template
+  };
+}
+
+async function upsertAnamnesisResponse(params: {
+  patientId: string;
+  clinicId: string;
+  requestId?: string | null;
+  respondentUserId?: string | null;
+  respondentRole: string;
+  answers: any;
+  status: 'DRAFT' | 'SUBMITTED' | 'REVIEWED';
+}) {
+  const nowIso = new Date().toISOString();
+  const requestId = sanitizeString(params.requestId, 120);
+  const answers = normalizeAnamnesisAnswers(params.answers || {});
+  let existingQuery = supabase
+    .from('patient_anamnesis_responses')
+    .select('id')
+    .eq('organization_id', params.clinicId)
+    .eq('patient_id', params.patientId)
+    .order('updated_at', { ascending: false })
+    .limit(1);
+  existingQuery = isUuid(requestId)
+    ? existingQuery.eq('request_id', requestId)
+    : existingQuery.is('request_id', null);
+  const existing = await existingQuery.maybeSingle();
+  if (existing.error && !isMissingRelationError(existing.error)) throw existing.error;
+
+  const payload = cleanObject({
+    organization_id: params.clinicId,
+    patient_id: params.patientId,
+    request_id: isUuid(requestId) ? requestId : null,
+    respondent_user_id: isUuid(params.respondentUserId || '') ? params.respondentUserId : null,
+    respondent_role: sanitizeString(params.respondentRole, 60) || 'family',
+    answers,
+    status: params.status,
+    submitted_at: params.status === 'SUBMITTED' || params.status === 'REVIEWED' ? nowIso : undefined,
+    updated_at: nowIso
+  });
+
+  if (existing.data?.id) {
+    const update = await updateRowsWithSchemaFallback({
+      tableName: 'patient_anamnesis_responses',
+      payload,
+      filters: [{ column: 'id', value: existing.data.id }],
+      context: 'anamnesis-response-update'
+    });
+    if (!update.success) throw update.error;
+    return { id: sanitizeString(existing.data.id, 120), ...payload };
+  }
+
+  const id = crypto.randomUUID();
+  const insert = await insertRowWithSchemaFallback(
+    'patient_anamnesis_responses',
+    { id, ...payload, created_at: nowIso },
+    'anamnesis-response-insert'
+  );
+  if (!insert.success) throw insert.error;
+  return { id, ...payload, created_at: nowIso };
+}
+
 function sanitizeIsoDateOnly(value: unknown): string | null {
   const raw = sanitizeString(value, 40);
   if (!raw) return null;
@@ -5698,13 +6227,23 @@ async function updatePatientStatusIfNeeded(user: any): Promise<'active' | 'inact
       .update({ status })
       .eq('id', sanitizeString(user.id, 120));
       if (status === 'active' && safeEmail) {
-        await supabase
+        const patientActivationResult = await supabase
           .from('patients')
           .update({ status: 'active' })
           .ilike('email', safeEmail)
           .eq('is_active', true)
           .is('deleted_at', null)
-          .in('status', ['pending', 'waiting_treatment', 'inactive']);
+          .in('status', ['pending', 'waiting_treatment', 'inactive'])
+          .or('onboarding_status.is.null,onboarding_status.in.(READY_FOR_CARE,ANAMNESIS_REVIEWED)');
+        if (patientActivationResult.error && extractMissingColumnName(patientActivationResult.error) === 'onboarding_status') {
+          await supabase
+            .from('patients')
+            .update({ status: 'active' })
+            .ilike('email', safeEmail)
+            .eq('is_active', true)
+            .is('deleted_at', null)
+            .in('status', ['waiting_treatment', 'inactive']);
+        }
       }
   } catch (error) {
     console.warn('[Auth] Não foi possível atualizar status clínico do paciente:', (error as any)?.message || error);
@@ -11489,6 +12028,740 @@ async function startServer() {
     }
   });
 
+  app.post('/api/patients/:patientId/anamnesis/send', portalActionLimiter, checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      if (!isUuid(patientId) || !isUuid(clinicId)) {
+        return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      }
+      const patient = await fetchPatientForAnamnesis(patientId, clinicId);
+      if (!patient?.id) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+
+      const nowIso = new Date().toISOString();
+      const existing = await supabase
+        .from('patient_anamnesis_requests')
+        .select(PATIENT_ANAMNESIS_REQUEST_SELECT)
+        .eq('organization_id', clinicId)
+        .eq('patient_id', patientId)
+        .in('status', ['SENT', 'IN_PROGRESS', 'SUBMITTED'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (existing.error && !isMissingRelationError(existing.error)) throw existing.error;
+
+      const requestId = sanitizeString(existing.data?.id, 120) || crypto.randomUUID();
+      const requestPayload = cleanObject({
+        id: requestId,
+        organization_id: clinicId,
+        patient_id: patientId,
+        requested_by: isUuid(actorId) ? actorId : null,
+        assigned_to_user_id: isUuid(sanitizeString(patient?.responsible_user_id, 120)) ? sanitizeString(patient.responsible_user_id, 120) : null,
+        status: existing.data?.id ? sanitizeString(existing.data.status, 40) || 'SENT' : 'SENT',
+        sent_at: sanitizeString(existing.data?.sent_at, 80) || nowIso,
+        expires_at: sanitizeString(existing.data?.expires_at, 80) || new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString(),
+        created_at: sanitizeString(existing.data?.created_at, 80) || nowIso,
+        updated_at: nowIso
+      });
+      if (existing.data?.id) {
+        const update = await updateRowsWithSchemaFallback({
+          tableName: 'patient_anamnesis_requests',
+          payload: requestPayload,
+          filters: [{ column: 'id', value: requestId }],
+          context: 'anamnesis-request-resend'
+        });
+        if (!update.success) throw update.error;
+      } else {
+        const insert = await insertRowWithSchemaFallback('patient_anamnesis_requests', requestPayload, 'anamnesis-request-send');
+        if (!insert.success) throw insert.error;
+      }
+
+      await updatePatientOnboardingWithSchemaFallback({
+        patientId,
+        clinicId,
+        patch: {
+          status: PATIENT_STATUS_PENDING_ANAMNESIS,
+          onboarding_status: ONBOARDING_ANAMNESIS_SENT,
+          anamnesis_required: true,
+          anamnesis_requested_at: nowIso
+        },
+        context: 'anamnesis-request-send'
+      });
+
+      let emailSent = false;
+      const patientEmail = sanitizeEmail(patient?.email);
+      if (patientEmail) {
+        const portalUrl = getAppPortalUrl({ section: 'anamnesis' });
+        const emailTemplate = buildAnamnesisRequestEmail({ patientName: sanitizeString(patient?.name, 180), portalUrl });
+        emailSent = await sendTransactionalEmailSafe({
+          to: patientEmail,
+          subject: emailTemplate.subject,
+          html: emailTemplate.html,
+          context: 'patient_anamnesis_request',
+          from: OFFICIAL_FROM_NOREPLY,
+          replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+          metadata: {
+            patientId,
+            email: maskEmail(patientEmail)
+          }
+        });
+      }
+
+      void persistActivityLog({
+        userId: actorId,
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
+        title: 'Ficha de anamnese enviada',
+        content: 'Solicitação de anamnese foi disponibilizada no portal da família.',
+        type: 'clinical',
+        actionType: 'ANAMNESIS_REQUEST_SENT',
+        payload: { patientId, requestId, emailSent }
+      });
+
+      return res.json({
+        success: true,
+        message: emailSent ? 'Ficha de anamnese enviada para a família.' : 'Ficha disponibilizada no portal. E-mail não enviado agora.',
+        data: { requestId, status: requestPayload.status, emailSent }
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/anamnesis/send [POST]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.get('/api/patients/:patientId/anamnesis', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      const flow = await fetchPatientAnamnesisFlow(patientId, clinicId);
+      if (!flow.patient?.id) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+      return res.json({
+        success: true,
+        data: {
+          patient: {
+            name: sanitizeString(flow.patient.name, 180),
+            status: sanitizeString(flow.patient.status, 60),
+            onboardingStatus: sanitizeString(flow.patient.onboarding_status, 80),
+            anamnesisRequired: flow.patient.anamnesis_required !== false
+          },
+          request: flow.request,
+          response: flow.response,
+          template: flow.template,
+          profileType: resolvePatientAnamnesisProfile(flow.patient)
+        }
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/anamnesis [GET]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.patch('/api/patients/:patientId/anamnesis/draft', portalActionLimiter, checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const requestId = sanitizeString(req.body?.requestId || req.body?.request_id, 120);
+      if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      const response = await upsertAnamnesisResponse({
+        patientId,
+        clinicId,
+        requestId: isUuid(requestId) ? requestId : null,
+        respondentUserId: sanitizeString(req.session.user?.id, 120),
+        respondentRole: 'professional',
+        answers: req.body?.answers || req.body?.anamnesisData || {},
+        status: 'DRAFT'
+      });
+      if (isUuid(requestId)) {
+        await updateRowsWithSchemaFallback({
+          tableName: 'patient_anamnesis_requests',
+          payload: { status: 'IN_PROGRESS', updated_at: new Date().toISOString() },
+          filters: [{ column: 'id', value: requestId }, { column: 'patient_id', value: patientId }],
+          context: 'anamnesis-professional-draft'
+        });
+      }
+      return res.json({ success: true, data: response });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/anamnesis/draft [PATCH]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.post('/api/patients/:patientId/anamnesis/submit', portalActionLimiter, checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const requestId = sanitizeString(req.body?.requestId || req.body?.request_id, 120);
+      if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      const response = await upsertAnamnesisResponse({
+        patientId,
+        clinicId,
+        requestId: isUuid(requestId) ? requestId : null,
+        respondentUserId: sanitizeString(req.session.user?.id, 120),
+        respondentRole: 'professional',
+        answers: req.body?.answers || req.body?.anamnesisData || {},
+        status: 'SUBMITTED'
+      });
+      const nowIso = new Date().toISOString();
+      if (isUuid(requestId)) {
+        await updateRowsWithSchemaFallback({
+          tableName: 'patient_anamnesis_requests',
+          payload: { status: 'SUBMITTED', submitted_at: nowIso, updated_at: nowIso },
+          filters: [{ column: 'id', value: requestId }, { column: 'patient_id', value: patientId }],
+          context: 'anamnesis-professional-submit'
+        });
+      }
+      await updatePatientOnboardingWithSchemaFallback({
+        patientId,
+        clinicId,
+        patch: {
+          status: PATIENT_STATUS_PENDING_ANAMNESIS,
+          onboarding_status: ONBOARDING_ANAMNESIS_SUBMITTED,
+          anamnesis_submitted_at: nowIso
+        },
+        context: 'anamnesis-professional-submit'
+      });
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
+        title: 'Anamnese enviada para revisão',
+        content: 'Ficha de anamnese foi enviada para revisão clínica.',
+        type: 'clinical',
+        actionType: 'ANAMNESIS_SUBMITTED',
+        payload: { patientId, requestId: isUuid(requestId) ? requestId : null }
+      });
+      return res.json({ success: true, data: response });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/anamnesis/submit [POST]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.post('/api/patients/:patientId/anamnesis/review', portalActionLimiter, checkAuth, checkPatientAccess, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const requestId = sanitizeString(req.body?.requestId || req.body?.request_id, 120);
+      const responseId = sanitizeString(req.body?.responseId || req.body?.response_id, 120);
+      if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      const nowIso = new Date().toISOString();
+      if (isUuid(responseId)) {
+        await updateRowsWithSchemaFallback({
+          tableName: 'patient_anamnesis_responses',
+          payload: { status: 'REVIEWED', updated_at: nowIso },
+          filters: [{ column: 'id', value: responseId }, { column: 'patient_id', value: patientId }],
+          context: 'anamnesis-review-response'
+        });
+      }
+      if (isUuid(requestId)) {
+        await updateRowsWithSchemaFallback({
+          tableName: 'patient_anamnesis_requests',
+          payload: {
+            status: 'REVIEWED',
+            reviewed_at: nowIso,
+            reviewed_by: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user.id, 120) : null,
+            updated_at: nowIso
+          },
+          filters: [{ column: 'id', value: requestId }, { column: 'patient_id', value: patientId }],
+          context: 'anamnesis-review-request'
+        });
+      }
+      await updatePatientOnboardingWithSchemaFallback({
+        patientId,
+        clinicId,
+        patch: {
+          status: PATIENT_STATUS_ACTIVE,
+          onboarding_status: ONBOARDING_READY_FOR_CARE,
+          anamnesis_reviewed_at: nowIso
+        },
+        context: 'anamnesis-review-patient'
+      });
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
+        title: 'Anamnese revisada',
+        content: 'Ficha de anamnese foi revisada e paciente liberado para cuidado clínico.',
+        type: 'clinical',
+        actionType: 'ANAMNESIS_REVIEWED',
+        payload: { patientId, requestId: isUuid(requestId) ? requestId : null }
+      });
+      return res.json({ success: true, message: 'Anamnese revisada.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/anamnesis/review [POST]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.get('/api/portal/patients/:patientId/anamnesis', checkAuth, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.params.patientId, 120);
+      if (!isUuid(patientId) || !(await canPortalSessionAccessPatient(patientId, req.session.user))) {
+        return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
+      }
+      const patient = await fetchPatientForAnamnesis(patientId, null);
+      if (!patient?.id) return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
+      const clinicId = sanitizeString(patient.clinic_id, 120);
+      const flow = await fetchPatientAnamnesisFlow(patientId, clinicId);
+      const hasVisibleAnamnesis = Boolean(flow.request?.id || flow.response?.id);
+      if (!hasVisibleAnamnesis) {
+        return res.json({ success: true, data: { available: false, request: null, response: null, template: null } });
+      }
+      return res.json({
+        success: true,
+        data: {
+          available: true,
+          request: flow.request,
+          response: flow.response,
+          template: flow.template,
+          profileType: resolvePatientAnamnesisProfile(patient)
+        }
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/patients/:patientId/anamnesis [GET]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.patch('/api/portal/patients/:patientId/anamnesis/draft', portalActionLimiter, checkAuth, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.params.patientId, 120);
+      if (!isUuid(patientId) || !(await canPortalSessionAccessPatient(patientId, req.session.user))) {
+        return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
+      }
+      const patient = await fetchPatientForAnamnesis(patientId, null);
+      const clinicId = sanitizeString(patient?.clinic_id, 120);
+      const requestId = sanitizeString(req.body?.requestId || req.body?.request_id, 120);
+      if (!patient?.id || !isUuid(clinicId) || !isUuid(requestId)) return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
+      const requestCheck = await supabase
+        .from('patient_anamnesis_requests')
+        .select('id, status')
+        .eq('id', requestId)
+        .eq('organization_id', clinicId)
+        .eq('patient_id', patientId)
+        .in('status', ['SENT', 'IN_PROGRESS'])
+        .limit(1)
+        .maybeSingle();
+      if (requestCheck.error && !isMissingRelationError(requestCheck.error)) throw requestCheck.error;
+      if (!requestCheck.data?.id) return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
+      const response = await upsertAnamnesisResponse({
+        patientId,
+        clinicId,
+        requestId,
+        respondentUserId: sanitizeString(req.session.user?.id, 120),
+        respondentRole: 'family',
+        answers: req.body?.answers || {},
+        status: 'DRAFT'
+      });
+      const nowIso = new Date().toISOString();
+      await updateRowsWithSchemaFallback({
+        tableName: 'patient_anamnesis_requests',
+        payload: { status: 'IN_PROGRESS', updated_at: nowIso },
+        filters: [{ column: 'id', value: requestId }],
+        context: 'portal-anamnesis-draft'
+      });
+      await updatePatientOnboardingWithSchemaFallback({
+        patientId,
+        clinicId,
+        patch: { onboarding_status: ONBOARDING_ANAMNESIS_IN_PROGRESS },
+        context: 'portal-anamnesis-draft'
+      });
+      return res.json({ success: true, data: response });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/patients/:patientId/anamnesis/draft [PATCH]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.post('/api/portal/patients/:patientId/anamnesis/submit', portalActionLimiter, checkAuth, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.params.patientId, 120);
+      if (!isUuid(patientId) || !(await canPortalSessionAccessPatient(patientId, req.session.user))) {
+        return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
+      }
+      const patient = await fetchPatientForAnamnesis(patientId, null);
+      const clinicId = sanitizeString(patient?.clinic_id, 120);
+      const requestId = sanitizeString(req.body?.requestId || req.body?.request_id, 120);
+      if (!patient?.id || !isUuid(clinicId) || !isUuid(requestId)) return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
+      const requestCheck = await supabase
+        .from('patient_anamnesis_requests')
+        .select('id, status')
+        .eq('id', requestId)
+        .eq('organization_id', clinicId)
+        .eq('patient_id', patientId)
+        .in('status', ['SENT', 'IN_PROGRESS'])
+        .limit(1)
+        .maybeSingle();
+      if (requestCheck.error && !isMissingRelationError(requestCheck.error)) throw requestCheck.error;
+      if (!requestCheck.data?.id) return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
+      const response = await upsertAnamnesisResponse({
+        patientId,
+        clinicId,
+        requestId,
+        respondentUserId: sanitizeString(req.session.user?.id, 120),
+        respondentRole: 'family',
+        answers: req.body?.answers || {},
+        status: 'SUBMITTED'
+      });
+      const nowIso = new Date().toISOString();
+      await updateRowsWithSchemaFallback({
+        tableName: 'patient_anamnesis_requests',
+        payload: { status: 'SUBMITTED', submitted_at: nowIso, updated_at: nowIso },
+        filters: [{ column: 'id', value: requestId }],
+        context: 'portal-anamnesis-submit'
+      });
+      await updatePatientOnboardingWithSchemaFallback({
+        patientId,
+        clinicId,
+        patch: {
+          status: PATIENT_STATUS_PENDING_ANAMNESIS,
+          onboarding_status: ONBOARDING_ANAMNESIS_SUBMITTED,
+          anamnesis_submitted_at: nowIso
+        },
+        context: 'portal-anamnesis-submit'
+      });
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Responsavel', 180),
+        title: 'Anamnese preenchida pela família',
+        content: 'Família enviou a ficha de anamnese pelo portal.',
+        type: 'clinical',
+        actionType: 'ANAMNESIS_SUBMITTED_BY_FAMILY',
+        payload: { patientId, requestId }
+      });
+      return res.json({ success: true, message: 'Ficha enviada para a clínica.', data: response });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/patients/:patientId/anamnesis/submit [POST]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.post('/api/patients/:patientId/relationship-confirmation/send', portalActionLimiter, checkAuth, checkPatientAccess, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      const patient = await fetchPatientForAnamnesis(patientId, clinicId);
+      if (!patient?.id) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+      const patientEmail = sanitizeEmail(patient.email);
+      if (!patientEmail) return res.status(400).json({ success: false, error: 'Paciente sem e-mail cadastrado.' });
+
+      const confirmation = await createRelationshipConfirmationRequest({
+        patientId,
+        clinicId,
+        email: patientEmail,
+        patientName: sanitizeString(patient.name, 180) || 'Paciente',
+        responsibleUserId: sanitizeString(patient.responsible_user_id, 120),
+        createdBy: sanitizeString(req.session.user?.id, 120),
+        metadata: { source: 'manual_resend' }
+      });
+      if (!confirmation.success && confirmation.error) throw confirmation.error;
+      await updatePatientOnboardingWithSchemaFallback({
+        patientId,
+        clinicId,
+        patch: {
+          status: PATIENT_STATUS_PENDING_CONFIRMATION,
+          relationship_status: RELATIONSHIP_PENDING
+        },
+        context: 'relationship-confirmation-manual-send'
+      });
+      return res.json({
+        success: true,
+        message: confirmation.sent ? 'Confirmação de vínculo enviada.' : 'Solicitação registrada. E-mail não enviado agora.',
+        data: { sent: confirmation.sent, confirmationId: confirmation.confirmationId }
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/relationship-confirmation/send [POST]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  const resolveRelationshipConfirmationForPortal = async (token: string, user: any) => {
+    const safeToken = sanitizeString(token, 500);
+    if (!safeToken) return { ok: false, status: 400, error: 'Solicitação inválida.' };
+    const tokenHash = hashIdentifier(`relationship-confirmation:${safeToken}`);
+    const { data: confirmation, error } = await supabase
+      .from('patient_relationship_confirmations')
+      .select(PATIENT_RELATIONSHIP_CONFIRMATION_SELECT)
+      .eq('confirmation_token_hash', tokenHash)
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    if (!confirmation?.id) return { ok: false, status: 404, error: 'Solicitação não encontrada.' };
+
+    const { data: patient, error: patientError } = await supabase
+      .from('patients')
+      .select('id, name, email, clinic_id, responsible_user_id')
+      .eq('id', confirmation.patient_id_requesting)
+      .limit(1)
+      .maybeSingle();
+    if (patientError) throw patientError;
+
+    const userId = sanitizeString(user?.id, 120);
+    const userEmail = sanitizeEmail(user?.email);
+    const responsibleMatches =
+      (isUuid(userId) && sanitizeString(confirmation.responsible_user_id, 120) === userId) ||
+      (userEmail && sanitizeEmail(confirmation.email_normalized) === userEmail) ||
+      (userEmail && sanitizeEmail(patient?.email) === userEmail);
+    if (!responsibleMatches) return { ok: false, status: 404, error: 'Solicitação não encontrada.' };
+    return { ok: true, confirmation, patient };
+  };
+
+  app.post('/api/portal/relationship-confirmations/:token/confirm', portalActionLimiter, checkAuth, async (req: any, res) => {
+    try {
+      const resolved: any = await resolveRelationshipConfirmationForPortal(req.params.token, req.session.user);
+      if (!resolved.ok) return res.status(resolved.status).json({ success: false, error: resolved.error });
+      const confirmation = resolved.confirmation;
+      const patient = resolved.patient;
+      if (sanitizeString(confirmation.status, 40) === 'CONFIRMED') {
+        return res.json({ success: true, idempotent: true, message: 'Vínculo já confirmado.' });
+      }
+      if (sanitizeString(confirmation.status, 40) !== 'PENDING') {
+        return res.status(409).json({ success: false, error: 'Solicitação não está pendente.' });
+      }
+      const expiresAt = confirmation.expires_at ? new Date(String(confirmation.expires_at)).getTime() : 0;
+      if (expiresAt && expiresAt < Date.now()) {
+        await updateRowsWithSchemaFallback({
+          tableName: 'patient_relationship_confirmations',
+          payload: { status: 'EXPIRED', updated_at: new Date().toISOString() },
+          filters: [{ column: 'id', value: confirmation.id }],
+          context: 'relationship-confirmation-expired'
+        });
+        return res.status(409).json({ success: false, error: 'Solicitação expirada.' });
+      }
+      const nowIso = new Date().toISOString();
+      await updateRowsWithSchemaFallback({
+        tableName: 'patient_relationship_confirmations',
+        payload: { status: 'CONFIRMED', confirmed_at: nowIso, updated_at: nowIso },
+        filters: [{ column: 'id', value: confirmation.id }, { column: 'status', value: 'PENDING' }],
+        context: 'relationship-confirmation-confirm'
+      });
+      await updatePatientOnboardingWithSchemaFallback({
+        patientId: sanitizeString(patient?.id, 120),
+        clinicId: sanitizeString(confirmation.organization_id_requesting, 120),
+        patch: {
+          status: PATIENT_STATUS_PENDING_ANAMNESIS,
+          relationship_status: RELATIONSHIP_CONFIRMED,
+          onboarding_status: ONBOARDING_NOT_STARTED
+        },
+        context: 'relationship-confirmation-confirm-patient'
+      });
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(confirmation.organization_id_requesting, 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Responsavel', 180),
+        title: 'Vínculo confirmado',
+        content: 'Responsável confirmou novo vínculo sem liberar histórico automaticamente.',
+        type: 'management',
+        actionType: 'RELATIONSHIP_CONFIRMED',
+        payload: { confirmationId: sanitizeString(confirmation.id, 120), patientId: sanitizeString(patient?.id, 120) }
+      });
+      return res.json({
+        success: true,
+        message: 'Vínculo confirmado.',
+        data: {
+          confirmationId: sanitizeString(confirmation.id, 120),
+          patientId: sanitizeString(patient?.id, 120),
+          canAuthorizeSharedHistory: true
+        }
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/relationship-confirmations/:token/confirm [POST]', error, {
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.post('/api/portal/relationship-confirmations/:token/reject', portalActionLimiter, checkAuth, async (req: any, res) => {
+    try {
+      const resolved: any = await resolveRelationshipConfirmationForPortal(req.params.token, req.session.user);
+      if (!resolved.ok) return res.status(resolved.status).json({ success: false, error: resolved.error });
+      const confirmation = resolved.confirmation;
+      if (sanitizeString(confirmation.status, 40) !== 'PENDING') {
+        return res.status(409).json({ success: false, error: 'Solicitação não está pendente.' });
+      }
+      const nowIso = new Date().toISOString();
+      await updateRowsWithSchemaFallback({
+        tableName: 'patient_relationship_confirmations',
+        payload: { status: 'REJECTED', updated_at: nowIso },
+        filters: [{ column: 'id', value: confirmation.id }, { column: 'status', value: 'PENDING' }],
+        context: 'relationship-confirmation-reject'
+      });
+      await updatePatientOnboardingWithSchemaFallback({
+        patientId: sanitizeString(confirmation.patient_id_requesting, 120),
+        clinicId: sanitizeString(confirmation.organization_id_requesting, 120),
+        patch: {
+          status: PATIENT_STATUS_PENDING_CONFIRMATION,
+          relationship_status: RELATIONSHIP_REJECTED
+        },
+        context: 'relationship-confirmation-reject-patient'
+      });
+      return res.json({ success: true, message: 'Vínculo recusado.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/relationship-confirmations/:token/reject [POST]', error, {
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.post('/api/portal/shared-history/:confirmationId/authorize', portalActionLimiter, checkAuth, async (req: any, res) => {
+    try {
+      const confirmationId = sanitizeString(req.params.confirmationId, 120);
+      if (!isUuid(confirmationId)) return res.status(400).json({ success: false, error: 'Solicitação inválida.' });
+      const { data: confirmation, error } = await supabase
+        .from('patient_relationship_confirmations')
+        .select(PATIENT_RELATIONSHIP_CONFIRMATION_SELECT)
+        .eq('id', confirmationId)
+        .eq('status', 'CONFIRMED')
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      if (!confirmation?.id) return res.status(404).json({ success: false, error: 'Solicitação não encontrada.' });
+      const patientId = sanitizeString(confirmation.patient_id_requesting, 120);
+      if (!(await canPortalSessionAccessPatient(patientId, req.session.user))) {
+        return res.status(404).json({ success: false, error: 'Solicitação não encontrada.' });
+      }
+      const { data: patient, error: patientError } = await supabase
+        .from('patients')
+        .select('id, name, email, age, status, clinic_id')
+        .eq('id', patientId)
+        .limit(1)
+        .maybeSingle();
+      if (patientError) throw patientError;
+      const scope = normalizePatientPortabilityScope(req.body?.scope);
+      const snapshot = buildPatientPortabilitySnapshot({
+        patient,
+        notes: [],
+        scope
+      });
+      const snapshotId = crypto.randomUUID();
+      const nowIso = new Date().toISOString();
+      const insert = await insertRowWithSchemaFallback('patient_shared_history_snapshots', {
+        id: snapshotId,
+        organization_id_source: null,
+        organization_id_target: sanitizeString(confirmation.organization_id_requesting, 120),
+        patient_id_source: null,
+        patient_id_target: patientId,
+        generated_by: sanitizeString(req.session.user?.id, 120),
+        authorized_by_user_id: sanitizeString(req.session.user?.id, 120),
+        scope,
+        snapshot_data: snapshot,
+        status: 'GENERATED',
+        generated_at: nowIso,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+        metadata: { confirmationId }
+      }, 'shared-history-authorize');
+      if (!insert.success) throw insert.error;
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(confirmation.organization_id_requesting, 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Responsavel', 180),
+        title: 'Histórico compartilhável autorizado',
+        content: 'Snapshot autorizado foi gerado conforme escopo escolhido.',
+        type: 'management',
+        actionType: 'SHARED_HISTORY_AUTHORIZED',
+        payload: { confirmationId, snapshotId, scope }
+      });
+      return res.json({ success: true, message: 'Histórico compartilhável autorizado.', data: { snapshotId, status: 'GENERATED' } });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/shared-history/:confirmationId/authorize [POST]', error, {
+        confirmationId: sanitizeString(req.params.confirmationId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.get('/api/patients/:patientId/shared-history', checkAuth, checkPatientAccess, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      const { data, error } = await supabase
+        .from('patient_shared_history_snapshots')
+        .select(PATIENT_SHARED_HISTORY_SNAPSHOT_SELECT)
+        .eq('organization_id_target', clinicId)
+        .eq('patient_id_target', patientId)
+        .order('generated_at', { ascending: false })
+        .limit(20);
+      if (error) {
+        if (isMissingRelationError(error)) return res.json({ success: true, data: [], warning: 'Compartilhamento ainda não configurado.' });
+        throw error;
+      }
+      return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/shared-history [GET]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.post('/api/patients/:patientId/shared-history/import', portalActionLimiter, checkAuth, checkPatientAccess, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const snapshotId = sanitizeString(req.body?.snapshotId || req.body?.snapshot_id, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(patientId) || !isUuid(snapshotId) || !isUuid(clinicId)) {
+        return res.status(400).json({ success: false, error: 'Solicitação inválida.' });
+      }
+      const { data: snapshot, error } = await supabase
+        .from('patient_shared_history_snapshots')
+        .select('id, status')
+        .eq('id', snapshotId)
+        .eq('organization_id_target', clinicId)
+        .eq('patient_id_target', patientId)
+        .eq('status', 'GENERATED')
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      if (!snapshot?.id) return res.status(404).json({ success: false, error: 'Snapshot não encontrado.' });
+      const update = await updateRowsWithSchemaFallback({
+        tableName: 'patient_shared_history_snapshots',
+        payload: { status: 'IMPORTED', metadata: { importedAt: new Date().toISOString() } },
+        filters: [{ column: 'id', value: snapshotId }],
+        context: 'shared-history-import'
+      });
+      if (!update.success) throw update.error;
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
+        title: 'Snapshot compartilhado importado',
+        content: 'Snapshot autorizado foi marcado como importado no prontuário.',
+        type: 'management',
+        actionType: 'SHARED_HISTORY_IMPORTED',
+        payload: { patientId, snapshotId }
+      });
+      return res.json({ success: true, message: 'Snapshot autorizado importado.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/shared-history/import [POST]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
   // Create Patient User Account (called by therapist when adding a patient)
   app.post('/api/patients/create-user', patientCreateLimiter, checkAuth, async (req: any, res) => {
     const { email, name, type, cpf } = req.body;
@@ -11764,12 +13037,24 @@ async function startServer() {
         }
       };
 
-      const ensurePatientLink = async (authUserId: string) => {
+      const ensurePatientLink = async (
+        authUserId: string,
+        options: { existingAccount?: boolean } = {}
+      ): Promise<string | null> => {
+          const existingAccount = options.existingAccount === true;
+          const nextPatientStatus = existingAccount
+            ? PATIENT_STATUS_PENDING_CONFIRMATION
+            : PATIENT_STATUS_PENDING_ANAMNESIS;
+          const nextRelationshipStatus = existingAccount ? RELATIONSHIP_PENDING : RELATIONSHIP_CONFIRMED;
+          const nextOnboardingStatus = ONBOARDING_NOT_STARTED;
           const patientPayloadBase = cleanObject({
             name: safeName,
             email: safeEmail,
             phone: normalizedPhone || undefined,
-            status: 'active',
+            status: nextPatientStatus,
+            onboarding_status: nextOnboardingStatus,
+            anamnesis_required: true,
+            relationship_status: nextRelationshipStatus,
             type: normalizedPortalType,
             patient_profile_type: canonicalProfileType,
             panel_type: canonicalProfileType,
@@ -11780,7 +13065,7 @@ async function startServer() {
             client_record_id: requestClientRecordId || undefined,
             created_at: new Date().toISOString()
         });
-        if (!patientPayloadBase.email) return;
+        if (!patientPayloadBase.email) return null;
 
         const existingPatient = await findDuplicatePatientInClinic({
           clinicId: patientPayloadBase.clinic_id,
@@ -11789,12 +13074,18 @@ async function startServer() {
           cpf: normalizedCpf,
           clientRecordId: requestClientRecordId
         });
+        const linkedPatientId = sanitizeString(existingPatient?.patientId, 120) ||
+          (isUuid(requestClientRecordId) ? requestClientRecordId : crypto.randomUUID());
 
           const upsertPatientData = cleanObject({
+            id: existingPatient?.patientId ? undefined : linkedPatientId,
             name: safeName,
             email: safeEmail,
             phone: normalizedPhone || undefined,
-            status: 'active',
+            status: nextPatientStatus,
+            onboarding_status: nextOnboardingStatus,
+            anamnesis_required: true,
+            relationship_status: nextRelationshipStatus,
             type: normalizedPortalType,
             patient_profile_type: canonicalProfileType,
             panel_type: canonicalProfileType,
@@ -11805,27 +13096,30 @@ async function startServer() {
             client_record_id: requestClientRecordId || undefined
           });
           const fallbackPatientData = cleanObject({
+            id: existingPatient?.patientId ? undefined : linkedPatientId,
             name: safeName,
             email: safeEmail,
             phone: normalizedPhone || undefined,
-            status: 'active',
+            status: 'pending',
             clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
             therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined
           });
 
         if (existingPatient?.patientId) {
-          const { error: updatePatientError } = await supabase
-            .from('patients')
-            .update(upsertPatientData)
-            .eq('id', existingPatient.patientId);
-          if (updatePatientError) {
-            const schemaMismatch = String(updatePatientError?.message || '').toLowerCase().includes('column');
-            if (!schemaMismatch) throw updatePatientError;
-            const { error: updateFallbackError } = await supabase
-              .from('patients')
-              .update(fallbackPatientData)
-              .eq('id', existingPatient.patientId);
-            if (updateFallbackError) throw updateFallbackError;
+          const updateResult = await updatePatientOnboardingWithSchemaFallback({
+            patientId: existingPatient.patientId,
+            clinicId: safeClinicId,
+            patch: upsertPatientData,
+            context: 'patient-create-user-existing-link'
+          });
+          if (!updateResult.success) {
+            const fallbackUpdate = await updateRowsWithSchemaFallback({
+              tableName: 'patients',
+              payload: fallbackPatientData,
+              filters: [{ column: 'id', value: existingPatient.patientId }],
+              context: 'patient-create-user-existing-link-fallback'
+            });
+            if (!fallbackUpdate.success) throw fallbackUpdate.error;
           }
         } else {
           const { error: insertPatientError } = await supabase.from('patients').insert([{
@@ -11833,9 +13127,11 @@ async function startServer() {
             created_at: new Date().toISOString()
           }]);
           if (insertPatientError) {
-            const schemaMismatch = String(insertPatientError?.message || '').toLowerCase().includes('column');
-            if (!schemaMismatch) {
-              if (isDuplicateConstraintError(insertPatientError)) return;
+            const insertMessage = String(insertPatientError?.message || '').toLowerCase();
+            const schemaMismatch = Boolean(extractMissingColumnName(insertPatientError)) || insertMessage.includes('column');
+            const statusConstraint = sanitizeString(insertPatientError?.code, 20) === '23514' || insertMessage.includes('check constraint');
+            if (!schemaMismatch && !statusConstraint) {
+              if (isDuplicateConstraintError(insertPatientError)) return linkedPatientId;
               throw insertPatientError;
             }
             const { error: insertFallbackError } = await supabase.from('patients').insert([{
@@ -11843,7 +13139,7 @@ async function startServer() {
               created_at: new Date().toISOString()
             }]);
             if (insertFallbackError) {
-              if (isDuplicateConstraintError(insertFallbackError)) return;
+              if (isDuplicateConstraintError(insertFallbackError)) return linkedPatientId;
               throw insertFallbackError;
             }
           }
@@ -11879,6 +13175,7 @@ async function startServer() {
           }
           delete safeUserUpdatePayload[missingColumn];
         }
+        return linkedPatientId;
       };
 
       const sendPatientActivationEmail = async (): Promise<{ sent: boolean; reason?: string }> => {
@@ -11948,6 +13245,74 @@ async function startServer() {
         return { sent: true };
       };
 
+      const sendRelationshipConfirmationForLinkedPatient = async (
+        authUserId: string,
+        linkedPatientId: string | null,
+        source: string
+      ) => {
+        const patientId = sanitizeString(linkedPatientId, 120);
+        if (!isUuid(patientId)) {
+          return { sent: false, confirmationId: null, reason: 'Paciente vinculado não localizado.' };
+        }
+
+        await updatePatientOnboardingWithSchemaFallback({
+          patientId,
+          clinicId: safeClinicId,
+          patch: {
+            status: PATIENT_STATUS_PENDING_CONFIRMATION,
+            onboarding_status: ONBOARDING_NOT_STARTED,
+            relationship_status: RELATIONSHIP_PENDING,
+            anamnesis_required: true
+          },
+          context: `patient-create-user-${source}-relationship-pending`
+        });
+
+        const confirmation = await createRelationshipConfirmationRequest({
+          patientId,
+          clinicId: safeClinicId,
+          email: normalizedEmail,
+          patientName: safeName,
+          responsibleUserId: authUserId,
+          createdBy: safeProfessionalId,
+          metadata: {
+            source,
+            requestedSpecialtyKeys,
+            clientRecordId: requestClientRecordId || null
+          }
+        });
+
+        if (!confirmation.success && confirmation.error && !isMissingRelationError(confirmation.error)) {
+          console.warn('[PatientCreateUser] confirmação de vínculo não preparada:', {
+            requestId: routeRequestId,
+            source,
+            patientId,
+            email: maskEmail(normalizedEmail),
+            message: sanitizeString(confirmation.error?.message || String(confirmation.error), 180)
+          });
+        }
+
+        void persistActivityLog({
+          userId: sanitizeString(req.session.user?.id, 120),
+          clinicId: safeClinicId,
+          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
+          title: 'Confirmação de vínculo enviada',
+          content: 'Solicitação de novo vínculo foi enviada sem expor histórico anterior.',
+          type: 'management',
+          actionType: 'RELATIONSHIP_CONFIRMATION_SENT',
+          payload: {
+            patientId,
+            email: maskEmail(normalizedEmail),
+            sent: Boolean(confirmation.sent)
+          }
+        });
+
+        return {
+          sent: Boolean(confirmation.sent),
+          confirmationId: confirmation.confirmationId || null,
+          reason: confirmation.success ? null : 'Não foi possível enviar a confirmação agora.'
+        };
+      };
+
       // 1. Check if user already exists in 'users' table
       const { data: existingUser, error: checkError } = await supabase
         .from('users')
@@ -11971,8 +13336,12 @@ async function startServer() {
         // E-mail de paciente pode existir em outra clínica para outra especialidade
         // (ex.: ABA em uma clínica e Fono em outra). O bloqueio já foi feito acima
         // apenas quando há conflito de mesma especialidade.
-        await ensurePatientLink(existingUser.id);
-        await updatePatientInviteStatus(existingUser.id, 'INVITE_QUEUED');
+        const linkedPatientId = await ensurePatientLink(existingUser.id, { existingAccount: true });
+        const relationshipConfirmation = await sendRelationshipConfirmationForLinkedPatient(
+          existingUser.id,
+          linkedPatientId,
+          'existing_public_user'
+        );
         if (isUuid(safeClinicId)) {
           queueActivePatientSync(safeClinicId, 'patient_create_user_existing');
         }
@@ -11980,7 +13349,7 @@ async function startServer() {
           userId: sanitizeString(req.session.user?.id, 120),
           clinicId: safeClinicId,
           actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
-          title: 'Responsável existente vinculado',
+          title: 'Responsável existente vinculado ao paciente',
           content: 'Responsável existente foi vinculado a paciente da clínica atual.',
           type: 'management',
           actionType: 'RESPONSIBLE_LINKED_TO_NEW_PATIENT',
@@ -11990,15 +13359,19 @@ async function startServer() {
             portabilityAvailable: true
           }
         });
-        sendPatientInviteInBackground({ context: 'existing_public_user', authUserId: existingUser.id });
         return res.json({
           success: true,
           idempotent: true,
-          status: 'LINKED_EXISTING_USER',
-          code: 'RESPONSIBLE_LINKED_TO_NEW_PATIENT',
-          message: 'Responsável existente vinculado ao paciente.',
+          status: 'RELATIONSHIP_CONFIRMATION_SENT',
+          code: 'RELATIONSHIP_CONFIRMATION_SENT',
+          legacyStatus: 'LINKED_EXISTING_USER',
+          message: relationshipConfirmation.sent
+            ? 'Confirmação de vínculo enviada para o responsável.'
+            : 'Vínculo pendente criado. Reenvie a confirmação de vínculo quando necessário.',
           warning: null,
-          activationEmailSent: null,
+          activationEmailSent: false,
+          relationshipConfirmationSent: relationshipConfirmation.sent,
+          patientId: linkedPatientId,
           portabilityAvailable: true,
           userAlreadyExisted: true
         });
@@ -12039,8 +13412,12 @@ async function startServer() {
 
           if (foundUser?.id) {
             await upsertPatientProfile(foundUser.id);
-            await ensurePatientLink(foundUser.id);
-            await updatePatientInviteStatus(foundUser.id, 'INVITE_QUEUED');
+            const linkedPatientId = await ensurePatientLink(foundUser.id, { existingAccount: true });
+            const relationshipConfirmation = await sendRelationshipConfirmationForLinkedPatient(
+              foundUser.id,
+              linkedPatientId,
+              'auth_duplicate_resolved'
+            );
             if (isUuid(safeClinicId)) {
               queueActivePatientSync(safeClinicId, 'patient_create_user_auth_exists');
             }
@@ -12058,15 +13435,19 @@ async function startServer() {
                 portabilityAvailable: true
               }
             });
-            sendPatientInviteInBackground({ context: 'auth_duplicate_resolved', authUserId: foundUser.id });
             return res.json({
               success: true,
               idempotent: true,
-              status: 'LINKED_EXISTING_USER',
-              code: 'EXISTING_EMAIL_LINKED',
-              message: 'Responsável existente vinculado ao paciente.',
+              status: 'RELATIONSHIP_CONFIRMATION_SENT',
+              code: 'RELATIONSHIP_CONFIRMATION_SENT',
+              legacyStatus: 'LINKED_EXISTING_USER',
+              message: relationshipConfirmation.sent
+                ? 'Confirmação de vínculo enviada para o responsável.'
+                : 'Vínculo pendente criado. Reenvie a confirmação de vínculo quando necessário.',
               warning: null,
-              activationEmailSent: null,
+              activationEmailSent: false,
+              relationshipConfirmationSent: relationshipConfirmation.sent,
+              patientId: linkedPatientId,
               portabilityAvailable: true,
               userAlreadyExisted: true
             });
@@ -12084,7 +13465,7 @@ async function startServer() {
 
       if (authUser?.user) {
         await upsertPatientProfile(authUser.user.id);
-        await ensurePatientLink(authUser.user.id);
+        const linkedPatientId = await ensurePatientLink(authUser.user.id, { existingAccount: false });
         await updatePatientInviteStatus(authUser.user.id, 'INVITE_QUEUED');
         if (isUuid(safeClinicId)) {
           queueActivePatientSync(safeClinicId, 'patient_create_user_new');
@@ -12097,6 +13478,8 @@ async function startServer() {
           message: 'Convite preparado com sucesso.',
           warning: null,
           activationEmailSent: null,
+          relationshipConfirmationSent: false,
+          patientId: linkedPatientId,
           portabilityAvailable: false
         });
       }
@@ -12540,6 +13923,18 @@ async function startServer() {
         120
       );
       const requestedSpecialtyKeys = derivePatientSpecialtyKeysFromPayload(req.body || {});
+      const anamnesisRequired = req.body?.anamnesisRequired === false || req.body?.anamnesis_required === false
+        ? false
+        : true;
+      const hasSubmittedAnamnesis = hasAnamnesisAnswers(req.body?.anamnesisData || req.body?.anamnesis_data || req.body?.anamnese);
+      const initialOnboardingStatus = !anamnesisRequired
+        ? ONBOARDING_READY_FOR_CARE
+        : hasSubmittedAnamnesis
+          ? ONBOARDING_ANAMNESIS_SUBMITTED
+          : ONBOARDING_NOT_STARTED;
+      const initialPatientStatus = !anamnesisRequired
+        ? PATIENT_STATUS_ACTIVE
+        : PATIENT_STATUS_PENDING_ANAMNESIS;
       const safeBody = cleanObject({
         id: isUuid(sanitizeString(req.body?.id, 120)) ? sanitizeString(req.body?.id, 120) : undefined,
         name: safeName,
@@ -12549,7 +13944,11 @@ async function startServer() {
         age: asSafeNumber(req.body?.age, 0, 130),
         diagnosis: sanitizeString(req.body?.diagnosis, 2000),
         ...buildPatientIdentityPersistenceFields(req.body),
-        status: sanitizeString(req.body?.status, 40) || 'active',
+        status: sanitizeString(req.body?.status, 40) || initialPatientStatus,
+        onboarding_status: initialOnboardingStatus,
+        anamnesis_required: anamnesisRequired,
+        anamnesis_submitted_at: hasSubmittedAnamnesis ? new Date().toISOString() : undefined,
+        relationship_status: RELATIONSHIP_CONFIRMED,
         clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
         therapist_id: isUuid(safeTherapistId) ? safeTherapistId : undefined,
         client_record_id: safeClientRecordId || undefined,
@@ -12584,7 +13983,9 @@ async function startServer() {
           email: sanitizeEmail(duplicatePatient.row?.email) || safeBody.email,
           cpf: normalizeCpf(duplicatePatient.row?.cpf) || safeBody.cpf,
           phone: sanitizePhone(duplicatePatient.row?.phone) || safeBody.phone,
-          status: sanitizeString(duplicatePatient.row?.status, 40) || 'active',
+          status: sanitizeString(duplicatePatient.row?.status, 40) || initialPatientStatus,
+          onboarding_status: sanitizeString(duplicatePatient.row?.onboarding_status, 60) || initialOnboardingStatus,
+          anamnesis_required: duplicatePatient.row?.anamnesis_required !== false,
           clinic_id: safeBody.clinic_id,
           therapist_id: safeBody.therapist_id
         });
@@ -13451,6 +14852,16 @@ async function startServer() {
       const filesCount = hasFilesPayload ? mergedPayload.files.length : 0;
       if (actorId) {
         if (hasAnamnesisPayload) {
+          void updatePatientOnboardingWithSchemaFallback({
+            patientId,
+            clinicId,
+            patch: {
+              status: PATIENT_STATUS_PENDING_ANAMNESIS,
+              onboarding_status: ONBOARDING_ANAMNESIS_SUBMITTED,
+              anamnesis_submitted_at: new Date().toISOString()
+            },
+            context: 'patient-records-anamnesis-payload'
+          });
           void persistActivityLog({
             userId: actorId,
             clinicId: clinicAuditId,

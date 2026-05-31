@@ -412,6 +412,15 @@ function normalizePatientInviteSuccess(result: any) {
   if (status === 'LINKED_EXISTING_USER') {
     return { ...result, message: result.message || 'Responsável existente vinculado ao paciente.' };
   }
+  if (status === 'RELATIONSHIP_CONFIRMATION_SENT') {
+    return {
+      ...result,
+      status,
+      message: result.message || 'Confirmação de vínculo enviada para o responsável.',
+      activationEmailSent: false,
+      relationshipConfirmationSent: result.relationshipConfirmationSent ?? true
+    };
+  }
   if (status === 'INVITE_QUEUED' || status === 'INVITE_PENDING') {
     return {
       ...result,
@@ -1167,6 +1176,148 @@ export const dataService = {
     } catch (error) {
       console.error('Error resending patient recovery email:', error);
       return { success: false, error: String(error) };
+    }
+  },
+
+  async sendPatientAnamnesisRequest(patientId: string) {
+    try {
+      const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/anamnesis/send`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error sending patient anamnesis request:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async getPatientAnamnesisFlow(patientId: string) {
+    try {
+      const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/anamnesis`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error loading patient anamnesis flow:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async savePatientAnamnesisDraft(patientId: string, answers: any, requestId?: string | null) {
+    try {
+      const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/anamnesis/draft`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ answers, requestId: requestId || undefined })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error saving patient anamnesis draft:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async submitPatientAnamnesis(patientId: string, answers: any, requestId?: string | null) {
+    try {
+      const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/anamnesis/submit`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ answers, requestId: requestId || undefined })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error submitting patient anamnesis:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async reviewPatientAnamnesis(patientId: string, requestId?: string | null, responseId?: string | null) {
+    try {
+      const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/anamnesis/review`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ requestId: requestId || undefined, responseId: responseId || undefined })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error reviewing patient anamnesis:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async getPortalPatientAnamnesis(patientId: string) {
+    try {
+      const response = await fetch(`/api/portal/patients/${encodeURIComponent(patientId)}/anamnesis`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error loading portal anamnesis:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async savePortalAnamnesisDraft(patientId: string, answers: any, requestId?: string | null) {
+    try {
+      const response = await fetch(`/api/portal/patients/${encodeURIComponent(patientId)}/anamnesis/draft`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ answers, requestId: requestId || undefined })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error saving portal anamnesis draft:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async submitPortalAnamnesis(patientId: string, answers: any, requestId?: string | null) {
+    try {
+      const response = await fetch(`/api/portal/patients/${encodeURIComponent(patientId)}/anamnesis/submit`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ answers, requestId: requestId || undefined })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error submitting portal anamnesis:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async sendPatientRelationshipConfirmation(patientId: string) {
+    try {
+      const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/relationship-confirmation/send`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error sending relationship confirmation:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async getPatientSharedHistory(patientId: string) {
+    try {
+      const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/shared-history`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error loading shared history:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
     }
   },
 

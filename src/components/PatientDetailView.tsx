@@ -187,6 +187,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [newNoteSubject, setNewNoteSubject] = useState("");
   const [showNoteFilters, setShowNoteFilters] = useState(false);
   const [showAnamnesis, setShowAnamnesis] = useState(false); 
+  const [anamnesisFlow, setAnamnesisFlow] = useState<any>(null);
+  const [anamnesisFlowMessage, setAnamnesisFlowMessage] = useState("");
+  const [isSendingAnamnesisRequest, setIsSendingAnamnesisRequest] = useState(false);
+  const [isReviewingAnamnesis, setIsReviewingAnamnesis] = useState(false);
   const [reportPeriod, setReportPeriod] = useState(() => String(initialChartFilters.reportPeriod || 'monthly'));
   const [comparisonDate1, setComparisonDate1] = useState(() => String(initialChartFilters.comparisonDate1 || ''));
   const [comparisonDate2, setComparisonDate2] = useState(() => String(initialChartFilters.comparisonDate2 || ''));
@@ -310,6 +314,77 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   useEffect(() => {
     setSelectedTherapistId(String(patient?.therapist_id || patient?.professional_id || '').trim());
   }, [patient?.therapist_id, patient?.professional_id, patient?.id]);
+
+  const loadAnamnesisFlow = async () => {
+    if (!patient?.id || !canOpenAnamnesis) return;
+    try {
+      const result = await dataService.getPatientAnamnesisFlow(String(patient.id));
+      if (result?.success) {
+        setAnamnesisFlow(result.data || null);
+      }
+    } catch (error) {
+      console.warn('Falha ao carregar status da anamnese:', error);
+    }
+  };
+
+  useEffect(() => {
+    void loadAnamnesisFlow();
+  }, [patient?.id, canOpenAnamnesis]);
+
+  const getAnamnesisStatusLabel = () => {
+    const requestStatus = String(anamnesisFlow?.request?.status || '').toUpperCase();
+    const responseStatus = String(anamnesisFlow?.response?.status || '').toUpperCase();
+    const onboarding = String(anamnesisFlow?.patient?.onboardingStatus || patient?.onboardingStatus || patient?.onboarding_status || '').toUpperCase();
+    if (requestStatus === 'REVIEWED' || responseStatus === 'REVIEWED' || onboarding === 'READY_FOR_CARE' || onboarding === 'ANAMNESIS_REVIEWED') return 'Anamnese revisada';
+    if (requestStatus === 'SUBMITTED' || responseStatus === 'SUBMITTED' || onboarding === 'ANAMNESIS_SUBMITTED') return 'Anamnese em análise';
+    if (requestStatus === 'IN_PROGRESS' || responseStatus === 'DRAFT' || onboarding === 'ANAMNESIS_IN_PROGRESS') return 'Anamnese em preenchimento';
+    if (requestStatus === 'SENT' || onboarding === 'ANAMNESIS_SENT') return 'Anamnese enviada';
+    return 'Anamnese pendente';
+  };
+
+  const handleSendAnamnesisRequest = async () => {
+    if (!patient?.id || isSendingAnamnesisRequest) return;
+    setIsSendingAnamnesisRequest(true);
+    setAnamnesisFlowMessage("");
+    try {
+      const result = await dataService.sendPatientAnamnesisRequest(String(patient.id));
+      if (!result?.success) throw new Error(result?.error || result?.message || 'Não foi possível enviar a ficha.');
+      setAnamnesisFlowMessage(result?.message || 'Ficha enviada para a família.');
+      onAddActivityLog?.('Ficha de anamnese enviada', `Ficha de anamnese solicitada para ${patient?.name || 'paciente'}.`, 'clinical');
+      await loadAnamnesisFlow();
+    } catch (error: any) {
+      setAnamnesisFlowMessage(error?.message || 'Não foi possível enviar a ficha agora.');
+    } finally {
+      setIsSendingAnamnesisRequest(false);
+    }
+  };
+
+  const handleReviewAnamnesisFlow = async () => {
+    if (!patient?.id || isReviewingAnamnesis) return;
+    setIsReviewingAnamnesis(true);
+    setAnamnesisFlowMessage("");
+    try {
+      const result = await dataService.reviewPatientAnamnesis(
+        String(patient.id),
+        anamnesisFlow?.request?.id || null,
+        anamnesisFlow?.response?.id || null
+      );
+      if (!result?.success) throw new Error(result?.error || result?.message || 'Não foi possível revisar a anamnese.');
+      setAnamnesisFlowMessage('Anamnese marcada como revisada.');
+      onUpdatePatient?.({
+        id: patient.id,
+        status: 'ACTIVE',
+        onboardingStatus: 'READY_FOR_CARE',
+        onboarding_status: 'READY_FOR_CARE',
+        anamnesisPending: false
+      });
+      await loadAnamnesisFlow();
+    } catch (error: any) {
+      setAnamnesisFlowMessage(error?.message || 'Não foi possível revisar a anamnese agora.');
+    } finally {
+      setIsReviewingAnamnesis(false);
+    }
+  };
 
   const canManageTherapistAssignment = useMemo(() => {
     const normalizedRole = String(userRole || '').toLowerCase();
@@ -3806,6 +3881,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setShowAnamnesis(false);
     setShowAnamnesisFileModal(true);
     setIsPreparingAnamnesisSave(false);
+    void dataService.submitPatientAnamnesis(String(patient.id), updatedData, anamnesisFlow?.request?.id || null)
+      .then((result) => {
+        if (result?.success) {
+          void loadAnamnesisFlow();
+        }
+      })
+      .catch((error) => console.warn('Falha ao sincronizar resposta da anamnese:', error));
     onAddActivityLog?.(
       "Ficha de anamnese salva",
       `A ficha de anamnese do paciente ${patient.name} foi registrada e anexada aos arquivos do prontuário.`,
@@ -4612,6 +4694,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     <h1 className={`text-2xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{patient.name}</h1>
                 </div>
                 <p className={`text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Detalhes do Paciente</p>
+                {canOpenAnamnesis && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider ${getAnamnesisStatusLabel().includes('revisada') ? 'bg-emerald-100 text-emerald-700' : isPanelDark ? 'bg-amber-500/10 text-amber-200' : 'bg-amber-50 text-amber-700'}`}>
+                      {getAnamnesisStatusLabel()}
+                    </span>
+                    {anamnesisFlowMessage && (
+                      <span className={`text-[11px] font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                        {anamnesisFlowMessage}
+                      </span>
+                    )}
+                  </div>
+                )}
                 {canManageTherapistAssignment && (
                   <div className="mt-2 flex items-center gap-2">
                     <label className={`text-[10px] font-semibold uppercase tracking-wide ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
@@ -4647,6 +4741,24 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             {canOpenAnamnesis && (
               <button id="anamnesis-btn" onClick={() => setShowAnamnesis(true)} className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2 border ${isPanelDark ? 'bg-violet-500/10 text-violet-200 border-violet-400/30 hover:bg-violet-500/20' : 'bg-[#F4F7FE] text-[#7a32fc] border-blue-100 hover:bg-[#7a32fc]/10'}`}> 
                 <FileText size={16} /> Ficha Anamnese 
+              </button>
+            )}
+            {canOpenAnamnesis && (
+              <button
+                onClick={() => void handleSendAnamnesisRequest()}
+                disabled={isSendingAnamnesisRequest}
+                className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2 border disabled:opacity-60 ${isPanelDark ? 'bg-slate-800 text-violet-200 border-slate-700 hover:bg-slate-700' : 'bg-white text-[#7a32fc] border-purple-100 hover:bg-purple-50'}`}
+              >
+                <Share2 size={16} /> {isSendingAnamnesisRequest ? 'Enviando...' : 'Enviar anamnese'}
+              </button>
+            )}
+            {canOpenAnamnesis && String(anamnesisFlow?.response?.status || '').toUpperCase() === 'SUBMITTED' && (
+              <button
+                onClick={() => void handleReviewAnamnesisFlow()}
+                disabled={isReviewingAnamnesis}
+                className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2 border border-emerald-100 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+              >
+                <CheckCircle2 size={16} /> {isReviewingAnamnesis ? 'Revisando...' : 'Marcar revisada'}
               </button>
             )}
             <button 

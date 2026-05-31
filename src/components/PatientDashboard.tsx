@@ -1,6 +1,6 @@
 ﻿import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle, Settings, User, MapPin, Bell, CalendarDays, Clock, Ban, FileSignature } from 'lucide-react';
+import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle, Settings, User, MapPin, Bell, CalendarDays, Clock, Ban, FileSignature, FileText } from 'lucide-react';
 import { EvolutionBarChart } from './Charts';
 import { CumulativeGrowthChart } from './CumulativeGrowthChart';
 import { LogoVerto, SuccessOverlay, BigEnergySlider, ENERGY_TAGS } from './Common';
@@ -10,6 +10,9 @@ import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
 import { calculateDomainMastery } from '../utils/clinicalMath';
 import { ensureFreshSession } from '../lib/supabase';
+import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemplate } from '../lib/anamnesisSchema';
+
+type PortalSection = 'home' | 'appointments' | 'anamnesis' | 'tasks' | 'reports' | 'documents' | 'profile';
 
 export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false, patientPortalId = '' }: any) => { 
   const chartFiltersStorageKey = `verto.patient-dashboard-chart-filters:${String(user?.id || patientPortalId || 'unknown')}`;
@@ -71,6 +74,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalModal, setPortalModal] = useState<'reschedule' | 'cancel' | 'sign' | ''>('');
   const [portalActionForm, setPortalActionForm] = useState({ reason: '', note: '', requestedStart: '', accepted: false });
   const [portalActionSaving, setPortalActionSaving] = useState(false);
+  const [portalSection, setPortalSection] = useState<PortalSection>('home');
+  const [portalAnamnesis, setPortalAnamnesis] = useState<any>(null);
+  const [portalAnamnesisDraft, setPortalAnamnesisDraft] = useState<Record<string, any>>({});
+  const [portalAnamnesisState, setPortalAnamnesisState] = useState({ loading: false, saving: false, message: '', error: '' });
+  const [expandedAnamnesisSections, setExpandedAnamnesisSections] = useState<Record<string, boolean>>({});
 
   const [isUploading, setIsUploading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -99,6 +107,24 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     ? 'Quanto mais alto o humor, mais fácil foi fazer essa tarefa'
     : 'Quanto mais energia, mais fácil foi fazer essa tarefa';
   const readOnlyNotice = "Você não possui um tratamento ativo no momento. Entre em contato com sua clínica para retomar o acompanhamento.";
+  const portalPatientId = String(patientPortalId || user?.patientId || user?.patient_id || user?.id || '').trim();
+  const hasPortalAnamnesis =
+    Boolean(portalAnamnesis?.available && (portalAnamnesis?.request?.id || portalAnamnesis?.response?.id));
+  const portalAnamnesisRequestStatus = String(portalAnamnesis?.request?.status || '').toUpperCase();
+  const portalAnamnesisResponseStatus = String(portalAnamnesis?.response?.status || '').toUpperCase();
+  const portalAnamnesisLocked =
+    portalAnamnesisRequestStatus === 'SUBMITTED' ||
+    portalAnamnesisRequestStatus === 'REVIEWED' ||
+    portalAnamnesisResponseStatus === 'SUBMITTED' ||
+    portalAnamnesisResponseStatus === 'REVIEWED';
+  const portalAnamnesisStatusLabel =
+    portalAnamnesisRequestStatus === 'REVIEWED' || portalAnamnesisResponseStatus === 'REVIEWED'
+      ? 'Revisada'
+      : portalAnamnesisRequestStatus === 'SUBMITTED' || portalAnamnesisResponseStatus === 'SUBMITTED'
+        ? 'Enviada para análise'
+        : portalAnamnesisResponseStatus === 'DRAFT' || portalAnamnesisRequestStatus === 'IN_PROGRESS'
+          ? 'Em preenchimento'
+          : 'Enviada';
 
   useEffect(() => {
     const persisted = readPersistedChartFilters();
@@ -255,6 +281,33 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     void loadPortalAppointments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, user?.email]);
+
+  const loadPortalAnamnesis = async () => {
+    if (!portalPatientId) return;
+    setPortalAnamnesisState((prev) => ({ ...prev, loading: true, error: '' }));
+    const result = await dataService.getPortalPatientAnamnesis(portalPatientId);
+    if (result?.success) {
+      const data = result.data || {};
+      setPortalAnamnesis(data);
+      const answers = data?.response?.answers && typeof data.response.answers === 'object'
+        ? data.response.answers
+        : {};
+      setPortalAnamnesisDraft(answers);
+      const template = normalizeAnamnesisTemplate(data?.template || getDefaultAnamnesisTemplate());
+      const profileTemplate = getProfileTemplate(template, data?.profileType === 'child' ? 'child' : isKidsProfile ? 'child' : 'adult');
+      setExpandedAnamnesisSections(
+        Object.fromEntries(profileTemplate.sections.filter((section: any) => section.active !== false).slice(0, 2).map((section: any) => [section.id, true]))
+      );
+      setPortalAnamnesisState({ loading: false, saving: false, message: '', error: '' });
+      return;
+    }
+    setPortalAnamnesisState({ loading: false, saving: false, message: '', error: result?.error || 'Não foi possível carregar a ficha agora.' });
+  };
+
+  useEffect(() => {
+    void loadPortalAnamnesis();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portalPatientId, user?.email]);
 
   const openPortalAppointmentDetail = async (appointment: any) => {
     setSelectedPortalAppointment(appointment);
@@ -1403,6 +1456,187 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     </div>
   ) : null;
 
+  const portalMenuItems = [
+    { id: 'home', label: 'Início', icon: User },
+    { id: 'appointments', label: 'Consultas', icon: CalendarDays },
+    ...(hasPortalAnamnesis ? [{ id: 'anamnesis', label: 'Ficha de anamnese', icon: FileText }] : []),
+    { id: 'tasks', label: 'Tarefas', icon: Zap },
+    { id: 'reports', label: 'Relatórios', icon: Trophy },
+    { id: 'documents', label: 'Documentos', icon: BookOpen },
+    { id: 'profile', label: 'Perfil', icon: Settings }
+  ] as Array<{ id: PortalSection; label: string; icon: any }>;
+
+  useEffect(() => {
+    if (portalSection === 'anamnesis' && !hasPortalAnamnesis) {
+      setPortalSection('home');
+    }
+  }, [portalSection, hasPortalAnamnesis]);
+
+  const portalMenu = (
+    <div className={`${isKidsProfile ? 'mb-4' : 'mb-6'} overflow-x-auto no-scrollbar`}>
+      <div className="flex min-w-max gap-2 rounded-[24px] border border-white/70 bg-white/80 p-2 shadow-sm backdrop-blur">
+        {portalMenuItems.map((item) => {
+          const Icon = item.icon;
+          const active = portalSection === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setPortalSection(item.id)}
+              className={`flex items-center gap-2 rounded-2xl px-3 py-2 text-xs font-black transition ${active ? 'bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20' : 'text-slate-500 hover:bg-purple-50 hover:text-[#7a32fc]'}`}
+            >
+              <Icon size={15} />
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  const nextPortalAppointment = portalAppointments[0] || null;
+  const portalHomeSummary = (
+    <div className="mb-6 grid gap-3 sm:grid-cols-3">
+      <button type="button" onClick={() => setPortalSection('appointments')} className="rounded-[24px] border border-purple-100 bg-white p-4 text-left shadow-sm transition hover:bg-purple-50">
+        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">Próxima consulta</p>
+        <p className="mt-2 text-sm font-black text-slate-900">{nextPortalAppointment ? formatPortalDateTime(nextPortalAppointment.scheduledAt) : 'Sem consulta próxima'}</p>
+      </button>
+      {hasPortalAnamnesis && (
+        <button type="button" onClick={() => setPortalSection('anamnesis')} className="rounded-[24px] border border-amber-100 bg-white p-4 text-left shadow-sm transition hover:bg-amber-50">
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-600">Anamnese</p>
+          <p className="mt-2 text-sm font-black text-slate-900">{portalAnamnesisStatusLabel}</p>
+        </button>
+      )}
+      <button type="button" onClick={() => setPortalSection('tasks')} className="rounded-[24px] border border-emerald-100 bg-white p-4 text-left shadow-sm transition hover:bg-emerald-50">
+        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-600">Tarefas</p>
+        <p className="mt-2 text-sm font-black text-slate-900">{visiblePatientTasks?.length || 0} pendente(s)</p>
+      </button>
+    </div>
+  );
+
+  const renderPortalAnamnesisField = (question: any) => {
+    const value = portalAnamnesisDraft?.[question.id] ?? '';
+    const fieldClass = "w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:border-[#7a32fc] disabled:bg-slate-50 disabled:text-slate-400";
+    const update = (nextValue: any) => setPortalAnamnesisDraft((prev) => ({ ...prev, [question.id]: nextValue }));
+    if (question.type === 'data') return <input type="date" disabled={portalAnamnesisLocked} className={fieldClass} value={value || ''} onChange={(event) => update(event.target.value)} />;
+    if (question.type === 'numero') return <input type="number" disabled={portalAnamnesisLocked} className={fieldClass} value={value || ''} onChange={(event) => update(event.target.value)} />;
+    if (question.type === 'telefone') return <input type="tel" disabled={portalAnamnesisLocked} className={fieldClass} value={value || ''} onChange={(event) => update(event.target.value)} />;
+    if (question.type === 'sim_nao') {
+      return (
+        <select disabled={portalAnamnesisLocked} className={fieldClass} value={value === '' ? '' : value ? 'sim' : 'nao'} onChange={(event) => update(event.target.value ? event.target.value === 'sim' : '')}>
+          <option value="">Selecione...</option>
+          <option value="sim">Sim</option>
+          <option value="nao">Não</option>
+        </select>
+      );
+    }
+    if (question.type === 'multipla_escolha') {
+      return (
+        <select disabled={portalAnamnesisLocked} className={fieldClass} value={value || ''} onChange={(event) => update(event.target.value)}>
+          <option value="">Selecione...</option>
+          {(question.options || []).map((option: string) => <option key={option} value={option}>{option}</option>)}
+        </select>
+      );
+    }
+    if (question.type === 'multipla_selecao') {
+      const selected = Array.isArray(value) ? value : [];
+      return (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {(question.options || []).map((option: string) => (
+            <label key={option} className="flex items-center gap-2 rounded-2xl border border-slate-100 bg-white px-3 py-2 text-sm font-semibold text-slate-600">
+              <input type="checkbox" disabled={portalAnamnesisLocked} checked={selected.includes(option)} onChange={(event) => update(event.target.checked ? [...selected, option] : selected.filter((item: string) => item !== option))} />
+              {option}
+            </label>
+          ))}
+        </div>
+      );
+    }
+    return <textarea disabled={portalAnamnesisLocked} rows={3} className={`${fieldClass} resize-none`} value={value || ''} onChange={(event) => update(event.target.value)} />;
+  };
+
+  const savePortalAnamnesisDraft = async () => {
+    if (!portalPatientId || !portalAnamnesis?.request?.id || portalAnamnesisLocked) return;
+    setPortalAnamnesisState((prev) => ({ ...prev, saving: true, error: '', message: '' }));
+    const result = await dataService.savePortalAnamnesisDraft(portalPatientId, portalAnamnesisDraft, portalAnamnesis.request.id);
+    if (!result?.success) {
+      setPortalAnamnesisState({ loading: false, saving: false, message: '', error: result?.error || 'Não foi possível salvar o rascunho.' });
+      return;
+    }
+    setPortalAnamnesisState({ loading: false, saving: false, message: 'Rascunho salvo.', error: '' });
+    await loadPortalAnamnesis();
+  };
+
+  const submitPortalAnamnesis = async () => {
+    if (!portalPatientId || !portalAnamnesis?.request?.id || portalAnamnesisLocked) return;
+    const confirmed = window.confirm('Enviar a ficha para a clínica? Após o envio, novas edições dependem de uma nova solicitação.');
+    if (!confirmed) return;
+    setPortalAnamnesisState((prev) => ({ ...prev, saving: true, error: '', message: '' }));
+    const result = await dataService.submitPortalAnamnesis(portalPatientId, portalAnamnesisDraft, portalAnamnesis.request.id);
+    if (!result?.success) {
+      setPortalAnamnesisState({ loading: false, saving: false, message: '', error: result?.error || 'Não foi possível enviar a ficha.' });
+      return;
+    }
+    setPortalAnamnesisState({ loading: false, saving: false, message: result?.message || 'Ficha enviada para a clínica.', error: '' });
+    await loadPortalAnamnesis();
+  };
+
+  const portalAnamnesisPanel = hasPortalAnamnesis ? (() => {
+    const template = normalizeAnamnesisTemplate(portalAnamnesis?.template || getDefaultAnamnesisTemplate());
+    const profile = getProfileTemplate(template, portalAnamnesis?.profileType === 'child' ? 'child' : isKidsProfile ? 'child' : 'adult');
+    return (
+      <div className="mb-6 rounded-[28px] border border-purple-100 bg-white p-4 shadow-sm sm:p-5">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Ficha de anamnese</p>
+            <h2 className="text-lg font-black text-slate-900">{portalAnamnesisStatusLabel}</h2>
+          </div>
+          <span className="rounded-full bg-purple-50 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-[#7a32fc]">
+            {portalAnamnesisLocked ? 'Edição bloqueada' : 'Rascunho disponível'}
+          </span>
+        </div>
+        {portalAnamnesisState.error && <div className="mb-3 rounded-2xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700">{portalAnamnesisState.error}</div>}
+        {portalAnamnesisState.message && <div className="mb-3 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{portalAnamnesisState.message}</div>}
+        <div className="space-y-3">
+          {profile.sections.filter((section: any) => section.active !== false).map((section: any) => {
+            const questions = profile.questions.filter((question: any) => question.active !== false && question.sectionId === section.id).sort((a: any, b: any) => a.order - b.order);
+            if (!questions.length) return null;
+            const expanded = expandedAnamnesisSections[section.id] !== false;
+            return (
+              <div key={section.id} className="rounded-3xl border border-slate-100 bg-slate-50/60 p-3">
+                <button type="button" onClick={() => setExpandedAnamnesisSections((prev) => ({ ...prev, [section.id]: !expanded }))} className="flex w-full items-center justify-between gap-3 px-1 py-1 text-left">
+                  <span className="text-sm font-black text-slate-800">{section.title}</span>
+                  <ChevronDown size={16} className={`text-slate-400 transition ${expanded ? 'rotate-180' : ''}`} />
+                </button>
+                {expanded && (
+                  <div className="mt-3 grid gap-3">
+                    {questions.map((question: any) => (
+                      <label key={question.id} className="block rounded-2xl bg-white p-3 shadow-sm">
+                        <span className="mb-2 block text-xs font-black text-slate-600">{question.label}{question.required ? <span className="text-rose-500"> *</span> : null}</span>
+                        {renderPortalAnamnesisField(question)}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {!portalAnamnesisLocked && (
+          <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:justify-end">
+            <button type="button" disabled={portalAnamnesisState.saving} onClick={() => void savePortalAnamnesisDraft()} className="rounded-2xl border border-purple-100 px-4 py-3 text-sm font-black text-[#7a32fc] disabled:opacity-60">Salvar rascunho</button>
+            <button type="button" disabled={portalAnamnesisState.saving} onClick={() => void submitPortalAnamnesis()} className="rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-black text-white shadow-lg shadow-purple-500/20 disabled:opacity-60">Enviar para a clínica</button>
+          </div>
+        )}
+      </div>
+    );
+  })() : null;
+
+  const portalPlaceholderPanel = (label: string) => (
+    <div className="mb-6 rounded-[28px] border border-dashed border-purple-100 bg-white/70 p-6 text-center text-sm font-semibold text-slate-500">
+      {label}
+    </div>
+  );
+
   const activePortalAppointment = portalAppointmentDetail?.appointment || selectedPortalAppointment;
   const activePortalStatus = String(activePortalAppointment?.status || '').toUpperCase();
   const portalActionBlocked = activePortalStatus.includes('CANCEL') || activePortalStatus.includes('COMPLET') || activePortalStatus.includes('NO_SHOW');
@@ -1658,8 +1892,17 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     {readOnlyNotice}
                   </div>
                 )}
-                {portalAppointmentsPanel}
+                {portalMenu}
+                {portalSection === 'home' && portalHomeSummary}
+                {portalSection === 'appointments' && portalAppointmentsPanel}
+                {portalSection === 'anamnesis' && portalAnamnesisPanel}
+                {portalSection === 'tasks' && portalPlaceholderPanel('Tarefas enviadas pela clínica aparecerão aqui.')}
+                {portalSection === 'reports' && portalPlaceholderPanel('Relatórios liberados pela clínica aparecerão aqui.')}
+                {portalSection === 'documents' && portalPlaceholderPanel('Documentos compartilhados pela clínica aparecerão aqui.')}
+                {portalSection === 'profile' && portalPlaceholderPanel('Use Configurações para atualizar os dados do perfil.')}
 
+                {portalSection === 'home' && (
+                  <React.Fragment>
                 <div className="bg-white p-4 sm:p-6 rounded-[32px] sm:rounded-[40px] shadow-xl border border-blue-50 flex flex-col justify-center mb-6 relative overflow-hidden">
                     <div className="absolute top-0 right-0 w-24 sm:w-32 h-24 sm:h-32 bg-yellow-100 rounded-bl-full opacity-50 -z-0"></div>
                     <div className="grid grid-cols-3 gap-2 mb-4">
@@ -1787,6 +2030,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     </div>
                   )}
                 </div>
+                  </React.Fragment>
+                )}
             </div>
 
             {isFamilyLogOpen && (
@@ -2010,7 +2255,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           {readOnlyNotice}
         </div>
       )}
-      {portalAppointmentsPanel}
+      {portalMenu}
+      {portalSection === 'home' && portalHomeSummary}
+      {portalSection === 'appointments' && portalAppointmentsPanel}
+      {portalSection === 'anamnesis' && portalAnamnesisPanel}
+      {portalSection === 'tasks' && portalPlaceholderPanel('Tarefas enviadas pela clínica aparecerão aqui.')}
+      {portalSection === 'reports' && portalPlaceholderPanel('Relatórios liberados pela clínica aparecerão aqui.')}
+      {portalSection === 'documents' && portalPlaceholderPanel('Documentos compartilhados pela clínica aparecerão aqui.')}
+      {portalSection === 'profile' && portalPlaceholderPanel('Use Configurações para atualizar os dados do perfil.')}
+      {portalSection === 'home' && (
+        <React.Fragment>
       {!dailyCheckinDone ? ( 
         <div className="mb-8 animate-slide-up"> 
           <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2 px-1"> {isConventionalAdult ? <Smile size={16} /> : <BatteryCharging size={16} />} {isConventionalAdult ? 'Como está se sentindo?' : 'Como se sente agora?'} </h2> 
@@ -2135,6 +2389,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           </div> 
         </div> 
       </div> 
+        </React.Fragment>
+      )}
       {isMoodModalOpen && selectedMood && ( 
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"> 
           <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-pop relative"> 

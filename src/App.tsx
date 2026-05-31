@@ -2929,6 +2929,11 @@ export default function App() {
       isMinor: Boolean(data.isMinor || data.menorDeIdade),
       guardian: resolvedGuardian,
       approach: data.approach, 
+      status: "PENDING_ANAMNESIS",
+      onboardingStatus: "NOT_STARTED",
+      onboarding_status: "NOT_STARTED",
+      anamnesisRequired: true,
+      anamnesis_required: true,
       type: resolvedPortalType,
       patientProfileType: resolvedProfileType,
       panelType: resolvedProfileType,
@@ -3002,6 +3007,8 @@ export default function App() {
         portabilityAvailable = Boolean(userResult.portabilityAvailable);
         if (userResult.idempotent) {
           activationMessage = userResult.message || 'Cadastro confirmado.';
+        } else if (userResult.relationshipConfirmationSent || userResult.code === 'RELATIONSHIP_CONFIRMATION_SENT') {
+          activationMessage = userResult.message || 'Confirmação de vínculo enviada para o responsável.';
         } else if (userResult.userAlreadyExisted || userResult.code === 'RESPONSIBLE_LINKED_TO_NEW_PATIENT' || userResult.code === 'EXISTING_EMAIL_LINKED') {
           activationMessage = portabilityAvailable
             ? 'Responsável vinculado com sucesso. O compartilhamento de histórico pode ser solicitado com autorização.'
@@ -3043,6 +3050,11 @@ export default function App() {
       age: data.anamnesisData?.idade || data.age || calculateAgeFromBirthDate(resolvedBirthDate) || 0,
       gender: data.gender || data.genero || '',
       diagnosis: data.diagnosis,
+      status: "PENDING_ANAMNESIS",
+      onboardingStatus: "NOT_STARTED",
+      onboarding_status: "NOT_STARTED",
+      anamnesisRequired: true,
+      anamnesis_required: true,
       type: resolvedPortalType,
       patientProfileType: resolvedProfileType,
       panelType: resolvedProfileType,
@@ -3244,8 +3256,10 @@ export default function App() {
         patientEmail: data.email || null,
         activationEmailSent,
         activationEmailWarning,
-        activationMessage,
-        portabilityAvailable
+        activationMessage: activationMessage || "Paciente cadastrado. Envie a ficha de anamnese para concluir a ativação clínica.",
+        portabilityAvailable,
+        onboardingStatus: "NOT_STARTED",
+        anamnesisRequired: true
       }
     };
     } catch (error: any) {
