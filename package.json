@@ -35,6 +35,7 @@
     "test:aba-mastery-engine": "tsx tests/abaMasteryEngine.test.ts",
     "test:aba-planning-engine": "tsx tests/abaPlanningEngine.test.ts",
     "test:aba-maintenance-engine": "tsx tests/abaMaintenanceEngine.test.ts",
+    "test:maintenance-probe-scheduling-calendar": "tsx tests/maintenanceProbeSchedulingCalendar.test.ts",
     "test:aba-clinical-charts": "tsx tests/abaClinicalCharts.test.ts",
     "test:closure-readiness": "tsx tests/closureReadiness.test.ts",
     "test:appointment-confirmation-signature": "tsx tests/appointmentConfirmationSignature.test.ts",

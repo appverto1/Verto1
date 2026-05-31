@@ -8,6 +8,10 @@ export type AbaMaintenanceScheduleMode =
 
 export type AbaMaintenanceScheduleStatus =
   | 'PENDING'
+  | 'PENDING_NEXT_SESSION'
+  | 'PENDING_CONFIRMATION'
+  | 'PENDING_LINK'
+  | 'PENDING_SCHEDULING'
   | 'SCHEDULED'
   | 'UNSCHEDULED'
   | 'DUE_TODAY'
@@ -61,7 +65,18 @@ export type NextMaintenanceProbe = {
 };
 
 const ACTIVE_APPOINTMENT_STATUSES = new Set(['scheduled', 'pending', 'confirmed', 'in_progress', 'rescheduled', 'reschedule']);
-const ACTIVE_SCHEDULE_STATUSES = new Set(['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE', 'MISSED']);
+const ACTIVE_SCHEDULE_STATUSES = new Set([
+  'PENDING',
+  'PENDING_NEXT_SESSION',
+  'PENDING_CONFIRMATION',
+  'PENDING_LINK',
+  'PENDING_SCHEDULING',
+  'SCHEDULED',
+  'UNSCHEDULED',
+  'DUE_TODAY',
+  'OVERDUE',
+  'MISSED'
+]);
 
 export const isoOrNow = (value: unknown) => {
   const date = new Date(typeof value === 'string' || typeof value === 'number' ? value : Date.now());
@@ -84,6 +99,10 @@ export const normalizeMaintenanceScheduleMode = (value: unknown): AbaMaintenance
 
 export const normalizeMaintenanceScheduleStatus = (value: unknown): AbaMaintenanceScheduleStatus => {
   const normalized = String(value || '').trim().toUpperCase();
+  if (normalized === 'PENDING_NEXT_SESSION') return 'PENDING_NEXT_SESSION';
+  if (normalized === 'PENDING_CONFIRMATION') return 'PENDING_CONFIRMATION';
+  if (normalized === 'PENDING_LINK') return 'PENDING_LINK';
+  if (normalized === 'PENDING_SCHEDULING') return 'PENDING_SCHEDULING';
   if (normalized === 'SCHEDULED') return 'SCHEDULED';
   if (normalized === 'UNSCHEDULED') return 'UNSCHEDULED';
   if (normalized === 'DUE_TODAY') return 'DUE_TODAY';
@@ -166,7 +185,7 @@ export function findBestAppointmentForMaintenanceProbe(
         appointmentId: null,
         scheduledFor: null,
         targetDueDate: isoOrNow(targetDueDate),
-        status: 'UNSCHEDULED',
+        status: 'PENDING_LINK',
         matchType: 'NO_APPOINTMENT_IN_WINDOW',
         toleranceStart: new Date(windowStartMs).toISOString(),
         toleranceEnd: new Date(windowEndMs).toISOString()
@@ -212,6 +231,7 @@ const scheduleReferenceDate = (schedule: any) =>
 export const deriveMaintenanceScheduleStatus = (schedule: any, now = new Date()): AbaMaintenanceScheduleStatus => {
   const status = normalizeMaintenanceScheduleStatus(schedule?.status);
   if (['COMPLETED', 'CANCELLED'].includes(status)) return status;
+  if (status === 'PENDING_NEXT_SESSION' || status === 'PENDING_CONFIRMATION') return status;
   const reference = scheduleReferenceDate(schedule);
   const referenceMs = reference ? new Date(reference).getTime() : NaN;
   if (!Number.isFinite(referenceMs)) return status;
@@ -228,7 +248,9 @@ export const formatMaintenanceScheduleDueLabel = (schedule: any, now = new Date(
   const appointmentId = schedule?.appointment_id || schedule?.appointmentId;
   const status = deriveMaintenanceScheduleStatus(schedule, now);
   if (!schedule) return 'Sem sondagem agendada';
-  if (status === 'UNSCHEDULED' && !scheduledFor && targetDueDate) return 'Sem sessao agendada proxima da data-alvo.';
+  if (status === 'PENDING_NEXT_SESSION') return 'Aguardando proxima sessao';
+  if (status === 'PENDING_CONFIRMATION') return 'Pendente de confirmacao';
+  if ((status === 'PENDING_LINK' || status === 'PENDING_SCHEDULING' || status === 'UNSCHEDULED') && !scheduledFor && targetDueDate) return 'Sem sessao vinculada';
   if (status === 'DUE_TODAY') return 'Proxima sondagem: hoje';
   if (status === 'OVERDUE') {
     const reference = scheduledFor || targetDueDate;

@@ -79,7 +79,7 @@ test('criacao de maintenance schedules usa marcos 7, 14, 30 e 60 sem data rigida
     approvedAt: '2026-05-01T12:00:00.000Z'
   });
   assert.deepEqual(schedules.map((item) => item.schedule_day), [7, 14, 30, 60]);
-  assert.equal(schedules[0].status, 'UNSCHEDULED');
+  assert.equal(schedules[0].status, 'PENDING_LINK');
   assert.equal(schedules[0].target_due_date, '2026-05-08T12:00:00.000Z');
   assert.equal(schedules[0].scheduled_for, null);
 });
@@ -99,13 +99,13 @@ test('schedule 7 dias vincula sessao existente no dia correto ou proxima na jane
   assert.equal(preview[0].status, 'SCHEDULED');
 });
 
-test('sem sessao na janela cria preview UNSCHEDULED sem quebrar', () => {
+test('sem sessao na janela cria preview PENDING_LINK sem quebrar', () => {
   const preview = buildDefaultMaintenanceSchedulePreview({
     approvedAt: '2026-05-01T12:00:00.000Z',
     maintenanceDays: [14],
     appointments: [{ id: 'far-away', scheduled_at: '2026-06-20T12:00:00.000Z', status: 'scheduled' }]
   });
-  assert.equal(preview[0].status, 'UNSCHEDULED');
+  assert.equal(preview[0].status, 'PENDING_LINK');
   assert.equal(preview[0].scheduledFor, null);
   assert.match(preview[0].message, /Sem sessao agendada/);
 });
@@ -227,6 +227,9 @@ test('migration cria tabelas, estados clinicos, schedules e alertas sem mutar ta
   assert.match(planningMigrationSql, /completed_by/i);
   assert.match(planningMigrationSql, /DUE_TODAY/i);
   assert.match(planningMigrationSql, /OVERDUE/i);
+  assert.match(serverCode, /PENDING_NEXT_SESSION/i);
+  assert.match(serverCode, /PENDING_CONFIRMATION/i);
+  assert.match(serverCode, /PENDING_LINK/i);
   assert.match(planningMigrationSql, /alter table public\.appointments[\s\S]*add column if not exists organization_id[\s\S]*add column if not exists deleted_at[\s\S]*add column if not exists is_active/i);
   assert.match(planningMigrationSql, /a\.organization_id::text = p_organization_id/i);
   assert.match(planningMigrationSql, /UNSCHEDULED/i);
@@ -303,8 +306,8 @@ test('agendamento flexivel trata 7 14 30 60 como marcos clinicos', () => {
   assert.match(planningMigrationSql, /appointment_id/);
   assert.match(planningMigrationSql, /p_schedule_day integer default 7/);
   assert.match(planningMigrationSql, /limit greatest\(1, least\(coalesce\(p_limit, 20\), 50\)\)/);
-  assert.match(sessionModeCode, /Previa/);
-  assert.match(sessionModeCode, /Os marcos sao datas clinicas desejadas/);
+  assert.match(sessionModeCode, /Plano de manutencao 7\/14\/30\/60/);
+  assert.match(sessionModeCode, /O plano cria quatro checagens apos a maestria/);
 });
 
 test('resumos separam treino/aquisicao de sondagem de manutencao no front', () => {

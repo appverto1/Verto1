@@ -525,6 +525,8 @@ export const SessionMode = ({
   const [maintenanceScheduleModalGoal, setMaintenanceScheduleModalGoal] = useState<any>(null);
   const [maintenanceScheduleMode, setMaintenanceScheduleMode] = useState('DEFAULT_SEQUENCE');
   const [maintenanceCustomDate, setMaintenanceCustomDate] = useState('');
+  const [maintenanceSelectedAppointmentId, setMaintenanceSelectedAppointmentId] = useState('');
+  const [maintenanceAppointmentsState, setMaintenanceAppointmentsState] = useState<{ loading: boolean; error: string; items: any[] }>({ loading: false, error: '', items: [] });
   const [maintenanceScheduleSaving, setMaintenanceScheduleSaving] = useState(false);
   const [planningFocusType, setPlanningFocusType] = useState('BALANCED');
   const [planningRecommendations, setPlanningRecommendations] = useState<any[]>([]);
@@ -2876,7 +2878,7 @@ export const SessionMode = ({
         const sameDay = !Number.isNaN(due.getTime()) && due.toISOString().slice(0, 10) === today.toISOString().slice(0, 10);
         const overdue = !Number.isNaN(due.getTime()) && due.getTime() < today.getTime();
         const linkedToThisAppointment = Boolean(activeAppointmentId && String(schedule?.appointment_id || schedule?.appointmentId || '') === activeAppointmentId);
-        return linkedToThisAppointment || status === 'UNSCHEDULED' || status === 'DUE_TODAY' || status === 'OVERDUE' || status === 'MISSED' || sameDay || overdue;
+        return linkedToThisAppointment || ['PENDING_NEXT_SESSION', 'PENDING_LINK', 'PENDING_SCHEDULING', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE', 'MISSED'].includes(status) || sameDay || overdue;
       })
       .slice(0, 6);
   }, [activeAppointmentId, maintenanceProbeRows]);
@@ -2890,40 +2892,136 @@ export const SessionMode = ({
     }
   };
 
-  const buildMaintenanceSchedulePayload = (goal: any, extra: any = {}) => ({
-    patient_id: patientId,
-    patientId,
-    appointment_id: activeAppointmentId || undefined,
-    appointmentId: activeAppointmentId || undefined,
-    organization_id: resolvedClinicId,
-    organizationId: resolvedClinicId,
-    scheduleMode: maintenanceScheduleMode,
-    dueDate: maintenanceCustomDate ? new Date(`${maintenanceCustomDate}T12:00:00`).toISOString() : undefined,
-    intervals: [7, 14, 30, 60],
-    target_name: goal?.name || goal?.target_name || goal?.targetName,
-    ...extra
-  });
+  useEffect(() => {
+    let cancelled = false;
+    if (!maintenanceScheduleModalGoal || !patientId) return;
+    setMaintenanceAppointmentsState({ loading: true, error: '', items: [] });
+    dataService.getAbaFutureAppointmentsForMaintenance(patientId, { limit: 20 })
+      .then((result: any) => {
+        if (cancelled) return;
+        setMaintenanceAppointmentsState({
+          loading: false,
+          error: result?.success === false ? result?.error || 'Nao foi possivel carregar proximas sessoes.' : '',
+          items: Array.isArray(result?.data) ? result.data : []
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setMaintenanceAppointmentsState({ loading: false, error: 'Nao foi possivel carregar proximas sessoes.', items: [] });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [maintenanceScheduleModalGoal, patientId]);
+
+  const formatMaintenanceAppointmentLine = (appointment: any) => {
+    const scheduledAt = new Date(appointment?.scheduled_at || appointment?.scheduledAt || appointment?.scheduledAtIso || '');
+    const date = Number.isNaN(scheduledAt.getTime())
+      ? 'Data a definir'
+      : scheduledAt.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    const time = Number.isNaN(scheduledAt.getTime())
+      ? ''
+      : scheduledAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const type = safeDisplayValue(appointment?.type || appointment?.service_type || appointment?.approach, 'Sessao');
+    const professional = safeDisplayValue(appointment?.therapistName || appointment?.therapist_name || appointment?.professionalName, 'Equipe');
+    const location = safeDisplayValue(appointment?.location || appointment?.roomName || appointment?.room_name, 'Local a definir');
+    const probeCount = Number(appointment?.maintenanceProbeCount ?? appointment?.maintenance_probe_count ?? 0);
+    return `${date}${time ? ` as ${time}` : ''} - ${type} - ${professional} - ${location}${probeCount > 0 ? ` - ${probeCount} probe(s)` : ''}`;
+  };
+
+  const maintenanceAppointments = maintenanceAppointmentsState.items;
+  const firstMaintenanceAppointment = maintenanceAppointments[0] || null;
+  const selectedMaintenanceAppointment = maintenanceAppointments.find((appointment: any) => String(appointment?.id || '') === maintenanceSelectedAppointmentId) || null;
+  const customDateAppointments = useMemo(() => {
+    if (!maintenanceCustomDate) return { sameDay: null, nearest: null };
+    const targetMs = new Date(`${maintenanceCustomDate}T12:00:00`).getTime();
+    const sorted = maintenanceAppointments
+      .map((appointment: any) => {
+        const date = new Date(appointment?.scheduled_at || appointment?.scheduledAt || '');
+        return { appointment, date, distance: Math.abs(date.getTime() - targetMs) };
+      })
+      .filter((item: any) => !Number.isNaN(item.date.getTime()))
+      .sort((a: any, b: any) => a.distance - b.distance);
+    const sameDay = sorted.find((item: any) => item.date.toISOString().slice(0, 10) === maintenanceCustomDate)?.appointment || null;
+    return { sameDay, nearest: sorted[0]?.appointment || null };
+  }, [maintenanceAppointments, maintenanceCustomDate]);
+
+  const maintenancePlanPreview = useMemo(() => {
+    const base = new Date();
+    return [7, 14, 30, 60].map((day) => {
+      const target = new Date(base);
+      target.setDate(target.getDate() + day);
+      const targetMs = target.getTime();
+      const match = maintenanceAppointments
+        .map((appointment: any) => {
+          const date = new Date(appointment?.scheduled_at || appointment?.scheduledAt || '');
+          return { appointment, date, distance: Math.abs(date.getTime() - targetMs) };
+        })
+        .filter((item: any) => !Number.isNaN(item.date.getTime()) && item.distance <= 14 * 86_400_000)
+        .sort((a: any, b: any) => a.distance - b.distance)[0]?.appointment || null;
+      return {
+        day,
+        targetDate: target.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+        appointment: match
+      };
+    });
+  }, [maintenanceAppointments]);
+
+  const buildMaintenanceSchedulePayload = (goal: any, extra: any = {}) => {
+    const explicitAppointmentId = extra.appointmentId || extra.appointment_id || (maintenanceScheduleMode === 'CUSTOM_DATE' ? maintenanceSelectedAppointmentId : '');
+    return {
+      patient_id: patientId,
+      patientId,
+      appointment_id: explicitAppointmentId || undefined,
+      appointmentId: explicitAppointmentId || undefined,
+      organization_id: resolvedClinicId,
+      organizationId: resolvedClinicId,
+      scheduleMode: maintenanceScheduleMode,
+      dueDate: maintenanceCustomDate ? new Date(`${maintenanceCustomDate}T12:00:00`).toISOString() : undefined,
+      intervals: [7, 14, 30, 60],
+      target_name: goal?.name || goal?.target_name || goal?.targetName,
+      ...extra
+    };
+  };
 
   const openMaintenanceScheduleModal = (goal: any) => {
     setMaintenanceScheduleModalGoal(goal);
-    setMaintenanceScheduleMode('DEFAULT_SEQUENCE');
+    setMaintenanceScheduleMode('NEXT_PATIENT_SESSION');
     setMaintenanceCustomDate('');
+    setMaintenanceSelectedAppointmentId('');
     setPlanningMessage('');
   };
 
   const handleScheduleMaintenanceGoal = async () => {
     if (!maintenanceScheduleModalGoal) return;
+    if (maintenanceScheduleMode === 'CUSTOM_DATE' && !maintenanceCustomDate) {
+      setPlanningMessage('Escolha uma data para agendar esta sondagem.');
+      return;
+    }
     setMaintenanceScheduleSaving(true);
     try {
       const targetId = String(maintenanceScheduleModalGoal?.id || maintenanceScheduleModalGoal?.target_id || maintenanceScheduleModalGoal?.targetId || '').trim();
-      const result = await dataService.createMaintenanceScheduleForTarget(targetId, buildMaintenanceSchedulePayload(maintenanceScheduleModalGoal));
+      const payload = buildMaintenanceSchedulePayload(maintenanceScheduleModalGoal);
+      const result = maintenanceScheduleMode === 'NEXT_PATIENT_SESSION'
+        ? await dataService.scheduleMaintenanceForNextSession(targetId, { ...payload, scheduleMode: 'NEXT_PATIENT_SESSION' })
+        : await dataService.createMaintenanceScheduleForTarget(targetId, payload);
       if (result?.success === false) {
         setPlanningMessage(result?.error || 'Nao foi possivel agendar a sondagem agora.');
         return;
       }
       await refreshMaintenanceOverview();
       setMaintenanceScheduleModalGoal(null);
-      showClinicalToast({ variant: 'success', title: 'Sondagem agendada', subtitle: 'O schedule de Maintenance Probe foi salvo.' }, 'none');
+      const rows = Array.isArray(result?.data) ? result.data : [];
+      const hasPendingNextSession = rows.some((row: any) => String(row?.status || '').toUpperCase() === 'PENDING_NEXT_SESSION');
+      const hasPendingLink = rows.some((row: any) => ['PENDING_LINK', 'PENDING_SCHEDULING', 'UNSCHEDULED'].includes(String(row?.status || '').toUpperCase()));
+      showClinicalToast({
+        variant: 'success',
+        title: hasPendingNextSession ? 'Sondagem pendente' : 'Sondagem agendada',
+        subtitle: hasPendingNextSession
+          ? 'Aguardando a proxima sessao do paciente para sugerir o vinculo.'
+          : hasPendingLink
+            ? 'Sem sessao vinculada agora; a pendencia foi preservada.'
+            : 'Maintenance Probe salva na agenda clinica.'
+      }, 'none');
     } finally {
       setMaintenanceScheduleSaving(false);
     }
@@ -2937,12 +3035,20 @@ export const SessionMode = ({
       const result = await dataService.scheduleMaintenanceForNextSession(targetId, buildMaintenanceSchedulePayload(goal, { scheduleMode: 'NEXT_PATIENT_SESSION' }));
       if (result?.success === false) {
         openMaintenanceScheduleModal(goal);
-        setMaintenanceScheduleMode('CUSTOM_DATE');
-        setPlanningMessage(result?.error || 'Nao ha proxima sessao agendada. Escolha uma data manualmente.');
+        setMaintenanceScheduleMode('NEXT_PATIENT_SESSION');
+        setPlanningMessage(result?.error || 'Nao foi possivel registrar a intencao para a proxima sessao.');
         return;
       }
       await refreshMaintenanceOverview();
-      showClinicalToast({ variant: 'success', title: 'Agendada para a proxima sessao', subtitle: 'A sondagem foi vinculada ao proximo atendimento.' }, 'none');
+      const rows = Array.isArray(result?.data) ? result.data : [];
+      const hasPendingNextSession = rows.some((row: any) => String(row?.status || '').toUpperCase() === 'PENDING_NEXT_SESSION');
+      showClinicalToast({
+        variant: 'success',
+        title: hasPendingNextSession ? 'Sondagem pendente' : 'Agendada para a proxima sessao',
+        subtitle: hasPendingNextSession
+          ? 'Nao ha proxima sessao agendada. A sondagem sera sugerida quando uma nova sessao for marcada.'
+          : 'A sondagem foi vinculada ao proximo atendimento.'
+      }, 'none');
     } finally {
       setMaintenanceScheduleSaving(false);
     }
@@ -5381,48 +5487,167 @@ export const SessionMode = ({
 
       {maintenanceScheduleModalGoal && (
         <div className="fixed inset-0 z-[218] flex items-end justify-center bg-gray-950/40 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:items-center sm:p-6">
-          <div className="w-full max-w-xl rounded-[28px] border border-amber-100 bg-white p-5 shadow-2xl shadow-gray-950/20">
+          <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-[24px] border border-amber-100 bg-white p-5 shadow-2xl shadow-gray-950/20 custom-scrollbar">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-amber-600">Agendar probe</p>
-                <h2 className="mt-1 text-xl font-black text-gray-900">{maintenanceScheduleModalGoal.name || maintenanceScheduleModalGoal.target_name || maintenanceScheduleModalGoal.targetName}</h2>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-amber-600">Agendar sondagem de manutencao</p>
+                <h2 className="mt-1 text-xl font-black text-gray-900">Target: {maintenanceScheduleModalGoal.name || maintenanceScheduleModalGoal.target_name || maintenanceScheduleModalGoal.targetName}</h2>
               </div>
               <button type="button" onClick={() => setMaintenanceScheduleModalGoal(null)} className="rounded-full bg-gray-100 p-2 text-gray-500">
                 <X size={18} />
               </button>
             </div>
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
-                Modo
-                <select value={maintenanceScheduleMode} onChange={(event) => setMaintenanceScheduleMode(event.target.value)} className="mt-1 w-full rounded-xl border border-amber-100 bg-[#FFFDF7] px-3 py-3 text-xs font-bold text-gray-700 outline-none">
-                  <option value="DEFAULT_SEQUENCE">Sequencia 7/14/30/60</option>
-                  <option value="NEXT_PATIENT_SESSION">Proxima sessao do paciente</option>
-                  <option value="CUSTOM_DATE">Data personalizada</option>
-                </select>
-              </label>
-              <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
-                Data personalizada
-                <input type="date" value={maintenanceCustomDate} onChange={(event) => setMaintenanceCustomDate(event.target.value)} disabled={maintenanceScheduleMode !== 'CUSTOM_DATE'} className="mt-1 w-full rounded-xl border border-amber-100 bg-[#FFFDF7] px-3 py-3 text-xs font-bold text-gray-700 outline-none disabled:opacity-50" />
-              </label>
+
+            <p className="mt-4 text-sm font-bold text-gray-800">Quando deseja sondar este target?</p>
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+              {[
+                {
+                  mode: 'NEXT_PATIENT_SESSION',
+                  title: 'Na proxima sessao',
+                  description: 'A sondagem sera feita na proxima sessao agendada deste paciente.'
+                },
+                {
+                  mode: 'DEFAULT_SEQUENCE',
+                  title: 'Plano 7/14/30/60',
+                  description: 'Cria checagens em 7, 14, 30 e 60 dias e tenta vincular cada uma a sessao mais proxima.'
+                },
+                {
+                  mode: 'CUSTOM_DATE',
+                  title: 'Escolher uma data',
+                  description: 'Escolha manualmente uma data para esta sondagem.'
+                }
+              ].map((option) => {
+                const selected = maintenanceScheduleMode === option.mode;
+                return (
+                  <button
+                    key={option.mode}
+                    type="button"
+                    onClick={() => {
+                      setMaintenanceScheduleMode(option.mode);
+                      setPlanningMessage('');
+                      if (option.mode !== 'CUSTOM_DATE') setMaintenanceSelectedAppointmentId('');
+                    }}
+                    className={`rounded-2xl border px-4 py-3 text-left transition-all ${selected ? 'border-amber-500 bg-amber-50 ring-2 ring-amber-500/15' : 'border-gray-100 bg-white hover:border-amber-200'}`}
+                  >
+                    <span className="text-sm font-black text-gray-900">{option.title}</span>
+                    <span className="mt-1 block text-xs font-semibold leading-relaxed text-gray-500">{option.description}</span>
+                  </button>
+                );
+              })}
             </div>
-            <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700">Previa</p>
-              <div className="mt-2 grid grid-cols-2 gap-2 text-xs font-semibold text-amber-900 sm:grid-cols-4">
-                {[7, 14, 30, 60].map((day) => (
-                  <span key={day} className="rounded-xl bg-white/70 px-3 py-2">Marco {day} dias</span>
-                ))}
+
+            <div className="mt-4 rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Proximas sessoes do paciente</p>
+              {maintenanceAppointmentsState.loading ? (
+                <p className="mt-2 text-xs font-semibold text-gray-500">Carregando proximas sessoes...</p>
+              ) : maintenanceAppointments.length > 0 ? (
+                <div className="mt-2 max-h-36 space-y-2 overflow-y-auto pr-1 custom-scrollbar">
+                  {maintenanceAppointments.slice(0, 20).map((appointment: any) => {
+                    const selected = maintenanceSelectedAppointmentId === String(appointment.id || '');
+                    return (
+                      <button
+                        key={appointment.id}
+                        type="button"
+                        onClick={() => setMaintenanceSelectedAppointmentId(selected ? '' : String(appointment.id || ''))}
+                        className={`w-full rounded-xl border px-3 py-2 text-left text-xs font-semibold ${selected ? 'border-amber-400 bg-amber-50 text-amber-900' : 'border-white bg-white text-gray-600'}`}
+                      >
+                        {formatMaintenanceAppointmentLine(appointment)}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="mt-2 text-xs font-semibold text-gray-500">Este paciente ainda nao possui proximas sessoes.</p>
+              )}
+              {maintenanceAppointmentsState.error && <p className="mt-2 text-xs font-bold text-amber-700">{maintenanceAppointmentsState.error}</p>}
+            </div>
+
+            {maintenanceScheduleMode === 'NEXT_PATIENT_SESSION' && (
+              <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700">Proxima sessao</p>
+                {firstMaintenanceAppointment ? (
+                  <p className="mt-2 text-sm font-bold text-amber-950">{formatMaintenanceAppointmentLine(firstMaintenanceAppointment)}</p>
+                ) : (
+                  <p className="mt-2 text-sm font-semibold text-amber-900">
+                    Nao ha proxima sessao agendada. A sondagem ficara pendente e sera sugerida quando uma nova sessao for marcada.
+                  </p>
+                )}
               </div>
-              <p className="mt-2 text-xs font-semibold text-amber-800">
-                Os marcos sao datas clinicas desejadas. O sistema vincula a sessao mais proxima dentro da janela; se nao houver agenda, salva como sem sessao vinculada.
-              </p>
-              {planningMessage && <p className="mt-2 text-xs font-bold text-red-600">{planningMessage}</p>}
-            </div>
-            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
+            )}
+
+            {maintenanceScheduleMode === 'DEFAULT_SEQUENCE' && (
+              <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700">Plano de manutencao 7/14/30/60</p>
+                <p className="mt-2 text-xs font-semibold text-amber-900">
+                  O plano cria quatro checagens apos a maestria. O sistema tenta vincular cada checagem a sessao mais proxima do paciente.
+                </p>
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {maintenancePlanPreview.map((item) => (
+                    <div key={item.day} className="rounded-xl bg-white/80 px-3 py-2 text-xs font-semibold text-amber-950">
+                      Marco {item.day} dias &gt; {item.targetDate} &gt; {item.appointment ? formatMaintenanceAppointmentLine(item.appointment) : 'pendente'}
+                    </div>
+                  ))}
+                </div>
+                {maintenanceAppointments.length === 0 && (
+                  <p className="mt-2 text-xs font-semibold text-amber-800">
+                    Nenhuma sessao futura encontrada. O plano sera criado como pendente e podera ser vinculado quando novas sessoes forem agendadas.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {maintenanceScheduleMode === 'CUSTOM_DATE' && (
+              <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-amber-700">
+                  Data especifica
+                  <input type="date" value={maintenanceCustomDate} onChange={(event) => { setMaintenanceCustomDate(event.target.value); setMaintenanceSelectedAppointmentId(''); }} className="mt-1 w-full rounded-xl border border-amber-100 bg-white px-3 py-3 text-xs font-bold text-gray-700 outline-none" />
+                </label>
+                {maintenanceCustomDate && (
+                  <div className="mt-3 rounded-xl bg-white/80 px-3 py-2 text-xs font-semibold text-amber-900">
+                    {customDateAppointments.sameDay ? (
+                      <div>
+                        <p>Sessao encontrada nesta data: {formatMaintenanceAppointmentLine(customDateAppointments.sameDay)}</p>
+                        <button type="button" onClick={() => setMaintenanceSelectedAppointmentId(String(customDateAppointments.sameDay.id || ''))} className="mt-2 rounded-full bg-amber-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white">
+                          Vincular a sessao sugerida
+                        </button>
+                      </div>
+                    ) : customDateAppointments.nearest ? (
+                      <div>
+                        <p>Nao ha sessao nesta data. Sessao proxima: {formatMaintenanceAppointmentLine(customDateAppointments.nearest)}</p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <button type="button" onClick={() => setMaintenanceSelectedAppointmentId(String(customDateAppointments.nearest.id || ''))} className="rounded-full bg-amber-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white">
+                            Vincular a sessao sugerida
+                          </button>
+                          <button type="button" onClick={() => setMaintenanceSelectedAppointmentId('')} className="rounded-full border border-amber-200 bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700">
+                            Salvar como pendente
+                          </button>
+                          <button type="button" onClick={() => { setMaintenanceCustomDate(''); setMaintenanceSelectedAppointmentId(''); }} className="rounded-full border border-gray-200 bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500">
+                            Escolher outra data
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p>Nao ha sessao proxima. Salve como pendente para preservar a intencao clinica.</p>
+                    )}
+                    {selectedMaintenanceAppointment && (
+                      <p className="mt-2 text-amber-800">Sessao selecionada: {formatMaintenanceAppointmentLine(selectedMaintenanceAppointment)}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {planningMessage && <p className="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">{planningMessage}</p>}
+
+            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
               <button type="button" onClick={handleScheduleMaintenanceGoal} disabled={maintenanceScheduleSaving} className="min-h-[46px] rounded-2xl bg-amber-600 px-4 py-3 text-xs font-bold uppercase tracking-widest text-white disabled:opacity-60">
-                Salvar
-              </button>
-              <button type="button" onClick={() => handleScheduleMaintenanceForNextSession(maintenanceScheduleModalGoal)} disabled={maintenanceScheduleSaving} className="min-h-[46px] rounded-2xl bg-amber-50 px-4 py-3 text-xs font-bold uppercase tracking-widest text-amber-700 disabled:opacity-60">
-                Proxima sessao
+                {maintenanceScheduleSaving
+                  ? 'Agendando...'
+                  : maintenanceScheduleMode === 'NEXT_PATIENT_SESSION'
+                    ? 'Agendar na proxima sessao'
+                    : maintenanceScheduleMode === 'DEFAULT_SEQUENCE'
+                      ? 'Criar plano de manutencao'
+                      : 'Agendar nesta data'}
               </button>
               <button type="button" onClick={() => setMaintenanceScheduleModalGoal(null)} className="min-h-[46px] rounded-2xl border border-gray-100 bg-white px-4 py-3 text-xs font-bold uppercase tracking-widest text-gray-500">
                 Cancelar

@@ -331,7 +331,13 @@ const CLINICAL_STATUS_OPTIONS = [
   { value: 'canceled', label: 'Cancelada' },
   { value: 'session_registered', label: 'Sessão registrada' },
   { value: 'report_pending', label: 'Relatório pendente' },
-  { value: 'signature_pending', label: 'Assinatura pendente' }
+  { value: 'signature_pending', label: 'Assinatura pendente' },
+  { value: 'maintenance_only', label: 'Somente manutencoes' },
+  { value: 'probes_pending', label: 'Probes pendentes' },
+  { value: 'probes_today', label: 'Probes para hoje' },
+  { value: 'probes_overdue', label: 'Probes atrasadas' },
+  { value: 'maintenance_pending_confirmation', label: 'Pendentes de confirmacao' },
+  { value: 'maintenance_unlinked', label: 'Sem sessao vinculada' }
 ];
 
 const LOCATION_FILTERS = [
@@ -634,6 +640,15 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
     has_next_session_plan: Boolean(event?.has_next_session_plan ?? event?.hasNextSessionPlan),
     has_maintenance_probe: Boolean(event?.has_maintenance_probe ?? event?.hasMaintenanceProbe),
     maintenance_probe_count: Number(event?.maintenance_probe_count ?? event?.maintenanceProbeCount ?? 0),
+    pending_maintenance_probe_count: Number(event?.pending_maintenance_probe_count ?? event?.pendingMaintenanceProbeCount ?? 0),
+    pending_maintenance_confirmation_count: Number(event?.pending_maintenance_confirmation_count ?? event?.pendingMaintenanceConfirmationCount ?? 0),
+    unlinked_maintenance_probe_count: Number(event?.unlinked_maintenance_probe_count ?? event?.unlinkedMaintenanceProbeCount ?? 0),
+    maintenance_due_today_count: Number(event?.maintenance_due_today_count ?? event?.maintenanceDueTodayCount ?? 0),
+    overdue_maintenance_probe_count: Number(event?.overdue_maintenance_probe_count ?? event?.overdueMaintenanceProbeCount ?? 0),
+    has_pending_maintenance_confirmation: Boolean(event?.has_pending_maintenance_confirmation ?? event?.hasPendingMaintenanceConfirmation),
+    has_unlinked_maintenance_probe: Boolean(event?.has_unlinked_maintenance_probe ?? event?.hasUnlinkedMaintenanceProbe),
+    has_overdue_maintenance_probe: Boolean(event?.has_overdue_maintenance_probe ?? event?.hasOverdueMaintenanceProbe),
+    has_maintenance_due_today: Boolean(event?.has_maintenance_due_today ?? event?.hasMaintenanceDueToday),
     plan_item_count: Number(event?.plan_item_count ?? event?.planItemCount ?? 0),
     closure_readiness_status: closureReadinessStatus || null,
     closureReadinessStatus: closureReadinessStatus || null,
@@ -927,6 +942,12 @@ export const ClinicalAgendaBoard = ({
             if (item === 'session_registered') return event.has_session_record;
             if (item === 'report_pending') return !event.has_report && status.includes('conclu');
             if (item === 'signature_pending') return event.has_pending_signature;
+            if (item === 'maintenance_only') return event.has_maintenance_probe;
+            if (item === 'probes_pending') return Number(event.pending_maintenance_probe_count || 0) > 0;
+            if (item === 'probes_today') return Number(event.maintenance_due_today_count || 0) > 0;
+            if (item === 'probes_overdue') return Number(event.overdue_maintenance_probe_count || 0) > 0;
+            if (item === 'maintenance_pending_confirmation') return Number(event.pending_maintenance_confirmation_count || 0) > 0;
+            if (item === 'maintenance_unlinked') return Number(event.unlinked_maintenance_probe_count || 0) > 0;
             return status.includes(removeDiacritics(item));
           });
           if (!matches) return false;
@@ -1118,6 +1139,32 @@ export const ClinicalAgendaBoard = ({
       dataService.getCalendarEventDetail(currentId).then((detailResult: any) => {
         if (detailResult?.success) setEventDetail(detailResult.data || null);
       });
+    }
+    setActionRequestState({ loadingId: '', error: '' });
+  };
+
+  const handleMaintenanceLinkDecision = async (probe: any, decision: 'confirm' | 'skip') => {
+    const scheduleId = String(probe?.id || '').trim();
+    const currentEvent = normalizeClinicalEvent({
+      ...(selectedEvent || {}),
+      ...((eventDetail || {}).event || {})
+    });
+    const appointmentId = String(currentEvent?.id || '').trim();
+    if (!scheduleId || !appointmentId) return;
+    const loadingId = `${decision}:${scheduleId}`;
+    setActionRequestState({ loadingId, error: '' });
+    const result = decision === 'confirm'
+      ? await dataService.confirmMaintenanceScheduleLink(scheduleId, { appointmentId })
+      : await dataService.skipMaintenanceScheduleLink(scheduleId, { appointmentId });
+    if (!result?.success) {
+      setActionRequestState({ loadingId: '', error: result?.error || 'Nao foi possivel atualizar a sondagem.' });
+      return;
+    }
+    cacheRef.current.clear();
+    const currentId = String(selectedEvent?.id || detailEvent?.id || '').trim();
+    if (currentId) {
+      const detailResult = await dataService.getCalendarEventDetail(currentId);
+      if (detailResult?.success) setEventDetail(detailResult.data || null);
     }
     setActionRequestState({ loadingId: '', error: '' });
   };
@@ -1378,6 +1425,8 @@ export const ClinicalAgendaBoard = ({
     const indicators = [
       closureStyle ? { label: closureStyle.label, icon: closureStyle.icon, className: closureStyle.className } : null,
       event.has_next_session_plan ? { label: 'Plano', icon: Zap, className: 'bg-violet-100 text-violet-700' } : null,
+      Number(event.pending_maintenance_confirmation_count || 0) > 0 ? { label: 'Pendente de confirmacao', icon: AlertCircle, className: 'bg-amber-100 text-amber-800' } : null,
+      Number(event.overdue_maintenance_probe_count || 0) > 0 ? { label: 'Sondagem atrasada', icon: AlertCircle, className: 'bg-rose-100 text-rose-700' } : null,
       event.has_maintenance_probe ? { label: `Probe${event.maintenance_probe_count > 1 ? ` ${event.maintenance_probe_count}` : ''}`, icon: AlertCircle, className: 'bg-amber-100 text-amber-700' } : null,
       event.has_session_record ? { label: 'Registrada', icon: CheckCircle2, className: 'bg-emerald-100 text-emerald-700' } : null,
       event.has_pending_signature ? { label: 'Assinatura', icon: ClipboardCheck, className: 'bg-rose-100 text-rose-700' } : null,
@@ -1560,6 +1609,13 @@ export const ClinicalAgendaBoard = ({
             const items = eventsByDate[key] || [];
             const isToday = key === toDateKey(new Date());
             const visibleItems = items.slice(0, 10);
+            const dayMaintenancePendingCount = items.reduce((total: number, event: any) => (
+              total +
+              Number(event.pending_maintenance_probe_count || 0) +
+              Number(event.pending_maintenance_confirmation_count || 0) +
+              Number(event.unlinked_maintenance_probe_count || 0) +
+              Number(event.overdue_maintenance_probe_count || 0)
+            ), 0);
             return (
               <div
                 key={key}
@@ -1587,8 +1643,11 @@ export const ClinicalAgendaBoard = ({
                 <div className="mb-1 flex shrink-0 items-center justify-between gap-2">
                   <span className={`text-xs font-bold ${isToday ? 'text-[#7a32fc]' : isDark ? 'text-slate-200' : 'text-slate-700'}`}>{day}</span>
                   {items.length > 0 && (
-                    <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-500'}`}>
-                      {items.length}
+                    <span className="flex items-center gap-1">
+                      {dayMaintenancePendingCount > 0 && <span title={`${dayMaintenancePendingCount} sondagem(ns) pendente(s)`} className="h-2 w-2 rounded-full bg-amber-500" />}
+                      <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-500'}`}>
+                        {items.length}
+                      </span>
                     </span>
                   )}
                 </div>
@@ -2191,22 +2250,61 @@ export const ClinicalAgendaBoard = ({
                 <div className={`rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-amber-100 bg-amber-50/70'}`}>
                   <h4 className="flex items-center gap-2 text-sm font-bold">
                     <AlertCircle size={16} className="text-amber-600" />
-                    Maintenance Probes pendentes
+                    Manutencoes vinculadas
                   </h4>
+                  {maintenanceProbes.some((probe: any) => String(probe?.status || '').toUpperCase() === 'PENDING_CONFIRMATION') && (
+                    <p className="mt-2 rounded-2xl border border-amber-200 bg-white/80 px-3 py-2 text-xs font-semibold text-amber-800">
+                      Ha sondagem de manutencao pendente para esta consulta. Confirme antes de vincular.
+                    </p>
+                  )}
                   <div className="mt-3 space-y-2">
                     {maintenanceProbes.slice(0, 6).map((probe: any, index: number) => {
                       const raw = typeof probe.raw_payload === 'object' && probe.raw_payload ? probe.raw_payload : {};
+                      const status = String(probe.status || 'PENDING').toUpperCase();
+                      const statusLabel: Record<string, string> = {
+                        PENDING_NEXT_SESSION: 'Aguardando proxima sessao',
+                        PENDING_CONFIRMATION: 'Pendente de confirmacao',
+                        PENDING_LINK: 'Sem sessao vinculada',
+                        PENDING_SCHEDULING: 'Pendente',
+                        SCHEDULED: 'Agendada',
+                        DUE_TODAY: 'Para hoje',
+                        OVERDUE: 'Atrasada',
+                        MISSED: 'Perdida'
+                      };
+                      const loadingConfirm = actionRequestState.loadingId === `confirm:${probe.id}`;
+                      const loadingSkip = actionRequestState.loadingId === `skip:${probe.id}`;
                       return (
                         <div key={probe.id || index} className="rounded-2xl bg-white/70 px-3 py-2 text-sm">
                           <p className="font-semibold text-slate-800">{raw.targetName || raw.target_name || 'Target em manutenção'}</p>
-                          <p className="mt-1 text-xs text-slate-500">Marco clínico: {probe.target_due_date ? new Date(probe.target_due_date).toLocaleDateString('pt-BR') : 'a definir'} · Status: {probe.status || 'PENDING'}</p>
-                          <button
-                            type="button"
-                            onClick={() => onStartSession?.({ ...detailEvent, maintenanceProbe: probe, activeCollectionType: 'maintenance_probe' })}
-                            className="mt-2 inline-flex min-h-[32px] items-center justify-center rounded-full bg-amber-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white"
-                          >
-                            Usar na sessão
-                          </button>
+                          <p className="mt-1 text-xs text-slate-500">Marco clinico: {probe.target_due_date ? new Date(probe.target_due_date).toLocaleDateString('pt-BR') : 'a definir'} - Status: {statusLabel[status] || status}</p>
+                          {status === 'PENDING_CONFIRMATION' ? (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                disabled={loadingConfirm || loadingSkip}
+                                onClick={() => void handleMaintenanceLinkDecision(probe, 'confirm')}
+                                className="inline-flex min-h-[32px] items-center justify-center rounded-full bg-amber-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white disabled:opacity-60"
+                              >
+                                {loadingConfirm ? 'Confirmando...' : 'Confirmar vinculo'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={loadingConfirm || loadingSkip}
+                                onClick={() => void handleMaintenanceLinkDecision(probe, 'skip')}
+                                className="inline-flex min-h-[32px] items-center justify-center rounded-full border border-amber-200 bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700 disabled:opacity-60"
+                              >
+                                {loadingSkip ? 'Atualizando...' : 'Fazer depois'}
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => onStartSession?.({ ...detailEvent, maintenanceProbe: probe, activeCollectionType: 'maintenance_probe' })}
+                              className="mt-2 inline-flex min-h-[32px] items-center justify-center rounded-full bg-amber-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white"
+                            >
+                              Usar Maintenance Probe
+                            </button>
+                          )}
                         </div>
                       );
                     })}

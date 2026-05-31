@@ -2510,6 +2510,24 @@ export const dataService = {
     return { success: true, data: [] };
   },
 
+  async getAbaFutureAppointmentsForMaintenance(patientId: string, options: { limit?: number; from?: string } = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    const endpoint = endpointWithQuery(`/api/aba/patients/${encodeURIComponent(String(patientId))}/future-appointments`, {
+      limit: normalizeListLimit(options.limit, 20, 20),
+      from: options.from
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: 'getAbaFutureAppointmentsForMaintenance', operation: 'list', table: 'appointments', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+    } catch (error) {
+      if (import.meta.env.DEV) console.log('Fetching future ABA maintenance appointments from local state only...');
+    }
+    return { success: true, data: [] };
+  },
+
   async createMaintenanceScheduleForTarget(targetId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
     const endpoint = `/api/aba/targets/${encodeURIComponent(String(targetId))}/maintenance-schedules`;
@@ -2523,6 +2541,38 @@ export const dataService = {
       return await safeJson(response);
     } catch (error) {
       return { success: false, error: 'Não foi possível agendar a sondagem agora.' };
+    }
+  },
+
+  async confirmMaintenanceScheduleLink(scheduleId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/maintenance-schedules/${encodeURIComponent(String(scheduleId))}/confirm-link`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, { helperName: 'confirmMaintenanceScheduleLink', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: 'Não foi possível confirmar o vínculo agora.' };
+    }
+  },
+
+  async skipMaintenanceScheduleLink(scheduleId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/maintenance-schedules/${encodeURIComponent(String(scheduleId))}/skip-link`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, { helperName: 'skipMaintenanceScheduleLink', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: 'Não foi possível adiar o vínculo agora.' };
     }
   },
 

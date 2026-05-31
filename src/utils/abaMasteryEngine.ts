@@ -14,7 +14,19 @@ export type AbaTargetClinicalStatus =
   | 'REGRESSION_RISK'
   | 'REGRESSION_CONFIRMED';
 
-export type AbaMaintenanceScheduleStatus = 'PENDING' | 'SCHEDULED' | 'UNSCHEDULED' | 'DUE_TODAY' | 'OVERDUE' | 'COMPLETED' | 'MISSED' | 'CANCELLED';
+export type AbaMaintenanceScheduleStatus =
+  | 'PENDING'
+  | 'PENDING_NEXT_SESSION'
+  | 'PENDING_CONFIRMATION'
+  | 'PENDING_LINK'
+  | 'PENDING_SCHEDULING'
+  | 'SCHEDULED'
+  | 'UNSCHEDULED'
+  | 'DUE_TODAY'
+  | 'OVERDUE'
+  | 'COMPLETED'
+  | 'MISSED'
+  | 'CANCELLED';
 
 export type AbaMaintenanceProbeStatus = 'MAINTAINED' | 'WATCH' | 'REGRESSION_RISK';
 
@@ -491,7 +503,7 @@ export function buildMaintenanceSchedulesForMasteryApproval(input: {
       schedule_mode: 'DEFAULT_SEQUENCE',
       window_start: null,
       window_end: null,
-      status: 'UNSCHEDULED',
+      status: 'PENDING_LINK',
       completed_at: null,
       created_at: createdAt,
       updated_at: createdAt
