@@ -14,7 +14,9 @@ import {
 import {
   OFFLINE_SYNC_MAX_RETRIES,
   getOfflineSyncBackoffMs,
+  isRecoverableFailedOfflineSyncRecord,
   resolveOfflineSyncFailure,
+  shouldReportFailedOfflineSyncRecord,
   shouldAttemptOfflineRecord
 } from '../src/utils/offlineSyncResilience.ts';
 
@@ -241,6 +243,28 @@ test('offline sync: FAILED nao e reprocessado automaticamente', () => {
   assert.equal(shouldAttemptOfflineRecord({ sync_status: 'failed', retry_count: 3 }), false);
 });
 
+test('offline sync: falha transitoria FAILED nao alimenta aviso manual', () => {
+  const record = {
+    sync_status: 'failed' as const,
+    retry_count: 3,
+    last_error: 'Application failed to respond',
+    endpoint: '/api/patients'
+  };
+  assert.equal(isRecoverableFailedOfflineSyncRecord(record), true);
+  assert.equal(shouldReportFailedOfflineSyncRecord(record), false);
+});
+
+test('offline sync: falha permanente continua exigindo revisao', () => {
+  const record = {
+    sync_status: 'failed' as const,
+    retry_count: 1,
+    last_error: 'Este paciente ja esta vinculado a outra clinica nesta mesma especialidade.',
+    endpoint: '/api/patients'
+  };
+  assert.equal(isRecoverableFailedOfflineSyncRecord(record), false);
+  assert.equal(shouldReportFailedOfflineSyncRecord(record), true);
+});
+
 test('offline sync: pending em backoff nao tenta imediatamente', () => {
   assert.equal(shouldAttemptOfflineRecord({ sync_status: 'pending', retry_count: 1, next_retry_at: 2_000 }, 1_000), false);
   assert.equal(shouldAttemptOfflineRecord({ sync_status: 'pending', retry_count: 1, next_retry_at: 2_000 }, 2_000), true);
@@ -259,6 +283,15 @@ test('rotas de sync nao reintroduzem select amplo', () => {
   const helperCode = fs.readFileSync(path.resolve(process.cwd(), 'src/utils/clinicalPostResilience.ts'), 'utf8');
   assert.doesNotMatch(serverCode, /select\(['"]\*['"]\)/);
   assert.doesNotMatch(helperCode, /select\(['"]\*['"]\)/);
+});
+
+test('App reativa falhas transitorias antes de exibir aviso superior', () => {
+  const appCode = fs.readFileSync(path.resolve(process.cwd(), 'src/App.tsx'), 'utf8');
+  assert.match(appCode, /resetFailedSyncRecord/);
+  assert.match(appCode, /isRecoverableFailedOfflineSyncRecord/);
+  assert.doesNotMatch(appCode, /failedSyncCount/);
+  assert.doesNotMatch(appCode, /role="status" className="sticky top-0 z-20 border-b border-amber-200/);
+  assert.doesNotMatch(appCode, /registro\(s\) local\(is\) n.o puderam sincronizar/);
 });
 
 for (const item of tests) {

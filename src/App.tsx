@@ -2,12 +2,15 @@
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS } from './components/Common';
 import { testSupabaseConnection, getSupabase, ensureFreshSession } from './lib/supabase';
 import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard } from 'lucide-react';
-import { getFailedSyncRecords, syncOfflineData } from './services/localDb';
+import { getFailedSyncRecords, resetFailedSyncRecord, syncOfflineData } from './services/localDb';
 import { dataService } from './services/dataService';
 import { formatProfessionalRegistry } from './utils/professionalRegistry';
 import { resolveAbaPromptLevel } from './utils/abaPromptLevels';
 import { isAbaV2Enabled } from './utils/featureFlags';
 import { formatPatientLabel, safeDisplayValue, sanitizeTechnicalErrorMessage } from './utils/displayLabels';
+import {
+  isRecoverableFailedOfflineSyncRecord,
+} from './utils/offlineSyncResilience';
 import {
   addMinutesToTime,
   appointmentTimesOverlap as scheduleTimesOverlap,
@@ -48,6 +51,28 @@ const ProfessionalOnboarding = React.lazy(() =>
   import('./components/ProfessionalOnboarding').then((m) => ({ default: m.ProfessionalOnboarding }))
 );
 
+const AUTO_RETRIED_FAILED_SYNC_KEY = 'verto.failedSyncAutoRetried.v1';
+
+const readAutoRetriedFailedSyncIds = () => {
+  try {
+    const value = window.sessionStorage.getItem(AUTO_RETRIED_FAILED_SYNC_KEY);
+    const parsed = value ? JSON.parse(value) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : []);
+  } catch {
+    return new Set<string>();
+  }
+};
+
+const rememberAutoRetriedFailedSyncIds = (ids: string[]) => {
+  if (ids.length === 0) return;
+  try {
+    const merged = Array.from(new Set([...readAutoRetriedFailedSyncIds(), ...ids])).slice(-250);
+    window.sessionStorage.setItem(AUTO_RETRIED_FAILED_SYNC_KEY, JSON.stringify(merged));
+  } catch {
+    // Session storage is optional; the retry itself is still safe.
+  }
+};
+
 export default function App() {
   const isActivationRoute =
     typeof window !== 'undefined' &&
@@ -59,7 +84,6 @@ export default function App() {
   const [user, setUser] = useState<any>(null); 
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [failedSyncCount, setFailedSyncCount] = useState(0);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
   const [installPromptUnavailable, setInstallPromptUnavailable] = useState(false);
@@ -703,16 +727,34 @@ export default function App() {
 
   useEffect(() => {
     if (!user) {
-      setFailedSyncCount(0);
       return;
     }
     let cancelled = false;
+    let retryTimers: number[] = [];
+    const scheduleRecoveredSync = () => {
+      retryTimers.forEach((timer) => window.clearTimeout(timer));
+      retryTimers = [250, 5_500].map((delay) =>
+        window.setTimeout(() => {
+          if (!cancelled) void syncOfflineData();
+        }, delay)
+      );
+    };
     const refreshFailedSyncCount = async () => {
       try {
         const failed = await getFailedSyncRecords();
-        if (!cancelled) setFailedSyncCount(failed.length);
+        const autoRetriedIds = readAutoRetriedFailedSyncIds();
+        const recoverable = failed.filter(
+          (record) => isRecoverableFailedOfflineSyncRecord(record) && !autoRetriedIds.has(record.id)
+        );
+
+        if (recoverable.length > 0 && navigator.onLine) {
+          rememberAutoRetriedFailedSyncIds(recoverable.map((record) => record.id));
+          await Promise.all(recoverable.map((record) => resetFailedSyncRecord(record.id)));
+          scheduleRecoveredSync();
+        }
+
       } catch {
-        if (!cancelled) setFailedSyncCount(0);
+        // Falhas ao ler o IndexedDB nao devem gerar faixa visual no app.
       }
     };
     void refreshFailedSyncCount();
@@ -722,6 +764,7 @@ export default function App() {
     window.addEventListener('online', handleFocus);
     return () => {
       cancelled = true;
+      retryTimers.forEach((timer) => window.clearTimeout(timer));
       window.clearInterval(interval);
       window.removeEventListener('focus', handleFocus);
       window.removeEventListener('online', handleFocus);
@@ -3124,10 +3167,10 @@ export default function App() {
         (Number(fbResult?.status) >= 500 || Number(fbResult?.status) === 408 || Number(fbResult?.status) === 429);
       if (deferredPatientSync) {
         activationEmailSent = activationEmailSent === null ? false : activationEmailSent;
-        activationMessage = [
-          activationMessage,
-          "Cadastro salvo localmente. A sincronização com o servidor será retomada automaticamente."
-        ].filter(Boolean).join(" ");
+        const pendingSyncMessage = "Cadastro salvo localmente. A sincronização com o servidor será retomada automaticamente.";
+        activationMessage = activationEmailSent === false
+          ? `${pendingSyncMessage} O convite poderá ser reenviado depois que o cadastro for confirmado no servidor.`
+          : pendingSyncMessage;
         return {
           success: true,
           data: {
@@ -4513,11 +4556,6 @@ export default function App() {
               </button>
             </div>
           </div>
-        </div>
-      )}
-      {user && failedSyncCount > 0 && (
-        <div role="status" className="sticky top-0 z-20 border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs font-bold text-amber-800">
-          {failedSyncCount} registro(s) local(is) não puderam sincronizar. Use a ação de tentativa manual quando disponível.
         </div>
       )}
       <Suspense fallback={lazyFallback}>

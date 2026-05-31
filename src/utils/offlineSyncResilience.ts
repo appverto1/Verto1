@@ -10,6 +10,8 @@ export type OfflineSyncLikeRecord = {
   next_retry_at?: number | null;
   last_attempt_at?: number | null;
   last_error?: string | null;
+  endpoint?: string | null;
+  type?: string | null;
 };
 
 export function normalizeRetryCount(value: unknown): number {
@@ -50,6 +52,29 @@ export function shouldAttemptOfflineRecord(record: OfflineSyncLikeRecord, now = 
   const nextRetryAt = Number(record.next_retry_at || 0);
   if (Number.isFinite(nextRetryAt) && nextRetryAt > now) return false;
   return normalizeRetryCount(record.retry_count) < OFFLINE_SYNC_MAX_RETRIES;
+}
+
+export function isRecoverableFailedOfflineSyncRecord(record: OfflineSyncLikeRecord): boolean {
+  if (record.sync_status !== 'failed') return false;
+  const reason = `${record.last_error || ''} ${record.endpoint || ''}`.toLowerCase();
+  if (!reason.trim()) return false;
+  return (
+    /\b(408|429|500|502|503|504)\b/.test(reason) ||
+    reason.includes('application failed to respond') ||
+    reason.includes('bad gateway') ||
+    reason.includes('gateway timeout') ||
+    reason.includes('service unavailable') ||
+    reason.includes('server error 5') ||
+    reason.includes('failed to fetch') ||
+    reason.includes('network') ||
+    reason.includes('timeout') ||
+    reason.includes('temporar') ||
+    reason.includes('falha tempor')
+  );
+}
+
+export function shouldReportFailedOfflineSyncRecord(record: OfflineSyncLikeRecord): boolean {
+  return record.sync_status === 'failed' && !isRecoverableFailedOfflineSyncRecord(record);
 }
 
 export function resolveOfflineSyncFailure(params: {

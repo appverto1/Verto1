@@ -8,6 +8,7 @@ const read = (file: string) => readFileSync(join(root, file), 'utf8');
 const serverCode = read('server.ts');
 const appCode = read('src/App.tsx');
 const dataServiceCode = read('src/services/dataService.ts');
+const coordinatorDashboardCode = read('src/components/CoordinatorDashboard.tsx');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -86,6 +87,25 @@ test('frontend envia especialidades no create-user e trata savePatient 5xx como 
   assert.match(addPatientSlice, /deferredPatientSync/);
   assert.match(addPatientSlice, /Cadastro salvo localmente\. A sincroniza..o com o servidor ser. retomada automaticamente/);
   assert.doesNotMatch(addPatientSlice, /rollbackOptimisticPatient\(\);[\s\S]{0,140}deferredPatientSync/);
+});
+
+test('POST /api/patients usa fallback de schema e nao devolve 500 generico sem log', () => {
+  const patientPostStart = serverCode.indexOf("app.post('/api/patients',");
+  const patientPostEnd = serverCode.indexOf("app.post('/api/patients/:patientId/portability/request'", patientPostStart);
+  const patientPostSlice = serverCode.slice(patientPostStart, patientPostEnd);
+  assert.match(serverCode, /function queryPatientsWithSchemaFallback/);
+  assert.match(serverCode, /function upsertPatientWithSchemaFallback/);
+  assert.match(serverCode, /onMissing:\s*'omit'/);
+  assert.match(serverCode, /onMissing:\s*'empty'/);
+  assert.match(patientPostSlice, /upsertPatientWithSchemaFallback\(safeBody\)/);
+  assert.match(patientPostSlice, /sendRouteDbError\(res, '\/api\/patients \[POST\]'/);
+  assert.doesNotMatch(patientPostSlice, /res\.status\(500\)\.json\(\{\s*error:\s*'Erro interno do servidor\.'/);
+});
+
+test('frontend nao chama sync pendente de sucesso completo', () => {
+  assert.match(coordinatorDashboardCode, /patientSyncPending/);
+  assert.match(coordinatorDashboardCode, /Paciente salvo localmente/);
+  assert.match(coordinatorDashboardCode, /ainda aguarda confirma..o do servidor/);
 });
 
 test('frontend limita busca de logs de atividade sem solicitar lote gigante', () => {

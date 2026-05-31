@@ -2377,6 +2377,7 @@ export function CoordinatorDashboard({
         const activationEmailSent = addPatientResult?.data?.activationEmailSent;
         const patientEmail = String(addPatientResult?.data?.patientEmail || newPatient?.email || "").trim();
         const activationMessage = String(addPatientResult?.data?.activationMessage || "").trim();
+        const patientSyncPending = Boolean(addPatientResult?.data?.patientSyncPending);
         const emailMessage =
           activationMessage
             ? ` ${activationMessage}`
@@ -2386,16 +2387,24 @@ export function CoordinatorDashboard({
             : patientEmail && activationEmailSent === false
               ? " Cadastro concluído, mas o e-mail de ativação não foi enviado. Use o botão de reenviar ativação."
               : "";
-        setActionPopup({
-          title: "Paciente adicionado",
-          message: `O paciente ${newPatient.name} foi cadastrado com sucesso.${emailMessage}`,
-        });
-        showToast(
-          activationEmailSent === false
-            ? "Paciente cadastrado. Ativação pendente de envio."
-            : "Dados salvos com sucesso!",
-          activationEmailSent === false ? "error" : "info"
-        );
+        if (patientSyncPending) {
+          setActionPopup({
+            title: "Paciente salvo localmente",
+            message: `O cadastro de ${newPatient.name} foi salvo neste dispositivo e ainda aguarda confirmação do servidor.${emailMessage}`,
+          });
+          showToast("Cadastro salvo localmente. Sincronização pendente.", "info");
+        } else {
+          setActionPopup({
+            title: "Paciente adicionado",
+            message: `O paciente ${newPatient.name} foi cadastrado com sucesso.${emailMessage}`,
+          });
+          showToast(
+            activationEmailSent === false
+              ? "Paciente cadastrado. Ativação pendente de envio."
+              : "Dados salvos com sucesso!",
+            activationEmailSent === false ? "error" : "info"
+          );
+        }
       }
       setIsPatientRegistrationModalOpen(false);
       resetPatientForm();

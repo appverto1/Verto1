@@ -3773,6 +3773,124 @@ async function getClinicTeamAccessUsage(clinicId: string) {
   };
 }
 
+type PatientSchemaFallbackFilter = {
+  op: 'eq' | 'is' | 'ilike';
+  column: string;
+  value: any;
+  onMissing?: 'omit' | 'empty' | 'throw';
+};
+
+async function queryPatientsWithSchemaFallback(params: {
+  selectColumns: string[] | string;
+  filters?: PatientSchemaFallbackFilter[];
+  limit?: number;
+  context?: string;
+}): Promise<any[]> {
+  let selectColumns = Array.isArray(params.selectColumns)
+    ? params.selectColumns.map((column) => sanitizeString(column, 120)).filter(Boolean)
+    : String(params.selectColumns || '')
+      .split(',')
+      .map((column) => sanitizeString(column, 120))
+      .filter(Boolean);
+  if (selectColumns.length === 0) selectColumns = ['id'];
+
+  let filters = (params.filters || [])
+    .map((filter) => ({
+      ...filter,
+      column: sanitizeString(filter.column, 120),
+      onMissing: filter.onMissing || 'throw'
+    }))
+    .filter((filter) => filter.column);
+
+  let lastError: any = null;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    let query = supabase
+      .from('patients')
+      .select(selectColumns.join(','));
+
+    for (const filter of filters) {
+      if (filter.op === 'eq') query = query.eq(filter.column, filter.value);
+      if (filter.op === 'is') query = query.is(filter.column, filter.value);
+      if (filter.op === 'ilike') query = query.ilike(filter.column, filter.value);
+    }
+    if (params.limit) query = query.limit(params.limit);
+
+    const { data, error } = await query;
+    if (!error) return Array.isArray(data) ? data : [];
+
+    lastError = error;
+    const missingColumn = extractMissingColumnName(error);
+    if (!missingColumn) throw error;
+
+    const filterIndex = filters.findIndex((filter) => filter.column === missingColumn);
+    if (filterIndex >= 0) {
+      const filter = filters[filterIndex];
+      if (filter.onMissing === 'empty') return [];
+      if (filter.onMissing === 'omit') {
+        filters = filters.filter((_, index) => index !== filterIndex);
+        console.warn('[Patients] filtro opcional removido por schema legado:', {
+          context: sanitizeString(params.context, 120) || 'patients',
+          missingColumn
+        });
+        continue;
+      }
+      throw error;
+    }
+
+    if (selectColumns.includes(missingColumn) && selectColumns.length > 1) {
+      selectColumns = selectColumns.filter((column) => column !== missingColumn);
+      console.warn('[Patients] coluna opcional removida do select por schema legado:', {
+        context: sanitizeString(params.context, 120) || 'patients',
+        missingColumn
+      });
+      continue;
+    }
+
+    throw error;
+  }
+
+  if (lastError) throw lastError;
+  return [];
+}
+
+async function upsertPatientWithSchemaFallback(payload: Record<string, any>) {
+  let safePayload: Record<string, any> = cleanObject({ ...payload });
+  let selectColumns = PATIENT_MUTATION_SELECT
+    .split(',')
+    .map((column) => sanitizeString(column, 120))
+    .filter(Boolean);
+  let lastResult: { data: any; error: any } = { data: null, error: null };
+
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const result = await supabase
+      .from('patients')
+      .upsert([safePayload], { onConflict: 'id' })
+      .select(selectColumns.join(','))
+      .single();
+    lastResult = result;
+    if (!result.error) return result;
+
+    const missingColumn = extractMissingColumnName(result.error);
+    if (!missingColumn) return result;
+
+    if (Object.prototype.hasOwnProperty.call(safePayload, missingColumn)) {
+      delete safePayload[missingColumn];
+      console.warn('[Patients] coluna opcional removida do payload de cadastro:', { missingColumn });
+      continue;
+    }
+
+    if (selectColumns.includes(missingColumn) && selectColumns.length > 1) {
+      selectColumns = selectColumns.filter((column) => column !== missingColumn);
+      console.warn('[Patients] coluna opcional removida do retorno de cadastro:', { missingColumn });
+      continue;
+    }
+
+    return result;
+  }
+
+  return lastResult;
+}
+
 async function findDuplicatePatientInClinic(params: {
   clinicId?: unknown;
   name?: unknown;
@@ -3802,58 +3920,52 @@ async function findDuplicatePatientInClinic(params: {
     Boolean(excludedId && sanitizeString(candidateId, 120) === excludedId);
 
   if (safeClientRecordId) {
-    try {
-      const { data: clientRows, error: clientError } = await supabase
-        .from('patients')
-        .select('id, name, email, cpf, client_record_id, status')
-        .eq('clinic_id', safeClinicId)
-        .eq('client_record_id', safeClientRecordId)
-        .eq('is_active', true)
-        .is('deleted_at', null)
-        .limit(10);
-      if (clientError) throw clientError;
+    const clientRows = await queryPatientsWithSchemaFallback({
+      context: 'duplicate-client-record',
+      selectColumns: ['id', 'name', 'email', 'cpf', 'client_record_id', 'status'],
+      filters: [
+        { op: 'eq', column: 'clinic_id', value: safeClinicId },
+        { op: 'eq', column: 'client_record_id', value: safeClientRecordId, onMissing: 'empty' },
+        { op: 'eq', column: 'is_active', value: true, onMissing: 'omit' },
+        { op: 'is', column: 'deleted_at', value: null, onMissing: 'omit' }
+      ],
+      limit: 10
+    });
 
-      const hit = (clientRows || []).find((row: any) => !isExcluded(row?.id));
-      if (hit?.id) {
-        return {
-          field: 'client_record_id',
-          patientId: sanitizeString(hit.id, 120),
-          patientName: sanitizeString(hit.name, 180) || 'Paciente',
-          value: safeClientRecordId,
-          row: hit
-        };
-      }
-    } catch (rawError: any) {
-      const missingColumn = extractMissingColumnName(rawError);
-      if (missingColumn !== 'client_record_id') throw rawError;
+    const hit = (clientRows || []).find((row: any) => !isExcluded(row?.id));
+    if (hit?.id) {
+      return {
+        field: 'client_record_id',
+        patientId: sanitizeString(hit.id, 120),
+        patientName: sanitizeString(hit.name, 180) || 'Paciente',
+        value: safeClientRecordId,
+        row: hit
+      };
     }
   }
 
   if (safeCpf) {
-    try {
-      const { data: cpfRows, error: cpfError } = await supabase
-        .from('patients')
-        .select('id, name, cpf, status')
-        .eq('clinic_id', safeClinicId)
-        .eq('cpf', safeCpf)
-        .eq('is_active', true)
-        .is('deleted_at', null)
-        .limit(10);
-      if (cpfError) throw cpfError;
+    const cpfRows = await queryPatientsWithSchemaFallback({
+      context: 'duplicate-cpf',
+      selectColumns: ['id', 'name', 'cpf', 'status'],
+      filters: [
+        { op: 'eq', column: 'clinic_id', value: safeClinicId },
+        { op: 'eq', column: 'cpf', value: safeCpf, onMissing: 'empty' },
+        { op: 'eq', column: 'is_active', value: true, onMissing: 'omit' },
+        { op: 'is', column: 'deleted_at', value: null, onMissing: 'omit' }
+      ],
+      limit: 10
+    });
 
-      const hit = (cpfRows || []).find((row: any) => !isExcluded(row?.id));
-      if (hit?.id) {
-        return {
-          field: 'cpf',
-          patientId: sanitizeString(hit.id, 120),
-          patientName: sanitizeString(hit.name, 180) || 'Paciente',
-          value: safeCpf,
-          row: hit
-        };
-      }
-    } catch (rawError: any) {
-      const missingColumn = extractMissingColumnName(rawError);
-      if (missingColumn !== 'cpf') throw rawError;
+    const hit = (cpfRows || []).find((row: any) => !isExcluded(row?.id));
+    if (hit?.id) {
+      return {
+        field: 'cpf',
+        patientId: sanitizeString(hit.id, 120),
+        patientName: sanitizeString(hit.name, 180) || 'Paciente',
+        value: safeCpf,
+        row: hit
+      };
     }
 
     if (params.includeLegacyRecordScan === true) {
@@ -3898,15 +4010,17 @@ async function findDuplicatePatientInClinic(params: {
   }
 
   if (safeEmail && safeName) {
-    const { data: emailRows, error: emailError } = await supabase
-      .from('patients')
-      .select('id, name, email, cpf, status')
-      .eq('clinic_id', safeClinicId)
-      .eq('email', safeEmail)
-      .eq('is_active', true)
-      .is('deleted_at', null)
-      .limit(20);
-    if (emailError) throw emailError;
+    const emailRows = await queryPatientsWithSchemaFallback({
+      context: 'duplicate-email',
+      selectColumns: ['id', 'name', 'email', 'cpf', 'status'],
+      filters: [
+        { op: 'eq', column: 'clinic_id', value: safeClinicId },
+        { op: 'eq', column: 'email', value: safeEmail },
+        { op: 'eq', column: 'is_active', value: true, onMissing: 'omit' },
+        { op: 'is', column: 'deleted_at', value: null, onMissing: 'omit' }
+      ],
+      limit: 20
+    });
 
     const hit = (emailRows || []).find((row: any) => (
       !isExcluded(row?.id) &&
@@ -4080,29 +4194,41 @@ async function findPatientSpecialtyConflictAcrossClinics(params: {
     });
   };
 
-  const select = 'id, name, email, cpf, clinic_id, status, patient_profile_type, panel_type, profile_type, type';
+  const select = ['id', 'name', 'email', 'cpf', 'clinic_id', 'status', 'patient_profile_type', 'panel_type', 'profile_type', 'type'];
   if (safeEmail) {
-    const { data, error } = await supabase
-      .from('patients')
-      .select(select)
-      .ilike('email', safeEmail)
-      .eq('is_active', true)
-      .is('deleted_at', null)
-      .limit(50);
-    if (!error) collect(data || []);
-    else console.warn('[PatientSpecialty] falha ao buscar paciente por e-mail:', sanitizeString(error?.message || String(error), 180));
+    try {
+      const data = await queryPatientsWithSchemaFallback({
+        context: 'specialty-conflict-email',
+        selectColumns: select,
+        filters: [
+          { op: 'ilike', column: 'email', value: safeEmail },
+          { op: 'eq', column: 'is_active', value: true, onMissing: 'omit' },
+          { op: 'is', column: 'deleted_at', value: null, onMissing: 'omit' }
+        ],
+        limit: 50
+      });
+      collect(data || []);
+    } catch (error: any) {
+      console.warn('[PatientSpecialty] falha ao buscar paciente por e-mail:', sanitizeString(error?.message || String(error), 180));
+    }
   }
 
   if (safeCpf) {
-    const { data, error } = await supabase
-      .from('patients')
-      .select(select)
-      .eq('cpf', safeCpf)
-      .eq('is_active', true)
-      .is('deleted_at', null)
-      .limit(50);
-    if (!error) collect(data || []);
-    else console.warn('[PatientSpecialty] falha ao buscar paciente por CPF:', sanitizeString(error?.message || String(error), 180));
+    try {
+      const data = await queryPatientsWithSchemaFallback({
+        context: 'specialty-conflict-cpf',
+        selectColumns: select,
+        filters: [
+          { op: 'eq', column: 'cpf', value: safeCpf, onMissing: 'empty' },
+          { op: 'eq', column: 'is_active', value: true, onMissing: 'omit' },
+          { op: 'is', column: 'deleted_at', value: null, onMissing: 'omit' }
+        ],
+        limit: 50
+      });
+      collect(data || []);
+    } catch (error: any) {
+      console.warn('[PatientSpecialty] falha ao buscar paciente por CPF:', sanitizeString(error?.message || String(error), 180));
+    }
   }
 
   const rows = Array.from(rowsById.values());
@@ -12505,62 +12631,7 @@ async function startServer() {
         });
       }
 
-      let { data, error } = await supabase
-        .from('patients')
-        .upsert([safeBody], { onConflict: 'id' })
-        .select(PATIENT_MUTATION_SELECT)
-        .single();
-
-      // Fallback defensivo para bases legadas com colunas divergentes (evita 500 no cadastro).
-      if (error) {
-        const fallbackRow = cleanObject({
-          id: safeBody.id,
-          name: safeBody.name,
-          email: safeBody.email,
-          cpf: safeBody.cpf,
-          phone: safeBody.phone,
-          age: safeBody.age,
-          diagnosis: safeBody.diagnosis,
-          type: safeBody.type,
-          social_name: safeBody.social_name,
-          birth_date: safeBody.birth_date,
-          gender: safeBody.gender,
-          patient_profile_type: safeBody.patient_profile_type,
-          panel_type: safeBody.panel_type,
-          profile_type: safeBody.profile_type,
-          insurance_type: safeBody.insurance_type,
-          insurance_name: safeBody.insurance_name,
-          insurance_card_number: safeBody.insurance_card_number,
-          patient_group: safeBody.patient_group,
-          lead_source: safeBody.lead_source,
-          rg: safeBody.rg,
-          cep: safeBody.cep,
-          responsible_name: safeBody.responsible_name,
-          responsible_birth_date: safeBody.responsible_birth_date,
-          responsible_cpf: safeBody.responsible_cpf,
-          responsible_phone: safeBody.responsible_phone,
-          responsible_email: safeBody.responsible_email,
-          metadata: safeBody.metadata,
-          status: safeBody.status || 'active',
-          clinic_id: safeBody.clinic_id,
-          therapist_id: safeBody.therapist_id,
-        });
-
-        let safeFallbackPayload: Record<string, any> = { ...fallbackRow };
-        while (Object.keys(safeFallbackPayload).length > 0) {
-          const fallbackResult = await supabase
-            .from('patients')
-            .upsert([safeFallbackPayload], { onConflict: 'id' })
-            .select(PATIENT_MUTATION_SELECT)
-            .single();
-          data = fallbackResult.data;
-          error = fallbackResult.error;
-          if (!error) break;
-          const missingColumn = extractMissingColumnName(error);
-          if (!missingColumn || !(missingColumn in safeFallbackPayload)) break;
-          delete safeFallbackPayload[missingColumn];
-        }
-      }
+      const { data, error } = await upsertPatientWithSchemaFallback(safeBody);
       
       if (error) throw error;
       const clinicForSync = sanitizeString(
@@ -12579,8 +12650,15 @@ async function startServer() {
         type: 'management'
       });
       res.json({ success: true, data });
-    } catch (error) {
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients [POST]', error, {
+        userId: sanitizeString(req.session?.user?.id, 120),
+        role: sanitizeString(req.session?.user?.role, 40),
+        clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
+        hasEmail: Boolean(req.body?.email),
+        hasCpf: Boolean(req.body?.cpf || req.body?.anamnesisData?.cpf),
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
