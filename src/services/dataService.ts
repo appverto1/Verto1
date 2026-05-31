@@ -4420,6 +4420,13 @@ export const dataService = {
             null,
           cpf: recordPayload?.responsavelCpf || patient?.responsible_cpf || patient?.guardian?.cpf || null,
           telefone: recordPayload?.responsavelTelefone || patient?.responsible_phone || patient?.guardian?.telefone || null,
+          email: recordPayload?.responsavelEmail || patient?.responsible_email || patient?.guardian?.email || null,
+          relacao:
+            recordPayload?.responsavelRelacao ||
+            patient?.responsible_relationship ||
+            patient?.metadata?.responsibleRelationship ||
+            patient?.guardian?.relacao ||
+            null,
         },
         patientProfileType: normalizePatientProfileType(
           recordPayload?.patientProfileType ||

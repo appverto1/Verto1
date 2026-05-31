@@ -2734,8 +2734,32 @@ const PATIENT_MUTATION_SELECT = [
   'id',
   'name',
   'email',
+  'cpf',
+  'phone',
   'age',
   'diagnosis',
+  'type',
+  'social_name',
+  'birth_date',
+  'gender',
+  'patient_profile_type',
+  'panel_type',
+  'profile_type',
+  'insurance_type',
+  'insurance_name',
+  'insurance_card_number',
+  'patient_group',
+  'lead_source',
+  'notes',
+  'rg',
+  'cep',
+  'responsible_name',
+  'responsible_birth_date',
+  'responsible_cpf',
+  'responsible_phone',
+  'responsible_email',
+  'responsible_relationship',
+  'metadata',
   'status',
   'clinic_id',
   'therapist_id',
@@ -2762,10 +2786,11 @@ const RELATIONSHIP_PENDING = 'PENDING';
 const RELATIONSHIP_CONFIRMED = 'CONFIRMED';
 const RELATIONSHIP_REJECTED = 'REJECTED';
 
-const PATIENT_ANAMNESIS_REQUEST_SELECT = [
+const PATIENT_ANAMNESIS_REQUEST_SELECT_COLUMNS = [
   'id',
   'organization_id',
   'patient_id',
+  'template_id',
   'requested_by',
   'assigned_to_user_id',
   'status',
@@ -2776,18 +2801,42 @@ const PATIENT_ANAMNESIS_REQUEST_SELECT = [
   'expires_at',
   'created_at',
   'updated_at'
-].join(',');
+];
 
-const PATIENT_ANAMNESIS_RESPONSE_SELECT = [
+const PATIENT_ANAMNESIS_REQUEST_SELECT = PATIENT_ANAMNESIS_REQUEST_SELECT_COLUMNS.join(',');
+
+const PATIENT_ANAMNESIS_RESPONSE_SELECT_COLUMNS = [
   'id',
   'organization_id',
   'patient_id',
   'request_id',
+  'template_id',
   'respondent_user_id',
   'respondent_role',
   'answers',
   'status',
   'submitted_at',
+  'reviewed_at',
+  'reviewed_by',
+  'version',
+  'created_at',
+  'updated_at'
+];
+
+const PATIENT_ANAMNESIS_RESPONSE_SELECT = PATIENT_ANAMNESIS_RESPONSE_SELECT_COLUMNS.join(',');
+
+const ANAMNESIS_TEMPLATE_SELECT = [
+  'id',
+  'organization_id',
+  'name',
+  'description',
+  'age_min_months',
+  'age_max_months',
+  'patient_profile_type',
+  'questions',
+  'is_default',
+  'is_active',
+  'created_by',
   'created_at',
   'updated_at'
 ].join(',');
@@ -5826,6 +5875,93 @@ function resolvePatientAnamnesisProfile(patient: any): 'adult' | 'child' {
   return 'adult';
 }
 
+function calculateAgeMonthsFromDateOnly(value: unknown): number | null {
+  const raw = sanitizeString(value, 40);
+  if (!raw) return null;
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const birth = match
+    ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+    : new Date(raw);
+  if (Number.isNaN(birth.getTime())) return null;
+  const today = new Date();
+  let months = (today.getFullYear() - birth.getFullYear()) * 12 + (today.getMonth() - birth.getMonth());
+  if (today.getDate() < birth.getDate()) months -= 1;
+  return months >= 0 ? months : null;
+}
+
+function anamnesisTemplateMatchesPatient(row: any, patient: any) {
+  if (!row?.id || row?.is_active === false) return false;
+  const ageMonths = calculateAgeMonthsFromDateOnly(patient?.birth_date || patient?.birthDate || patient?.dataNascimento);
+  const minMonths = row?.age_min_months === null || row?.age_min_months === undefined ? null : Number(row.age_min_months);
+  const maxMonths = row?.age_max_months === null || row?.age_max_months === undefined ? null : Number(row.age_max_months);
+  const hasAgeRule = Number.isFinite(minMonths) || Number.isFinite(maxMonths);
+  const ageMatches =
+    ageMonths === null || !hasAgeRule
+      ? true
+      : (!Number.isFinite(minMonths) || ageMonths >= Number(minMonths)) &&
+        (!Number.isFinite(maxMonths) || ageMonths <= Number(maxMonths));
+  if (!ageMatches) return false;
+
+  const rowProfile = sanitizeString(row?.patient_profile_type, 80).toUpperCase();
+  if (!rowProfile) return true;
+  const patientProfile = sanitizeString(
+    patient?.patient_profile_type || patient?.panel_type || patient?.profile_type || patient?.type,
+    80
+  ).toUpperCase();
+  if (!patientProfile) return true;
+  if (rowProfile === 'TEEN' && patientProfile === 'KIDS') return true;
+  if (rowProfile === 'KIDS_TEA' && patientProfile === 'KIDS') return true;
+  if (rowProfile === 'ADULT' && patientProfile === 'ABA') return true;
+  return rowProfile === patientProfile || patientProfile.includes(rowProfile) || rowProfile.includes(patientProfile);
+}
+
+function normalizeAgeBasedAnamnesisTemplate(row: any, patient: any, compatibleRows: any[] = []) {
+  const fallback = getDefaultAnamnesisTemplate();
+  const profileType = resolvePatientAnamnesisProfile(patient);
+  const rawQuestions = row?.questions && typeof row.questions === 'object' ? row.questions : {};
+  const template = sanitizeAnamnesisTemplate(
+    rawQuestions?.profiles || rawQuestions?.version ? rawQuestions : fallback
+  );
+  return {
+    ...template,
+    selectedTemplateId: sanitizeString(row?.id, 120) || null,
+    templateName: sanitizeString(row?.name, 180) || (profileType === 'child' ? 'Ficha infantil' : 'Ficha adulta'),
+    templateDescription: sanitizeString(row?.description, 500) || null,
+    ageMinMonths: Number.isFinite(Number(row?.age_min_months)) ? Number(row.age_min_months) : null,
+    ageMaxMonths: Number.isFinite(Number(row?.age_max_months)) ? Number(row.age_max_months) : null,
+    patientProfileType: sanitizeString(row?.patient_profile_type, 80) || null,
+    compatibleTemplates: compatibleRows.slice(0, 12).map((item: any) => ({
+      id: sanitizeString(item?.id, 120),
+      name: sanitizeString(item?.name, 180),
+      description: sanitizeString(item?.description, 240) || null,
+      ageMinMonths: Number.isFinite(Number(item?.age_min_months)) ? Number(item.age_min_months) : null,
+      ageMaxMonths: Number.isFinite(Number(item?.age_max_months)) ? Number(item.age_max_months) : null,
+      patientProfileType: sanitizeString(item?.patient_profile_type, 80) || null
+    })).filter((item: any) => item.id && item.name)
+  };
+}
+
+function buildPublicAnamnesisTemplate(template: any) {
+  const sanitized = sanitizeAnamnesisTemplate(template || getDefaultAnamnesisTemplate());
+  return {
+    ...sanitized,
+    templateName: sanitizeString(template?.templateName, 180) || null,
+    templateDescription: sanitizeString(template?.templateDescription, 500) || null,
+    ageMinMonths: Number.isFinite(Number(template?.ageMinMonths)) ? Number(template.ageMinMonths) : null,
+    ageMaxMonths: Number.isFinite(Number(template?.ageMaxMonths)) ? Number(template.ageMaxMonths) : null,
+    patientProfileType: sanitizeString(template?.patientProfileType, 80) || null,
+    compatibleTemplates: Array.isArray(template?.compatibleTemplates)
+      ? template.compatibleTemplates.map((item: any) => ({
+          name: sanitizeString(item?.name, 180),
+          description: sanitizeString(item?.description, 240) || null,
+          ageMinMonths: Number.isFinite(Number(item?.ageMinMonths)) ? Number(item.ageMinMonths) : null,
+          ageMaxMonths: Number.isFinite(Number(item?.ageMaxMonths)) ? Number(item.ageMaxMonths) : null,
+          patientProfileType: sanitizeString(item?.patientProfileType, 80) || null
+        })).filter((item: any) => item.name)
+      : []
+  };
+}
+
 async function fetchAnamnesisTemplateForClinic(clinicId: string) {
   const templateResult = await fetchClinicAnamnesisTemplateWithSchemaFallback({
     supabase,
@@ -5839,14 +5975,63 @@ async function fetchAnamnesisTemplateForClinic(clinicId: string) {
   return sanitizeAnamnesisTemplate(templateResult.data?.template_json || getDefaultAnamnesisTemplate());
 }
 
+async function fetchAnamnesisTemplateForPatient(patient: any, clinicId: string, requestedTemplateId?: string | null) {
+  const fallback = await fetchAnamnesisTemplateForClinic(clinicId);
+  const safeClinicId = sanitizeString(clinicId, 120);
+  if (!isUuid(safeClinicId)) return fallback;
+  const requestedId = sanitizeString(requestedTemplateId, 120);
+
+  try {
+    let query = supabase
+      .from('anamnesis_templates')
+      .select(ANAMNESIS_TEMPLATE_SELECT)
+      .eq('is_active', true)
+      .or(`organization_id.is.null,organization_id.eq.${safeClinicId}`)
+      .order('organization_id', { ascending: false })
+      .order('is_default', { ascending: false })
+      .order('created_at', { ascending: true })
+      .limit(120);
+    if (isUuid(requestedId)) query = query.eq('id', requestedId);
+    const { data, error } = await query;
+    if (error) {
+      if (isMissingRelationError(error) || extractMissingColumnName(error)) return fallback;
+      throw error;
+    }
+    const rows = Array.isArray(data) ? data : [];
+    const compatible = rows.filter((row: any) => anamnesisTemplateMatchesPatient(row, patient));
+    const patientProfileKey = sanitizeString(
+      patient?.patient_profile_type || patient?.panel_type || patient?.profile_type || patient?.type,
+      80
+    ).toUpperCase();
+    const exactCompatible = compatible.filter((row: any) => (
+      patientProfileKey &&
+      sanitizeString(row?.patient_profile_type, 80).toUpperCase() === patientProfileKey
+    ));
+    const selected =
+      exactCompatible.find((row: any) => sanitizeString(row?.organization_id, 120) === safeClinicId) ||
+      exactCompatible[0] ||
+      compatible.find((row: any) => sanitizeString(row?.organization_id, 120) === safeClinicId) ||
+      compatible[0] ||
+      rows.find((row: any) => sanitizeString(row?.organization_id, 120) === safeClinicId) ||
+      rows[0];
+    return selected ? normalizeAgeBasedAnamnesisTemplate(selected, patient, compatible) : fallback;
+  } catch (error: any) {
+    console.warn('[AnamnesisTemplates] fallback para template legado:', error?.message || String(error));
+    return fallback;
+  }
+}
+
 const PATIENT_ANAMNESIS_PATIENT_SELECT_COLUMNS = [
   'id',
   'name',
   'email',
   'age',
+  'birth_date',
   'clinic_id',
   'therapist_id',
   'responsible_user_id',
+  'responsible_email',
+  'responsible_relationship',
   'status',
   'type',
   'patient_profile_type',
@@ -5882,6 +6067,76 @@ async function fetchPatientForAnamnesis(patientId: string, clinicId?: string | n
     throw error;
   }
   return null;
+}
+
+async function fetchPatientAnamnesisRequestWithSchemaFallback(params: {
+  patientId: string;
+  clinicId: string;
+  requestId?: string | null;
+  statuses?: string[];
+}) {
+  let columns = [...PATIENT_ANAMNESIS_REQUEST_SELECT_COLUMNS];
+  let lastError: any = null;
+  const requestId = sanitizeString(params.requestId, 120);
+
+  while (columns.length > 0) {
+    let query = supabase
+      .from('patient_anamnesis_requests')
+      .select(columns.join(', '))
+      .eq('organization_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .limit(1);
+    if (isUuid(requestId)) {
+      query = query.eq('id', requestId);
+    } else {
+      query = query.order('created_at', { ascending: false });
+    }
+    if (Array.isArray(params.statuses) && params.statuses.length > 0) {
+      query = query.in('status', params.statuses.map((status) => sanitizeString(status, 60)).filter(Boolean));
+    }
+
+    const { data, error } = await query.maybeSingle();
+    if (!error) return { data: data || null, error: null };
+    if (isMissingRelationError(error)) return { data: null, error };
+
+    lastError = error;
+    const missingColumn = extractMissingColumnName(error);
+    if (missingColumn && columns.includes(missingColumn)) {
+      columns = columns.filter((column) => column !== missingColumn);
+      continue;
+    }
+    return { data: null, error };
+  }
+
+  return { data: null, error: lastError || new Error('Falha ao consultar solicitação de anamnese.') };
+}
+
+async function fetchLatestPatientAnamnesisResponseWithSchemaFallback(patientId: string, clinicId: string) {
+  let columns = [...PATIENT_ANAMNESIS_RESPONSE_SELECT_COLUMNS];
+  let lastError: any = null;
+
+  while (columns.length > 0) {
+    const { data, error } = await supabase
+      .from('patient_anamnesis_responses')
+      .select(columns.join(', '))
+      .eq('organization_id', clinicId)
+      .eq('patient_id', patientId)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!error) return { data: data || null, error: null };
+    if (isMissingRelationError(error)) return { data: null, error };
+
+    lastError = error;
+    const missingColumn = extractMissingColumnName(error);
+    if (missingColumn && columns.includes(missingColumn)) {
+      columns = columns.filter((column) => column !== missingColumn);
+      continue;
+    }
+    return { data: null, error };
+  }
+
+  return { data: null, error: lastError || new Error('Falha ao consultar resposta de anamnese.') };
 }
 
 function buildRelationshipConfirmationEmail(params: { patientName: string; confirmationUrl: string }) {
@@ -5991,28 +6246,18 @@ async function fetchPatientAnamnesisFlow(patientId: string, clinicId: string) {
   const patient = await fetchPatientForAnamnesis(patientId, clinicId);
   if (!patient?.id) return { patient: null, request: null, response: null, template: getDefaultAnamnesisTemplate() };
 
-  const [requestResult, responseResult, template] = await Promise.all([
-    supabase
-      .from('patient_anamnesis_requests')
-      .select(PATIENT_ANAMNESIS_REQUEST_SELECT)
-      .eq('organization_id', clinicId)
-      .eq('patient_id', patientId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from('patient_anamnesis_responses')
-      .select(PATIENT_ANAMNESIS_RESPONSE_SELECT)
-      .eq('organization_id', clinicId)
-      .eq('patient_id', patientId)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    fetchAnamnesisTemplateForClinic(clinicId)
+  const [requestResult, responseResult] = await Promise.all([
+    fetchPatientAnamnesisRequestWithSchemaFallback({ patientId, clinicId }),
+    fetchLatestPatientAnamnesisResponseWithSchemaFallback(patientId, clinicId),
   ]);
 
   if (requestResult.error && !isMissingRelationError(requestResult.error)) throw requestResult.error;
   if (responseResult.error && !isMissingRelationError(responseResult.error)) throw responseResult.error;
+  const template = await fetchAnamnesisTemplateForPatient(
+    patient,
+    clinicId,
+    sanitizeString(requestResult.data?.template_id || responseResult.data?.template_id, 120)
+  );
 
   return {
     patient,
@@ -6026,6 +6271,7 @@ async function upsertAnamnesisResponse(params: {
   patientId: string;
   clinicId: string;
   requestId?: string | null;
+  templateId?: string | null;
   respondentUserId?: string | null;
   respondentRole: string;
   answers: any;
@@ -6033,6 +6279,7 @@ async function upsertAnamnesisResponse(params: {
 }) {
   const nowIso = new Date().toISOString();
   const requestId = sanitizeString(params.requestId, 120);
+  const templateId = sanitizeString(params.templateId, 120);
   const answers = normalizeAnamnesisAnswers(params.answers || {});
   let existingQuery = supabase
     .from('patient_anamnesis_responses')
@@ -6046,16 +6293,34 @@ async function upsertAnamnesisResponse(params: {
     : existingQuery.is('request_id', null);
   const existing = await existingQuery.maybeSingle();
   if (existing.error && !isMissingRelationError(existing.error)) throw existing.error;
+  let nextVersion = 1;
+  if (!existing.data?.id) {
+    const latestVersion = await supabase
+      .from('patient_anamnesis_responses')
+      .select('version')
+      .eq('organization_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .order('version', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!latestVersion.error) {
+      nextVersion = Math.max(1, Number(latestVersion.data?.version || 0) + 1);
+    }
+  }
 
   const payload = cleanObject({
     organization_id: params.clinicId,
     patient_id: params.patientId,
     request_id: isUuid(requestId) ? requestId : null,
+    template_id: isUuid(templateId) ? templateId : null,
     respondent_user_id: isUuid(params.respondentUserId || '') ? params.respondentUserId : null,
     respondent_role: sanitizeString(params.respondentRole, 60) || 'family',
     answers,
     status: params.status,
     submitted_at: params.status === 'SUBMITTED' || params.status === 'REVIEWED' ? nowIso : undefined,
+    reviewed_at: params.status === 'REVIEWED' ? nowIso : undefined,
+    reviewed_by: params.status === 'REVIEWED' && isUuid(params.respondentUserId || '') ? params.respondentUserId : undefined,
+    version: existing.data?.id ? undefined : nextVersion,
     updated_at: nowIso
   });
 
@@ -6121,6 +6386,14 @@ function buildPatientIdentityPersistenceFields(body: any) {
       cidade: sanitizeString(body?.cidade || address?.cidade, 120),
     }),
     isMinor: Boolean(body?.isMinor || body?.is_minor || body?.menorDeIdade),
+    registrationNotes: sanitizeTextField(body?.notes || body?.outrasInformacoes || body?.otherInformation, 4000),
+    responsibleRelationship: sanitizeString(
+      body?.responsibleRelationship ||
+        body?.responsible_relationship ||
+        body?.responsavelRelacao ||
+        guardian?.relacao,
+      120
+    ),
   });
   return cleanObject({
     ...profileFields,
@@ -6132,6 +6405,7 @@ function buildPatientIdentityPersistenceFields(body: any) {
     insurance_card_number: sanitizeString(body?.insuranceCardNumber || body?.insurance_card_number || body?.cardNumber || body?.convenioCarteirinha, 120),
     patient_group: sanitizeString(body?.group || body?.patient_group || body?.grupo, 80),
     lead_source: sanitizeString(body?.source || body?.lead_source || body?.comoConheceu, 120),
+    notes: sanitizeTextField(body?.notes || body?.outrasInformacoes || body?.otherInformation, 4000),
     rg: sanitizeString(body?.rg, 40),
     cep: sanitizeString(body?.cep || address?.cep, 20),
     responsible_name: sanitizeString(body?.responsibleName || body?.responsible_name || body?.responsavelNome || guardian?.nome, 160),
@@ -6139,6 +6413,7 @@ function buildPatientIdentityPersistenceFields(body: any) {
     responsible_cpf: normalizeCpf(body?.responsibleCpf || body?.responsible_cpf || body?.responsavelCpf || guardian?.cpf) || undefined,
     responsible_phone: normalizeBrazilMobilePhone(body?.responsiblePhone || body?.responsible_phone || body?.responsavelTelefone || guardian?.telefone) || sanitizePhone(body?.responsiblePhone || guardian?.telefone),
     responsible_email: sanitizeEmail(body?.responsibleEmail || body?.responsible_email || body?.responsavelEmail || guardian?.email) || undefined,
+    responsible_relationship: sanitizeString(body?.responsibleRelationship || body?.responsible_relationship || body?.responsavelRelacao || guardian?.relacao, 120),
     metadata: Object.keys(safeMetadata).length ? safeMetadata : undefined,
   });
 }
@@ -12070,22 +12345,32 @@ async function startServer() {
       if (!patient?.id) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
 
       const nowIso = new Date().toISOString();
-      const existing = await supabase
-        .from('patient_anamnesis_requests')
-        .select(PATIENT_ANAMNESIS_REQUEST_SELECT)
-        .eq('organization_id', clinicId)
-        .eq('patient_id', patientId)
-        .in('status', ['SENT', 'IN_PROGRESS', 'SUBMITTED'])
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const selectedTemplate = await fetchAnamnesisTemplateForPatient(
+        patient,
+        clinicId,
+        req.body?.templateId || req.body?.template_id
+      );
+      const patientEmail = sanitizeEmail(patient?.responsible_email || patient?.email);
+      if (!patientEmail) {
+        return res.status(400).json({
+          success: false,
+          error: 'Cadastre um responsável com e-mail antes de enviar a ficha.'
+        });
+      }
+      const existing = await fetchPatientAnamnesisRequestWithSchemaFallback({
+        patientId,
+        clinicId,
+        statuses: ['SENT', 'IN_PROGRESS', 'SUBMITTED']
+      });
       if (existing.error && !isMissingRelationError(existing.error)) throw existing.error;
 
       const requestId = sanitizeString(existing.data?.id, 120) || crypto.randomUUID();
+      const resolvedTemplateId = sanitizeString(existing.data?.template_id || selectedTemplate?.selectedTemplateId, 120);
       const requestPayload = cleanObject({
         id: requestId,
         organization_id: clinicId,
         patient_id: patientId,
+        template_id: isUuid(resolvedTemplateId) ? resolvedTemplateId : undefined,
         requested_by: isUuid(actorId) ? actorId : null,
         assigned_to_user_id: isUuid(sanitizeString(patient?.responsible_user_id, 120)) ? sanitizeString(patient.responsible_user_id, 120) : null,
         status: existing.data?.id ? sanitizeString(existing.data.status, 40) || 'SENT' : 'SENT',
@@ -12120,23 +12405,20 @@ async function startServer() {
       });
 
       let emailSent = false;
-      const patientEmail = sanitizeEmail(patient?.email);
-      if (patientEmail) {
-        const portalUrl = getAppPortalUrl({ section: 'anamnesis' });
-        const emailTemplate = buildAnamnesisRequestEmail({ patientName: sanitizeString(patient?.name, 180), portalUrl });
-        emailSent = await sendTransactionalEmailSafe({
-          to: patientEmail,
-          subject: emailTemplate.subject,
-          html: emailTemplate.html,
-          context: 'patient_anamnesis_request',
-          from: OFFICIAL_FROM_NOREPLY,
-          replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
-          metadata: {
-            patientId,
-            email: maskEmail(patientEmail)
-          }
-        });
-      }
+      const portalUrl = getAppPortalUrl({ section: 'anamnesis' });
+      const emailTemplate = buildAnamnesisRequestEmail({ patientName: sanitizeString(patient?.name, 180), portalUrl });
+      emailSent = await sendTransactionalEmailSafe({
+        to: patientEmail,
+        subject: emailTemplate.subject,
+        html: emailTemplate.html,
+        context: 'patient_anamnesis_request',
+        from: OFFICIAL_FROM_NOREPLY,
+        replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+        metadata: {
+          patientId,
+          email: maskEmail(patientEmail)
+        }
+      });
 
       void persistActivityLog({
         userId: actorId,
@@ -12146,13 +12428,24 @@ async function startServer() {
         content: 'Solicitação de anamnese foi disponibilizada no portal da família.',
         type: 'clinical',
         actionType: 'ANAMNESIS_REQUEST_SENT',
-        payload: { patientId, requestId, emailSent }
+        payload: { patientId, requestId, emailSent, templateName: sanitizeString(selectedTemplate?.templateName, 180) || null }
       });
 
       return res.json({
         success: true,
         message: emailSent ? 'Ficha de anamnese enviada para a família.' : 'Ficha disponibilizada no portal. E-mail não enviado agora.',
-        data: { requestId, status: requestPayload.status, emailSent }
+        data: {
+          requestId,
+          status: requestPayload.status,
+          emailSent,
+          templateName: sanitizeString(selectedTemplate?.templateName, 180) || null,
+          availableTemplates: Array.isArray(selectedTemplate?.compatibleTemplates)
+            ? selectedTemplate.compatibleTemplates.map((template: any) => ({
+                name: sanitizeString(template?.name, 180),
+                description: sanitizeString(template?.description, 240) || null
+              })).filter((template: any) => template.name)
+            : []
+        }
       });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/patients/:patientId/anamnesis/send [POST]', error, {
@@ -12180,7 +12473,7 @@ async function startServer() {
           },
           request: flow.request,
           response: flow.response,
-          template: flow.template,
+          template: buildPublicAnamnesisTemplate(flow.template),
           profileType: resolvePatientAnamnesisProfile(flow.patient)
         }
       });
@@ -12198,10 +12491,15 @@ async function startServer() {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const requestId = sanitizeString(req.body?.requestId || req.body?.request_id, 120);
       if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      const requestCheck = isUuid(requestId)
+        ? await fetchPatientAnamnesisRequestWithSchemaFallback({ patientId, clinicId, requestId })
+        : { data: null, error: null };
+      if (requestCheck.error && !isMissingRelationError(requestCheck.error)) throw requestCheck.error;
       const response = await upsertAnamnesisResponse({
         patientId,
         clinicId,
         requestId: isUuid(requestId) ? requestId : null,
+        templateId: req.body?.templateId || req.body?.template_id || requestCheck.data?.template_id || null,
         respondentUserId: sanitizeString(req.session.user?.id, 120),
         respondentRole: 'professional',
         answers: req.body?.answers || req.body?.anamnesisData || {},
@@ -12230,10 +12528,15 @@ async function startServer() {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const requestId = sanitizeString(req.body?.requestId || req.body?.request_id, 120);
       if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      const requestCheck = isUuid(requestId)
+        ? await fetchPatientAnamnesisRequestWithSchemaFallback({ patientId, clinicId, requestId })
+        : { data: null, error: null };
+      if (requestCheck.error && !isMissingRelationError(requestCheck.error)) throw requestCheck.error;
       const response = await upsertAnamnesisResponse({
         patientId,
         clinicId,
         requestId: isUuid(requestId) ? requestId : null,
+        templateId: req.body?.templateId || req.body?.template_id || requestCheck.data?.template_id || null,
         respondentUserId: sanitizeString(req.session.user?.id, 120),
         respondentRole: 'professional',
         answers: req.body?.answers || req.body?.anamnesisData || {},
@@ -12285,10 +12588,16 @@ async function startServer() {
       const responseId = sanitizeString(req.body?.responseId || req.body?.response_id, 120);
       if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
       const nowIso = new Date().toISOString();
+      const actorId = sanitizeString(req.session.user?.id, 120);
       if (isUuid(responseId)) {
         await updateRowsWithSchemaFallback({
           tableName: 'patient_anamnesis_responses',
-          payload: { status: 'REVIEWED', updated_at: nowIso },
+          payload: {
+            status: 'REVIEWED',
+            reviewed_at: nowIso,
+            reviewed_by: isUuid(actorId) ? actorId : null,
+            updated_at: nowIso
+          },
           filters: [{ column: 'id', value: responseId }, { column: 'patient_id', value: patientId }],
           context: 'anamnesis-review-response'
         });
@@ -12316,8 +12625,18 @@ async function startServer() {
         },
         context: 'anamnesis-review-patient'
       });
+      const reviewedFlow = await fetchPatientAnamnesisFlow(patientId, clinicId);
+      void persistAnamnesisFinalFileFallback({
+        patientId,
+        clinicId,
+        sessionUser: req.session.user,
+        flow: reviewedFlow,
+        reviewedAt: nowIso
+      }).catch((fileError: any) => {
+        console.warn('[AnamnesisFiles] Falha ao salvar ficha revisada em Arquivos:', fileError?.message || String(fileError));
+      });
       void persistActivityLog({
-        userId: sanitizeString(req.session.user?.id, 120),
+        userId: actorId,
         clinicId,
         actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
         title: 'Anamnese revisada',
@@ -12355,7 +12674,7 @@ async function startServer() {
           available: true,
           request: flow.request,
           response: flow.response,
-          template: flow.template,
+          template: buildPublicAnamnesisTemplate(flow.template),
           profileType: resolvePatientAnamnesisProfile(patient)
         }
       });
@@ -12377,21 +12696,19 @@ async function startServer() {
       const clinicId = sanitizeString(patient?.clinic_id, 120);
       const requestId = sanitizeString(req.body?.requestId || req.body?.request_id, 120);
       if (!patient?.id || !isUuid(clinicId) || !isUuid(requestId)) return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
-      const requestCheck = await supabase
-        .from('patient_anamnesis_requests')
-        .select('id, status')
-        .eq('id', requestId)
-        .eq('organization_id', clinicId)
-        .eq('patient_id', patientId)
-        .in('status', ['SENT', 'IN_PROGRESS'])
-        .limit(1)
-        .maybeSingle();
+      const requestCheck = await fetchPatientAnamnesisRequestWithSchemaFallback({
+        patientId,
+        clinicId,
+        requestId,
+        statuses: ['SENT', 'IN_PROGRESS']
+      });
       if (requestCheck.error && !isMissingRelationError(requestCheck.error)) throw requestCheck.error;
       if (!requestCheck.data?.id) return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
       const response = await upsertAnamnesisResponse({
         patientId,
         clinicId,
         requestId,
+        templateId: requestCheck.data?.template_id || null,
         respondentUserId: sanitizeString(req.session.user?.id, 120),
         respondentRole: 'family',
         answers: req.body?.answers || {},
@@ -12429,21 +12746,19 @@ async function startServer() {
       const clinicId = sanitizeString(patient?.clinic_id, 120);
       const requestId = sanitizeString(req.body?.requestId || req.body?.request_id, 120);
       if (!patient?.id || !isUuid(clinicId) || !isUuid(requestId)) return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
-      const requestCheck = await supabase
-        .from('patient_anamnesis_requests')
-        .select('id, status')
-        .eq('id', requestId)
-        .eq('organization_id', clinicId)
-        .eq('patient_id', patientId)
-        .in('status', ['SENT', 'IN_PROGRESS'])
-        .limit(1)
-        .maybeSingle();
+      const requestCheck = await fetchPatientAnamnesisRequestWithSchemaFallback({
+        patientId,
+        clinicId,
+        requestId,
+        statuses: ['SENT', 'IN_PROGRESS']
+      });
       if (requestCheck.error && !isMissingRelationError(requestCheck.error)) throw requestCheck.error;
       if (!requestCheck.data?.id) return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
       const response = await upsertAnamnesisResponse({
         patientId,
         clinicId,
         requestId,
+        templateId: requestCheck.data?.template_id || null,
         respondentUserId: sanitizeString(req.session.user?.id, 120),
         respondentRole: 'family',
         answers: req.body?.answers || {},
@@ -12832,6 +13147,7 @@ async function startServer() {
       const normalizedCpf = normalizeCpf(cpf);
       const rawPhone = req.body?.phone ?? req.body?.telefone;
       const normalizedPhone = normalizeBrazilMobilePhone(rawPhone);
+      const identityPersistenceFields = buildPatientIdentityPersistenceFields(req.body);
       const requestClientRecordId = sanitizeString(req.body?.clientRecordId || req.body?.client_record_id || req.body?.localId, 120);
       const routeRequestId = requestIdForLogs(req);
       const requestedSpecialtyKeys = derivePatientSpecialtyKeysFromPayload({
@@ -13103,6 +13419,8 @@ async function startServer() {
             name: safeName,
             email: safeEmail,
             phone: normalizedPhone || undefined,
+            cpf: normalizedCpf || undefined,
+            ...identityPersistenceFields,
             status: nextPatientStatus,
             onboarding_status: nextOnboardingStatus,
             anamnesis_required: true,
@@ -13134,6 +13452,8 @@ async function startServer() {
             name: safeName,
             email: safeEmail,
             phone: normalizedPhone || undefined,
+            cpf: normalizedCpf || undefined,
+            ...identityPersistenceFields,
             status: nextPatientStatus,
             onboarding_status: nextOnboardingStatus,
             anamnesis_required: true,
@@ -14006,6 +14326,7 @@ async function startServer() {
       const initialPatientStatus = !anamnesisRequired
         ? PATIENT_STATUS_ACTIVE
         : PATIENT_STATUS_PENDING_ANAMNESIS;
+      const requestedPatientStatus = sanitizeString(req.body?.status, 40);
       const safeBody = cleanObject({
         id: isUuid(sanitizeString(req.body?.id, 120)) ? sanitizeString(req.body?.id, 120) : undefined,
         name: safeName,
@@ -14015,7 +14336,7 @@ async function startServer() {
         age: asSafeNumber(req.body?.age, 0, 130),
         diagnosis: sanitizeString(req.body?.diagnosis, 2000),
         ...buildPatientIdentityPersistenceFields(req.body),
-        status: sanitizeString(req.body?.status, 40) || initialPatientStatus,
+        status: !anamnesisRequired ? (requestedPatientStatus || initialPatientStatus) : initialPatientStatus,
         onboarding_status: initialOnboardingStatus,
         anamnesis_required: anamnesisRequired,
         anamnesis_submitted_at: hasSubmittedAnamnesis ? new Date().toISOString() : undefined,
@@ -14118,7 +14439,7 @@ async function startServer() {
         clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
         actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
         title: 'Paciente cadastrado/atualizado',
-        content: `Paciente ${safeBody.name} (${data?.id || safeBody.id || 'sem-id'}) foi salvo no sistema.`,
+        content: `Paciente ${safeBody.name} foi salvo no sistema.`,
         type: 'management'
       });
       res.json({ success: true, data });
@@ -14567,6 +14888,16 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'CPF inválido. Informe 11 dígitos.' });
       }
 
+      const requestedStatusPatch = req.body?.status !== undefined ? sanitizeString(req.body?.status, 40) : undefined;
+      const requestedOnboardingPatch = sanitizeString(req.body?.onboardingStatus || req.body?.onboarding_status, 80).toUpperCase();
+      const requestedAnamnesisRequired = req.body?.anamnesisRequired ?? req.body?.anamnesis_required;
+      const safeStatusPatch =
+        requestedStatusPatch?.toUpperCase() === PATIENT_STATUS_ACTIVE &&
+        requestedAnamnesisRequired !== false &&
+        !['READY_FOR_CARE', 'ANAMNESIS_REVIEWED'].includes(requestedOnboardingPatch)
+          ? PATIENT_STATUS_PENDING_ANAMNESIS
+          : requestedStatusPatch;
+
       const hasIdentityPersistencePatch = [
         'type',
         'patientProfileType',
@@ -14604,6 +14935,9 @@ async function startServer() {
         'responsible_phone',
         'responsibleEmail',
         'responsible_email',
+        'responsibleRelationship',
+        'responsible_relationship',
+        'responsavelRelacao',
         'guardian',
         'address',
         'isMinor',
@@ -14623,7 +14957,7 @@ async function startServer() {
             ? (isUuid(safeTherapistId) ? safeTherapistId : null)
             : undefined,
         clinic_id: canChangeClinic && req.body?.clinic_id !== undefined ? sanitizeString(req.body?.clinic_id, 100) : undefined,
-        status: req.body?.status !== undefined ? sanitizeString(req.body?.status, 40) : undefined
+        status: req.body?.status !== undefined ? safeStatusPatch : undefined
       });
 
       let updatedPatient: any = null;
@@ -14714,8 +15048,8 @@ async function startServer() {
         title: 'Cadastro de paciente atualizado',
         content:
           canAssignTherapist && rawTherapistId !== undefined
-            ? `Paciente ${sanitizeString(req.params.id, 120)} teve responsável terapêutico atualizado para ${isUuid(safeTherapistId) ? sanitizeString(safeTherapistId, 120) : 'não atribuído'}.`
-            : `Paciente ${sanitizeString(req.params.id, 120)} teve dados cadastrais atualizados.`,
+            ? `Responsável terapêutico do paciente foi atualizado para ${isUuid(safeTherapistId) ? 'profissional selecionado' : 'não atribuído'}.`
+            : 'Dados cadastrais do paciente foram atualizados.',
         type: 'management'
       });
       res.json({ success: true });
@@ -15150,6 +15484,142 @@ async function startServer() {
       row
     });
     if (!writeResult.success) throw writeResult.error;
+  };
+
+  const buildAnamnesisFinalDocumentHtml = (params: {
+    patientName: string;
+    templateName: string;
+    reviewedAt: string;
+    answers: any;
+    version: number;
+  }) => {
+    const labelForKey = (key: string) =>
+      sanitizeString(key, 120)
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/^./, (letter) => letter.toUpperCase()) || 'Resposta';
+    const formatValue = (value: any): string => {
+      if (value === null || value === undefined || value === '') return 'Não informado';
+      if (typeof value === 'boolean') return value ? 'Sim' : 'Não';
+      if (Array.isArray(value)) {
+        return value.length > 0 ? value.map((item) => formatValue(item)).join(', ') : 'Não informado';
+      }
+      if (typeof value === 'object') {
+        return Object.entries(value)
+          .map(([key, item]) => `${labelForKey(key)}: ${formatValue(item)}`)
+          .join(' | ') || 'Não informado';
+      }
+      return sanitizeString(String(value), 10000) || 'Não informado';
+    };
+    const entries = Object.entries(params.answers && typeof params.answers === 'object' ? params.answers : {})
+      .filter(([key]) => !['requestId', 'request_id', 'templateId', 'template_id'].includes(key))
+      .slice(0, 240);
+    const reviewedDate = (() => {
+      try {
+        return new Date(params.reviewedAt).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+      } catch {
+        return new Date().toLocaleDateString('pt-BR');
+      }
+    })();
+    const rows = entries.length > 0
+      ? entries.map(([key, value]) => `
+          <section class="answer">
+            <h2>${escapeHtml(labelForKey(key))}</h2>
+            <p>${escapeHtml(formatValue(value))}</p>
+          </section>
+        `).join('')
+      : '<section class="answer"><h2>Ficha</h2><p>Sem respostas registradas nesta versão.</p></section>';
+    return `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>Ficha de Anamnese - ${escapeHtml(params.patientName)}</title>
+  <style>
+    body { margin: 0; background: #f8fafc; color: #0f172a; font-family: Inter, Segoe UI, Arial, sans-serif; }
+    main { max-width: 880px; margin: 0 auto; padding: 40px 24px; }
+    header { border-bottom: 3px solid #7a32fc; padding-bottom: 18px; margin-bottom: 24px; }
+    .eyebrow { color: #7a32fc; font-size: 11px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; margin: 0 0 8px; }
+    h1 { font-size: 28px; line-height: 1.2; margin: 0 0 8px; }
+    .meta { color: #475569; font-size: 13px; margin: 0; }
+    .answer { break-inside: avoid; background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 16px; margin: 0 0 12px; }
+    .answer h2 { font-size: 13px; color: #334155; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .08em; }
+    .answer p { white-space: pre-wrap; line-height: 1.55; margin: 0; font-size: 14px; }
+    footer { color: #64748b; font-size: 11px; margin-top: 24px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">Verto · Anamnese revisada</p>
+      <h1>Ficha de Anamnese</h1>
+      <p class="meta">${escapeHtml(params.patientName)} · ${escapeHtml(params.templateName)} · Versão ${params.version} · ${reviewedDate}</p>
+    </header>
+    ${rows}
+    <footer>Documento lógico gerado a partir do formulário de anamnese revisado pela clínica.</footer>
+  </main>
+</body>
+</html>`;
+  };
+
+  const persistAnamnesisFinalFileFallback = async (params: {
+    patientId: string;
+    clinicId: string;
+    sessionUser: any;
+    flow: any;
+    reviewedAt: string;
+  }) => {
+    const response = params.flow?.response || {};
+    const patientName = sanitizeString(params.flow?.patient?.name, 180) || 'Paciente';
+    const templateName = sanitizeString(params.flow?.template?.templateName, 180) || 'Anamnese';
+    const version = Math.max(1, Number(response?.version || 1) || 1);
+    const reviewedDate = sanitizeString(params.reviewedAt, 80) || new Date().toISOString();
+    const html = buildAnamnesisFinalDocumentHtml({
+      patientName,
+      templateName,
+      reviewedAt: reviewedDate,
+      answers: response?.answers || {},
+      version
+    });
+    const contentUrl = `data:text/html;charset=utf-8;base64,${Buffer.from(html, 'utf8').toString('base64')}`;
+    const dayLabel = (() => {
+      try {
+        return new Date(reviewedDate).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }).replace(/\//g, '-');
+      } catch {
+        return new Date().toISOString().slice(0, 10);
+      }
+    })();
+    const safePatientName = patientName.replace(/[^\p{L}\p{N}\s._-]+/gu, '').replace(/\s+/g, ' ').trim() || 'Paciente';
+    const safeTemplateName = templateName.replace(/[^\p{L}\p{N}\s._-]+/gu, '').replace(/\s+/g, ' ').trim() || 'Anamnese';
+    const versionToken = response?.version
+      ? `v${version}`
+      : sanitizeString(response?.id || params.flow?.request?.id || reviewedDate, 120);
+    const fileEntry = cleanObject({
+      id: uuidFromStableString(`patient-anamnesis-final-file:${params.patientId}:${versionToken}`),
+      patientId: params.patientId,
+      fileName: `Ficha de Anamnese - ${safeTemplateName} - ${safePatientName} - ${dayLabel}.html`,
+      mimeType: 'text/html',
+      sizeBytes: Buffer.byteLength(html, 'utf8'),
+      source: 'anamnesis',
+      createdAt: reviewedDate,
+      url: contentUrl,
+      content: html,
+      metadata: {
+        category: 'Anamnese',
+        status: 'Revisada',
+        origin: 'formulario_anamnese',
+        logicalDocument: true,
+        version,
+        templateName
+      }
+    });
+    await persistPatientFileFallback({
+      patientId: params.patientId,
+      clinicId: params.clinicId,
+      sessionUser: params.sessionUser,
+      fileEntry
+    });
   };
 
   app.get('/api/patient-files/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {

@@ -47,6 +47,7 @@
     "test:pilot-security": "tsx tests/pilotSecurity.test.ts",
     "test:patient-portability": "tsx tests/patientPortability.test.ts",
     "test:anamnesis-portal-flow": "tsx tests/anamnesisPortalFlow.test.ts",
+    "test:patient-registration-anamnesis": "tsx tests/patientRegistrationAnamnesis.test.ts",
     "test:profile-media-persistence": "tsx tests/profileMediaPersistence.test.ts",
     "stripe:create-active-patient-price": "node scripts/create-stripe-active-patient-price.mjs",
     "clean": "rm -rf dist",

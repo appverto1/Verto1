@@ -393,7 +393,10 @@ export default function App() {
   const calculateAgeFromBirthDate = (birthDate: string) => {
     const normalized = String(birthDate || '').trim();
     if (!normalized) return null;
-    const birth = new Date(normalized);
+    const dateOnly = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const birth = dateOnly
+      ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+      : new Date(normalized);
     if (Number.isNaN(birth.getTime())) return null;
     const today = new Date();
     let age = today.getFullYear() - birth.getFullYear();
@@ -476,6 +479,8 @@ export default function App() {
       ),
       responsavelCpf: coalescePatientText(guardian?.cpf, existing?.responsavelCpf),
       responsavelTelefone: coalescePatientText(guardian?.telefone, existing?.responsavelTelefone),
+      responsavelEmail: coalescePatientText(guardian?.email, existing?.responsavelEmail),
+      responsavelRelacao: coalescePatientText(guardian?.relacao, existing?.responsavelRelacao),
       patientProfileType: normalizePatientProfileType(
         source?.patientProfileType || source?.panelType || source?.profileType || source?.profile_type || source?.type || existing?.patientProfileType,
       ),
@@ -2898,12 +2903,14 @@ export default function App() {
     const resolvedGuardian =
       data.guardian && typeof data.guardian === 'object'
         ? data.guardian
-        : data.responsavelNome || data.responsavelTelefone || data.responsavelCpf
+        : data.responsavelNome || data.responsavelTelefone || data.responsavelCpf || data.responsavelEmail || data.responsavelRelacao
           ? {
               nome: data.responsavelNome || null,
               dataNascimento: data.responsavelDataNascimento || null,
               cpf: data.responsavelCpf || null,
               telefone: data.responsavelTelefone || null,
+              email: data.responsavelEmail || data.responsibleEmail || null,
+              relacao: data.responsavelRelacao || data.responsibleRelationship || null,
             }
           : null;
 
@@ -2995,6 +3002,26 @@ export default function App() {
         data.cpf || data.anamnesisData?.cpf || null,
         {
           phone: data.phone,
+          birthDate: resolvedBirthDate,
+          birth_date: resolvedBirthDate,
+          gender: data.gender || data.genero || '',
+          insuranceType: data.insuranceType || data.convenioTipo || 'particular',
+          insuranceName: data.insuranceName || data.convenioNome || '',
+          insuranceCardNumber: data.cardNumber || data.convenioCarteirinha || '',
+          group: data.group || data.grupo || '',
+          source: data.source || data.comoConheceu || '',
+          rg: data.rg || '',
+          cep: data.cep || data.address?.cep || '',
+          address: data.address || {},
+          notes: data.notes || data.outrasInformacoes || '',
+          isMinor: Boolean(data.isMinor || data.menorDeIdade),
+          guardian: resolvedGuardian,
+          responsibleName: resolvedGuardian?.nome || '',
+          responsibleBirthDate: resolvedGuardian?.dataNascimento || '',
+          responsibleCpf: resolvedGuardian?.cpf || '',
+          responsiblePhone: resolvedGuardian?.telefone || '',
+          responsibleEmail: resolvedGuardian?.email || '',
+          responsibleRelationship: resolvedGuardian?.relacao || '',
           clientRecordId: String(newId),
           patientProfileType: resolvedProfileType,
           panelType: resolvedProfileType,
@@ -3074,6 +3101,8 @@ export default function App() {
       responsibleBirthDate: resolvedGuardian?.dataNascimento || '',
       responsibleCpf: resolvedGuardian?.cpf || '',
       responsiblePhone: resolvedGuardian?.telefone || '',
+      responsibleEmail: resolvedGuardian?.email || '',
+      responsibleRelationship: resolvedGuardian?.relacao || '',
       clientRecordId: String(newId)
     });
 
@@ -3373,6 +3402,8 @@ export default function App() {
           responsibleBirthDate: updatedData.guardian?.dataNascimento || updatedData.responsavelDataNascimento,
           responsibleCpf: updatedData.guardian?.cpf || updatedData.responsavelCpf,
           responsiblePhone: updatedData.guardian?.telefone || updatedData.responsavelTelefone,
+          responsibleEmail: updatedData.guardian?.email || updatedData.responsavelEmail,
+          responsibleRelationship: updatedData.guardian?.relacao || updatedData.responsavelRelacao,
           therapist_id:
             typeof updatedData?.therapist_id !== 'undefined'
               ? updatedData.therapist_id

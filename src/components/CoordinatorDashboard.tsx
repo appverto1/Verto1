@@ -384,9 +384,57 @@ export function CoordinatorDashboard({
     return entries;
   }, [therapistMembersById]);
 
-  const visiblePatients = useMemo(() => {
+  const parsePatientBirthDateParts = (value: any) => {
+    const raw = String(value || "").trim();
+    if (!raw) return null;
+    const isoDateOnly = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoDateOnly) {
+      return {
+        day: Number(isoDateOnly[3]),
+        month: Number(isoDateOnly[2]),
+      };
+    }
+    const brazilianDate = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (brazilianDate) {
+      return {
+        day: Number(brazilianDate[1]),
+        month: Number(brazilianDate[2]),
+      };
+    }
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime())) return null;
+    return {
+      day: date.getDate(),
+      month: date.getMonth() + 1,
+    };
+  };
+
+  const isInactivePatientForDashboard = (patient: any) => {
+    const normalized = String(patient?.status || "").trim().toLowerCase();
+    return Boolean(
+      patient?.deleted_at ||
+        patient?.deletedAt ||
+        patient?.unlinkedAt ||
+        patient?.is_active === false ||
+        ["inactive", "inativo", "deleted", "archived", "cancelled", "canceled", "unlinked"].includes(normalized),
+    );
+  };
+
+  const isBirthdayTodayPatient = (patient: any) => {
+    if (isInactivePatientForDashboard(patient)) return false;
+    const today = new Date();
+    const birthDate = parsePatientBirthDateParts(
+      patient?.birthDate ||
+        patient?.birth_date ||
+        patient?.dataNascimento ||
+        patient?.anamnesisData?.dataNascimento,
+    );
+    return birthDate?.day === today.getDate() && birthDate?.month === today.getMonth() + 1;
+  };
+
+  const roleScopedPatients = useMemo(() => {
     const currentTherapistId = String(user?.id || "").trim();
-    const patientsAllowedForRole = isTherapist
+    return isTherapist
       ? allPatients.filter((patient: any) => {
           const therapistId = String(
             patient?.therapist_id || patient?.professional_id || "",
@@ -394,6 +442,15 @@ export function CoordinatorDashboard({
           return Boolean(currentTherapistId) && therapistId === currentTherapistId;
         })
       : allPatients;
+  }, [allPatients, isTherapist, user?.id]);
+
+  const birthdayPatients = useMemo(
+    () => roleScopedPatients.filter((patient: any) => isBirthdayTodayPatient(patient)),
+    [roleScopedPatients],
+  );
+
+  const visiblePatients = useMemo(() => {
+    const patientsAllowedForRole = roleScopedPatients;
 
     if (patientTherapistFilter === "all" || isTherapist) return patientsAllowedForRole;
     if (patientTherapistFilter === "unassigned") {
@@ -410,7 +467,7 @@ export function CoordinatorDashboard({
       ).trim();
       return therapistId === patientTherapistFilter;
     });
-  }, [allPatients, isTherapist, patientTherapistFilter, user?.id]);
+  }, [isTherapist, patientTherapistFilter, roleScopedPatients]);
 
   const billingHistory = [
     {
@@ -949,6 +1006,8 @@ export function CoordinatorDashboard({
     responsavelDataNascimento: "",
     responsavelCpf: "",
     responsavelTelefone: "",
+    responsavelEmail: "",
+    responsavelRelacao: "",
     patientProfileType: "ADULT",
     financialPlans: [],
   });
@@ -2215,6 +2274,8 @@ export function CoordinatorDashboard({
       responsavelDataNascimento: "",
       responsavelCpf: "",
       responsavelTelefone: "",
+      responsavelEmail: "",
+      responsavelRelacao: "",
       patientProfileType: "ADULT",
       financialPlans: [],
     });
@@ -2222,7 +2283,10 @@ export function CoordinatorDashboard({
 
   const calculateAgeFromBirthDate = (birthDate: string) => {
     if (!birthDate) return undefined;
-    const birth = new Date(birthDate);
+    const dateOnly = String(birthDate).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const birth = dateOnly
+      ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+      : new Date(birthDate);
     if (Number.isNaN(birth.getTime())) return undefined;
     const today = new Date();
     let age = today.getFullYear() - birth.getFullYear();
@@ -2268,6 +2332,11 @@ export function CoordinatorDashboard({
     const normalizedGuardianPhone = normalizeBrazilMobileInput(newPatientForm.responsavelTelefone);
     if (newPatientForm.menorDeIdade && normalizedGuardianPhone && !isValidBrazilMobile(normalizedGuardianPhone)) {
       showToast("Telefone do responsável inválido. Use DDD + 9 dígitos.", "error");
+      return;
+    }
+    const normalizedGuardianEmail = String(newPatientForm.responsavelEmail || "").trim().toLowerCase();
+    if (normalizedGuardianEmail && !isValidEmail(normalizedGuardianEmail)) {
+      showToast("E-mail do responsável inválido.", "error");
       return;
     }
     showProcessing(
@@ -2329,8 +2398,14 @@ export function CoordinatorDashboard({
             dataNascimento: newPatientForm.responsavelDataNascimento || null,
             cpf: normalizedGuardianCpf || null,
             telefone: normalizedGuardianPhone || null,
+            email: normalizedGuardianEmail || null,
+            relacao: newPatientForm.responsavelRelacao || null,
           }
         : null,
+      responsavelEmail: normalizedGuardianEmail || null,
+      responsavelRelacao: newPatientForm.responsavelRelacao || null,
+      responsibleEmail: normalizedGuardianEmail || null,
+      responsibleRelationship: newPatientForm.responsavelRelacao || null,
       type: legacyPortalType,
       patientProfileType: canonicalProfileType,
       panelType: canonicalProfileType,
@@ -2415,10 +2490,40 @@ export function CoordinatorDashboard({
 
   const isPatientPendingAnamnesis = (patient: any) => {
     if (!patient) return false;
+    if (patient?.anamnesis_required === false || patient?.anamnesisRequired === false) return false;
+    const onboarding = String(patient?.onboarding_status || patient?.onboardingStatus || "").toUpperCase();
+    const status = String(patient?.status || "").toUpperCase();
+    if (["READY_FOR_CARE", "ANAMNESIS_REVIEWED"].includes(onboarding)) return false;
+    if (status === "ACTIVE" && onboarding === "READY_FOR_CARE") return false;
+    if (
+      [
+        "NOT_STARTED",
+        "ANAMNESIS_SENT",
+        "ANAMNESIS_IN_PROGRESS",
+        "ANAMNESIS_SUBMITTED",
+        "PENDING_ANAMNESIS",
+        "PENDING_CONFIRMATION",
+      ].includes(onboarding || status)
+    ) {
+      return true;
+    }
     const data = patient.anamnesisData;
     const hasAnamnesis =
       !!(data && typeof data === "object" && Object.keys(data).length > 0);
     return !hasAnamnesis;
+  };
+
+  const getPatientClinicalStatusLabel = (patient: any) => {
+    if (!patient) return "Cadastro incompleto";
+    const onboarding = String(patient?.onboarding_status || patient?.onboardingStatus || "").toUpperCase();
+    const status = String(patient?.status || "").toUpperCase();
+    if (["READY_FOR_CARE", "ANAMNESIS_REVIEWED"].includes(onboarding) || (status === "ACTIVE" && !isPatientPendingAnamnesis(patient))) {
+      return "Paciente ativo";
+    }
+    if (onboarding === "ANAMNESIS_SENT") return "Ficha enviada à família";
+    if (onboarding === "ANAMNESIS_IN_PROGRESS") return "Anamnese em preenchimento";
+    if (onboarding === "ANAMNESIS_SUBMITTED") return "Aguardando revisão";
+    return "Anamnese pendente";
   };
 
   const handleEditPatient = (patient: any) => {
@@ -2449,6 +2554,12 @@ export function CoordinatorDashboard({
       responsavelDataNascimento: patient.guardian?.dataNascimento || "",
       responsavelCpf: patient.guardian?.cpf || "",
       responsavelTelefone: patient.guardian?.telefone || "",
+      responsavelEmail: patient.guardian?.email || patient.responsible_email || "",
+      responsavelRelacao:
+        patient.guardian?.relacao ||
+        patient.responsible_relationship ||
+        patient.metadata?.responsibleRelationship ||
+        "",
       patientProfileType: normalizePatientProfileType(
         patient.patientProfileType || patient.panelType || patient.profile_type || patient.type,
       ),
@@ -3099,38 +3210,8 @@ export function CoordinatorDashboard({
   }, [dueSoonPatientPayments, role]);
 
   const birthdayTodayCount = useMemo(() => {
-    const today = new Date();
-    const todayMonth = today.getMonth() + 1;
-    const todayDay = today.getDate();
-
-    const parseBirthDate = (value: any) => {
-      const raw = String(value || "").trim();
-      if (!raw) return null;
-      const brazilianDate = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-      if (brazilianDate) {
-        return {
-          day: Number(brazilianDate[1]),
-          month: Number(brazilianDate[2]),
-        };
-      }
-      const date = new Date(raw);
-      if (Number.isNaN(date.getTime())) return null;
-      return {
-        day: date.getDate(),
-        month: date.getMonth() + 1,
-      };
-    };
-
-    return (allPatients || []).filter((patient: any) => {
-      const birthDate = parseBirthDate(
-        patient?.birthDate ||
-          patient?.birth_date ||
-          patient?.dataNascimento ||
-          patient?.anamnesisData?.dataNascimento,
-      );
-      return birthDate?.day === todayDay && birthDate?.month === todayMonth;
-    }).length;
-  }, [allPatients]);
+    return birthdayPatients.length;
+  }, [birthdayPatients.length]);
 
   const dashboardDailyStats = useMemo(() => {
     const stats = [
@@ -5210,7 +5291,6 @@ export function CoordinatorDashboard({
           id: "birthdays",
           label: "Aniversariantes",
           icon: Heart,
-          badge: "EM BREVE",
         },
       ];
 
@@ -5256,7 +5336,6 @@ export function CoordinatorDashboard({
           id: "birthdays",
           label: "Aniversariantes",
           icon: Heart,
-          badge: "EM BREVE",
         },
       ];
 
@@ -6666,22 +6745,83 @@ export function CoordinatorDashboard({
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
-                className="flex flex-col items-center justify-center py-20 bg-white rounded-[40px] shadow-sm border border-slate-100 p-8 text-center"
+                className="bg-white p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100"
               >
-                <div className="w-20 h-20 bg-pink-50 text-pink-600 rounded-[32px] flex items-center justify-center mb-6">
-                  <Heart size={40} />
+                <div className="mb-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-pink-50 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-pink-600">
+                      <Cake size={14} />
+                      Aniversariantes de hoje
+                    </div>
+                    <h3 className="text-xl font-bold text-slate-900">
+                      {birthdayTodayCount === 1
+                        ? "1 aniversariante hoje"
+                        : `${birthdayTodayCount} aniversariantes hoje`}
+                    </h3>
+                    <p className="mt-1 text-sm font-medium text-slate-500">
+                      A contagem considera dia e mês de nascimento, sem alterar a data por fuso horário.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigateToTab("patients")}
+                    className="inline-flex items-center justify-center rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700 transition-all hover:border-[#7a32fc] hover:text-[#7a32fc]"
+                  >
+                    Limpar filtro
+                  </button>
                 </div>
-                <h3 className="text-2xl font-bold text-slate-900 tracking-tight mb-2">
-                  Aniversariantes
-                </h3>
-                <p className="text-slate-500 font-medium mb-8 max-w-md">
-                  Configuração que possibilite o envio de mensagens
-                  automáticas de feliz aniversário aos pacientes e
-                  profissionais da clínica.
-                </p>
-                <span className="px-6 py-2 bg-[#7a32fc] text-white rounded-full text-xs font-bold uppercase tracking-widest shadow-lg shadow-blue-500/20">
-                  Em Breve
-                </span>
+
+                {birthdayPatients.length > 0 ? (
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    {birthdayPatients.map((patient: any) => (
+                      <div
+                        key={`birthday-${patient.id}`}
+                        className="rounded-3xl border border-pink-100 bg-pink-50/50 p-5 shadow-sm"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-lg font-black text-pink-600 shadow-sm">
+                            {(String(patient?.name || "P").trim().charAt(0) || "P").toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <h4 className="truncate text-sm font-bold text-slate-900">
+                              {normalizeUtf8Text(patient?.name || "Paciente")}
+                            </h4>
+                            <p className="mt-0.5 text-xs font-semibold text-slate-500">
+                              {patient?.birthDate || patient?.birth_date || patient?.dataNascimento || "Nascimento cadastrado"}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-4 flex items-center justify-between gap-3">
+                          <span className="rounded-xl bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                            {getPatientProfileTypeLabel(patient.patientProfileType || patient.panelType || patient.type)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isReceptionist) {
+                                openPatientProfileModal(patient);
+                                return;
+                              }
+                              onPatientClick(patient.id, { tab: "history" });
+                            }}
+                            className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white"
+                          >
+                            Abrir
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-3xl border border-slate-100 bg-slate-50 p-8 text-center">
+                    <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-slate-400">
+                      <Cake size={26} />
+                    </div>
+                    <p className="text-sm font-semibold text-slate-500">
+                      Nenhum aniversariante hoje.
+                    </p>
+                  </div>
+                )}
               </motion.div>
             )}
             {activeTab === "patients" && (
@@ -6864,7 +7004,7 @@ export function CoordinatorDashboard({
                                   className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all whitespace-nowrap text-left"
                                 >
                                   <ClipboardCheck size={14} className="text-purple-500 shrink-0" />
-                                  Ficha Anamnese
+                                  Ficha de anamnese
                                 </button>
                               )}
                               {!isTherapist && (
@@ -6902,16 +7042,21 @@ export function CoordinatorDashboard({
                       </div>
                       <div className="flex items-center justify-between pt-4 border-t border-slate-200/50">
                         <div className="flex items-center gap-2">
+                          {(() => {
+                            const clinicalPending = isPatientPendingAnamnesis(patient);
+                            return (
+                              <>
                           <span
-                            className={`w-2 h-2 rounded-full animate-pulse ${isPatientPendingAnamnesis(patient) ? "bg-amber-500" : "bg-green-500"}`}
+                                className={`w-2 h-2 rounded-full ${clinicalPending ? "bg-amber-500 animate-pulse" : "bg-green-500"}`}
                           />
                           <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">
                             {isReceptionist
                               ? "Cadastro do paciente"
-                              : isPatientPendingAnamnesis(patient)
-                              ? "Pendente de Anamnese"
-                              : "Paciente Ativo"}
+                                  : getPatientClinicalStatusLabel(patient)}
                           </span>
+                              </>
+                            );
+                          })()}
                         </div>
                         <div className="flex flex-wrap items-center justify-end gap-2">
                           <PatientInternalChatPreview
@@ -6956,7 +7101,7 @@ export function CoordinatorDashboard({
                             }}
                             className="px-3 py-2 rounded-xl bg-purple-50 text-purple-700 text-[10px] font-bold uppercase tracking-wider hover:bg-purple-100 transition-all"
                           >
-                            Ficha Anamnese
+                            Ficha de anamnese
                           </button>
                           <button
                             onClick={(e) => {
@@ -8614,6 +8759,8 @@ export function CoordinatorDashboard({
                 <input type="date" className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.responsavelDataNascimento} onChange={(e) => handlePatientFormChange("responsavelDataNascimento", e.target.value)} />
                 <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="CPF do responsável" value={newPatientForm.responsavelCpf} onChange={(e) => handlePatientFormChange("responsavelCpf", e.target.value)} />
                 <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Telefone do responsável" value={newPatientForm.responsavelTelefone} onChange={(e) => handlePatientFormChange("responsavelTelefone", e.target.value)} />
+                <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="E-mail do responsável" value={newPatientForm.responsavelEmail} onChange={(e) => handlePatientFormChange("responsavelEmail", e.target.value)} />
+                <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Relação com o paciente" value={newPatientForm.responsavelRelacao} onChange={(e) => handlePatientFormChange("responsavelRelacao", e.target.value)} />
               </div>
             )}
 
