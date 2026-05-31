@@ -1,6 +1,6 @@
 ﻿import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle, Settings, User, MapPin, Bell, CalendarDays, Clock, Ban, FileSignature, FileText } from 'lucide-react';
+import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, ChevronLeft, ChevronRight, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle, Settings, User, MapPin, Bell, CalendarDays, Clock, Ban, FileSignature, FileText } from 'lucide-react';
 import { EvolutionBarChart } from './Charts';
 import { CumulativeGrowthChart } from './CumulativeGrowthChart';
 import { LogoVerto, SuccessOverlay, BigEnergySlider, ENERGY_TAGS } from './Common';
@@ -69,6 +69,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [notificationSubscriptionReady, setNotificationSubscriptionReady] = useState(false);
   const [portalAppointments, setPortalAppointments] = useState<any[]>([]);
   const [portalAppointmentsLoaded, setPortalAppointmentsLoaded] = useState(false);
+  const [portalAppointmentsRangeKey, setPortalAppointmentsRangeKey] = useState('');
+  const [portalCalendarMonth, setPortalCalendarMonth] = useState(() => new Date());
   const [portalAppointmentsState, setPortalAppointmentsState] = useState({ loading: false, error: '', message: '' });
   const [selectedPortalAppointment, setSelectedPortalAppointment] = useState<any | null>(null);
   const [portalAppointmentDetail, setPortalAppointmentDetail] = useState<any | null>(null);
@@ -122,6 +124,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     user?.anamnesis_reviewed_at ||
     /ANAMNESIS|ANAMNESE|PENDING_ANAMNESIS/.test(portalAnamnesisStatusHint)
   );
+  const hasPendingPortalAnamnesisHint = Boolean(
+    hasPortalAnamnesisHint &&
+    !user?.anamnesisSubmittedAt &&
+    !user?.anamnesis_submitted_at &&
+    !user?.anamnesisReviewedAt &&
+    !user?.anamnesis_reviewed_at &&
+    !/SUBMITTED|REVIEWED|READY_FOR_CARE/.test(portalAnamnesisStatusHint)
+  );
   const hasPortalAnamnesis =
     Boolean(portalAnamnesis?.available && (portalAnamnesis?.request?.id || portalAnamnesis?.response?.id));
   const shouldOfferPortalAnamnesis =
@@ -141,6 +151,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         : portalAnamnesisResponseStatus === 'DRAFT' || portalAnamnesisRequestStatus === 'IN_PROGRESS'
           ? 'Em preenchimento'
           : 'Enviada';
+  const portalAnamnesisNeedsAction = Boolean(
+    hasPortalAnamnesis &&
+    !portalAnamnesisLocked &&
+    (
+      ['SENT', 'IN_PROGRESS'].includes(portalAnamnesisRequestStatus) ||
+      portalAnamnesisResponseStatus === 'DRAFT' ||
+      !portalAnamnesisResponseStatus
+    )
+  );
 
   useEffect(() => {
     const persisted = readPersistedChartFilters();
@@ -286,6 +305,29 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     });
   };
 
+  const getPortalDefaultAppointmentsRange = () => {
+    const now = new Date();
+    return {
+      from: new Date(now.getTime() - 7 * 86400000).toISOString(),
+      to: new Date(now.getTime() + 90 * 86400000).toISOString(),
+      limit: 60
+    };
+  };
+
+  const getPortalCalendarMonthRange = (value: Date) => {
+    const base = value instanceof Date && !Number.isNaN(value.getTime()) ? value : new Date();
+    const from = new Date(base.getFullYear(), base.getMonth(), 1, 0, 0, 0, 0);
+    const to = new Date(base.getFullYear(), base.getMonth() + 1, 0, 23, 59, 59, 999);
+    return {
+      from: from.toISOString(),
+      to: to.toISOString(),
+      limit: 80
+    };
+  };
+
+  const getPortalAppointmentsRangeKey = (range: { from: string; to: string; limit?: number }) =>
+    `${range.from}|${range.to}|${range.limit || ''}`;
+
   const getPortalStatusLabel = (status: any) => {
     const normalized = String(status || '').toUpperCase();
     if (normalized.includes('CONFIRM')) return 'Confirmada';
@@ -335,34 +377,39 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return parts.join(' ');
   };
 
-  const loadPortalAppointments = async () => {
+  const loadPortalAppointments = async (range = getPortalDefaultAppointmentsRange()) => {
+    const rangeKey = getPortalAppointmentsRangeKey(range);
     setPortalAppointmentsState((prev) => ({ ...prev, loading: true, error: '' }));
-    const now = new Date();
-    const from = new Date(now.getTime() - 7 * 86400000).toISOString();
-    const to = new Date(now.getTime() + 90 * 86400000).toISOString();
-    const result = await dataService.getPortalAppointments({ from, to, limit: 30 });
+    const result = await dataService.getPortalAppointments({ from: range.from, to: range.to, limit: range.limit });
     if (result?.success) {
       setPortalAppointments(Array.isArray(result.data) ? result.data : []);
       setPortalAppointmentsLoaded(true);
+      setPortalAppointmentsRangeKey(rangeKey);
       setPortalAppointmentsState({ loading: false, error: '', message: '' });
       return;
     }
     setPortalAppointmentsLoaded(true);
+    setPortalAppointmentsRangeKey(rangeKey);
     setPortalAppointmentsState({ loading: false, error: result?.error || 'Não foi possível carregar suas consultas agora.', message: '' });
   };
 
   useEffect(() => {
     setPortalAppointments([]);
     setPortalAppointmentsLoaded(false);
+    setPortalAppointmentsRangeKey('');
     setPortalAppointmentsState({ loading: false, error: '', message: '' });
   }, [user?.id, user?.email]);
 
   useEffect(() => {
     if (!['appointments', 'reports'].includes(portalSection)) return;
-    if (portalAppointmentsLoaded || portalAppointmentsState.loading) return;
-    void loadPortalAppointments();
+    const range = portalSection === 'appointments'
+      ? getPortalCalendarMonthRange(portalCalendarMonth)
+      : getPortalDefaultAppointmentsRange();
+    const rangeKey = getPortalAppointmentsRangeKey(range);
+    if ((portalAppointmentsLoaded && portalAppointmentsRangeKey === rangeKey) || portalAppointmentsState.loading) return;
+    void loadPortalAppointments(range);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [portalSection, portalAppointmentsLoaded, portalAppointmentsState.loading, user?.id, user?.email]);
+  }, [portalSection, portalCalendarMonth, portalAppointmentsLoaded, portalAppointmentsRangeKey, portalAppointmentsState.loading, user?.id, user?.email]);
 
   const loadPortalAnamnesis = async () => {
     if (!portalPatientId) return;
@@ -399,10 +446,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   useEffect(() => {
     if (!portalPatientId || portalAnamnesisChecked || portalAnamnesisState.loading) return;
-    if (portalSection !== 'anamnesis' && !isMenuOpen) return;
+    const shouldLoadHomeNotice = portalSection === 'home' && hasPendingPortalAnamnesisHint;
+    if (portalSection !== 'anamnesis' && !isMenuOpen && !shouldLoadHomeNotice) return;
     void loadPortalAnamnesis();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [portalSection, isMenuOpen, portalPatientId, portalAnamnesisChecked, portalAnamnesisState.loading]);
+  }, [portalSection, isMenuOpen, portalPatientId, portalAnamnesisChecked, portalAnamnesisState.loading, hasPendingPortalAnamnesisHint]);
 
   const openPortalAppointmentDetail = async (appointment: any) => {
     setSelectedPortalAppointment(appointment);
@@ -1732,29 +1780,38 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     </div>
   );
 
-  const nextPortalAppointment = portalAppointments.find((appointment: any) => {
-    const when = new Date(appointment?.scheduledAt || appointment?.scheduled_at || '');
-    return !Number.isNaN(when.getTime()) && when.getTime() >= Date.now();
-  }) || portalAppointments[0] || null;
+  const portalAnamnesisTopNotice = (portalAnamnesisNeedsAction || (!portalAnamnesisChecked && hasPendingPortalAnamnesisHint)) ? (
+    <button
+      type="button"
+      onClick={() => setPortalSection('anamnesis')}
+      className="mb-4 flex w-full items-center justify-between gap-3 rounded-[24px] border border-amber-200 bg-amber-50 px-4 py-3 text-left shadow-sm transition hover:bg-amber-100"
+    >
+      <span className="min-w-0">
+        <span className="block text-[10px] font-black uppercase tracking-[0.2em] text-amber-600">Ficha de anamnese</span>
+        <span className="mt-1 block text-sm font-black text-slate-900">
+          {portalAnamnesisState.loading || (!portalAnamnesisChecked && hasPendingPortalAnamnesisHint)
+            ? 'Carregando ficha solicitada...'
+            : 'Preencha a ficha solicitada pela clínica'}
+        </span>
+      </span>
+      <span className="shrink-0 rounded-2xl bg-white px-3 py-2 text-xs font-black text-amber-700">
+        Preencher
+      </span>
+    </button>
+  ) : null;
+
   const portalHomeSummary = (
-    <div className="mb-6 grid gap-3 sm:grid-cols-3">
-      <button type="button" onClick={() => setPortalSection('appointments')} className="rounded-[24px] border border-purple-100 bg-white p-4 text-left shadow-sm transition hover:bg-purple-50">
-        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">{isKidsProfile ? 'Calendário' : 'Próxima consulta'}</p>
-        <p className="mt-2 text-sm font-black text-slate-900">{nextPortalAppointment ? formatPortalDateTime(nextPortalAppointment.scheduledAt) : 'Abrir agenda'}</p>
-      </button>
-      {hasPortalAnamnesis && (
-        <button type="button" onClick={() => setPortalSection('anamnesis')} className="rounded-[24px] border border-amber-100 bg-white p-4 text-left shadow-sm transition hover:bg-amber-50">
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-600">Anamnese</p>
-          <p className="mt-2 text-sm font-black text-slate-900">{portalAnamnesisStatusLabel}</p>
-        </button>
-      )}
+    <React.Fragment>
+      {portalAnamnesisTopNotice}
       {!isKidsProfile && (
-        <button type="button" onClick={() => setPortalSection('tasks')} className="rounded-[24px] border border-emerald-100 bg-white p-4 text-left shadow-sm transition hover:bg-emerald-50">
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-600">Tarefas</p>
-          <p className="mt-2 text-sm font-black text-slate-900">{visiblePatientTasks?.length || 0} pendente(s)</p>
-        </button>
+        <div className="mb-6 grid gap-3 sm:grid-cols-2">
+          <button type="button" onClick={() => setPortalSection('tasks')} className="rounded-[24px] border border-emerald-100 bg-white p-4 text-left shadow-sm transition hover:bg-emerald-50">
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-600">Tarefas</p>
+            <p className="mt-2 text-sm font-black text-slate-900">{visiblePatientTasks?.length || 0} pendente(s)</p>
+          </button>
+        </div>
       )}
-    </div>
+    </React.Fragment>
   );
 
   const renderPortalAnamnesisField = (question: any) => {
@@ -2003,6 +2060,62 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     </div>
   );
 
+  const portalCalendarMonthLabel = portalCalendarMonth.toLocaleDateString('pt-BR', {
+    month: 'long',
+    year: 'numeric'
+  });
+  const portalCalendarWeekdays = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+  const getPortalAppointmentDateKey = (appointment: any) =>
+    toLocalDateKey(appointment?.scheduledAt || appointment?.scheduled_at || appointment?.date);
+  const portalMonthAppointments = useMemo(() => {
+    const monthPrefix = `${portalCalendarMonth.getFullYear()}-${String(portalCalendarMonth.getMonth() + 1).padStart(2, '0')}`;
+    return portalAppointments
+      .filter((appointment: any) => getPortalAppointmentDateKey(appointment).startsWith(monthPrefix))
+      .sort((a: any, b: any) => new Date(a?.scheduledAt || a?.scheduled_at || 0).getTime() - new Date(b?.scheduledAt || b?.scheduled_at || 0).getTime());
+  }, [portalAppointments, portalCalendarMonth]);
+  const portalCalendarCells = useMemo(() => {
+    const year = portalCalendarMonth.getFullYear();
+    const month = portalCalendarMonth.getMonth();
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const cells = Array.from({ length: firstDay }, () => ({ day: null as number | null, dateKey: '', appointments: [] as any[] }));
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      const dateKey = toLocalDateKey(new Date(year, month, day));
+      cells.push({
+        day,
+        dateKey,
+        appointments: portalMonthAppointments.filter((appointment: any) => getPortalAppointmentDateKey(appointment) === dateKey)
+      });
+    }
+    return cells;
+  }, [portalCalendarMonth, portalMonthAppointments]);
+  const changePortalCalendarMonth = (direction: -1 | 1) => {
+    setPortalCalendarMonth((previous) => {
+      const next = new Date(previous);
+      next.setMonth(next.getMonth() + direction);
+      return next;
+    });
+  };
+  const getPortalStatusPillClass = (status: any) => {
+    const normalized = String(status || '').toUpperCase();
+    if (normalized.includes('CONFIRM')) return 'bg-emerald-50 text-emerald-700';
+    if (normalized.includes('CANCEL')) return 'bg-rose-50 text-rose-700';
+    if (normalized.includes('RESCHEDULE')) return 'bg-amber-50 text-amber-700';
+    if (normalized.includes('COMPLET') || normalized.includes('REALIZ')) return 'bg-blue-50 text-blue-700';
+    if (normalized.includes('PEND')) return 'bg-slate-100 text-slate-600';
+    return 'bg-purple-50 text-[#7a32fc]';
+  };
+  const getPortalStatusShortLabel = (status: any) => {
+    const label = getPortalStatusLabel(status);
+    const normalized = String(status || '').toUpperCase();
+    if (normalized.includes('CONFIRM')) return 'Conf.';
+    if (normalized.includes('RESCHEDULE')) return 'Remarc.';
+    if (normalized.includes('CANCEL')) return 'Cancel.';
+    if (normalized.includes('COMPLET') || normalized.includes('REALIZ')) return 'Realiz.';
+    if (normalized.includes('PEND')) return 'Pend.';
+    return label.slice(0, 7);
+  };
+
   const activePortalAppointment = portalAppointmentDetail?.appointment || selectedPortalAppointment;
   const activePortalStatus = String(activePortalAppointment?.status || '').toUpperCase();
   const portalActionBlocked = activePortalStatus.includes('CANCEL') || activePortalStatus.includes('COMPLET') || activePortalStatus.includes('NO_SHOW');
@@ -2011,10 +2124,22 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Calendário</p>
-          <h2 className="text-lg font-black text-slate-900">Consultas e status</h2>
+          <h2 className="text-lg font-black text-slate-900">Agenda mensal da clínica</h2>
         </div>
-        <button type="button" onClick={() => void loadPortalAppointments()} className="rounded-2xl border border-purple-100 px-3 py-2 text-xs font-bold text-[#7a32fc]">
+        <button type="button" onClick={() => void loadPortalAppointments(getPortalCalendarMonthRange(portalCalendarMonth))} className="rounded-2xl border border-purple-100 px-3 py-2 text-xs font-bold text-[#7a32fc]">
           Atualizar
+        </button>
+      </div>
+      <div className="mb-4 flex items-center justify-between gap-3 rounded-3xl border border-slate-100 bg-slate-50/70 px-3 py-2">
+        <button type="button" onClick={() => changePortalCalendarMonth(-1)} className="rounded-2xl bg-white p-2 text-slate-500 shadow-sm" aria-label="Mês anterior">
+          <ChevronLeft size={18} />
+        </button>
+        <div className="text-center">
+          <p className="text-sm font-black capitalize text-slate-900">{portalCalendarMonthLabel}</p>
+          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Próximos agendamentos do paciente</p>
+        </div>
+        <button type="button" onClick={() => changePortalCalendarMonth(1)} className="rounded-2xl bg-white p-2 text-slate-500 shadow-sm" aria-label="Próximo mês">
+          <ChevronRight size={18} />
         </button>
       </div>
       {portalAppointmentsState.error && (
@@ -2031,34 +2156,82 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         <div className="rounded-2xl bg-purple-50 px-4 py-3 text-sm font-semibold text-purple-700">Carregando consultas...</div>
       ) : portalAppointments.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-5 text-center text-sm font-semibold text-purple-700">
-          Nenhuma consulta encontrada no período.
+          Nenhuma consulta encontrada neste mês.
         </div>
       ) : (
-        <div className="space-y-2">
-          {portalAppointments.slice(0, 30).map((appointment) => (
-            <button
-              type="button"
-              key={appointment.id}
-              onClick={() => void openPortalAppointmentDetail(appointment)}
-              className="flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50/70 px-3 py-3 text-left transition hover:border-purple-100 hover:bg-purple-50"
-            >
-              <div className="min-w-0">
-                <p className="flex items-center gap-2 text-sm font-black text-slate-900">
-                  <CalendarDays size={15} className="text-[#7a32fc]" />
-                  {formatPortalDateTime(appointment.scheduledAt)}
-                </p>
-                <p className="mt-1 text-xs font-semibold text-slate-500">
-                  {appointment.serviceType || 'Consulta'} · {appointment.professionalName || 'Equipe'}
-                </p>
-                <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                  {appointment.locationLabel || appointment.roomName || 'Local informado pela clínica'}
-                </p>
+        <div className="space-y-4">
+          <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-black uppercase tracking-wider text-slate-400">
+            {portalCalendarWeekdays.map((day) => <div key={day}>{day}</div>)}
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {portalCalendarCells.map((cell, index) => (
+              <div
+                key={cell.dateKey || `empty-${index}`}
+                className={`min-h-[82px] rounded-2xl border p-1.5 text-left ${cell.day ? 'border-slate-100 bg-slate-50/70' : 'border-transparent bg-transparent'}`}
+              >
+                {cell.day ? (
+                  <React.Fragment>
+                    <p className={`mb-1 text-xs font-black ${cell.dateKey === toLocalDateKey(new Date()) ? 'text-[#7a32fc]' : 'text-slate-500'}`}>{cell.day}</p>
+                    <div className="space-y-1">
+                      {cell.appointments.slice(0, 2).map((appointment: any) => (
+                        <button
+                          type="button"
+                          key={appointment.id}
+                          onClick={() => void openPortalAppointmentDetail(appointment)}
+                          className="block w-full rounded-xl bg-white px-1.5 py-1 text-left shadow-sm transition hover:bg-purple-50"
+                        >
+                          <span className="block truncate text-[10px] font-black text-slate-800">{formatPortalTime(appointment.scheduledAt)}</span>
+                          <span className={`mt-0.5 block max-w-full truncate rounded-full px-1.5 py-0.5 text-[8px] font-black uppercase ${getPortalStatusPillClass(appointment.status)}`}>
+                            {getPortalStatusShortLabel(appointment.status)}
+                          </span>
+                        </button>
+                      ))}
+                      {cell.appointments.length > 2 && (
+                        <span className="block rounded-xl bg-white px-1.5 py-1 text-[9px] font-black text-slate-500">
+                          +{cell.appointments.length - 2}
+                        </span>
+                      )}
+                    </div>
+                  </React.Fragment>
+                ) : null}
               </div>
-              <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600">
-                {getPortalStatusLabel(appointment.status)}
-              </span>
-            </button>
-          ))}
+            ))}
+          </div>
+          <div>
+            <p className="mb-2 text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Consultas do mês</p>
+            {portalMonthAppointments.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-5 text-center text-sm font-semibold text-purple-700">
+                Nenhum agendamento visível neste mês.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {portalMonthAppointments.slice(0, 30).map((appointment) => (
+                  <button
+                    type="button"
+                    key={appointment.id}
+                    onClick={() => void openPortalAppointmentDetail(appointment)}
+                    className="flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50/70 px-3 py-3 text-left transition hover:border-purple-100 hover:bg-purple-50"
+                  >
+                    <div className="min-w-0">
+                      <p className="flex items-center gap-2 text-sm font-black text-slate-900">
+                        <CalendarDays size={15} className="text-[#7a32fc]" />
+                        {formatPortalDateTime(appointment.scheduledAt)}
+                      </p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">
+                        {appointment.serviceType || 'Consulta'} · {appointment.professionalName || 'Equipe'}
+                      </p>
+                      <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        {appointment.locationLabel || appointment.roomName || 'Local informado pela clínica'}
+                      </p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold ${getPortalStatusPillClass(appointment.status)}`}>
+                      {getPortalStatusLabel(appointment.status)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

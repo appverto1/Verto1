@@ -18,6 +18,14 @@ function serverSlice(marker: string, chars = 2600) {
   return serverCode.slice(start, start + chars);
 }
 
+function between(source: string, startMarker: string, endMarker: string) {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
+  assert.ok(start >= 0, `${startMarker} nao encontrado.`);
+  assert.ok(end > start, `${endMarker} nao encontrado depois de ${startMarker}.`);
+  return source.slice(start, end);
+}
+
 test('scripts especificos do portal do paciente existem', () => {
   assert.match(packageJson, /"test:patient-portal": "tsx tests\/patientPortal\.test\.ts"/);
   assert.match(packageJson, /"test:patient-dashboard": "tsx tests\/patientDashboard\.test\.ts"/);
@@ -48,6 +56,16 @@ test('cada item novo abre painel proprio e Inicio preserva a home', () => {
   assert.match(patientDashboardCode, /portalSection === 'reports' && portalReportPanel/);
 });
 
+test('home mostra aviso de anamnese apenas enquanto ficha esta pendente e nao mostra card de calendario', () => {
+  const homeSummary = between(patientDashboardCode, 'const portalAnamnesisTopNotice =', 'const renderPortalAnamnesisField');
+  assert.match(homeSummary, /portalAnamnesisNeedsAction/);
+  assert.match(homeSummary, /hasPendingPortalAnamnesisHint/);
+  assert.match(homeSummary, /setPortalSection\('anamnesis'\)/);
+  assert.match(homeSummary, /Preencher/);
+  assert.doesNotMatch(homeSummary, /setPortalSection\('appointments'\)/);
+  assert.doesNotMatch(homeSummary, /Pr.xima consulta|Abrir agenda/);
+});
+
 test('anotacoes e documentos sao filtrados para familia sem expor conteudo interno', () => {
   assert.match(patientDashboardCode, /const isPortalSharedNote = \(note: any\) =>/);
   assert.match(patientDashboardCode, /hasPortalPrivateFlag\(note\)/);
@@ -63,7 +81,11 @@ test('anotacoes e documentos sao filtrados para familia sem expor conteudo inter
 test('calendario e relatorio carregam sob demanda e nao na home Kids', () => {
   assert.match(patientDashboardCode, /\['appointments', 'reports'\]\.includes\(portalSection\)/);
   assert.match(patientDashboardCode, /portalAppointmentsLoaded/);
-  assert.match(patientDashboardCode, /void loadPortalAppointments\(\);/);
+  assert.match(patientDashboardCode, /getPortalCalendarMonthRange\(portalCalendarMonth\)/);
+  assert.match(patientDashboardCode, /portalAppointmentsRangeKey/);
+  assert.match(patientDashboardCode, /portalCalendarCells/);
+  assert.match(patientDashboardCode, /Agenda mensal da cl.nica/);
+  assert.match(patientDashboardCode, /Pr.ximos agendamentos do paciente/);
   assert.match(patientDashboardCode, /portalReportPanel/);
   assert.match(patientDashboardCode, /actualDurationMinutes/);
   assert.match(patientDashboardCode, /formatPortalDuration/);

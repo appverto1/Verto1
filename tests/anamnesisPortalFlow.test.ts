@@ -179,6 +179,19 @@ test('ficha enviada ao paciente leva cadastro preenchido e familia submete cadas
   assert.match(routeSlice("app.post('/api/portal/patients/:patientId/anamnesis/submit'", 3600), /mergeAnamnesisAnswersWithRegistrationPrefill\(patient, req\.body\?\.answers \|\| \{\}\)/);
 });
 
+test('novo envio de anamnese abre um ciclo novo para familia preencher como primeira vez', () => {
+  const sendRoute = routeSlice("app.post('/api/patients/:patientId/anamnesis/send'", 5200);
+  assert.match(sendRoute, /statuses: \['SENT', 'IN_PROGRESS'\]/);
+  assert.doesNotMatch(sendRoute, /statuses: \['SENT', 'IN_PROGRESS', 'SUBMITTED'\]/);
+  assert.match(serverCode, /fetchLatestPatientAnamnesisResponseWithSchemaFallback\(patientId: string, clinicId: string, requestId\?: string \| null\)/);
+  assert.match(serverCode, /query = query\.eq\('request_id', safeRequestId\)/);
+  assert.match(serverCode, /let responseResult = await fetchLatestPatientAnamnesisResponseWithSchemaFallback\(\s*patientId,\s*clinicId,\s*isUuid\(requestId\) \? requestId : null\s*\)/);
+  assert.match(serverCode, /\['SUBMITTED', 'REVIEWED'\]\.includes\(requestStatus\)/);
+  assert.match(patientDashboardCode, /hasPendingPortalAnamnesisHint/);
+  assert.match(patientDashboardCode, /portalAnamnesisNeedsAction/);
+  assert.match(patientDashboardCode, /portalAnamnesisTopNotice/);
+});
+
 test('profissional visualiza ficha submetida e pode salvar em Arquivos antes ou depois da revisao', () => {
   assert.match(patientDetailCode, /hasSubmittedAnamnesisFlow/);
   assert.match(patientDetailCode, /buildSubmittedAnamnesisDocumentData/);

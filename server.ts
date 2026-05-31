@@ -6223,19 +6223,24 @@ async function fetchPatientAnamnesisRequestWithSchemaFallback(params: {
   return { data: null, error: lastError || new Error('Falha ao consultar solicitação de anamnese.') };
 }
 
-async function fetchLatestPatientAnamnesisResponseWithSchemaFallback(patientId: string, clinicId: string) {
+async function fetchLatestPatientAnamnesisResponseWithSchemaFallback(patientId: string, clinicId: string, requestId?: string | null) {
   let columns = [...PATIENT_ANAMNESIS_RESPONSE_SELECT_COLUMNS];
   let lastError: any = null;
+  const safeRequestId = sanitizeString(requestId, 120);
 
   while (columns.length > 0) {
-    const { data, error } = await supabase
+    let query = supabase
       .from('patient_anamnesis_responses')
       .select(columns.join(', '))
       .eq('organization_id', clinicId)
       .eq('patient_id', patientId)
       .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+    if (isUuid(safeRequestId)) {
+      query = query.eq('request_id', safeRequestId);
+    }
+
+    const { data, error } = await query.maybeSingle();
     if (!error) return { data: data || null, error: null };
     if (isMissingRelationError(error)) return { data: null, error };
 
@@ -6358,12 +6363,19 @@ async function fetchPatientAnamnesisFlow(patientId: string, clinicId: string) {
   const patient = await fetchPatientForAnamnesis(patientId, clinicId);
   if (!patient?.id) return { patient: null, request: null, response: null, template: getDefaultAnamnesisTemplate() };
 
-  const [requestResult, responseResult] = await Promise.all([
-    fetchPatientAnamnesisRequestWithSchemaFallback({ patientId, clinicId }),
-    fetchLatestPatientAnamnesisResponseWithSchemaFallback(patientId, clinicId),
-  ]);
+  const requestResult = await fetchPatientAnamnesisRequestWithSchemaFallback({ patientId, clinicId });
 
   if (requestResult.error && !isMissingRelationError(requestResult.error)) throw requestResult.error;
+  const requestId = sanitizeString(requestResult.data?.id, 120);
+  let responseResult = await fetchLatestPatientAnamnesisResponseWithSchemaFallback(
+    patientId,
+    clinicId,
+    isUuid(requestId) ? requestId : null
+  );
+  const requestStatus = sanitizeString(requestResult.data?.status, 60).toUpperCase();
+  if (!responseResult.data?.id && ['SUBMITTED', 'REVIEWED'].includes(requestStatus)) {
+    responseResult = await fetchLatestPatientAnamnesisResponseWithSchemaFallback(patientId, clinicId);
+  }
   if (responseResult.error && !isMissingRelationError(responseResult.error)) throw responseResult.error;
   const template = await fetchAnamnesisTemplateForPatient(
     patient,
@@ -12498,7 +12510,7 @@ async function startServer() {
       const existing = await fetchPatientAnamnesisRequestWithSchemaFallback({
         patientId,
         clinicId,
-        statuses: ['SENT', 'IN_PROGRESS', 'SUBMITTED']
+        statuses: ['SENT', 'IN_PROGRESS']
       });
       if (existing.error && !isMissingRelationError(existing.error)) throw existing.error;
 

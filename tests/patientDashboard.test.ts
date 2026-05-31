@@ -47,7 +47,9 @@ test('menu Kids usa hamburger sem remover atalhos clinicos da home', () => {
   assert.match(patientDashboardCode, /portalMenuItems\.map\(\(item\) =>/);
   assert.match(patientDashboardCode, /onClick=\{\(\) => \{ setPortalSection\(item\.id\); setIsMenuOpen\(false\); \}\}/);
   assert.match(patientDashboardCode, /\.\.\.\(!isKidsProfile \? \[\{ id: 'tasks', label: 'Tarefas'/);
-  assert.match(patientDashboardCode, /{!isKidsProfile && \(\s*<button type="button" onClick=\{\(\) => setPortalSection\('tasks'\)\}/);
+  assert.match(patientDashboardCode, /{!isKidsProfile && \(\s*<div className="mb-6 grid gap-3 sm:grid-cols-2">[\s\S]*setPortalSection\('tasks'\)/);
+  const homeSummary = between('const portalAnamnesisTopNotice =', 'const renderPortalAnamnesisField');
+  assert.doesNotMatch(homeSummary, /setPortalSection\('appointments'\)|Pr.xima consulta|Abrir agenda/);
 });
 
 test('persistencia visual Kids continua baseada em dados existentes e nao mocks', () => {
