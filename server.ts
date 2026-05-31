@@ -6034,8 +6034,27 @@ const PATIENT_ANAMNESIS_PATIENT_SELECT_COLUMNS = [
   'id',
   'name',
   'email',
+  'cpf',
+  'phone',
   'age',
   'birth_date',
+  'social_name',
+  'gender',
+  'insurance_type',
+  'insurance_name',
+  'insurance_card_number',
+  'patient_group',
+  'lead_source',
+  'notes',
+  'rg',
+  'cep',
+  'responsible_name',
+  'responsible_birth_date',
+  'responsible_cpf',
+  'responsible_phone',
+  'responsible_email',
+  'responsible_relationship',
+  'metadata',
   'clinic_id',
   'therapist_id',
   'responsible_user_id',
@@ -6076,6 +6095,90 @@ async function fetchPatientForAnamnesis(patientId: string, clinicId?: string | n
     throw error;
   }
   return null;
+}
+
+function buildPatientRegistrationAnamnesisPrefill(patient: any) {
+  const metadata = patient?.metadata && typeof patient.metadata === 'object' ? patient.metadata : {};
+  const address = metadata?.address && typeof metadata.address === 'object' ? metadata.address : {};
+  const patientProfileType = resolvePatientAnamnesisProfile(patient);
+  const dateOnly = (value: any) => sanitizeIsoDateOnly(value) || sanitizeString(value, 40) || undefined;
+  const firstText = (...values: any[]) => {
+    for (const value of values) {
+      const text = sanitizeString(value, 4000);
+      if (text) return text;
+    }
+    return undefined;
+  };
+  const optionText = (value: any) => {
+    const raw = firstText(value);
+    if (!raw) return undefined;
+    const normalized = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    if (normalized === 'particular') return 'Particular';
+    if (normalized === 'convenio' || normalized === 'convênio') return 'Convenio';
+    return raw;
+  };
+  const birthDate = dateOnly(patient?.birth_date || patient?.dataNascimento || patient?.birthDate);
+  const age =
+    asSafeNumber(patient?.age, 0, 130) ??
+    (() => {
+      const months = calculateAgeMonthsFromDateOnly(birthDate);
+      return typeof months === 'number' ? Math.floor(months / 12) : undefined;
+    })();
+  const logradouro = firstText(patient?.logradouro, address?.logradouro, address?.street);
+  const numero = firstText(patient?.numero, address?.numero, address?.number);
+  const bairro = firstText(patient?.bairro, address?.bairro, address?.neighborhood);
+  const cidade = firstText(patient?.cidade, address?.cidade, address?.city);
+  const endereco = [logradouro, numero, bairro, cidade].filter(Boolean).join(', ');
+  const menorDeIdade =
+    typeof metadata?.isMinor === 'boolean'
+      ? metadata.isMinor
+      : typeof metadata?.menorDeIdade === 'boolean'
+        ? metadata.menorDeIdade
+        : typeof age === 'number' && age < 18
+          ? true
+          : undefined;
+
+  return cleanObject({
+    nome: firstText(patient?.name),
+    nomeSocial: firstText(patient?.social_name, patient?.socialName),
+    telefone: firstText(patient?.phone),
+    email: firstText(patient?.email),
+    cpf: firstText(patient?.cpf),
+    dataNascimento: birthDate,
+    idade: typeof age === 'number' ? age : undefined,
+    genero: optionText(patient?.gender),
+    convenioTipo: optionText(patient?.insurance_type) || 'Particular',
+    convenioNome: firstText(patient?.insurance_name),
+    convenioCarteirinha: firstText(patient?.insurance_card_number),
+    grupo: optionText(patient?.patient_group),
+    comoConheceu: optionText(patient?.lead_source),
+    rg: firstText(patient?.rg),
+    cep: firstText(patient?.cep, address?.cep, address?.zip),
+    logradouro,
+    numero,
+    complemento: firstText(patient?.complemento, address?.complemento, address?.complement),
+    bairro,
+    cidade,
+    endereco: endereco || undefined,
+    outrasInformacoes: firstText(patient?.notes, metadata?.registrationNotes),
+    menorDeIdade,
+    responsavelNome: firstText(patient?.responsible_name),
+    responsavelDataNascimento: dateOnly(patient?.responsible_birth_date),
+    responsavelCpf: firstText(patient?.responsible_cpf),
+    responsavelTelefone: firstText(patient?.responsible_phone),
+    responsavelEmail: firstText(patient?.responsible_email),
+    responsavelRelacao: firstText(patient?.responsible_relationship, metadata?.responsibleRelationship),
+    formType: patientProfileType === 'child' ? 'child' : 'adult',
+    patientProfileType
+  });
+}
+
+function mergeAnamnesisAnswersWithRegistrationPrefill(patient: any, answers: any) {
+  const safeAnswers = answers && typeof answers === 'object' && !Array.isArray(answers) ? answers : {};
+  return {
+    ...buildPatientRegistrationAnamnesisPrefill(patient),
+    ...safeAnswers
+  };
 }
 
 async function fetchPatientAnamnesisRequestWithSchemaFallback(params: {
@@ -6267,12 +6370,17 @@ async function fetchPatientAnamnesisFlow(patientId: string, clinicId: string) {
     clinicId,
     sanitizeString(requestResult.data?.template_id || responseResult.data?.template_id, 120)
   );
+  const prefillAnswers = buildPatientRegistrationAnamnesisPrefill(patient);
 
   return {
     patient,
     request: requestResult.error ? null : requestResult.data || null,
     response: responseResult.error ? null : responseResult.data || null,
-    template
+    template,
+    prefillAnswers,
+    prefilledKeys: Object.entries(prefillAnswers)
+      .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+      .map(([key]) => key)
   };
 }
 
@@ -12503,6 +12611,8 @@ async function startServer() {
           },
           request: flow.request,
           response: flow.response,
+          prefillAnswers: flow.prefillAnswers || {},
+          prefilledKeys: flow.prefilledKeys || [],
           template: buildPublicAnamnesisTemplate(flow.template),
           profileType: resolvePatientAnamnesisProfile(flow.patient)
         }
@@ -12525,6 +12635,8 @@ async function startServer() {
         ? await fetchPatientAnamnesisRequestWithSchemaFallback({ patientId, clinicId, requestId })
         : { data: null, error: null };
       if (requestCheck.error && !isMissingRelationError(requestCheck.error)) throw requestCheck.error;
+      const patient = await fetchPatientForAnamnesis(patientId, clinicId);
+      if (!patient?.id) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
       const response = await upsertAnamnesisResponse({
         patientId,
         clinicId,
@@ -12532,7 +12644,7 @@ async function startServer() {
         templateId: req.body?.templateId || req.body?.template_id || requestCheck.data?.template_id || null,
         respondentUserId: sanitizeString(req.session.user?.id, 120),
         respondentRole: 'professional',
-        answers: req.body?.answers || req.body?.anamnesisData || {},
+        answers: mergeAnamnesisAnswersWithRegistrationPrefill(patient, req.body?.answers || req.body?.anamnesisData || {}),
         status: 'DRAFT'
       });
       if (isUuid(requestId)) {
@@ -12562,6 +12674,8 @@ async function startServer() {
         ? await fetchPatientAnamnesisRequestWithSchemaFallback({ patientId, clinicId, requestId })
         : { data: null, error: null };
       if (requestCheck.error && !isMissingRelationError(requestCheck.error)) throw requestCheck.error;
+      const patient = await fetchPatientForAnamnesis(patientId, clinicId);
+      if (!patient?.id) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
       const response = await upsertAnamnesisResponse({
         patientId,
         clinicId,
@@ -12569,7 +12683,7 @@ async function startServer() {
         templateId: req.body?.templateId || req.body?.template_id || requestCheck.data?.template_id || null,
         respondentUserId: sanitizeString(req.session.user?.id, 120),
         respondentRole: 'professional',
-        answers: req.body?.answers || req.body?.anamnesisData || {},
+        answers: mergeAnamnesisAnswersWithRegistrationPrefill(patient, req.body?.answers || req.body?.anamnesisData || {}),
         status: 'SUBMITTED'
       });
       const nowIso = new Date().toISOString();
@@ -12704,6 +12818,8 @@ async function startServer() {
           available: true,
           request: flow.request,
           response: flow.response,
+          prefillAnswers: flow.prefillAnswers || {},
+          prefilledKeys: flow.prefilledKeys || [],
           template: buildPublicAnamnesisTemplate(flow.template),
           profileType: resolvePatientAnamnesisProfile(patient)
         }
@@ -12741,7 +12857,7 @@ async function startServer() {
         templateId: requestCheck.data?.template_id || null,
         respondentUserId: sanitizeString(req.session.user?.id, 120),
         respondentRole: 'family',
-        answers: req.body?.answers || {},
+        answers: mergeAnamnesisAnswersWithRegistrationPrefill(patient, req.body?.answers || {}),
         status: 'DRAFT'
       });
       const nowIso = new Date().toISOString();
@@ -12791,7 +12907,7 @@ async function startServer() {
         templateId: requestCheck.data?.template_id || null,
         respondentUserId: sanitizeString(req.session.user?.id, 120),
         respondentRole: 'family',
-        answers: req.body?.answers || {},
+        answers: mergeAnamnesisAnswersWithRegistrationPrefill(patient, req.body?.answers || {}),
         status: 'SUBMITTED'
       });
       const nowIso = new Date().toISOString();
@@ -15609,7 +15725,10 @@ async function startServer() {
       patientName,
       templateName,
       reviewedAt: reviewedDate,
-      answers: response?.answers || {},
+      answers: {
+        ...(params.flow?.prefillAnswers || {}),
+        ...(response?.answers || {})
+      },
       version
     });
     const contentUrl = `data:text/html;charset=utf-8;base64,${Buffer.from(html, 'utf8').toString('base64')}`;

@@ -143,10 +143,52 @@ test('frontend expõe anamnese apenas como ficha solicitada e organizada em menu
   assert.match(patientDashboardCode, /shouldOfferPortalAnamnesis \? \[\{ id: 'anamnesis'/);
   assert.match(patientDashboardCode, /portalSection === 'appointments' && portalAppointmentsPanel/);
   assert.match(patientDashboardCode, /portalSection === 'anamnesis' && portalAnamnesisPanel/);
+  assert.match(patientDashboardCode, /prefillAnswers/);
+  assert.match(patientDashboardCode, /setPortalAnamnesisDraft\(\{ \.\.\.prefillAnswers, \.\.\.answers \}\)/);
+  assert.match(patientDashboardCode, /isPrefilledByClinic/);
+  assert.match(patientDashboardCode, /Preenchido pela cl.nica/);
   assert.match(patientDashboardCode, /getPortalPatientAnamnesis/);
   assert.match(patientDashboardCode, /savePortalAnamnesisDraft/);
   assert.match(patientDashboardCode, /submitPortalAnamnesis/);
   assert.match(patientDashboardCode, /portalAnamnesisLocked/);
+});
+
+test('ficha enviada ao paciente leva cadastro preenchido e familia submete cadastro junto com respostas clinicas', () => {
+  assert.match(serverCode, /function buildPatientRegistrationAnamnesisPrefill\(patient: any\)/);
+  for (const column of [
+    'social_name',
+    'phone',
+    'cpf',
+    'birth_date',
+    'gender',
+    'insurance_type',
+    'insurance_name',
+    'insurance_card_number',
+    'patient_group',
+    'lead_source',
+    'responsible_name',
+    'responsible_phone',
+    'metadata'
+  ]) {
+    assert.match(serverCode, new RegExp(`'${column}'`));
+  }
+  assert.match(serverCode, /prefillAnswers,\s*prefilledKeys/);
+  assert.match(routeSlice("app.get('/api/portal/patients/:patientId/anamnesis'", 2200), /prefillAnswers: flow\.prefillAnswers \|\| \{\}/);
+  assert.match(routeSlice("app.get('/api/patients/:patientId/anamnesis'", 2200), /prefillAnswers: flow\.prefillAnswers \|\| \{\}/);
+  assert.match(routeSlice("app.patch('/api/portal/patients/:patientId/anamnesis/draft'", 3600), /mergeAnamnesisAnswersWithRegistrationPrefill\(patient, req\.body\?\.answers \|\| \{\}\)/);
+  assert.match(routeSlice("app.post('/api/portal/patients/:patientId/anamnesis/submit'", 3600), /mergeAnamnesisAnswersWithRegistrationPrefill\(patient, req\.body\?\.answers \|\| \{\}\)/);
+});
+
+test('profissional visualiza ficha submetida e pode salvar em Arquivos antes ou depois da revisao', () => {
+  assert.match(patientDetailCode, /hasSubmittedAnamnesisFlow/);
+  assert.match(patientDetailCode, /buildSubmittedAnamnesisDocumentData/);
+  assert.match(patientDetailCode, /openSubmittedAnamnesisForFiles/);
+  assert.match(patientDetailCode, /Ver ficha enviada/);
+  assert.match(patientDetailCode, /setShowAnamnesisFileModal\(true\)/);
+  assert.match(patientDetailCode, /Salvar em Arquivos/);
+  assert.match(patientDetailCode, /savePatientAnamnesisSubmission/);
+  assert.match(serverCode, /persistAnamnesisFinalFileFallback/);
+  assert.match(serverCode, /answers:\s*\{\s*\.\.\.\(params\.flow\?\.prefillAnswers \|\| \{\}\),\s*\.\.\.\(response\?\.answers \|\| \{\}\)/);
 });
 
 test('profissional consegue enviar, acompanhar e revisar ficha sem expor detalhes de infraestrutura', () => {

@@ -341,6 +341,62 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     if (requestStatus === 'SENT' || onboarding === 'ANAMNESIS_SENT') return 'Anamnese enviada';
     return 'Anamnese pendente';
   };
+  const hasSubmittedAnamnesisFlow = ['SUBMITTED', 'REVIEWED'].includes(String(anamnesisFlow?.response?.status || '').toUpperCase());
+
+  const buildQuestionLabelsFromAnamnesisFlow = (flow: any) => {
+    const profileType = flow?.profileType === 'child' ? 'child' : 'adult';
+    const questions = Array.isArray(flow?.template?.profiles?.[profileType]?.questions)
+      ? flow.template.profiles[profileType].questions
+      : [];
+    return Object.fromEntries(
+      questions
+        .map((question: any) => [String(question?.id || '').trim(), String(question?.label || '').trim()])
+        .filter(([id, label]: any[]) => id && label)
+    );
+  };
+
+  const buildSubmittedAnamnesisDocumentData = () => {
+    const responseAnswers =
+      anamnesisFlow?.response?.answers && typeof anamnesisFlow.response.answers === 'object'
+        ? anamnesisFlow.response.answers
+        : {};
+    const prefillAnswers =
+      anamnesisFlow?.prefillAnswers && typeof anamnesisFlow.prefillAnswers === 'object'
+        ? anamnesisFlow.prefillAnswers
+        : {};
+    const questionLabels = {
+      ...buildQuestionLabelsFromAnamnesisFlow(anamnesisFlow),
+      ...(responseAnswers?.questionLabels && typeof responseAnswers.questionLabels === 'object' ? responseAnswers.questionLabels : {})
+    };
+    return {
+      ...prefillAnswers,
+      ...responseAnswers,
+      questionLabels,
+      formType: anamnesisFlow?.profileType === 'child' ? 'child' : 'adult',
+      anamnesisTemplateVersion: Number(anamnesisFlow?.template?.version || responseAnswers?.anamnesisTemplateVersion || 1)
+    };
+  };
+
+  const openSubmittedAnamnesisForFiles = () => {
+    if (!hasSubmittedAnamnesisFlow) return;
+    const submittedData = buildSubmittedAnamnesisDocumentData();
+    const submittedAt = String(
+      anamnesisFlow?.response?.submitted_at ||
+        anamnesisFlow?.response?.submittedAt ||
+        anamnesisFlow?.request?.submitted_at ||
+        new Date().toISOString()
+    );
+    const referenceDate = submittedAt.slice(0, 10);
+    const safePatientName = String(patient?.name || 'Paciente').replace(/\s+/g, '_');
+    const documentHtml = buildAnamnesisDocumentHtml(submittedData, referenceDate);
+    setPendingAnamnesisPayload(documentHtml);
+    setPendingAnamnesisData(submittedData);
+    setAnamnesisFileName(`Ficha_Anamnese_${safePatientName}_${referenceDate}.pdf`);
+    setAnamnesisFileDate(referenceDate);
+    setShowAnamnesisFileModal(true);
+    setShowAnamnesis(false);
+    setIsPreparingAnamnesisSave(false);
+  };
 
   const handleSendAnamnesisRequest = async () => {
     if (!patient?.id || isSendingAnamnesisRequest) return;
@@ -376,7 +432,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         status: 'ACTIVE',
         onboardingStatus: 'READY_FOR_CARE',
         onboarding_status: 'READY_FOR_CARE',
-        anamnesisPending: false
+        anamnesisPending: false,
+        anamnesisData: buildSubmittedAnamnesisDocumentData(),
+        lastAnamnesisAt: new Date().toISOString()
       });
       await loadAnamnesisFlow();
     } catch (error: any) {
@@ -4750,6 +4808,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2 border disabled:opacity-60 ${isPanelDark ? 'bg-slate-800 text-violet-200 border-slate-700 hover:bg-slate-700' : 'bg-white text-[#7a32fc] border-purple-100 hover:bg-purple-50'}`}
               >
                 <Share2 size={16} /> {isSendingAnamnesisRequest ? 'Enviando...' : 'Enviar anamnese'}
+              </button>
+            )}
+            {canOpenAnamnesis && hasSubmittedAnamnesisFlow && (
+              <button
+                onClick={openSubmittedAnamnesisForFiles}
+                className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2 border border-indigo-100 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+              >
+                <Eye size={16} /> Ver ficha enviada
               </button>
             )}
             {canOpenAnamnesis && String(anamnesisFlow?.response?.status || '').toUpperCase() === 'SUBMITTED' && (

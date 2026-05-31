@@ -371,10 +371,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (result?.success) {
       const data = result.data || {};
       setPortalAnamnesis(data);
+      const prefillAnswers = data?.prefillAnswers && typeof data.prefillAnswers === 'object'
+        ? data.prefillAnswers
+        : {};
       const answers = data?.response?.answers && typeof data.response.answers === 'object'
         ? data.response.answers
         : {};
-      setPortalAnamnesisDraft(answers);
+      setPortalAnamnesisDraft({ ...prefillAnswers, ...answers });
       const template = normalizeAnamnesisTemplate(data?.template || getDefaultAnamnesisTemplate());
       const profileTemplate = getProfileTemplate(template, data?.profileType === 'child' ? 'child' : isKidsProfile ? 'child' : 'adult');
       setExpandedAnamnesisSections(
@@ -1756,14 +1759,22 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const renderPortalAnamnesisField = (question: any) => {
     const value = portalAnamnesisDraft?.[question.id] ?? '';
+    const prefilledKeys = new Set(Array.isArray(portalAnamnesis?.prefilledKeys) ? portalAnamnesis.prefilledKeys : []);
+    const prefilledValue = portalAnamnesis?.prefillAnswers?.[question.id];
+    const isPrefilledByClinic =
+      prefilledKeys.has(question.id) &&
+      prefilledValue !== null &&
+      prefilledValue !== undefined &&
+      String(prefilledValue).trim() !== '';
+    const fieldDisabled = portalAnamnesisLocked || isPrefilledByClinic;
     const fieldClass = "w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:border-[#7a32fc] disabled:bg-slate-50 disabled:text-slate-400";
     const update = (nextValue: any) => setPortalAnamnesisDraft((prev) => ({ ...prev, [question.id]: nextValue }));
-    if (question.type === 'data') return <input type="date" disabled={portalAnamnesisLocked} className={fieldClass} value={value || ''} onChange={(event) => update(event.target.value)} />;
-    if (question.type === 'numero') return <input type="number" disabled={portalAnamnesisLocked} className={fieldClass} value={value || ''} onChange={(event) => update(event.target.value)} />;
-    if (question.type === 'telefone') return <input type="tel" disabled={portalAnamnesisLocked} className={fieldClass} value={value || ''} onChange={(event) => update(event.target.value)} />;
+    if (question.type === 'data') return <input type="date" disabled={fieldDisabled} className={fieldClass} value={value || ''} onChange={(event) => update(event.target.value)} />;
+    if (question.type === 'numero') return <input type="number" disabled={fieldDisabled} className={fieldClass} value={value || ''} onChange={(event) => update(event.target.value)} />;
+    if (question.type === 'telefone') return <input type="tel" disabled={fieldDisabled} className={fieldClass} value={value || ''} onChange={(event) => update(event.target.value)} />;
     if (question.type === 'sim_nao') {
       return (
-        <select disabled={portalAnamnesisLocked} className={fieldClass} value={value === '' ? '' : value ? 'sim' : 'nao'} onChange={(event) => update(event.target.value ? event.target.value === 'sim' : '')}>
+        <select disabled={fieldDisabled} className={fieldClass} value={value === '' ? '' : value ? 'sim' : 'nao'} onChange={(event) => update(event.target.value ? event.target.value === 'sim' : '')}>
           <option value="">Selecione...</option>
           <option value="sim">Sim</option>
           <option value="nao">Não</option>
@@ -1772,7 +1783,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     }
     if (question.type === 'multipla_escolha') {
       return (
-        <select disabled={portalAnamnesisLocked} className={fieldClass} value={value || ''} onChange={(event) => update(event.target.value)}>
+        <select disabled={fieldDisabled} className={fieldClass} value={value || ''} onChange={(event) => update(event.target.value)}>
           <option value="">Selecione...</option>
           {(question.options || []).map((option: string) => <option key={option} value={option}>{option}</option>)}
         </select>
@@ -1784,14 +1795,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         <div className="grid gap-2 sm:grid-cols-2">
           {(question.options || []).map((option: string) => (
             <label key={option} className="flex items-center gap-2 rounded-2xl border border-slate-100 bg-white px-3 py-2 text-sm font-semibold text-slate-600">
-              <input type="checkbox" disabled={portalAnamnesisLocked} checked={selected.includes(option)} onChange={(event) => update(event.target.checked ? [...selected, option] : selected.filter((item: string) => item !== option))} />
+              <input type="checkbox" disabled={fieldDisabled} checked={selected.includes(option)} onChange={(event) => update(event.target.checked ? [...selected, option] : selected.filter((item: string) => item !== option))} />
               {option}
             </label>
           ))}
         </div>
       );
     }
-    return <textarea disabled={portalAnamnesisLocked} rows={3} className={`${fieldClass} resize-none`} value={value || ''} onChange={(event) => update(event.target.value)} />;
+    return <textarea disabled={fieldDisabled} rows={3} className={`${fieldClass} resize-none`} value={value || ''} onChange={(event) => update(event.target.value)} />;
   };
 
   const savePortalAnamnesisDraft = async () => {
@@ -1859,7 +1870,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                   <div className="mt-3 grid gap-3">
                     {questions.map((question: any) => (
                       <label key={question.id} className="block rounded-2xl bg-white p-3 shadow-sm">
-                        <span className="mb-2 block text-xs font-black text-slate-600">{question.label}{question.required ? <span className="text-rose-500"> *</span> : null}</span>
+                        <span className="mb-2 flex flex-wrap items-center gap-2 text-xs font-black text-slate-600">
+                          <span>{question.label}{question.required ? <span className="text-rose-500"> *</span> : null}</span>
+                          {portalAnamnesis?.prefilledKeys?.includes(question.id) && String(portalAnamnesis?.prefillAnswers?.[question.id] ?? '').trim() ? (
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-slate-500">Preenchido pela clínica</span>
+                          ) : null}
+                        </span>
                         {renderPortalAnamnesisField(question)}
                       </label>
                     ))}
