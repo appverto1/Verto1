@@ -10,6 +10,8 @@ const appCode = read('src/App.tsx');
 const dataServiceCode = read('src/services/dataService.ts');
 const coordinatorCode = read('src/components/CoordinatorDashboard.tsx');
 const patientDashboardCode = read('src/components/PatientDashboard.tsx');
+const patientDetailCode = read('src/components/PatientDetailView.tsx');
+const anamnesisSchemaCode = read('src/lib/anamnesisSchema.ts');
 const routeSchemaCode = read('src/utils/routeSchemaFallbacks.ts');
 const migrationCode = read('supabase/migrations/20260531150000_patient_registration_anamnesis_age_templates.sql');
 
@@ -37,10 +39,12 @@ test('cadastro persiste campos editaveis por migration, backend, payload e hidra
     assert.match(routeSchemaCode, new RegExp(`'${column}'`));
   }
 
-  const identityBuilder = sliceFrom(serverCode, 'function buildPatientIdentityPersistenceFields', 3600);
+  const identityBuilder = sliceFrom(serverCode, 'function buildPatientIdentityPersistenceFields', 4600);
   assert.match(identityBuilder, /birth_date:\s*sanitizeIsoDateOnly/);
   assert.match(identityBuilder, /responsible_email:\s*sanitizeEmail/);
   assert.match(identityBuilder, /responsible_relationship:\s*sanitizeString/);
+  assert.match(identityBuilder, /const responsiblePhoneSource/);
+  assert.match(identityBuilder, /guardian:\s*cleanObject/);
   assert.match(identityBuilder, /notes:\s*sanitizeTextField/);
   assert.match(identityBuilder, /registrationNotes/);
 
@@ -144,10 +148,28 @@ test('portal bloqueia reenvio, revisao versiona e ficha final aparece em Arquivo
   assert.match(reviewRoute, /persistAnamnesisFinalFileFallback/);
   assert.match(reviewRoute, /fetchPatientAnamnesisFlow/);
 
-  for (const label of ['Início', 'Consultas', 'Ficha de anamnese', 'Tarefas', 'Relatórios', 'Documentos', 'Perfil']) {
+  for (const label of ['Início', 'Consultas', 'Ficha de anamnese', 'Tarefas', 'Relatório', 'Documentos', 'Perfil']) {
     assert.match(patientDashboardCode, new RegExp(label));
   }
   assert.match(coordinatorCode, /Ficha de anamnese/);
+});
+
+test('anamnese reflete cadastro completo da clinica, incluindo responsavel de menor', () => {
+  assert.match(serverCode, /async function fetchPatientRegistrationPayloadForAnamnesis/);
+  assert.match(serverCode, /PATIENT_ANAMNESIS_RECORD_SELECT_COLUMNS/);
+  assert.match(serverCode, /\.eq\('patient_id', safePatientId\)/);
+  assert.match(serverCode, /buildPatientAnamnesisContext\(patient, registrationPayload\)/);
+  assert.match(serverCode, /fetchAnamnesisTemplateForPatient\(\s*patientContext/);
+  assert.match(serverCode, /hasResponsibleData/);
+  assert.match(serverCode, /responsavelEmail/);
+  assert.match(serverCode, /responsavelRelacao/);
+  assert.match(serverCode, /explicitMinor === true \|\| hasResponsibleData/);
+  assert.match(anamnesisSchemaCode, /id: 'responsavelEmail'/);
+  assert.match(anamnesisSchemaCode, /id: 'responsavelRelacao'/);
+  assert.match(appCode, /source\?\.responsavelNome/);
+  assert.match(appCode, /source\?\.responsibleName/);
+  assert.match(patientDetailCode, /patientRecord\?\.responsavelNome/);
+  assert.match(patientDetailCode, /patientRecord\?\.responsibleName/);
 });
 
 let passed = 0;

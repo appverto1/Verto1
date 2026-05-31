@@ -10,6 +10,7 @@ const appCode = read('src/App.tsx');
 const dataServiceCode = read('src/services/dataService.ts');
 const patientDashboardCode = read('src/components/PatientDashboard.tsx');
 const patientDetailCode = read('src/components/PatientDetailView.tsx');
+const anamnesisSchemaCode = read('src/lib/anamnesisSchema.ts');
 const migrationCode = read('supabase/migrations/20260530120000_anamnesis_relationship_flow.sql');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
@@ -154,7 +155,11 @@ test('frontend expõe anamnese apenas como ficha solicitada e organizada em menu
 });
 
 test('ficha enviada ao paciente leva cadastro preenchido e familia submete cadastro junto com respostas clinicas', () => {
-  assert.match(serverCode, /function buildPatientRegistrationAnamnesisPrefill\(patient: any\)/);
+  assert.match(serverCode, /function buildPatientRegistrationAnamnesisPrefill\(patient: any, registrationPayload: any = \{\}\)/);
+  assert.match(serverCode, /async function fetchPatientRegistrationPayloadForAnamnesis/);
+  assert.match(serverCode, /\.from\('patient_records'\)[\s\S]*\.select\(columns\.join\(', '\)\)[\s\S]*\.eq\('patient_id', safePatientId\)/);
+  assert.match(serverCode, /payload_encrypted/);
+  assert.match(serverCode, /payload_preview/);
   for (const column of [
     'social_name',
     'phone',
@@ -168,15 +173,25 @@ test('ficha enviada ao paciente leva cadastro preenchido e familia submete cadas
     'lead_source',
     'responsible_name',
     'responsible_phone',
+    'responsible_email',
+    'responsible_relationship',
     'metadata'
   ]) {
     assert.match(serverCode, new RegExp(`'${column}'`));
   }
+  for (const field of ['responsavelEmail', 'responsavelRelacao']) {
+    assert.match(anamnesisSchemaCode, new RegExp(`id: '${field}'`));
+    assert.match(serverCode, new RegExp(field));
+  }
+  assert.match(serverCode, /hasResponsibleData/);
+  assert.match(serverCode, /explicitMinor === true \|\| hasResponsibleData/);
   assert.match(serverCode, /prefillAnswers,\s*prefilledKeys/);
   assert.match(routeSlice("app.get('/api/portal/patients/:patientId/anamnesis'", 2200), /prefillAnswers: flow\.prefillAnswers \|\| \{\}/);
   assert.match(routeSlice("app.get('/api/patients/:patientId/anamnesis'", 2200), /prefillAnswers: flow\.prefillAnswers \|\| \{\}/);
-  assert.match(routeSlice("app.patch('/api/portal/patients/:patientId/anamnesis/draft'", 3600), /mergeAnamnesisAnswersWithRegistrationPrefill\(patient, req\.body\?\.answers \|\| \{\}\)/);
-  assert.match(routeSlice("app.post('/api/portal/patients/:patientId/anamnesis/submit'", 3600), /mergeAnamnesisAnswersWithRegistrationPrefill\(patient, req\.body\?\.answers \|\| \{\}\)/);
+  assert.match(routeSlice("app.patch('/api/portal/patients/:patientId/anamnesis/draft'", 3800), /const registrationPayload = await fetchPatientRegistrationPayloadForAnamnesis\(patientId, clinicId\)/);
+  assert.match(routeSlice("app.patch('/api/portal/patients/:patientId/anamnesis/draft'", 3800), /mergeAnamnesisAnswersWithRegistrationPrefill\(patient, req\.body\?\.answers \|\| \{\}, registrationPayload\)/);
+  assert.match(routeSlice("app.post('/api/portal/patients/:patientId/anamnesis/submit'", 3800), /const registrationPayload = await fetchPatientRegistrationPayloadForAnamnesis\(patientId, clinicId\)/);
+  assert.match(routeSlice("app.post('/api/portal/patients/:patientId/anamnesis/submit'", 3800), /mergeAnamnesisAnswersWithRegistrationPrefill\(patient, req\.body\?\.answers \|\| \{\}, registrationPayload\)/);
 });
 
 test('novo envio de anamnese abre um ciclo novo para familia preencher como primeira vez', () => {

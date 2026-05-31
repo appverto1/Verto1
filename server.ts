@@ -6073,6 +6073,15 @@ const PATIENT_ANAMNESIS_PATIENT_SELECT_COLUMNS = [
   'relationship_status'
 ];
 
+const PATIENT_ANAMNESIS_RECORD_SELECT_COLUMNS = [
+  'patient_id',
+  'clinic_id',
+  'payload_encrypted',
+  'payload',
+  'payload_preview',
+  'updated_at'
+];
+
 async function fetchPatientForAnamnesis(patientId: string, clinicId?: string | null) {
   let columns = [...PATIENT_ANAMNESIS_PATIENT_SELECT_COLUMNS];
   while (columns.length > 0) {
@@ -6097,11 +6106,63 @@ async function fetchPatientForAnamnesis(patientId: string, clinicId?: string | n
   return null;
 }
 
-function buildPatientRegistrationAnamnesisPrefill(patient: any) {
-  const metadata = patient?.metadata && typeof patient.metadata === 'object' ? patient.metadata : {};
-  const address = metadata?.address && typeof metadata.address === 'object' ? metadata.address : {};
-  const patientProfileType = resolvePatientAnamnesisProfile(patient);
-  const dateOnly = (value: any) => sanitizeIsoDateOnly(value) || sanitizeString(value, 40) || undefined;
+async function fetchPatientRegistrationPayloadForAnamnesis(patientId: string, clinicId?: string | null) {
+  const safePatientId = sanitizeString(patientId, 120);
+  const safeClinicId = sanitizeString(clinicId, 120);
+  if (!isUuid(safePatientId)) return {};
+
+  let columns = [...PATIENT_ANAMNESIS_RECORD_SELECT_COLUMNS];
+  let scopeByClinic = isUuid(safeClinicId);
+  let lastError: any = null;
+
+  while (columns.length > 0) {
+    let query = supabase
+      .from('patient_records')
+      .select(columns.join(', '))
+      .eq('patient_id', safePatientId)
+      .limit(1);
+    if (scopeByClinic) query = query.eq('clinic_id', safeClinicId);
+    if (columns.includes('updated_at')) query = query.order('updated_at', { ascending: false });
+
+    const { data, error } = await query.maybeSingle();
+    if (!error) {
+      const encryptedPayload = sanitizeString((data as any)?.payload_encrypted, 2_000_000);
+      const decryptedPayload = decryptJsonPayload(encryptedPayload) || {};
+      const legacyPayload = parseStoredJsonObject((data as any)?.payload);
+      const previewPayload = parseStoredJsonObject((data as any)?.payload_preview);
+      return cleanObject({
+        ...previewPayload,
+        ...legacyPayload,
+        ...decryptedPayload
+      });
+    }
+
+    if (isMissingRelationError(error)) return {};
+    lastError = error;
+    const missingColumn = extractMissingColumnName(error);
+    if (missingColumn === 'clinic_id' && scopeByClinic) {
+      scopeByClinic = false;
+      columns = columns.filter((column) => column !== missingColumn);
+      continue;
+    }
+    if (missingColumn && columns.includes(missingColumn)) {
+      columns = columns.filter((column) => column !== missingColumn);
+      continue;
+    }
+    break;
+  }
+
+  if (lastError) {
+    console.warn('[AnamnesisPrefill] Cadastro completo indisponivel para pre-preenchimento:', sanitizeString(lastError?.message || String(lastError), 180));
+  }
+  return {};
+}
+
+function buildPatientAnamnesisContext(patient: any, registrationPayload: any = {}) {
+  const asObject = (value: any) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const registration = asObject(registrationPayload);
+  const registrationAnamnesis = asObject(registration?.anamnese || registration?.anamnesisData);
+  const patientAnamnesis = asObject(patient?.anamnesisData);
   const firstText = (...values: any[]) => {
     for (const value of values) {
       const text = sanitizeString(value, 4000);
@@ -6109,74 +6170,223 @@ function buildPatientRegistrationAnamnesisPrefill(patient: any) {
     }
     return undefined;
   };
-  const optionText = (value: any) => {
+  const firstDate = (...values: any[]) => {
+    for (const value of values) {
+      const date = sanitizeIsoDateOnly(value);
+      if (date) return date;
+    }
+    return firstText(...values);
+  };
+  const birthDate = firstDate(
+    registration?.dataNascimento,
+    registration?.birthDate,
+    registration?.birth_date,
+    registrationAnamnesis?.dataNascimento,
+    patient?.dataNascimento,
+    patient?.birthDate,
+    patient?.birth_date,
+    patientAnamnesis?.dataNascimento
+  );
+  const age =
+    asSafeNumber(registration?.idade ?? registration?.age, 0, 130) ??
+    asSafeNumber(registrationAnamnesis?.idade ?? registrationAnamnesis?.age, 0, 130) ??
+    asSafeNumber(patient?.age, 0, 130);
+
+  return cleanObject({
+    ...patient,
+    anamnesisData: cleanObject({
+      ...patientAnamnesis,
+      ...registrationAnamnesis
+    }),
+    age,
+    birth_date: birthDate || patient?.birth_date,
+    birthDate: birthDate || patient?.birthDate,
+    dataNascimento: birthDate || patient?.dataNascimento,
+    patient_profile_type: firstText(
+      registration?.patientProfileType,
+      registration?.patient_profile_type,
+      registrationAnamnesis?.patientProfileType,
+      patient?.patient_profile_type
+    ),
+    panel_type: firstText(registration?.panelType, registration?.panel_type, patient?.panel_type),
+    profile_type: firstText(registration?.profileType, registration?.profile_type, patient?.profile_type),
+    type: firstText(registration?.type, patient?.type)
+  });
+}
+
+function buildPatientRegistrationAnamnesisPrefill(patient: any, registrationPayload: any = {}) {
+  const asObject = (value: any) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const registration = asObject(registrationPayload);
+  const registrationAnamnesis = asObject(registration?.anamnese || registration?.anamnesisData);
+  const patientAnamnesis = asObject(patient?.anamnesisData);
+  const metadata = asObject(patient?.metadata);
+  const registrationMetadata = asObject(registration?.metadata);
+  const address = cleanObject({
+    ...asObject(metadata?.address),
+    ...asObject(patient?.address),
+    ...asObject(registrationMetadata?.address),
+    ...asObject(registration?.address),
+    ...asObject(registrationAnamnesis?.address),
+    ...asObject(patientAnamnesis?.address)
+  });
+  const guardian = cleanObject({
+    ...asObject(metadata?.guardian),
+    ...asObject(metadata?.responsible),
+    ...asObject(patient?.guardian),
+    ...asObject(registrationMetadata?.guardian),
+    ...asObject(registrationMetadata?.responsible),
+    ...asObject(registration?.guardian),
+    ...asObject(registration?.responsible),
+    ...asObject(registrationAnamnesis?.guardian),
+    ...asObject(patientAnamnesis?.guardian)
+  });
+  const firstText = (...values: any[]) => {
+    for (const value of values) {
+      const text = sanitizeString(value, 4000);
+      if (text) return text;
+    }
+    return undefined;
+  };
+  const dateOnly = (...values: any[]) => {
+    for (const value of values) {
+      const date = sanitizeIsoDateOnly(value);
+      if (date) return date;
+    }
+    return firstText(...values);
+  };
+  const firstNumber = (...values: any[]) => {
+    for (const value of values) {
+      const number = asSafeNumber(value, 0, 130);
+      if (typeof number === 'number') return number;
+    }
+    return undefined;
+  };
+  const firstBoolean = (...values: any[]) => {
+    for (const value of values) {
+      if (typeof value === 'boolean') return value;
+      const raw = sanitizeString(value, 40);
+      if (!raw) continue;
+      const normalized = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      if (['true', '1', 'sim', 'yes', 'menor'].includes(normalized)) return true;
+      if (['false', '0', 'nao', 'no', 'maior'].includes(normalized)) return false;
+    }
+    return undefined;
+  };
+  const normalizeOption = (value: any, kind: 'gender' | 'insurance' | 'group' | 'source') => {
     const raw = firstText(value);
     if (!raw) return undefined;
-    const normalized = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-    if (normalized === 'particular') return 'Particular';
-    if (normalized === 'convenio' || normalized === 'convênio') return 'Convenio';
+    const normalized = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[_-]+/g, ' ').trim();
+    if (kind === 'insurance') {
+      if (['particular', 'privado', 'private', 'self pay'].includes(normalized)) return 'Particular';
+      if (['convenio', 'convênio', 'plano', 'plano de saude', 'insurance'].includes(normalized)) return 'Convenio';
+    }
+    if (kind === 'gender') {
+      if (['f', 'feminino', 'female', 'mulher'].includes(normalized)) return 'Feminino';
+      if (['m', 'masculino', 'male', 'homem'].includes(normalized)) return 'Masculino';
+      if (['nao binario', 'nao-binario', 'non binary', 'non-binary'].includes(normalized)) return 'Nao-binario';
+      if (['prefere nao informar', 'nao informar'].includes(normalized)) return 'Prefere nao informar';
+    }
+    if (kind === 'group') {
+      if (['infantil', 'kids', 'crianca', 'criança', 'child'].includes(normalized)) return 'Infantil';
+      if (['adolescente', 'teen'].includes(normalized)) return 'Adolescente';
+      if (['adulto', 'adult'].includes(normalized)) return 'Adulto';
+      if (['idoso', 'idosa', 'senior'].includes(normalized)) return 'Idoso';
+    }
+    if (kind === 'source') {
+      if (normalized === 'indicacao' || normalized === 'indicacao profissional') return 'Indicacao';
+      if (normalized === 'rede social' || normalized === 'redes sociais') return 'Rede social';
+      if (normalized === 'convenio' || normalized === 'convênio') return 'Convenio';
+      if (normalized === 'whatsapp') return 'WhatsApp';
+    }
     return raw;
   };
-  const birthDate = dateOnly(patient?.birth_date || patient?.dataNascimento || patient?.birthDate);
+  const birthDate = dateOnly(
+    registration?.dataNascimento,
+    registration?.birthDate,
+    registration?.birth_date,
+    registrationAnamnesis?.dataNascimento,
+    patient?.dataNascimento,
+    patient?.birthDate,
+    patient?.birth_date,
+    patientAnamnesis?.dataNascimento
+  );
   const age =
-    asSafeNumber(patient?.age, 0, 130) ??
+    firstNumber(registration?.idade, registration?.age, registrationAnamnesis?.idade, patientAnamnesis?.idade, patient?.age) ??
     (() => {
       const months = calculateAgeMonthsFromDateOnly(birthDate);
       return typeof months === 'number' ? Math.floor(months / 12) : undefined;
     })();
-  const logradouro = firstText(patient?.logradouro, address?.logradouro, address?.street);
-  const numero = firstText(patient?.numero, address?.numero, address?.number);
-  const bairro = firstText(patient?.bairro, address?.bairro, address?.neighborhood);
-  const cidade = firstText(patient?.cidade, address?.cidade, address?.city);
+  const logradouro = firstText(registration?.logradouro, address?.logradouro, address?.street, patient?.logradouro, registrationAnamnesis?.logradouro, patientAnamnesis?.logradouro);
+  const numero = firstText(registration?.numero, address?.numero, address?.number, patient?.numero, registrationAnamnesis?.numero, patientAnamnesis?.numero);
+  const bairro = firstText(registration?.bairro, address?.bairro, address?.neighborhood, patient?.bairro, registrationAnamnesis?.bairro, patientAnamnesis?.bairro);
+  const cidade = firstText(registration?.cidade, address?.cidade, address?.city, patient?.cidade, registrationAnamnesis?.cidade, patientAnamnesis?.cidade);
   const endereco = [logradouro, numero, bairro, cidade].filter(Boolean).join(', ');
+  const responsavelNome = firstText(registration?.responsavelNome, registration?.responsibleName, registration?.responsible_name, guardian?.nome, guardian?.name, registrationAnamnesis?.responsavelNome, patientAnamnesis?.responsavelNome, patient?.responsible_name);
+  const responsavelDataNascimento = dateOnly(registration?.responsavelDataNascimento, registration?.responsibleBirthDate, registration?.responsible_birth_date, guardian?.dataNascimento, guardian?.birthDate, guardian?.birth_date, registrationAnamnesis?.responsavelDataNascimento, patientAnamnesis?.responsavelDataNascimento, patient?.responsible_birth_date);
+  const responsavelCpf = firstText(registration?.responsavelCpf, registration?.responsibleCpf, registration?.responsible_cpf, guardian?.cpf, registrationAnamnesis?.responsavelCpf, patientAnamnesis?.responsavelCpf, patient?.responsible_cpf);
+  const responsavelTelefone = firstText(registration?.responsavelTelefone, registration?.responsiblePhone, registration?.responsible_phone, guardian?.telefone, guardian?.phone, registrationAnamnesis?.responsavelTelefone, patientAnamnesis?.responsavelTelefone, patient?.responsible_phone);
+  const responsavelEmail = firstText(registration?.responsavelEmail, registration?.responsibleEmail, registration?.responsible_email, guardian?.email, registrationAnamnesis?.responsavelEmail, patientAnamnesis?.responsavelEmail, patient?.responsible_email);
+  const responsavelRelacao = firstText(registration?.responsavelRelacao, registration?.responsibleRelationship, registration?.responsible_relationship, guardian?.relacao, guardian?.relationship, registrationAnamnesis?.responsavelRelacao, patientAnamnesis?.responsavelRelacao, patient?.responsible_relationship, metadata?.responsibleRelationship);
+  const explicitMinor = firstBoolean(
+    registration?.menorDeIdade,
+    registration?.isMinor,
+    registration?.is_minor,
+    registrationAnamnesis?.menorDeIdade,
+    patientAnamnesis?.menorDeIdade,
+    patient?.isMinor,
+    patient?.is_minor,
+    metadata?.menorDeIdade,
+    metadata?.isMinor
+  );
+  const hasResponsibleData = Boolean(responsavelNome || responsavelDataNascimento || responsavelCpf || responsavelTelefone || responsavelEmail || responsavelRelacao);
+  const profileContext = buildPatientAnamnesisContext(patient, registration);
+  const patientProfileType = resolvePatientAnamnesisProfile(profileContext);
   const menorDeIdade =
-    typeof metadata?.isMinor === 'boolean'
-      ? metadata.isMinor
-      : typeof metadata?.menorDeIdade === 'boolean'
-        ? metadata.menorDeIdade
-        : typeof age === 'number' && age < 18
-          ? true
-          : undefined;
+    explicitMinor === true || hasResponsibleData || (typeof age === 'number' && age < 18) || patientProfileType === 'child'
+      ? true
+      : explicitMinor === false
+        ? false
+        : undefined;
 
   return cleanObject({
-    nome: firstText(patient?.name),
-    nomeSocial: firstText(patient?.social_name, patient?.socialName),
-    telefone: firstText(patient?.phone),
-    email: firstText(patient?.email),
-    cpf: firstText(patient?.cpf),
+    nome: firstText(registration?.nome, registration?.name, registrationAnamnesis?.nome, patientAnamnesis?.nome, patient?.name),
+    nomeSocial: firstText(registration?.nomeSocial, registration?.socialName, registration?.social_name, registrationAnamnesis?.nomeSocial, patientAnamnesis?.nomeSocial, patient?.social_name, patient?.socialName),
+    telefone: firstText(registration?.telefone, registration?.phone, registrationAnamnesis?.telefone, patientAnamnesis?.telefone, patient?.phone),
+    email: firstText(registration?.email, registrationAnamnesis?.email, patientAnamnesis?.email, patient?.email),
+    cpf: firstText(registration?.cpf, registrationAnamnesis?.cpf, patientAnamnesis?.cpf, patient?.cpf),
     dataNascimento: birthDate,
     idade: typeof age === 'number' ? age : undefined,
-    genero: optionText(patient?.gender),
-    convenioTipo: optionText(patient?.insurance_type) || 'Particular',
-    convenioNome: firstText(patient?.insurance_name),
-    convenioCarteirinha: firstText(patient?.insurance_card_number),
-    grupo: optionText(patient?.patient_group),
-    comoConheceu: optionText(patient?.lead_source),
-    rg: firstText(patient?.rg),
-    cep: firstText(patient?.cep, address?.cep, address?.zip),
+    genero: normalizeOption(firstText(registration?.genero, registration?.gender, registrationAnamnesis?.genero, patientAnamnesis?.genero, patient?.gender), 'gender'),
+    convenioTipo: normalizeOption(firstText(registration?.convenioTipo, registration?.insuranceType, registration?.insurance_type, registrationAnamnesis?.convenioTipo, patientAnamnesis?.convenioTipo, patient?.insurance_type), 'insurance'),
+    convenioNome: firstText(registration?.convenioNome, registration?.insuranceName, registration?.insurance_name, registrationAnamnesis?.convenioNome, patientAnamnesis?.convenioNome, patient?.insurance_name),
+    convenioCarteirinha: firstText(registration?.convenioCarteirinha, registration?.cardNumber, registration?.insuranceCardNumber, registration?.insurance_card_number, registrationAnamnesis?.convenioCarteirinha, patientAnamnesis?.convenioCarteirinha, patient?.insurance_card_number),
+    grupo: normalizeOption(firstText(registration?.grupo, registration?.group, registration?.patient_group, registrationAnamnesis?.grupo, patientAnamnesis?.grupo, patient?.patient_group), 'group'),
+    comoConheceu: normalizeOption(firstText(registration?.comoConheceu, registration?.source, registration?.lead_source, registrationAnamnesis?.comoConheceu, patientAnamnesis?.comoConheceu, patient?.lead_source), 'source'),
+    rg: firstText(registration?.rg, registrationAnamnesis?.rg, patientAnamnesis?.rg, patient?.rg),
+    cep: firstText(registration?.cep, address?.cep, address?.zip, registrationAnamnesis?.cep, patientAnamnesis?.cep, patient?.cep),
     logradouro,
     numero,
-    complemento: firstText(patient?.complemento, address?.complemento, address?.complement),
+    complemento: firstText(registration?.complemento, address?.complemento, address?.complement, registrationAnamnesis?.complemento, patientAnamnesis?.complemento, patient?.complemento),
     bairro,
     cidade,
-    endereco: endereco || undefined,
-    outrasInformacoes: firstText(patient?.notes, metadata?.registrationNotes),
+    endereco: endereco || firstText(registration?.endereco, registration?.addressText, registrationAnamnesis?.endereco, patientAnamnesis?.endereco),
+    outrasInformacoes: firstText(registration?.outrasInformacoes, registration?.notes, registration?.otherInformation, registrationAnamnesis?.outrasInformacoes, patientAnamnesis?.outrasInformacoes, patient?.notes, metadata?.registrationNotes),
     menorDeIdade,
-    responsavelNome: firstText(patient?.responsible_name),
-    responsavelDataNascimento: dateOnly(patient?.responsible_birth_date),
-    responsavelCpf: firstText(patient?.responsible_cpf),
-    responsavelTelefone: firstText(patient?.responsible_phone),
-    responsavelEmail: firstText(patient?.responsible_email),
-    responsavelRelacao: firstText(patient?.responsible_relationship, metadata?.responsibleRelationship),
+    responsavelNome,
+    responsavelDataNascimento,
+    responsavelCpf,
+    responsavelTelefone,
+    responsavelEmail,
+    responsavelRelacao,
     formType: patientProfileType === 'child' ? 'child' : 'adult',
     patientProfileType
   });
 }
 
-function mergeAnamnesisAnswersWithRegistrationPrefill(patient: any, answers: any) {
+function mergeAnamnesisAnswersWithRegistrationPrefill(patient: any, answers: any, registrationPayload: any = {}) {
   const safeAnswers = answers && typeof answers === 'object' && !Array.isArray(answers) ? answers : {};
   return {
-    ...buildPatientRegistrationAnamnesisPrefill(patient),
+    ...buildPatientRegistrationAnamnesisPrefill(patient, registrationPayload),
     ...safeAnswers
   };
 }
@@ -6362,6 +6572,8 @@ async function createRelationshipConfirmationRequest(params: {
 async function fetchPatientAnamnesisFlow(patientId: string, clinicId: string) {
   const patient = await fetchPatientForAnamnesis(patientId, clinicId);
   if (!patient?.id) return { patient: null, request: null, response: null, template: getDefaultAnamnesisTemplate() };
+  const registrationPayload = await fetchPatientRegistrationPayloadForAnamnesis(patientId, clinicId);
+  const patientContext = buildPatientAnamnesisContext(patient, registrationPayload);
 
   const requestResult = await fetchPatientAnamnesisRequestWithSchemaFallback({ patientId, clinicId });
 
@@ -6378,14 +6590,15 @@ async function fetchPatientAnamnesisFlow(patientId: string, clinicId: string) {
   }
   if (responseResult.error && !isMissingRelationError(responseResult.error)) throw responseResult.error;
   const template = await fetchAnamnesisTemplateForPatient(
-    patient,
+    patientContext,
     clinicId,
     sanitizeString(requestResult.data?.template_id || responseResult.data?.template_id, 120)
   );
-  const prefillAnswers = buildPatientRegistrationAnamnesisPrefill(patient);
+  const prefillAnswers = buildPatientRegistrationAnamnesisPrefill(patient, registrationPayload);
 
   return {
     patient,
+    patientContext,
     request: requestResult.error ? null : requestResult.data || null,
     response: responseResult.error ? null : responseResult.data || null,
     template,
@@ -6526,6 +6739,12 @@ function buildPatientIdentityPersistenceFields(body: any) {
   const address = body?.address && typeof body.address === 'object' ? body.address : {};
   const guardian = body?.guardian && typeof body.guardian === 'object' ? body.guardian : {};
   const profileFields = buildPatientProfileTypeFields(body);
+  const responsiblePhoneSource =
+    body?.responsiblePhone ||
+    body?.responsible_phone ||
+    body?.responsavelTelefone ||
+    guardian?.telefone ||
+    guardian?.phone;
   const safeMetadata = cleanObject({
     address: cleanObject({
       cep: sanitizeString(body?.cep || address?.cep, 20),
@@ -6536,12 +6755,28 @@ function buildPatientIdentityPersistenceFields(body: any) {
       cidade: sanitizeString(body?.cidade || address?.cidade, 120),
     }),
     isMinor: Boolean(body?.isMinor || body?.is_minor || body?.menorDeIdade),
+    guardian: cleanObject({
+      nome: sanitizeString(body?.responsibleName || body?.responsible_name || body?.responsavelNome || guardian?.nome || guardian?.name, 160),
+      dataNascimento: sanitizeIsoDateOnly(body?.responsibleBirthDate || body?.responsible_birth_date || body?.responsavelDataNascimento || guardian?.dataNascimento || guardian?.birthDate || guardian?.birth_date),
+      cpf: normalizeCpf(body?.responsibleCpf || body?.responsible_cpf || body?.responsavelCpf || guardian?.cpf) || undefined,
+      telefone: normalizeBrazilMobilePhone(responsiblePhoneSource) || sanitizePhone(responsiblePhoneSource),
+      email: sanitizeEmail(body?.responsibleEmail || body?.responsible_email || body?.responsavelEmail || guardian?.email) || undefined,
+      relacao: sanitizeString(
+        body?.responsibleRelationship ||
+          body?.responsible_relationship ||
+          body?.responsavelRelacao ||
+          guardian?.relacao ||
+          guardian?.relationship,
+        120
+      ),
+    }),
     registrationNotes: sanitizeTextField(body?.notes || body?.outrasInformacoes || body?.otherInformation, 4000),
     responsibleRelationship: sanitizeString(
       body?.responsibleRelationship ||
         body?.responsible_relationship ||
         body?.responsavelRelacao ||
-        guardian?.relacao,
+        guardian?.relacao ||
+        guardian?.relationship,
       120
     ),
   });
@@ -6561,9 +6796,9 @@ function buildPatientIdentityPersistenceFields(body: any) {
     responsible_name: sanitizeString(body?.responsibleName || body?.responsible_name || body?.responsavelNome || guardian?.nome, 160),
     responsible_birth_date: sanitizeIsoDateOnly(body?.responsibleBirthDate || body?.responsible_birth_date || body?.responsavelDataNascimento || guardian?.dataNascimento),
     responsible_cpf: normalizeCpf(body?.responsibleCpf || body?.responsible_cpf || body?.responsavelCpf || guardian?.cpf) || undefined,
-    responsible_phone: normalizeBrazilMobilePhone(body?.responsiblePhone || body?.responsible_phone || body?.responsavelTelefone || guardian?.telefone) || sanitizePhone(body?.responsiblePhone || guardian?.telefone),
+    responsible_phone: normalizeBrazilMobilePhone(responsiblePhoneSource) || sanitizePhone(responsiblePhoneSource),
     responsible_email: sanitizeEmail(body?.responsibleEmail || body?.responsible_email || body?.responsavelEmail || guardian?.email) || undefined,
-    responsible_relationship: sanitizeString(body?.responsibleRelationship || body?.responsible_relationship || body?.responsavelRelacao || guardian?.relacao, 120),
+    responsible_relationship: sanitizeString(body?.responsibleRelationship || body?.responsible_relationship || body?.responsavelRelacao || guardian?.relacao || guardian?.relationship, 120),
     metadata: Object.keys(safeMetadata).length ? safeMetadata : undefined,
   });
 }
@@ -12493,10 +12728,12 @@ async function startServer() {
       }
       const patient = await fetchPatientForAnamnesis(patientId, clinicId);
       if (!patient?.id) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+      const registrationPayload = await fetchPatientRegistrationPayloadForAnamnesis(patientId, clinicId);
+      const patientContext = buildPatientAnamnesisContext(patient, registrationPayload);
 
       const nowIso = new Date().toISOString();
       const selectedTemplate = await fetchAnamnesisTemplateForPatient(
-        patient,
+        patientContext,
         clinicId,
         req.body?.templateId || req.body?.template_id
       );
@@ -12626,7 +12863,7 @@ async function startServer() {
           prefillAnswers: flow.prefillAnswers || {},
           prefilledKeys: flow.prefilledKeys || [],
           template: buildPublicAnamnesisTemplate(flow.template),
-          profileType: resolvePatientAnamnesisProfile(flow.patient)
+          profileType: resolvePatientAnamnesisProfile(flow.patientContext || flow.patient)
         }
       });
     } catch (error: any) {
@@ -12649,6 +12886,7 @@ async function startServer() {
       if (requestCheck.error && !isMissingRelationError(requestCheck.error)) throw requestCheck.error;
       const patient = await fetchPatientForAnamnesis(patientId, clinicId);
       if (!patient?.id) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+      const registrationPayload = await fetchPatientRegistrationPayloadForAnamnesis(patientId, clinicId);
       const response = await upsertAnamnesisResponse({
         patientId,
         clinicId,
@@ -12656,7 +12894,7 @@ async function startServer() {
         templateId: req.body?.templateId || req.body?.template_id || requestCheck.data?.template_id || null,
         respondentUserId: sanitizeString(req.session.user?.id, 120),
         respondentRole: 'professional',
-        answers: mergeAnamnesisAnswersWithRegistrationPrefill(patient, req.body?.answers || req.body?.anamnesisData || {}),
+        answers: mergeAnamnesisAnswersWithRegistrationPrefill(patient, req.body?.answers || req.body?.anamnesisData || {}, registrationPayload),
         status: 'DRAFT'
       });
       if (isUuid(requestId)) {
@@ -12688,6 +12926,7 @@ async function startServer() {
       if (requestCheck.error && !isMissingRelationError(requestCheck.error)) throw requestCheck.error;
       const patient = await fetchPatientForAnamnesis(patientId, clinicId);
       if (!patient?.id) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+      const registrationPayload = await fetchPatientRegistrationPayloadForAnamnesis(patientId, clinicId);
       const response = await upsertAnamnesisResponse({
         patientId,
         clinicId,
@@ -12695,7 +12934,7 @@ async function startServer() {
         templateId: req.body?.templateId || req.body?.template_id || requestCheck.data?.template_id || null,
         respondentUserId: sanitizeString(req.session.user?.id, 120),
         respondentRole: 'professional',
-        answers: mergeAnamnesisAnswersWithRegistrationPrefill(patient, req.body?.answers || req.body?.anamnesisData || {}),
+        answers: mergeAnamnesisAnswersWithRegistrationPrefill(patient, req.body?.answers || req.body?.anamnesisData || {}, registrationPayload),
         status: 'SUBMITTED'
       });
       const nowIso = new Date().toISOString();
@@ -12833,7 +13072,7 @@ async function startServer() {
           prefillAnswers: flow.prefillAnswers || {},
           prefilledKeys: flow.prefilledKeys || [],
           template: buildPublicAnamnesisTemplate(flow.template),
-          profileType: resolvePatientAnamnesisProfile(patient)
+          profileType: resolvePatientAnamnesisProfile(flow.patientContext || patient)
         }
       });
     } catch (error: any) {
@@ -12862,6 +13101,7 @@ async function startServer() {
       });
       if (requestCheck.error && !isMissingRelationError(requestCheck.error)) throw requestCheck.error;
       if (!requestCheck.data?.id) return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
+      const registrationPayload = await fetchPatientRegistrationPayloadForAnamnesis(patientId, clinicId);
       const response = await upsertAnamnesisResponse({
         patientId,
         clinicId,
@@ -12869,7 +13109,7 @@ async function startServer() {
         templateId: requestCheck.data?.template_id || null,
         respondentUserId: sanitizeString(req.session.user?.id, 120),
         respondentRole: 'family',
-        answers: mergeAnamnesisAnswersWithRegistrationPrefill(patient, req.body?.answers || {}),
+        answers: mergeAnamnesisAnswersWithRegistrationPrefill(patient, req.body?.answers || {}, registrationPayload),
         status: 'DRAFT'
       });
       const nowIso = new Date().toISOString();
@@ -12912,6 +13152,7 @@ async function startServer() {
       });
       if (requestCheck.error && !isMissingRelationError(requestCheck.error)) throw requestCheck.error;
       if (!requestCheck.data?.id) return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
+      const registrationPayload = await fetchPatientRegistrationPayloadForAnamnesis(patientId, clinicId);
       const response = await upsertAnamnesisResponse({
         patientId,
         clinicId,
@@ -12919,7 +13160,7 @@ async function startServer() {
         templateId: requestCheck.data?.template_id || null,
         respondentUserId: sanitizeString(req.session.user?.id, 120),
         respondentRole: 'family',
-        answers: mergeAnamnesisAnswersWithRegistrationPrefill(patient, req.body?.answers || {}),
+        answers: mergeAnamnesisAnswersWithRegistrationPrefill(patient, req.body?.answers || {}, registrationPayload),
         status: 'SUBMITTED'
       });
       const nowIso = new Date().toISOString();

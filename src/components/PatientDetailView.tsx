@@ -82,12 +82,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const existing = patientRecord?.anamnesisData && typeof patientRecord.anamnesisData === 'object'
       ? patientRecord.anamnesisData
       : {};
-    const address = patientRecord?.address && typeof patientRecord.address === 'object'
-      ? patientRecord.address
-      : {};
-    const guardian = patientRecord?.guardian && typeof patientRecord.guardian === 'object'
-      ? patientRecord.guardian
-      : {};
+    const asObject = (value: any) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const metadata = asObject(patientRecord?.metadata);
+    const address = {
+      ...asObject(metadata?.address),
+      ...asObject(patientRecord?.address),
+    };
+    const guardian = {
+      ...asObject(metadata?.guardian),
+      ...asObject(metadata?.responsible),
+      ...asObject(patientRecord?.guardian),
+      ...asObject(patientRecord?.responsible),
+    };
     const resolvedBirthDate = coalescePatientText(
       patientRecord?.dataNascimento,
       patientRecord?.birthDate,
@@ -99,21 +105,87 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const bairro = coalescePatientText(patientRecord?.bairro, address?.bairro, existing?.bairro);
     const cidade = coalescePatientText(patientRecord?.cidade, address?.cidade, existing?.cidade);
     const derivedAgeFromBirthDate = calculateAgeFromBirthDate(resolvedBirthDate);
+    const responsavelNome = coalescePatientText(
+      patientRecord?.responsavelNome,
+      patientRecord?.responsibleName,
+      patientRecord?.responsible_name,
+      guardian?.nome,
+      guardian?.name,
+      existing?.responsavelNome,
+    );
+    const responsavelDataNascimento = coalescePatientText(
+      patientRecord?.responsavelDataNascimento,
+      patientRecord?.responsibleBirthDate,
+      patientRecord?.responsible_birth_date,
+      guardian?.dataNascimento,
+      guardian?.birthDate,
+      guardian?.birth_date,
+      existing?.responsavelDataNascimento,
+    );
+    const responsavelCpf = coalescePatientText(
+      patientRecord?.responsavelCpf,
+      patientRecord?.responsibleCpf,
+      patientRecord?.responsible_cpf,
+      guardian?.cpf,
+      existing?.responsavelCpf,
+    );
+    const responsavelTelefone = coalescePatientText(
+      patientRecord?.responsavelTelefone,
+      patientRecord?.responsiblePhone,
+      patientRecord?.responsible_phone,
+      guardian?.telefone,
+      guardian?.phone,
+      existing?.responsavelTelefone,
+    );
+    const responsavelEmail = coalescePatientText(
+      patientRecord?.responsavelEmail,
+      patientRecord?.responsibleEmail,
+      patientRecord?.responsible_email,
+      guardian?.email,
+      existing?.responsavelEmail,
+    );
+    const responsavelRelacao = coalescePatientText(
+      patientRecord?.responsavelRelacao,
+      patientRecord?.responsibleRelationship,
+      patientRecord?.responsible_relationship,
+      guardian?.relacao,
+      guardian?.relationship,
+      metadata?.responsibleRelationship,
+      existing?.responsavelRelacao,
+    );
+    const explicitMinor =
+      typeof patientRecord?.menorDeIdade === 'boolean'
+        ? patientRecord.menorDeIdade
+        : typeof patientRecord?.isMinor === 'boolean'
+          ? patientRecord.isMinor
+          : typeof patientRecord?.is_minor === 'boolean'
+            ? patientRecord.is_minor
+            : typeof existing?.menorDeIdade === 'boolean'
+              ? existing.menorDeIdade
+              : undefined;
+    const hasResponsibleData = Boolean(
+      responsavelNome ||
+      responsavelDataNascimento ||
+      responsavelCpf ||
+      responsavelTelefone ||
+      responsavelEmail ||
+      responsavelRelacao,
+    );
 
     return {
       ...existing,
-      nome: coalescePatientText(patientRecord?.name, existing?.nome),
-      nomeSocial: coalescePatientText(patientRecord?.socialName, existing?.nomeSocial),
-      telefone: coalescePatientText(patientRecord?.phone, existing?.telefone),
+      nome: coalescePatientText(patientRecord?.nome, patientRecord?.name, existing?.nome),
+      nomeSocial: coalescePatientText(patientRecord?.nomeSocial, patientRecord?.socialName, existing?.nomeSocial),
+      telefone: coalescePatientText(patientRecord?.telefone, patientRecord?.phone, existing?.telefone),
       email: coalescePatientText(patientRecord?.email, existing?.email),
       cpf: coalescePatientText(patientRecord?.cpf, existing?.cpf),
       dataNascimento: resolvedBirthDate,
-      genero: coalescePatientText(patientRecord?.gender, existing?.genero),
-      convenioTipo: coalescePatientText(patientRecord?.insuranceType, existing?.convenioTipo) || 'particular',
-      convenioNome: coalescePatientText(patientRecord?.insuranceName, existing?.convenioNome),
-      convenioCarteirinha: coalescePatientText(patientRecord?.cardNumber, existing?.convenioCarteirinha),
-      grupo: coalescePatientText(patientRecord?.group, existing?.grupo),
-      comoConheceu: coalescePatientText(patientRecord?.source, existing?.comoConheceu),
+      genero: coalescePatientText(patientRecord?.genero, patientRecord?.gender, existing?.genero),
+      convenioTipo: coalescePatientText(patientRecord?.convenioTipo, patientRecord?.insuranceType, patientRecord?.insurance_type, existing?.convenioTipo) || 'particular',
+      convenioNome: coalescePatientText(patientRecord?.convenioNome, patientRecord?.insuranceName, patientRecord?.insurance_name, existing?.convenioNome),
+      convenioCarteirinha: coalescePatientText(patientRecord?.convenioCarteirinha, patientRecord?.cardNumber, patientRecord?.insuranceCardNumber, patientRecord?.insurance_card_number, existing?.convenioCarteirinha),
+      grupo: coalescePatientText(patientRecord?.grupo, patientRecord?.group, existing?.grupo),
+      comoConheceu: coalescePatientText(patientRecord?.comoConheceu, patientRecord?.source, existing?.comoConheceu),
       rg: coalescePatientText(patientRecord?.rg, existing?.rg),
       cep: coalescePatientText(patientRecord?.cep, existing?.cep),
       logradouro,
@@ -126,16 +198,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         coalescePatientText(existing?.endereco),
       outrasInformacoes: coalescePatientText(patientRecord?.notes, existing?.outrasInformacoes),
       menorDeIdade:
-        typeof patientRecord?.isMinor === 'boolean'
-          ? patientRecord.isMinor
-          : Boolean(existing?.menorDeIdade),
-      responsavelNome: coalescePatientText(guardian?.nome, existing?.responsavelNome),
-      responsavelDataNascimento: coalescePatientText(
-        guardian?.dataNascimento,
-        existing?.responsavelDataNascimento,
-      ),
-      responsavelCpf: coalescePatientText(guardian?.cpf, existing?.responsavelCpf),
-      responsavelTelefone: coalescePatientText(guardian?.telefone, existing?.responsavelTelefone),
+        explicitMinor === true || hasResponsibleData || (typeof derivedAgeFromBirthDate === 'number' && derivedAgeFromBirthDate < 18)
+          ? true
+          : explicitMinor === false
+            ? false
+            : Boolean(existing?.menorDeIdade),
+      responsavelNome,
+      responsavelDataNascimento,
+      responsavelCpf,
+      responsavelTelefone,
+      responsavelEmail,
+      responsavelRelacao,
       idade:
         typeof derivedAgeFromBirthDate === 'number'
           ? derivedAgeFromBirthDate

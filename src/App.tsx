@@ -411,8 +411,18 @@ export default function App() {
   const buildPatientAnamnesisSnapshot = (patientLike: any, baseAnamnesisData?: any) => {
     const source = patientLike || {};
     const existing = baseAnamnesisData && typeof baseAnamnesisData === 'object' ? baseAnamnesisData : {};
-    const address = source?.address && typeof source.address === 'object' ? source.address : {};
-    const guardian = source?.guardian && typeof source.guardian === 'object' ? source.guardian : {};
+    const asObject = (value: any) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const metadata = asObject(source?.metadata);
+    const address = {
+      ...asObject(metadata?.address),
+      ...asObject(source?.address),
+    };
+    const guardian = {
+      ...asObject(metadata?.guardian),
+      ...asObject(metadata?.responsible),
+      ...asObject(source?.guardian),
+      ...asObject(source?.responsible),
+    };
     const resolvedBirthDate = coalescePatientText(
       source?.dataNascimento,
       source?.birthDate,
@@ -428,19 +438,43 @@ export default function App() {
     const resolvedComplement = coalescePatientText(source?.complemento, address?.complemento, existing?.complemento);
     const resolvedDistrict = coalescePatientText(source?.bairro, address?.bairro, existing?.bairro);
     const resolvedCity = coalescePatientText(source?.cidade, address?.cidade, existing?.cidade);
+    const responsavelNome = coalescePatientText(source?.responsavelNome, source?.responsibleName, source?.responsible_name, guardian?.nome, guardian?.name, existing?.responsavelNome);
+    const responsavelDataNascimento = coalescePatientText(source?.responsavelDataNascimento, source?.responsibleBirthDate, source?.responsible_birth_date, guardian?.dataNascimento, guardian?.birthDate, guardian?.birth_date, existing?.responsavelDataNascimento);
+    const responsavelCpf = coalescePatientText(source?.responsavelCpf, source?.responsibleCpf, source?.responsible_cpf, guardian?.cpf, existing?.responsavelCpf);
+    const responsavelTelefone = coalescePatientText(source?.responsavelTelefone, source?.responsiblePhone, source?.responsible_phone, guardian?.telefone, guardian?.phone, existing?.responsavelTelefone);
+    const responsavelEmail = coalescePatientText(source?.responsavelEmail, source?.responsibleEmail, source?.responsible_email, guardian?.email, existing?.responsavelEmail);
+    const responsavelRelacao = coalescePatientText(source?.responsavelRelacao, source?.responsibleRelationship, source?.responsible_relationship, guardian?.relacao, guardian?.relationship, metadata?.responsibleRelationship, existing?.responsavelRelacao);
+    const explicitMinor =
+      typeof source?.menorDeIdade === 'boolean'
+        ? source.menorDeIdade
+        : typeof source?.isMinor === 'boolean'
+          ? source.isMinor
+          : typeof source?.is_minor === 'boolean'
+            ? source.is_minor
+            : typeof existing?.menorDeIdade === 'boolean'
+              ? existing.menorDeIdade
+              : undefined;
+    const hasResponsibleData = Boolean(
+      responsavelNome ||
+      responsavelDataNascimento ||
+      responsavelCpf ||
+      responsavelTelefone ||
+      responsavelEmail ||
+      responsavelRelacao,
+    );
 
     return {
       ...existing,
-      nome: coalescePatientText(source?.name, existing?.nome),
+      nome: coalescePatientText(source?.nome, source?.name, existing?.nome),
       nomeSocial: coalescePatientText(source?.socialName, source?.nomeSocial, existing?.nomeSocial),
-      telefone: resolvedPhone,
+      telefone: coalescePatientText(source?.telefone, resolvedPhone),
       email: resolvedEmail,
       cpf: resolvedCpf,
       dataNascimento: resolvedBirthDate,
       genero: coalescePatientText(source?.gender, source?.genero, existing?.genero),
-      convenioTipo: coalescePatientText(source?.insuranceType, existing?.convenioTipo) || 'particular',
-      convenioNome: coalescePatientText(source?.insuranceName, existing?.convenioNome),
-      convenioCarteirinha: coalescePatientText(source?.cardNumber, existing?.convenioCarteirinha),
+      convenioTipo: coalescePatientText(source?.convenioTipo, source?.insuranceType, source?.insurance_type, existing?.convenioTipo) || 'particular',
+      convenioNome: coalescePatientText(source?.convenioNome, source?.insuranceName, source?.insurance_name, existing?.convenioNome),
+      convenioCarteirinha: coalescePatientText(source?.convenioCarteirinha, source?.cardNumber, source?.insuranceCardNumber, source?.insurance_card_number, existing?.convenioCarteirinha),
       financialPlans: Array.isArray(source?.financialPlans)
         ? source.financialPlans
         : Array.isArray(existing?.financialPlans)
@@ -452,8 +486,8 @@ export default function App() {
           : existing?.monthlyTreatmentValue || 0,
       billingDueDay: coalescePatientText(source?.billingDueDay, existing?.billingDueDay),
       billingMethod: coalescePatientText(source?.billingMethod, existing?.billingMethod),
-      grupo: coalescePatientText(source?.group, existing?.grupo),
-      comoConheceu: coalescePatientText(source?.source, existing?.comoConheceu),
+      grupo: coalescePatientText(source?.grupo, source?.group, existing?.grupo),
+      comoConheceu: coalescePatientText(source?.comoConheceu, source?.source, existing?.comoConheceu),
       rg: coalescePatientText(source?.rg, existing?.rg),
       cep: coalescePatientText(source?.cep, existing?.cep),
       logradouro: resolvedStreet,
@@ -467,20 +501,17 @@ export default function App() {
           .join(', ') || coalescePatientText(source?.addressText, existing?.endereco),
       outrasInformacoes: coalescePatientText(source?.notes, existing?.outrasInformacoes),
       menorDeIdade:
-        typeof source?.isMinor === 'boolean'
-          ? source.isMinor
-          : typeof existing?.menorDeIdade === 'boolean'
-            ? existing.menorDeIdade
+        explicitMinor === true || hasResponsibleData || (typeof derivedAgeFromBirthDate === 'number' && derivedAgeFromBirthDate < 18)
+          ? true
+          : explicitMinor === false
+            ? false
             : false,
-      responsavelNome: coalescePatientText(guardian?.nome, existing?.responsavelNome),
-      responsavelDataNascimento: coalescePatientText(
-        guardian?.dataNascimento,
-        existing?.responsavelDataNascimento,
-      ),
-      responsavelCpf: coalescePatientText(guardian?.cpf, existing?.responsavelCpf),
-      responsavelTelefone: coalescePatientText(guardian?.telefone, existing?.responsavelTelefone),
-      responsavelEmail: coalescePatientText(guardian?.email, existing?.responsavelEmail),
-      responsavelRelacao: coalescePatientText(guardian?.relacao, existing?.responsavelRelacao),
+      responsavelNome,
+      responsavelDataNascimento,
+      responsavelCpf,
+      responsavelTelefone,
+      responsavelEmail,
+      responsavelRelacao,
       patientProfileType: normalizePatientProfileType(
         source?.patientProfileType || source?.panelType || source?.profileType || source?.profile_type || source?.type || existing?.patientProfileType,
       ),

@@ -72,7 +72,9 @@ const COMMON_QUESTIONS: AnamnesisQuestion[] = [
   { id: 'responsavelNome', sectionId: 'responsavel_legal', label: 'Nome do responsavel', type: 'dissertativa', required: false, active: true, order: 2 },
   { id: 'responsavelDataNascimento', sectionId: 'responsavel_legal', label: 'Nascimento do responsavel', type: 'data', required: false, active: true, order: 3 },
   { id: 'responsavelCpf', sectionId: 'responsavel_legal', label: 'CPF do responsavel', type: 'dissertativa', required: false, active: true, order: 4 },
-  { id: 'responsavelTelefone', sectionId: 'responsavel_legal', label: 'Telefone do responsavel', type: 'telefone', required: false, active: true, order: 5 }
+  { id: 'responsavelTelefone', sectionId: 'responsavel_legal', label: 'Telefone do responsavel', type: 'telefone', required: false, active: true, order: 5 },
+  { id: 'responsavelEmail', sectionId: 'responsavel_legal', label: 'E-mail do responsavel', type: 'dissertativa', required: false, active: true, order: 6 },
+  { id: 'responsavelRelacao', sectionId: 'responsavel_legal', label: 'Relacao com o paciente', type: 'dissertativa', required: false, active: true, order: 7 }
 ];
 
 const ADULT_SECTIONS: AnamnesisSection[] = [
@@ -276,4 +278,3 @@ export function buildQuestionLabelMap(template: AnamnesisTemplate): Record<strin
   });
   return map;
 }
-
