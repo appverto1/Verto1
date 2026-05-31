@@ -335,6 +335,55 @@ async function sha256Hex(blob: Blob): Promise<string | null> {
     .join('');
 }
 
+async function sha256TextHex(value: string): Promise<string | null> {
+  if (!crypto?.subtle) return null;
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function extensionForImageContentType(contentType: string) {
+  const normalized = String(contentType || '').toLowerCase();
+  if (normalized.includes('webp')) return 'webp';
+  if (normalized.includes('png')) return 'png';
+  if (normalized.includes('gif')) return 'gif';
+  return 'jpg';
+}
+
+function resolveIdempotentPatientPhotoPath(path: string, contentType: string, contentHash?: string | null) {
+  const normalizedPath = String(path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  const hash = String(contentHash || '').replace(/[^a-f0-9]/gi, '').toLowerCase();
+  if (!hash) {
+    return { path: normalizedPath, idempotent: false, idempotencyKey: '' };
+  }
+
+  const shortHash = hash.slice(0, 32);
+  const extension = extensionForImageContentType(contentType);
+  const onboardingMatch = normalizedPath.match(/^onboarding\/([^/]+)\/(profile|signature|logo)(?:[-/.]|$)/i);
+  if (onboardingMatch) {
+    const ownerId = onboardingMatch[1];
+    const kind = onboardingMatch[2].toLowerCase();
+    return {
+      path: `onboarding/${ownerId}/${kind}/${kind}-${shortHash}.${extension}`,
+      idempotent: true,
+      idempotencyKey: `onboarding:${ownerId}:${kind}:${shortHash}`
+    };
+  }
+
+  const patientProfileMatch = normalizedPath.match(/^([^/]+)\/profile(?:[-/.]|$)/i);
+  if (patientProfileMatch) {
+    const ownerId = patientProfileMatch[1];
+    return {
+      path: `${ownerId}/profile/profile-${shortHash}.${extension}`,
+      idempotent: true,
+      idempotencyKey: `patient-profile:${ownerId}:${shortHash}`
+    };
+  }
+
+  return { path: normalizedPath, idempotent: false, idempotencyKey: '' };
+}
+
 async function getAuthHeaders(includeBearer = true) {
   const headers: any = {
     'Content-Type': 'application/json; charset=utf-8',
@@ -3550,17 +3599,50 @@ export const dataService = {
 
   async saveUserProfile(userId: string, profile: any) {
     const data = { ...profile, updated_at: profile.updated_at || new Date().toISOString() };
+    const endpoint = `/api/profile/${userId}`;
+    const queuePendingProfile = async (reason: string) => {
+      await saveEncryptedRecord({
+        id: `profile:${userId}`,
+        data,
+        type: 'profile',
+        sync_status: 'pending',
+        last_updated: Date.now(),
+        method: 'POST',
+        endpoint
+      });
+      return {
+        success: false,
+        queued: true,
+        error: reason || 'Perfil salvo localmente. A sincronização será retomada automaticamente.'
+      };
+    };
     try {
-      const response = await fetch(`/api/profile/${userId}`, {
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: await getAuthHeaders(),
         credentials: 'include',
         body: JSON.stringify(data)
       });
-      return await safeJson(response);
-    } catch (error) {
+      const result = await safeJson(response);
+      if (response.ok && result?.success !== false) {
+        await saveEncryptedRecord({
+          id: `profile:${userId}`,
+          data,
+          type: 'profile',
+          sync_status: 'synced',
+          last_updated: Date.now(),
+          method: 'POST',
+          endpoint
+        });
+        return result;
+      }
+      if (response.status === 408 || response.status === 429 || response.status >= 500) {
+        return await queuePendingProfile(result?.error || result?.message || `HTTP ${response.status}`);
+      }
+      return result;
+    } catch (error: any) {
       console.error('Error saving user profile:', error);
-      return { success: false, error: String(error) };
+      return await queuePendingProfile(error?.message || String(error));
     }
   },
 
@@ -3596,17 +3678,51 @@ export const dataService = {
     profilePicture?: string | null;
     profilePicturePath?: string | null;
   }) {
+    const endpoint = '/api/patient/self/profile';
+    const payload = profile || {};
+    const queuePendingProfile = async (reason: string) => {
+      await saveEncryptedRecord({
+        id: 'profile:self',
+        data: payload,
+        type: 'profile',
+        sync_status: 'pending',
+        last_updated: Date.now(),
+        method: 'PATCH',
+        endpoint
+      });
+      return {
+        success: false,
+        queued: true,
+        error: reason || 'Perfil salvo localmente. A sincronização será retomada automaticamente.'
+      };
+    };
     try {
-      const response = await fetch('/api/patient/self/profile', {
+      const response = await fetch(endpoint, {
         method: 'PATCH',
         headers: await getAuthHeaders(),
         credentials: 'include',
-        body: JSON.stringify(profile || {})
+        body: JSON.stringify(payload)
       });
-      return await safeJson(response);
-    } catch (error) {
+      const result = await safeJson(response);
+      if (response.ok && result?.success !== false) {
+        await saveEncryptedRecord({
+          id: 'profile:self',
+          data: payload,
+          type: 'profile',
+          sync_status: 'synced',
+          last_updated: Date.now(),
+          method: 'PATCH',
+          endpoint
+        });
+        return result;
+      }
+      if (response.status === 408 || response.status === 429 || response.status >= 500) {
+        return await queuePendingProfile(result?.error || result?.message || `HTTP ${response.status}`);
+      }
+      return result;
+    } catch (error: any) {
       console.error('Error updating patient profile:', error);
-      return { success: false, error: String(error) };
+      return await queuePendingProfile(error?.message || String(error));
     }
   },
 
@@ -3641,6 +3757,8 @@ export const dataService = {
           quality: 0.78,
           mimeType: 'image/jpeg'
         });
+        const contentHash = await sha256TextHex(prepared.dataUrl) || await sha256Hex(file);
+        const uploadTarget = resolveIdempotentPatientPhotoPath(path, prepared.contentType, contentHash);
 
         const response = await fetch('/api/storage/upload', {
           method: 'POST',
@@ -3648,9 +3766,11 @@ export const dataService = {
           credentials: 'include',
           body: JSON.stringify({
             bucket,
-            path,
+            path: uploadTarget.path,
             contentType: prepared.contentType,
-            fileBase64: prepared.dataUrl
+            fileBase64: prepared.dataUrl,
+            idempotent: uploadTarget.idempotent,
+            idempotencyKey: uploadTarget.idempotencyKey
           })
         });
 
@@ -3748,15 +3868,21 @@ export const dataService = {
       const prepared = shouldCompressPatientPhoto
         ? await compressImageDataUrl(dataUrl, { maxDimension: 1200, quality: 0.78, mimeType: 'image/jpeg' })
         : { dataUrl, contentType: contentTypeHint || 'image/png' };
+      const contentHash = shouldCompressPatientPhoto ? await sha256TextHex(prepared.dataUrl) : null;
+      const uploadTarget = shouldCompressPatientPhoto
+        ? resolveIdempotentPatientPhotoPath(path, prepared.contentType, contentHash)
+        : { path, idempotent: false, idempotencyKey: '' };
       const response = await fetch('/api/storage/upload', {
         method: 'POST',
         headers: await getAuthHeaders(),
         credentials: 'include',
         body: JSON.stringify({
           bucket,
-          path,
+          path: uploadTarget.path,
           contentType: prepared.contentType,
-          fileBase64: prepared.dataUrl
+          fileBase64: prepared.dataUrl,
+          idempotent: uploadTarget.idempotent,
+          idempotencyKey: uploadTarget.idempotencyKey
         })
       });
 

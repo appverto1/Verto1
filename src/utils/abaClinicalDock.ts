@@ -1,3 +1,5 @@
+import { getBehaviorDefaultMeasurement, resolveBehaviorMeasurementForAction } from './abaBehaviorCapture';
+
 export type AbaQuickBehaviorShortcut = {
   behaviorId: string;
   label: string;
@@ -33,7 +35,7 @@ const shortcutColorById: Record<string, string> = {
 
 export const normalizeQuickBehaviorShortcuts = (
   configuredShortcuts: any,
-  behaviors: Array<{ id: string; name: string; defaultMeasurement?: string }>
+  behaviors: Array<{ id: string; name: string; defaultMeasurement?: string; allowedMeasurements?: string[] }>
 ): AbaQuickBehaviorShortcut[] => {
   const byId = new Map(behaviors.map((behavior) => [String(behavior.id), behavior]));
   const rawShortcuts = Array.isArray(configuredShortcuts) && configuredShortcuts.length > 0
@@ -45,14 +47,18 @@ export const normalizeQuickBehaviorShortcuts = (
       const behaviorId = String(shortcut?.behaviorId || shortcut?.behavior_id || shortcut?.id || '').trim();
       const behavior = byId.get(behaviorId);
       if (!behavior) return null;
+      const method = resolveBehaviorMeasurementForAction(
+        behavior,
+        shortcut?.method || shortcut?.measurementType || getBehaviorDefaultMeasurement(behavior)
+      );
       return {
         behaviorId,
         label: String(shortcut?.label || shortcutLabelById[behaviorId] || behavior.name),
-        method: String(shortcut?.method || shortcut?.measurementType || behavior.defaultMeasurement || 'frequency'),
+        method,
         priority: Number(shortcut?.priority ?? index + 1),
         visibleInDock: shortcut?.visibleInDock !== false && shortcut?.visible_in_dock !== false,
         color: String(shortcut?.color || shortcutColorById[behaviorId] || 'slate'),
-        icon: String(shortcut?.icon || (behavior.defaultMeasurement === 'duration' ? 'duration' : 'plus'))
+        icon: String(shortcut?.icon || (method === 'duration' ? 'duration' : 'plus'))
       };
     })
     .filter(Boolean)

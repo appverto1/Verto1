@@ -131,6 +131,7 @@ const metricLabels: Record<string, string> = {
   FUNCTIONAL_COMMUNICATION: 'Comunicação funcional',
   ENGAGEMENT: 'Engajamento',
   BEHAVIOR_FREQUENCY: 'Frequência',
+  BEHAVIOR_DURATION_EPISODES: 'Episódios de duração',
   BEHAVIOR_DURATION_TOTAL: 'Duração total',
   BEHAVIOR_DURATION_AVG: 'Duração média',
   BEHAVIOR_DURATION_MAX: 'Duração máxima',
@@ -150,6 +151,7 @@ const metricLabels: Record<string, string> = {
 const targetMetricOptions = ['TARGET_INDEPENDENCE', 'TARGET_ACCURACY', 'TARGET_TRIAL_COUNT'];
 const behaviorMetricOptions = [
   'BEHAVIOR_FREQUENCY',
+  'BEHAVIOR_DURATION_EPISODES',
   'BEHAVIOR_DURATION_TOTAL',
   'BEHAVIOR_DURATION_AVG',
   'BEHAVIOR_INTERVAL_OCCURRENCE'
@@ -260,6 +262,7 @@ const metricAxisLabels: Record<string, string> = {
   TARGET_ERROR: 'Erro (%)',
   TARGET_TRIAL_COUNT: 'Tentativas',
   BEHAVIOR_FREQUENCY: 'Ocorrências',
+  BEHAVIOR_DURATION_EPISODES: 'Episódios',
   BEHAVIOR_DURATION_TOTAL: 'Duração total',
   BEHAVIOR_DURATION_AVG: 'Duração média',
   BEHAVIOR_DURATION_MAX: 'Duração máxima',

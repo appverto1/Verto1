@@ -5,6 +5,9 @@ export type AbaPromptLevel = {
   isError: boolean;
 };
 
+export const ABA_PROMPTED_PROMPT_KEYS = ['visual', 'gestural', 'verbal', 'model', 'partial_physical', 'full_physical'] as const;
+export type AbaPromptedPromptKey = typeof ABA_PROMPTED_PROMPT_KEYS[number];
+
 const PROMPTED_LEVEL: AbaPromptLevel = {
   key: 'prompted',
   label: 'Com ajuda',
@@ -18,11 +21,15 @@ export const ABA_PROMPT_LEVEL_OPTIONS: AbaPromptLevel[] = [
   { key: 'gestural', label: 'Gestual', isIndependent: false, isError: false },
   { key: 'verbal', label: 'Verbal', isIndependent: false, isError: false },
   { key: 'model', label: 'Modelo', isIndependent: false, isError: false },
-  { key: 'partial_physical', label: 'Fisica parcial', isIndependent: false, isError: false },
-  { key: 'full_physical', label: 'Fisica total', isIndependent: false, isError: false },
+  { key: 'partial_physical', label: 'Física parcial', isIndependent: false, isError: false },
+  { key: 'full_physical', label: 'Física total', isIndependent: false, isError: false },
   { key: 'other', label: 'Outro', isIndependent: false, isError: false },
   { key: 'error', label: 'Erro / sem resposta', isIndependent: false, isError: true }
 ];
+
+export const ABA_PROMPTED_PROMPT_OPTIONS = ABA_PROMPT_LEVEL_OPTIONS.filter((level) => (
+  ABA_PROMPTED_PROMPT_KEYS.includes(level.key as AbaPromptedPromptKey)
+));
 
 const ABA_PROMPT_LEVELS: AbaPromptLevel[] = [
   ...ABA_PROMPT_LEVEL_OPTIONS,
@@ -123,4 +130,8 @@ export function resolveAbaPromptLevel(input: {
   if (correct === true || (score !== null && maxScore !== null && score >= maxScore)) return PROMPT_BY_KEY.get('independent')!;
   if (correct === false || score === 0) return PROMPT_BY_KEY.get('error')!;
   return PROMPT_BY_KEY.get('independent')!;
+}
+
+export function getAbaPromptLabel(value: unknown, fallback = 'Com ajuda') {
+  return getAbaPromptLevel(value)?.label || fallback;
 }

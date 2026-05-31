@@ -177,11 +177,14 @@ test('profissional consegue enviar, acompanhar e revisar ficha sem expor detalhe
 
 test('historico compartilhado depende de autorizacao explicita e snapshot limitado', () => {
   assert.match(serverCode, /patient_shared_history_snapshots/);
+  assert.match(serverCode, /existingSnapshots/);
+  assert.match(serverCode, /idempotent:\s*true[\s\S]*Hist.rico compartilh.vel j. estava autorizado/);
   assert.match(serverCode, /buildPatientPortabilitySnapshot\(\{\s*patient,\s*notes:\s*\[\]/);
   assert.match(serverCode, /authorized_by_user_id/);
   assert.match(serverCode, /relationship_status:\s*RELATIONSHIP_CONFIRMED/);
   assert.match(serverCode, /confirmation_token_hash/);
   assert.match(serverCode, /hashIdentifier\(`relationship-confirmation:/);
+  assert.match(migrationCode, /idx_shared_history_snapshots_confirmation/);
 });
 
 let passed = 0;

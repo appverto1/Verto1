@@ -7,6 +7,7 @@ export type AbaMetricType =
   | 'FUNCTIONAL_COMMUNICATION'
   | 'ENGAGEMENT'
   | 'BEHAVIOR_FREQUENCY'
+  | 'BEHAVIOR_DURATION_EPISODES'
   | 'BEHAVIOR_DURATION_TOTAL'
   | 'BEHAVIOR_DURATION_AVG'
   | 'BEHAVIOR_DURATION_MAX'
@@ -150,6 +151,7 @@ export const ABA_METRIC_DIRECTION: Record<string, AbaMetricDirection> = {
   ENGAGEMENT: 'HIGHER_IS_BETTER',
   TARGET_TRIAL_COUNT: 'HIGHER_IS_BETTER',
   BEHAVIOR_FREQUENCY: 'LOWER_IS_BETTER',
+  BEHAVIOR_DURATION_EPISODES: 'LOWER_IS_BETTER',
   BEHAVIOR_DURATION_TOTAL: 'LOWER_IS_BETTER',
   BEHAVIOR_DURATION_AVG: 'LOWER_IS_BETTER',
   BEHAVIOR_DURATION_MAX: 'LOWER_IS_BETTER',
@@ -170,6 +172,7 @@ export const ABA_CLINICAL_LINE_METRICS: Record<AbaClinicalLineCategory, AbaClini
   ],
   behavior: [
     { id: 'BEHAVIOR_FREQUENCY', label: 'Frequencia', axis: 'count' },
+    { id: 'BEHAVIOR_DURATION_EPISODES', label: 'Episodios de duracao', axis: 'count' },
     { id: 'BEHAVIOR_DURATION_TOTAL', label: 'Duracao total', axis: 'duration' },
     { id: 'BEHAVIOR_DURATION_AVG', label: 'Duracao media', axis: 'duration' },
     { id: 'BEHAVIOR_INTERVAL_OCCURRENCE', label: 'Intervalo parcial %', axis: 'percent' }
@@ -751,7 +754,7 @@ export function aggregateAbaClinicalLinePoints(
     }));
   }
 
-  const sumMetric = ['TARGET_TRIAL_COUNT', 'BEHAVIOR_FREQUENCY', 'BEHAVIOR_DURATION_TOTAL', 'MASTERY_VALID_ATTEMPTS', 'MAINTENANCE_FAILURES'].includes(metric);
+  const sumMetric = ['TARGET_TRIAL_COUNT', 'BEHAVIOR_FREQUENCY', 'BEHAVIOR_DURATION_EPISODES', 'BEHAVIOR_DURATION_TOTAL', 'MASTERY_VALID_ATTEMPTS', 'MAINTENANCE_FAILURES'].includes(metric);
   const groups = new Map<string, AbaClinicalLinePoint[]>();
   for (const point of sorted) {
     const key = groupBy === 'week' ? lineWeekKey(point.date) : aggregateDateKey(point.date);
@@ -933,6 +936,14 @@ export function buildSessionMetricSnapshotsFromSummaries(input: {
     const prev = findMatching(previousDuration, item, ['behavior_id', 'behaviorId'], ['behaviorName', 'behavior_name', 'behavior']);
     const label = String(firstValue(item, ['behaviorName', 'behavior_name', 'behavior']) || 'Comportamento').trim();
     const behaviorId = String(firstValue(item, ['behavior_id', 'behaviorId']) || '').trim() || null;
+    snapshots.push(buildSnapshot({
+      ...common,
+      behaviorId,
+      metricType: 'BEHAVIOR_DURATION_EPISODES',
+      metricLabel: label,
+      metricValue: firstValue(item, ['episodes', 'duration_episode_count', 'durationEpisodeCount']),
+      previousValue: firstValue(prev, ['episodes', 'duration_episode_count', 'durationEpisodeCount'])
+    }));
     snapshots.push(buildSnapshot({
       ...common,
       behaviorId,

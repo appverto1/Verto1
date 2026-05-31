@@ -778,7 +778,60 @@ export const ClinicalAgendaBoard = ({
 
   useEffect(() => {
     cacheRef.current.clear();
-  }, [agendaVersion]);
+    const localById = new Map<string, any>();
+    for (const item of agenda || []) {
+      const id = String(item?.id || '').trim();
+      if (id) localById.set(id, item);
+    }
+    if (localById.size === 0) return;
+
+    const mergeLocalAppointment = (event: any) => {
+      const id = String(event?.id || event?.appointment_id || '').trim();
+      const local = id ? localById.get(id) : null;
+      if (!local) return event;
+      return {
+        ...event,
+        ...local,
+        status: local.status ?? event.status,
+        notes: local.notes ?? local.note ?? event.notes,
+        updated_at: local.updated_at ?? local.updatedAt ?? event.updated_at
+      };
+    };
+
+    setRemoteEvents((prev) => {
+      if (!prev.length) return prev;
+      let changed = false;
+      const next = prev.map((event: any) => {
+        const merged = mergeLocalAppointment(event);
+        if (
+          merged !== event &&
+          (
+            String(merged.status || '') !== String(event.status || '') ||
+            String(merged.notes || '') !== String(event.notes || '') ||
+            String(merged.updated_at || '') !== String(event.updated_at || '')
+          )
+        ) {
+          changed = true;
+        }
+        return merged;
+      });
+      return changed ? next : prev;
+    });
+
+    setSelectedEvent((prev: any) => {
+      if (!prev) return prev;
+      const merged = mergeLocalAppointment(prev);
+      return merged === prev ? prev : normalizeClinicalEvent(merged, roomLookup);
+    });
+
+    setEventDetail((prev: any) => {
+      if (!prev?.event) return prev;
+      const merged = mergeLocalAppointment(prev.event);
+      return merged === prev.event
+        ? prev
+        : { ...prev, event: normalizeClinicalEvent(merged, roomLookup) };
+    });
+  }, [agendaVersion, roomLookup]);
 
   useEffect(() => {
     let cancelled = false;

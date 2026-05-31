@@ -324,6 +324,16 @@ const measurementTypeOf = (event: any) => String(valueOf(event, 'measurementType
 
 const behaviorNameOf = (event: any) => String(valueOf(event, 'behaviorName', 'behavior_name', 'title') || 'Comportamento');
 
+const isCompletedDurationEvent = (event: any) => {
+  if (measurementTypeOf(event) !== 'duration') return false;
+  const status = String(valueOf(event, 'status') || '').trim().toUpperCase();
+  if (status === 'IN_PROGRESS') return false;
+  const durationValue = valueOf(event, 'durationSeconds', 'duration_seconds');
+  const hasDuration = durationValue !== undefined && durationValue !== null;
+  const hasEndedAt = Boolean(valueOf(event, 'endedAt', 'ended_at'));
+  return status === 'COMPLETED' || hasEndedAt || hasDuration;
+};
+
 const isIntervalAggregate = (event: any) => Boolean(
   valueOf(event, 'intervalAggregate') ||
   valueOf(event, 'raw_payload', 'rawPayload')?.intervalAggregate
@@ -432,7 +442,7 @@ export const calculateFrequencySummary = (events: any[]): BehaviorFrequencySumma
 export const calculateDurationSummary = (events: any[]): BehaviorDurationSummary[] => {
   const grouped = new Map<string, { behaviorName: string; durations: number[] }>();
   for (const event of events) {
-    if (measurementTypeOf(event) !== 'duration') continue;
+    if (!isCompletedDurationEvent(event)) continue;
     const behaviorName = behaviorNameOf(event);
     const duration = Math.max(0, safeNumber(valueOf(event, 'durationSeconds', 'duration_seconds'), 0));
     const current = grouped.get(behaviorName) || { behaviorName, durations: [] };
@@ -712,7 +722,7 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
     const behaviorName = behaviorNameOf(record);
     if (measurementType === 'frequency' || measurementType === 'rate') {
       frequencyGroups.set(behaviorName, [...(frequencyGroups.get(behaviorName) || []), record]);
-    } else if (measurementType === 'duration') {
+    } else if (measurementType === 'duration' && isCompletedDurationEvent(record)) {
       durationGroups.set(behaviorName, [...(durationGroups.get(behaviorName) || []), record]);
     } else if (intervalMethods.has(measurementType)) {
       const key = `${behaviorName}:${measurementType}`;
@@ -893,7 +903,7 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
         ? effectiveBehaviorRecords.filter((record) => measurementTypeOf(record) === 'frequency' || measurementTypeOf(record) === 'rate').length
         : sessionSummary.frequencySummary.reduce((sum, item) => sum + item.occurrences, 0),
       totalDurationEvents: effectiveBehaviorRecords.length > 0
-        ? effectiveBehaviorRecords.filter((record) => measurementTypeOf(record) === 'duration').length
+        ? effectiveBehaviorRecords.filter((record) => isCompletedDurationEvent(record)).length
         : sessionSummary.durationSummary.reduce((sum, item) => sum + item.episodes, 0),
       totalIntervalCollections: interval.length,
       sessionNote: sessionSummary.sessionNote || ''

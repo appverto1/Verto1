@@ -496,9 +496,26 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         setSettingsMessage(upload?.error || 'Não foi possível enviar a foto.');
         return;
       }
-      setSettingsForm((prev) => ({ ...prev, profilePicture: upload.url, profilePicturePath: upload.path } as any));
+      const nextForm = {
+        ...settingsForm,
+        profilePicture: upload.url,
+        profilePicturePath: upload.path
+      } as any;
+      setSettingsForm(nextForm);
       setProfilePicture(upload.url);
-      setSettingsMessage('Foto pronta. Clique em salvar para confirmar.');
+      const persistResult = await dataService.updatePatientSelfProfile({
+        name: nextForm.name.trim() || displayName,
+        address: String(nextForm.address || '').trim(),
+        profilePicture: upload.url,
+        profilePicturePath: upload.path
+      });
+      if (persistResult?.success) {
+        setSettingsMessage('Foto salva com segurança.');
+      } else if (persistResult?.queued) {
+        setSettingsMessage('Foto salva localmente. A sincronização será retomada automaticamente.');
+      } else {
+        setSettingsMessage(persistResult?.error || 'Foto enviada. Clique em salvar para confirmar os dados.');
+      }
     } finally {
       setIsSavingSettings(false);
       event.target.value = '';
@@ -522,14 +539,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         profilePicturePath: (settingsForm as any).profilePicturePath || null
       });
 
-      if (!result?.success) {
+      if (!result?.success && !result?.queued) {
         setSettingsMessage(result?.error || 'Não foi possível salvar suas configurações.');
         return;
       }
 
       setDisplayName(nextName);
       setProfilePicture(settingsForm.profilePicture || null);
-      setSettingsMessage('Configurações salvas com sucesso.');
+      setSettingsMessage(result?.queued ? 'Configurações salvas localmente. A sincronização será retomada automaticamente.' : 'Configurações salvas com sucesso.');
       setTimeout(() => setIsSettingsOpen(false), 700);
     } catch (error: any) {
       setSettingsMessage(error?.message || 'Não foi possível salvar suas configurações.');

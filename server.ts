@@ -1976,13 +1976,13 @@ function sanitizeSessionUrl(value: unknown): string | null {
 function extractPatientPhotosStoragePath(raw: unknown): string | null {
   const value = sanitizeString(raw, 1500);
   if (!value) return null;
-  if (value.startsWith('onboarding/')) return value;
-  if (value.startsWith('patients/')) return value;
-  if (!value.includes('://') && value.includes('/') && !value.startsWith('data:')) return value;
   if (value.startsWith('patient-photos/')) {
     const pathPart = value.slice('patient-photos/'.length);
     return pathPart ? pathPart : null;
   }
+  if (value.startsWith('onboarding/')) return value;
+  if (value.startsWith('patients/')) return value;
+  if (!value.includes('://') && value.includes('/') && !value.startsWith('data:')) return value;
   const marker = '/storage/v1/object/sign/patient-photos/';
   if (value.includes(marker)) {
     const encodedPath = value.split(marker)[1]?.split('?')[0] || '';
@@ -2089,6 +2089,19 @@ function detectMimeByMagicBytes(buffer: Buffer): DetectedUploadMime | null {
   }
 
   return null;
+}
+
+function isStorageDuplicateObjectError(error: any): boolean {
+  const status = Number(error?.statusCode || error?.status || 0);
+  const code = sanitizeString(error?.code || error?.error, 80).toLowerCase();
+  const message = sanitizeString(error?.message || String(error || ''), 300).toLowerCase();
+  return (
+    status === 409 ||
+    code.includes('duplicate') ||
+    code.includes('resourcealreadyexists') ||
+    message.includes('already exists') ||
+    message.includes('duplicate')
+  );
 }
 
 function isAllowedDetectedMime(mime: DetectedUploadMime, context: UploadContext): boolean {
@@ -5594,6 +5607,7 @@ function buildSessionUserPayload(input: any) {
     role: ensureRole(resolvedRole) ? resolvedRole : 'therapist',
     name: sanitizeString(input?.name, 180),
     profilePicture: sanitizeSessionUrl(input?.profilePicture),
+    profilePicturePath: sanitizeString(input?.profilePicturePath || input?.profile_picture_path, 500) || null,
     address: sanitizeString(input?.address, 320) || null,
     type: sanitizeString(input?.type, 80) || null,
     age: typeof input?.age === 'number' ? input.age : null,
@@ -11305,12 +11319,15 @@ async function startServer() {
         sanitizeString(req.session.user?.name, 180) ||
         'Paciente';
       const address = sanitizeString(req.body?.address || req.body?.endereco, 320) || null;
-      const profilePicture =
+      const requestedProfilePicture =
         sanitizeSessionUrl(req.body?.profilePicture) ||
         sanitizeSessionUrl(req.body?.profile_picture) ||
         sanitizeSessionUrl(req.session.user?.profilePicture) ||
         null;
       const profilePicturePath = sanitizeString(req.body?.profilePicturePath || req.body?.profile_picture_path, 500) || null;
+      const profilePicture =
+        (profilePicturePath ? await resolvePatientPhotoUrl(requestedProfilePicture, profilePicturePath) : null) ||
+        requestedProfilePicture;
       const updatedAt = new Date().toISOString();
 
       await patchTableSafely('users', { column: 'id', value: userId }, {
@@ -11370,7 +11387,8 @@ async function startServer() {
         data: {
           name,
           address,
-          profilePicture
+          profilePicture,
+          profilePicturePath
         }
       });
     } catch (error: any) {
@@ -11496,6 +11514,10 @@ async function startServer() {
       const actorRole = sanitizeString(actor?.role, 40).toLowerCase();
       const actorId = sanitizeString(actor?.id, 120);
       const isPatientActor = actorRole === 'patient';
+      const isProfessionalActor = ['coordinator', 'receptionist', 'therapist', 'admin', 'owner'].includes(actorRole);
+      if (!isPatientActor && !isProfessionalActor) {
+        return res.status(403).json({ success: false, error: 'Perfil sem permissão para alterar agenda.' });
+      }
       const clinicId = currentClinicId(actor);
       const now = new Date().toISOString();
       const safeSource = sanitizeString(req.body?.source, 80) || 'appointment_confirmation_popup';
@@ -11511,6 +11533,10 @@ async function startServer() {
       const isPushNotificationAction = safeSource === 'push_notification_action';
       const isFutureRecurringCancellation =
         normalizedStatus === 'canceled' && recurrenceScope === 'future';
+
+      if (isPatientActor && !['confirmed', 'reschedule', 'canceled'].includes(normalizedStatus)) {
+        return res.status(403).json({ success: false, error: 'Resposta de consulta não permitida.' });
+      }
 
       if (isFutureRecurringCancellation && actorRole !== 'therapist') {
         return res.status(403).json({
@@ -11620,11 +11646,15 @@ async function startServer() {
       });
 
       if (!foundAppointment) {
-        const { data: tableAppointment, error: tableReadError } = await supabase
+        let tableAppointmentQuery = supabase
           .from('appointments')
           .select(APPOINTMENT_SELECT)
           .eq('id', appointmentId)
-          .maybeSingle();
+          .limit(1);
+        if (isProfessionalActor && !hasGlobalClinicAccess(actor) && clinicId) {
+          tableAppointmentQuery = tableAppointmentQuery.eq('clinic_id', clinicId);
+        }
+        const { data: tableAppointment, error: tableReadError } = await tableAppointmentQuery.maybeSingle();
         if (tableReadError) {
           console.warn('[Appointments] status fallback read failed:', tableReadError.message);
         }
@@ -12655,8 +12685,30 @@ async function startServer() {
         notes: [],
         scope
       });
-      const snapshotId = crypto.randomUUID();
       const nowIso = new Date().toISOString();
+      const { data: existingSnapshots, error: existingSnapshotError } = await supabase
+        .from('patient_shared_history_snapshots')
+        .select(PATIENT_SHARED_HISTORY_SNAPSHOT_SELECT)
+        .eq('organization_id_target', sanitizeString(confirmation.organization_id_requesting, 120))
+        .eq('patient_id_target', patientId)
+        .eq('status', 'GENERATED')
+        .order('generated_at', { ascending: false })
+        .limit(20);
+      if (existingSnapshotError && !isMissingRelationError(existingSnapshotError)) throw existingSnapshotError;
+      const existingSnapshot = (Array.isArray(existingSnapshots) ? existingSnapshots : []).find((row: any) => (
+        sanitizeString(row?.metadata?.confirmationId, 120) === confirmationId ||
+        sanitizeString(row?.metadata?.confirmation_id, 120) === confirmationId
+      ));
+      if (existingSnapshot?.id) {
+        return res.json({
+          success: true,
+          idempotent: true,
+          message: 'Histórico compartilhável já estava autorizado.',
+          data: { snapshotId: sanitizeString(existingSnapshot.id, 120), status: sanitizeString(existingSnapshot.status, 40) || 'GENERATED' }
+        });
+      }
+
+      const snapshotId = crypto.randomUUID();
       const insert = await insertRowWithSchemaFallback('patient_shared_history_snapshots', {
         id: snapshotId,
         organization_id_source: null,
@@ -13554,6 +13606,8 @@ async function startServer() {
       const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
       const actorId = sanitizeString(req.session.user?.id, 120);
       const isOnboardingUpload = objectPath.startsWith('onboarding/');
+      const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180);
+      const isIdempotentUpload = Boolean(req.body?.idempotent === true || idempotencyKey);
 
       if (bucketName !== 'patient-photos') {
         return res.status(400).json({ success: false, error: 'Bucket inválido para upload.' });
@@ -13640,7 +13694,23 @@ async function startServer() {
           contentType: validation.detectedMime
         });
 
-      if (uploadError) throw uploadError;
+      if (uploadError) {
+        if (!isIdempotentUpload || !isStorageDuplicateObjectError(uploadError)) {
+          throw uploadError;
+        }
+
+        const { data: signedExisting, error: signedExistingError } = await supabase.storage
+          .from(bucketName)
+          .createSignedUrl(objectPath, 60 * 10);
+        if (signedExistingError) throw signedExistingError;
+
+        return res.json({
+          success: true,
+          idempotent: true,
+          url: signedExisting.signedUrl,
+          path: objectPath
+        });
+      }
 
       const { data: signedData, error: signedError } = await supabase.storage
         .from(bucketName)
@@ -13650,6 +13720,7 @@ async function startServer() {
 
       return res.json({
         success: true,
+        idempotent: false,
         url: signedData.signedUrl,
         path: uploadData.path
       });
@@ -17435,6 +17506,15 @@ async function startServer() {
             sanitizeUrl(req.body?.clinicLogoUrl) ||
             sanitizeUrl(req.body?.clinicSettings?.clinicLogoUrl) ||
             undefined;
+          const pathProfilePictureUrl = profilePicturePath
+            ? await resolvePatientPhotoUrl(currentProfilePictureUrl, profilePicturePath)
+            : null;
+          const pathSignatureUrl = signaturePath
+            ? await resolvePatientPhotoUrl(currentSignatureUrl, signaturePath)
+            : null;
+          const pathClinicLogoUrl = clinicLogoPath
+            ? await resolvePatientPhotoUrl(currentClinicLogoUrl, clinicLogoPath)
+            : null;
 
           // Merge metadata so one partial update does not erase previously persisted media paths.
           const { data: existingProfile } = await supabase
@@ -17448,17 +17528,20 @@ async function startServer() {
               : {};
           const resolvedProfilePictureUrl =
             currentProfilePictureUrl ||
+            pathProfilePictureUrl ||
             sanitizeUrl(existingProfile?.profile_photo_url) ||
             sanitizeSessionUrl(req.session.user?.profilePicture) ||
             null;
           const resolvedSignatureUrl =
             currentSignatureUrl ||
+            pathSignatureUrl ||
             sanitizeUrl(existingProfile?.signature_data_url) ||
             sanitizeSessionUrl(req.session.user?.signatureDataUrl) ||
             sanitizeSessionUrl(req.session.user?.clinicSettings?.signatureDataUrl) ||
             null;
           const resolvedClinicLogoUrl =
             currentClinicLogoUrl ||
+            pathClinicLogoUrl ||
             sanitizeUrl(existingProfile?.clinic_logo_url) ||
             sanitizeSessionUrl(req.session.user?.clinicSettings?.clinicLogoUrl) ||
             null;
@@ -19585,6 +19668,7 @@ async function startServer() {
   const abaMetricUnit = (metric: string) => {
     if (isAbaPercentMetric(metric)) return '%';
     if (metric === 'BEHAVIOR_FREQUENCY') return ' ocorrência(s)';
+    if (metric === 'BEHAVIOR_DURATION_EPISODES') return ' episódio(s)';
     if (metric === 'TARGET_TRIAL_COUNT') return ' tentativa(s)';
     if (metric.includes('DURATION')) return 's';
     return '';
@@ -19754,6 +19838,7 @@ async function startServer() {
   };
 
   const behaviorDailyLineValue = (row: any, metric: string) => {
+    if (metric === 'BEHAVIOR_DURATION_EPISODES') return Number(row?.duration_episode_count || 0);
     if (metric === 'BEHAVIOR_DURATION_TOTAL') return Number(row?.duration_total_seconds || 0);
     if (metric === 'BEHAVIOR_DURATION_AVG') return Number(row?.duration_avg_seconds || 0);
     if (metric === 'BEHAVIOR_INTERVAL_OCCURRENCE') return Number(row?.interval_occurrence_percent || 0);
@@ -25554,7 +25639,7 @@ async function startServer() {
           }
         }
       } else if (params.category === 'behavior') {
-        const behaviorMetrics = ['BEHAVIOR_FREQUENCY', 'BEHAVIOR_DURATION_TOTAL', 'BEHAVIOR_DURATION_AVG', 'BEHAVIOR_INTERVAL_OCCURRENCE'];
+        const behaviorMetrics = ['BEHAVIOR_FREQUENCY', 'BEHAVIOR_DURATION_EPISODES', 'BEHAVIOR_DURATION_TOTAL', 'BEHAVIOR_DURATION_AVG', 'BEHAVIOR_INTERVAL_OCCURRENCE'];
         let dailyQuery = supabase
           .from('aba_behavior_daily_summaries')
           .select(ABA_BEHAVIOR_DAILY_CHART_SELECT)
@@ -25723,7 +25808,7 @@ async function startServer() {
       const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
       if (!isUuid(patientId)) return res.json({ success: true, data: { points: [], annotations: [] } });
       const params = parseAbaChartParams(req.query);
-      const behaviorMetrics = ['BEHAVIOR_FREQUENCY', 'BEHAVIOR_DURATION_TOTAL', 'BEHAVIOR_DURATION_AVG', 'BEHAVIOR_INTERVAL_OCCURRENCE'];
+      const behaviorMetrics = ['BEHAVIOR_FREQUENCY', 'BEHAVIOR_DURATION_EPISODES', 'BEHAVIOR_DURATION_TOTAL', 'BEHAVIOR_DURATION_AVG', 'BEHAVIOR_INTERVAL_OCCURRENCE'];
       let dailyQuery = supabase
         .from('aba_behavior_daily_summaries')
         .select(ABA_BEHAVIOR_DAILY_CHART_SELECT)
@@ -25769,6 +25854,7 @@ async function startServer() {
         };
         const points = [
           { ...base, id: `${row.id}-frequency`, metricType: 'BEHAVIOR_FREQUENCY', value: Number(row.frequency_count || 0) },
+          { ...base, id: `${row.id}-duration-episodes`, metricType: 'BEHAVIOR_DURATION_EPISODES', value: Number(row.duration_episode_count || 0) },
           { ...base, id: `${row.id}-duration-total`, metricType: 'BEHAVIOR_DURATION_TOTAL', value: Number(row.duration_total_seconds || 0) },
           { ...base, id: `${row.id}-interval`, metricType: 'BEHAVIOR_INTERVAL_OCCURRENCE', value: Number(row.interval_occurrence_percent || 0) }
         ];

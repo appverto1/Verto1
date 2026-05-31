@@ -198,6 +198,8 @@ create index if not exists idx_relationship_confirmations_patient
 
 create index if not exists idx_shared_history_snapshots_target
   on public.patient_shared_history_snapshots (organization_id_target, patient_id_target, status, generated_at desc);
+create index if not exists idx_shared_history_snapshots_confirmation
+  on public.patient_shared_history_snapshots ((metadata->>'confirmationId'));
 
 alter table public.patient_anamnesis_requests enable row level security;
 alter table public.patient_anamnesis_responses enable row level security;

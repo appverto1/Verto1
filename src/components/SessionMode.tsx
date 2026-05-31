@@ -24,11 +24,19 @@ import {
 } from 'lucide-react';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { dataService } from '../services/dataService';
-import { ABA_PROMPT_LEVEL_OPTIONS, resolveAbaPromptLevel } from '../utils/abaPromptLevels';
+import { ABA_PROMPTED_PROMPT_KEYS, ABA_PROMPTED_PROMPT_OPTIONS, resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 import { buildSessionReport, calculateSessionSummary, canCloseAbaSession, canRecordInAbaSession, type SessionSummary, type SessionSummaryPendingItem } from '../utils/abaSessionSummary';
 import { isAbaV2Enabled } from '../utils/featureFlags';
 import { buildClinicalActionToast, buildClinicalOfflineToast, buildClinicalSaveErrorToast, type ClinicalActionToast } from '../utils/abaSessionFeedback';
 import { getCrisisShortcutIds, getDockVisibleShortcuts, normalizeQuickBehaviorShortcuts } from '../utils/abaClinicalDock';
+import {
+  behaviorAllowsMeasurement,
+  formatBehaviorHistoryDetail,
+  getBehaviorAllowedMeasurements,
+  getBehaviorDefaultMeasurement,
+  isIntervalMeasurementType,
+  resolveBehaviorMeasurementForAction
+} from '../utils/abaBehaviorCapture';
 import { formatPatientLabel, formatTherapistLabel, safeDisplayValue } from '../utils/displayLabels';
 import {
   formatAbaTrialHistoryLabel,
@@ -70,6 +78,7 @@ type SessionRecord = {
   trialOutcome?: 'independent' | 'prompted' | 'error';
   collectionType?: string;
   promptLevelKey?: string;
+  promptLevelName?: string;
   score?: number | null;
   correct?: boolean;
   independent?: boolean;
@@ -276,8 +285,15 @@ const syncClasses: Record<SyncStatus, string> = {
   error: 'bg-red-50 text-red-600 border-red-100'
 };
 
-const promptedPromptKeys = ['visual', 'gestural', 'verbal', 'model', 'partial_physical', 'full_physical'];
-const promptedPromptOptions = ABA_PROMPT_LEVEL_OPTIONS.filter((prompt) => promptedPromptKeys.includes(prompt.key));
+const promptedPromptKeySet = new Set<string>(ABA_PROMPTED_PROMPT_KEYS);
+const promptedPromptOptions = ABA_PROMPTED_PROMPT_OPTIONS.map((prompt) => ({
+  ...prompt,
+  compactLabel: prompt.key === 'partial_physical'
+    ? 'Física parcial'
+    : prompt.key === 'full_physical'
+      ? 'Física total'
+      : prompt.label
+}));
 
 const normalizeSyncStatus = (status: any): SyncStatus => {
   return status === 'syncing' || status === 'synced' || status === 'error' ? status : 'local';
@@ -308,11 +324,13 @@ const mapRecentAbaEventToSessionRecord = (event: any): SessionRecord | null => {
     const outcome: SessionRecord['trialOutcome'] = !correct ? 'error' : independent ? 'independent' : 'prompted';
     const collectionType = event.collection_type || event.collectionType || event.trial_type || event.trialType || 'dtt';
     const score = event.response_score ?? event.responseScore ?? event.score ?? null;
+    const promptLevelKey = event.prompt_level_key || event.promptLevelKey;
+    const promptLevelName = event.prompt_level_name || event.promptLevelName;
     return {
       id: String(event.id),
       kind: 'trial',
       title: String(event.target_name || event.targetName || 'Tentativa'),
-      detail: formatAbaTrialHistoryLabel({ collectionType, outcome, score }),
+      detail: formatAbaTrialHistoryLabel({ collectionType, outcome, score, promptLevelKey, promptLevelName }),
       timestamp: String(event.occurred_at || event.occurredAt || event.created_at || event.createdAt || new Date().toISOString()),
       syncStatus: normalizeSyncStatus(event.sync_status || event.syncStatus || 'synced'),
       targetId: event.target_id || event.targetId || null,
@@ -321,7 +339,8 @@ const mapRecentAbaEventToSessionRecord = (event: any): SessionRecord | null => {
       therapistId: event.therapist_id || event.therapistId || null,
       trialOutcome: outcome,
       collectionType,
-      promptLevelKey: event.prompt_level_key || event.promptLevelKey,
+      promptLevelKey,
+      promptLevelName,
       score,
       correct,
       independent
@@ -331,13 +350,14 @@ const mapRecentAbaEventToSessionRecord = (event: any): SessionRecord | null => {
   const measurementType = String(event.measurement_type || event.measurementType || 'frequency');
   const durationSeconds = event.duration_seconds ?? event.durationSeconds ?? null;
   const countDelta = event.count_delta ?? event.countDelta ?? null;
-  const detail = measurementType === 'duration'
-    ? durationSeconds
-      ? `duração ${formatSessionDuration(Number(durationSeconds || 0))}`
-      : 'duração em andamento'
-    : measurementType === 'frequency'
-      ? `frequência +${Number(countDelta || 1)}`
-      : getMeasurementLabel(measurementType);
+  const detail = formatBehaviorHistoryDetail({
+    measurementType,
+    durationSeconds,
+    countDelta,
+    location: event.location,
+    severity: event.severity,
+    status: event.status
+  });
 
   return {
     id: String(event.id),
@@ -372,6 +392,8 @@ const normalizePersistedSessionRecord = (record: any): SessionRecord => {
   };
   if (normalizedRecord.kind === 'trial') {
     const collectionType = normalizeAbaCollectionType(normalizedRecord.collectionType || record?.collection_type || record?.trialType || 'dtt');
+    const promptLevelKey = normalizedRecord.promptLevelKey || record?.prompt_level_key || record?.promptLevel;
+    const promptLevelName = normalizedRecord.promptLevelName || record?.prompt_level_name;
     const score = normalizedRecord.score ?? record?.response_score ?? 0;
     const scoreNumber = Number(score);
     const isCorrect = typeof normalizedRecord.correct === 'boolean' ? normalizedRecord.correct : Number.isFinite(scoreNumber) && scoreNumber > 0;
@@ -380,22 +402,20 @@ const normalizePersistedSessionRecord = (record: any): SessionRecord => {
     return {
       ...normalizedRecord,
       collectionType,
+      promptLevelKey,
+      promptLevelName,
       trialOutcome: outcome,
       detail: formatAbaTrialHistoryLabel({
         collectionType,
         outcome,
-        score
+        score,
+        promptLevelKey,
+        promptLevelName
       })
     };
   }
   return normalizedRecord;
 };
-
-const isIntervalMeasurement = (measurementType: string) => (
-  measurementType === 'partial_interval' ||
-  measurementType === 'whole_interval' ||
-  measurementType === 'momentary_time_sampling'
-);
 
 const getIntervalInstruction = (measurementType: string) => {
   if (measurementType === 'partial_interval') return 'SIM = ocorreu em qualquer momento do intervalo.';
@@ -590,9 +610,9 @@ export const SessionMode = ({
     () => behaviorPresets.find((behavior) => behavior.id === selectedBehaviorId) || behaviorPresets[0],
     [selectedBehaviorId]
   );
-  const selectedBehaviorMeasurements = selectedBehavior.allowedMeasurements || [selectedBehavior.defaultMeasurement];
+  const selectedBehaviorMeasurements = getBehaviorAllowedMeasurements(selectedBehavior);
   const selectedBehaviorAllowsMultipleMethods = selectedBehaviorMeasurements.length > 1;
-  const selectedBehaviorMethodOptions = behaviorMeasurementOptions.filter((option) => selectedBehaviorMeasurements.includes(option.key));
+  const selectedBehaviorMethodOptions = behaviorMeasurementOptions.filter((option) => selectedBehaviorMeasurements.includes(option.key as any));
   const quickBehaviorShortcuts = useMemo(() => normalizeQuickBehaviorShortcuts(
     patient?.quickBehaviorShortcuts ||
     patient?.quick_behavior_shortcuts ||
@@ -686,7 +706,7 @@ export const SessionMode = ({
   }, []);
 
   useEffect(() => {
-    setBehaviorMeasurementType(selectedBehavior.defaultMeasurement);
+    setBehaviorMeasurementType(getBehaviorDefaultMeasurement(selectedBehavior));
   }, [selectedBehavior.id, selectedBehavior.defaultMeasurement]);
 
   useEffect(() => {
@@ -1287,6 +1307,8 @@ export const SessionMode = ({
         isIndependent: Boolean(record.independent),
         prompt_level_key: record.promptLevelKey,
         promptLevelKey: record.promptLevelKey,
+        prompt_level_name: record.promptLevelName,
+        promptLevelName: record.promptLevelName,
         occurred_at: record.timestamp,
         occurredAt: record.timestamp,
         timestamp: record.timestamp,
@@ -1325,7 +1347,9 @@ export const SessionMode = ({
       detail: formatAbaTrialHistoryLabel({
         collectionType: 'maintenance_probe',
         outcome: original.trialOutcome || (original.correct ? 'independent' : 'error'),
-        score: original.score ?? 0
+        score: original.score ?? 0,
+        promptLevelKey: original.promptLevelKey,
+        promptLevelName: original.promptLevelName
       }),
       syncStatus: 'local',
       editedAt: convertedAt,
@@ -1382,7 +1406,13 @@ export const SessionMode = ({
       id: trialId,
       kind: 'trial',
       title: goal.name,
-      detail: formatAbaTrialHistoryLabel({ collectionType: normalizedCollectionType, outcome, score }),
+      detail: formatAbaTrialHistoryLabel({
+        collectionType: normalizedCollectionType,
+        outcome,
+        score,
+        promptLevelKey: selectedPrompt.key,
+        promptLevelName: selectedPrompt.label
+      }),
       timestamp,
       targetId: goal?.id || null,
       targetName: goal?.name || null,
@@ -1391,6 +1421,7 @@ export const SessionMode = ({
       trialOutcome: outcome,
       collectionType: normalizedCollectionType,
       promptLevelKey: selectedPrompt.key,
+      promptLevelName: selectedPrompt.label,
       score,
       correct: isCorrect,
       independent: isIndependent,
@@ -1453,8 +1484,8 @@ export const SessionMode = ({
       : outcome === 'error'
         ? resolveAbaPromptLevel({ promptLevelKey: 'error' })
         : resolveAbaPromptLevel({ promptLevelKey: promptedPromptKey || promptLevelKey });
-    if (outcome === 'prompted' && !promptedPromptKeys.includes(selectedPrompt.key)) {
-      setPromptWarning('Selecione visual, gestual, verbal, modelo, fisica parcial ou fisica total antes de salvar.');
+    if (outcome === 'prompted' && !promptedPromptKeySet.has(selectedPrompt.key)) {
+      setPromptWarning('Selecione visual, gestual, verbal, modelo, física parcial ou física total antes de salvar.');
       setPromptSelectionGoal(goal);
       return;
     }
@@ -1497,6 +1528,18 @@ export const SessionMode = ({
   const registerFrequency = (behaviorName = selectedBehavior.name, countDelta = 1) => {
     if (!ensureSessionCanRecord()) return;
     const behavior = behaviorPresets.find((item) => item.name === behaviorName) || selectedBehavior;
+    if (!behaviorAllowsMeasurement(behavior, 'frequency')) {
+      if (behaviorAllowsMeasurement(behavior, 'duration')) {
+        startDuration(behavior.name);
+      } else {
+        showClinicalToast({
+          variant: 'info',
+          title: 'Método indisponível',
+          subtitle: `${behavior.name} usa ${getMeasurementLabel(getBehaviorDefaultMeasurement(behavior))}.`
+        }, 'none');
+      }
+      return;
+    }
     const frequencyLockKey = `frequency:${behavior.id}:${behaviorName}`;
     if (!lockAction(frequencyLockKey, 300)) return;
     const payload = buildBehaviorPayload(behaviorName, 'frequency', { count_delta: countDelta, countDelta });
@@ -1512,7 +1555,12 @@ export const SessionMode = ({
       id: String(payload.id),
       kind: 'behavior',
       title: behaviorName,
-      detail: `${countDelta > 0 ? '+' : ''}${countDelta} ocorrência`,
+      detail: formatBehaviorHistoryDetail({
+        measurementType: 'frequency',
+        countDelta,
+        location: selectedLocation,
+        severity: selectedSeverity
+      }),
       timestamp: payload.timestamp,
       measurementType: 'frequency',
       countDelta,
@@ -1567,23 +1615,26 @@ export const SessionMode = ({
       duration_seconds: null,
       durationSeconds: null,
       status: 'IN_PROGRESS',
-      count_delta: 1,
-      countDelta: 1,
       location: selectedLocation,
       severity: selectedSeverity,
       timestamp: startedAt,
-      raw_payload: { durationLifecycleStatus: 'open' }
+      raw_payload: { durationLifecycleStatus: 'open', durationOnly: true }
     });
     void saveExistingBehaviorEvent(payload, {
       id,
       kind: 'behavior',
       title: behaviorName,
-      detail: 'duração em andamento',
+      detail: formatBehaviorHistoryDetail({
+        measurementType: 'duration',
+        durationSeconds: null,
+        location: selectedLocation,
+        severity: selectedSeverity,
+        status: 'IN_PROGRESS'
+      }),
       timestamp: startedAt,
       measurementType: 'duration',
       startedAt,
       durationSeconds: null,
-      countDelta: 1,
       location: selectedLocation,
       severity: selectedSeverity
     });
@@ -1611,24 +1662,32 @@ export const SessionMode = ({
       duration_seconds: durationSeconds,
       durationSeconds,
       status: 'COMPLETED',
-      count_delta: 1,
-      countDelta: 1,
       location: event.location || selectedLocation,
       severity: event.severity ?? selectedSeverity,
       timestamp: event.startedAt,
-      raw_payload: { durationLifecycleStatus: 'completed' }
+      raw_payload: {
+        durationLifecycleStatus: 'completed',
+        durationOnly: true,
+        frequencyDerivedFromDuration: true,
+        derivedOccurrences: 1
+      }
     });
     void saveExistingBehaviorEvent(payload, {
       id: event.id,
       kind: 'behavior',
       title: event.behaviorName,
-      detail: `duração ${formatElapsed(event.startedAt, new Date(endedAt).getTime())}`,
+      detail: formatBehaviorHistoryDetail({
+        measurementType: 'duration',
+        durationSeconds,
+        location: event.location || selectedLocation,
+        severity: event.severity ?? selectedSeverity,
+        status: 'COMPLETED'
+      }),
       timestamp: event.startedAt,
       measurementType: 'duration',
       startedAt: event.startedAt,
       endedAt,
       durationSeconds,
-      countDelta: 1,
       location: event.location || selectedLocation,
       severity: event.severity ?? selectedSeverity
     }).finally(() => releaseActionLock(durationEndLockKey));
@@ -1646,28 +1705,30 @@ export const SessionMode = ({
 
   const selectBehavior = (behavior: any) => {
     setSelectedBehaviorId(behavior.id);
-    setBehaviorMeasurementType(behavior.defaultMeasurement);
+    setBehaviorMeasurementType(getBehaviorDefaultMeasurement(behavior));
   };
 
   const handleSelectedBehaviorAction = () => {
     if (!ensureSessionCanRecord()) return;
-    if (behaviorMeasurementType === 'frequency') {
+    const effectiveMeasurementType = resolveBehaviorMeasurementForAction(selectedBehavior, behaviorMeasurementType);
+    if (effectiveMeasurementType !== behaviorMeasurementType) setBehaviorMeasurementType(effectiveMeasurementType);
+    if (effectiveMeasurementType === 'frequency') {
       registerFrequency(selectedBehavior.name, 1);
       return;
     }
-    if (behaviorMeasurementType === 'duration') {
+    if (effectiveMeasurementType === 'duration') {
       startDuration(selectedBehavior.name);
       return;
     }
-    if (behaviorMeasurementType === 'abc') {
+    if (effectiveMeasurementType === 'abc') {
       openAbcModal(selectedBehavior.id);
       return;
     }
-    if (isIntervalMeasurement(behaviorMeasurementType)) {
-      startIntervalRun();
+    if (isIntervalMeasurementType(effectiveMeasurementType)) {
+      startIntervalRun(selectedBehavior, effectiveMeasurementType);
       return;
     }
-    if (behaviorMeasurementType === 'rate') {
+    if (effectiveMeasurementType === 'rate') {
       if (!rateWindow) startRateWindow();
       else registerRateOccurrence();
       return;
@@ -2380,7 +2441,7 @@ export const SessionMode = ({
 
   const executeBehaviorShortcut = (shortcut: any) => {
     const behavior = resolveShortcutBehavior(shortcut);
-    const method = String(shortcut?.method || behavior.defaultMeasurement || 'frequency');
+    const method = resolveBehaviorMeasurementForAction(behavior, shortcut?.method || behavior.defaultMeasurement || 'frequency');
     if (shortcut?.behaviorId === 'abc' || method === 'abc') {
       openAbcModal(behavior.id);
       return;
@@ -2395,7 +2456,7 @@ export const SessionMode = ({
       else startDuration(behavior.name);
       return;
     }
-    if (isIntervalMeasurement(method)) {
+    if (isIntervalMeasurementType(method)) {
       startIntervalRun(behavior, method);
     }
   };
@@ -2994,7 +3055,7 @@ export const SessionMode = ({
 
   const isIntervalHistoryRecord = (record: SessionRecord) => (
     record.kind === 'behavior' &&
-    isIntervalMeasurement(inferRecordMeasurementType(record)) &&
+    isIntervalMeasurementType(inferRecordMeasurementType(record)) &&
     (record.intervalNumber !== undefined || record.intervalIndex !== undefined || record.intervalAggregate)
   );
 
@@ -3142,7 +3203,9 @@ export const SessionMode = ({
         ? formatAbaTrialHistoryLabel({
             collectionType: editedCollectionType,
             outcome: original.trialOutcome || (original.correct ? 'independent' : 'error'),
-            score: original.score ?? 0
+            score: original.score ?? 0,
+            promptLevelKey: original.promptLevelKey,
+            promptLevelName: original.promptLevelName
           })
         : isLockedIntervalRecord ? original.detail : (editingRecordDetail.trim() || original.detail),
       collectionType: editedCollectionType,
@@ -4068,7 +4131,7 @@ export const SessionMode = ({
 
   const renderDockShortcutButton = (shortcut: any, compact = false, closeAfterAction = false) => {
     const behavior = resolveShortcutBehavior(shortcut);
-    const method = String(shortcut?.method || behavior.defaultMeasurement || 'frequency');
+    const method = resolveBehaviorMeasurementForAction(behavior, shortcut?.method || behavior.defaultMeasurement || 'frequency');
     const openDuration = method === 'duration' ? findOpenDurationForBehavior(behavior.name) : null;
     const isActive = Boolean(openDuration);
     const elapsed = openDuration ? formatElapsed(openDuration.startedAt, nowMs) : '';
@@ -4221,7 +4284,7 @@ export const SessionMode = ({
             <section className="mt-4">
               <p className="text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">Duração</p>
               <div className="mt-2 grid grid-cols-2 gap-2">
-                {behaviorPresets.filter((behavior) => behavior.defaultMeasurement === 'duration' || behavior.allowedMeasurements?.includes('duration')).slice(0, 4).map((behavior) => renderDockShortcutButton({
+                {behaviorPresets.filter((behavior) => behaviorAllowsMeasurement(behavior, 'duration')).slice(0, 4).map((behavior) => renderDockShortcutButton({
                   behaviorId: behavior.id,
                   label: `${behavior.name} iniciar`,
                   method: 'duration',
@@ -4308,7 +4371,7 @@ export const SessionMode = ({
           </button>
         </div>
 
-        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:mt-0 lg:flex lg:items-center lg:justify-end lg:gap-3">
+        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:mt-0 lg:flex lg:items-center lg:justify-end lg:gap-3">
           <div className="contents lg:flex lg:items-center lg:gap-3 lg:rounded-2xl lg:bg-[#F4F7FE] lg:border lg:border-blue-100 lg:px-4 lg:py-3">
             <label className="min-h-[52px] rounded-2xl bg-[#F4F7FE] border border-blue-100 px-3 py-2 text-[9px] sm:text-[10px] font-bold text-gray-400 uppercase tracking-widest lg:min-h-0 lg:border-0 lg:bg-transparent lg:p-0">
               Tipo da próxima tentativa
@@ -4319,18 +4382,6 @@ export const SessionMode = ({
               >
                 {collectionOptions.map((option) => (
                   <option key={option.key} value={option.key}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="min-h-[52px] rounded-2xl bg-[#F4F7FE] border border-blue-100 px-3 py-2 text-[9px] sm:text-[10px] font-bold text-gray-400 uppercase tracking-widest lg:min-h-0 lg:border-0 lg:bg-transparent lg:p-0">
-              Prompt se houver ajuda
-              <select
-                value={promptLevelKey}
-                onChange={(event) => setPromptLevelKey(event.target.value)}
-                className="block mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
-              >
-                {promptedPromptOptions.map((prompt) => (
-                  <option key={prompt.key} value={prompt.key}>{prompt.label}</option>
                 ))}
               </select>
             </label>
@@ -4671,6 +4722,7 @@ export const SessionMode = ({
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-5">
               {behaviorPresets.map((behavior) => {
                 const isOpen = openDurations.some((event) => event.behaviorName === behavior.name);
+                const defaultMeasurement = getBehaviorDefaultMeasurement(behavior);
                 return (
                   <div
                     key={behavior.id}
@@ -4685,8 +4737,8 @@ export const SessionMode = ({
                     <button onClick={() => selectBehavior(behavior)} className="w-full min-h-[58px] text-left">
                       <span className="block">{behavior.name}</span>
                       <span className="mt-2 inline-flex items-center gap-1 text-[10px] uppercase tracking-widest opacity-70">
-                        {behavior.defaultMeasurement === 'duration' ? (isOpen ? <Square size={12} /> : <Play size={12} />) : behavior.defaultMeasurement === 'frequency' ? <Plus size={12} /> : <Timer size={12} />}
-                        {getMeasurementLabel(behavior.defaultMeasurement)}
+                        {defaultMeasurement === 'duration' ? (isOpen ? <Square size={12} /> : <Play size={12} />) : defaultMeasurement === 'frequency' ? <Plus size={12} /> : <Timer size={12} />}
+                        {getMeasurementLabel(defaultMeasurement)}
                       </span>
                     </button>
                     <button
@@ -4701,7 +4753,7 @@ export const SessionMode = ({
             </div>
 
             <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-4">
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-4">
+              <div className="grid grid-cols-1 gap-3 mb-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.5fr)_minmax(0,1fr)]">
                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
                   Comportamento
                   <select
@@ -4717,30 +4769,38 @@ export const SessionMode = ({
                     ))}
                   </select>
                 </label>
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
                   Local
-                  <select
-                    value={selectedLocation}
-                    onChange={(event) => setSelectedLocation(event.target.value)}
-                    className="mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none"
-                  >
+                  <div className="mt-1 flex flex-wrap gap-2">
                     {locationOptions.map((location) => (
-                      <option key={location} value={location}>{location}</option>
+                      <button
+                        key={location}
+                        type="button"
+                        onClick={() => setSelectedLocation(location)}
+                        aria-pressed={selectedLocation === location}
+                        className={`min-h-[38px] rounded-xl border px-3 py-2 text-[11px] font-bold normal-case tracking-normal transition-all active:scale-95 ${selectedLocation === location ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-md shadow-purple-500/20' : 'border-blue-100 bg-white text-gray-600 hover:border-purple-200'}`}
+                      >
+                        {location}
+                      </button>
                     ))}
-                  </select>
-                </label>
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                  </div>
+                </div>
+                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
                   Severidade
-                  <select
-                    value={selectedSeverity}
-                    onChange={(event) => setSelectedSeverity(Number(event.target.value))}
-                    className="mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none"
-                  >
+                  <div className="mt-1 flex flex-wrap gap-2">
                     {severityOptions.map((severity) => (
-                      <option key={severity} value={severity}>{severity}</option>
+                      <button
+                        key={severity}
+                        type="button"
+                        onClick={() => setSelectedSeverity(severity)}
+                        aria-pressed={selectedSeverity === severity}
+                        className={`flex min-h-[38px] min-w-[38px] items-center justify-center rounded-xl border px-3 py-2 text-xs font-black tracking-normal transition-all active:scale-95 ${selectedSeverity === severity ? 'border-[#1B254B] bg-[#1B254B] text-white shadow-md shadow-slate-900/20' : 'border-blue-100 bg-white text-gray-600 hover:border-slate-300'}`}
+                      >
+                        {severity}
+                      </button>
                     ))}
-                  </select>
-                </label>
+                  </div>
+                </div>
               </div>
 
               {behaviorMeasurementType === 'frequency' && (
@@ -4772,6 +4832,9 @@ export const SessionMode = ({
                       <Square size={16} /> Encerrar {formatElapsed(event.startedAt, nowMs)}
                     </button>
                   ))}
+                  <button onClick={() => openAbcModal()} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-white text-[#7a32fc] border border-purple-100 text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
+                    <FileText size={16} /> ABC rapido
+                  </button>
                 </div>
               )}
 
@@ -4795,7 +4858,7 @@ export const SessionMode = ({
                 </div>
               )}
 
-              {isIntervalMeasurement(behaviorMeasurementType) && (
+              {isIntervalMeasurementType(behaviorMeasurementType) && (
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                     <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
@@ -4981,9 +5044,7 @@ export const SessionMode = ({
               const goalKey = String(goal?.id || goal?.name || 'goal');
               const masteryRow = teachingMasteryRows.find((row) => String(row.id || row.targetId || row.name) === goalKey || row.name === goal.name);
               const maintenanceInfo = getGoalMaintenanceInfo(goal);
-              const promptedRenderPrompt = resolveAbaPromptLevel({ promptLevelKey });
               const independentTrialLockKey = `trial:${goalKey}:independent:independent`;
-              const promptedTrialLockKey = `trial:${goalKey}:prompted:${promptedRenderPrompt.key}`;
               const errorTrialLockKey = `trial:${goalKey}:error:error`;
               return (
                 <div key={goal.id} className="bg-white rounded-[24px] sm:rounded-[32px] p-4 sm:p-6 shadow-xl shadow-blue-900/5 border border-white relative overflow-hidden">
@@ -5077,16 +5138,32 @@ export const SessionMode = ({
                       <span className="text-xl sm:text-2xl font-bold mt-2">Independente</span>
                       <span className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] font-bold uppercase tracking-widest opacity-80`}>1 = correto independente</span>
                     </button>
-                    <button
-                      onClick={() => handleTrialClick(goal, 0.5, 'prompted', promptLevelKey)}
-                      disabled={Boolean(actionLocks[promptedTrialLockKey])}
-                      className={`relative bg-[#FFB547] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-orange-500/20 hover:scale-[1.01] active:scale-95 transition-all disabled:opacity-90 ${microFeedback[promptedTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-orange-200/70' : ''}`}
-                    >
-                      {microFeedback[promptedTrialLockKey] === 'check' && <span className="absolute right-4 top-4 rounded-full bg-white/25 p-1"><CheckCircle2 size={16} /></span>}
-                      <Activity size={26} />
-                      <span className="text-xl sm:text-2xl font-bold mt-2">Com ajuda</span>
-                      <span className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] font-bold uppercase tracking-widest opacity-80`}>0.5 = correto com ajuda</span>
-                    </button>
+                    <div className="relative rounded-3xl border border-orange-100 bg-orange-50 p-2 shadow-lg shadow-orange-500/10">
+                      <div className="mb-2 flex min-h-[28px] items-center justify-center gap-2 px-2 text-orange-700">
+                        <Activity size={18} />
+                        <span className="text-xs font-black uppercase tracking-widest">Com ajuda</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {promptedPromptOptions.map((prompt) => {
+                          const promptedTrialLockKey = `trial:${goalKey}:prompted:${prompt.key}`;
+                          const promptedActive = microFeedback[promptedTrialLockKey] === 'check';
+                          return (
+                            <button
+                              key={prompt.key}
+                              type="button"
+                              onClick={() => handleTrialClick(goal, 0.5, 'prompted', prompt.key)}
+                              disabled={Boolean(actionLocks[promptedTrialLockKey])}
+                              aria-label={`Registrar ${goal.name} com ajuda ${prompt.label}`}
+                              title={`Com ajuda ${prompt.label}`}
+                              className={`relative flex min-h-[46px] items-center justify-center rounded-2xl border px-2 text-center text-[11px] font-black leading-tight transition-all active:scale-95 disabled:opacity-80 sm:min-h-[50px] sm:text-xs ${promptedActive ? 'scale-[0.98] border-orange-300 bg-white text-orange-700 ring-4 ring-orange-200/70' : 'border-orange-100 bg-white text-orange-700 shadow-sm hover:border-orange-300 hover:bg-orange-100'}`}
+                            >
+                              {promptedActive && <span className="absolute right-2 top-2 rounded-full bg-orange-100 p-0.5 text-orange-700"><CheckCircle2 size={12} /></span>}
+                              <span className="max-w-full break-words">{prompt.compactLabel}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                     <button
                       onClick={() => handleTrialClick(goal, 0, 'error')}
                       disabled={Boolean(actionLocks[errorTrialLockKey])}

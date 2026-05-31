@@ -499,7 +499,12 @@ test('aba v2 feature flag: frontend and backend can disable isolated ABA V2 flow
   );
 });
 
-test('aba prompt integrity: dropdown selections are canonical and persistent', () => {
+test('aba prompt integrity: quick action selections are canonical and persistent', () => {
+  assert.match(
+    abaPromptCode,
+    /ABA_PROMPTED_PROMPT_KEYS = \['visual', 'gestural', 'verbal', 'model', 'partial_physical', 'full_physical'\]/m,
+    'A captura rapida deve expor os seis prompts clinicos canonicos.'
+  );
   assert.match(
     abaPromptCode,
     /ABA_PROMPT_LEVEL_OPTIONS[\s\S]*?key: 'gestural', label: 'Gestual'[\s\S]*?key: 'verbal', label: 'Verbal'[\s\S]*?key: 'other', label: 'Outro'/m,
@@ -513,7 +518,7 @@ test('aba prompt integrity: dropdown selections are canonical and persistent', (
   assert.match(
     sessionModeCode,
     /promptLevelKey: selectedPrompt\.key[\s\S]*?promptLevelName: selectedPrompt\.label[\s\S]*?promptLevel: selectedPrompt\.key/m,
-    'SessionMode deve enviar o prompt selecionado no dropdown mesmo sem depender de fallback por score.'
+    'SessionMode deve enviar o prompt selecionado na acao rapida sem depender de fallback por score.'
   );
   assert.doesNotMatch(
     sessionModeCode,
@@ -545,8 +550,8 @@ test('aba prompt integrity: dropdown selections are canonical and persistent', (
 test('aba session mode: trials and behavior events are one-touch and session-scoped', () => {
   assert.match(
     sessionModeCode,
-    /onClick=\{\(\) => handleTrialClick\(goal, 1, 'independent'\)\}[\s\S]*?Independente[\s\S]*?onClick=\{\(\) => handleTrialClick\(goal, 0\.5, 'prompted'(?:, promptLevelKey)?\)\}[\s\S]*?Com ajuda[\s\S]*?onClick=\{\(\) => handleTrialClick\(goal, 0, 'error'\)\}[\s\S]*?Erro/m,
-    'SessionMode deve salvar tentativa em um toque com botoes Independente, Com ajuda e Erro.'
+    /onClick=\{\(\) => handleTrialClick\(goal, 1, 'independent'\)\}[\s\S]*?Independente[\s\S]*?promptedPromptOptions\.map\(\(prompt\) => \{[\s\S]*?onClick=\{\(\) => handleTrialClick\(goal, 0\.5, 'prompted', prompt\.key\)\}[\s\S]*?Com ajuda[\s\S]*?onClick=\{\(\) => handleTrialClick\(goal, 0, 'error'\)\}[\s\S]*?Erro/m,
+    'SessionMode deve salvar tentativa em um toque com Independente, prompts de ajuda segmentados e Erro.'
   );
   assert.match(
     appCode,

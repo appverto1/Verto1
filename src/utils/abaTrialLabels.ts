@@ -1,3 +1,5 @@
+import { getAbaPromptLabel } from './abaPromptLevels';
+
 export type AbaTrialOutcome = 'independent' | 'prompted' | 'error' | string | null | undefined;
 
 const COLLECTION_LABELS: Record<string, string> = {
@@ -63,13 +65,26 @@ export const formatAbaScoreLabel = (score: unknown) => {
 export const formatAbaTrialHistoryLabel = ({
   collectionType,
   outcome,
-  score
+  score,
+  promptLevelKey,
+  promptLevelName,
+  promptLabel
 }: {
   collectionType: unknown;
   outcome: AbaTrialOutcome;
   score: unknown;
+  promptLevelKey?: unknown;
+  promptLevelName?: unknown;
+  promptLabel?: unknown;
 }) => {
   const normalized = normalizeAbaCollectionType(collectionType);
   const prefix = HISTORY_PREFIX_LABELS[normalized] || getAbaCollectionLabel(normalized);
-  return `${prefix} · ${getAbaTrialOutcomeLabel(outcome)} · ${formatAbaScoreLabel(score)}`;
+  const normalizedOutcome = String(outcome || '').trim().toLowerCase();
+  const resolvedPromptLabel = normalizedOutcome === 'prompted'
+    ? getAbaPromptLabel(promptLevelKey || promptLevelName || promptLabel, '')
+    : '';
+  const outcomeLabel = normalizedOutcome === 'prompted' && resolvedPromptLabel && resolvedPromptLabel !== 'Com ajuda'
+    ? `Com ajuda ${resolvedPromptLabel.toLowerCase()}`
+    : getAbaTrialOutcomeLabel(outcome);
+  return `${prefix} · ${outcomeLabel} · ${formatAbaScoreLabel(score)}`;
 };

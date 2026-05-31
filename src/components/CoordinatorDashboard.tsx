@@ -8129,7 +8129,7 @@ export function CoordinatorDashboard({
       )}
 
       {pendingRecurringCancellation && (
-        <div className="fixed inset-0 z-[134] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[180] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-3xl border border-violet-100 bg-white p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>

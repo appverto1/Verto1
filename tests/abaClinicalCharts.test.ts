@@ -15,6 +15,7 @@ import {
 
 const root = process.cwd();
 const migrationSql = readFileSync(join(root, 'supabase/migrations/20260525173000_aba_clinical_charts.sql'), 'utf8');
+const durationEpisodeMetricMigration = readFileSync(join(root, 'supabase/migrations/20260531130000_aba_duration_episode_metric.sql'), 'utf8');
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 'utf8');
 const patientDetailCode = readFileSync(join(root, 'src/components/PatientDetailView.tsx'), 'utf8');
@@ -33,6 +34,7 @@ test('migration cria snapshots e anotações com escopo clínico', () => {
     assert.match(migrationSql, new RegExp(`${tableName}_patient_scope_rw`, 'i'));
   }
   assert.match(migrationSql, /metric_type text not null[\s\S]*?TARGET_ACCURACY[\s\S]*?BEHAVIOR_FREQUENCY[\s\S]*?MAINTENANCE_STATUS/i);
+  assert.match(durationEpisodeMetricMigration, /aba_session_metric_snapshots_metric_type_check[\s\S]*?BEHAVIOR_DURATION_EPISODES/i);
   assert.match(migrationSql, /annotation_type text not null[\s\S]*?GOAL_LINE[\s\S]*?CONDITION_LINE[\s\S]*?NOTE/i);
 });
 
@@ -42,6 +44,7 @@ test('directionality está configurada por métrica', () => {
   assert.equal(getAbaMetricDirection('FUNCTIONAL_COMMUNICATION'), 'HIGHER_IS_BETTER');
   assert.equal(getAbaMetricDirection('ENGAGEMENT'), 'HIGHER_IS_BETTER');
   assert.equal(getAbaMetricDirection('BEHAVIOR_FREQUENCY'), 'LOWER_IS_BETTER');
+  assert.equal(getAbaMetricDirection('BEHAVIOR_DURATION_EPISODES'), 'LOWER_IS_BETTER');
   assert.equal(getAbaMetricDirection('BEHAVIOR_DURATION_TOTAL'), 'LOWER_IS_BETTER');
   assert.equal(getAbaMetricDirection('BEHAVIOR_INTERVAL_OCCURRENCE'), 'LOWER_IS_BETTER');
   assert.equal(getAbaMetricDirection('MASTERY_STATUS'), 'STATUS_BASED');
@@ -334,6 +337,29 @@ test('buildSessionMetricSnapshotsFromSummaries cria snapshot geral quando não h
   assert.ok(snapshots.some((item) => item.metricType === 'TARGET_INDEPENDENCE' && item.previousValue === 60));
 });
 
+test('duration summary gera métrica de episódios derivada para gráficos', () => {
+  const snapshots = buildSessionMetricSnapshotsFromSummaries({
+    currentSummary: {
+      session_id: 's2',
+      patient_id: 'p1',
+      clinic_id: 'c1',
+      ended_at: '2026-05-25T10:00:00.000Z',
+      duration_summary: [{ behaviorName: 'Choro', episodes: 2, totalSeconds: 120, averageSeconds: 60 }]
+    },
+    previousSummary: {
+      session_id: 's1',
+      patient_id: 'p1',
+      clinic_id: 'c1',
+      ended_at: '2026-05-24T10:00:00.000Z',
+      duration_summary: [{ behaviorName: 'Choro', episodes: 1, totalSeconds: 40, averageSeconds: 40 }]
+    }
+  });
+  const episodeSnapshot = snapshots.find((item) => item.metricType === 'BEHAVIOR_DURATION_EPISODES' && item.metricLabel === 'Choro');
+  assert.equal(episodeSnapshot?.metricValue, 2);
+  assert.equal(episodeSnapshot?.previousValue, 1);
+  assert.ok(snapshots.some((item) => item.metricType === 'BEHAVIOR_DURATION_TOTAL' && item.metricValue === 120));
+});
+
 test('linha clínica de target retorna pontos por sessão e resumo econômico', () => {
   const rows = [
     {
@@ -400,6 +426,7 @@ test('backend expõe endpoints ABA summary-driven com selects explícitos', () =
   assert.match(serverCode, /buildSessionMetricSnapshots\(sessionId\)/);
   assert.match(serverCode, /fetchAbaSnapshotRows\({[\s\S]*?metricTypes: targetMetrics/m);
   assert.match(serverCode, /from\('aba_behavior_daily_summaries'\)[\s\S]*?select\(ABA_BEHAVIOR_DAILY_CHART_SELECT\)/m);
+  assert.match(serverCode, /BEHAVIOR_DURATION_EPISODES[\s\S]*?duration_episode_count/m);
   assert.doesNotMatch(serverCode, /select\('\*'\)/);
 });
 
@@ -412,6 +439,7 @@ test('frontend carrega gráficos ABA lazy e usa dataService dedicado', () => {
   assert.match(panelCode, /LineFilters/);
   assert.match(panelCode, /ClinicalLineTooltip/);
   assert.match(panelCode, /dataService\.getAbaClinicalLineChart/);
+  assert.match(panelCode, /BEHAVIOR_DURATION_EPISODES/);
   assert.match(dataServiceCode, /async getAbaClinicalChart\(patientId: string, chart:/);
   assert.match(dataServiceCode, /async getAbaClinicalLineChart\(patientId: string/);
   assert.match(dataServiceCode, /async saveAbaGraphAnnotation\(patientId: string/);
