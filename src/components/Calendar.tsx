@@ -868,6 +868,8 @@ export const ClinicalAgendaBoard = ({
           (
             String(merged.status || '') !== String(event.status || '') ||
             String(merged.notes || '') !== String(event.notes || '') ||
+            String(merged.recurrenceGroupId || merged.recurrence_group_id || '') !== String(event.recurrenceGroupId || event.recurrence_group_id || '') ||
+            String(merged.recurrenceIndex || merged.recurrence_index || '') !== String(event.recurrenceIndex || event.recurrence_index || '') ||
             String(merged.updated_at || '') !== String(event.updated_at || '')
           )
         ) {

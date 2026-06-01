@@ -23,6 +23,8 @@ test('rota permite cancelamento por profissional e escopa a consulta pela clinic
   assert.match(serverCode, /status:\s*'deleted'/);
   assert.match(serverCode, /is_active:\s*false/);
   assert.match(serverCode, /deleted_at:\s*now/);
+  assert.match(serverCode, /isSameOrFuturePatientSeriesAppointment/);
+  assert.match(serverCode, /patient series delete fallback read failed/);
 });
 
 test('paciente nao consegue usar a rota para status administrativo', () => {
@@ -43,6 +45,7 @@ test('painel profissional e recepcao usam o fluxo de cancelamento recorrente', (
   assert.match(coordinatorCode, /const canDeleteRecurringAppointments = canCancelRecurringAppointments/);
   assert.match(coordinatorCode, /canCancelRecurringAppointments && isRecurringAppointment\(appointment\)/);
   assert.match(coordinatorCode, /canDeleteRecurringAppointments && isRecurringAppointment\(appointment\)/);
+  assert.match(coordinatorCode, /hasFuturePatientSeriesAppointment\(appointment\)/);
   assert.match(coordinatorCode, /submitRecurringCancellation\("future"\)/);
   assert.match(coordinatorCode, /submitRecurringDeletion\("future"\)/);
   assert.match(coordinatorCode, /fixed inset-0 z-\[180\][^"]*pendingRecurringCancellation|pendingRecurringCancellation[\s\S]{0,180}z-\[180\]/);
@@ -64,6 +67,8 @@ test('agenda clinica reconcilia cancelamento local com cache remoto', () => {
   assert.match(appCode, /const handleDeleteAppointment = async/);
   assert.match(appCode, /method: 'DELETE'/);
   assert.match(appCode, /deletedAppointmentIds/);
+  assert.match(appCode, /getPatientSeriesKey/);
+  assert.match(appCode, /getProfessionalSeriesKey/);
 });
 
 let passed = 0;

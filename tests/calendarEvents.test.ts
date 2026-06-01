@@ -16,6 +16,9 @@ const test = (name: string, fn: () => void) => tests.push({ name, fn });
 test('calendar endpoint usa intervalo visivel, limit e colunas explicitas', () => {
   assert.match(serverCode, /app\.get\('\/api\/calendar\/events'/);
   assert.match(serverCode, /const CALENDAR_EVENT_SELECT = \[/);
+  assert.match(serverCode, /'recurrence_group_id'/);
+  assert.match(serverCode, /'recurrence_index'/);
+  assert.match(serverCode, /recurrenceGroupId: sanitizeString/);
   assert.match(serverCode, /\.select\(CALENDAR_EVENT_SELECT\)/);
   assert.match(serverCode, /\.gte\('scheduled_at', range\.fromIso\)/);
   assert.match(serverCode, /\.lte\('scheduled_at', range\.toIso\)/);

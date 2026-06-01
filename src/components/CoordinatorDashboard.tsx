@@ -2401,15 +2401,120 @@ export function CoordinatorDashboard({
     );
   };
 
+  const readAppointmentSourcePayload = useCallback((appointment: any) => {
+    const payload = appointment?.source_payload || appointment?.sourcePayload;
+    if (!payload) return {};
+    if (typeof payload === "object" && !Array.isArray(payload)) return payload;
+    if (typeof payload !== "string") return {};
+    try {
+      const parsed = JSON.parse(payload);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }, []);
+
+  const normalizeSeriesKeyText = useCallback((value: any) =>
+    String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim(), []);
+
+  const getAppointmentOccurrenceTime = useCallback((appointment: any) => {
+    const source = readAppointmentSourcePayload(appointment);
+    const scheduledAt =
+      appointment?.scheduledAt ||
+      appointment?.scheduled_at ||
+      appointment?.start_time ||
+      source?.scheduledAt ||
+      source?.scheduled_at ||
+      source?.start_time;
+    const parsedScheduledAt = scheduledAt ? new Date(scheduledAt).getTime() : Number.NaN;
+    if (!Number.isNaN(parsedScheduledAt)) return parsedScheduledAt;
+    const date = String(appointment?.date || source?.date || "").trim();
+    const time = String(appointment?.time || source?.time || "").trim();
+    const parsedDateTime = date && time ? new Date(`${date}T${time}:00`).getTime() : Number.NaN;
+    return Number.isNaN(parsedDateTime) ? Number.POSITIVE_INFINITY : parsedDateTime;
+  }, [readAppointmentSourcePayload]);
+
+  const getPatientSeriesKey = useCallback((appointment: any) => {
+    const source = readAppointmentSourcePayload(appointment);
+    const patientId = String(appointment?.patientId || appointment?.patient_id || source?.patientId || source?.patient_id || "").trim();
+    if (patientId) return `id:${patientId}`;
+    const patientName = normalizeSeriesKeyText(
+      appointment?.patientName || appointment?.patient_name || appointment?.name || source?.patientName || source?.patient_name || source?.name,
+    );
+    return patientName ? `name:${patientName}` : "";
+  }, [normalizeSeriesKeyText, readAppointmentSourcePayload]);
+
+  const getProfessionalSeriesKey = useCallback((appointment: any) => {
+    const source = readAppointmentSourcePayload(appointment);
+    const professionalId = String(
+      appointment?.therapistId ||
+        appointment?.therapist_id ||
+        appointment?.professionalId ||
+        appointment?.professional_id ||
+        source?.therapistId ||
+        source?.therapist_id ||
+        source?.professionalId ||
+        source?.professional_id ||
+        "",
+    ).trim();
+    if (professionalId) return `id:${professionalId}`;
+    const professionalName = normalizeSeriesKeyText(
+      appointment?.therapistName || appointment?.therapist_name || appointment?.professional || source?.therapistName || source?.therapist_name || source?.professional,
+    );
+    return professionalName ? `name:${professionalName}` : "";
+  }, [normalizeSeriesKeyText, readAppointmentSourcePayload]);
+
+  const getSeriesClockTime = useCallback((appointment: any) => {
+    const source = readAppointmentSourcePayload(appointment);
+    const explicitTime = String(appointment?.time || source?.time || "").trim().slice(0, 5);
+    if (/^\d{2}:\d{2}$/.test(explicitTime)) return explicitTime;
+    const timestamp = getAppointmentOccurrenceTime(appointment);
+    if (!Number.isFinite(timestamp)) return "";
+    const parsed = new Date(timestamp);
+    return `${String(parsed.getHours()).padStart(2, "0")}:${String(parsed.getMinutes()).padStart(2, "0")}`;
+  }, [getAppointmentOccurrenceTime, readAppointmentSourcePayload]);
+
+  const hasFuturePatientSeriesAppointment = useCallback((appointment: any) => {
+    const patientKey = getPatientSeriesKey(appointment);
+    if (!patientKey) return false;
+    const professionalKey = getProfessionalSeriesKey(appointment);
+    const clockTime = getSeriesClockTime(appointment);
+    const occurrenceTime = getAppointmentOccurrenceTime(appointment);
+    return (therapistAgenda || []).some((candidate: any) => {
+      if (!candidate || String(candidate?.id) === String(appointment?.id)) return false;
+      if (getPatientSeriesKey(candidate) !== patientKey) return false;
+      const candidateProfessionalKey = getProfessionalSeriesKey(candidate);
+      if (professionalKey && candidateProfessionalKey && candidateProfessionalKey !== professionalKey) return false;
+      const candidateClockTime = getSeriesClockTime(candidate);
+      if (clockTime && candidateClockTime && candidateClockTime !== clockTime) return false;
+      return getAppointmentOccurrenceTime(candidate) >= occurrenceTime;
+    });
+  }, [
+    getAppointmentOccurrenceTime,
+    getPatientSeriesKey,
+    getProfessionalSeriesKey,
+    getSeriesClockTime,
+    therapistAgenda,
+  ]);
+
   const isRecurringAppointment = useCallback((appointment: any) => {
     if (!appointment) return false;
+    const source = readAppointmentSourcePayload(appointment);
     return Boolean(
       appointment?.isRecurring ||
         appointment?.is_recurring ||
         appointment?.recurrenceGroupId ||
-        appointment?.recurrence_group_id,
+        appointment?.recurrence_group_id ||
+        source?.recurrenceGroupId ||
+        source?.recurrence_group_id ||
+        hasFuturePatientSeriesAppointment(appointment),
     );
-  }, []);
+  }, [hasFuturePatientSeriesAppointment, readAppointmentSourcePayload]);
 
   const requestAppointmentCancellation = useCallback(
     (appointment: any, details: any = {}) => {

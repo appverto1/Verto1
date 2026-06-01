@@ -2637,14 +2637,36 @@ export default function App() {
       }
     }
   };
+  const readAppointmentSourcePayload = (appointment: any) => {
+    const payload = appointment?.source_payload || appointment?.sourcePayload;
+    if (!payload) return {};
+    if (typeof payload === 'object' && !Array.isArray(payload)) return payload;
+    if (typeof payload !== 'string') return {};
+    try {
+      const parsed = JSON.parse(payload);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const getAppointmentRecurrenceGroupId = (appointment: any) => {
+    const source = readAppointmentSourcePayload(appointment);
+    return String(
+      appointment?.recurrenceGroupId ||
+        appointment?.recurrence_group_id ||
+        source?.recurrenceGroupId ||
+        source?.recurrence_group_id ||
+        '',
+    ).trim();
+  };
+
   const handleUpdateAgendaStatus = async (id: any, status: string, details: any = {}) => {
     const normalizedStatus = status === 'cancelled' ? 'canceled' : status;
     const note = String(details?.note ?? details?.notes ?? details?.observation ?? '').trim();
     const recurrenceScope = String(details?.recurrenceScope || 'single').toLowerCase() === 'future' ? 'future' : 'single';
     const currentAppointment = therapistAgenda.find(item => String(item.id) === String(id));
-    const recurrenceGroupId = String(
-      currentAppointment?.recurrenceGroupId || currentAppointment?.recurrence_group_id || '',
-    ).trim();
+    const recurrenceGroupId = getAppointmentRecurrenceGroupId(currentAppointment);
     const getRecurrenceIndex = (appointment: any) =>
       Number(appointment?.recurrenceIndex ?? appointment?.recurrence_index ?? 0) || 0;
     const currentRecurrenceIndex = getRecurrenceIndex(currentAppointment);
@@ -2724,33 +2746,92 @@ export default function App() {
       return { success: false, error: 'Agendamento não encontrado.' };
     }
 
-    const recurrenceGroupId = String(
-      currentAppointment?.recurrenceGroupId || currentAppointment?.recurrence_group_id || '',
-    ).trim();
+    const recurrenceGroupId = getAppointmentRecurrenceGroupId(currentAppointment);
     const getRecurrenceIndex = (appointment: any) =>
       Number(appointment?.recurrenceIndex ?? appointment?.recurrence_index ?? 0) || 0;
     const currentRecurrenceIndex = getRecurrenceIndex(currentAppointment);
     const getOccurrenceTimestamp = (appointment: any) => {
-      const scheduledAt = appointment?.scheduledAt || appointment?.scheduled_at;
+      const source = readAppointmentSourcePayload(appointment);
+      const scheduledAt = appointment?.scheduledAt || appointment?.scheduled_at || source?.scheduledAt || source?.scheduled_at;
       const parsedScheduledAt = scheduledAt ? new Date(scheduledAt).getTime() : Number.NaN;
       if (!Number.isNaN(parsedScheduledAt)) return parsedScheduledAt;
-      const date = String(appointment?.date || '').trim();
-      const time = String(appointment?.time || '').trim();
+      const date = String(appointment?.date || source?.date || '').trim();
+      const time = String(appointment?.time || source?.time || '').trim();
       const parsedDateTime = date && time ? new Date(`${date}T${time}:00`).getTime() : Number.NaN;
       return Number.isNaN(parsedDateTime) ? Number.POSITIVE_INFINITY : parsedDateTime;
     };
+    const normalizeSeriesText = (value: any) =>
+      String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+    const getPatientSeriesKey = (appointment: any) => {
+      const source = readAppointmentSourcePayload(appointment);
+      const patientId = String(appointment?.patientId || appointment?.patient_id || source?.patientId || source?.patient_id || '').trim();
+      if (patientId) return `id:${patientId}`;
+      const patientName = normalizeSeriesText(
+        appointment?.patientName || appointment?.patient_name || appointment?.name || source?.patientName || source?.patient_name || source?.name,
+      );
+      return patientName ? `name:${patientName}` : '';
+    };
+    const getProfessionalSeriesKey = (appointment: any) => {
+      const source = readAppointmentSourcePayload(appointment);
+      const professionalId = String(
+        appointment?.therapistId ||
+          appointment?.therapist_id ||
+          appointment?.professionalId ||
+          appointment?.professional_id ||
+          source?.therapistId ||
+          source?.therapist_id ||
+          source?.professionalId ||
+          source?.professional_id ||
+          '',
+      ).trim();
+      if (professionalId) return `id:${professionalId}`;
+      const professionalName = normalizeSeriesText(
+        appointment?.therapistName || appointment?.therapist_name || appointment?.professional || source?.therapistName || source?.therapist_name || source?.professional,
+      );
+      return professionalName ? `name:${professionalName}` : '';
+    };
+    const getSeriesClockTime = (appointment: any) => {
+      const source = readAppointmentSourcePayload(appointment);
+      const explicitTime = String(appointment?.time || source?.time || '').trim().slice(0, 5);
+      if (/^\d{2}:\d{2}$/.test(explicitTime)) return explicitTime;
+      const timestamp = getOccurrenceTimestamp(appointment);
+      if (!Number.isFinite(timestamp)) return '';
+      const parsed = new Date(timestamp);
+      return `${String(parsed.getHours()).padStart(2, '0')}:${String(parsed.getMinutes()).padStart(2, '0')}`;
+    };
+    const currentPatientSeriesKey = getPatientSeriesKey(currentAppointment);
+    const currentProfessionalSeriesKey = getProfessionalSeriesKey(currentAppointment);
+    const currentSeriesClockTime = getSeriesClockTime(currentAppointment);
     const currentOccurrenceTimestamp = getOccurrenceTimestamp(currentAppointment);
     const shouldDeleteItem = (appointment: any) => {
       if (String(appointment?.id) === String(id)) return true;
-      if (recurrenceScope !== 'future' || !recurrenceGroupId) return false;
-      const appointmentRecurrenceGroupId = String(
-        appointment?.recurrenceGroupId || appointment?.recurrence_group_id || '',
-      ).trim();
-      if (!appointmentRecurrenceGroupId || appointmentRecurrenceGroupId !== recurrenceGroupId) return false;
-      const appointmentRecurrenceIndex = getRecurrenceIndex(appointment);
-      if (currentRecurrenceIndex > 0 && appointmentRecurrenceIndex > 0) {
-        return appointmentRecurrenceIndex >= currentRecurrenceIndex;
+      if (recurrenceScope !== 'future') return false;
+      const appointmentRecurrenceGroupId = getAppointmentRecurrenceGroupId(appointment);
+      if (recurrenceGroupId) {
+        if (!appointmentRecurrenceGroupId || appointmentRecurrenceGroupId !== recurrenceGroupId) return false;
+        const appointmentRecurrenceIndex = getRecurrenceIndex(appointment);
+        if (currentRecurrenceIndex > 0 && appointmentRecurrenceIndex > 0) {
+          return appointmentRecurrenceIndex >= currentRecurrenceIndex;
+        }
+        return getOccurrenceTimestamp(appointment) >= currentOccurrenceTimestamp;
       }
+      const appointmentPatientSeriesKey = getPatientSeriesKey(appointment);
+      if (!currentPatientSeriesKey || appointmentPatientSeriesKey !== currentPatientSeriesKey) return false;
+      const appointmentProfessionalSeriesKey = getProfessionalSeriesKey(appointment);
+      if (
+        currentProfessionalSeriesKey &&
+        appointmentProfessionalSeriesKey &&
+        appointmentProfessionalSeriesKey !== currentProfessionalSeriesKey
+      ) {
+        return false;
+      }
+      const appointmentSeriesClockTime = getSeriesClockTime(appointment);
+      if (currentSeriesClockTime && appointmentSeriesClockTime && appointmentSeriesClockTime !== currentSeriesClockTime) return false;
       return getOccurrenceTimestamp(appointment) >= currentOccurrenceTimestamp;
     };
 

@@ -2962,6 +2962,8 @@ const CALENDAR_EVENT_SELECT = [
   'reschedule_requested_by',
   'cancel_requested_at',
   'cancel_requested_by',
+  'recurrence_group_id',
+  'recurrence_index',
   'notes',
   'source_payload',
   'created_at',
@@ -4769,14 +4771,17 @@ function isTrustedPushNotificationAction(action: unknown): boolean {
 }
 
 function buildAppointmentScheduledAt(appointment: any): string | null {
+  const source = parseStoredJsonObject(appointment?.source_payload || appointment?.sourcePayload);
   const explicit = sanitizeString(appointment?.scheduled_at || appointment?.scheduledAt, 80);
-  if (explicit) {
-    const parsed = new Date(explicit);
+  const sourceExplicit = sanitizeString(source?.scheduled_at || source?.scheduledAt, 80);
+  const resolvedExplicit = explicit || sourceExplicit;
+  if (resolvedExplicit) {
+    const parsed = new Date(resolvedExplicit);
     if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
   }
 
-  const date = sanitizeDate(appointment?.date);
-  const time = sanitizeString(appointment?.time, 10);
+  const date = sanitizeDate(appointment?.date || source?.date);
+  const time = sanitizeString(appointment?.time || source?.time, 10);
   if (!date || !/^\d{2}:\d{2}$/.test(time)) return null;
 
   const parsed = new Date(`${date}T${time}:00-03:00`);
@@ -4785,17 +4790,76 @@ function buildAppointmentScheduledAt(appointment: any): string | null {
 }
 
 function getAppointmentRecurrenceGroupId(appointment: any): string {
+  const source = parseStoredJsonObject(appointment?.source_payload || appointment?.sourcePayload);
   return sanitizeString(
-    appointment?.recurrenceGroupId || appointment?.recurrence_group_id,
+    appointment?.recurrenceGroupId ||
+      appointment?.recurrence_group_id ||
+      source?.recurrenceGroupId ||
+      source?.recurrence_group_id,
     120,
   );
 }
 
 function getAppointmentRecurrenceIndex(appointment: any): number {
+  const source = parseStoredJsonObject(appointment?.source_payload || appointment?.sourcePayload);
   const rawValue = Number(
-    appointment?.recurrenceIndex ?? appointment?.recurrence_index ?? 0,
+    appointment?.recurrenceIndex ??
+      appointment?.recurrence_index ??
+      source?.recurrenceIndex ??
+      source?.recurrence_index ??
+      0,
   );
   return Number.isFinite(rawValue) ? rawValue : 0;
+}
+
+function getAppointmentPatientSeriesKey(appointment: any): string {
+  const source = parseStoredJsonObject(appointment?.source_payload || appointment?.sourcePayload);
+  const patientId = sanitizeString(
+    appointment?.patientId || appointment?.patient_id || source?.patientId || source?.patient_id,
+    120,
+  );
+  if (patientId) return `id:${patientId}`;
+  const patientName = sanitizeString(
+    appointment?.patientName || appointment?.patient_name || appointment?.name || source?.patientName || source?.patient_name || source?.name,
+    180,
+  )
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  return patientName ? `name:${patientName}` : '';
+}
+
+function getAppointmentProfessionalSeriesKey(appointment: any): string {
+  const source = parseStoredJsonObject(appointment?.source_payload || appointment?.sourcePayload);
+  const professionalId = sanitizeString(
+    appointment?.therapistId || appointment?.therapist_id || appointment?.professionalId || appointment?.professional_id ||
+      source?.therapistId || source?.therapist_id || source?.professionalId || source?.professional_id,
+    120,
+  );
+  if (professionalId) return `id:${professionalId}`;
+  const professionalName = sanitizeString(
+    appointment?.therapistName || appointment?.therapist_name || appointment?.professional || source?.therapistName || source?.therapist_name || source?.professional,
+    180,
+  )
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  return professionalName ? `name:${professionalName}` : '';
+}
+
+function getAppointmentSeriesClockTime(appointment: any): string {
+  const source = parseStoredJsonObject(appointment?.source_payload || appointment?.sourcePayload);
+  const explicitTime = sanitizeString(appointment?.time || source?.time, 10).slice(0, 5);
+  if (/^\d{2}:\d{2}$/.test(explicitTime)) return explicitTime;
+  const scheduledAt = buildAppointmentScheduledAt(appointment);
+  if (!scheduledAt) return '';
+  const parsed = new Date(scheduledAt);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return `${String(parsed.getHours()).padStart(2, '0')}:${String(parsed.getMinutes()).padStart(2, '0')}`;
 }
 
 function getAppointmentOccurrenceTime(appointment: any): number {
@@ -4825,6 +4889,23 @@ function isSameOrFutureRecurringAppointment(referenceAppointment: any, candidate
   if (referenceIndex > 0 && candidateIndex > 0) {
     return candidateIndex >= referenceIndex;
   }
+
+  return getAppointmentOccurrenceTime(candidateAppointment) >= getAppointmentOccurrenceTime(referenceAppointment);
+}
+
+function isSameOrFuturePatientSeriesAppointment(referenceAppointment: any, candidateAppointment: any): boolean {
+  if (String(candidateAppointment?.id) === String(referenceAppointment?.id)) return true;
+  const referencePatientKey = getAppointmentPatientSeriesKey(referenceAppointment);
+  const candidatePatientKey = getAppointmentPatientSeriesKey(candidateAppointment);
+  if (!referencePatientKey || referencePatientKey !== candidatePatientKey) return false;
+
+  const referenceProfessionalKey = getAppointmentProfessionalSeriesKey(referenceAppointment);
+  const candidateProfessionalKey = getAppointmentProfessionalSeriesKey(candidateAppointment);
+  if (referenceProfessionalKey && candidateProfessionalKey && referenceProfessionalKey !== candidateProfessionalKey) return false;
+
+  const referenceTime = getAppointmentSeriesClockTime(referenceAppointment);
+  const candidateTime = getAppointmentSeriesClockTime(candidateAppointment);
+  if (referenceTime && candidateTime && referenceTime !== candidateTime) return false;
 
   return getAppointmentOccurrenceTime(candidateAppointment) >= getAppointmentOccurrenceTime(referenceAppointment);
 }
@@ -5620,6 +5701,10 @@ async function syncAppointmentsTableFromClinicState(params: {
       location_type: locationType,
       location_notes: sanitizeString(appointment?.location_notes || appointment?.locationNotes || appointment?.addressNote, 1000) || null,
       call_link: sanitizeString(appointment?.call_link || appointment?.callLink, 500) || null,
+      recurrence_group_id: sanitizeString(appointment?.recurrenceGroupId || appointment?.recurrence_group_id, 120) || null,
+      recurrence_index: Number.isFinite(Number(appointment?.recurrenceIndex ?? appointment?.recurrence_index))
+        ? Math.max(0, Math.round(Number(appointment?.recurrenceIndex ?? appointment?.recurrence_index)))
+        : null,
       recurrence_total: Number.isFinite(Number(appointment?.recurrenceTotal ?? appointment?.recurrence_total))
         ? Math.max(1, Math.round(Number(appointment?.recurrenceTotal ?? appointment?.recurrence_total)))
         : null,
@@ -12861,26 +12946,65 @@ async function startServer() {
       let affectedAppointments = [foundAppointment];
       if (recurrenceScope === 'future') {
         const recurrenceGroupId = getAppointmentRecurrenceGroupId(foundAppointment);
-        if (recurrenceGroupId && appointments.length > 0) {
+        if (appointments.length > 0) {
           affectedAppointments = appointments.filter((appointment: any) =>
-            isSameOrFutureRecurringAppointment(foundAppointment, appointment),
+            recurrenceGroupId
+              ? isSameOrFutureRecurringAppointment(foundAppointment, appointment)
+              : isSameOrFuturePatientSeriesAppointment(foundAppointment, appointment),
           );
-        } else if (recurrenceGroupId) {
-          let recurringQuery = supabase
-            .from('appointments')
-            .select(APPOINTMENT_SELECT)
-            .eq('recurrence_group_id', recurrenceGroupId)
-            .order('scheduled_at', { ascending: true })
-            .limit(200);
-          if (!hasGlobalClinicAccess(actor) && clinicId) recurringQuery = recurringQuery.eq('clinic_id', clinicId);
-          const { data: recurringRows, error: recurringReadError } = await recurringQuery;
-          if (recurringReadError) {
-            console.warn('[Appointments] recurring delete fallback read failed:', recurringReadError.message);
+          if (affectedAppointments.length <= 1 && recurrenceGroupId) {
+            affectedAppointments = appointments.filter((appointment: any) =>
+              isSameOrFuturePatientSeriesAppointment(foundAppointment, appointment),
+            );
           }
-          const recurringAppointments = Array.isArray(recurringRows) ? recurringRows : [];
+        } else {
+          const recurringAppointments: any[] = [];
+          const patientId = sanitizeString(foundAppointment?.patientId || foundAppointment?.patient_id, 120);
+          if (recurrenceGroupId || patientId) {
+            let recurringQuery = supabase
+              .from('appointments')
+              .select(APPOINTMENT_SELECT)
+              .order('scheduled_at', { ascending: true })
+              .limit(200);
+            if (recurrenceGroupId) recurringQuery = recurringQuery.eq('recurrence_group_id', recurrenceGroupId);
+            else {
+              const scheduledAt = buildAppointmentScheduledAt(foundAppointment);
+              recurringQuery = recurringQuery.eq('patient_id', patientId);
+              if (scheduledAt) recurringQuery = recurringQuery.gte('scheduled_at', scheduledAt);
+            }
+            if (!hasGlobalClinicAccess(actor) && clinicId) recurringQuery = recurringQuery.eq('clinic_id', clinicId);
+            const { data: recurringRows, error: recurringReadError } = await recurringQuery;
+            if (recurringReadError) {
+              console.warn('[Appointments] recurring delete fallback read failed:', recurringReadError.message);
+            }
+            recurringAppointments.push(...(Array.isArray(recurringRows) ? recurringRows : []));
+          }
           affectedAppointments = recurringAppointments.filter((appointment: any) =>
-            isSameOrFutureRecurringAppointment(foundAppointment, appointment),
+            recurrenceGroupId
+              ? isSameOrFutureRecurringAppointment(foundAppointment, appointment)
+              : isSameOrFuturePatientSeriesAppointment(foundAppointment, appointment),
           );
+          if (affectedAppointments.length <= 1 && recurrenceGroupId) {
+            const patientId = sanitizeString(foundAppointment?.patientId || foundAppointment?.patient_id, 120);
+            const scheduledAt = buildAppointmentScheduledAt(foundAppointment);
+            if (patientId) {
+              let patientSeriesQuery = supabase
+                .from('appointments')
+                .select(APPOINTMENT_SELECT)
+                .eq('patient_id', patientId)
+                .order('scheduled_at', { ascending: true })
+                .limit(200);
+              if (scheduledAt) patientSeriesQuery = patientSeriesQuery.gte('scheduled_at', scheduledAt);
+              if (!hasGlobalClinicAccess(actor) && clinicId) patientSeriesQuery = patientSeriesQuery.eq('clinic_id', clinicId);
+              const { data: patientRows, error: patientReadError } = await patientSeriesQuery;
+              if (patientReadError) {
+                console.warn('[Appointments] patient series delete fallback read failed:', patientReadError.message);
+              }
+              affectedAppointments = (Array.isArray(patientRows) ? patientRows : []).filter((appointment: any) =>
+                isSameOrFuturePatientSeriesAppointment(foundAppointment, appointment),
+              );
+            }
+          }
         }
       }
       if (affectedAppointments.length === 0) affectedAppointments = [foundAppointment];
@@ -21679,6 +21803,10 @@ async function startServer() {
       has_overdue_maintenance_probe: overdueProbeCount > 0,
       has_maintenance_due_today: dueTodayProbeCount > 0,
       plan_item_count: planCount,
+      recurrence_group_id: sanitizeString(row?.recurrence_group_id || row?.recurrenceGroupId || source?.recurrence_group_id || source?.recurrenceGroupId, 120) || null,
+      recurrenceGroupId: sanitizeString(row?.recurrenceGroupId || row?.recurrence_group_id || source?.recurrenceGroupId || source?.recurrence_group_id, 120) || null,
+      recurrence_index: Number(row?.recurrence_index ?? row?.recurrenceIndex ?? source?.recurrence_index ?? source?.recurrenceIndex) || null,
+      recurrenceIndex: Number(row?.recurrenceIndex ?? row?.recurrence_index ?? source?.recurrenceIndex ?? source?.recurrence_index) || null,
       is_active: row?.is_active ?? row?.isActive ?? source?.is_active ?? source?.isActive ?? true,
       deleted_at: row?.deleted_at || row?.deletedAt || source?.deleted_at || source?.deletedAt || null
     };
