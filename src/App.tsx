@@ -35,6 +35,9 @@ const LandingPage = React.lazy(() =>
 const ActivationAccess = React.lazy(() =>
   import('./components/ActivationAccess').then((m) => ({ default: m.ActivationAccess }))
 );
+const PortalRelationshipConfirmation = React.lazy(() =>
+  import('./components/PortalRelationshipConfirmation').then((m) => ({ default: m.PortalRelationshipConfirmation }))
+);
 const PatientDashboard = React.lazy(() =>
   import('./components/PatientDashboard').then((m) => ({ default: m.PatientDashboard }))
 );
@@ -80,6 +83,9 @@ export default function App() {
   const isResetPasswordRoute =
     typeof window !== 'undefined' &&
     /^\/reset-password\/?$/.test(window.location.pathname);
+  const isPortalRelationshipRoute =
+    typeof window !== 'undefined' &&
+    /^\/portal\/confirmar-vinculo\/?$/i.test(window.location.pathname);
   const isAuthActionRoute = isActivationRoute || isResetPasswordRoute;
   const [user, setUser] = useState<any>(null); 
   const [loading, setLoading] = useState(true);
@@ -4921,8 +4927,9 @@ export default function App() {
         </div>
       )}
       <Suspense fallback={lazyFallback}>
-      
-      {!user || userNeedsPatientActivation ? (
+      {isPortalRelationshipRoute ? (
+        <PortalRelationshipConfirmation onLogin={handleLoginSuccess} />
+      ) : !user || userNeedsPatientActivation ? (
         isAuthActionRoute || userNeedsPatientActivation ? (
           <ActivationAccess onLogin={handleLoginSuccess} />
         ) : (

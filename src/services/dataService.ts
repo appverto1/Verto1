@@ -1357,6 +1357,92 @@ export const dataService = {
     }
   },
 
+  async requestPortalLoginCode(email: string, relationshipToken?: string) {
+    try {
+      const response = await fetch('/api/portal/auth/request-code', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ email, relationshipToken })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error requesting portal login code:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async verifyPortalLoginCode(email: string, code: string) {
+    try {
+      const response = await fetch('/api/portal/auth/verify-code', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ email, code })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error verifying portal login code:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async getRelationshipConfirmation(token: string) {
+    try {
+      const response = await fetch(`/api/portal/relationship-confirmations/${encodeURIComponent(token)}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error loading relationship confirmation:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async confirmRelationship(token: string) {
+    try {
+      const response = await fetch(`/api/portal/relationship-confirmations/${encodeURIComponent(token)}/confirm`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error confirming relationship:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async rejectRelationship(token: string) {
+    try {
+      const response = await fetch(`/api/portal/relationship-confirmations/${encodeURIComponent(token)}/reject`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error rejecting relationship:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async authorizeRelationshipHistory(token: string, scope: any) {
+    try {
+      const response = await fetch(`/api/portal/relationship-confirmations/${encodeURIComponent(token)}/authorize-history`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ scope })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error authorizing relationship history:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
   async getPatientSharedHistory(patientId: string) {
     try {
       const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/shared-history`, {

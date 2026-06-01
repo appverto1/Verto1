@@ -50,6 +50,8 @@
     "test:patient-portability": "tsx tests/patientPortability.test.ts",
     "test:patient-archive": "tsx tests/patientArchive.test.ts",
     "test:patient-longitudinal-timeline": "tsx tests/patientLongitudinalTimeline.test.ts",
+    "test:portal-relationship-confirmation": "tsx tests/portalRelationshipConfirmation.test.ts",
+    "test:portal-otp-auth": "tsx tests/portalOtpAuth.test.ts",
     "test:anamnesis-portal-flow": "tsx tests/anamnesisPortalFlow.test.ts",
     "test:patient-portal": "tsx tests/patientPortal.test.ts",
     "test:patient-dashboard": "tsx tests/patientDashboard.test.ts",

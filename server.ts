@@ -409,6 +409,7 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ENCRYPTION_ALGO = 'aes-256-gcm';
 const paymentStatuses = new Set(['paid', 'pending', 'canceled', 'refunded', 'delinquent']);
 const OTP_TTL_MS = 15 * 60 * 1000;
+const PORTAL_LOGIN_OTP_TTL_MS = 10 * 60 * 1000;
 
 function sanitizeString(value: unknown, maxLength = 5000): string {
   if (typeof value !== 'string') return '';
@@ -1379,7 +1380,7 @@ async function sendTransactionalEmailSafe(params: {
 }
 
 type RecoveryChannel = 'email';
-type OtpPurpose = 'password_recovery' | 'phone_verification';
+type OtpPurpose = 'password_recovery' | 'phone_verification' | 'portal_login';
 
 type OtpChallenge = {
   key: string;
@@ -7063,6 +7064,29 @@ function buildRelationshipConfirmationEmail(params: { patientName: string; confi
   };
 }
 
+function buildPortalLoginCodeEmail(params: { name?: string | null; code: string; portalUrl: string }) {
+  const name = escapeHtml(params.name || 'família');
+  const code = escapeHtml(params.code);
+  const portalUrl = escapeHtml(params.portalUrl);
+  return {
+    subject: 'Seu código de acesso à Verto',
+    html: `
+      <div style="font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a;background:#f8fafc;padding:28px;">
+        <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:22px;padding:28px;">
+          <p style="margin:0 0 8px;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#7a32fc;font-weight:800;">Verto</p>
+          <h1 style="font-size:22px;margin:0 0 14px;">Código de acesso</h1>
+          <p style="font-size:15px;line-height:1.6;color:#334155;margin:0 0 18px;">
+            Olá, ${name}. Use o código abaixo para entrar no portal e revisar a solicitação de vínculo.
+          </p>
+          <div style="font-size:28px;letter-spacing:.28em;font-weight:900;color:#111827;background:#f1f5f9;border-radius:16px;padding:16px 18px;text-align:center;">${code}</div>
+          <p style="font-size:13px;line-height:1.5;color:#64748b;margin:18px 0 0;">Este código expira em 10 minutos e só pode ser usado uma vez.</p>
+          <p style="font-size:12px;line-height:1.5;color:#64748b;margin:18px 0 0;">Portal: <a href="${portalUrl}" style="color:#7a32fc;word-break:break-all;">${portalUrl}</a></p>
+        </div>
+      </div>
+    `
+  };
+}
+
 function buildAnamnesisRequestEmail(params: { patientName: string; portalUrl: string }) {
   const patientName = escapeHtml(params.patientName || 'paciente');
   const portalUrl = escapeHtml(params.portalUrl);
@@ -7087,6 +7111,17 @@ function getAppPortalUrl(params: Record<string, string> = {}) {
   const baseUrl = sanitizeString(process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || 'https://www.appverto.com.br', 500)
     .replace(/\/+$/, '');
   const url = new URL(baseUrl || 'https://www.appverto.com.br');
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) url.searchParams.set(key, value);
+  });
+  return url.toString();
+}
+
+function getAppPortalPathUrl(pathname: string, params: Record<string, string> = {}) {
+  const baseUrl = sanitizeString(process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || 'https://www.appverto.com.br', 500)
+    .replace(/\/+$/, '');
+  const url = new URL(baseUrl || 'https://www.appverto.com.br');
+  url.pathname = `/${sanitizeString(pathname, 200).replace(/^\/+/, '')}`;
   Object.entries(params).forEach(([key, value]) => {
     if (value) url.searchParams.set(key, value);
   });
@@ -7125,7 +7160,7 @@ async function createRelationshipConfirmationRequest(params: {
   const insert = await insertRowWithSchemaFallback('patient_relationship_confirmations', payload, 'relationship-confirmation');
   if (!insert.success) return { success: false, error: insert.error, sent: false, token: null, confirmationId: null };
 
-  const confirmationUrl = getAppPortalUrl({ relationship_token: token });
+  const confirmationUrl = getAppPortalPathUrl('/portal/confirmar-vinculo', { token });
   const emailTemplate = buildRelationshipConfirmationEmail({
     patientName: params.patientName,
     confirmationUrl
@@ -10526,6 +10561,192 @@ async function startServer() {
     } catch (error: any) {
       console.warn('[Auth] password recovery email request warning:', error.message);
       return res.json(genericResponse);
+    }
+  });
+
+  app.post('/api/portal/auth/request-code', portalActionLimiter, async (req: any, res) => {
+    const email = sanitizeEmail(req.body?.email);
+    const relationshipToken = sanitizeString(req.body?.relationshipToken || req.body?.relationship_token || req.query?.token, 500);
+    const genericResponse = {
+      success: true,
+      message: 'Se este e-mail estiver cadastrado, enviaremos um código de acesso.'
+    };
+
+    try {
+      if (!email) return res.json(genericResponse);
+      const authUser = await findAuthUserByEmail(email);
+      if (!authUser?.id) {
+        await persistIdentityAuditLog({
+          title: 'OTP do portal solicitado',
+          content: `Código do portal solicitado para identificador não encontrado (${maskEmail(email)}).`,
+          identifier: email,
+          channel: 'email',
+          request: req,
+          status: 'not_found'
+        });
+        return res.json(genericResponse);
+      }
+
+      const code = generate6DigitOtp();
+      const key = makeOtpChallengeKey('email', 'portal_login', email);
+      await consumeOtpChallenge(key);
+      await setOtpChallenge({
+        key,
+        channel: 'email',
+        purpose: 'portal_login',
+        identifier: email,
+        userId: authUser.id,
+        codeHash: hashIdentifier(code),
+        expiresAt: Date.now() + PORTAL_LOGIN_OTP_TTL_MS,
+        attempts: 0,
+        consumed: false,
+        createdAt: Date.now()
+      });
+
+      const { data: profile } = await supabase
+        .from('users')
+        .select('name, role')
+        .eq('id', authUser.id)
+        .maybeSingle();
+      const portalUrl = relationshipToken
+        ? getAppPortalPathUrl('/portal/confirmar-vinculo', { token: relationshipToken })
+        : getAppPortalPathUrl('/portal');
+      const emailTemplate = buildPortalLoginCodeEmail({
+        name: sanitizeString(profile?.name || authUser.user_metadata?.full_name || email.split('@')[0], 180),
+        code,
+        portalUrl
+      });
+      const sent = await sendTransactionalEmailSafe({
+        to: email,
+        subject: emailTemplate.subject,
+        html: emailTemplate.html,
+        context: 'portal_login_otp_request',
+        from: OFFICIAL_FROM_NOREPLY,
+        replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+        templateKind: undefined,
+        templateData: {
+          nome: sanitizeString(profile?.name || authUser.user_metadata?.full_name || email.split('@')[0], 180),
+          codigo: code,
+          expira_em_minutos: 10
+        },
+        metadata: {
+          email: maskEmail(email),
+          userId: authUser.id
+        }
+      });
+
+      await persistIdentityAuditLog({
+        title: 'OTP do portal solicitado',
+        content: `Código de acesso do portal gerado para ${maskEmail(email)}. E-mail oficial ${sent ? 'enviado' : 'com falha de envio'}.`,
+        identifier: email,
+        channel: 'email',
+        userId: authUser.id,
+        request: req,
+        status: sent ? 'sent' : 'warning'
+      });
+      return res.json(genericResponse);
+    } catch (error: any) {
+      console.warn('[PortalAuth] request-code warning:', error?.message || String(error));
+      return res.json(genericResponse);
+    }
+  });
+
+  app.post('/api/portal/auth/verify-code', portalActionLimiter, async (req: any, res) => {
+    const email = sanitizeEmail(req.body?.email);
+    const code = sanitizeString(req.body?.code, 12).replace(/\D/g, '');
+    const genericError = { success: false, error: 'Código inválido ou expirado.' };
+
+    try {
+      if (!email || !/^\d{6}$/.test(code)) return res.status(400).json(genericError);
+      const key = makeOtpChallengeKey('email', 'portal_login', email);
+      const challenge = await getOtpChallenge(key);
+      if (!challenge || challenge.consumed) {
+        return res.status(400).json(genericError);
+      }
+      challenge.attempts += 1;
+      if (challenge.attempts > 5) {
+        await consumeOtpChallenge(key);
+        await persistIdentityAuditLog({
+          title: 'OTP do portal bloqueado por tentativas',
+          content: `Tentativas excedidas para login do portal por e-mail.`,
+          identifier: email,
+          channel: 'email',
+          userId: challenge.userId,
+          request: req,
+          status: 'blocked'
+        });
+        return res.status(429).json({ success: false, error: 'Muitas tentativas. Solicite um novo código.' });
+      }
+      if (hashIdentifier(code) !== challenge.codeHash || Date.now() > challenge.expiresAt || !challenge.userId) {
+        await setOtpChallenge(challenge);
+        return res.status(400).json(genericError);
+      }
+
+      const authUser = await findAuthUserByEmail(email);
+      if (!authUser?.id || sanitizeString(authUser.id, 120) !== sanitizeString(challenge.userId, 120)) {
+        await consumeOtpChallenge(key);
+        return res.status(400).json(genericError);
+      }
+      const profileResult = await fetchProfileWithSchemaFallback({
+        supabase,
+        userId: authUser.id,
+        logger: console,
+        includeTwoFactorSecret: false
+      });
+      if (profileResult.error || !profileResult.data) {
+        await consumeOtpChallenge(key);
+        return res.status(400).json(genericError);
+      }
+      const profile = profileResult.data as any;
+      const workspaces = await fetchUserWorkspaces(authUser.id);
+      const selectedWorkspace = workspaces.find((w: any) => w.clinicId === profile.clinic_id) || workspaces[0] || null;
+      const roleForSession = selectedWorkspace?.role || profile.role || 'patient';
+      const clinicForSession = selectedWorkspace?.clinicId || profile.clinic_id || null;
+      const treatmentStatus = await updatePatientStatusIfNeeded({
+        id: authUser.id,
+        role: roleForSession,
+        clinicId: clinicForSession,
+        activeWorkspaceId: clinicForSession,
+        workspaces
+      });
+
+      const userData = {
+        id: authUser.id,
+        email: authUser.email || email,
+        role: roleForSession,
+        name: profile.name || authUser.user_metadata?.full_name || email.split('@')[0],
+        sessionToken: issueSessionToken(sanitizeString(authUser.id, 120)),
+        profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
+        address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
+        type: profile.type || authUser.user_metadata?.type || null,
+        age: typeof profile.age === 'number' ? profile.age : null,
+        subscriptionStatus: profile.subscription_status,
+        planName: profile.plan_name,
+        planPrice: profile.plan_price,
+        status: sanitizeString((profile as any)?.status, 60) || null,
+        treatmentStatus,
+        clinicId: clinicForSession,
+        activeWorkspaceId: clinicForSession,
+        emailVerified: Boolean((authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at),
+        phoneVerified: Boolean(profile.phone_verified_at),
+        firstLoginCompleted: (profile.first_login_completed ?? authUser.user_metadata?.first_login_completed) ?? null,
+        workspaces
+      };
+      await consumeOtpChallenge(key);
+      req.session.user = buildSessionUserPayload(userData);
+      await persistIdentityAuditLog({
+        title: 'OTP do portal verificado',
+        content: `Login por código do portal concluído para ${maskEmail(email)}.`,
+        identifier: email,
+        channel: 'email',
+        userId: authUser.id,
+        request: req,
+        status: 'verified'
+      });
+      return res.json({ success: true, user: userData });
+    } catch (error: any) {
+      console.warn('[PortalAuth] verify-code warning:', error?.message || String(error));
+      return res.status(400).json(genericError);
     }
   });
 
@@ -14050,7 +14271,7 @@ async function startServer() {
     }
   });
 
-  const resolveRelationshipConfirmationForPortal = async (token: string, user: any) => {
+  const fetchRelationshipConfirmationByToken = async (token: string) => {
     const safeToken = sanitizeString(token, 500);
     if (!safeToken) return { ok: false, status: 400, error: 'Solicitação inválida.' };
     const tokenHash = hashIdentifier(`relationship-confirmation:${safeToken}`);
@@ -14070,6 +14291,14 @@ async function startServer() {
       .limit(1)
       .maybeSingle();
     if (patientError) throw patientError;
+    return { ok: true, confirmation, patient };
+  };
+
+  const resolveRelationshipConfirmationForPortal = async (token: string, user: any) => {
+    const fetched: any = await fetchRelationshipConfirmationByToken(token);
+    if (!fetched.ok) return fetched;
+    const confirmation = fetched.confirmation;
+    const patient = fetched.patient;
 
     const userId = sanitizeString(user?.id, 120);
     const userEmail = sanitizeEmail(user?.email);
@@ -14080,6 +14309,55 @@ async function startServer() {
     if (!responsibleMatches) return { ok: false, status: 404, error: 'Solicitação não encontrada.' };
     return { ok: true, confirmation, patient };
   };
+
+  app.get('/api/portal/relationship-confirmations/:token', portalActionLimiter, async (req: any, res) => {
+    try {
+      const fetched: any = await fetchRelationshipConfirmationByToken(req.params.token);
+      if (!fetched.ok) return res.status(fetched.status).json({ success: false, error: fetched.error });
+      const confirmation = fetched.confirmation;
+      const patient = fetched.patient;
+      const user = req.session?.user || null;
+      const userEmail = sanitizeEmail(user?.email);
+      const authenticatedMatches = Boolean(
+        user &&
+          (
+            (isUuid(sanitizeString(user?.id, 120)) && sanitizeString(confirmation.responsible_user_id, 120) === sanitizeString(user?.id, 120)) ||
+            (userEmail && sanitizeEmail(confirmation.email_normalized) === userEmail) ||
+            (userEmail && sanitizeEmail(patient?.email) === userEmail)
+          )
+      );
+      if (user && !authenticatedMatches) {
+        return res.status(404).json({ success: false, error: 'Solicitação não encontrada.' });
+      }
+      void persistActivityLog({
+        userId: sanitizeString(user?.id, 120) || null,
+        clinicId: sanitizeString(confirmation.organization_id_requesting, 120),
+        actorName: sanitizeString(user?.name || user?.email || 'Portal', 180),
+        title: 'Solicitação de vínculo visualizada',
+        content: 'Solicitação de vínculo foi aberta no portal sem autenticar pelo token.',
+        type: 'management',
+        actionType: 'RELATIONSHIP_CONFIRMATION_VIEWED',
+        payload: { confirmationId: sanitizeString(confirmation.id, 120), authenticated: authenticatedMatches }
+      });
+      return res.json({
+        success: true,
+        requiresAuth: !authenticatedMatches,
+        data: {
+          status: sanitizeString(confirmation.status, 40),
+          patientName: sanitizeString(patient?.name, 180) || 'Paciente',
+          requestedAt: sanitizeString(confirmation.created_at, 80) || null,
+          expiresAt: sanitizeString(confirmation.expires_at, 80) || null,
+          emailMasked: maskEmail(sanitizeEmail(confirmation.email_normalized)),
+          canConfirm: authenticatedMatches && sanitizeString(confirmation.status, 40) === 'PENDING',
+          canAuthorizeSharedHistory: authenticatedMatches && sanitizeString(confirmation.status, 40) === 'CONFIRMED'
+        }
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/relationship-confirmations/:token [GET]', error, {
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
 
   app.post('/api/portal/relationship-confirmations/:token/confirm', portalActionLimiter, checkAuth, async (req: any, res) => {
     try {
@@ -14173,6 +14451,149 @@ async function startServer() {
       return res.json({ success: true, message: 'Vínculo recusado.' });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/portal/relationship-confirmations/:token/reject [POST]', error, {
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.get('/api/portal/relationship-confirmations/:token/shareable-history-preview', portalActionLimiter, checkAuth, async (req: any, res) => {
+    try {
+      const resolved: any = await resolveRelationshipConfirmationForPortal(req.params.token, req.session.user);
+      if (!resolved.ok) return res.status(resolved.status).json({ success: false, error: resolved.error });
+      const confirmation = resolved.confirmation;
+      if (sanitizeString(confirmation.status, 40) !== 'CONFIRMED') {
+        return res.status(409).json({ success: false, error: 'Confirme o vínculo antes de compartilhar histórico.' });
+      }
+      return res.json({
+        success: true,
+        data: {
+          patientName: sanitizeString(resolved.patient?.name, 180) || 'Paciente',
+          warning: 'Anotações privadas de clínicas anteriores não serão compartilhadas.',
+          options: [
+            'demographics',
+            'patientVisibleNotes',
+            'professionalSharedNotes',
+            'reports',
+            'files',
+            'abaSummary',
+            'peiSummary',
+            'sharedNotes'
+          ],
+          defaultScope: normalizePatientPortabilityScope({})
+        }
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/relationship-confirmations/:token/shareable-history-preview [GET]', error, {
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.post('/api/portal/relationship-confirmations/:token/authorize-history', portalActionLimiter, checkAuth, async (req: any, res) => {
+    try {
+      const resolved: any = await resolveRelationshipConfirmationForPortal(req.params.token, req.session.user);
+      if (!resolved.ok) return res.status(resolved.status).json({ success: false, error: resolved.error });
+      const confirmation = resolved.confirmation;
+      const patient = resolved.patient;
+      if (sanitizeString(confirmation.status, 40) !== 'CONFIRMED') {
+        return res.status(409).json({ success: false, error: 'Confirme o vínculo antes de compartilhar histórico.' });
+      }
+      const patientId = sanitizeString(confirmation.patient_id_requesting, 120);
+      const clinicId = sanitizeString(confirmation.organization_id_requesting, 120);
+      const scope = normalizePatientPortabilityScope(req.body?.scope);
+      const snapshot = buildPatientPortabilitySnapshot({
+        patient,
+        notes: [],
+        scope
+      });
+      const nowIso = new Date().toISOString();
+      const { data: existingSnapshots, error: existingSnapshotError } = await supabase
+        .from('patient_shared_history_snapshots')
+        .select(PATIENT_SHARED_HISTORY_SNAPSHOT_SELECT)
+        .eq('organization_id_target', clinicId)
+        .eq('patient_id_target', patientId)
+        .order('generated_at', { ascending: false })
+        .limit(20);
+      if (existingSnapshotError && !isMissingRelationError(existingSnapshotError)) throw existingSnapshotError;
+      const existingSnapshot = (Array.isArray(existingSnapshots) ? existingSnapshots : []).find((row: any) => (
+        sanitizeString(row?.metadata?.confirmationId, 120) === sanitizeString(confirmation.id, 120) ||
+        sanitizeString(row?.metadata?.confirmation_id, 120) === sanitizeString(confirmation.id, 120)
+      ));
+      if (existingSnapshot?.id) {
+        const importResult = await importSharedSnapshotIntoLongitudinalTimeline({
+          snapshot: existingSnapshot,
+          patientId,
+          clinicId,
+          actorId: sanitizeString(req.session.user?.id, 120)
+        });
+        return res.json({
+          success: true,
+          idempotent: true,
+          message: importResult.message || 'Histórico compartilhado já estava autorizado.',
+          data: {
+            snapshotId: sanitizeString(existingSnapshot.id, 120),
+            importedItemsCount: importResult.importedItemsCount,
+            skippedDuplicatesCount: importResult.skippedDuplicatesCount
+          }
+        });
+      }
+
+      const snapshotId = crypto.randomUUID();
+      const insert = await insertRowWithSchemaFallback('patient_shared_history_snapshots', {
+        id: snapshotId,
+        organization_id_source: null,
+        organization_id_target: clinicId,
+        patient_id_source: null,
+        patient_id_target: patientId,
+        generated_by: sanitizeString(req.session.user?.id, 120),
+        authorized_by_user_id: sanitizeString(req.session.user?.id, 120),
+        scope,
+        snapshot_data: snapshot,
+        status: 'GENERATED',
+        generated_at: nowIso,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+        metadata: { confirmationId: sanitizeString(confirmation.id, 120), excludesPrivateHistory: true }
+      }, 'relationship-authorize-history');
+      if (!insert.success) throw insert.error;
+      const importResult = await importSharedSnapshotIntoLongitudinalTimeline({
+        snapshot: { ...(insert.data || {}), id: snapshotId },
+        patientId,
+        clinicId,
+        actorId: sanitizeString(req.session.user?.id, 120)
+      });
+      await updateRowsWithSchemaFallback({
+        tableName: 'patient_shared_history_snapshots',
+        payload: { status: 'IMPORTED', metadata: { confirmationId: sanitizeString(confirmation.id, 120), importedAt: new Date().toISOString(), excludesPrivateHistory: true } },
+        filters: [{ column: 'id', value: snapshotId }],
+        context: 'relationship-authorize-history-imported'
+      });
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Responsavel', 180),
+        title: 'Histórico compartilhável autorizado',
+        content: 'Histórico compartilhável autorizado e importado sem anotações privadas.',
+        type: 'management',
+        actionType: 'SHARED_HISTORY_AUTHORIZED',
+        payload: { confirmationId: sanitizeString(confirmation.id, 120), snapshotId, importedItemsCount: importResult.importedItemsCount }
+      });
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Responsavel', 180),
+        title: 'Dados privados excluídos da portabilidade',
+        content: 'Anotações privadas foram mantidas fora do compartilhamento.',
+        type: 'management',
+        actionType: 'PRIVATE_HISTORY_EXCLUDED_FROM_PORTABILITY',
+        payload: { confirmationId: sanitizeString(confirmation.id, 120), snapshotId }
+      });
+      return res.json({
+        success: true,
+        message: 'Histórico compartilhável autorizado.',
+        data: { snapshotId, importedItemsCount: importResult.importedItemsCount, skippedDuplicatesCount: importResult.skippedDuplicatesCount }
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/relationship-confirmations/:token/authorize-history [POST]', error, {
         requestId: requestIdForLogs(req)
       });
     }
