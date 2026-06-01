@@ -45,6 +45,27 @@ test('detalhe da consulta salva pagador no contexto administrativo', () => {
   assert.doesNotMatch(calendarCode, /onClick=\{\(\) => onEditAppointment\?\.\(detailEvent\)\}[\s\S]{0,140}Editar pagador/);
 });
 
+test('modal carrega pagadores ativos e permite criar pagador rapido', () => {
+  assert.match(calendarCode, /dataService\.getPayers\(\{ status: 'ACTIVE', limit: 80 \}\)/);
+  assert.match(calendarCode, /Nenhum pagador cadastrado/);
+  assert.match(calendarCode, /Criar pagador/);
+  assert.match(calendarCode, /createQuickBillingPayer/);
+  assert.match(calendarCode, /dataService\.createPayer/);
+  assert.match(calendarCode, /Salvar e selecionar/);
+  assert.match(calendarCode, /setBillingPayers/);
+  assert.match(calendarCode, /payerId: String\(payer\?\.id/);
+  assert.match(calendarCode, /payerName: String\(payer\?\.name/);
+});
+
+test('criacao de pagador reutiliza nome existente na mesma clinica', () => {
+  const routeStart = serverCode.indexOf("app.post('/api/admin/payers'");
+  assert.ok(routeStart > 0, 'rota de criar pagador deve existir');
+  const route = serverCode.slice(routeStart, routeStart + 2600);
+  assert.match(route, /\.from\('clinic_payers'\)[\s\S]*\.select\(CLINIC_PAYER_SELECT\)[\s\S]*\.eq\('organization_id', organizationId\)[\s\S]*\.ilike\('name', name\)/);
+  assert.match(route, /idempotent:\s*true/);
+  assert.match(route, /serializePayer\(existingPayer\)/);
+});
+
 test('fechamento usa pagador da consulta, nao plano do paciente como substituto', () => {
   const payerBlockIndex = closureCode.indexOf("'payer_linked'");
   assert.ok(payerBlockIndex > 0, 'payer_linked deve existir');

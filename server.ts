@@ -25492,6 +25492,19 @@ async function startServer() {
       const name = sanitizeString(req.body?.name, 180);
       if (!isUuid(organizationId) || name.length < 2) return res.status(400).json(payerSafeError(400));
       const now = new Date().toISOString();
+      const { data: existingPayers, error: existingPayerError } = await supabase
+        .from('clinic_payers')
+        .select(CLINIC_PAYER_SELECT)
+        .eq('organization_id', organizationId)
+        .ilike('name', name)
+        .limit(10);
+      if (existingPayerError) throw existingPayerError;
+      const existingPayer = (Array.isArray(existingPayers) ? existingPayers : []).find((payer: any) =>
+        sanitizeString(payer?.name, 180).trim().toLowerCase() === name.trim().toLowerCase()
+      );
+      if (existingPayer?.id) {
+        return res.json({ success: true, idempotent: true, data: serializePayer(existingPayer) });
+      }
       const payload = cleanObject({
         id: crypto.randomUUID(),
         organization_id: organizationId,

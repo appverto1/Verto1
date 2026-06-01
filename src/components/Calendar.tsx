@@ -775,6 +775,13 @@ export const ClinicalAgendaBoard = ({
     procedureCode: '',
     notes: ''
   });
+  const [quickPayerForm, setQuickPayerForm] = useState({
+    open: false,
+    saving: false,
+    error: '',
+    name: '',
+    payerType: 'INSURANCE'
+  });
   const cacheRef = useRef<Map<string, any[]>>(new Map());
   const localAgendaIdsRef = useRef(new Set<string>());
   const canEditBillingContext = ['coordinator', 'admin', 'owner'].includes(String(currentUser?.role || '').toLowerCase());
@@ -1198,10 +1205,44 @@ export const ClinicalAgendaBoard = ({
     }));
   };
 
+  const createQuickBillingPayer = async () => {
+    const name = quickPayerForm.name.trim();
+    if (name.length < 2) {
+      setQuickPayerForm((prev) => ({ ...prev, error: 'Informe o nome do pagador.' }));
+      return;
+    }
+    setQuickPayerForm((prev) => ({ ...prev, saving: true, error: '' }));
+    const result = await dataService.createPayer({
+      name,
+      payerType: quickPayerForm.payerType,
+      status: 'ACTIVE'
+    });
+    if (!result?.success || !result?.data) {
+      setQuickPayerForm((prev) => ({
+        ...prev,
+        saving: false,
+        error: result?.error || 'Não foi possível criar o pagador agora.'
+      }));
+      return;
+    }
+    const payer = result.data;
+    setBillingPayers((prev) => {
+      const withoutDuplicate = prev.filter((item: any) => String(item?.id || '') !== String(payer?.id || ''));
+      return [...withoutDuplicate, payer].sort((a: any, b: any) => String(a?.name || '').localeCompare(String(b?.name || ''), 'pt-BR'));
+    });
+    setBillingForm((prev) => ({
+      ...prev,
+      payerId: String(payer?.id || ''),
+      payerName: String(payer?.name || name)
+    }));
+    setQuickPayerForm({ open: false, saving: false, error: '', name: '', payerType: 'INSURANCE' });
+  };
+
   const openBillingEditor = (source: any = null) => {
     if (!canEditBillingContext) return;
     const currentBilling = detail?.billingContext || {};
     hydrateBillingForm(source || currentBilling);
+    setQuickPayerForm({ open: false, saving: false, error: '', name: '', payerType: 'INSURANCE' });
     setBillingEditorOpen(true);
     setBillingEditorState({ loading: false, saving: false, error: '', success: '' });
     void loadBillingPayers();
@@ -2177,7 +2218,65 @@ export const ClinicalAgendaBoard = ({
                     </option>
                   ))}
                 </select>
+                {!billingEditorState.loading && billingPayers.length === 0 && (
+                  <span className="mt-2 block text-xs font-semibold normal-case tracking-normal text-slate-400">Nenhum pagador cadastrado.</span>
+                )}
+                <button
+                  type="button"
+                  disabled={billingEditorState.saving || quickPayerForm.saving}
+                  onClick={() => setQuickPayerForm((prev) => ({ ...prev, open: !prev.open, error: '' }))}
+                  className="mt-2 inline-flex items-center gap-1 rounded-xl border border-violet-200 px-3 py-2 text-xs font-bold normal-case tracking-normal text-[#7a32fc] disabled:opacity-60"
+                >
+                  <Plus size={13} /> Criar pagador
+                </button>
               </label>
+              {quickPayerForm.open && (
+                <div className={`sm:col-span-2 rounded-2xl border p-3 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-violet-100 bg-violet-50/40'}`}>
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      Nome do pagador/convênio
+                      <input
+                        className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-[#101827] text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
+                        value={quickPayerForm.name}
+                        onChange={(event) => setQuickPayerForm((prev) => ({ ...prev, name: event.target.value, error: '' }))}
+                        placeholder="Unimed, Particular..."
+                      />
+                    </label>
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      Tipo
+                      <select
+                        className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-[#101827] text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
+                        value={quickPayerForm.payerType}
+                        onChange={(event) => setQuickPayerForm((prev) => ({ ...prev, payerType: event.target.value }))}
+                      >
+                        <option value="INSURANCE">Convênio</option>
+                        <option value="PRIVATE">Particular</option>
+                        <option value="COURTESY">Cortesia</option>
+                        <option value="OTHER">Outro</option>
+                      </select>
+                    </label>
+                  </div>
+                  {quickPayerForm.error && <p className="mt-2 text-xs font-bold text-amber-700">{quickPayerForm.error}</p>}
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                    <button
+                      type="button"
+                      disabled={quickPayerForm.saving}
+                      onClick={() => setQuickPayerForm({ open: false, saving: false, error: '', name: '', payerType: 'INSURANCE' })}
+                      className={`rounded-xl border px-3 py-2 text-xs font-bold disabled:opacity-60 ${isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 text-slate-600 hover:bg-white'}`}
+                    >
+                      Cancelar criação
+                    </button>
+                    <button
+                      type="button"
+                      disabled={quickPayerForm.saving || quickPayerForm.name.trim().length < 2}
+                      onClick={createQuickBillingPayer}
+                      className="rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-bold text-white disabled:opacity-60"
+                    >
+                      {quickPayerForm.saving ? 'Criando...' : 'Salvar e selecionar'}
+                    </button>
+                  </div>
+                </div>
+              )}
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
                 Serviço
                 <input
