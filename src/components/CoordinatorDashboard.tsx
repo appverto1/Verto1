@@ -2813,13 +2813,28 @@ export function CoordinatorDashboard({
     }
   };
 
+  const isPatientAnamnesisReviewed = (patient: any) => {
+    if (!patient) return false;
+    const onboarding = String(patient?.onboarding_status || patient?.onboardingStatus || "").toUpperCase();
+    const status = String(patient?.status || "").toUpperCase();
+    const requestStatus = String(patient?.anamnesis_request_status || patient?.anamnesisRequestStatus || "").toUpperCase();
+    const responseStatus = String(patient?.anamnesis_response_status || patient?.anamnesisResponseStatus || "").toUpperCase();
+    const reviewedAt = patient?.anamnesis_reviewed_at || patient?.anamnesisReviewedAt || patient?.lastAnamnesisAt;
+    return (
+      ["READY_FOR_CARE", "ANAMNESIS_REVIEWED"].includes(onboarding) ||
+      requestStatus === "REVIEWED" ||
+      responseStatus === "REVIEWED" ||
+      Boolean(reviewedAt) ||
+      (status === "ACTIVE" && patient?.anamnesisPending === false)
+    );
+  };
+
   const isPatientPendingAnamnesis = (patient: any) => {
     if (!patient) return false;
     if (patient?.anamnesis_required === false || patient?.anamnesisRequired === false) return false;
+    if (isPatientAnamnesisReviewed(patient)) return false;
     const onboarding = String(patient?.onboarding_status || patient?.onboardingStatus || "").toUpperCase();
     const status = String(patient?.status || "").toUpperCase();
-    if (["READY_FOR_CARE", "ANAMNESIS_REVIEWED"].includes(onboarding)) return false;
-    if (status === "ACTIVE" && onboarding === "READY_FOR_CARE") return false;
     if (
       [
         "NOT_STARTED",
@@ -2841,8 +2856,10 @@ export function CoordinatorDashboard({
   const getPatientClinicalStatusLabel = (patient: any) => {
     if (!patient) return "Cadastro incompleto";
     const onboarding = String(patient?.onboarding_status || patient?.onboardingStatus || "").toUpperCase();
-    const status = String(patient?.status || "").toUpperCase();
-    if (["READY_FOR_CARE", "ANAMNESIS_REVIEWED"].includes(onboarding) || (status === "ACTIVE" && !isPatientPendingAnamnesis(patient))) {
+    if (isPatientAnamnesisReviewed(patient)) {
+      return "Anamnese revisada";
+    }
+    if (String(patient?.status || "").toUpperCase() === "ACTIVE" && !isPatientPendingAnamnesis(patient)) {
       return "Paciente ativo";
     }
     if (onboarding === "ANAMNESIS_SENT") return "Ficha enviada à família";

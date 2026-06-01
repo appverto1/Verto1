@@ -52,6 +52,8 @@ const isVbMappProtocol = (protocol: any) => {
   return source.includes('vb-mapp') || source.includes('vbmapp') || source.includes('vb mapp');
 };
 
+type PatientDetailTab = 'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'files';
+
 export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession }: any) => {
   const safeSetProtocols =
     typeof setProtocols === 'function' ? setProtocols : null;
@@ -341,7 +343,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
   }, []);
 
-  const allTabs: Array<'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'files'> = [
+  const allTabs: PatientDetailTab[] = [
     'history',
     'notes',
     'report',
@@ -355,25 +357,27 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       !Array.isArray(allowedTabs) || allowedTabs.length === 0
         ? allTabs
         : allowedTabs.filter((tab: string) =>
-            allTabs.includes(tab as 'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'files'),
+            allTabs.includes(tab as PatientDetailTab),
           );
 
     const filteredByProfile = isKidsProfile
       ? tabsFromProps
       : tabsFromProps.filter((tab: string) => tab !== 'session' && tab !== 'aba-charts');
 
-    return new Set(filteredByProfile as Array<'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'files'>);
+    return new Set(filteredByProfile as PatientDetailTab[]);
   }, [allowedTabs, isKidsProfile]);
-  const canAccessTab = (tab: 'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'files') =>
+  const canAccessTab = (tab: PatientDetailTab) =>
     allowedTabsSet.has(tab);
   const canOpenAnamnesis = canAccessTab('history') && canAccessTab('notes');
+  const getSessionFallbackTab = () =>
+    allTabs.find((tab) => tab !== 'session' && canAccessTab(tab)) || 'files';
 
   useEffect(() => {
     if (initialTab && canAccessTab(initialTab)) {
-      setActiveTab(initialTab);
+      setActiveTab(initialTab === 'session' ? getSessionFallbackTab() : initialTab);
       return;
     }
-    const firstAllowed = allTabs.find((tab) => canAccessTab(tab)) || 'files';
+    const firstAllowed = allTabs.find((tab) => tab !== 'session' && canAccessTab(tab)) || 'files';
     setActiveTab(firstAllowed);
   }, [initialTab, patient?.id, allowedTabsSet]);
 
@@ -886,20 +890,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     };
   }, [sessionStorageKey, patient?.id]);
 
-  const requestSessionStart = (nextAction: 'tab' | 'fullscreen' = 'tab') => {
+  const requestSessionStart = (nextAction: 'tab' | 'fullscreen' = 'fullscreen') => {
+    const resolvedAction = nextAction === 'tab' ? 'fullscreen' : nextAction;
     if (!abaV2Enabled) {
-      setActiveTab('session');
+      setActiveTab(getSessionFallbackTab());
       return;
     }
     if (activeSession) {
-      if (nextAction === 'fullscreen') setIsSessionModeOpen(true);
-      else setActiveTab('session');
+      setIsSessionModeOpen(true);
       return;
     }
-    setPendingSessionAction(nextAction);
+    setPendingSessionAction(resolvedAction);
     setSessionDurationInput(String(scheduledSessionForPatient ? scheduledSessionDurationMinutes : configuredDefaultSessionMinutes));
     setRestoreSessionData(false);
-    if (nextAction === 'tab') setActiveTab('session');
     setShowSessionStartConfirm(true);
   };
 
@@ -4094,7 +4097,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const handleRecordTrialWithConfirmation = (pid: any, goalId: any, title: string, score: number) => {
     if (!activeSession) {
-      requestSessionStart('tab');
+      requestSessionStart('fullscreen');
       return;
     }
     setPendingTrial({ pid, goalId, title, score });
@@ -4565,7 +4568,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   useEffect(() => {
     if (isTutorialActive) {
       if (tutorialStep >= 19) setActiveTab('files');
-      else if (tutorialStep >= 17 && isKidsProfile && canAccessTab('session')) setActiveTab('session');
+      else if (tutorialStep >= 17 && isKidsProfile && canAccessTab('session')) setActiveTab(getSessionFallbackTab());
       else if (tutorialStep >= 14 && isKidsProfile && canAccessTab('plan')) setActiveTab('plan');
       else if (tutorialStep >= 11) setActiveTab('report');
       else if (tutorialStep >= 7) setActiveTab('notes');
@@ -4923,7 +4926,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             </button>
           )}
           {canAccessTab('session') && isKidsProfile && (
-            <button id="tab-session" onClick={() => requestSessionStart('tab')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'session' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Sessão</button>
+            <button id="tab-session" onClick={() => requestSessionStart('fullscreen')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'session' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Sessão</button>
           )}
           {abaV2Enabled && canAccessTab('aba-charts') && isKidsProfile && (
             <button id="tab-aba-charts" onClick={() => setActiveTab('aba-charts')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'aba-charts' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Gráficos ABA</button>
@@ -6378,146 +6381,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             <AbaClinicalChartsPanel patientId={String(patient.id)} isPanelDark={isPanelDark} />
           </React.Suspense>
         ) : activeTab === 'session' && isKidsProfile ? (
-          <div className="space-y-6 animate-fade-in">
-            {abaV2Enabled && renderAbaRecordsPanel()}
-            <div className={`p-8 rounded-[40px] shadow-sm border relative overflow-hidden transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>
-              <div className="absolute top-0 right-0 w-32 h-32 bg-[#7a32fc]/5 rounded-bl-full -z-0"></div>
-              <div className="flex items-center justify-between mb-8 relative z-10">
-                <div>
-                  <h3 className={`text-2xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-gray-800'}`}>Registro de Sessão</h3>
-                  <p className={`text-xs font-semibold uppercase tracking-widest mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Pontuação Dinâmica de Metas Prioritárias</p>
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-3">
-                  {activeSession && (
-                    <div className={`rounded-2xl border px-4 py-2 text-right transition-colors ${isPanelDark ? 'border-violet-400/30 bg-violet-500/10' : 'border-violet-100 bg-violet-50'}`}>
-                      <p className="text-[9px] font-semibold uppercase tracking-widest text-[#7a32fc]">Sessão em andamento</p>
-                      <p className={`text-xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-gray-900'}`}>{formatSessionCountdown(remainingSessionSeconds)}</p>
-                    </div>
-                  )}
-                  {activeSession && (
-                    <button
-                      onClick={() => setShowSessionEndConfirm(true)}
-                      className="bg-red-50 text-red-500 font-semibold px-5 py-3 rounded-2xl border border-red-100 hover:bg-red-100 active:scale-95 transition-all flex items-center gap-2 text-sm"
-                    >
-                      <StopCircle size={18} /> Encerrar sessão
-                    </button>
-                  )}
-                  <button 
-                    id="session-start-btn"
-                    onClick={() => requestSessionStart('fullscreen')}
-                    className="bg-[#7a32fc] text-white font-semibold px-6 py-3 rounded-2xl shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 active:scale-95 transition-all flex items-center gap-2 text-sm"
-                  >
-                    <Activity size={20} /> {activeSession ? 'Modo Tela Cheia' : 'Iniciar Sessão'}
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-6">
-                {patient.pei?.filter((g: any) => g.isPriority || g.status === 'in_progress').length > 0 ? (
-                  patient.pei.filter((g: any) => g.isPriority || g.status === 'in_progress').map((goal: any) => (
-                      <div key={goal.id} className={`p-6 rounded-[32px] border relative group transition-colors ${isPanelDark ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-100'}`}>
-                        {showTrialConfirmation && lastRecordedGoalId === goal.id && (
-                          <div className={`absolute inset-x-0 bottom-0 z-30 backdrop-blur-sm border-t p-4 animate-slide-up rounded-b-[32px] transition-colors ${isPanelDark ? 'bg-slate-900/95 border-slate-700' : 'bg-white/95 border-gray-100'}`}>
-                            <div className="flex items-center gap-3">
-                              <div className="flex-1">
-                                <input 
-                                  type="text"
-                                  className={`w-full border rounded-xl px-3 py-2 text-[11px] outline-none focus:border-green-500 transition-all ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-gray-50 border-gray-200 text-slate-800'}`}
-                                  placeholder="Anotações do Profissional (opcional)..."
-                                  value={trialObservation}
-                                  onChange={(e) => setTrialObservation(e.target.value)}
-                                  autoFocus
-                                />
-                              </div>
-                              <div className="flex gap-2 shrink-0">
-                                <button 
-                                  onClick={handleUndoTrial}
-                                  className="px-3 py-2 bg-red-50 text-red-500 rounded-xl text-[10px] font-semibold uppercase tracking-widest hover:bg-red-100 transition-all"
-                                >
-                                  Desfazer
-                                </button>
-                                <button 
-                                  onClick={handleSaveTrialObservation}
-                                  className="px-4 py-2 bg-green-500 text-white rounded-xl text-[10px] font-semibold uppercase tracking-widest hover:opacity-90 transition-all shadow-md shadow-green-500/20"
-                                >
-                                  Confirmar
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                        <div className="flex justify-between items-start mb-4">
-                          <div>
-                            <span className="text-[9px] font-semibold text-[#7a32fc] bg-[#7a32fc]/10 px-3 py-1 rounded-full uppercase tracking-widest mb-2 inline-block">
-                              {goal.domainName}
-                            </span>
-                            <h4 className={`text-xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-gray-800'}`}>{goal.name}</h4>
-                            {patientCategory === 'Criança' && (
-                              <div className="mt-2">
-                                <MasteryDots count={getMasteryProgress(goal) || 0} status={goal.status} target={getGoalMasteryTarget(goal)} />
-                              </div>
-                            )}
-                            <p className={`text-xs mt-1 font-medium ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>{sanitizeDescriptionForDisplay(goal.objective)}</p>
-                          </div>
-                        </div>
-
-                        <div className={`grid gap-4 ${(goal.maxScore || 1) > 1 ? 'grid-cols-5' : 'grid-cols-3'}`}>
-                          {(goal.maxScore || 1) === 1 ? (
-                            <>
-                              <button 
-                                onClick={() => handleRecordTrialWithConfirmation(patient.id, goal.id, goal.name, 1)}
-                                className="bg-[#05CD99] text-white py-4 rounded-2xl flex items-center justify-center text-2xl font-semibold shadow-md hover:scale-[1.02] active:scale-95 transition-all"
-                              >
-                                1
-                              </button>
-                              <button 
-                                onClick={() => handleRecordTrialWithConfirmation(patient.id, goal.id, goal.name, 0.5)}
-                                className="bg-[#FFB547] text-white py-4 rounded-2xl flex items-center justify-center text-2xl font-semibold shadow-md hover:scale-[1.02] active:scale-95 transition-all"
-                              >
-                                0.5
-                              </button>
-                              <button 
-                                onClick={() => handleRecordTrialWithConfirmation(patient.id, goal.id, goal.name, 0)}
-                                className="bg-[#EE5D50] text-white py-4 rounded-2xl flex items-center justify-center text-2xl font-semibold shadow-md hover:scale-[1.02] active:scale-95 transition-all"
-                              >
-                                0
-                              </button>
-                            </>
-                          ) : (
-                            Array.from({ length: (goal.maxScore || 1) + 1 }, (_, i) => (goal.maxScore || 1) - i).map((score) => {
-                              const colors = ['bg-[#EE5D50]', 'bg-[#FFB547]', 'bg-[#7a32fc]', 'bg-[#7551FF]', 'bg-[#05CD99]'];
-                              const colorClass = colors[score] || 'bg-gray-500';
-                              return (
-                                <button 
-                                  key={score}
-                                  onClick={() => handleRecordTrialWithConfirmation(patient.id, goal.id, goal.name, score)}
-                                  className={`${colorClass} text-white py-4 rounded-2xl flex items-center justify-center text-2xl font-semibold shadow-md hover:scale-[1.02] active:scale-95 transition-all`}
-                                >
-                                  {score}
-                                </button>
-                              );
-                            })
-                          )}
-                        </div>
-                      
-                      <div className="mt-4 flex items-center justify-center gap-2">
-                        <Info size={12} className={isPanelDark ? 'text-slate-500' : 'text-gray-300'} />
-                        <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-300' : 'text-gray-400'}`}>
-                          Critério: {goal.criteria || "Nenhum critério definido"}
-                        </p>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-center py-16 bg-gray-50 rounded-[32px] border-2 border-dashed border-gray-200">
-                    <Zap size={48} className="mx-auto mb-4 text-gray-300 opacity-50" />
-                    <p className="text-lg font-semibold text-gray-400">Nenhuma meta prioritária.</p>
-                    <p className="text-sm text-gray-400 mt-1">Marque metas no PEI como prioridade para vê-las aqui.</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+          null
         ) : (
           <div className="space-y-6 animate-fade-in">
             <div className={`p-6 rounded-3xl shadow-sm border transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>

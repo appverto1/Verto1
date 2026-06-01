@@ -85,6 +85,19 @@ test('status clinico nao ativa paciente com anamnese obrigatoria pendente', () =
   assert.match(reviewRoute, /ONBOARDING_READY_FOR_CARE/);
   assert.match(reviewRoute, /reviewed_at/);
 
+  const coordinatorStatus = sliceFrom(coordinatorCode, 'const isPatientAnamnesisReviewed', 2400);
+  for (const field of [
+    'anamnesis_request_status',
+    'anamnesis_response_status',
+    'anamnesis_reviewed_at',
+    'lastAnamnesisAt',
+    'anamnesisPending'
+  ]) {
+    assert.match(coordinatorStatus, new RegExp(field));
+  }
+  assert.match(coordinatorStatus, /if \(isPatientAnamnesisReviewed\(patient\)\) return false/);
+  assert.match(coordinatorStatus, /return "Anamnese revisada"/);
+
   assert.match(coordinatorCode, /const getPatientClinicalStatusLabel/);
   for (const label of ['Anamnese pendente', 'Ficha enviada à família', 'Anamnese em preenchimento', 'Aguardando revisão', 'Paciente ativo']) {
     assert.match(coordinatorCode, new RegExp(label));

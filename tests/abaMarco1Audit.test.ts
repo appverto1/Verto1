@@ -55,6 +55,14 @@ test('feature flag aba_v2 isola UI, dataService e API', () => {
   assert.match(serverCode, /const requireAbaV2Feature[\s\S]*?feature_disabled[\s\S]*?aba_v2/m);
 });
 
+test('aba Sessao abre somente em tela cheia', () => {
+  assert.match(patientDetailCode, /const requestSessionStart = \(nextAction: 'tab' \| 'fullscreen' = 'fullscreen'\)/);
+  assert.match(patientDetailCode, /const resolvedAction = nextAction === 'tab' \? 'fullscreen' : nextAction/);
+  assert.match(patientDetailCode, /id="tab-session" onClick=\{\(\) => requestSessionStart\('fullscreen'\)\}/);
+  assert.doesNotMatch(patientDetailCode, /requestSessionStart\('tab'\)/);
+  assert.doesNotMatch(patientDetailCode, />Registro de Sessão</);
+});
+
 test('calculos ABA Marco 1 usam funcoes auditaveis', () => {
   const trials = [
     { trialOutcome: 'independent', score: 1, independent: true, correct: true },
