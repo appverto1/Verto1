@@ -35,7 +35,7 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
     setLoading(true);
     const result = await dataService.getRelationshipConfirmation(token);
     if (!result?.success) {
-      setError(result?.error || 'Não foi possível carregar a solicitação.');
+      setError(result?.message || result?.error || 'Não foi possível carregar a solicitação.');
     } else {
       setRequest(result.data);
       setConfirmed(Boolean(result.data?.canAuthorizeSharedHistory));
@@ -52,7 +52,7 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
     setError('');
     setMessage('');
     const result = await dataService.requestPortalLoginCode(email, token);
-    if (!result?.success) setError(result?.error || 'Não foi possível enviar o código.');
+    if (!result?.success) setError(result?.message || result?.error || 'Não foi possível enviar o código.');
     else setMessage(result.message || 'Se este e-mail estiver cadastrado, enviaremos um código de acesso.');
   };
 
@@ -60,7 +60,7 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
     setError('');
     const result = await dataService.verifyPortalLoginCode(email, code);
     if (!result?.success) {
-      setError(result?.error || 'Código inválido ou expirado.');
+      setError(result?.message || result?.error || 'Código inválido ou expirado.');
       return;
     }
     onLogin?.(result.user);
@@ -72,7 +72,7 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
     setError('');
     const result = await dataService.confirmRelationship(token);
     if (!result?.success) {
-      setError(result?.error || 'Não foi possível confirmar o vínculo.');
+      setError(result?.message || result?.error || 'Não foi possível confirmar o vínculo.');
       return;
     }
     setConfirmed(true);
@@ -84,7 +84,7 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
     setError('');
     const result = await dataService.rejectRelationship(token);
     if (!result?.success) {
-      setError(result?.error || 'Não foi possível recusar o vínculo.');
+      setError(result?.message || result?.error || 'Não foi possível recusar o vínculo.');
       return;
     }
     setMessage(result.message || 'Vínculo recusado.');
@@ -95,7 +95,7 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
     setError('');
     const result = await dataService.authorizeRelationshipHistory(token, scope);
     if (!result?.success) {
-      setError(result?.error || 'Não foi possível compartilhar o histórico.');
+      setError(result?.message || result?.error || 'Não foi possível compartilhar o histórico.');
       return;
     }
     setMessage(result.message || 'Histórico compartilhável autorizado.');
@@ -216,4 +216,3 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
     </div>
   );
 }
-

@@ -8650,6 +8650,25 @@ async function startServer() {
     res.status(401).json({ error: 'Unauthorized - No valid session or token' });
   };
 
+  const checkPortalAuth = async (req: any, res: any, next: any) => {
+    const portalAuthRequired = () => res.status(401).json({
+      success: false,
+      error: 'PORTAL_AUTH_REQUIRED',
+      message: 'Entre com o código enviado ao e-mail responsável para continuar.'
+    });
+
+    if (!req.session?.user) return portalAuthRequired();
+    const sessionUserId = sanitizeString(req.session.user?.id, 120);
+    const sessionToken = sanitizeString(req.session.user?.sessionToken, 120);
+    const activeToken = sessionUserId ? activeSessionByUserId.get(sessionUserId) : null;
+    if (sessionUserId && activeToken && sessionToken && activeToken !== sessionToken) {
+      req.session.destroy(() => {});
+      return portalAuthRequired();
+    }
+    syncWorkspaceContextInSession(req, res, () => {});
+    return next();
+  };
+
   const repairActivityLabelText = (value: unknown) =>
     sanitizeString(value, 220)
       .replace(/Ã§/g, 'ç')
@@ -10654,7 +10673,7 @@ async function startServer() {
   app.post('/api/portal/auth/verify-code', portalActionLimiter, async (req: any, res) => {
     const email = sanitizeEmail(req.body?.email);
     const code = sanitizeString(req.body?.code, 12).replace(/\D/g, '');
-    const genericError = { success: false, error: 'Código inválido ou expirado.' };
+    const genericError = { success: false, error: 'INVALID_CODE', message: 'Código inválido ou expirado.' };
 
     try {
       if (!email || !/^\d{6}$/.test(code)) return res.status(400).json(genericError);
@@ -10675,7 +10694,7 @@ async function startServer() {
           request: req,
           status: 'blocked'
         });
-        return res.status(429).json({ success: false, error: 'Muitas tentativas. Solicite um novo código.' });
+        return res.status(429).json({ success: false, error: 'TOO_MANY_ATTEMPTS', message: 'Muitas tentativas. Solicite um novo código.' });
       }
       if (hashIdentifier(code) !== challenge.codeHash || Date.now() > challenge.expiresAt || !challenge.userId) {
         await setOtpChallenge(challenge);
@@ -14306,7 +14325,14 @@ async function startServer() {
       (isUuid(userId) && sanitizeString(confirmation.responsible_user_id, 120) === userId) ||
       (userEmail && sanitizeEmail(confirmation.email_normalized) === userEmail) ||
       (userEmail && sanitizeEmail(patient?.email) === userEmail);
-    if (!responsibleMatches) return { ok: false, status: 404, error: 'Solicitação não encontrada.' };
+    if (!responsibleMatches) {
+      return {
+        ok: false,
+        status: 403,
+        error: 'RELATIONSHIP_USER_MISMATCH',
+        message: 'Este vínculo pertence a outro responsável.'
+      };
+    }
     return { ok: true, confirmation, patient };
   };
 
@@ -14327,7 +14353,11 @@ async function startServer() {
           )
       );
       if (user && !authenticatedMatches) {
-        return res.status(404).json({ success: false, error: 'Solicitação não encontrada.' });
+        return res.status(403).json({
+          success: false,
+          error: 'RELATIONSHIP_USER_MISMATCH',
+          message: 'Este vínculo pertence a outro responsável.'
+        });
       }
       void persistActivityLog({
         userId: sanitizeString(user?.id, 120) || null,
@@ -14359,10 +14389,10 @@ async function startServer() {
     }
   });
 
-  app.post('/api/portal/relationship-confirmations/:token/confirm', portalActionLimiter, checkAuth, async (req: any, res) => {
+  app.post('/api/portal/relationship-confirmations/:token/confirm', portalActionLimiter, checkPortalAuth, async (req: any, res) => {
     try {
       const resolved: any = await resolveRelationshipConfirmationForPortal(req.params.token, req.session.user);
-      if (!resolved.ok) return res.status(resolved.status).json({ success: false, error: resolved.error });
+      if (!resolved.ok) return res.status(resolved.status).json({ success: false, error: resolved.error, message: resolved.message || resolved.error });
       const confirmation = resolved.confirmation;
       const patient = resolved.patient;
       if (sanitizeString(confirmation.status, 40) === 'CONFIRMED') {
@@ -14424,10 +14454,10 @@ async function startServer() {
     }
   });
 
-  app.post('/api/portal/relationship-confirmations/:token/reject', portalActionLimiter, checkAuth, async (req: any, res) => {
+  app.post('/api/portal/relationship-confirmations/:token/reject', portalActionLimiter, checkPortalAuth, async (req: any, res) => {
     try {
       const resolved: any = await resolveRelationshipConfirmationForPortal(req.params.token, req.session.user);
-      if (!resolved.ok) return res.status(resolved.status).json({ success: false, error: resolved.error });
+      if (!resolved.ok) return res.status(resolved.status).json({ success: false, error: resolved.error, message: resolved.message || resolved.error });
       const confirmation = resolved.confirmation;
       if (sanitizeString(confirmation.status, 40) !== 'PENDING') {
         return res.status(409).json({ success: false, error: 'Solicitação não está pendente.' });
@@ -14456,10 +14486,10 @@ async function startServer() {
     }
   });
 
-  app.get('/api/portal/relationship-confirmations/:token/shareable-history-preview', portalActionLimiter, checkAuth, async (req: any, res) => {
+  app.get('/api/portal/relationship-confirmations/:token/shareable-history-preview', portalActionLimiter, checkPortalAuth, async (req: any, res) => {
     try {
       const resolved: any = await resolveRelationshipConfirmationForPortal(req.params.token, req.session.user);
-      if (!resolved.ok) return res.status(resolved.status).json({ success: false, error: resolved.error });
+      if (!resolved.ok) return res.status(resolved.status).json({ success: false, error: resolved.error, message: resolved.message || resolved.error });
       const confirmation = resolved.confirmation;
       if (sanitizeString(confirmation.status, 40) !== 'CONFIRMED') {
         return res.status(409).json({ success: false, error: 'Confirme o vínculo antes de compartilhar histórico.' });
@@ -14489,10 +14519,10 @@ async function startServer() {
     }
   });
 
-  app.post('/api/portal/relationship-confirmations/:token/authorize-history', portalActionLimiter, checkAuth, async (req: any, res) => {
+  app.post('/api/portal/relationship-confirmations/:token/authorize-history', portalActionLimiter, checkPortalAuth, async (req: any, res) => {
     try {
       const resolved: any = await resolveRelationshipConfirmationForPortal(req.params.token, req.session.user);
-      if (!resolved.ok) return res.status(resolved.status).json({ success: false, error: resolved.error });
+      if (!resolved.ok) return res.status(resolved.status).json({ success: false, error: resolved.error, message: resolved.message || resolved.error });
       const confirmation = resolved.confirmation;
       const patient = resolved.patient;
       if (sanitizeString(confirmation.status, 40) !== 'CONFIRMED') {

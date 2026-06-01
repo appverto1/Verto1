@@ -42,8 +42,10 @@ test('OTP do portal e separado de recuperacao de senha e usa hash', () => {
   assert.match(verifyCode, /hashIdentifier\(code\) !== challenge\.codeHash/);
   assert.match(verifyCode, /challenge\.attempts > 5/);
   assert.match(verifyCode, /await consumeOtpChallenge\(key\)/);
+  assert.match(verifyCode, /error:\s*'INVALID_CODE'/);
   assert.match(verifyCode, /req\.session\.user = buildSessionUserPayload/);
   assert.match(verifyCode, /PORTAL_OTP_VERIFIED|OTP do portal verificado/);
+  assert.doesNotMatch(verifyCode, /PATIENT_ACTIVATION_REQUIRED/);
 });
 
 test('relationship token localiza solicitacao mas nao autentica nem libera historico', () => {
@@ -52,7 +54,9 @@ test('relationship token localiza solicitacao mas nao autentica nem libera histo
   assert.doesNotMatch(getRoute, /req\.session\.user =/);
   assert.match(getRoute, /requiresAuth:\s*!authenticatedMatches/);
   assert.match(getRoute, /canAuthorizeSharedHistory/);
-  assert.match(confirmRoute, /portalActionLimiter, checkAuth/);
+  assert.match(confirmRoute, /portalActionLimiter, checkPortalAuth/);
+  assert.match(serverCode, /error:\s*'PORTAL_AUTH_REQUIRED'/);
+  assert.match(serverCode, /error:\s*'RELATIONSHIP_USER_MISMATCH'/);
   assert.match(confirmRoute, /Vínculo já confirmado/);
   assert.match(confirmRoute, /RELATIONSHIP_CONFIRMED/);
 });
@@ -60,7 +64,7 @@ test('relationship token localiza solicitacao mas nao autentica nem libera histo
 test('autorizacao de historico acontece depois do vinculo confirmado e importa timeline', () => {
   const previewRoute = sliceFrom(serverCode, "app.get('/api/portal/relationship-confirmations/:token/shareable-history-preview'", 2600);
   const authorizeRoute = sliceFrom(serverCode, "app.post('/api/portal/relationship-confirmations/:token/authorize-history'", 7600);
-  assert.match(previewRoute, /checkAuth/);
+  assert.match(previewRoute, /checkPortalAuth/);
   assert.match(previewRoute, /Confirme o vínculo antes de compartilhar histórico/);
   assert.match(authorizeRoute, /sanitizeString\(confirmation\.status, 40\) !== 'CONFIRMED'/);
   assert.match(authorizeRoute, /buildPatientPortabilitySnapshot/);

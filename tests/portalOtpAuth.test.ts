@@ -38,8 +38,10 @@ test('verify-code expira, limita tentativas e consome uso unico', () => {
   assert.match(route, /challenge\.attempts \+= 1/);
   assert.match(route, /challenge\.attempts > 5/);
   assert.match(route, /Date\.now\(\) > challenge\.expiresAt/);
+  assert.match(route, /error:\s*'INVALID_CODE'/);
   assert.match(route, /await consumeOtpChallenge\(key\)/);
   assert.match(route, /req\.session\.user = buildSessionUserPayload\(userData\)/);
+  assert.doesNotMatch(route, /PATIENT_ACTIVATION_REQUIRED/);
 });
 
 test('portal login nao reutiliza fluxo de reset ou ativacao', () => {

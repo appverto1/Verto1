@@ -80,8 +80,8 @@ test('rotas novas sao autenticadas, escopadas por paciente/portal e sem select e
     assert.match(route, /canPortalSessionAccessPatient/);
   }
 
-  assert.match(routeSlice("app.post('/api/portal/relationship-confirmations/:token/confirm'"), /portalActionLimiter, checkAuth/);
-  assert.match(routeSlice("app.post('/api/portal/relationship-confirmations/:token/reject'"), /portalActionLimiter, checkAuth/);
+  assert.match(routeSlice("app.post('/api/portal/relationship-confirmations/:token/confirm'"), /portalActionLimiter, checkPortalAuth/);
+  assert.match(routeSlice("app.post('/api/portal/relationship-confirmations/:token/reject'"), /portalActionLimiter, checkPortalAuth/);
   assert.match(routeSlice("app.post('/api/portal/shared-history/:confirmationId/authorize'"), /portalActionLimiter, checkAuth/);
   assert.match(routeSlice("app.get('/api/patients/:patientId/shared-history'"), /checkAuth, checkPatientAccess, requireRoles\('coordinator', 'therapist', 'admin', 'owner'\)/);
   assert.match(routeSlice("app.post('/api/patients/:patientId/shared-history/import'"), /portalActionLimiter, checkAuth, checkPatientAccess, requireRoles\('coordinator', 'admin', 'owner'\)/);
