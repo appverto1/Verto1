@@ -2876,6 +2876,30 @@ const PATIENT_SHARED_HISTORY_SNAPSHOT_SELECT = [
   'metadata'
 ].join(',');
 
+const PATIENT_LONGITUDINAL_TIMELINE_SELECT = [
+  'id',
+  'global_patient_identity_id',
+  'organization_id',
+  'patient_id',
+  'source_organization_id',
+  'source_patient_id',
+  'item_type',
+  'item_title',
+  'item_date',
+  'item_data',
+  'visibility',
+  'portability_scope',
+  'is_imported',
+  'is_read_only',
+  'imported_from_snapshot_id',
+  'source_hash',
+  'created_by',
+  'created_at',
+  'updated_at',
+  'imported_at',
+  'metadata'
+].join(',');
+
 const CLINIC_PAYER_REQUIREMENT_SELECT = [
   'id',
   'organization_id',
@@ -4114,6 +4138,230 @@ async function updateRowsWithSchemaFallback(params: {
   }
 
   return { success: false, error: lastError || new Error('Falha ao atualizar registro.') };
+}
+
+function stableHashPayload(input: any): string {
+  const normalize = (value: any): any => {
+    if (Array.isArray(value)) return value.map(normalize);
+    if (value && typeof value === 'object') {
+      return Object.keys(value)
+        .sort()
+        .reduce((acc: Record<string, any>, key) => {
+          acc[key] = normalize(value[key]);
+          return acc;
+        }, {});
+    }
+    return value;
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(normalize(input || {}))).digest('hex');
+}
+
+function normalizeTimelineVisibility(value: any): 'PRIVATE' | 'PATIENT' | 'PROFESSIONALS' | 'PORTABLE' | 'IMPORTED' {
+  const normalized = sanitizeString(value, 40).toUpperCase();
+  if (['PATIENT', 'FAMILY', 'FAMILIA'].includes(normalized)) return 'PATIENT';
+  if (['PROFESSIONALS', 'PROFESSIONAL', 'TEAM'].includes(normalized)) return 'PROFESSIONALS';
+  if (normalized === 'PORTABLE') return 'PORTABLE';
+  if (normalized === 'IMPORTED') return 'IMPORTED';
+  return 'PRIVATE';
+}
+
+function isShareableTimelineVisibility(value: any): boolean {
+  const visibility = normalizeTimelineVisibility(value);
+  return visibility === 'PATIENT' || visibility === 'PROFESSIONALS' || visibility === 'PORTABLE' || visibility === 'IMPORTED';
+}
+
+function buildTimelineItemsFromSharedSnapshot(params: {
+  snapshot: any;
+  patientId: string;
+  clinicId: string;
+  actorId?: string | null;
+}) {
+  const snapshotData = parseStoredJsonObject(params.snapshot?.snapshot_data || params.snapshot?.snapshotData);
+  const scope = normalizePatientPortabilityScope(params.snapshot?.scope || snapshotData?.scope);
+  const snapshotId = sanitizeString(params.snapshot?.id, 120);
+  const sourceOrganizationId = sanitizeString(
+    params.snapshot?.organization_id_source || params.snapshot?.organizationIdSource || snapshotData?.sourceOrganizationId,
+    120,
+  );
+  const sourcePatientId = sanitizeString(params.snapshot?.patient_id_source || params.snapshot?.patientIdSource, 120);
+  const generatedAt = sanitizeString(params.snapshot?.generated_at || params.snapshot?.generatedAt, 80) || new Date().toISOString();
+  const base = {
+    organization_id: params.clinicId,
+    patient_id: params.patientId,
+    source_organization_id: sourceOrganizationId || null,
+    source_patient_id: sourcePatientId || null,
+    imported_from_snapshot_id: snapshotId || null,
+    is_imported: true,
+    is_read_only: true,
+    created_by: sanitizeString(params.actorId, 120) || null,
+    imported_at: new Date().toISOString()
+  };
+  const items: any[] = [];
+
+  if (snapshotData?.demographics && scope.demographics) {
+    const itemData = sanitizeClinicalPayload({ demographics: snapshotData.demographics });
+    items.push({
+      ...base,
+      item_type: 'PORTABILITY_IMPORT',
+      item_title: 'Dados cadastrais compartilhados',
+      item_date: generatedAt,
+      item_data: itemData,
+      visibility: 'IMPORTED',
+      portability_scope: scope,
+      metadata: { source: 'patient_portability_snapshot', section: 'demographics' }
+    });
+  }
+
+  for (const note of Array.isArray(snapshotData?.notes) ? snapshotData.notes : []) {
+    const visibility = normalizeTimelineVisibility(note?.type || note?.visibility);
+    if (!isShareableTimelineVisibility(visibility)) continue;
+    const itemData = sanitizeClinicalPayload({
+      subject: note?.subject || null,
+      content: note?.content || null,
+      createdAt: note?.createdAt || note?.created_at || null
+    });
+    items.push({
+      ...base,
+      item_type: 'SHARED_NOTE',
+      item_title: sanitizeString(note?.subject || 'Anotação compartilhada', 180) || 'Anotação compartilhada',
+      item_date: sanitizeString(note?.createdAt || note?.created_at || generatedAt, 80) || generatedAt,
+      item_data: itemData,
+      visibility: 'IMPORTED',
+      portability_scope: scope,
+      metadata: { source: 'patient_portability_snapshot', originalVisibility: visibility }
+    });
+  }
+
+  const priorTimeline = Array.isArray(snapshotData?.timelineItems)
+    ? snapshotData.timelineItems
+    : Array.isArray(snapshotData?.timeline_items)
+      ? snapshotData.timeline_items
+      : [];
+  for (const prior of priorTimeline) {
+    const visibility = normalizeTimelineVisibility(prior?.visibility);
+    if (!isShareableTimelineVisibility(visibility)) continue;
+    const itemType = sanitizeString(prior?.itemType || prior?.item_type || 'OTHER', 80).toUpperCase();
+    const itemData = sanitizeClinicalPayload(prior?.itemData || prior?.item_data || prior?.data || {});
+    items.push({
+      ...base,
+      source_organization_id: sanitizeString(prior?.sourceOrganizationId || prior?.source_organization_id || sourceOrganizationId, 120) || null,
+      source_patient_id: sanitizeString(prior?.sourcePatientId || prior?.source_patient_id || sourcePatientId, 120) || null,
+      item_type: itemType,
+      item_title: sanitizeString(prior?.itemTitle || prior?.item_title || 'Histórico compartilhado', 180) || 'Histórico compartilhado',
+      item_date: sanitizeString(prior?.itemDate || prior?.item_date || generatedAt, 80) || generatedAt,
+      item_data: itemData,
+      visibility: 'IMPORTED',
+      portability_scope: prior?.portabilityScope || prior?.portability_scope || scope,
+      metadata: { source: 'previous_imported_timeline' }
+    });
+  }
+
+  return items.map((item) => ({
+    ...item,
+    source_hash: stableHashPayload({
+      snapshotId,
+      sourceOrganizationId: item.source_organization_id,
+      sourcePatientId: item.source_patient_id,
+      patientId: params.patientId,
+      itemType: item.item_type,
+      itemDate: item.item_date,
+      itemTitle: item.item_title,
+      itemData: item.item_data
+    })
+  }));
+}
+
+async function importSharedSnapshotIntoLongitudinalTimeline(params: {
+  snapshot: any;
+  patientId: string;
+  clinicId: string;
+  actorId?: string | null;
+}) {
+  const snapshotId = sanitizeString(params.snapshot?.id, 120);
+  const idempotencyKey = stableHashPayload({
+    snapshotId,
+    patientId: params.patientId,
+    clinicId: params.clinicId,
+    action: 'shared-history-import'
+  });
+  const items = buildTimelineItemsFromSharedSnapshot(params);
+
+  const { data: existingImport, error: existingImportError } = await supabase
+    .from('patient_history_imports')
+    .select('id, status, imported_items_count, skipped_duplicates_count')
+    .eq('organization_id', params.clinicId)
+    .eq('patient_id', params.patientId)
+    .eq('source_snapshot_id', snapshotId)
+    .eq('idempotency_key', idempotencyKey)
+    .limit(1)
+    .maybeSingle();
+  if (existingImportError && !isMissingRelationError(existingImportError)) throw existingImportError;
+  if (existingImport?.id && sanitizeString(existingImport.status, 40).toUpperCase() === 'COMPLETED') {
+    return {
+      success: true,
+      idempotent: true,
+      importedItemsCount: Number(existingImport.imported_items_count || 0),
+      skippedDuplicatesCount: Number(existingImport.skipped_duplicates_count || items.length),
+      message: 'Histórico compartilhado já estava importado.'
+    };
+  }
+
+  const sourceHashes = items.map((item) => sanitizeString(item.source_hash, 120)).filter(Boolean);
+  const existingHashes = new Set<string>();
+  if (sourceHashes.length > 0) {
+    const { data: existingItems, error: existingItemsError } = await supabase
+      .from('patient_longitudinal_timeline_items')
+      .select('source_hash')
+      .eq('organization_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .in('source_hash', sourceHashes)
+      .limit(500);
+    if (existingItemsError && !isMissingRelationError(existingItemsError)) throw existingItemsError;
+    for (const row of Array.isArray(existingItems) ? existingItems : []) {
+      const hash = sanitizeString(row?.source_hash, 120);
+      if (hash) existingHashes.add(hash);
+    }
+  }
+
+  let importedItemsCount = 0;
+  let skippedDuplicatesCount = 0;
+  for (const item of items) {
+    if (existingHashes.has(sanitizeString(item.source_hash, 120))) {
+      skippedDuplicatesCount += 1;
+      continue;
+    }
+    const insert = await insertRowWithSchemaFallback('patient_longitudinal_timeline_items', item, 'shared-history-import-timeline-item');
+    if (!insert.success) {
+      if (isMissingRelationError(insert.error)) break;
+      throw insert.error;
+    }
+    importedItemsCount += 1;
+  }
+
+  const importInsert = await insertRowWithSchemaFallback('patient_history_imports', {
+    organization_id: params.clinicId,
+    patient_id: params.patientId,
+    source_snapshot_id: snapshotId,
+    source_organization_id: sanitizeString(params.snapshot?.organization_id_source, 120) || null,
+    imported_by: sanitizeString(params.actorId, 120) || null,
+    imported_at: new Date().toISOString(),
+    status: 'COMPLETED',
+    imported_items_count: importedItemsCount,
+    skipped_duplicates_count: skippedDuplicatesCount,
+    idempotency_key: idempotencyKey,
+    metadata: { source: 'shared_history_snapshot', readOnly: true }
+  }, 'shared-history-import-record');
+  if (!importInsert.success && !isMissingRelationError(importInsert.error)) throw importInsert.error;
+
+  return {
+    success: true,
+    idempotent: importedItemsCount === 0 && skippedDuplicatesCount > 0,
+    importedItemsCount,
+    skippedDuplicatesCount,
+    message: importedItemsCount === 0 && skippedDuplicatesCount > 0
+      ? 'Histórico compartilhado já estava importado.'
+      : 'Histórico compartilhado importado.'
+  };
 }
 
 async function updatePatientOnboardingWithSchemaFallback(params: {
@@ -14044,6 +14292,198 @@ async function startServer() {
     }
   });
 
+  app.get('/api/patients/:patientId/timeline', checkAuth, checkPatientAccess, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const limit = parseBoundedListLimit(req.query?.limit, 50, 100);
+      const offset = Math.max(0, Math.min(5000, Number(req.query?.offset || 0) || 0));
+      if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      const { data, error } = await supabase
+        .from('patient_longitudinal_timeline_items')
+        .select(PATIENT_LONGITUDINAL_TIMELINE_SELECT)
+        .eq('organization_id', clinicId)
+        .eq('patient_id', patientId)
+        .order('item_date', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1);
+      if (error) {
+        if (isMissingRelationError(error)) return res.json({ success: true, data: [], pagination: { limit, offset, hasMore: false }, warning: 'Timeline longitudinal ainda não configurada.' });
+        throw error;
+      }
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
+        title: 'Timeline longitudinal visualizada',
+        content: 'Timeline longitudinal do paciente foi consultada com paginação.',
+        type: 'management',
+        actionType: 'LONGITUDINAL_TIMELINE_VIEWED',
+        payload: { patientId, limit, offset }
+      });
+      const rows = Array.isArray(data) ? data : [];
+      return res.json({ success: true, data: rows, pagination: { limit, offset, hasMore: rows.length === limit } });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/timeline [GET]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.get('/api/patients/:patientId/imported-history', checkAuth, checkPatientAccess, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const limit = parseBoundedListLimit(req.query?.limit, 50, 100);
+      if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      const { data, error } = await supabase
+        .from('patient_longitudinal_timeline_items')
+        .select(PATIENT_LONGITUDINAL_TIMELINE_SELECT)
+        .eq('organization_id', clinicId)
+        .eq('patient_id', patientId)
+        .eq('is_imported', true)
+        .order('item_date', { ascending: false, nullsFirst: false })
+        .limit(limit);
+      if (error) {
+        if (isMissingRelationError(error)) return res.json({ success: true, data: [], warning: 'Histórico importado ainda não configurado.' });
+        throw error;
+      }
+      return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/imported-history [GET]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.post('/api/patients/:patientId/shared-history/snapshot', portalActionLimiter, checkAuth, checkPatientAccess, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const targetClinicId = sanitizeString(req.body?.targetOrganizationId || req.body?.organization_id_target || clinicId, 120);
+      if (!isUuid(patientId) || !isUuid(clinicId) || !isUuid(targetClinicId)) {
+        return res.status(400).json({ success: false, error: 'Solicitação inválida.' });
+      }
+      const { data: patient, error: patientError } = await supabase
+        .from('patients')
+        .select('id, name, email, age, status, clinic_id')
+        .eq('id', patientId)
+        .eq('clinic_id', clinicId)
+        .limit(1)
+        .maybeSingle();
+      if (patientError) throw patientError;
+      if (!patient?.id) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+
+      const scope = normalizePatientPortabilityScope(req.body?.scope);
+      const notesResult = await fetchNotesWithRoleFilter({
+        patientId,
+        role: 'coordinator',
+        limit: 200,
+        requestId: requestIdForLogs(req)
+      });
+      if (notesResult.error) throw notesResult.error;
+
+      const { data: priorTimeline, error: priorTimelineError } = await supabase
+        .from('patient_longitudinal_timeline_items')
+        .select(PATIENT_LONGITUDINAL_TIMELINE_SELECT)
+        .eq('organization_id', clinicId)
+        .eq('patient_id', patientId)
+        .eq('is_imported', true)
+        .order('item_date', { ascending: false, nullsFirst: false })
+        .limit(200);
+      if (priorTimelineError && !isMissingRelationError(priorTimelineError)) throw priorTimelineError;
+
+      const snapshot = {
+        ...buildPatientPortabilitySnapshot({
+          patient,
+          notes: notesResult.data || [],
+          scope
+        }),
+        timelineItems: (Array.isArray(priorTimeline) ? priorTimeline : [])
+          .filter((item: any) => isShareableTimelineVisibility(item?.visibility))
+          .map((item: any) => ({
+            itemType: sanitizeString(item?.item_type, 80),
+            itemTitle: sanitizeString(item?.item_title, 180),
+            itemDate: sanitizeString(item?.item_date, 80) || null,
+            itemData: sanitizeClinicalPayload(item?.item_data || {}),
+            visibility: normalizeTimelineVisibility(item?.visibility),
+            sourceOrganizationId: sanitizeString(item?.source_organization_id || item?.organization_id, 120) || null,
+            portabilityScope: item?.portability_scope || scope
+          }))
+      };
+      const idempotencyKey = stableHashPayload({ patientId, clinicId, targetClinicId, snapshot, scope });
+      const { data: existingSnapshots, error: existingError } = await supabase
+        .from('patient_shared_history_snapshots')
+        .select(PATIENT_SHARED_HISTORY_SNAPSHOT_SELECT)
+        .eq('organization_id_source', clinicId)
+        .eq('organization_id_target', targetClinicId)
+        .eq('patient_id_source', patientId)
+        .eq('status', 'GENERATED')
+        .order('generated_at', { ascending: false })
+        .limit(20);
+      if (existingError && !isMissingRelationError(existingError)) throw existingError;
+      const existingSnapshot = (Array.isArray(existingSnapshots) ? existingSnapshots : []).find((row: any) =>
+        sanitizeString(row?.metadata?.idempotencyKey || row?.metadata?.idempotency_key, 120) === idempotencyKey
+      );
+      if (existingSnapshot?.id) {
+        return res.json({
+          success: true,
+          idempotent: true,
+          message: 'Snapshot compartilhável já estava gerado.',
+          data: { snapshotId: sanitizeString(existingSnapshot.id, 120), status: sanitizeString(existingSnapshot.status, 40) || 'GENERATED' }
+        });
+      }
+
+      const snapshotId = crypto.randomUUID();
+      const nowIso = new Date().toISOString();
+      const insert = await insertRowWithSchemaFallback('patient_shared_history_snapshots', {
+        id: snapshotId,
+        organization_id_source: clinicId,
+        organization_id_target: targetClinicId,
+        patient_id_source: patientId,
+        patient_id_target: sanitizeString(req.body?.patientIdTarget || req.body?.patient_id_target, 120) || patientId,
+        generated_by: sanitizeString(req.session.user?.id, 120),
+        authorized_by_user_id: sanitizeString(req.session.user?.id, 120),
+        scope,
+        snapshot_data: snapshot,
+        status: 'GENERATED',
+        generated_at: nowIso,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+        idempotency_key: idempotencyKey,
+        metadata: { idempotencyKey, excludesPrivateHistory: true }
+      }, 'shared-history-snapshot');
+      if (!insert.success) throw insert.error;
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
+        title: 'Snapshot compartilhável gerado',
+        content: 'Snapshot longitudinal autorizado foi gerado excluindo dados privados.',
+        type: 'management',
+        actionType: 'SHARED_HISTORY_SNAPSHOT_GENERATED',
+        payload: { patientId, snapshotId, privateExcluded: true }
+      });
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuario', 180),
+        title: 'Dados privados excluídos da portabilidade',
+        content: 'Anotações privadas foram mantidas apenas na clínica original.',
+        type: 'management',
+        actionType: 'PRIVATE_HISTORY_EXCLUDED_FROM_PORTABILITY',
+        payload: { patientId, snapshotId }
+      });
+      return res.json({ success: true, message: 'Snapshot compartilhável gerado.', data: { snapshotId, status: 'GENERATED' } });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/shared-history/snapshot [POST]', error, {
+        patientId: sanitizeString(req.params.patientId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
   app.post('/api/patients/:patientId/shared-history/import', portalActionLimiter, checkAuth, checkPatientAccess, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -14054,15 +14494,38 @@ async function startServer() {
       }
       const { data: snapshot, error } = await supabase
         .from('patient_shared_history_snapshots')
-        .select('id, status')
+        .select(PATIENT_SHARED_HISTORY_SNAPSHOT_SELECT)
         .eq('id', snapshotId)
         .eq('organization_id_target', clinicId)
         .eq('patient_id_target', patientId)
-        .eq('status', 'GENERATED')
         .limit(1)
         .maybeSingle();
       if (error) throw error;
       if (!snapshot?.id) return res.status(404).json({ success: false, error: 'Snapshot não encontrado.' });
+      if (sanitizeString(snapshot.status, 40) === 'IMPORTED') {
+        const idempotentImport = await importSharedSnapshotIntoLongitudinalTimeline({
+          snapshot,
+          patientId,
+          clinicId,
+          actorId: sanitizeString(req.session.user?.id, 120)
+        });
+        return res.json({
+          success: true,
+          idempotent: true,
+          message: idempotentImport.message || 'Histórico compartilhado já estava importado.',
+          importedItemsCount: idempotentImport.importedItemsCount,
+          skippedDuplicatesCount: idempotentImport.skippedDuplicatesCount
+        });
+      }
+      if (sanitizeString(snapshot.status, 40) !== 'GENERATED') {
+        return res.status(409).json({ success: false, error: 'Snapshot não está disponível para importação.' });
+      }
+      const importResult = await importSharedSnapshotIntoLongitudinalTimeline({
+        snapshot,
+        patientId,
+        clinicId,
+        actorId: sanitizeString(req.session.user?.id, 120)
+      });
       const update = await updateRowsWithSchemaFallback({
         tableName: 'patient_shared_history_snapshots',
         payload: { status: 'IMPORTED', metadata: { importedAt: new Date().toISOString() } },
@@ -14077,10 +14540,21 @@ async function startServer() {
         title: 'Snapshot compartilhado importado',
         content: 'Snapshot autorizado foi marcado como importado no prontuário.',
         type: 'management',
-        actionType: 'SHARED_HISTORY_IMPORTED',
-        payload: { patientId, snapshotId }
+        actionType: importResult.idempotent ? 'SHARED_HISTORY_IMPORT_IDEMPOTENT' : 'SHARED_HISTORY_IMPORTED',
+        payload: {
+          patientId,
+          snapshotId,
+          importedItemsCount: importResult.importedItemsCount,
+          skippedDuplicatesCount: importResult.skippedDuplicatesCount
+        }
       });
-      return res.json({ success: true, message: 'Snapshot autorizado importado.' });
+      return res.json({
+        success: true,
+        idempotent: importResult.idempotent,
+        message: importResult.message || 'Snapshot autorizado importado.',
+        importedItemsCount: importResult.importedItemsCount,
+        skippedDuplicatesCount: importResult.skippedDuplicatesCount
+      });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/patients/:patientId/shared-history/import [POST]', error, {
         patientId: sanitizeString(req.params.patientId, 120),
@@ -15756,6 +16230,29 @@ async function startServer() {
       }
 
       const nowIso = new Date().toISOString();
+      const { data: portabilitySnapshots, error: portabilitySnapshotsError } = await supabase
+        .from('patient_portability_snapshots')
+        .select('id, organization_id_source, organization_id_target, patient_id_source, patient_id_target, snapshot_data, status, generated_at, metadata')
+        .eq('portability_request_id', requestId)
+        .eq('organization_id_target', organizationId)
+        .in('status', ['GENERATED', 'IMPORTED'])
+        .limit(20);
+      if (portabilitySnapshotsError && !isMissingRelationError(portabilitySnapshotsError)) throw portabilitySnapshotsError;
+      let importedItemsCount = 0;
+      let skippedDuplicatesCount = 0;
+      for (const snapshot of Array.isArray(portabilitySnapshots) ? portabilitySnapshots : []) {
+        const importResult = await importSharedSnapshotIntoLongitudinalTimeline({
+          snapshot: {
+            ...snapshot,
+            scope: requestRow.scope
+          },
+          patientId,
+          clinicId: organizationId,
+          actorId: sanitizeString(req.session.user?.id, 120)
+        });
+        importedItemsCount += Number(importResult.importedItemsCount || 0);
+        skippedDuplicatesCount += Number(importResult.skippedDuplicatesCount || 0);
+      }
       const { error: snapshotUpdateError } = await supabase
         .from('patient_portability_snapshots')
         .update({ status: 'IMPORTED', metadata: { importedAt: nowIso }, })
@@ -15790,8 +16287,8 @@ async function startServer() {
         title: 'Snapshot de portabilidade importado',
         content: 'Snapshot autorizado foi importado para o contexto da clínica atual.',
         type: 'management',
-        actionType: 'PORTABILITY_SNAPSHOT_IMPORTED',
-        payload: { requestId, patientId }
+        actionType: importedItemsCount === 0 && skippedDuplicatesCount > 0 ? 'SHARED_HISTORY_IMPORT_IDEMPOTENT' : 'PORTABILITY_SNAPSHOT_IMPORTED',
+        payload: { requestId, patientId, importedItemsCount, skippedDuplicatesCount }
       });
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
@@ -15804,7 +16301,15 @@ async function startServer() {
         payload: { requestId, patientId, grantCreated: !grantError }
       });
 
-      return res.json({ success: true, message: 'Snapshot autorizado importado.' });
+      return res.json({
+        success: true,
+        idempotent: importedItemsCount === 0 && skippedDuplicatesCount > 0,
+        message: importedItemsCount === 0 && skippedDuplicatesCount > 0
+          ? 'Histórico compartilhado já estava importado.'
+          : 'Snapshot autorizado importado.',
+        importedItemsCount,
+        skippedDuplicatesCount
+      });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/patients/:patientId/portability/import [POST]', error, {
         patientId: sanitizeString(req.params.patientId, 120),

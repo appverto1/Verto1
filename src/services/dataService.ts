@@ -1370,6 +1370,51 @@ export const dataService = {
     }
   },
 
+  async getPatientLongitudinalTimeline(patientId: string, params: { limit?: number; offset?: number } = {}) {
+    try {
+      const searchParams = new URLSearchParams();
+      if (params.limit) searchParams.set('limit', String(params.limit));
+      if (params.offset) searchParams.set('offset', String(params.offset));
+      const suffix = searchParams.toString() ? `?${searchParams.toString()}` : '';
+      const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/timeline${suffix}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error loading patient longitudinal timeline:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async getPatientImportedHistory(patientId: string, limit = 50) {
+    try {
+      const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/imported-history?limit=${encodeURIComponent(String(limit))}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error loading patient imported history:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
+  async createPatientSharedHistorySnapshot(patientId: string, payload: any = {}) {
+    try {
+      const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/shared-history/snapshot`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error creating patient shared history snapshot:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
   async updatePatient(id: string, updates: any) {
     return await saveOfflineFirst(id, updates, 'patient', `/api/patients/${id}`, 'PATCH');
   },
