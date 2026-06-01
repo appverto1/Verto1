@@ -1678,7 +1678,44 @@ export function CoordinatorDashboard({
   const getPatientAutoPayerKey = (patient: any, fallbackName = "") =>
     normalizePayerLookup(patient?.id || patient?.patient_id || fallbackName || patient?.name);
 
-  const resolvePatientInsurancePayer = (patient: any) => {
+  const normalizeBillingServiceMatchKey = (value: any) => {
+    const raw = normalizePayerLookup(value).replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    const aliases: Record<string, string> = {
+      aba: "ABA",
+      fono: "SPEECH_THERAPY",
+      fonoaudiologia: "SPEECH_THERAPY",
+      speech_therapy: "SPEECH_THERAPY",
+      psicologia: "PSYCHOLOGY",
+      psychology: "PSYCHOLOGY",
+      terapia_ocupacional: "OCCUPATIONAL_THERAPY",
+      occupational_therapy: "OCCUPATIONAL_THERAPY",
+      to: "OCCUPATIONAL_THERAPY",
+      psicopedagogia: "PSYCHOPEDAGOGY",
+      physiotherapy: "PHYSIOTHERAPY",
+      fisioterapia: "PHYSIOTHERAPY",
+      therapy: "THERAPY",
+      terapia: "THERAPY",
+    };
+    return aliases[raw] || raw.toUpperCase();
+  };
+
+  const financialPlanMatchesAppointmentService = (plan: any, serviceType: any) => {
+    const serviceKey = normalizeBillingServiceMatchKey(serviceType);
+    if (!serviceKey) return false;
+    return [
+      plan?.serviceType,
+      plan?.service_type,
+      plan?.customServiceName,
+      plan?.custom_service_name,
+      plan?.serviceNameSnapshot,
+      plan?.service_name_snapshot,
+    ]
+      .map(normalizeBillingServiceMatchKey)
+      .filter(Boolean)
+      .includes(serviceKey);
+  };
+
+  const resolvePatientInsurancePayer = (patient: any, serviceType: any = "") => {
     if (!patient) return { payerId: "", payerName: "" };
     const plans = normalizePatientFinancialPlans(
       Array.isArray(patient?.financialPlans)
@@ -1687,12 +1724,22 @@ export function CoordinatorDashboard({
           ? patient.financial_plans
           : [],
     );
-    const insurancePlan = plans.find(
+    const insurancePlans = plans.filter(
       (plan: any) =>
         plan?.billingMode === "INSURANCE" &&
+        String(plan?.status || "ACTIVE").toUpperCase() === "ACTIVE" &&
         (String(plan?.payerId || "").trim() ||
           String(plan?.payerNameSnapshot || "").trim()),
     );
+    const matchingPlans = serviceType
+      ? insurancePlans.filter((plan: any) => financialPlanMatchesAppointmentService(plan, serviceType))
+      : [];
+    const insurancePlan =
+      matchingPlans.length === 1
+        ? matchingPlans[0]
+        : !serviceType && insurancePlans.length === 1
+          ? insurancePlans[0]
+          : null;
     const planPayerId = String(insurancePlan?.payerId || "").trim();
     const planPayerName = normalizeUtf8Text(
       String(
@@ -1764,7 +1811,7 @@ export function CoordinatorDashboard({
     const patient = allPatients.find(
       (item: any) => normalizeUtf8Text(item?.name).trim().toLowerCase() === normalizedName,
     );
-    const patientPayer = resolvePatientInsurancePayer(patient);
+    const patientPayer = resolvePatientInsurancePayer(patient, sessionApproach);
     const matchingPayer = resolveClinicPayerForPatientInsurance(patientPayer);
     lastAutoPayerPatientKeyRef.current = getPatientAutoPayerKey(patient, name);
     setSessionPatientName(name);
@@ -1803,8 +1850,8 @@ export function CoordinatorDashboard({
   }, [allPatients, sessionPatientName]);
 
   const selectedSessionPatientInsurancePayer = useMemo(
-    () => resolvePatientInsurancePayer(selectedSessionPatient),
-    [selectedSessionPatient, selectedSessionPatient?.financialPlans, selectedSessionPatient?.financial_plans],
+    () => resolvePatientInsurancePayer(selectedSessionPatient, sessionApproach),
+    [selectedSessionPatient, selectedSessionPatient?.financialPlans, selectedSessionPatient?.financial_plans, sessionApproach],
   );
 
   const selectedSessionPatientInsuranceClinicPayer = useMemo(

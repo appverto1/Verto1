@@ -40,6 +40,7 @@
     "test:closure-readiness": "tsx tests/closureReadiness.test.ts",
     "test:appointment-confirmation-signature": "tsx tests/appointmentConfirmationSignature.test.ts",
     "test:appointment-professional-cancel": "tsx tests/appointmentProfessionalCancel.test.ts",
+    "test:appointment-billing-context": "tsx tests/appointmentBillingContext.test.ts",
     "test:payer-requirements": "tsx tests/payerRequirements.test.ts",
     "test:calendar-events": "tsx tests/calendarEvents.test.ts",
     "test:scheduling": "tsx tests/scheduling.test.ts",

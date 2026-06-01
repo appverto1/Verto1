@@ -274,6 +274,14 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     : durationVariance <= requirements.maxDurationVarianceMinutes;
 
   const checklist: ClosureChecklistItem[] = [];
+  const appointmentPayerContext = firstValue(
+    requirements.payerName,
+    requirements.payerId,
+    appointment.payer_name_snapshot,
+    appointment.payerNameSnapshot,
+    appointment.payer_id,
+    appointment.payerId
+  );
   checklist.push(buildCheck(
     'session_completed',
     'Sessão concluída',
@@ -380,14 +388,14 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
   checklist.push(buildCheck(
     'payer_linked',
     'Convênio/pagador vinculado',
-    firstValue(requirements.payerName, requirements.payerId, input.patient?.insuranceType, input.patient?.payerType, input.patient?.financialPlans, appointment.payer_name_snapshot, appointment.payerNameSnapshot, appointment.payer_type, appointment.payerType) ? 'PASSED' : 'NOT_APPLICABLE',
+    appointmentPayerContext ? 'PASSED' : 'NOT_APPLICABLE',
     false,
     'LOW',
-    firstValue(requirements.payerName, requirements.payerId, input.patient?.insuranceType, input.patient?.payerType, input.patient?.financialPlans, appointment.payer_name_snapshot, appointment.payerNameSnapshot, appointment.payer_type, appointment.payerType)
+    appointmentPayerContext
       ? 'Pagador informado para esta conferÃªncia.'
       : 'Pagador não configurado para esta conferência.',
     {
-      present: Boolean(firstValue(requirements.payerName, requirements.payerId, input.patient?.insuranceType, input.patient?.payerType, input.patient?.financialPlans, appointment.payer_name_snapshot, appointment.payerNameSnapshot, appointment.payer_type, appointment.payerType)),
+      present: Boolean(appointmentPayerContext),
       source: requirements.payerRequirementSource || 'DEFAULT'
     }
   ));

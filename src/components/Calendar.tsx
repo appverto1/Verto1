@@ -744,7 +744,25 @@ export const ClinicalAgendaBoard = ({
   const [detailState, setDetailState] = useState<{ loading: boolean; error: string }>({ loading: false, error: '' });
   const [closureDetailState, setClosureDetailState] = useState<{ loading: boolean; error: string; data: any | null }>({ loading: false, error: '', data: null });
   const [actionRequestState, setActionRequestState] = useState<{ loadingId: string; error: string }>({ loadingId: '', error: '' });
+  const [billingEditorOpen, setBillingEditorOpen] = useState(false);
+  const [billingEditorState, setBillingEditorState] = useState<{ loading: boolean; saving: boolean; error: string; success: string }>({
+    loading: false,
+    saving: false,
+    error: '',
+    success: ''
+  });
+  const [billingPayers, setBillingPayers] = useState<any[]>([]);
+  const [billingForm, setBillingForm] = useState({
+    payerId: '',
+    payerName: '',
+    serviceType: '',
+    guideNumber: '',
+    authorizationCode: '',
+    procedureCode: '',
+    notes: ''
+  });
   const cacheRef = useRef<Map<string, any[]>>(new Map());
+  const canEditBillingContext = ['coordinator', 'admin', 'owner'].includes(String(currentUser?.role || '').toLowerCase());
   const roomLookup = useMemo(() => {
     const map = new Map<string, any>();
     (rooms || []).forEach((room: any) => {
@@ -1119,6 +1137,117 @@ export const ClinicalAgendaBoard = ({
     setRemoteEvents((prev) => prev.map((event: any) => String(event?.id) === String(normalized.id) ? { ...event, ...appointment, status: appointment.status || event.status } : event));
     setSelectedEvent((prev: any) => prev && String(prev?.id) === String(normalized.id) ? { ...prev, ...normalized } : prev);
     setEventDetail((prev: any) => prev ? { ...prev, event: { ...(prev.event || {}), ...appointment } } : prev);
+  };
+
+  const hydrateBillingForm = (source: any = {}) => {
+    setBillingForm({
+      payerId: String(source?.payerId || source?.payer_id || ''),
+      payerName: String(source?.payerName || source?.payer_name_snapshot || ''),
+      serviceType: String(source?.serviceType || source?.service_type || detailEvent.type || ''),
+      guideNumber: String(source?.guideNumber || source?.guide_number || ''),
+      authorizationCode: String(source?.authorizationCode || source?.authorization_code || ''),
+      procedureCode: String(source?.procedureCode || source?.procedure_code || ''),
+      notes: String(source?.notes || '')
+    });
+  };
+
+  const loadBillingPayers = async () => {
+    if (billingPayers.length > 0) return;
+    setBillingEditorState((prev) => ({ ...prev, loading: true, error: '' }));
+    const result = await dataService.getPayers({ status: 'ACTIVE', limit: 80 });
+    if (result?.success && Array.isArray(result.data)) {
+      setBillingPayers(result.data);
+      setBillingEditorState((prev) => ({ ...prev, loading: false, error: '' }));
+      return;
+    }
+    setBillingEditorState((prev) => ({
+      ...prev,
+      loading: false,
+      error: result?.error || 'Não foi possível carregar pagadores agora.'
+    }));
+  };
+
+  const openBillingEditor = (source: any = null) => {
+    if (!canEditBillingContext) return;
+    const currentBilling = detail?.billingContext || {};
+    hydrateBillingForm(source || currentBilling);
+    setBillingEditorOpen(true);
+    setBillingEditorState({ loading: false, saving: false, error: '', success: '' });
+    void loadBillingPayers();
+  };
+
+  const mergeBillingContextIntoDetail = (nextBillingContext: any) => {
+    const appointmentPatch = {
+      payer_name_snapshot: nextBillingContext?.payerName || null,
+      payerName: nextBillingContext?.payerName || null,
+      guide_number: nextBillingContext?.guideNumber || null,
+      guideNumber: nextBillingContext?.guideNumber || null,
+      authorization_code: nextBillingContext?.authorizationCode || null,
+      authorizationCode: nextBillingContext?.authorizationCode || null
+    };
+    cacheRef.current.clear();
+    setEventDetail((prev: any) => prev ? {
+      ...prev,
+      billingContext: nextBillingContext,
+      event: { ...(prev.event || {}), ...appointmentPatch },
+      closure: { ...(prev.closure || {}), ...appointmentPatch }
+    } : prev);
+    setSelectedEvent((prev: any) => prev ? { ...prev, ...appointmentPatch } : prev);
+    setRemoteEvents((prev) => prev.map((event: any) =>
+      String(event?.id || '') === String(detailEvent?.id || '') ? { ...event, ...appointmentPatch } : event
+    ));
+  };
+
+  const saveBillingContext = async (values: any) => {
+    const appointmentId = String(detailEvent?.id || selectedEvent?.id || '').trim();
+    if (!appointmentId) return false;
+    setBillingEditorState((prev) => ({ ...prev, saving: true, error: '', success: '' }));
+    const result = await dataService.updateAppointmentBillingContext(appointmentId, {
+      payerId: values.payerId || null,
+      payerName: values.payerName || null,
+      serviceType: values.serviceType || detailEvent.type || null,
+      guideNumber: values.guideNumber || null,
+      authorizationCode: values.authorizationCode || null,
+      procedureCode: values.procedureCode || null,
+      notes: values.notes || null
+    });
+    if (!result?.success) {
+      setBillingEditorState((prev) => ({
+        ...prev,
+        saving: false,
+        error: result?.error || 'Não foi possível atualizar pagador da consulta.',
+        success: ''
+      }));
+      return false;
+    }
+    mergeBillingContextIntoDetail(result.data || {});
+    setBillingEditorState({ loading: false, saving: false, error: '', success: result.message || 'Pagador atualizado.' });
+    dataService.getCalendarEventDetail(appointmentId).then((detailResult: any) => {
+      if (detailResult?.success) setEventDetail(detailResult.data || null);
+    });
+    dataService.getClosureAppointmentDetail(appointmentId).then((closureResult: any) => {
+      if (closureResult?.success) setClosureDetailState((prev) => ({ ...prev, data: closureResult.data || prev.data }));
+    });
+    return true;
+  };
+
+  const submitBillingEditor = async () => {
+    const saved = await saveBillingContext(billingForm);
+    if (saved) setBillingEditorOpen(false);
+  };
+
+  const applyBillingSuggestion = async () => {
+    const suggestion = (detail?.billingContext || {}).suggestion;
+    if (!suggestion?.payerName && !suggestion?.payerId) return;
+    await saveBillingContext({
+      payerId: suggestion.payerId || '',
+      payerName: suggestion.payerName || '',
+      serviceType: suggestion.serviceType || detailEvent.type || '',
+      guideNumber: suggestion.guideNumber || '',
+      authorizationCode: suggestion.authorizationCode || '',
+      procedureCode: '',
+      notes: ''
+    });
   };
 
   const handleActionRequestDecision = async (request: any, decision: 'approve' | 'reject') => {
@@ -1711,6 +1840,16 @@ export const ClinicalAgendaBoard = ({
   const billingContext = detail.billingContext || {};
   const billingDocuments = Array.isArray(billingContext.documents) ? billingContext.documents : [];
   const pendingBillingDocuments = billingDocuments.filter((doc: any) => ['REQUIRED', 'PENDING', 'EXPIRED'].includes(String(doc.status || '').toUpperCase()));
+  const billingSuggestion = billingContext.suggestion || null;
+  const hasSavedBillingContext = Boolean(
+    billingContext.hasContext ||
+      billingContext.payerName ||
+      billingContext.guideNumber ||
+      billingContext.authorizationCode ||
+      billingContext.notes
+  );
+  const billingPayerSelectValue = billingForm.payerId || (billingForm.payerName ? '__snapshot__' : '');
+  const billingSnapshotOptionVisible = Boolean(billingForm.payerName && !billingForm.payerId);
 
   return (
     <div className="flex flex-col gap-3 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:h-[calc(100vh-2rem)] xl:min-h-[680px] xl:overflow-hidden xl:pb-0">
@@ -1957,6 +2096,104 @@ export const ClinicalAgendaBoard = ({
         </div>
       )}
 
+      {billingEditorOpen && (
+        <div className="fixed inset-0 z-[170] flex items-end justify-center bg-black/40 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => !billingEditorState.saving && setBillingEditorOpen(false)}>
+          <div className={`max-h-[88vh] w-full max-w-xl overflow-y-auto rounded-t-[28px] p-5 shadow-2xl sm:rounded-[28px] ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`} onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">Pagador da consulta</p>
+                <h3 className="text-lg font-bold">Editar pagador</h3>
+              </div>
+              <button type="button" disabled={billingEditorState.saving} onClick={() => setBillingEditorOpen(false)} className={`rounded-2xl border p-2 disabled:opacity-50 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Fechar pagador">
+                <X size={18} />
+              </button>
+            </div>
+
+            {billingEditorState.error && (
+              <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+                {billingEditorState.error}
+              </div>
+            )}
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                Pagador/convênio
+                <select
+                  className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
+                  value={billingPayerSelectValue}
+                  disabled={billingEditorState.loading || billingEditorState.saving}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === '__snapshot__') return;
+                    const payer = billingPayers.find((item: any) => String(item?.id || '') === value);
+                    setBillingForm((prev) => ({
+                      ...prev,
+                      payerId: value,
+                      payerName: payer?.name || ''
+                    }));
+                  }}
+                >
+                  <option value="">Sem pagador</option>
+                  {billingSnapshotOptionVisible && (
+                    <option value="__snapshot__">{billingForm.payerName}</option>
+                  )}
+                  {billingPayers.map((payer: any) => (
+                    <option key={payer.id} value={payer.id}>
+                      {payer.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                Serviço
+                <input
+                  className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
+                  value={billingForm.serviceType}
+                  onChange={(event) => setBillingForm((prev) => ({ ...prev, serviceType: event.target.value }))}
+                  placeholder="Tipo de atendimento"
+                />
+              </label>
+              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                Guia
+                <input
+                  className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
+                  value={billingForm.guideNumber}
+                  onChange={(event) => setBillingForm((prev) => ({ ...prev, guideNumber: event.target.value }))}
+                  placeholder="Número da guia"
+                />
+              </label>
+              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                Autorização/senha
+                <input
+                  className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
+                  value={billingForm.authorizationCode}
+                  onChange={(event) => setBillingForm((prev) => ({ ...prev, authorizationCode: event.target.value }))}
+                  placeholder="Código informado pelo pagador"
+                />
+              </label>
+              <label className="sm:col-span-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                Observações administrativas
+                <textarea
+                  className={`mt-1 min-h-[96px] w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
+                  value={billingForm.notes}
+                  onChange={(event) => setBillingForm((prev) => ({ ...prev, notes: event.target.value }))}
+                  placeholder="Observações para conferência"
+                />
+              </label>
+            </div>
+
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button type="button" disabled={billingEditorState.saving} onClick={() => setBillingEditorOpen(false)} className={`rounded-2xl border px-4 py-3 text-sm font-bold disabled:opacity-60 ${isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                Cancelar
+              </button>
+              <button type="button" disabled={billingEditorState.saving} onClick={submitBillingEditor} className="rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/20 disabled:opacity-60">
+                {billingEditorState.saving ? 'Salvando...' : 'Salvar pagador'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedEvent && (
         <div className="fixed inset-0 z-[140] flex items-end justify-center bg-black/40 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => setSelectedEvent(null)}>
           <div className={`max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-[28px] p-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] shadow-2xl sm:rounded-[28px] sm:p-6 ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`} onClick={(event) => event.stopPropagation()}>
@@ -2022,16 +2259,28 @@ export const ClinicalAgendaBoard = ({
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#7a32fc]">Pagador e conferência</p>
                   <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
-                    <p><span className="font-semibold">Pagador:</span> {billingContext.payerName || detailEvent.payer_name_snapshot || 'Sem pagador'}</p>
-                    <p><span className="font-semibold">Guia:</span> {billingContext.guideNumber || detailEvent.guide_number || 'Pendente/não informada'}</p>
-                    <p><span className="font-semibold">Autorização:</span> {billingContext.authorizationCode || detailEvent.authorization_code || 'Pendente/não informada'}</p>
+                    <p>
+                      <span className="font-semibold">
+                        {hasSavedBillingContext ? 'Pagador:' : billingSuggestion?.payerName ? 'Sugestao do paciente:' : 'Pagador:'}
+                      </span>{' '}
+                      {billingContext.payerName || detailEvent.payer_name_snapshot || billingSuggestion?.payerName || 'nao informado'}
+                    </p>
+                    <p><span className="font-semibold">Guia:</span> {billingContext.guideNumber || detailEvent.guide_number || 'pendente'}</p>
+                    <p><span className="font-semibold">Autorização:</span> {billingContext.authorizationCode || detailEvent.authorization_code || 'pendente'}</p>
                     <p><span className="font-semibold">Documentos:</span> {pendingBillingDocuments.length > 0 ? `${pendingBillingDocuments.length} pendente(s)` : 'Sem pendência extra'}</p>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={() => onEditAppointment?.(detailEvent)} className="rounded-2xl bg-[#7a32fc] px-3 py-2 text-xs font-bold text-white">
-                    Editar pagador
-                  </button>
+                  {canEditBillingContext && billingSuggestion?.payerName && !hasSavedBillingContext && (
+                    <button type="button" onClick={applyBillingSuggestion} disabled={billingEditorState.saving} className="rounded-2xl bg-[#7a32fc] px-3 py-2 text-xs font-bold text-white disabled:opacity-60">
+                      Aplicar a consulta
+                    </button>
+                  )}
+                  {canEditBillingContext && (
+                    <button type="button" onClick={() => openBillingEditor()} className={`rounded-2xl px-3 py-2 text-xs font-bold ${hasSavedBillingContext ? 'bg-[#7a32fc] text-white' : 'border border-violet-200 bg-white text-[#7a32fc]'}`}>
+                      {hasSavedBillingContext ? 'Editar pagador' : 'Definir pagador'}
+                    </button>
+                  )}
                   <button type="button" onClick={() => openClosureChecklist(detailEvent)} className={`rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 text-slate-200' : 'border-violet-200 bg-white text-[#7a32fc]'}`}>
                     Ver checklist
                   </button>

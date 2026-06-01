@@ -5148,6 +5148,242 @@ async function syncAppointmentProfessionalsMirrorRows(params: {
   }
 }
 
+function normalizeBillingServiceMatchKey(value: any): string {
+  const raw = sanitizeString(value, 120)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  const aliases: Record<string, string> = {
+    aba: 'ABA',
+    fono: 'SPEECH_THERAPY',
+    fonoaudiologia: 'SPEECH_THERAPY',
+    speech_therapy: 'SPEECH_THERAPY',
+    psicologia: 'PSYCHOLOGY',
+    psychology: 'PSYCHOLOGY',
+    terapia_ocupacional: 'OCCUPATIONAL_THERAPY',
+    occupational_therapy: 'OCCUPATIONAL_THERAPY',
+    to: 'OCCUPATIONAL_THERAPY',
+    psicopedagogia: 'PSYCHOPEDAGOGY',
+    physiotherapy: 'PHYSIOTHERAPY',
+    fisioterapia: 'PHYSIOTHERAPY',
+    therapy: 'THERAPY',
+    terapia: 'THERAPY'
+  };
+  return aliases[raw] || raw.toUpperCase();
+}
+
+function financialPlanMatchesAppointmentService(plan: any, appointmentServiceType: any): boolean {
+  const appointmentKey = normalizeBillingServiceMatchKey(appointmentServiceType);
+  if (!appointmentKey) return false;
+  const planKeys = [
+    plan?.service_type,
+    plan?.serviceType,
+    plan?.custom_service_name,
+    plan?.customServiceName,
+    plan?.service_name_snapshot,
+    plan?.serviceNameSnapshot
+  ]
+    .map(normalizeBillingServiceMatchKey)
+    .filter(Boolean);
+  return planKeys.includes(appointmentKey);
+}
+
+async function resolveAppointmentBillingSuggestion(params: {
+  organizationId: string;
+  patientId: string;
+  serviceType?: string | null;
+}) {
+  const organizationId = sanitizeString(params.organizationId, 120);
+  const patientId = sanitizeString(params.patientId, 120);
+  if (!isUuid(organizationId) || !isUuid(patientId)) return null;
+  const serviceType = sanitizeString(params.serviceType, 120);
+
+  const planResult = await supabase
+    .from('patient_financial_plans')
+    .select(PATIENT_FINANCIAL_PLAN_SELECT)
+    .eq('organization_id', organizationId)
+    .eq('patient_id', patientId)
+    .eq('status', 'ACTIVE')
+    .eq('billing_mode', 'INSURANCE')
+    .limit(20);
+  if (planResult.error && !hasMissingFinancialSchema(planResult.error)) throw planResult.error;
+  const plans = planResult.error ? [] : Array.isArray(planResult.data) ? planResult.data : [];
+  const usablePlans = plans.filter((plan: any) =>
+    isUuid(sanitizeString(plan?.payer_id, 120)) || Boolean(sanitizeString(plan?.payer_name_snapshot, 180))
+  );
+  const matchingPlans = serviceType
+    ? usablePlans.filter((plan: any) => financialPlanMatchesAppointmentService(plan, serviceType))
+    : [];
+  const selectedPlan =
+    matchingPlans.length === 1
+      ? matchingPlans[0]
+      : !serviceType && usablePlans.length === 1
+        ? usablePlans[0]
+        : null;
+  if (selectedPlan) {
+    let payerName = sanitizeString(selectedPlan.payer_name_snapshot, 180);
+    const payerId = sanitizeString(selectedPlan.payer_id, 120);
+    if (!payerName && isUuid(payerId)) {
+      const payerResult = await supabase
+        .from('clinic_payers')
+        .select('id, name')
+        .eq('organization_id', organizationId)
+        .eq('id', payerId)
+        .limit(1)
+        .maybeSingle();
+      if (payerResult.error && !hasMissingFinancialSchema(payerResult.error)) throw payerResult.error;
+      payerName = sanitizeString(payerResult.data?.name, 180);
+    }
+    return {
+      payerId: isUuid(payerId) ? payerId : null,
+      payerName: payerName || null,
+      serviceType: sanitizeString(selectedPlan.service_type || serviceType, 120) || null,
+      authorizationCode: sanitizeString(selectedPlan.authorization_code, 120) || null,
+      guideNumber: null,
+      source: 'patient_financial_plan'
+    };
+  }
+
+  const patientResult = await supabase
+    .from('patients')
+    .select('id, insurance_type, insurance_name')
+    .eq('id', patientId)
+    .eq('clinic_id', organizationId)
+    .limit(1)
+    .maybeSingle();
+  if (patientResult.error) {
+    if (hasMissingFinancialSchema(patientResult.error)) return null;
+    throw patientResult.error;
+  }
+  const insuranceName = sanitizeString(patientResult.data?.insurance_name, 180);
+  const insuranceType = sanitizeString(patientResult.data?.insurance_type, 80)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+  if (!insuranceName || insuranceType === 'particular' || insuranceType === 'private') return null;
+  const payerResult = await supabase
+    .from('clinic_payers')
+    .select('id, name')
+    .eq('organization_id', organizationId)
+    .ilike('name', insuranceName)
+    .limit(2);
+  if (payerResult.error && !hasMissingFinancialSchema(payerResult.error)) throw payerResult.error;
+  const matchingPayer = Array.isArray(payerResult.data) && payerResult.data.length === 1 ? payerResult.data[0] : null;
+  return {
+    payerId: isUuid(sanitizeString(matchingPayer?.id, 120)) ? sanitizeString(matchingPayer.id, 120) : null,
+    payerName: sanitizeString(matchingPayer?.name || insuranceName, 180) || null,
+    serviceType: serviceType || null,
+    authorizationCode: null,
+    guideNumber: null,
+    source: 'patient_registration'
+  };
+}
+
+async function upsertInitialBillingContextFromAppointment(params: {
+  organizationId: string;
+  appointmentId: string;
+  patientId: string;
+  appointment: any;
+}) {
+  const organizationId = sanitizeString(params.organizationId, 120);
+  const appointmentId = sanitizeString(params.appointmentId, 120);
+  const patientId = sanitizeString(params.patientId, 120);
+  if (!isUuid(organizationId) || !isUuid(appointmentId) || !isUuid(patientId)) return;
+  const existing = await supabase
+    .from('appointment_billing_contexts')
+    .select('id')
+    .eq('organization_id', organizationId)
+    .eq('appointment_id', appointmentId)
+    .limit(1)
+    .maybeSingle();
+  if (existing.error) {
+    if (hasMissingFinancialSchema(existing.error)) return;
+    throw existing.error;
+  }
+  if (existing.data?.id) return;
+
+  const rawPayerId = sanitizeString(params.appointment?.payerId || params.appointment?.payer_id, 120);
+  let payer: any = null;
+  if (isUuid(rawPayerId)) {
+    const payerResult = await supabase
+      .from('clinic_payers')
+      .select('id, name')
+      .eq('organization_id', organizationId)
+      .eq('id', rawPayerId)
+      .limit(1)
+      .maybeSingle();
+    if (payerResult.error && !hasMissingFinancialSchema(payerResult.error)) throw payerResult.error;
+    payer = payerResult.data || null;
+  }
+  const serviceType = sanitizeString(
+    params.appointment?.service_type ||
+      params.appointment?.serviceType ||
+      params.appointment?.approach ||
+      params.appointment?.type,
+    120
+  );
+  let payerName = sanitizeString(
+    payer?.name ||
+      params.appointment?.payerName ||
+      params.appointment?.payer_name_snapshot ||
+      params.appointment?.payerNameSnapshot,
+    180
+  );
+  let suggestedBilling: any = null;
+  if (!payer?.id && !payerName) {
+    suggestedBilling = await resolveAppointmentBillingSuggestion({
+      organizationId,
+      patientId,
+      serviceType
+    });
+    const suggestedPayerId = sanitizeString(suggestedBilling?.payerId || suggestedBilling?.payer_id, 120);
+    if (isUuid(suggestedPayerId)) {
+      const suggestedPayerResult = await supabase
+        .from('clinic_payers')
+        .select('id, name')
+        .eq('organization_id', organizationId)
+        .eq('id', suggestedPayerId)
+        .limit(1)
+        .maybeSingle();
+      if (suggestedPayerResult.error && !hasMissingFinancialSchema(suggestedPayerResult.error)) throw suggestedPayerResult.error;
+      payer = suggestedPayerResult.data || null;
+    }
+    payerName = sanitizeString(payer?.name || suggestedBilling?.payerName || suggestedBilling?.payer_name_snapshot, 180);
+  }
+  const payload = cleanObject({
+    id: crypto.randomUUID(),
+    organization_id: organizationId,
+    appointment_id: appointmentId,
+    patient_id: patientId,
+    payer_id: payer?.id || null,
+    payer_name_snapshot: payerName || null,
+    service_type: serviceType || sanitizeString(suggestedBilling?.serviceType || suggestedBilling?.service_type, 120) || null,
+    authorization_code: sanitizeString(params.appointment?.authorizationCode || params.appointment?.authorization_code || suggestedBilling?.authorizationCode || suggestedBilling?.authorization_code, 120) || null,
+    guide_number: sanitizeString(params.appointment?.guideNumber || params.appointment?.guide_number || suggestedBilling?.guideNumber || suggestedBilling?.guide_number, 120) || null,
+    procedure_code: sanitizeString(params.appointment?.procedureCode || params.appointment?.procedure_code, 80) || null,
+    notes: sanitizeTextField(params.appointment?.billingNotes || params.appointment?.billing_notes, 1200) || null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  });
+  const hasContextValue = Boolean(
+    payload.payer_id ||
+      payload.payer_name_snapshot ||
+      payload.authorization_code ||
+      payload.guide_number ||
+      payload.procedure_code ||
+      payload.notes
+  );
+  if (!hasContextValue) return;
+  const upsertResult = await supabase
+    .from('appointment_billing_contexts')
+    .upsert([payload], { onConflict: 'organization_id,appointment_id' });
+  if (upsertResult.error && !hasMissingFinancialSchema(upsertResult.error)) throw upsertResult.error;
+}
+
 async function syncAppointmentsTableFromClinicState(params: {
   clinicId: string | null;
   appointments: any[];
@@ -5413,6 +5649,12 @@ async function syncAppointmentsTableFromClinicState(params: {
         clinicId,
         professionalIds,
         professionalName: row.therapist_name
+      });
+      await upsertInitialBillingContextFromAppointment({
+        organizationId: row.organization_id,
+        appointmentId,
+        patientId,
+        appointment
       });
       await flagPendingMaintenanceProbesForAppointment({
         appointmentId,
@@ -23659,7 +23901,11 @@ async function startServer() {
             appointment_id: eventId,
             patient_id: event.patient_id,
             service_type: event.type || event.service_type || null
-          }, null, billingDocuments),
+          }, null, billingDocuments, billingContext ? null : await resolveAppointmentBillingSuggestion({
+            organizationId,
+            patientId: event.patient_id,
+            serviceType: event.type || event.service_type || null
+          })),
           actionRequests,
           statusHistory,
           signatures
@@ -23730,8 +23976,18 @@ async function startServer() {
     updatedAt: row?.updated_at || null
   });
 
-  const serializeBillingContext = (row: any, payer: any = null, documents: any[] = []) => ({
+  const serializeBillingSuggestion = (suggestion: any) => suggestion ? {
+    payerId: sanitizeString(suggestion?.payerId || suggestion?.payer_id, 120) || null,
+    payerName: sanitizeString(suggestion?.payerName || suggestion?.payer_name_snapshot, 180) || null,
+    serviceType: sanitizeString(suggestion?.serviceType || suggestion?.service_type, 120) || null,
+    authorizationCode: sanitizeString(suggestion?.authorizationCode || suggestion?.authorization_code, 120) || null,
+    guideNumber: sanitizeString(suggestion?.guideNumber || suggestion?.guide_number, 120) || null,
+    source: sanitizeString(suggestion?.source, 60) || 'patient_default'
+  } : null;
+
+  const serializeBillingContext = (row: any, payer: any = null, documents: any[] = [], suggestion: any = null) => ({
     id: sanitizeString(row?.id, 120) || null,
+    hasContext: Boolean(row?.id),
     payerId: sanitizeString(row?.payer_id, 120) || null,
     payerName: sanitizeString(payer?.name || row?.payer_name_snapshot, 180) || null,
     payerType: payer ? normalizePayerType(payer?.payer_type) : null,
@@ -23747,7 +24003,8 @@ async function startServer() {
       requiredForServiceType: sanitizeString(doc?.required_for_service_type, 120) || null,
       dueDate: doc?.due_date || null,
       uploadedAt: doc?.uploaded_at || null
-    }))
+    })),
+    suggestion: row?.id ? null : serializeBillingSuggestion(suggestion)
   });
 
   const writePayerRequirementAuditLog = async (params: {
@@ -24048,13 +24305,20 @@ async function startServer() {
       const billingContext = await fetchAppointmentBillingContextRow(organizationId, appointment.id);
       const payer = billingContext?.payer_id ? await fetchPayerForAdmin(billingContext.payer_id, organizationId) : null;
       const documents = await fetchRequiredDocumentsForAppointment(organizationId, appointment.id);
+      const suggestion = billingContext?.id
+        ? null
+        : await resolveAppointmentBillingSuggestion({
+            organizationId,
+            patientId: appointment.patient_id,
+            serviceType: appointment.service_type || appointment.approach || null
+          });
       return res.json({
         success: true,
         data: serializeBillingContext(billingContext || {
           appointment_id: appointment.id,
           patient_id: appointment.patient_id,
           service_type: appointment.service_type || appointment.approach || null
-        }, payer, documents)
+        }, payer, documents, suggestion)
       });
     } catch (error: any) {
       console.warn('[PayerRequirements] billing context get failed:', error?.message || String(error));
@@ -24135,7 +24399,7 @@ async function startServer() {
       }
       void regenerateClosureForAppointments([appointment.id], req.session.user, 'billing_context_updated');
       const documents = await fetchRequiredDocumentsForAppointment(organizationId, appointment.id);
-      return res.json({ success: true, data: serializeBillingContext(data, payer, documents) });
+      return res.json({ success: true, message: 'Pagador atualizado.', data: serializeBillingContext(data, payer, documents) });
     } catch (error: any) {
       console.warn('[PayerRequirements] billing context update failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
