@@ -139,6 +139,7 @@ interface CoordinatorDashboardProps {
   onScheduleSession: (session: any) => any;
   onUpdateAppointment: (id: any, updates: any) => any;
   onUpdateAgendaStatus: (id: any, status: string, details?: any) => void;
+  onDeleteAppointment?: (id: any, details?: any) => Promise<any> | any;
   onAddPatient: (patient: any) => Promise<any> | any;
   patientsHistory: any[];
   therapistNotes: any[];
@@ -182,6 +183,7 @@ export function CoordinatorDashboard({
   onScheduleSession,
   onUpdateAppointment,
   onUpdateAgendaStatus,
+  onDeleteAppointment,
   onAddPatient,
   patientsHistory,
   therapistNotes,
@@ -213,6 +215,7 @@ export function CoordinatorDashboard({
   const isTherapist = capabilityRole === "therapist";
   const isReceptionist = capabilityRole === "receptionist";
   const canCancelRecurringAppointments = ["coordinator", "receptionist", "therapist", "admin", "owner"].includes(role.toLowerCase());
+  const canDeleteRecurringAppointments = canCancelRecurringAppointments;
   const canAccessClinicFinance = ["coordinator", "admin", "owner"].includes(role.toLowerCase());
   const canCreatePatients = !isTherapist;
   const canManageRooms = !isTherapist;
@@ -694,6 +697,12 @@ export function CoordinatorDashboard({
   const [agendaAppointmentObservation, setAgendaAppointmentObservation] =
     useState("");
   const [pendingRecurringCancellation, setPendingRecurringCancellation] =
+    useState<{
+      appointment: any;
+      note: string;
+      source: string;
+    } | null>(null);
+  const [pendingRecurringDeletion, setPendingRecurringDeletion] =
     useState<{
       appointment: any;
       note: string;
@@ -2443,6 +2452,54 @@ export function CoordinatorDashboard({
     [handleStatusUpdate, pendingRecurringCancellation],
   );
 
+  const handleDeleteAgendaAppointment = useCallback(
+    (id: any, details: any = {}) => {
+      if (!onDeleteAppointment) return { success: false, error: "Exclusão indisponível." };
+      return onDeleteAppointment(id, details);
+    },
+    [onDeleteAppointment],
+  );
+
+  const requestAppointmentDeletion = useCallback(
+    (appointment: any, details: any = {}) => {
+      if (!appointment?.id) return;
+      const payload = {
+        note: String(
+          details?.note ?? details?.notes ?? details?.observation ?? "",
+        ).trim(),
+        source: String(details?.source || "agenda_management"),
+      };
+      if (canDeleteRecurringAppointments && isRecurringAppointment(appointment)) {
+        setPendingRecurringDeletion({
+          appointment,
+          ...payload,
+        });
+        return;
+      }
+      handleDeleteAgendaAppointment(appointment.id, {
+        ...payload,
+        recurrenceScope: "single",
+      });
+    },
+    [canDeleteRecurringAppointments, handleDeleteAgendaAppointment, isRecurringAppointment],
+  );
+
+  const submitRecurringDeletion = useCallback(
+    (scope: "single" | "future") => {
+      if (!pendingRecurringDeletion?.appointment?.id) return;
+      handleDeleteAgendaAppointment(
+        pendingRecurringDeletion.appointment.id,
+        {
+          note: pendingRecurringDeletion.note,
+          source: pendingRecurringDeletion.source,
+          recurrenceScope: scope,
+        },
+      );
+      setPendingRecurringDeletion(null);
+    },
+    [handleDeleteAgendaAppointment, pendingRecurringDeletion],
+  );
+
   const normalizeCpfInput = (value: string) =>
     String(value || "")
       .replace(/\D/g, "")
@@ -3334,6 +3391,17 @@ export function CoordinatorDashboard({
       });
     },
     [agendaAppointmentObservation, closeAgendaActionModal, requestAppointmentCancellation],
+  );
+
+  const handleDeleteAppointmentFromAgenda = useCallback(
+    (appointment: any) => {
+      closeAgendaActionModal();
+      requestAppointmentDeletion(appointment, {
+        note: agendaAppointmentObservation,
+        source: "agenda_modal",
+      });
+    },
+    [agendaAppointmentObservation, closeAgendaActionModal, requestAppointmentDeletion],
   );
 
   const handleConfirmAppointmentFromAgenda = useCallback(
@@ -4615,6 +4683,7 @@ export function CoordinatorDashboard({
       onEditAppointment={handleEditAppointment}
       onConfirmAppointment={handleConfirmAppointmentFromAgenda}
       onCancelAppointment={handleCancelAppointmentFromAgenda}
+      onDeleteAppointment={handleDeleteAppointmentFromAgenda}
       onOpenPatient={onPatientClick}
       onStartSession={(appointment: any) =>
         {
@@ -8836,6 +8905,15 @@ export function CoordinatorDashboard({
               </button>
               <button
                 onClick={() =>
+                  handleDeleteAppointmentFromAgenda(selectedAgendaAppointment)
+                }
+                className="flex items-center gap-2 rounded-2xl border border-rose-200 px-4 py-3 text-sm font-semibold text-rose-700 hover:bg-rose-50 transition-all"
+              >
+                <Trash2 size={16} />
+                Excluir
+              </button>
+              <button
+                onClick={() =>
                   openAppointmentProfileFromAgenda(selectedAgendaAppointment)
                 }
                 className="flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-all sm:col-span-2"
@@ -9218,6 +9296,65 @@ export function CoordinatorDashboard({
             }`}
           >
             {toast.message}
+          </div>
+        </div>
+      )}
+
+      {pendingRecurringDeletion && (
+        <div className="fixed inset-0 z-[180] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-3xl border border-rose-100 bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-rose-500">
+                  Recorrência
+                </p>
+                <h3 className="text-lg font-bold text-slate-900">
+                  Como deseja excluir?
+                </h3>
+                <p className="mt-2 text-sm text-slate-500">
+                  Esta consulta faz parte de uma série recorrente. A exclusão remove o agendamento da agenda só nesta data ou nesta e nas próximas consultas.
+                </p>
+              </div>
+              <button
+                onClick={() => setPendingRecurringDeletion(null)}
+                className="text-slate-400 hover:text-slate-700"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-sm font-bold text-slate-800">
+                {pendingRecurringDeletion.appointment?.patientName ||
+                  pendingRecurringDeletion.appointment?.name ||
+                  "Paciente"}
+              </p>
+              <p className="mt-1 text-xs font-medium text-slate-500">
+                {pendingRecurringDeletion.appointment?.date} às{" "}
+                {pendingRecurringDeletion.appointment?.time}
+              </p>
+            </div>
+
+            <div className="mt-6 grid gap-2">
+              <button
+                onClick={() => submitRecurringDeletion("single")}
+                className="rounded-2xl border border-rose-200 px-4 py-3 text-left text-sm font-semibold text-rose-600 transition-all hover:bg-rose-50"
+              >
+                Excluir só esta consulta
+              </button>
+              <button
+                onClick={() => submitRecurringDeletion("future")}
+                className="rounded-2xl bg-rose-600 px-4 py-3 text-left text-sm font-semibold text-white transition-all hover:bg-rose-700"
+              >
+                Excluir esta e as próximas
+              </button>
+              <button
+                onClick={() => setPendingRecurringDeletion(null)}
+                className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-600 transition-all hover:bg-slate-50"
+              >
+                Voltar
+              </button>
+            </div>
           </div>
         </div>
       )}

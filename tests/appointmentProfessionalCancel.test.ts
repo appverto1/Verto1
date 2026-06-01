@@ -13,12 +13,16 @@ const test = (name: string, fn: () => void) => tests.push({ name, fn });
 
 test('rota permite cancelamento por profissional e escopa a consulta pela clinica', () => {
   assert.match(serverCode, /app\.patch\('\/api\/appointments\/:appointmentId\/status', checkAuth, handleAppointmentStatusUpdate\)/);
+  assert.match(serverCode, /app\.delete\('\/api\/appointments\/:appointmentId', checkAuth, requireRoles\('coordinator', 'receptionist', 'therapist', 'admin', 'owner'\)/);
   assert.match(serverCode, /const isProfessionalActor = \['coordinator', 'receptionist', 'therapist', 'admin', 'owner'\]\.includes\(actorRole\)/);
   assert.match(serverCode, /!isPatientActor && !isProfessionalActor/);
   assert.match(serverCode, /tableAppointmentQuery = tableAppointmentQuery\.eq\('clinic_id', clinicId\)/);
   assert.match(serverCode, /const canCancelFutureRecurrence = isProfessionalActor/);
   assert.match(serverCode, /isFutureRecurringCancellation && !canCancelFutureRecurrence/);
   assert.match(serverCode, /status: tableStatus/);
+  assert.match(serverCode, /status:\s*'deleted'/);
+  assert.match(serverCode, /is_active:\s*false/);
+  assert.match(serverCode, /deleted_at:\s*now/);
 });
 
 test('paciente nao consegue usar a rota para status administrativo', () => {
@@ -29,13 +33,20 @@ test('paciente nao consegue usar a rota para status administrativo', () => {
 test('painel profissional e recepcao usam o fluxo de cancelamento recorrente', () => {
   assert.match(appCode, /user\.role === 'coordinator' \|\| user\.role === 'receptionist' \|\| user\.role === 'therapist'/);
   assert.match(coordinatorCode, /onCancelAppointment=\{handleCancelAppointmentFromAgenda\}/);
+  assert.match(coordinatorCode, /onDeleteAppointment=\{handleDeleteAppointmentFromAgenda\}/);
   assert.match(coordinatorCode, /requestAppointmentCancellation\(appointment/);
+  assert.match(coordinatorCode, /requestAppointmentDeletion\(appointment/);
   assert.match(coordinatorCode, /handleStatusUpdate\(appointment\.id, "canceled"/);
+  assert.match(coordinatorCode, /handleDeleteAgendaAppointment\(appointment\.id/);
   assert.match(coordinatorCode, /recurrenceScope: "single"/);
   assert.match(coordinatorCode, /const canCancelRecurringAppointments = \["coordinator", "receptionist", "therapist", "admin", "owner"\]\.includes\(role\.toLowerCase\(\)\)/);
+  assert.match(coordinatorCode, /const canDeleteRecurringAppointments = canCancelRecurringAppointments/);
   assert.match(coordinatorCode, /canCancelRecurringAppointments && isRecurringAppointment\(appointment\)/);
+  assert.match(coordinatorCode, /canDeleteRecurringAppointments && isRecurringAppointment\(appointment\)/);
   assert.match(coordinatorCode, /submitRecurringCancellation\("future"\)/);
+  assert.match(coordinatorCode, /submitRecurringDeletion\("future"\)/);
   assert.match(coordinatorCode, /fixed inset-0 z-\[180\][^"]*pendingRecurringCancellation|pendingRecurringCancellation[\s\S]{0,180}z-\[180\]/);
+  assert.match(coordinatorCode, /pendingRecurringDeletion[\s\S]{0,900}Excluir esta e as próximas/);
 });
 
 test('agenda clinica reconcilia cancelamento local com cache remoto', () => {
@@ -43,9 +54,16 @@ test('agenda clinica reconcilia cancelamento local com cache remoto', () => {
   assert.match(calendarCode, /cacheRef\.current\.clear\(\)/);
   assert.match(calendarCode, /const mergeLocalAppointment = \(event: any\) =>/);
   assert.match(calendarCode, /setRemoteEvents\(\(prev\) =>/);
+  assert.match(calendarCode, /removedLocalIds/);
+  assert.match(calendarCode, /setRemoteEvents\(\(prev\) => prev\.filter/);
   assert.match(calendarCode, /setSelectedEvent\(\(prev: any\) =>/);
   assert.match(calendarCode, /setEventDetail\(\(prev: any\) =>/);
   assert.match(calendarCode, /onCancelAppointment\?\.\(detailEvent\)/);
+  assert.match(calendarCode, /onDeleteAppointment\?\.\(detailEvent\)/);
+  assert.match(calendarCode, /isDeletedAppointmentEvent/);
+  assert.match(appCode, /const handleDeleteAppointment = async/);
+  assert.match(appCode, /method: 'DELETE'/);
+  assert.match(appCode, /deletedAppointmentIds/);
 });
 
 let passed = 0;

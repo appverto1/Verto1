@@ -5636,7 +5636,7 @@ async function syncAppointmentsTableFromClinicState(params: {
         duration_minutes: safeDuration,
         scheduled_end_at: appointment?.scheduled_end_at || appointment?.scheduledEndAt || scheduledEndAt
       },
-      is_active: !['cancelled', 'canceled'].includes(effectiveStatusForTable),
+      is_active: !['cancelled', 'canceled', 'deleted'].includes(effectiveStatusForTable),
       updated_at: new Date().toISOString()
     };
 
@@ -12794,6 +12794,199 @@ async function startServer() {
   };
 
   app.patch('/api/appointments/:appointmentId/status', checkAuth, handleAppointmentStatusUpdate);
+
+  app.delete('/api/appointments/:appointmentId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res: any) => {
+    try {
+      const appointmentId = sanitizeString(req.params.appointmentId, 120);
+      if (!appointmentId) return res.status(400).json({ success: false, error: 'Consulta inválida.' });
+
+      const actor = req.session.user;
+      const actorId = sanitizeString(actor?.id, 120);
+      const actorRole = sanitizeString(actor?.role, 40).toLowerCase();
+      const clinicId = currentClinicId(actor);
+      const now = new Date().toISOString();
+      const recurrenceScope =
+        sanitizeString(req.body?.recurrenceScope || req.query?.recurrenceScope, 20).toLowerCase() === 'future'
+          ? 'future'
+          : 'single';
+      const safeSource = sanitizeString(req.body?.source || req.query?.source, 80) || 'agenda_management';
+      const appointmentNote = sanitizeString(
+        req.body?.note || req.body?.notes || req.body?.observation || req.body?.appointmentObservation,
+        1200
+      );
+
+      const clinicStateQuery = supabase
+        .from('clinic_state')
+        .select('clinic_id, appointments');
+      const { data, error } = clinicId
+        ? await clinicStateQuery.eq('clinic_id', clinicId).maybeSingle()
+        : await clinicStateQuery.limit(200);
+      if (error) throw error;
+
+      const states = clinicId ? [data].filter(Boolean) : (Array.isArray(data) ? data : []);
+      let foundAppointment: any = null;
+      let foundClinicId = '';
+      const ownerState = states.find((state: any) => {
+        const appointments = Array.isArray(state?.appointments) ? state.appointments : [];
+        const match = appointments.find((appointment: any) => String(appointment?.id) === appointmentId);
+        if (!match) return false;
+        foundAppointment = match;
+        foundClinicId = sanitizeString(state?.clinic_id || clinicId, 120);
+        return true;
+      });
+
+      if (!foundAppointment) {
+        let tableAppointmentQuery = supabase
+          .from('appointments')
+          .select(APPOINTMENT_SELECT)
+          .eq('id', appointmentId)
+          .limit(1);
+        if (!hasGlobalClinicAccess(actor) && clinicId) {
+          tableAppointmentQuery = tableAppointmentQuery.eq('clinic_id', clinicId);
+        }
+        const { data: tableAppointment, error: tableReadError } = await tableAppointmentQuery.maybeSingle();
+        if (tableReadError) {
+          console.warn('[Appointments] delete fallback read failed:', tableReadError.message);
+        }
+        if (tableAppointment) {
+          foundAppointment = tableAppointment;
+        }
+      }
+
+      if (!foundAppointment) {
+        return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
+      }
+
+      const appointments = Array.isArray(ownerState?.appointments) ? ownerState.appointments : [];
+      let affectedAppointments = [foundAppointment];
+      if (recurrenceScope === 'future') {
+        const recurrenceGroupId = getAppointmentRecurrenceGroupId(foundAppointment);
+        if (recurrenceGroupId && appointments.length > 0) {
+          affectedAppointments = appointments.filter((appointment: any) =>
+            isSameOrFutureRecurringAppointment(foundAppointment, appointment),
+          );
+        } else if (recurrenceGroupId) {
+          let recurringQuery = supabase
+            .from('appointments')
+            .select(APPOINTMENT_SELECT)
+            .eq('recurrence_group_id', recurrenceGroupId)
+            .order('scheduled_at', { ascending: true })
+            .limit(200);
+          if (!hasGlobalClinicAccess(actor) && clinicId) recurringQuery = recurringQuery.eq('clinic_id', clinicId);
+          const { data: recurringRows, error: recurringReadError } = await recurringQuery;
+          if (recurringReadError) {
+            console.warn('[Appointments] recurring delete fallback read failed:', recurringReadError.message);
+          }
+          const recurringAppointments = Array.isArray(recurringRows) ? recurringRows : [];
+          affectedAppointments = recurringAppointments.filter((appointment: any) =>
+            isSameOrFutureRecurringAppointment(foundAppointment, appointment),
+          );
+        }
+      }
+      if (affectedAppointments.length === 0) affectedAppointments = [foundAppointment];
+
+      const affectedAppointmentIds = Array.from(new Set(
+        affectedAppointments
+          .map((appointment: any) => sanitizeString(appointment?.id, 120))
+          .filter(Boolean)
+      ));
+      const affectedAppointmentIdSet = new Set(affectedAppointmentIds);
+
+      let nextAppointments = appointments;
+      let updatedClinicAppointments: any[] | null = null;
+      if (ownerState) {
+        nextAppointments = appointments.filter((appointment: any) => !affectedAppointmentIdSet.has(String(appointment?.id)));
+        const { data: updated, error: updateError } = await supabase
+          .from('clinic_state')
+          .update({
+            appointments: nextAppointments,
+            updated_by: actorId,
+            updated_at: now
+          })
+          .eq('clinic_id', foundClinicId || clinicId)
+          .select('appointments')
+          .single();
+        if (updateError) throw updateError;
+        updatedClinicAppointments = Array.isArray(updated?.appointments) ? updated.appointments : nextAppointments;
+      }
+
+      const validAppointmentIds = affectedAppointmentIds.filter((value) => isUuid(value));
+      if (validAppointmentIds.length > 0) {
+        let safePatch: Record<string, any> = cleanObject({
+          status: 'deleted',
+          is_active: false,
+          deleted_at: now,
+          updated_at: now,
+          notes: appointmentNote || undefined
+        });
+        let triedLegacyStatus = false;
+        while (Object.keys(safePatch).length > 0) {
+          let deleteQuery = supabase
+            .from('appointments')
+            .update(safePatch)
+            .in('id', validAppointmentIds);
+          if (!hasGlobalClinicAccess(actor) && clinicId) deleteQuery = deleteQuery.eq('clinic_id', clinicId);
+          const result = await deleteQuery.select('id');
+          if (!result.error) break;
+
+          const missingColumn = extractMissingColumnName(result.error);
+          if (missingColumn && missingColumn in safePatch) {
+            delete safePatch[missingColumn];
+            continue;
+          }
+
+          if (!triedLegacyStatus && /status|check constraint/i.test(String(result.error.message || ''))) {
+            triedLegacyStatus = true;
+            safePatch.status = 'cancelled';
+            continue;
+          }
+
+          console.warn('[Appointments] delete table sync failed:', result.error.message);
+          break;
+        }
+      }
+
+      const patientName = sanitizeString(
+        foundAppointment?.patientName || foundAppointment?.patient_name || foundAppointment?.name,
+        180
+      ) || 'paciente';
+      void persistActivityLog({
+        userId: actorId || '',
+        clinicId: sanitizeString(foundClinicId || clinicId || foundAppointment?.clinic_id, 120),
+        actorName: sanitizeString(actor?.name || actor?.email || 'Equipe', 180),
+        title: recurrenceScope === 'future' && affectedAppointmentIds.length > 1
+          ? 'Consultas recorrentes excluídas'
+          : 'Consulta excluída',
+        content: `${actor?.name || actor?.email || 'Equipe'} excluiu ${affectedAppointmentIds.length} consulta(s) de ${patientName} da agenda.`,
+        type: 'management',
+        actionType: 'appointment_deleted',
+        payloadDetails: JSON.stringify({
+          appointmentId,
+          deletedAppointmentIds: affectedAppointmentIds,
+          recurrenceScope,
+          source: safeSource,
+          actorRole,
+          note: appointmentNote || null
+        })
+      });
+      void regenerateClosureForAppointments(
+        affectedAppointmentIds,
+        req.session.user,
+        'appointment_deleted'
+      );
+
+      return res.json({
+        success: true,
+        deletedAppointmentIds: affectedAppointmentIds,
+        appointments: updatedClinicAppointments,
+        recurrenceScope
+      });
+    } catch (error: any) {
+      console.error('[Appointments] delete error:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Erro ao excluir consulta.' });
+    }
+  });
+
   app.post('/api/notifications/appointments/:appointmentId/respond', checkAuth, async (req: any, res: any) => {
     const action = sanitizeString(req.body?.action || req.body?.status, 40).toLowerCase();
     const source = sanitizeString(req.body?.source, 80) || 'notification_action';
@@ -21485,7 +21678,9 @@ async function startServer() {
       has_unlinked_maintenance_probe: unlinkedProbeCount > 0,
       has_overdue_maintenance_probe: overdueProbeCount > 0,
       has_maintenance_due_today: dueTodayProbeCount > 0,
-      plan_item_count: planCount
+      plan_item_count: planCount,
+      is_active: row?.is_active ?? row?.isActive ?? source?.is_active ?? source?.isActive ?? true,
+      deleted_at: row?.deleted_at || row?.deletedAt || source?.deleted_at || source?.deletedAt || null
     };
   };
 
@@ -21499,6 +21694,8 @@ async function startServer() {
   };
 
   const calendarEventMatchesFilters = (event: any, filters: any) => {
+    const rawStatus = sanitizeString(event?.status, 80).toLowerCase();
+    if (event?.is_active === false || event?.isActive === false || event?.deleted_at || event?.deletedAt || rawStatus === 'deleted') return false;
     if (filters.therapistIds.length > 0 && !filters.therapistIds.includes(String(event.therapist_id || ''))) return false;
     if (filters.patientIds.length > 0 && !filters.patientIds.includes(String(event.patient_id || ''))) return false;
     if (filters.roomIds?.length > 0 && !filters.roomIds.includes(String(event.room_id || ''))) return false;
@@ -23684,6 +23881,8 @@ async function startServer() {
         .select(CALENDAR_EVENT_SELECT)
         .gte('scheduled_at', range.fromIso)
         .lte('scheduled_at', range.toIso)
+        .is('deleted_at', null)
+        .neq('status', 'deleted')
         .order('scheduled_at', { ascending: true })
         .limit(range.limit);
       if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);

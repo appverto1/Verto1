@@ -25,6 +25,7 @@ import {
   RefreshCcw,
   Search,
   Stethoscope,
+  Trash2,
   User,
   Users,
   X,
@@ -163,6 +164,18 @@ export const getAppointmentStatusColor = (status: any) => {
 
 const normalizeAgendaStatus = (status: any) => canonicalAppointmentStatus(status).toLowerCase();
 
+const isDeletedAppointmentEvent = (event: any) => {
+  const normalizedStatus = normalizeAppointmentStatusKey(event?.status || event?.appointment_status || '');
+  return (
+    normalizedStatus === 'DELETED' ||
+    normalizedStatus.includes('DELET') ||
+    normalizedStatus.includes('EXCLUID') ||
+    event?.is_active === false ||
+    event?.isActive === false ||
+    Boolean(event?.deleted_at || event?.deletedAt)
+  );
+};
+
 const getAgendaStatusDotClass = (status: any) => {
   return getAppointmentStatusColor(status).dot;
 };
@@ -194,7 +207,7 @@ export const CalendarWidget = ({ agenda, currentDate, onDateChange, onDateSelect
 
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const dayAppointments = agenda.filter((a: any) => a.date === dateStr);
+    const dayAppointments = agenda.filter((a: any) => a.date === dateStr && !isDeletedAppointmentEvent(a));
     const isToday = new Date().toISOString().split('T')[0] === dateStr;
 
     days.push(
@@ -259,7 +272,7 @@ export const DayDetailsModal = ({ isOpen, onClose, date, agenda, onAddSession, o
   if (!isOpen) return null;
   const isDark = theme === 'dark';
   
-  const appointments = agenda.filter((a: any) => a.date === date).sort((a: any, b: any) => a.time.localeCompare(b.time));
+  const appointments = agenda.filter((a: any) => a.date === date && !isDeletedAppointmentEvent(a)).sort((a: any, b: any) => a.time.localeCompare(b.time));
   const dateObj = new Date(date + 'T00:00:00');
   const dateDisplay = dateObj.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
 
@@ -695,6 +708,7 @@ export const ClinicalAgendaBoard = ({
   onEditAppointment,
   onConfirmAppointment,
   onCancelAppointment,
+  onDeleteAppointment,
   onOpenPatient,
   onStartSession,
   theme = 'light'
@@ -762,6 +776,7 @@ export const ClinicalAgendaBoard = ({
     notes: ''
   });
   const cacheRef = useRef<Map<string, any[]>>(new Map());
+  const localAgendaIdsRef = useRef(new Set<string>());
   const canEditBillingContext = ['coordinator', 'admin', 'owner'].includes(String(currentUser?.role || '').toLowerCase());
   const roomLookup = useMemo(() => {
     const map = new Map<string, any>();
@@ -813,8 +828,20 @@ export const ClinicalAgendaBoard = ({
     cacheRef.current.clear();
     const localById = new Map<string, any>();
     for (const item of agenda || []) {
+      if (isDeletedAppointmentEvent(item)) continue;
       const id = String(item?.id || '').trim();
       if (id) localById.set(id, item);
+    }
+    const removedLocalIds = new Set<string>();
+    localAgendaIdsRef.current.forEach((id: any) => {
+      const normalizedId = String(id || '');
+      if (normalizedId && !localById.has(normalizedId)) removedLocalIds.add(normalizedId);
+    });
+    localAgendaIdsRef.current = new Set(localById.keys());
+    if (removedLocalIds.size > 0) {
+      setRemoteEvents((prev) => prev.filter((event: any) => !removedLocalIds.has(String(event?.id || event?.appointment_id || ''))));
+      setSelectedEvent((prev: any) => prev && removedLocalIds.has(String(prev?.id || prev?.appointment_id || '')) ? null : prev);
+      setEventDetail((prev: any) => prev?.event && removedLocalIds.has(String(prev.event?.id || prev.event?.appointment_id || '')) ? null : prev);
     }
     if (localById.size === 0) return;
 
@@ -920,8 +947,8 @@ export const ClinicalAgendaBoard = ({
     selectedLocations.join(',')
   ]);
 
-  const localEvents = useMemo(() => (agenda || []).map((event: any) => normalizeClinicalEvent(event, roomLookup)), [agenda, roomLookup]);
-  const serverEvents = useMemo(() => (remoteEvents || []).map((event: any) => normalizeClinicalEvent(event, roomLookup)), [remoteEvents, roomLookup]);
+  const localEvents = useMemo(() => (agenda || []).filter((event: any) => !isDeletedAppointmentEvent(event)).map((event: any) => normalizeClinicalEvent(event, roomLookup)), [agenda, roomLookup]);
+  const serverEvents = useMemo(() => (remoteEvents || []).filter((event: any) => !isDeletedAppointmentEvent(event)).map((event: any) => normalizeClinicalEvent(event, roomLookup)), [remoteEvents, roomLookup]);
   const baseEvents = remoteState.loaded ? serverEvents : localEvents;
 
   const selectedDateKey = toDateKey(activeDate);
@@ -944,6 +971,7 @@ export const ClinicalAgendaBoard = ({
     const toTime = visibleRange.end.getTime();
     return baseEvents
       .filter((event: any) => {
+        if (isDeletedAppointmentEvent(event)) return false;
         const startTime = event.start.getTime();
         if (startTime < fromTime || startTime > toTime) return false;
         if (selectedTherapistIds.length > 0 && !selectedTherapistIds.includes(String(event.therapist_id || ''))) return false;
@@ -1122,11 +1150,12 @@ export const ClinicalAgendaBoard = ({
     setSelectedDayKeyForPanel(dateKey);
   };
 
-  const handleStatusAction = (event: any, action: 'confirm' | 'reschedule' | 'cancel') => {
+  const handleStatusAction = (event: any, action: 'confirm' | 'reschedule' | 'cancel' | 'delete') => {
     const normalized = normalizeClinicalEvent(event, roomLookup);
     if (action === 'confirm') onConfirmAppointment?.(normalized);
     if (action === 'reschedule') onEditAppointment?.(normalized);
     if (action === 'cancel') onCancelAppointment?.(normalized);
+    if (action === 'delete') onDeleteAppointment?.(normalized);
     setStatusActionEvent(null);
   };
 
@@ -2077,6 +2106,9 @@ export const ClinicalAgendaBoard = ({
               <button type="button" onClick={() => handleStatusAction(statusActionEvent, 'cancel')} className="rounded-2xl border border-violet-200 bg-white px-4 py-3 text-sm font-bold text-[#7a32fc] hover:bg-violet-50">
                 Cancelar
               </button>
+              <button type="button" onClick={() => handleStatusAction(statusActionEvent, 'delete')} className="rounded-2xl border border-rose-200 bg-white px-4 py-3 text-sm font-bold text-rose-600 hover:bg-rose-50">
+                Excluir
+              </button>
             </div>
           </div>
         </div>
@@ -2468,6 +2500,10 @@ export const ClinicalAgendaBoard = ({
               <button type="button" onClick={() => onCancelAppointment?.(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-200 px-4 py-3 text-sm font-bold text-rose-600 hover:bg-rose-50">
                 <Ban size={16} />
                 Cancelar
+              </button>
+              <button type="button" onClick={() => onDeleteAppointment?.(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-200 px-4 py-3 text-sm font-bold text-rose-700 hover:bg-rose-50">
+                <Trash2 size={16} />
+                Excluir
               </button>
             </div>
 

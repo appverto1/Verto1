@@ -2716,6 +2716,104 @@ export default function App() {
     }
   };
 
+  const handleDeleteAppointment = async (id: any, details: any = {}) => {
+    const note = String(details?.note ?? details?.notes ?? details?.observation ?? '').trim();
+    const recurrenceScope = String(details?.recurrenceScope || 'single').toLowerCase() === 'future' ? 'future' : 'single';
+    const currentAppointment = therapistAgenda.find((item) => String(item.id) === String(id));
+    if (!currentAppointment) {
+      return { success: false, error: 'Agendamento não encontrado.' };
+    }
+
+    const recurrenceGroupId = String(
+      currentAppointment?.recurrenceGroupId || currentAppointment?.recurrence_group_id || '',
+    ).trim();
+    const getRecurrenceIndex = (appointment: any) =>
+      Number(appointment?.recurrenceIndex ?? appointment?.recurrence_index ?? 0) || 0;
+    const currentRecurrenceIndex = getRecurrenceIndex(currentAppointment);
+    const getOccurrenceTimestamp = (appointment: any) => {
+      const scheduledAt = appointment?.scheduledAt || appointment?.scheduled_at;
+      const parsedScheduledAt = scheduledAt ? new Date(scheduledAt).getTime() : Number.NaN;
+      if (!Number.isNaN(parsedScheduledAt)) return parsedScheduledAt;
+      const date = String(appointment?.date || '').trim();
+      const time = String(appointment?.time || '').trim();
+      const parsedDateTime = date && time ? new Date(`${date}T${time}:00`).getTime() : Number.NaN;
+      return Number.isNaN(parsedDateTime) ? Number.POSITIVE_INFINITY : parsedDateTime;
+    };
+    const currentOccurrenceTimestamp = getOccurrenceTimestamp(currentAppointment);
+    const shouldDeleteItem = (appointment: any) => {
+      if (String(appointment?.id) === String(id)) return true;
+      if (recurrenceScope !== 'future' || !recurrenceGroupId) return false;
+      const appointmentRecurrenceGroupId = String(
+        appointment?.recurrenceGroupId || appointment?.recurrence_group_id || '',
+      ).trim();
+      if (!appointmentRecurrenceGroupId || appointmentRecurrenceGroupId !== recurrenceGroupId) return false;
+      const appointmentRecurrenceIndex = getRecurrenceIndex(appointment);
+      if (currentRecurrenceIndex > 0 && appointmentRecurrenceIndex > 0) {
+        return appointmentRecurrenceIndex >= currentRecurrenceIndex;
+      }
+      return getOccurrenceTimestamp(appointment) >= currentOccurrenceTimestamp;
+    };
+
+    const deletedAppointmentIds = therapistAgenda
+      .filter(shouldDeleteItem)
+      .map((appointment) => String(appointment.id));
+    const deletedAppointmentIdSet = new Set(deletedAppointmentIds);
+    if (deletedAppointmentIdSet.size === 0) {
+      return { success: false, error: 'Nenhum agendamento encontrado para excluir.' };
+    }
+
+    const previousAgenda = therapistAgenda;
+    setTherapistAgenda((prev) => prev.filter((item) => !deletedAppointmentIdSet.has(String(item.id))));
+    try {
+      const response = await fetch(`/api/appointments/${encodeURIComponent(String(id))}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          note,
+          source: details?.source || 'agenda_management',
+          recurrenceScope,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result?.success === false) {
+        throw new Error(result?.error || 'Erro ao excluir agendamento.');
+      }
+      if (Array.isArray(result?.appointments)) {
+        setTherapistAgenda(
+          [...result.appointments].sort((a, b) => {
+            if (a.date !== b.date) return String(a.date || '').localeCompare(String(b.date || ''));
+            return String(a.time || '').localeCompare(String(b.time || ''));
+          }),
+        );
+      } else if (Array.isArray(result?.deletedAppointmentIds)) {
+        const confirmedDeletedIds = new Set(result.deletedAppointmentIds.map((value: any) => String(value)));
+        setTherapistAgenda((prev) => prev.filter((item) => !confirmedDeletedIds.has(String(item.id))));
+      }
+      const appointmentLabel = formatPatientLabel({
+        name: currentAppointment?.patientName || currentAppointment?.name,
+        id: currentAppointment?.patientId
+      }, 'consulta selecionada');
+      onAddActivityLog(
+        "Exclusão de Agendamento",
+        recurrenceScope === 'future'
+          ? `${deletedAppointmentIdSet.size} agendamentos recorrentes de ${appointmentLabel} foram excluídos da agenda.`
+          : `Agendamento de ${appointmentLabel} foi excluído da agenda.`,
+        'management',
+      );
+      return {
+        success: true,
+        deletedAppointmentIds: Array.isArray(result?.deletedAppointmentIds)
+          ? result.deletedAppointmentIds
+          : deletedAppointmentIds,
+      };
+    } catch (error: any) {
+      setTherapistAgenda(previousAgenda);
+      console.warn('Falha ao excluir agendamento:', error?.message || String(error));
+      return { success: false, error: error?.message || 'Não foi possível excluir o agendamento.' };
+    }
+  };
+
   const handleUpdateAppointment = (id: any, updates: any) => {
     const currentAppointment = therapistAgenda.find((item) => String(item.id) === String(id));
     if (!currentAppointment) {
@@ -4839,6 +4937,7 @@ export default function App() {
           onScheduleSession={handleScheduleSession}
           onUpdateAppointment={handleUpdateAppointment}
           onUpdateAgendaStatus={handleUpdateAgendaStatus}
+          onDeleteAppointment={handleDeleteAppointment}
           onAddPatient={handleAddPatient}
           patientsHistory={history}
           therapistNotes={therapistNotes}
