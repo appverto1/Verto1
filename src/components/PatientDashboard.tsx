@@ -47,6 +47,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [dailyCheckinDone, setDailyCheckinDone] = useState(false);
   const [familyNote, setFamilyNote] = useState("");
   const [familyImage, setFamilyImage] = useState<string | null>(null);
+  const [familyImagePath, setFamilyImagePath] = useState<string | null>(null);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [showFamilySuccess, setShowFamilySuccess] = useState(false);
   const [isFamilyLogOpen, setIsFamilyLogOpen] = useState(false);
@@ -1436,13 +1437,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     });
   }, [familyDiaryHistory]);
 
-  const handleConfirmFamilyNote = () => {
+  const handleConfirmFamilyNote = async () => {
     if (isReadOnlyMode) return;
     if (familyNote.trim() || familyImage) {
       setShowFamilySuccess(true);
-      setTimeout(async () => {
+      try {
         let persistedImage = familyImage || undefined;
-        let persistedImagePath: string | undefined;
+        let persistedImagePath: string | undefined = familyImagePath || undefined;
         if (persistedImage && persistedImage.startsWith('data:image/')) {
           const extension = persistedImage.includes('image/jpeg') ? 'jpg' : persistedImage.includes('image/webp') ? 'webp' : 'png';
           const fileName = `${user.id}/family-${Date.now()}.${extension}`;
@@ -1451,18 +1452,23 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             persistedImage = uploadResult.url;
             persistedImagePath = uploadResult.path;
           } else {
-            setShowFamilySuccess(false);
-            alert(`Não foi possível salvar a foto no armazenamento: ${uploadResult?.error || 'erro desconhecido'}`);
-            return;
+            throw new Error(`Não foi possível salvar a foto no armazenamento: ${uploadResult?.error || 'erro desconhecido'}`);
           }
         }
 
-        onAddFamilyNote(user.id, familyNote, persistedImage, persistedImagePath);
-        setShowFamilySuccess(false);
+        const saveResult = await onAddFamilyNote(portalPatientId || user.id, familyNote, persistedImage, persistedImagePath);
+        if (saveResult?.success === false) {
+          throw new Error(saveResult?.error || 'Não foi possível persistir o registro no histórico.');
+        }
         setFamilyNote("");
         setFamilyImage(null);
+        setFamilyImagePath(null);
         setIsFamilyLogOpen(false);
-      }, 2000);
+      } catch (error: any) {
+        alert(error?.message || 'Não foi possível salvar o registro da família. Tente novamente.');
+      } finally {
+        setShowFamilySuccess(false);
+      }
     }
   };
 
@@ -1495,6 +1501,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         
         if (result.success && result.url) {
           setFamilyImage(result.url);
+          setFamilyImagePath(result.path || null);
           setIsDrawingMode(true);
         } else {
           alert('Erro ao enviar imagem. Tente novamente em alguns instantes.');
@@ -2617,7 +2624,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                           <SecureImage src={familyImage} alt="Preview" className="w-full h-full object-cover" />
                           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                             <button onClick={() => setIsDrawingMode(true)} className="p-1.5 bg-white rounded-full text-blue-500 shadow-sm" title="Rabiscar na foto"><Pencil size={14}/></button>
-                            <button onClick={() => setFamilyImage(null)} className="p-1.5 bg-white rounded-full text-red-500 shadow-sm"><Trash2 size={14}/></button>
+                            <button onClick={() => { setFamilyImage(null); setFamilyImagePath(null); }} className="p-1.5 bg-white rounded-full text-red-500 shadow-sm"><Trash2 size={14}/></button>
                           </div>
                         </div>
                       ) : (
@@ -2651,7 +2658,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             {isDrawingMode && familyImage && (
               <DrawingCanvas 
                 image={familyImage} 
-                onSave={(edited) => { setFamilyImage(edited); setIsDrawingMode(false); }} 
+                onSave={(edited) => { setFamilyImage(edited); setFamilyImagePath(null); setIsDrawingMode(false); }} 
                 onCancel={() => { setIsDrawingMode(false); }} 
               />
             )}

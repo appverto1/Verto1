@@ -60,6 +60,33 @@ test('estado operacional mutavel tem caminho persistente explicito', () => {
   assert.match(dataServiceCore, /saveOfflineFirst/);
 });
 
+test('diario da familia usa historico como fonte persistente e idempotente', () => {
+  const familySave = sliceFrom(appCode, 'const handleAddFamilyNote = async', 3600);
+  assert.match(familySave, /const recordId = createAppointmentId\(\)/);
+  assert.match(familySave, /const createdAt = new Date\(\)\.toISOString\(\)/);
+  assert.match(familySave, /id:\s*recordId/);
+  assert.match(familySave, /patient_id:\s*targetPatientId/);
+  assert.match(familySave, /image_path:\s*imagePath \|\| null/);
+  assert.match(familySave, /created_at:\s*createdAt/);
+  assert.match(familySave, /source:\s*'family_portal'/);
+  assert.match(familySave, /return \{ success: true, data: historySaveResult\?\.data \|\| newHistoryItem \}/);
+
+  const historyRoute = sliceFrom(serverCode, "app.post('/api/history'", 3600);
+  assert.match(historyRoute, /const incomingHistoryId = sanitizeString\(req\.body\?\.id/);
+  assert.match(historyRoute, /hasDifferentPhotoToday/);
+  assert.match(historyRoute, /String\(photo\?\.id \|\| ''\) !== incomingHistoryId/);
+});
+
+test('estrelinhas do diario sao persistidas para o portal do paciente', () => {
+  const updateHistory = sliceFrom(appCode, 'const handleUpdateHistoryItem = async', 8000);
+  assert.match(updateHistory, /resolvePatientEmailForMilestone/);
+  assert.match(updateHistory, /stableUuidFromString\(`family-milestone:\$\{sourceRef\}`\)/);
+  assert.match(updateHistory, /source:\s*'family_milestone_event'/);
+  assert.match(updateHistory, /dataService\.updateNote\(String\(noteId\)/);
+  assert.match(updateHistory, /const historyUpdateResult = await dataService\.updateHistoryItem/);
+  assert.match(updateHistory, /throw new Error\(historyUpdateResult\?\.error \|\| 'Falha ao salvar estrela no histórico\.'\)/);
+});
+
 test('offline first criptografado e sync nao perdem mutacoes pendentes', () => {
   const saveOfflineFirst = sliceFrom(dataServiceCode, 'async function saveOfflineFirst', 3200);
   assert.match(saveOfflineFirst, /await saveEncryptedRecord/);

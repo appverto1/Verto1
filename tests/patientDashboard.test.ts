@@ -60,6 +60,15 @@ test('persistencia visual Kids continua baseada em dados existentes e nao mocks'
   assert.doesNotMatch(patientDashboardCode, /mock[A-Z]|fake[A-Z]|dummy[A-Z]/);
 });
 
+test('diario da familia preserva path de foto e aguarda persistencia do historico', () => {
+  assert.match(patientDashboardCode, /const \[familyImagePath, setFamilyImagePath\] = useState<string \| null>\(null\)/);
+  assert.match(patientDashboardCode, /let persistedImagePath: string \| undefined = familyImagePath \|\| undefined/);
+  assert.match(patientDashboardCode, /const saveResult = await onAddFamilyNote\(portalPatientId \|\| user\.id, familyNote, persistedImage, persistedImagePath\)/);
+  assert.match(patientDashboardCode, /setFamilyImagePath\(result\.path \|\| null\)/);
+  assert.match(patientDashboardCode, /setFamilyImagePath\(null\); setIsDrawingMode\(false\)/);
+  assert.match(patientDashboardCode, /setFamilyImagePath\(null\);\s*setIsFamilyLogOpen\(false\)/);
+});
+
 let passed = 0;
 for (const item of tests) {
   try {

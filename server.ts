@@ -17628,6 +17628,7 @@ async function startServer() {
       const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
       if (role === 'patient' && safeType === 'photo') {
         const safeEmail = sanitizeEmail(req.body?.patient_email || req.session.user?.email);
+        const incomingHistoryId = sanitizeString(req.body?.id || req.body?.clientRecordId || req.body?.localId, 120);
         if (!safeEmail) {
           return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível para validação de foto diária.' });
         }
@@ -17644,9 +17645,12 @@ async function startServer() {
           .is('deleted_at', null)
           .gte('created_at', startOfDay)
           .lt('created_at', endOfDay)
-          .limit(1);
+          .limit(5);
         if (todayPhotosError) throw todayPhotosError;
-        if (Array.isArray(todayPhotos) && todayPhotos.length > 0) {
+        const hasDifferentPhotoToday = Array.isArray(todayPhotos) && todayPhotos.some((photo: any) =>
+          !incomingHistoryId || String(photo?.id || '') !== incomingHistoryId
+        );
+        if (hasDifferentPhotoToday) {
           return res.status(409).json({
             success: false,
             error: 'Limite diário atingido: apenas 1 foto por dia pode ser enviada no Portal da Família.'

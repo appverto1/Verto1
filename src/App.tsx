@@ -283,6 +283,28 @@ export default function App() {
     typeof value === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 
+  const stableUuidFromString = (value: unknown) => {
+    const text = String(value || 'verto');
+    let h1 = 0x811c9dc5;
+    let h2 = 0x9e3779b9;
+    let h3 = 0x85ebca6b;
+    let h4 = 0xc2b2ae35;
+
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      h1 = Math.imul(h1 ^ code, 16777619);
+      h2 = Math.imul(h2 ^ code, 2246822519);
+      h3 = Math.imul(h3 ^ code, 3266489917);
+      h4 = Math.imul(h4 ^ code, 668265263);
+    }
+
+    const hex = [h1, h2, h3, h4]
+      .map((part) => (part >>> 0).toString(16).padStart(8, '0'))
+      .join('');
+    const variant = (8 + (parseInt(hex.slice(16, 17), 16) % 4)).toString(16);
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+  };
+
   const normalizeTextKey = (value: unknown) =>
     String(value || '')
       .normalize('NFD')
@@ -2446,17 +2468,34 @@ export default function App() {
       return starred ? `${STAR_MARKER} ${cleaned}`.trim() : cleaned;
     };
     const rawId = String(id || '');
+    const resolvePatientEmailForMilestone = (patientId?: string | null, explicitEmail?: string | null) => {
+      const safeEmail = String(explicitEmail || '').trim().toLowerCase();
+      if (safeEmail) return safeEmail;
+      const safePatientId = String(patientId || '').trim();
+      return String(
+        allPatients.find((p: any) => String(p?.id || '').trim() === safePatientId)?.email || ''
+      ).trim().toLowerCase() || null;
+    };
     const persistMilestoneEvent = async (payload: { patientId?: string; patientEmail?: string | null; sourceRef: string; awarded: boolean }) => {
       try {
-        await dataService.addNote({
-          id: crypto.randomUUID(),
-          patient_id: String(payload.patientId || '').trim(),
-          patient_email: payload.patientEmail || null,
+        const patientId = String(payload.patientId || '').trim();
+        const patientEmail = resolvePatientEmailForMilestone(patientId, payload.patientEmail);
+        const sourceRef = String(payload.sourceRef || '').trim();
+        if (!sourceRef || (!patientId && !patientEmail)) return;
+        const result = await dataService.addNote({
+          id: stableUuidFromString(`family-milestone:${sourceRef}`),
+          patient_id: patientId,
+          patient_email: patientEmail,
           text: `MILESTONE_EVENT|source=${payload.sourceRef}|awarded=${payload.awarded ? 1 : 0}`,
           visibility: 'family',
           subject: 'milestone_event',
-          type: 'family_note'
+          type: 'family_note',
+          score: payload.awarded ? 1 : 0,
+          source: 'family_milestone_event'
         });
+        if (result?.success === false && !(result?.offline && result?.pending)) {
+          console.warn('Falha ao persistir evento de marco:', result?.error || result);
+        }
       } catch (error) {
         console.error('Falha ao persistir evento de marco:', error);
       }
@@ -2465,6 +2504,10 @@ export default function App() {
       const noteId = rawId.replace('note-family-', '');
       const starred = Number(score || 0) >= 1;
       const matchingNote = (Array.isArray(therapistNotes) ? therapistNotes : []).find((n: any) => String(n.id) === String(noteId));
+      const notePatientId = String(matchingNote?.patientId || matchingNote?.patient_id || '').trim();
+      const notePatientEmail = resolvePatientEmailForMilestone(notePatientId, matchingNote?.patient_email);
+      const updatedNoteText = applyStarMarker(String(matchingNote?.text || matchingNote?.note || ''), starred);
+      const updatedNoteSubject = String(matchingNote?.subject || 'Geral').replace(/\u2b50|â­/g, '').trim() || 'Geral';
       setTherapistNotes(prev =>
         prev.map((n: any) =>
           String(n.id) === String(noteId)
@@ -2473,7 +2516,7 @@ export default function App() {
                 score,
                 visibility: n?.visibility || 'family',
                 type: n?.type || 'family_note',
-                subject: starred ? `â­ ${String(n?.subject || 'Geral').replace(/\u2b50|â­/g, '').trim()}` : String(n?.subject || 'Geral').replace(/\u2b50|â­/g, '').trim(),
+                subject: updatedNoteSubject,
                 text: applyStarMarker(String(n?.text || n?.note || ''), starred),
                 note: applyStarMarker(String(n?.note || n?.text || ''), starred)
               }
@@ -2481,9 +2524,22 @@ export default function App() {
         )
       );
       try {
+        if (matchingNote) {
+          const noteUpdateResult = await dataService.updateNote(String(noteId), {
+            score,
+            patient_id: notePatientId,
+            patient_email: notePatientEmail,
+            visibility: matchingNote?.visibility || 'family',
+            subject: updatedNoteSubject,
+            text: updatedNoteText
+          });
+          if (noteUpdateResult?.success === false) {
+            console.warn('Falha ao atualizar anotação familiar original:', noteUpdateResult?.error || noteUpdateResult);
+          }
+        }
         await persistMilestoneEvent({
-          patientId: String(matchingNote?.patientId || matchingNote?.patient_id || ''),
-          patientEmail: matchingNote?.patient_email || null,
+          patientId: notePatientId,
+          patientEmail: notePatientEmail,
           sourceRef: rawId,
           awarded: starred
         });
@@ -2526,21 +2582,33 @@ export default function App() {
       }
 
       try {
-        await dataService.updateHistoryItem(String(rawId), {
+        const patientEmail =
+          String(item?.patient_email || '').trim().toLowerCase() ||
+          resolvePatientEmailForMilestone(String(item?.patientId || item?.patient_id || ''), matchingNote?.patient_email);
+        const historyUpdateResult = await dataService.updateHistoryItem(String(rawId), {
           score,
           note: String(item?.note || item?.text || ''),
           title: String(item?.title || ''),
           icon: String(item?.icon || ''),
           patient_id: String(item?.patientId || item?.patient_id || ''),
-          patient_email:
-            String(item?.patient_email || '').trim().toLowerCase() ||
-            allPatients.find((p: any) => String(p.id) === String(item?.patientId || item?.patient_id || ''))?.email ||
-            null
+          patient_email: patientEmail
         });
+        if (historyUpdateResult?.success === false) {
+          throw new Error(historyUpdateResult?.error || 'Falha ao salvar estrela no histórico.');
+        }
+        if (historyUpdateResult?.data) {
+          setHistory(prev =>
+            prev.map((h: any) =>
+              String(h.id) === rawId
+                ? { ...h, ...historyUpdateResult.data, patientId: historyUpdateResult.data.patient_id || h.patientId }
+                : h
+            )
+          );
+        }
 
         await persistMilestoneEvent({
           patientId: String(item?.patientId || item?.patient_id || ''),
-          patientEmail: matchingNote?.patient_email || allPatients.find((p: any) => String(p.id) === String(item?.patientId || item?.patient_id || ''))?.email || null,
+          patientEmail,
           sourceRef: rawId,
           awarded: starred
         });
@@ -4339,52 +4407,75 @@ export default function App() {
   const handleAddFamilyNote = async (pid: any, txt: string, image?: string, imagePath?: string) => {
     const identity = resolvePatientIdentityForPortal({ patientId: pid });
     const targetPatientId = String(identity.patientId || pid || user?.id || '').trim();
+    const recordId = createAppointmentId();
+    const createdAt = new Date().toISOString();
+    const isPhotoRecord = Boolean(image);
     // Evita duplicidade: família persiste via histórico clínico (fonte única de verdade).
     
     const newHistoryItem = {
-      id: Date.now(),
+      id: recordId,
       patientId: targetPatientId,
-      type: image ? 'photo' : 'family_note',
-      title: image ? "Foto enviada" : "Registro da Família",
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      patient_id: targetPatientId,
+      patient_email: identity.patientEmail,
+      type: isPhotoRecord ? 'photo' : 'family_note',
+      title: isPhotoRecord ? "Foto enviada" : "Registro da Família",
+      score: 0,
+      time: new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       note: txt,
       image: image,
-      icon: image ? "📷" : "🏠",
+      image_path: imagePath || null,
+      icon: isPhotoRecord ? "📷" : "🏠",
       dateGroup: "Hoje",
-      date: new Date().toISOString()
+      date: createdAt,
+      created_at: createdAt,
+      source: 'family_portal'
     };
 
     // Also add to history timeline
-    setHistory(prev => [newHistoryItem, ...prev]);
+    setHistory(prev => [newHistoryItem, ...prev.filter((item: any) => String(item.id) !== recordId)]);
 
     onAddActivityLog("Registro da Família", `Nova anotação da família adicionada para ${formatPatientLabel({ name: identity.patientName, id: targetPatientId })}.`);
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
     const historySaveResult = await dataService.addHistoryItem({
+      id: recordId,
       patient_id: targetPatientId,
       patient_email: identity.patientEmail,
       patient_name: identity.patientName,
-      type: image ? 'photo' : 'family_note',
-      title: image ? "Foto enviada" : "Registro da Família",
+      type: isPhotoRecord ? 'photo' : 'family_note',
+      title: isPhotoRecord ? "Foto enviada" : "Registro da Família",
+      score: 0,
       note: txt,
       image: image,
       image_path: imagePath || null,
-      icon: image ? "📷" : "🏠"
+      icon: isPhotoRecord ? "📷" : "🏠",
+      created_at: createdAt,
+      date_group: "Hoje",
+      source: 'family_portal'
     });
 
     if (!historySaveResult?.success) {
       console.warn('[family-note] Falha ao persistir histórico da família:', historySaveResult);
-      alert(`Registro salvo parcialmente. Não foi possível persistir a foto no histórico: ${historySaveResult?.error || 'erro desconhecido'}`);
       setHistory(prev => prev.filter((item: any) => item.id !== newHistoryItem.id));
+      return { success: false, error: historySaveResult?.error || 'Falha ao persistir histórico da família.' };
     } else if (historySaveResult?.data?.id) {
-      // Substitui ID temporário pelo ID persistido para não duplicar após rehidratação/sync.
       setHistory(prev =>
         prev.map((item: any) =>
-          item.id === newHistoryItem.id ? { ...item, id: historySaveResult.data.id } : item
+          item.id === newHistoryItem.id
+            ? {
+                ...item,
+                ...historySaveResult.data,
+                patientId: historySaveResult.data.patient_id || item.patientId,
+                date: historySaveResult.data.created_at || item.date,
+                image: historySaveResult.data.image || item.image,
+                image_path: historySaveResult.data.image_path || item.image_path || null
+              }
+            : item
         )
       );
     }
+    return { success: true, data: historySaveResult?.data || newHistoryItem };
   };
 
   const handleLogout = async () => {
