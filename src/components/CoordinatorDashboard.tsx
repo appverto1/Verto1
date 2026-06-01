@@ -212,7 +212,7 @@ export function CoordinatorDashboard({
         : "coordinator";
   const isTherapist = capabilityRole === "therapist";
   const isReceptionist = capabilityRole === "receptionist";
-  const canCancelRecurringAppointments = isTherapist || isReceptionist;
+  const canCancelRecurringAppointments = ["coordinator", "receptionist", "therapist", "admin", "owner"].includes(role.toLowerCase());
   const canAccessClinicFinance = ["coordinator", "admin", "owner"].includes(role.toLowerCase());
   const canCreatePatients = !isTherapist;
   const canManageRooms = !isTherapist;
@@ -2127,6 +2127,45 @@ export function CoordinatorDashboard({
       editingAppointmentId ? "Salvando agendamento..." : "Criando agendamento...",
     );
 
+    const getBulkEditExcludedAppointmentIds = () => {
+      if (!editingAppointmentId) return [];
+      if (!isEditingRecurringAppointment || appointmentEditScope !== "future") {
+        return [String(editingAppointmentId)];
+      }
+      const recurrenceGroupId = String(
+        editingAppointment?.recurrenceGroupId || editingAppointment?.recurrence_group_id || "",
+      ).trim();
+      const currentIndex =
+        Number(editingAppointment?.recurrenceIndex ?? editingAppointment?.recurrence_index ?? 0) || 0;
+      const getOccurrenceTime = (appointment: any) => {
+        const scheduledAt = appointment?.scheduledAt || appointment?.scheduled_at;
+        const parsedScheduledAt = scheduledAt ? new Date(scheduledAt).getTime() : Number.NaN;
+        if (!Number.isNaN(parsedScheduledAt)) return parsedScheduledAt;
+        const date = String(appointment?.date || "").trim();
+        const time = String(appointment?.time || "").trim();
+        const parsedDateTime = date && time ? new Date(`${date}T${time}:00`).getTime() : Number.NaN;
+        return Number.isNaN(parsedDateTime) ? Number.POSITIVE_INFINITY : parsedDateTime;
+      };
+      const currentOccurrenceTime = getOccurrenceTime(editingAppointment);
+      return therapistAgenda
+        .filter((appointment: any) => {
+          if (String(appointment?.id || "") === String(editingAppointmentId)) return true;
+          if (!recurrenceGroupId) return false;
+          const appointmentGroupId = String(
+            appointment?.recurrenceGroupId || appointment?.recurrence_group_id || "",
+          ).trim();
+          if (appointmentGroupId !== recurrenceGroupId) return false;
+          const appointmentIndex = Number(appointment?.recurrenceIndex ?? appointment?.recurrence_index ?? 0) || 0;
+          if (currentIndex > 0 && appointmentIndex > 0) {
+            return appointmentIndex >= currentIndex;
+          }
+          return getOccurrenceTime(appointment) >= currentOccurrenceTime;
+        })
+        .map((appointment: any) => String(appointment?.id || "").trim())
+        .filter(Boolean);
+    };
+    const conflictExcludeEventIds = getBulkEditExcludedAppointmentIds();
+
     const serverConflict = await dataService.checkScheduleConflicts({
       patient_id: selectedSessionPatient?.id,
       patient_name: sessionPatientName,
@@ -2140,6 +2179,7 @@ export function CoordinatorDashboard({
       end_time: sessionEndTime,
       duration_minutes: sessionDurationMinutes,
       exclude_event_id: editingAppointmentId,
+      exclude_event_ids: conflictExcludeEventIds,
       recurrence_dates: sessionRecurrenceDates,
     });
     const conflictPayload = serverConflict?.data || serverConflict;

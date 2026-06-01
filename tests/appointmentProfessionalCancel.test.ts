@@ -16,7 +16,7 @@ test('rota permite cancelamento por profissional e escopa a consulta pela clinic
   assert.match(serverCode, /const isProfessionalActor = \['coordinator', 'receptionist', 'therapist', 'admin', 'owner'\]\.includes\(actorRole\)/);
   assert.match(serverCode, /!isPatientActor && !isProfessionalActor/);
   assert.match(serverCode, /tableAppointmentQuery = tableAppointmentQuery\.eq\('clinic_id', clinicId\)/);
-  assert.match(serverCode, /const canCancelFutureRecurrence = actorRole === 'therapist' \|\| actorRole === 'receptionist'/);
+  assert.match(serverCode, /const canCancelFutureRecurrence = isProfessionalActor/);
   assert.match(serverCode, /isFutureRecurringCancellation && !canCancelFutureRecurrence/);
   assert.match(serverCode, /status: tableStatus/);
 });
@@ -32,7 +32,7 @@ test('painel profissional e recepcao usam o fluxo de cancelamento recorrente', (
   assert.match(coordinatorCode, /requestAppointmentCancellation\(appointment/);
   assert.match(coordinatorCode, /handleStatusUpdate\(appointment\.id, "canceled"/);
   assert.match(coordinatorCode, /recurrenceScope: "single"/);
-  assert.match(coordinatorCode, /const canCancelRecurringAppointments = isTherapist \|\| isReceptionist/);
+  assert.match(coordinatorCode, /const canCancelRecurringAppointments = \["coordinator", "receptionist", "therapist", "admin", "owner"\]\.includes\(role\.toLowerCase\(\)\)/);
   assert.match(coordinatorCode, /canCancelRecurringAppointments && isRecurringAppointment\(appointment\)/);
   assert.match(coordinatorCode, /submitRecurringCancellation\("future"\)/);
   assert.match(coordinatorCode, /fixed inset-0 z-\[180\][^"]*pendingRecurringCancellation|pendingRecurringCancellation[\s\S]{0,180}z-\[180\]/);

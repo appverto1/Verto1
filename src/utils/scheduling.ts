@@ -261,6 +261,7 @@ export function checkLocalScheduleConflicts(input: {
   end_time?: any;
   duration_minutes?: any;
   exclude_event_id?: any;
+  exclude_event_ids?: any[];
   recurrence_dates?: any[];
 }): ScheduleConflictResult {
   const appointments = Array.isArray(input.appointments) ? input.appointments : [];
@@ -276,7 +277,14 @@ export function checkLocalScheduleConflicts(input: {
   const roomName = String(input.room_name || roomId || 'Sala').trim();
   const professionalIds = new Set((input.professional_ids || []).map((value) => String(value || '').trim()).filter(Boolean));
   const professionalNames = new Set((input.professional_names || []).map((value) => String(value || '').trim()).filter(Boolean));
-  const excludeId = String(input.exclude_event_id || '').trim();
+  const excludeIds = new Set(
+    [
+      input.exclude_event_id,
+      ...(Array.isArray(input.exclude_event_ids) ? input.exclude_event_ids : [])
+    ]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+  );
   const conflicts: ScheduleConflict[] = [];
 
   const addConflict = (conflict: ScheduleConflict) => {
@@ -288,7 +296,7 @@ export function checkLocalScheduleConflicts(input: {
     if (!dateKey || !startTime || !endTime) continue;
 
     for (const appointment of appointments) {
-      if (excludeId && String(appointment?.id || '') === excludeId) continue;
+      if (excludeIds.has(String(appointment?.id || ''))) continue;
       if (!appointmentBlocksConflict(appointment)) continue;
       if (String(appointment?.date || '').slice(0, 10) !== dateKey) {
         const start = getAppointmentStartDateTime(appointment);

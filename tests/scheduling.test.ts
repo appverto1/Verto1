@@ -117,6 +117,49 @@ test('detecta conflito de profissional, paciente e recorrência', () => {
   assert.equal(recurrence.conflicts[0].date, '2026-05-27');
 });
 
+test('remarcacao em lote ignora as ocorrencias da propria serie', () => {
+  const recurringSeries = [
+    {
+      id: 'series-1',
+      date: '2026-05-27',
+      time: '08:00',
+      duration_minutes: 60,
+      patientId: 'p1',
+      professionalId: 't1',
+      room: 'room-aba',
+      location_type: 'clinica',
+      status: 'scheduled',
+      recurrence_group_id: 'rec-1',
+      recurrence_index: 1,
+    },
+    {
+      id: 'series-2',
+      date: '2026-06-03',
+      time: '08:00',
+      duration_minutes: 60,
+      patientId: 'p1',
+      professionalId: 't1',
+      room: 'room-aba',
+      location_type: 'clinica',
+      status: 'scheduled',
+      recurrence_group_id: 'rec-1',
+      recurrence_index: 2,
+    },
+  ];
+  const result = checkLocalScheduleConflicts({
+    appointments: recurringSeries,
+    patient_id: 'p1',
+    professional_ids: ['t1'],
+    room_id: 'room-aba',
+    location_type: 'clinica',
+    start_time: '08:30',
+    duration_minutes: 60,
+    recurrence_dates: ['2026-05-27', '2026-06-03'],
+    exclude_event_ids: ['series-1', 'series-2'],
+  });
+  assert.equal(result.hasConflict, false);
+});
+
 test('relatórios somam paciente e profissional com duração real', () => {
   const appointments = [
     ...baseAppointments.map((item) => ({
@@ -169,6 +212,7 @@ test('backend expõe endpoint de conflitos, relatórios e queries econômicas', 
   assert.match(serverCode, /app\.get\('\/api\/reports\/time\/professional'/);
   assert.match(serverCode, /\.select\(SCHEDULE_CONFLICT_APPOINTMENT_SELECT\)/);
   assert.match(serverCode, /\.select\(TIME_REPORT_APPOINTMENT_SELECT\)/);
+  assert.match(serverCode, /exclude_event_ids/);
   assert.doesNotMatch(serverCode, /check-conflicts[\s\S]{0,2400}\.select\('\*'\)/);
 });
 
@@ -204,6 +248,7 @@ test('modal separa local, sala e duração', () => {
   ]) {
     assert.match(coordinatorCode, new RegExp(fragment));
   }
+  assert.match(coordinatorCode, /exclude_event_ids: conflictExcludeEventIds/);
 });
 
 let passed = 0;

@@ -12440,11 +12440,11 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'Resposta de consulta não permitida.' });
       }
 
-      const canCancelFutureRecurrence = actorRole === 'therapist' || actorRole === 'receptionist';
+      const canCancelFutureRecurrence = isProfessionalActor;
       if (isFutureRecurringCancellation && !canCancelFutureRecurrence) {
         return res.status(403).json({
           success: false,
-          error: 'Somente o profissional ou a recepção podem cancelar esta e as próximas consultas da recorrência.'
+          error: 'Perfil sem permissão para cancelar esta e as próximas consultas da recorrência.'
         });
       }
 
@@ -21766,6 +21766,11 @@ async function startServer() {
       end_time: parsedDates.endTime,
       duration_minutes: parsedDates.duration,
       exclude_event_id: rawInput?.exclude_event_id || rawInput?.excludeEventId,
+      exclude_event_ids: Array.isArray(rawInput?.exclude_event_ids)
+        ? rawInput.exclude_event_ids
+        : Array.isArray(rawInput?.excludeEventIds)
+          ? rawInput.excludeEventIds
+          : [],
       recurrence_dates: parsedDates.recurrenceDates
     });
 
