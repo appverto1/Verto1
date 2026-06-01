@@ -81,6 +81,14 @@ test('UI remove lembrete automatico e expõe plano financeiro por modalidade', (
   assert.match(coordinatorCode, /Pagador\/convênio/);
 });
 
+test('agendamento usa convenio cadastrado do paciente como pagador', () => {
+  assert.match(coordinatorCode, /resolvePatientInsurancePayer/);
+  assert.match(coordinatorCode, /sessionPayerNameSnapshot/);
+  assert.match(coordinatorCode, /Conv.nio do paciente: \{sessionPayerSnapshotOptionLabel\}/);
+  assert.match(coordinatorCode, /payerName: selectedSessionPayerName/);
+  assert.match(coordinatorCode, /payerName: selectedSessionPayerName[\s\S]{0,220}serviceType: sessionApproach/);
+});
+
 test('persistencia envia campos cadastrais visiveis e planos para backend', () => {
   for (const pattern of [
     /birthDate: resolvedBirthDate/,

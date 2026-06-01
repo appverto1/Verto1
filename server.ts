@@ -12198,10 +12198,11 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'Resposta de consulta não permitida.' });
       }
 
-      if (isFutureRecurringCancellation && actorRole !== 'therapist') {
+      const canCancelFutureRecurrence = actorRole === 'therapist' || actorRole === 'receptionist';
+      if (isFutureRecurringCancellation && !canCancelFutureRecurrence) {
         return res.status(403).json({
           success: false,
-          error: 'Somente o profissional pode cancelar esta e as próximas consultas da recorrência.'
+          error: 'Somente o profissional ou a recepção podem cancelar esta e as próximas consultas da recorrência.'
         });
       }
 

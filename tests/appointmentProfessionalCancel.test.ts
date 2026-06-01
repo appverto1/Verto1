@@ -16,7 +16,8 @@ test('rota permite cancelamento por profissional e escopa a consulta pela clinic
   assert.match(serverCode, /const isProfessionalActor = \['coordinator', 'receptionist', 'therapist', 'admin', 'owner'\]\.includes\(actorRole\)/);
   assert.match(serverCode, /!isPatientActor && !isProfessionalActor/);
   assert.match(serverCode, /tableAppointmentQuery = tableAppointmentQuery\.eq\('clinic_id', clinicId\)/);
-  assert.match(serverCode, /isFutureRecurringCancellation && actorRole !== 'therapist'/);
+  assert.match(serverCode, /const canCancelFutureRecurrence = actorRole === 'therapist' \|\| actorRole === 'receptionist'/);
+  assert.match(serverCode, /isFutureRecurringCancellation && !canCancelFutureRecurrence/);
   assert.match(serverCode, /status: tableStatus/);
 });
 
@@ -25,12 +26,14 @@ test('paciente nao consegue usar a rota para status administrativo', () => {
   assert.match(serverCode, /Consulta n.o pertence a este paciente|Consulta não pertence a este paciente/);
 });
 
-test('painel do profissional usa o fluxo de cancelamento e nao deixa modal recorrente escondido', () => {
+test('painel profissional e recepcao usam o fluxo de cancelamento recorrente', () => {
   assert.match(appCode, /user\.role === 'coordinator' \|\| user\.role === 'receptionist' \|\| user\.role === 'therapist'/);
   assert.match(coordinatorCode, /onCancelAppointment=\{handleCancelAppointmentFromAgenda\}/);
   assert.match(coordinatorCode, /requestAppointmentCancellation\(appointment/);
   assert.match(coordinatorCode, /handleStatusUpdate\(appointment\.id, "canceled"/);
   assert.match(coordinatorCode, /recurrenceScope: "single"/);
+  assert.match(coordinatorCode, /const canCancelRecurringAppointments = isTherapist \|\| isReceptionist/);
+  assert.match(coordinatorCode, /canCancelRecurringAppointments && isRecurringAppointment\(appointment\)/);
   assert.match(coordinatorCode, /submitRecurringCancellation\("future"\)/);
   assert.match(coordinatorCode, /fixed inset-0 z-\[180\][^"]*pendingRecurringCancellation|pendingRecurringCancellation[\s\S]{0,180}z-\[180\]/);
 });

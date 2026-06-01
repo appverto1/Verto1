@@ -163,6 +163,8 @@ interface CoordinatorDashboardProps {
   onUpdateTask?: (taskId: any, updates: any) => void;
 }
 
+const SESSION_PATIENT_INSURANCE_PAYER_VALUE = "__patient_insurance__";
+
 export function CoordinatorDashboard({
   user,
   onLogout,
@@ -210,6 +212,7 @@ export function CoordinatorDashboard({
         : "coordinator";
   const isTherapist = capabilityRole === "therapist";
   const isReceptionist = capabilityRole === "receptionist";
+  const canCancelRecurringAppointments = isTherapist || isReceptionist;
   const canAccessClinicFinance = ["coordinator", "admin", "owner"].includes(role.toLowerCase());
   const canCreatePatients = !isTherapist;
   const canManageRooms = !isTherapist;
@@ -656,9 +659,11 @@ export function CoordinatorDashboard({
   const [sessionCallLink, setSessionCallLink] = useState("");
   const [sessionProfessional, setSessionProfessional] = useState("");
   const [sessionPayerId, setSessionPayerId] = useState("");
+  const [sessionPayerNameSnapshot, setSessionPayerNameSnapshot] = useState("");
   const [sessionGuideNumber, setSessionGuideNumber] = useState("");
   const [sessionAuthorizationCode, setSessionAuthorizationCode] = useState("");
   const [clinicPayers, setClinicPayers] = useState<any[]>([]);
+  const lastAutoPayerPatientKeyRef = useRef("");
   const [sessionNumSessions, setSessionNumSessions] = useState(1);
   const [sessionRecurrencePattern, setSessionRecurrencePattern] = useState("weekly");
   const [scheduleConflictState, setScheduleConflictState] = useState<{
@@ -1662,6 +1667,75 @@ export function CoordinatorDashboard({
     return raw;
   })();
 
+  const normalizePayerLookup = (value: any) =>
+    normalizeUtf8Text(String(value ?? ""))
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+
+  const getPatientAutoPayerKey = (patient: any, fallbackName = "") =>
+    normalizePayerLookup(patient?.id || patient?.patient_id || fallbackName || patient?.name);
+
+  const resolvePatientInsurancePayer = (patient: any) => {
+    if (!patient) return { payerId: "", payerName: "" };
+    const plans = normalizePatientFinancialPlans(
+      Array.isArray(patient?.financialPlans)
+        ? patient.financialPlans
+        : Array.isArray(patient?.financial_plans)
+          ? patient.financial_plans
+          : [],
+    );
+    const insurancePlan = plans.find(
+      (plan: any) =>
+        plan?.billingMode === "INSURANCE" &&
+        (String(plan?.payerId || "").trim() ||
+          String(plan?.payerNameSnapshot || "").trim()),
+    );
+    const planPayerId = String(insurancePlan?.payerId || "").trim();
+    const planPayerName = normalizeUtf8Text(
+      String(
+        insurancePlan?.payerNameSnapshot ||
+          insurancePlan?.insuranceName ||
+          "",
+      ),
+    ).trim();
+    if (planPayerId || planPayerName) {
+      return { payerId: planPayerId, payerName: planPayerName };
+    }
+
+    const insuranceType = normalizePayerLookup(
+      patient?.insuranceType ||
+        patient?.insurance_type ||
+        patient?.convenioTipo ||
+        patient?.anamnesisData?.convenioTipo,
+    );
+    const insuranceName = normalizeUtf8Text(
+      String(
+        patient?.insuranceName ||
+          patient?.insurance_name ||
+          patient?.convenioNome ||
+          patient?.anamnesisData?.convenioNome ||
+          "",
+      ),
+    ).trim();
+    if (!insuranceName || insuranceType === "particular" || insuranceType === "private") {
+      return { payerId: "", payerName: "" };
+    }
+    return { payerId: "", payerName: insuranceName };
+  };
+
+  const resolveClinicPayerForPatientInsurance = (patientPayer: any) => {
+    const payerId = String(patientPayer?.payerId || "").trim();
+    const payerNameKey = normalizePayerLookup(patientPayer?.payerName);
+    return (
+      clinicPayers.find((payer: any) => payerId && String(payer?.id || "") === payerId) ||
+      clinicPayers.find((payer: any) => payerNameKey && normalizePayerLookup(payer?.name) === payerNameKey) ||
+      null
+    );
+  };
+
   useEffect(() => {
     if (sessionPatientName && allPatients) {
       const matches = allPatients.filter((p: any) =>
@@ -1686,7 +1760,16 @@ export function CoordinatorDashboard({
   }, [isAddSessionModalOpen, isTherapist]);
 
   const selectPatientForSession = (name: string) => {
+    const normalizedName = normalizeUtf8Text(name).trim().toLowerCase();
+    const patient = allPatients.find(
+      (item: any) => normalizeUtf8Text(item?.name).trim().toLowerCase() === normalizedName,
+    );
+    const patientPayer = resolvePatientInsurancePayer(patient);
+    const matchingPayer = resolveClinicPayerForPatientInsurance(patientPayer);
+    lastAutoPayerPatientKeyRef.current = getPatientAutoPayerKey(patient, name);
     setSessionPatientName(name);
+    setSessionPayerId(String(matchingPayer?.id || patientPayer.payerId || ""));
+    setSessionPayerNameSnapshot(String(matchingPayer?.name || patientPayer.payerName || ""));
     setFilteredPatients([]);
   };
 
@@ -1719,6 +1802,20 @@ export function CoordinatorDashboard({
     );
   }, [allPatients, sessionPatientName]);
 
+  const selectedSessionPatientInsurancePayer = useMemo(
+    () => resolvePatientInsurancePayer(selectedSessionPatient),
+    [selectedSessionPatient, selectedSessionPatient?.financialPlans, selectedSessionPatient?.financial_plans],
+  );
+
+  const selectedSessionPatientInsuranceClinicPayer = useMemo(
+    () => resolveClinicPayerForPatientInsurance(selectedSessionPatientInsurancePayer),
+    [
+      clinicPayers,
+      selectedSessionPatientInsurancePayer.payerId,
+      selectedSessionPatientInsurancePayer.payerName,
+    ],
+  );
+
   const selectedSessionProfessional = useMemo(() => {
     const normalizedName = normalizeUtf8Text(sessionProfessional).trim();
     return (
@@ -1737,6 +1834,67 @@ export function CoordinatorDashboard({
     () => clinicPayers.find((payer: any) => String(payer?.id || "") === String(sessionPayerId || "")) || null,
     [clinicPayers, sessionPayerId],
   );
+
+  const selectedSessionPayerName = selectedSessionPayer?.name || sessionPayerNameSnapshot || "";
+  const sessionPayerSelectValue =
+    sessionPayerId || (sessionPayerNameSnapshot ? SESSION_PATIENT_INSURANCE_PAYER_VALUE : "");
+  const hasSessionPayerIdOption = Boolean(sessionPayerId && !selectedSessionPayer);
+  const sessionPayerSnapshotOptionLabel =
+    sessionPayerNameSnapshot || selectedSessionPatientInsurancePayer.payerName || "";
+  const hasPatientInsuranceSnapshotOption = Boolean(
+    sessionPayerSnapshotOptionLabel &&
+      !sessionPayerId &&
+      !clinicPayers.some(
+        (payer: any) => normalizePayerLookup(payer?.name) === normalizePayerLookup(sessionPayerSnapshotOptionLabel),
+      ),
+  );
+
+  const handleSessionPayerChange = (value: string) => {
+    lastAutoPayerPatientKeyRef.current = getPatientAutoPayerKey(selectedSessionPatient, sessionPatientName);
+    if (value === SESSION_PATIENT_INSURANCE_PAYER_VALUE) {
+      setSessionPayerId("");
+      setSessionPayerNameSnapshot(sessionPayerSnapshotOptionLabel);
+      return;
+    }
+    const payer = clinicPayers.find((item: any) => String(item?.id || "") === String(value || ""));
+    setSessionPayerId(value);
+    setSessionPayerNameSnapshot(payer?.name || "");
+  };
+
+  useEffect(() => {
+    if (!isAddSessionModalOpen || editingAppointmentId) return;
+    const patientPayer = selectedSessionPatientInsurancePayer;
+    const matchingPayer = selectedSessionPatientInsuranceClinicPayer;
+    const patientKey = getPatientAutoPayerKey(selectedSessionPatient, sessionPatientName);
+    const nextPayerId = String(matchingPayer?.id || patientPayer.payerId || "");
+    const nextPayerName = String(matchingPayer?.name || patientPayer.payerName || "");
+    if (!nextPayerId && !nextPayerName) return;
+
+    if (!sessionPayerId && !sessionPayerNameSnapshot) {
+      if (patientKey && lastAutoPayerPatientKeyRef.current === patientKey) return;
+      lastAutoPayerPatientKeyRef.current = patientKey;
+      setSessionPayerId(nextPayerId);
+      setSessionPayerNameSnapshot(nextPayerName);
+      return;
+    }
+
+    const currentSnapshotMatchesPatient =
+      normalizePayerLookup(sessionPayerNameSnapshot) === normalizePayerLookup(patientPayer.payerName);
+    if (!sessionPayerId && matchingPayer?.id && currentSnapshotMatchesPatient) {
+      setSessionPayerId(String(matchingPayer.id));
+      setSessionPayerNameSnapshot(String(matchingPayer.name || patientPayer.payerName || ""));
+    }
+  }, [
+    clinicPayers,
+    editingAppointmentId,
+    isAddSessionModalOpen,
+    selectedSessionPatient,
+    selectedSessionPatientInsuranceClinicPayer,
+    selectedSessionPatientInsurancePayer,
+    sessionPatientName,
+    sessionPayerId,
+    sessionPayerNameSnapshot,
+  ]);
 
   const sessionRecurrenceDates = useMemo(
     () =>
@@ -1861,6 +2019,7 @@ export function CoordinatorDashboard({
   ]);
 
   const resetSessionForm = () => {
+    lastAutoPayerPatientKeyRef.current = "";
     setSessionPatientName("");
     setSessionTime("08:00");
     setSessionDurationOption("50");
@@ -1872,6 +2031,7 @@ export function CoordinatorDashboard({
     setSessionApproach("");
     setSessionProfessional("");
     setSessionPayerId("");
+    setSessionPayerNameSnapshot("");
     setSessionGuideNumber("");
     setSessionAuthorizationCode("");
     setSessionNumSessions(1);
@@ -1971,8 +2131,8 @@ export function CoordinatorDashboard({
         call_link: sessionCallLink,
         payerId: sessionPayerId || null,
         payer_id: sessionPayerId || null,
-        payerName: selectedSessionPayer?.name || "",
-        payer_name_snapshot: selectedSessionPayer?.name || "",
+        payerName: selectedSessionPayerName,
+        payer_name_snapshot: selectedSessionPayerName,
         guideNumber: sessionGuideNumber,
         guide_number: sessionGuideNumber,
         authorizationCode: sessionAuthorizationCode,
@@ -2002,9 +2162,10 @@ export function CoordinatorDashboard({
           : `Sessão de ${sessionPatientName} atualizada para ${sessionDate} às ${sessionTime}.`,
         "management",
       );
-      if (sessionPayerId || sessionGuideNumber || sessionAuthorizationCode) {
+      if (sessionPayerId || selectedSessionPayerName || sessionGuideNumber || sessionAuthorizationCode) {
         void dataService.updateAppointmentBillingContext(String(editingAppointmentId), {
           payerId: sessionPayerId || null,
+          payerName: selectedSessionPayerName,
           serviceType: sessionApproach || "Consulta Padrão",
           guideNumber: sessionGuideNumber,
           authorizationCode: sessionAuthorizationCode,
@@ -2039,8 +2200,8 @@ export function CoordinatorDashboard({
       call_link: sessionCallLink,
       payerId: sessionPayerId || null,
       payer_id: sessionPayerId || null,
-      payerName: selectedSessionPayer?.name || "",
-      payer_name_snapshot: selectedSessionPayer?.name || "",
+      payerName: selectedSessionPayerName,
+      payer_name_snapshot: selectedSessionPayerName,
       guideNumber: sessionGuideNumber,
       guide_number: sessionGuideNumber,
       authorizationCode: sessionAuthorizationCode,
@@ -2163,7 +2324,7 @@ export function CoordinatorDashboard({
         ).trim(),
         source: String(details?.source || "agenda_management"),
       };
-      if (isTherapist && isRecurringAppointment(appointment)) {
+      if (canCancelRecurringAppointments && isRecurringAppointment(appointment)) {
         setPendingRecurringCancellation({
           appointment,
           ...payload,
@@ -2175,7 +2336,7 @@ export function CoordinatorDashboard({
         recurrenceScope: "single",
       });
     },
-    [handleStatusUpdate, isRecurringAppointment, isTherapist],
+    [canCancelRecurringAppointments, handleStatusUpdate, isRecurringAppointment],
   );
 
   const submitRecurringCancellation = useCallback(
@@ -2787,12 +2948,14 @@ export function CoordinatorDashboard({
       appointment.therapistName || appointment.professional || "",
     );
     setSessionPayerId(String(appointment.payerId || appointment.payer_id || ""));
+    setSessionPayerNameSnapshot(String(appointment.payerName || appointment.payer_name_snapshot || ""));
     setSessionGuideNumber(String(appointment.guideNumber || appointment.guide_number || ""));
     setSessionAuthorizationCode(String(appointment.authorizationCode || appointment.authorization_code || ""));
     if (appointment.id && !isTherapist) {
       dataService.getAppointmentBillingContext(String(appointment.id)).then((result: any) => {
         if (!result?.success || !result.data) return;
         setSessionPayerId(String(result.data.payerId || ""));
+        setSessionPayerNameSnapshot(String(result.data.payerName || ""));
         setSessionGuideNumber(String(result.data.guideNumber || ""));
         setSessionAuthorizationCode(String(result.data.authorizationCode || ""));
       });
@@ -8099,10 +8262,20 @@ export function CoordinatorDashboard({
                       Pagador/convênio
                       <select
                         className="mt-1 w-full rounded-xl border border-violet-100 bg-white p-3 text-sm font-semibold normal-case tracking-normal text-slate-700 outline-none"
-                        value={sessionPayerId}
-                        onChange={(e) => setSessionPayerId(e.target.value)}
+                        value={sessionPayerSelectValue}
+                        onChange={(e) => handleSessionPayerChange(e.target.value)}
                       >
                         <option value="">Sem pagador</option>
+                        {hasPatientInsuranceSnapshotOption && (
+                          <option value={SESSION_PATIENT_INSURANCE_PAYER_VALUE}>
+                            Convênio do paciente: {sessionPayerSnapshotOptionLabel}
+                          </option>
+                        )}
+                        {hasSessionPayerIdOption && (
+                          <option value={sessionPayerId}>
+                            {sessionPayerNameSnapshot || selectedSessionPatientInsurancePayer.payerName || "Pagador cadastrado"}
+                          </option>
+                        )}
                         {clinicPayers.map((payer: any) => (
                           <option key={payer.id} value={payer.id}>
                             {payer.name}
