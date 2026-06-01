@@ -20,6 +20,14 @@ function sliceFrom(source: string, marker: string, chars = 5000) {
   return source.slice(start, start + chars);
 }
 
+function sliceBetween(source: string, startMarker: string, endMarker: string) {
+  const start = source.indexOf(startMarker);
+  assert.ok(start >= 0, `${startMarker} nao encontrado.`);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  assert.ok(end > start, `${endMarker} nao encontrado depois de ${startMarker}.`);
+  return source.slice(start, end);
+}
+
 test('email de vinculo usa rota do portal e nao reset de senha', () => {
   const emailBuilder = sliceFrom(serverCode, 'function buildRelationshipConfirmationEmail', 1800);
   const createRequest = sliceFrom(serverCode, 'async function createRelationshipConfirmationRequest', 3600);
@@ -43,6 +51,9 @@ test('OTP do portal e separado de recuperacao de senha e usa hash', () => {
   assert.match(verifyCode, /challenge\.attempts > 5/);
   assert.match(verifyCode, /await consumeOtpChallenge\(key\)/);
   assert.match(verifyCode, /error:\s*'INVALID_CODE'/);
+  assert.match(verifyCode, /portalVerified:\s*true/);
+  assert.match(verifyCode, /accountState:\s*'PORTAL_VERIFIED'/);
+  assert.match(verifyCode, /passwordStatus:\s*'PASSWORD_OPTIONAL'/);
   assert.match(verifyCode, /req\.session\.user = buildSessionUserPayload/);
   assert.match(verifyCode, /PORTAL_OTP_VERIFIED|OTP do portal verificado/);
   assert.doesNotMatch(verifyCode, /PATIENT_ACTIVATION_REQUIRED/);
@@ -70,6 +81,8 @@ test('autorizacao de historico acontece depois do vinculo confirmado e importa t
   assert.match(authorizeRoute, /buildPatientPortabilitySnapshot/);
   assert.match(authorizeRoute, /importSharedSnapshotIntoLongitudinalTimeline/);
   assert.match(authorizeRoute, /PRIVATE_HISTORY_EXCLUDED_FROM_PORTABILITY/);
+  assert.match(authorizeRoute, /status:\s*'HISTORY_SHARE_AUTHORIZED'/);
+  assert.match(authorizeRoute, /Histórico compartilhado com sucesso/);
   assert.match(authorizeRoute, /idempotent:\s*true/);
 });
 
@@ -84,6 +97,23 @@ test('UI tem rota propria, login por codigo e checklist de compartilhamento', ()
   assert.match(dataServiceCode, /requestPortalLoginCode/);
   assert.match(dataServiceCode, /verifyPortalLoginCode/);
   assert.match(dataServiceCode, /authorizeRelationshipHistory/);
+});
+
+test('pos compartilhamento encerra no portal e senha fica opcional', () => {
+  const authorizeHandler = sliceBetween(portalComponent, 'const authorizeHistory = async () => {', 'const goToPortal = () => {');
+  const successView = sliceFrom(portalComponent, 'Compartilhamento autorizado', 2600);
+  const userActivationGuard = sliceFrom(appCode, 'const userNeedsPatientActivation =', 420);
+  assert.doesNotMatch(authorizeHandler, /window\.location|reset-password|ativar|auth\/callback|api\/auth\/login/);
+  assert.match(authorizeHandler, /setHistoryAuthorized\(true\)/);
+  assert.match(successView, /O vínculo foi confirmado e o histórico selecionado foi compartilhado com a clínica/);
+  assert.match(successView, /Anotações privadas de clínicas anteriores não foram compartilhadas/);
+  assert.match(successView, /Ir para o portal/);
+  assert.match(successView, /Fechar/);
+  assert.match(successView, /Quer criar uma senha para entrar mais rápido depois/);
+  assert.match(successView, /Criar senha/);
+  assert.match(successView, /Agora não/);
+  assert.match(userActivationGuard, /portalVerified !== true/);
+  assert.match(userActivationGuard, /accountState !== 'PORTAL_VERIFIED'/);
 });
 
 test('migration cria suporte OTP sem expor codigo puro', () => {

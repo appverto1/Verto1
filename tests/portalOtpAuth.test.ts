@@ -39,6 +39,9 @@ test('verify-code expira, limita tentativas e consome uso unico', () => {
   assert.match(route, /challenge\.attempts > 5/);
   assert.match(route, /Date\.now\(\) > challenge\.expiresAt/);
   assert.match(route, /error:\s*'INVALID_CODE'/);
+  assert.match(route, /portalVerified:\s*true/);
+  assert.match(route, /accountState:\s*'PORTAL_VERIFIED'/);
+  assert.match(route, /passwordStatus:\s*'PASSWORD_OPTIONAL'/);
   assert.match(route, /await consumeOtpChallenge\(key\)/);
   assert.match(route, /req\.session\.user = buildSessionUserPayload\(userData\)/);
   assert.doesNotMatch(route, /PATIENT_ACTIVATION_REQUIRED/);

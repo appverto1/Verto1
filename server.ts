@@ -6256,6 +6256,9 @@ function buildSessionUserPayload(input: any) {
     sessionToken: sanitizeString(input?.sessionToken, 120) || null,
     emailVerified: Boolean(input?.emailVerified),
     phoneVerified: Boolean(input?.phoneVerified),
+    portalVerified: Boolean(input?.portalVerified),
+    accountState: sanitizeString(input?.accountState, 60) || null,
+    passwordStatus: sanitizeString(input?.passwordStatus, 60) || null,
     firstLoginCompleted:
       typeof input?.firstLoginCompleted === 'boolean' ? input.firstLoginCompleted : null,
     activationRequired: Boolean(input?.activationRequired),
@@ -8521,6 +8524,8 @@ async function startServer() {
       const role = sanitizeString(candidate?.role, 40).toLowerCase();
       const status = sanitizeString(candidate?.status, 60).toLowerCase();
       const firstLoginCompleted = candidate?.firstLoginCompleted;
+      const accountState = sanitizeString(candidate?.accountState, 60).toUpperCase();
+      if (candidate?.portalVerified === true || accountState === 'PORTAL_VERIFIED') return false;
       return role === 'patient' && (
         Boolean(candidate?.activationRequired) ||
         status === 'pending_activation' ||
@@ -10748,6 +10753,9 @@ async function startServer() {
         activeWorkspaceId: clinicForSession,
         emailVerified: Boolean((authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at),
         phoneVerified: Boolean(profile.phone_verified_at),
+        portalVerified: true,
+        accountState: 'PORTAL_VERIFIED',
+        passwordStatus: 'PASSWORD_OPTIONAL',
         firstLoginCompleted: (profile.first_login_completed ?? authUser.user_metadata?.first_login_completed) ?? null,
         workspaces
       };
@@ -14558,8 +14566,9 @@ async function startServer() {
         });
         return res.json({
           success: true,
+          status: 'HISTORY_SHARE_AUTHORIZED',
           idempotent: true,
-          message: importResult.message || 'Histórico compartilhado já estava autorizado.',
+          message: 'Histórico compartilhado com sucesso.',
           data: {
             snapshotId: sanitizeString(existingSnapshot.id, 120),
             importedItemsCount: importResult.importedItemsCount,
@@ -14619,7 +14628,8 @@ async function startServer() {
       });
       return res.json({
         success: true,
-        message: 'Histórico compartilhável autorizado.',
+        status: 'HISTORY_SHARE_AUTHORIZED',
+        message: 'Histórico compartilhado com sucesso.',
         data: { snapshotId, importedItemsCount: importResult.importedItemsCount, skippedDuplicatesCount: importResult.skippedDuplicatesCount }
       });
     } catch (error: any) {

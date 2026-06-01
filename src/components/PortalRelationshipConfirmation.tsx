@@ -15,6 +15,7 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
   const [error, setError] = useState('');
   const [confirmed, setConfirmed] = useState(false);
   const [shareHistory, setShareHistory] = useState(false);
+  const [historyAuthorized, setHistoryAuthorized] = useState(false);
   const [scope, setScope] = useState({
     demographics: true,
     patientVisibleNotes: true,
@@ -98,8 +99,21 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
       setError(result?.message || result?.error || 'Não foi possível compartilhar o histórico.');
       return;
     }
-    setMessage(result.message || 'Histórico compartilhável autorizado.');
+    setHistoryAuthorized(true);
+    setMessage(result.message || 'Histórico compartilhado com sucesso.');
     setShareHistory(false);
+  };
+
+  const goToPortal = () => {
+    if (typeof window !== 'undefined') window.location.href = '/portal';
+  };
+
+  const closePortal = () => {
+    if (typeof window !== 'undefined') window.close();
+  };
+
+  const createPasswordLater = () => {
+    if (typeof window !== 'undefined') window.location.href = '/reset-password';
   };
 
   const toggleScope = (key: keyof typeof scope) => {
@@ -119,7 +133,40 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
           </div>
         </div>
 
-        {loading ? (
+        {historyAuthorized ? (
+          <div className="space-y-5">
+            <div className="flex items-center gap-2 rounded-2xl bg-emerald-50 p-4 text-sm font-bold text-emerald-700">
+              <CheckCircle2 size={18} /> Compartilhamento autorizado
+            </div>
+            <div className="rounded-2xl bg-slate-50 p-4">
+              <p className="text-sm leading-6 text-slate-700">
+                O vínculo foi confirmado e o histórico selecionado foi compartilhado com a clínica.
+              </p>
+              <p className="mt-2 text-xs leading-5 text-slate-500">
+                Anotações privadas de clínicas anteriores não foram compartilhadas.
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <button onClick={goToPortal} className="rounded-2xl bg-violet-600 px-4 py-3 text-sm font-black text-white">
+                Ir para o portal
+              </button>
+              <button onClick={closePortal} className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-600">
+                Fechar
+              </button>
+            </div>
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <p className="text-xs leading-5 text-slate-500">Quer criar uma senha para entrar mais rápido depois?</p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <button onClick={createPasswordLater} className="rounded-2xl border border-violet-200 px-4 py-3 text-sm font-bold text-violet-700">
+                  Criar senha
+                </button>
+                <button onClick={goToPortal} className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-600">
+                  Agora não
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : loading ? (
           <p className="text-sm text-slate-500">Carregando solicitação...</p>
         ) : request?.requiresAuth ? (
           <div className="space-y-4">

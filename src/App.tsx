@@ -4830,6 +4830,8 @@ export default function App() {
   );
   const userNeedsPatientActivation =
     user?.role === 'patient' &&
+    user?.portalVerified !== true &&
+    user?.accountState !== 'PORTAL_VERIFIED' &&
     (user?.activationRequired === true || user?.firstLoginCompleted === false);
 
   return (
