@@ -3089,18 +3089,18 @@ export function CoordinatorDashboard({
     const shouldDelete = window.confirm(
       isUnlinkOnly
         ? `Deseja desvincular o paciente ${patientName} da clínica?`
-        : `Deseja excluir o paciente ${patientName}? Esta ação removerá o paciente da clínica.`,
+        : `Deseja arquivar o paciente ${patientName}? Ele deixará de aparecer na lista ativa, mas o histórico da clínica será preservado para consulta caso o paciente retorne.`,
     );
     if (!shouldDelete) return;
-    showProcessing(isUnlinkOnly ? "Desvinculando paciente..." : "Excluindo paciente...");
+    showProcessing(isUnlinkOnly ? "Desvinculando paciente..." : "Arquivando paciente...");
 
     try {
       if (onUpdatePatient) {
         const updateResult = await onUpdatePatient({
           id: patient.id,
-          clinic_id: null,
-          status: "deleted",
-          [isUnlinkOnly ? "unlinkedAt" : "deletedAt"]: new Date().toISOString(),
+          ...(isUnlinkOnly ? { clinic_id: null, unlinkedAt: new Date().toISOString() } : {}),
+          status: isUnlinkOnly ? "deleted" : "archived",
+          [isUnlinkOnly ? "unlinkedAt" : "archivedAt"]: new Date().toISOString(),
         });
         if (updateResult?.success === false) {
           showToast(String(updateResult?.error || "Não foi possível atualizar o paciente."), "error");
@@ -3109,19 +3109,19 @@ export function CoordinatorDashboard({
       }
 
       onAddActivityLog(
-        isUnlinkOnly ? "Paciente desvinculado" : "Paciente excluído",
+        isUnlinkOnly ? "Paciente desvinculado" : "Paciente arquivado",
         isUnlinkOnly
           ? `Paciente ${patientName} foi desvinculado da clínica.`
-          : `Paciente ${patientName} foi excluído da clínica.`,
+          : `Paciente ${patientName} foi arquivado com histórico preservado.`,
         "management",
       );
       setActionPopup({
-        title: isUnlinkOnly ? "Paciente desvinculado" : "Paciente excluído",
+        title: isUnlinkOnly ? "Paciente desvinculado" : "Paciente arquivado",
         message: isUnlinkOnly
           ? `O paciente ${patientName} foi desvinculado da clínica.`
-          : `O paciente ${patientName} foi excluído com sucesso.`,
+          : `O paciente ${patientName} foi arquivado com sucesso. O histórico da clínica permanece preservado para consulta.`,
       });
-      showToast(isUnlinkOnly ? "Paciente desvinculado da clínica." : "Paciente excluído com sucesso!");
+      showToast(isUnlinkOnly ? "Paciente desvinculado da clínica." : "Paciente arquivado com sucesso.");
       setOpenMenuId(null);
     } finally {
       hideProcessing();
@@ -7601,7 +7601,7 @@ export function CoordinatorDashboard({
                                   </>
                                 ) : (
                                   <>
-                                    <Trash2 size={14} className="shrink-0" /> Excluir
+                                    <Trash2 size={14} className="shrink-0" /> Arquivar
                                   </>
                                 )}
                               </button>

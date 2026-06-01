@@ -2777,6 +2777,7 @@ const PATIENT_MUTATION_SELECT = [
 const PATIENT_STATUS_PENDING_ANAMNESIS = 'PENDING_ANAMNESIS';
 const PATIENT_STATUS_PENDING_CONFIRMATION = 'PENDING_CONFIRMATION';
 const PATIENT_STATUS_ACTIVE = 'ACTIVE';
+const PATIENT_STATUS_ARCHIVED = 'ARCHIVED';
 const ONBOARDING_NOT_STARTED = 'NOT_STARTED';
 const ONBOARDING_ANAMNESIS_SENT = 'ANAMNESIS_SENT';
 const ONBOARDING_ANAMNESIS_IN_PROGRESS = 'ANAMNESIS_IN_PROGRESS';
@@ -17264,6 +17265,41 @@ async function startServer() {
     }
   });
 
+  const writePatientArchiveStateWithSchemaFallback = async (params: {
+    patientId: string;
+    clinicId?: string | null;
+    payload: Record<string, any>;
+  }) => {
+    let candidate = cleanObject(params.payload);
+    const triedMissingColumns = new Set<string>();
+
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      if (Object.keys(candidate).length === 0) {
+        return { error: { message: 'Nenhum campo seguro disponível para arquivamento do paciente.' }, payload: candidate };
+      }
+
+      let query = supabase
+        .from('patients')
+        .update(candidate)
+        .eq('id', params.patientId);
+      if (params.clinicId) query = query.eq('clinic_id', params.clinicId);
+      const { error } = await query;
+      if (!error) return { error: null, payload: candidate };
+
+      const missingColumn = extractMissingColumnName(error);
+      if (!missingColumn || triedMissingColumns.has(missingColumn) || !(missingColumn in candidate)) {
+        return { error, payload: candidate };
+      }
+
+      triedMissingColumns.add(missingColumn);
+      const nextCandidate = { ...candidate };
+      delete nextCandidate[missingColumn];
+      candidate = nextCandidate;
+    }
+
+    return { error: { message: 'Falha ao atualizar paciente após fallback de schema.' }, payload: candidate };
+  };
+
   app.delete('/api/patients/:id', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.params.id, 120);
@@ -17275,10 +17311,8 @@ async function startServer() {
       const scopedClinicId = currentClinicId(req.session.user);
       let findQuery = supabase
         .from('patients')
-        .select('id, clinic_id, email, name, therapist_id')
-        .eq('id', patientId)
-        .eq('is_active', true)
-        .is('deleted_at', null);
+        .select('id, clinic_id, email, name, therapist_id, status, metadata')
+        .eq('id', patientId);
       if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
         findQuery = findQuery.eq('clinic_id', scopedClinicId);
       }
@@ -17292,110 +17326,159 @@ async function startServer() {
       }
 
       const nowIso = new Date().toISOString();
-      const unlinkPayload = cleanObject({
-        clinic_id: null,
-        status: 'deleted',
-        is_active: false,
-        // Algumas bases têm `therapist_id` como NOT NULL.
-        // Mantemos o vínculo histórico do terapeuta para evitar violação de constraint.
-        therapist_id: sanitizeString(patientRow?.therapist_id, 120) || undefined,
-        updated_at: nowIso,
-        deleted_at: nowIso
-      });
-      const fallbackUnlinkPayload = cleanObject({
-        clinic_id: null,
-        status: 'deleted'
-      });
-
-      let { error: unlinkError } = await supabase
-        .from('patients')
-        .update(unlinkPayload)
-        .eq('id', patientId);
-      if (unlinkError) {
-        const missingColumn = extractMissingColumnName(unlinkError);
-        if (!missingColumn) throw unlinkError;
-        let safeFallbackPayload = { ...fallbackUnlinkPayload };
-        delete safeFallbackPayload[missingColumn];
-        const fallbackResult = await supabase
-          .from('patients')
-          .update(safeFallbackPayload)
-          .eq('id', patientId);
-        unlinkError = fallbackResult.error;
-        if (unlinkError) throw unlinkError;
-      }
-
-      const patientEmail = sanitizeEmail(patientRow?.email);
-      const archiveDependency = async (table: 'notes' | 'history' | 'appointments' | 'activity_logs', column: string, value: string | null) => {
-        if (!value) return;
-        const payload = table === 'activity_logs'
-          ? { deleted_at: nowIso, is_active: false, status: 'archived', updated_at: nowIso }
-          : { deleted_at: nowIso, is_active: false };
-        const { error } = await supabase
-          .from(table)
-          .update(payload)
-          .eq(column, value);
-        if (error) throw error;
-      };
-
-      await Promise.all([
-        archiveDependency('notes', 'patient_id', patientId),
-        archiveDependency('history', 'patient_id', patientId),
-        archiveDependency('appointments', 'patient_id', patientId),
-        archiveDependency('activity_logs', 'user_id', patientId),
-        archiveDependency('notes', 'patient_email', patientEmail),
-        archiveDependency('history', 'patient_email', patientEmail)
-      ]);
-
-      if (patientEmail) {
-        let safeUserPatch: Record<string, any> = cleanObject({
-          status: 'waiting_treatment',
-          clinic_id: null,
-          updated_at: nowIso
-        });
-        while (Object.keys(safeUserPatch).length > 0) {
-          const { error: userPatchError } = await supabase
-            .from('users')
-            .update(safeUserPatch)
-            .eq('email', patientEmail)
-            .eq('role', 'patient');
-          if (!userPatchError) break;
-          const missingColumn = extractMissingColumnName(userPatchError);
-          if (!missingColumn || !(missingColumn in safeUserPatch)) {
-            throw userPatchError;
-          }
-          delete safeUserPatch[missingColumn];
+      const archiveMetadata = {
+        ...parseStoredJsonObject(patientRow?.metadata),
+        archive: {
+          status: 'archived',
+          archivedAt: nowIso,
+          archivedBy: sanitizeString(req.session.user?.id, 120),
+          readOnlyHistory: true,
+          privateDataOwnerClinicId: sanitizeString(patientRow?.clinic_id || scopedClinicId, 120) || null
         }
-      }
+      };
+      const alreadyArchived =
+        String(patientRow?.status || '').toUpperCase() === PATIENT_STATUS_ARCHIVED ||
+        String(parseStoredJsonObject(patientRow?.metadata)?.archive?.status || '').toLowerCase() === 'archived';
 
-      if (sanitizeString(req.session.user?.id, 120) === patientId) {
-        await supabase.auth.admin.updateUserById(patientId, {
-          ban_duration: '876000h'
+      if (!alreadyArchived) {
+        const archivePayload = cleanObject({
+          status: PATIENT_STATUS_ARCHIVED,
+          is_active: false,
+          archived_at: nowIso,
+          archived_by: sanitizeString(req.session.user?.id, 120) || null,
+          deleted_at: nowIso,
+          updated_at: nowIso,
+          metadata: archiveMetadata
         });
+
+        const archiveResult = await writePatientArchiveStateWithSchemaFallback({
+          patientId,
+          clinicId: !hasGlobalClinicAccess(req.session.user) ? sanitizeString(patientRow?.clinic_id, 120) : null,
+          payload: archivePayload
+        });
+        if (archiveResult.error) throw archiveResult.error;
       }
 
       if (scopedClinicId && isUuid(scopedClinicId)) {
-        queueActivePatientSync(scopedClinicId, 'patient_delete');
+        queueActivePatientSync(scopedClinicId, 'patient_archive');
       }
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
-        clinicId: sanitizeString(scopedClinicId || req.session.user?.id, 120),
+        clinicId: sanitizeString(patientRow?.clinic_id || scopedClinicId || req.session.user?.id, 120),
         actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
-        title: 'Paciente excluído/desvinculado',
-        content: `Paciente ${sanitizeString(patientRow?.name || patientId, 180)} foi removido da clínica.`,
+        title: alreadyArchived ? 'Arquivamento de paciente confirmado' : 'Paciente arquivado',
+        content: alreadyArchived
+          ? `Paciente ${sanitizeString(patientRow?.name || 'selecionado', 180)} já estava arquivado.`
+          : `Paciente ${sanitizeString(patientRow?.name || 'selecionado', 180)} foi arquivado com histórico preservado.`,
         actionType: 'PATIENT_ARCHIVED',
         payloadDetails: JSON.stringify({
           action: 'PATIENT_ARCHIVED',
           patient_id: patientId,
+          clinic_id: sanitizeString(patientRow?.clinic_id, 120) || null,
+          already_archived: alreadyArchived,
+          private_history_read_only: true,
           requested_by: sanitizeString(req.session.user?.id, 120),
           requested_at: nowIso
         }),
         type: 'management'
       });
 
-      return res.json({ success: true, deletedId: patientId });
+      return res.json({
+        success: true,
+        message: 'Paciente arquivado com sucesso.',
+        archivedId: patientId,
+        deletedId: patientId,
+        idempotent: alreadyArchived
+      });
     } catch (error) {
-      console.error('[PatientsDelete] error:', error);
-      return res.status(500).json({ success: false, error: 'Falha na operação de dados.' });
+      logRouteDbError('/api/patients/:id [DELETE]', error, {
+        patientId: sanitizeString(req.params.id, 120),
+        userId: sanitizeString(req.session?.user?.id, 120),
+        clinicId: sanitizeString(currentClinicId(req.session?.user), 120)
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível arquivar o paciente agora.' });
+    }
+  });
+
+  app.post('/api/patients/:id/reactivate', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.params.id, 120);
+      if (!isUuid(patientId)) {
+        return res.status(400).json({ success: false, error: 'patientId inválido.' });
+      }
+
+      const scopedClinicId = currentClinicId(req.session.user);
+      let findQuery = supabase
+        .from('patients')
+        .select('id, clinic_id, name, therapist_id, status, metadata, anamnesis_required, anamnesis_reviewed_at')
+        .eq('id', patientId);
+      if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
+        findQuery = findQuery.eq('clinic_id', scopedClinicId);
+      }
+      const { data: patientRow, error: findError } = await findQuery.maybeSingle();
+      if (findError) throw findError;
+      if (!patientRow?.id) {
+        return res.status(404).json({ success: false, error: 'Paciente não encontrado no escopo da clínica.' });
+      }
+
+      const nowIso = new Date().toISOString();
+      const nextStatus = patientRow?.anamnesis_required !== false && !patientRow?.anamnesis_reviewed_at
+        ? PATIENT_STATUS_PENDING_ANAMNESIS
+        : PATIENT_STATUS_ACTIVE;
+      const reactivationMetadata = {
+        ...parseStoredJsonObject(patientRow?.metadata),
+        reactivation: {
+          reactivatedAt: nowIso,
+          reactivatedBy: sanitizeString(req.session.user?.id, 120),
+          previousPrivateHistoryReadOnly: true
+        }
+      };
+      const reactivationPayload = cleanObject({
+        status: nextStatus,
+        is_active: true,
+        deleted_at: null,
+        reactivated_at: nowIso,
+        reactivated_by: sanitizeString(req.session.user?.id, 120) || null,
+        updated_at: nowIso,
+        metadata: reactivationMetadata
+      });
+
+      const reactivationResult = await writePatientArchiveStateWithSchemaFallback({
+        patientId,
+        clinicId: !hasGlobalClinicAccess(req.session.user) ? sanitizeString(patientRow?.clinic_id, 120) : null,
+        payload: reactivationPayload
+      });
+      if (reactivationResult.error) throw reactivationResult.error;
+
+      if (scopedClinicId && isUuid(scopedClinicId)) {
+        queueActivePatientSync(scopedClinicId, 'patient_reactivate');
+      }
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(patientRow?.clinic_id || scopedClinicId || req.session.user?.id, 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+        title: 'Paciente reativado',
+        content: `Paciente ${sanitizeString(patientRow?.name || 'selecionado', 180)} foi reativado com histórico anterior preservado para leitura.`,
+        actionType: 'PATIENT_REACTIVATED',
+        payloadDetails: JSON.stringify({
+          action: 'PATIENT_REACTIVATED',
+          patient_id: patientId,
+          clinic_id: sanitizeString(patientRow?.clinic_id, 120) || null,
+          private_history_read_only: true,
+          requested_by: sanitizeString(req.session.user?.id, 120),
+          requested_at: nowIso
+        }),
+        type: 'management'
+      });
+
+      return res.json({ success: true, message: 'Paciente reativado com sucesso.', patientId, status: nextStatus });
+    } catch (error) {
+      logRouteDbError('/api/patients/:id/reactivate [POST]', error, {
+        patientId: sanitizeString(req.params.id, 120),
+        userId: sanitizeString(req.session?.user?.id, 120),
+        clinicId: sanitizeString(currentClinicId(req.session?.user), 120)
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível reativar o paciente agora.' });
     }
   });
 

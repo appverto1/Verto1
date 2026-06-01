@@ -1849,6 +1849,9 @@ export async function fetchPatientsWithSchemaFallback(params: {
 
     if (filterIsActive) query = query.eq('is_active', true);
     if (filterDeletedAt) query = query.is('deleted_at', null);
+    if (columns.includes('status')) {
+      query = query.neq('status', 'ARCHIVED').neq('status', 'archived');
+    }
 
     query = query
       .order('created_at', { ascending: false })

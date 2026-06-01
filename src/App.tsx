@@ -3599,14 +3599,20 @@ export default function App() {
         : currentPatient?.anamnesisData
           ? buildPatientAnamnesisSnapshot(mergedIdentityPatient, currentPatient.anamnesisData)
           : undefined;
-    const isDeleteOrUnlink = updatedData?.clinic_id === null || String(updatedData?.status || '').toLowerCase() === 'deleted';
+    const normalizedPatientStatus = String(updatedData?.status || '').toLowerCase();
+    const isArchivePatient = normalizedPatientStatus === 'archived';
+    const isDeleteOrUnlink = updatedData?.clinic_id === null || normalizedPatientStatus === 'deleted' || isArchivePatient;
 
-    // If unlinking (clinic_id is null), remove from local state
+    // If unlinking or archiving, remove from the active patient list while the backend preserves history.
     if (isDeleteOrUnlink) {
       setAllPatients(prev => prev.filter(p => p.id !== updatedData.id));
-      setClinicalRecords(prev => prev.filter(r => r.patientId !== updatedData.id));
-      setTherapistAgenda(prev => prev.filter(a => a.id !== updatedData.id));
-      onAddActivityLog("Desvinculação de Paciente", `${formatPatientLabel(mergedIdentityPatient)} foi desvinculado.`, 'management');
+      onAddActivityLog(
+        isArchivePatient ? "Arquivamento de Paciente" : "Desvinculação de Paciente",
+        isArchivePatient
+          ? `${formatPatientLabel(mergedIdentityPatient)} foi arquivado com histórico preservado.`
+          : `${formatPatientLabel(mergedIdentityPatient)} foi desvinculado.`,
+        'management',
+      );
     } else {
       if (Object.keys(identityData).length > 1) { // More than just 'id'
         setAllPatients(prev => prev.map(p => p.id === updatedData.id ? {
@@ -3648,7 +3654,7 @@ export default function App() {
         const deleteResult = await dataService.deletePatient(String(updatedData.id));
         if (!deleteResult?.success) {
           const errorMessage = toReadableError(deleteResult?.error || 'Erro desconhecido');
-          alert(`Não foi possível excluir/desvincular paciente: ${errorMessage}`);
+          alert(`Não foi possível arquivar/desvincular paciente: ${errorMessage}`);
           return { success: false, error: errorMessage };
         }
       } else {

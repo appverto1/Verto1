@@ -31,6 +31,11 @@ class FakeQuery {
     return this;
   }
 
+  neq(column: string, value: any) {
+    this.filters.push({ op: 'neq', column, value });
+    return this;
+  }
+
   is(column: string, value: any) {
     this.filters.push({ op: 'is', column, value });
     return this;

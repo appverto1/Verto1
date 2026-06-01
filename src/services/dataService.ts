@@ -1386,7 +1386,7 @@ export const dataService = {
       if (!response.ok) {
         return {
           success: false,
-          error: normalizeApiErrorMessage(result?.error || result?.message || `Falha ao excluir paciente (${response.status})`),
+          error: normalizeApiErrorMessage(result?.error || result?.message || `Falha ao arquivar paciente (${response.status})`),
           details: result
         };
       }
