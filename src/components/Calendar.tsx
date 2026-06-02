@@ -546,6 +546,23 @@ const sanitizeHumanRoomName = (value: any) => {
   return text && !looksLikeTechnicalId(text) ? text : '';
 };
 
+const sanitizeHumanPayerName = (value: any) => {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text && !looksLikeTechnicalId(text) ? text : '';
+};
+
+const normalizePayerOptions = (items: any[] = []) => {
+  const seen = new Set<string>();
+  return (Array.isArray(items) ? items : [])
+    .map((payer: any) => ({
+      ...payer,
+      id: String(payer?.id || '').trim(),
+      name: sanitizeHumanPayerName(payer?.name)
+    }))
+    .filter((payer: any) => payer.id && payer.name && !seen.has(payer.id) && seen.add(payer.id))
+    .sort((a: any, b: any) => String(a?.name || '').localeCompare(String(b?.name || ''), 'pt-BR'));
+};
+
 const locationTypeLabel = (value: any) => {
   const normalized = removeDiacritics(value || '');
   if (normalized.includes('online') || normalized.includes('remoto')) return 'Online';
@@ -766,6 +783,7 @@ export const ClinicalAgendaBoard = ({
     success: ''
   });
   const [billingPayers, setBillingPayers] = useState<any[]>([]);
+  const [billingPayersLoaded, setBillingPayersLoaded] = useState(false);
   const [billingForm, setBillingForm] = useState({
     payerId: '',
     payerName: '',
@@ -1180,7 +1198,7 @@ export const ClinicalAgendaBoard = ({
   const hydrateBillingForm = (source: any = {}) => {
     setBillingForm({
       payerId: String(source?.payerId || source?.payer_id || ''),
-      payerName: String(source?.payerName || source?.payer_name_snapshot || ''),
+      payerName: sanitizeHumanPayerName(source?.payerName || source?.payer_name_snapshot || ''),
       serviceType: String(source?.serviceType || source?.service_type || detailEvent.type || ''),
       guideNumber: String(source?.guideNumber || source?.guide_number || ''),
       authorizationCode: String(source?.authorizationCode || source?.authorization_code || ''),
@@ -1190,11 +1208,12 @@ export const ClinicalAgendaBoard = ({
   };
 
   const loadBillingPayers = async () => {
-    if (billingPayers.length > 0) return;
+    if (billingPayersLoaded) return;
     setBillingEditorState((prev) => ({ ...prev, loading: true, error: '' }));
     const result = await dataService.getPayers({ status: 'ACTIVE', limit: 80 });
     if (result?.success && Array.isArray(result.data)) {
-      setBillingPayers(result.data);
+      setBillingPayers(normalizePayerOptions(result.data));
+      setBillingPayersLoaded(true);
       setBillingEditorState((prev) => ({ ...prev, loading: false, error: '' }));
       return;
     }
@@ -1228,12 +1247,13 @@ export const ClinicalAgendaBoard = ({
     const payer = result.data;
     setBillingPayers((prev) => {
       const withoutDuplicate = prev.filter((item: any) => String(item?.id || '') !== String(payer?.id || ''));
-      return [...withoutDuplicate, payer].sort((a: any, b: any) => String(a?.name || '').localeCompare(String(b?.name || ''), 'pt-BR'));
+      return normalizePayerOptions([...withoutDuplicate, payer]);
     });
+    setBillingPayersLoaded(true);
     setBillingForm((prev) => ({
       ...prev,
       payerId: String(payer?.id || ''),
-      payerName: String(payer?.name || name)
+      payerName: sanitizeHumanPayerName(payer?.name || name)
     }));
     setQuickPayerForm({ open: false, saving: false, error: '', name: '', payerType: 'INSURANCE' });
   };
@@ -1920,8 +1940,14 @@ export const ClinicalAgendaBoard = ({
       billingContext.authorizationCode ||
       billingContext.notes
   );
-  const billingPayerSelectValue = billingForm.payerId || (billingForm.payerName ? '__snapshot__' : '');
-  const billingSnapshotOptionVisible = Boolean(billingForm.payerName && !billingForm.payerId);
+  const selectedBillingPayerKnown = Boolean(billingForm.payerId && billingPayers.some((payer: any) => String(payer?.id || '') === String(billingForm.payerId || '')));
+  const billingSnapshotSelectValue = billingForm.payerId || '__snapshot__';
+  const billingSnapshotOptionVisible = Boolean(billingForm.payerName && !selectedBillingPayerKnown);
+  const billingPayerSelectValue = selectedBillingPayerKnown
+    ? billingForm.payerId
+    : billingSnapshotOptionVisible
+      ? billingSnapshotSelectValue
+      : '';
 
   return (
     <div className="flex flex-col gap-3 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:h-[calc(100vh-2rem)] xl:min-h-[680px] xl:overflow-hidden xl:pb-0">
@@ -2199,7 +2225,7 @@ export const ClinicalAgendaBoard = ({
                   disabled={billingEditorState.loading || billingEditorState.saving}
                   onChange={(event) => {
                     const value = event.target.value;
-                    if (value === '__snapshot__') return;
+                    if (billingSnapshotOptionVisible && value === billingSnapshotSelectValue) return;
                     const payer = billingPayers.find((item: any) => String(item?.id || '') === value);
                     setBillingForm((prev) => ({
                       ...prev,
@@ -2210,7 +2236,7 @@ export const ClinicalAgendaBoard = ({
                 >
                   <option value="">Sem pagador</option>
                   {billingSnapshotOptionVisible && (
-                    <option value="__snapshot__">{billingForm.payerName}</option>
+                    <option value={billingSnapshotSelectValue}>{billingForm.payerName}</option>
                   )}
                   {billingPayers.map((payer: any) => (
                     <option key={payer.id} value={payer.id}>
@@ -2398,6 +2424,7 @@ export const ClinicalAgendaBoard = ({
                       </span>{' '}
                       {billingContext.payerName || detailEvent.payer_name_snapshot || billingSuggestion?.payerName || 'nao informado'}
                     </p>
+                    <p><span className="font-semibold">ServiÃ§o:</span> {billingContext.serviceType || detailEvent.service_type || detailEvent.type || 'ABA'}</p>
                     <p><span className="font-semibold">Guia:</span> {billingContext.guideNumber || detailEvent.guide_number || 'pendente'}</p>
                     <p><span className="font-semibold">Autorização:</span> {billingContext.authorizationCode || detailEvent.authorization_code || 'pendente'}</p>
                     <p><span className="font-semibold">Documentos:</span> {pendingBillingDocuments.length > 0 ? `${pendingBillingDocuments.length} pendente(s)` : 'Sem pendência extra'}</p>

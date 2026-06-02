@@ -25472,7 +25472,8 @@ async function startServer() {
         .order('name', { ascending: true })
         .limit(limit);
       const status = sanitizeString(req.query?.status, 40).toUpperCase();
-      if (status === 'ACTIVE' || status === 'INACTIVE') query = query.eq('status', status);
+      if (status === 'ACTIVE') query = query.in('status', ['ACTIVE', 'active', 'Ativo', 'ativo']);
+      if (status === 'INACTIVE') query = query.in('status', ['INACTIVE', 'inactive', 'Inativo', 'inativo']);
       const { data, error } = await query;
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
@@ -25795,8 +25796,16 @@ async function startServer() {
           performedBy: sanitizeString(req.session.user?.id, 120)
         });
       }
-      void regenerateClosureForAppointments([appointment.id], req.session.user, 'billing_context_updated');
       const documents = await fetchRequiredDocumentsForAppointment(organizationId, appointment.id);
+      try {
+        await persistAppointmentClosureCheck({
+          appointmentId: appointment.id,
+          user: req.session.user,
+          force: true
+        });
+      } catch (closureError: any) {
+        console.warn('[PayerRequirements] fechamento pontual apos pagador falhou:', closureError?.message || String(closureError));
+      }
       return res.json({ success: true, message: 'Pagador atualizado.', data: serializeBillingContext(data, payer, documents) });
     } catch (error: any) {
       console.warn('[PayerRequirements] billing context update failed:', error?.message || String(error));

@@ -16,7 +16,13 @@ test('endpoint de contexto faz upsert idempotente por consulta', () => {
   assert.match(serverCode, /app\.get\('\/api\/appointments\/:appointmentId\/billing-context'/);
   assert.match(serverCode, /app\.patch\('\/api\/appointments\/:appointmentId\/billing-context'/);
   assert.match(serverCode, /\.upsert\(\[payload\], \{ onConflict: 'organization_id,appointment_id' \}\)/);
-  assert.match(serverCode, /void regenerateClosureForAppointments\(\[appointment\.id\], req\.session\.user, 'billing_context_updated'\)/);
+  const routeStart = serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'");
+  assert.ok(routeStart > 0, 'rota de salvar contexto deve existir');
+  const routeEnd = serverCode.indexOf("app.post('/api/appointments/:appointmentId/required-documents", routeStart);
+  assert.ok(routeEnd > routeStart, 'rota de salvar contexto deve terminar antes da dispensa de documento');
+  const route = serverCode.slice(routeStart, routeEnd);
+  assert.match(route, /await persistAppointmentClosureCheck\(\{\s*appointmentId: appointment\.id,\s*user: req\.session\.user,\s*force: true\s*\}\)/);
+  assert.doesNotMatch(route, /regenerateClosureForAppointments/);
   assert.match(serverCode, /message: 'Pagador atualizado\.'/);
   assert.doesNotMatch(serverCode, /\.select\('\*'\)/);
 });
@@ -54,7 +60,11 @@ test('modal carrega pagadores ativos e permite criar pagador rapido', () => {
   assert.match(calendarCode, /Salvar e selecionar/);
   assert.match(calendarCode, /setBillingPayers/);
   assert.match(calendarCode, /payerId: String\(payer\?\.id/);
-  assert.match(calendarCode, /payerName: String\(payer\?\.name/);
+  assert.match(calendarCode, /payerName: sanitizeHumanPayerName\(payer\?\.name/);
+  assert.match(calendarCode, /billingPayersLoaded/);
+  assert.match(calendarCode, /normalizePayerOptions\(result\.data\)/);
+  assert.match(calendarCode, /selectedBillingPayerKnown/);
+  assert.match(calendarCode, /billingSnapshotSelectValue/);
 });
 
 test('criacao de pagador reutiliza nome existente na mesma clinica', () => {
@@ -64,6 +74,21 @@ test('criacao de pagador reutiliza nome existente na mesma clinica', () => {
   assert.match(route, /\.from\('clinic_payers'\)[\s\S]*\.select\(CLINIC_PAYER_SELECT\)[\s\S]*\.eq\('organization_id', organizationId\)[\s\S]*\.ilike\('name', name\)/);
   assert.match(route, /idempotent:\s*true/);
   assert.match(route, /serializePayer\(existingPayer\)/);
+});
+
+test('payer_id e appointment_id fora da organizacao sao rejeitados', () => {
+  const fetchStart = serverCode.indexOf('const fetchAppointmentForBillingContext');
+  assert.ok(fetchStart > 0, 'helper de escopo da consulta deve existir');
+  const fetchSlice = serverCode.slice(fetchStart, fetchStart + 1500);
+  assert.match(fetchSlice, /\.from\('appointments'\)[\s\S]*\.select\(CLOSURE_APPOINTMENT_SELECT\)[\s\S]*\.eq\('id', safeAppointmentId\)/);
+  assert.match(fetchSlice, /\.or\(`organization_id\.eq\.\$\{organizationId\},clinic_id\.eq\.\$\{organizationId\}`\)/);
+  assert.match(fetchSlice, /canAccessPatientInCurrentClinic/);
+
+  const routeStart = serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'");
+  const routeEnd = serverCode.indexOf("app.post('/api/appointments/:appointmentId/required-documents", routeStart);
+  const route = serverCode.slice(routeStart, routeEnd);
+  assert.match(route, /const payer = isUuid\(payerId\) \? await fetchPayerForAdmin\(payerId, organizationId\) : null/);
+  assert.match(route, /if \(payerId && !payer\) return res\.status\(404\)\.json\(payerSafeError\(404\)\)/);
 });
 
 test('fechamento usa pagador da consulta, nao plano do paciente como substituto', () => {
