@@ -24,7 +24,9 @@ test('endpoint de contexto faz upsert idempotente por consulta', () => {
   assert.ok(routeEnd > routeStart, 'rota de salvar contexto deve terminar antes da dispensa de documento');
   const route = serverCode.slice(routeStart, routeEnd);
   assert.match(route, /await persistAppointmentClosureCheck\(\{\s*appointmentId: appointment\.id,\s*user: req\.session\.user,\s*force: true\s*\}\)/);
+  assert.match(route, /const data = await upsertAppointmentBillingContextRow\(payload, Boolean\(existing\?\.id\)\)/);
   assert.doesNotMatch(route, /regenerateClosureForAppointments/);
+  assert.doesNotMatch(route, /\.upsert\(\[payload\]/);
   assert.match(route, /message: 'Pagador salvo na consulta\.'/);
   assert.doesNotMatch(serverCode, /\.select\('\*'\)/);
 });
@@ -32,6 +34,8 @@ test('endpoint de contexto faz upsert idempotente por consulta', () => {
 test('salvar contexto usa fallback de schema sem expor 503 tecnico', () => {
   assert.match(serverCode, /APPOINTMENT_BILLING_CONTEXT_SCHEMA_FALLBACK_COLUMNS/);
   assert.match(serverCode, /APPOINTMENT_BILLING_CONTEXT_METADATA_VALUE_COLUMNS/);
+  assert.match(serverCode, /BILLING_CONTEXT_APPOINTMENT_SELECT/);
+  assert.match(serverCode, /BILLING_CONTEXT_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS/);
   assert.match(serverCode, /const buildBillingContextSelect/);
   assert.match(serverCode, /const buildBillingContextStoragePayload/);
   assert.match(serverCode, /buildBillingContextMetadata\(payload\)/);
@@ -40,12 +44,17 @@ test('salvar contexto usa fallback de schema sem expor 503 tecnico', () => {
   const routeStart = serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'");
   const routeEnd = serverCode.indexOf("app.post('/api/appointments/:appointmentId/required-documents", routeStart);
   const route = serverCode.slice(routeStart, routeEnd);
-  assert.match(route, /const data = await upsertAppointmentBillingContextRow\(payload\)/);
+  assert.match(route, /const data = await upsertAppointmentBillingContextRow\(payload, Boolean\(existing\?\.id\)\)/);
+  assert.match(route, /auditoria apos pagador falhou/);
+  assert.match(route, /pendencias apos pagador falharam/);
+  assert.match(route, /documentos apos pagador falharam/);
   assert.match(route, /error: 'Não foi possível salvar o pagador da consulta agora\.'/);
   assert.doesNotMatch(route, /status\(503\)/);
 
   const fetchStart = serverCode.indexOf('const fetchAppointmentForBillingContext');
-  const fetchSlice = serverCode.slice(fetchStart, fetchStart + 1200);
+  const fetchSlice = serverCode.slice(fetchStart, fetchStart + 1800);
+  assert.match(fetchSlice, /runAppointmentQuery\(CLOSURE_APPOINTMENT_SELECT\)/);
+  assert.match(fetchSlice, /runAppointmentQuery\(selectColumns\)/);
   assert.match(fetchSlice, /status: 500, error: 'Agenda indisponível\.'/);
   assert.doesNotMatch(fetchSlice, /status: 503/);
 
@@ -125,8 +134,9 @@ test('criacao de pagador reutiliza nome existente na mesma clinica', () => {
 test('payer_id e appointment_id fora da organizacao sao rejeitados', () => {
   const fetchStart = serverCode.indexOf('const fetchAppointmentForBillingContext');
   assert.ok(fetchStart > 0, 'helper de escopo da consulta deve existir');
-  const fetchSlice = serverCode.slice(fetchStart, fetchStart + 1500);
-  assert.match(fetchSlice, /\.from\('appointments'\)[\s\S]*\.select\(CLOSURE_APPOINTMENT_SELECT\)[\s\S]*\.eq\('id', safeAppointmentId\)/);
+  const fetchSlice = serverCode.slice(fetchStart, fetchStart + 2600);
+  assert.match(fetchSlice, /\.from\('appointments'\)[\s\S]*\.select\(selectColumns\)[\s\S]*\.eq\('id', safeAppointmentId\)/);
+  assert.match(fetchSlice, /runAppointmentQuery\(CLOSURE_APPOINTMENT_SELECT\)/);
   assert.match(fetchSlice, /\.or\(`organization_id\.eq\.\$\{organizationId\},clinic_id\.eq\.\$\{organizationId\}`\)/);
   assert.match(fetchSlice, /canAccessPatientInCurrentClinic/);
 

@@ -3099,6 +3099,24 @@ const CLOSURE_APPOINTMENT_SELECT = [
   'updated_at'
 ].join(',');
 
+const BILLING_CONTEXT_APPOINTMENT_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'patient_id',
+  'approach',
+  'service_type',
+  'status',
+  'updated_at'
+].join(',');
+
+const BILLING_CONTEXT_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS = new Set([
+  'approach',
+  'service_type',
+  'status',
+  'updated_at'
+]);
+
 const CLOSURE_ABA_SESSION_SELECT = [
   'id',
   'organization_id',
@@ -24596,18 +24614,30 @@ async function startServer() {
     return null;
   };
 
-  const upsertAppointmentBillingContextRow = async (payload: any) => {
-    const upsertWithSelect = (row: any, selectColumns: string) => supabase
+  const upsertAppointmentBillingContextRow = async (payload: any, hasExistingRow = false) => {
+    const writeWithSelect = async (row: any, selectColumns: string) => {
+      if (hasExistingRow && isUuid(sanitizeString(row?.id, 120))) {
+        const updateResult = await supabase
+          .from('appointment_billing_contexts')
+          .update(cleanObject(row))
+          .eq('organization_id', row.organization_id)
+          .eq('id', row.id)
+          .select(selectColumns)
+          .maybeSingle();
+        if (updateResult.error || updateResult.data) return updateResult;
+      }
+      return supabase
         .from('appointment_billing_contexts')
-        .upsert([cleanObject(row)], { onConflict: 'organization_id,appointment_id' })
+        .insert([cleanObject(row)])
         .select(selectColumns)
         .maybeSingle();
+    };
 
     const omittedColumns = new Set<string>();
     let lastError: any = null;
     for (let attempt = 0; attempt <= APPOINTMENT_BILLING_CONTEXT_SCHEMA_FALLBACK_COLUMNS.size; attempt += 1) {
       const storagePayload = buildBillingContextStoragePayload(payload, omittedColumns);
-      const result = await upsertWithSelect(storagePayload, buildBillingContextSelect(omittedColumns));
+      const result = await writeWithSelect(storagePayload, buildBillingContextSelect(omittedColumns));
       if (!result.error) {
         return mergeBillingContextMetadata(result.data || storagePayload);
       }
@@ -25581,17 +25611,36 @@ async function startServer() {
     const safeAppointmentId = sanitizeString(appointmentId, 120);
     const organizationId = sanitizeString(currentClinicId(user), 120);
     if (!isUuid(safeAppointmentId) || !isUuid(organizationId)) return { ok: false, status: 400, error: 'Consulta inválida.' };
-    const { data, error } = await supabase
-      .from('appointments')
-      .select(CLOSURE_APPOINTMENT_SELECT)
-      .eq('id', safeAppointmentId)
-      .or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`)
-      .limit(1)
-      .maybeSingle();
-    if (error) {
-      if (hasMissingFinancialSchema(error)) return { ok: false, status: 500, error: 'Agenda indisponível.' };
-      throw error;
+    const runAppointmentQuery = (selectColumns: string) => supabase
+        .from('appointments')
+        .select(selectColumns)
+        .eq('id', safeAppointmentId)
+        .or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`)
+        .limit(1)
+        .maybeSingle();
+    let result = await runAppointmentQuery(CLOSURE_APPOINTMENT_SELECT);
+    if (result.error && extractMissingColumnName(result.error)) {
+      const omittedColumns = new Set<string>();
+      for (let attempt = 0; attempt <= BILLING_CONTEXT_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.size; attempt += 1) {
+        const selectColumns = BILLING_CONTEXT_APPOINTMENT_SELECT
+          .split(',')
+          .map((column) => column.trim())
+          .filter((column) => column && !omittedColumns.has(column))
+          .join(',');
+        result = await runAppointmentQuery(selectColumns);
+        if (!result.error) break;
+        const missingColumn = extractMissingColumnName(result.error);
+        if (!missingColumn || !BILLING_CONTEXT_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.has(missingColumn) || omittedColumns.has(missingColumn)) {
+          break;
+        }
+        omittedColumns.add(missingColumn);
+      }
     }
+    if (result.error) {
+      if (hasMissingFinancialSchema(result.error)) return { ok: false, status: 500, error: 'Agenda indisponível.' };
+      throw result.error;
+    }
+    const data = result.data;
     if (!data?.id) return { ok: false, status: 404, error: 'Consulta não encontrada.' };
     if (!(await canAccessPatientInCurrentClinic(sanitizeString(data.patient_id, 120), user))) {
       return { ok: false, status: 404, error: 'Consulta não encontrada.' };
@@ -25908,46 +25957,60 @@ async function startServer() {
         created_at: existing?.created_at || now,
         updated_at: now
       });
-      const data = await upsertAppointmentBillingContextRow(payload);
-      await writePayerRequirementAuditLog({
-        organizationId,
-        payerId: data?.payer_id || null,
-        appointmentId: appointment.id,
-        action: 'BILLING_CONTEXT_UPDATED',
-        previousValue: existing,
-        newValue: data,
-        performedBy: sanitizeString(req.session.user?.id, 120)
-      });
-      const resolvedRequirements = await fetchClosureRequirements(
-        organizationId,
-        data?.service_type || appointment.service_type || appointment.approach || null,
-        appointment.id
-      );
-      if ((resolvedRequirements as any)?.requireGuide) {
-        await upsertRequiredDocumentStatus({
+      const data = await upsertAppointmentBillingContextRow(payload, Boolean(existing?.id));
+      try {
+        await writePayerRequirementAuditLog({
           organizationId,
-          appointmentId: appointment.id,
-          patientId: appointment.patient_id,
           payerId: data?.payer_id || null,
-          serviceType: data?.service_type || appointment.service_type || appointment.approach || null,
-          documentType: 'GUIDE',
-          status: data?.guide_number ? 'PROVIDED' : 'PENDING',
+          appointmentId: appointment.id,
+          action: 'BILLING_CONTEXT_UPDATED',
+          previousValue: existing,
+          newValue: data,
           performedBy: sanitizeString(req.session.user?.id, 120)
         });
+      } catch (auditError: any) {
+        console.warn('[PayerRequirements] auditoria apos pagador falhou:', auditError?.message || String(auditError));
       }
-      if ((resolvedRequirements as any)?.requireAuthorization) {
-        await upsertRequiredDocumentStatus({
+      let resolvedRequirements: any = null;
+      try {
+        resolvedRequirements = await fetchClosureRequirements(
           organizationId,
-          appointmentId: appointment.id,
-          patientId: appointment.patient_id,
-          payerId: data?.payer_id || null,
-          serviceType: data?.service_type || appointment.service_type || appointment.approach || null,
-          documentType: 'AUTHORIZATION',
-          status: data?.authorization_code ? 'PROVIDED' : 'PENDING',
-          performedBy: sanitizeString(req.session.user?.id, 120)
-        });
+          data?.service_type || appointment.service_type || appointment.approach || null,
+          appointment.id
+        );
+        if (resolvedRequirements?.requireGuide) {
+          await upsertRequiredDocumentStatus({
+            organizationId,
+            appointmentId: appointment.id,
+            patientId: appointment.patient_id,
+            payerId: data?.payer_id || null,
+            serviceType: data?.service_type || appointment.service_type || appointment.approach || null,
+            documentType: 'GUIDE',
+            status: data?.guide_number ? 'PROVIDED' : 'PENDING',
+            performedBy: sanitizeString(req.session.user?.id, 120)
+          });
+        }
+        if (resolvedRequirements?.requireAuthorization) {
+          await upsertRequiredDocumentStatus({
+            organizationId,
+            appointmentId: appointment.id,
+            patientId: appointment.patient_id,
+            payerId: data?.payer_id || null,
+            serviceType: data?.service_type || appointment.service_type || appointment.approach || null,
+            documentType: 'AUTHORIZATION',
+            status: data?.authorization_code ? 'PROVIDED' : 'PENDING',
+            performedBy: sanitizeString(req.session.user?.id, 120)
+          });
+        }
+      } catch (documentError: any) {
+        console.warn('[PayerRequirements] pendencias apos pagador falharam:', documentError?.message || String(documentError));
       }
-      const documents = await fetchRequiredDocumentsForAppointment(organizationId, appointment.id);
+      let documents: any[] = [];
+      try {
+        documents = await fetchRequiredDocumentsForAppointment(organizationId, appointment.id);
+      } catch (documentsError: any) {
+        console.warn('[PayerRequirements] documentos apos pagador falharam:', documentsError?.message || String(documentsError));
+      }
       try {
         await persistAppointmentClosureCheck({
           appointmentId: appointment.id,
